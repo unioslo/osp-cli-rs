@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+msg_file="${1:?commit message file is required}"
+
+subject="$(sed '/^#/d;/^[[:space:]]*$/d' "$msg_file" | head -n 1 || true)"
+
+if [[ -z "$subject" ]]; then
+    echo "ERROR: Empty commit message subject."
+    exit 1
+fi
+
+# Allow Git-generated commit subjects and local autosquash workflow.
+if [[ "$subject" =~ ^(Merge|Revert)\  ]] || [[ "$subject" =~ ^(fixup!|squash!)\  ]]; then
+    exit 0
+fi
+
+if ((${#subject} > 72)); then
+    echo "ERROR: Subject line is longer than 72 characters (${#subject})."
+    echo "       Subject: $subject"
+    exit 1
+fi
+
+if [[ "$subject" =~ \.$ ]]; then
+    echo "ERROR: Subject line must not end with a period."
+    exit 1
+fi
+
+# Conventional + project rule:
+# <type>(<scope>): <Subject>
+# scope is optional; if present it must be lowercase and kebab/snake/path style.
+pattern='^(feat|fix|docs|refactor|test|chore|style|ci|build|perf|revert)(\([a-z0-9][a-z0-9._/-]*\))?: [A-Z].+$'
+if ! [[ "$subject" =~ $pattern ]]; then
+    cat <<'EOF'
+ERROR: Invalid commit subject format.
+
+Expected:
+  <type>(<scope>): <Subject>
+
+Allowed <type>:
+  feat, fix, docs, refactor, test, chore, style, ci, build, perf, revert
+
+Examples:
+  feat(cli): Add plugin doctor command
+  fix(config): Normalize profile identifiers
+  docs(roadmap): Update phase checklist
+EOF
+    echo "Got:"
+    echo "  $subject"
+    exit 1
+fi
+
+# If there is a body, enforce a blank line after the subject.
+if sed '/^#/d' "$msg_file" | awk 'NR==1{next} NR==2{if(length($0)!=0) exit 1; exit 0} END{exit 0}'; then
+    exit 0
+fi
+
+echo "ERROR: Commit body must be separated from the subject by one blank line."
+exit 1
