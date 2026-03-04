@@ -3,7 +3,7 @@ use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_dsl::{apply_pipeline, parse_pipeline};
 use osp_ports::LdapDirectory;
 use osp_ui::theme::DEFAULT_THEME_NAME;
-use osp_ui::{RenderSettings, render_rows};
+use osp_ui::{RenderSettings, StyleOverrides, render_rows};
 
 #[test]
 fn dsl_pipeline_project_works_on_ldap_user_data() {
@@ -21,7 +21,15 @@ fn dsl_pipeline_project_works_on_ldap_user_data() {
         color: ColorMode::Never,
         unicode: UnicodeMode::Never,
         width: None,
+        margin: 0,
+        indent_size: 2,
+        short_list_max: 1,
+        medium_list_max: 5,
+        grid_padding: 4,
+        grid_columns: None,
+        column_weight: 3,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);
 
@@ -46,7 +54,15 @@ fn dsl_pipeline_values_works_on_netgroup_members() {
         color: ColorMode::Never,
         unicode: UnicodeMode::Never,
         width: None,
+        margin: 0,
+        indent_size: 2,
+        short_list_max: 1,
+        medium_list_max: 5,
+        grid_padding: 4,
+        grid_columns: None,
+        column_weight: 3,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);
 
@@ -70,7 +86,15 @@ fn dsl_pipeline_filter_works() {
         color: ColorMode::Never,
         unicode: UnicodeMode::Never,
         width: None,
+        margin: 0,
+        indent_size: 2,
+        short_list_max: 1,
+        medium_list_max: 5,
+        grid_padding: 4,
+        grid_columns: None,
+        column_weight: 3,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);
 
@@ -93,11 +117,22 @@ fn dsl_pipeline_markdown_table_format_works() {
         color: ColorMode::Never,
         unicode: UnicodeMode::Never,
         width: Some(200),
+        margin: 0,
+        indent_size: 2,
+        short_list_max: 1,
+        medium_list_max: 5,
+        grid_padding: 4,
+        grid_columns: None,
+        column_weight: 3,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);
 
-    assert!(output.contains("| uid | cn |") || output.contains("| cn | uid |"));
-    assert!(output.contains("| --- | --- |"));
+    let mut lines = output.lines();
+    let header = lines.next().unwrap_or_default();
+    let separator = lines.next().unwrap_or_default();
+    assert!(header.contains("uid") && header.contains("cn"));
+    assert!(separator.contains("---"));
     assert!(output.contains("oistes"));
 }

@@ -10,12 +10,14 @@ pub mod theme;
 use std::io::IsTerminal;
 
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+use osp_core::output_model::{OutputItems, OutputResult};
 use osp_core::row::Row;
 
 pub use document::{
     CodeBlock, Document, JsonBlock, LineBlock, LinePart, MregBlock, MregEntry, MregRow, MregValue,
-    PanelBlock, PanelRules, TableBlock, TableStyle, ValueBlock,
+    PanelBlock, PanelRules, TableAlign, TableBlock, TableStyle, ValueBlock,
 };
+pub use style::StyleOverrides;
 
 #[derive(Debug, Clone)]
 pub struct RenderSettings {
@@ -24,7 +26,15 @@ pub struct RenderSettings {
     pub color: ColorMode,
     pub unicode: UnicodeMode,
     pub width: Option<usize>,
+    pub margin: usize,
+    pub indent_size: usize,
+    pub short_list_max: usize,
+    pub medium_list_max: usize,
+    pub grid_padding: usize,
+    pub grid_columns: Option<usize>,
+    pub column_weight: usize,
     pub theme_name: String,
+    pub style_overrides: StyleOverrides,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +49,15 @@ pub struct ResolvedRenderSettings {
     pub color: bool,
     pub unicode: bool,
     pub width: Option<usize>,
+    pub margin: usize,
+    pub indent_size: usize,
+    pub short_list_max: usize,
+    pub medium_list_max: usize,
+    pub grid_padding: usize,
+    pub grid_columns: Option<usize>,
+    pub column_weight: usize,
     pub theme_name: String,
+    pub style_overrides: StyleOverrides,
 }
 
 impl RenderSettings {
@@ -85,14 +103,30 @@ impl RenderSettings {
                 color: false,
                 unicode: false,
                 width: self.resolve_width(),
+                margin: self.margin,
+                indent_size: self.indent_size.max(1),
+                short_list_max: self.short_list_max.max(1),
+                medium_list_max: self.medium_list_max.max(self.short_list_max.max(1) + 1),
+                grid_padding: self.grid_padding.max(1),
+                grid_columns: self.grid_columns.filter(|value| *value > 0),
+                column_weight: self.column_weight.max(1),
                 theme_name: theme::normalize_theme_name(&self.theme_name),
+                style_overrides: self.style_overrides.clone(),
             },
             RenderBackend::Rich => ResolvedRenderSettings {
                 backend,
                 color: self.resolve_color_mode(),
                 unicode: self.resolve_unicode_mode(),
                 width: self.resolve_width(),
+                margin: self.margin,
+                indent_size: self.indent_size.max(1),
+                short_list_max: self.short_list_max.max(1),
+                medium_list_max: self.medium_list_max.max(self.short_list_max.max(1) + 1),
+                grid_padding: self.grid_padding.max(1),
+                grid_columns: self.grid_columns.filter(|value| *value > 0),
+                column_weight: self.column_weight.max(1),
                 theme_name: theme::normalize_theme_name(&self.theme_name),
+                style_overrides: self.style_overrides.clone(),
             },
         }
     }
@@ -110,21 +144,49 @@ impl RenderSettings {
 }
 
 pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
-    let document = format::build_document(rows, settings);
+    render_output(
+        &OutputResult {
+            items: OutputItems::Rows(rows.to_vec()),
+            meta: Default::default(),
+        },
+        settings,
+    )
+}
+
+pub fn render_output(output: &OutputResult, settings: &RenderSettings) -> String {
+    let document = format::build_document_from_output(output, settings);
     let resolved = settings.resolve_render_settings();
     renderer::render_document(&document, resolved)
 }
 
 pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {
+    render_output_for_copy(
+        &OutputResult {
+            items: OutputItems::Rows(rows.to_vec()),
+            meta: Default::default(),
+        },
+        settings,
+    )
+}
+
+pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) -> String {
     let copy_settings = RenderSettings {
         format: settings.format,
         mode: RenderMode::Plain,
         color: ColorMode::Never,
         unicode: UnicodeMode::Never,
         width: settings.width,
+        margin: settings.margin,
+        indent_size: settings.indent_size,
+        short_list_max: settings.short_list_max,
+        medium_list_max: settings.medium_list_max,
+        grid_padding: settings.grid_padding,
+        grid_columns: settings.grid_columns,
+        column_weight: settings.column_weight,
         theme_name: settings.theme_name.clone(),
+        style_overrides: settings.style_overrides.clone(),
     };
-    let document = format::build_document(rows, &copy_settings);
+    let document = format::build_document_from_output(output, &copy_settings);
     render_document_for_copy(&document, &copy_settings)
 }
 
@@ -135,7 +197,15 @@ pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) 
         color: ColorMode::Never,
         unicode: UnicodeMode::Never,
         width: settings.width,
+        margin: settings.margin,
+        indent_size: settings.indent_size,
+        short_list_max: settings.short_list_max,
+        medium_list_max: settings.medium_list_max,
+        grid_padding: settings.grid_padding,
+        grid_columns: settings.grid_columns,
+        column_weight: settings.column_weight,
         theme_name: settings.theme_name.clone(),
+        style_overrides: settings.style_overrides.clone(),
     };
     let resolved = copy_settings.resolve_render_settings();
     renderer::render_document(document, resolved)
@@ -146,15 +216,38 @@ pub fn copy_rows_to_clipboard(
     settings: &RenderSettings,
     clipboard: &clipboard::ClipboardService,
 ) -> Result<(), clipboard::ClipboardError> {
+    copy_output_to_clipboard(
+        &OutputResult {
+            items: OutputItems::Rows(rows.to_vec()),
+            meta: Default::default(),
+        },
+        settings,
+        clipboard,
+    )
+}
+
+pub fn copy_output_to_clipboard(
+    output: &OutputResult,
+    settings: &RenderSettings,
+    clipboard: &clipboard::ClipboardService,
+) -> Result<(), clipboard::ClipboardError> {
     let copy_settings = RenderSettings {
         format: settings.format,
         mode: RenderMode::Plain,
         color: ColorMode::Never,
         unicode: UnicodeMode::Never,
         width: settings.width,
+        margin: settings.margin,
+        indent_size: settings.indent_size,
+        short_list_max: settings.short_list_max,
+        medium_list_max: settings.medium_list_max,
+        grid_padding: settings.grid_padding,
+        grid_columns: settings.grid_columns,
+        column_weight: settings.column_weight,
         theme_name: settings.theme_name.clone(),
+        style_overrides: settings.style_overrides.clone(),
     };
-    let document = format::build_document(rows, &copy_settings);
+    let document = format::build_document_from_output(output, &copy_settings);
     clipboard.copy_document(&document, &copy_settings)
 }
 
@@ -173,7 +266,15 @@ mod tests {
             color: ColorMode::Never,
             unicode: UnicodeMode::Never,
             width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            style_overrides: crate::style::StyleOverrides::default(),
         }
     }
 
@@ -271,7 +372,15 @@ mod tests {
             color: ColorMode::Always,
             unicode: UnicodeMode::Always,
             width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            style_overrides: crate::style::StyleOverrides::default(),
         };
 
         let resolved = settings.resolve_render_settings();
@@ -288,7 +397,15 @@ mod tests {
             color: ColorMode::Always,
             unicode: UnicodeMode::Always,
             width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            style_overrides: crate::style::StyleOverrides::default(),
         };
 
         let resolved = settings.resolve_render_settings();
@@ -315,7 +432,15 @@ mod tests {
             color: ColorMode::Always,
             unicode: UnicodeMode::Always,
             width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            style_overrides: crate::style::StyleOverrides::default(),
         };
 
         let rendered = render_rows_for_copy(&rows, &settings);

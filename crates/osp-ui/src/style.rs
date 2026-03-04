@@ -1,5 +1,22 @@
 use crate::theme;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StyleOverrides {
+    pub table_header: Option<String>,
+    pub mreg_key: Option<String>,
+    pub value: Option<String>,
+    pub number: Option<String>,
+    pub bool_true: Option<String>,
+    pub bool_false: Option<String>,
+    pub null_value: Option<String>,
+    pub ipv4: Option<String>,
+    pub ipv6: Option<String>,
+    pub panel_border: Option<String>,
+    pub panel_title: Option<String>,
+    pub code: Option<String>,
+    pub json_key: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleToken {
     None,
@@ -7,6 +24,17 @@ pub enum StyleToken {
     PromptCommand,
     TableHeader,
     MregKey,
+    JsonKey,
+    Code,
+    PanelBorder,
+    PanelTitle,
+    Value,
+    Number,
+    BoolTrue,
+    BoolFalse,
+    Null,
+    Ipv4,
+    Ipv6,
     MessageError,
     MessageWarning,
     MessageSuccess,
@@ -15,11 +43,21 @@ pub enum StyleToken {
 }
 
 pub fn apply_style(text: &str, token: StyleToken, color: bool, theme_name: &str) -> String {
+    apply_style_with_overrides(text, token, color, theme_name, &StyleOverrides::default())
+}
+
+pub fn apply_style_with_overrides(
+    text: &str,
+    token: StyleToken,
+    color: bool,
+    theme_name: &str,
+    overrides: &StyleOverrides,
+) -> String {
     if !color || matches!(token, StyleToken::None) {
         return text.to_string();
     }
 
-    let spec = style_spec_for_token(token, theme_name);
+    let spec = style_spec_for_token(token, theme_name, overrides);
     apply_style_spec(text, spec, color)
 }
 
@@ -33,7 +71,15 @@ pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
     format!("{prefix}{text}\x1b[0m")
 }
 
-fn style_spec_for_token(token: StyleToken, theme_name: &str) -> &'static str {
+fn style_spec_for_token<'a>(
+    token: StyleToken,
+    theme_name: &str,
+    overrides: &'a StyleOverrides,
+) -> &'a str {
+    if let Some(value) = override_for_token(token, overrides) {
+        return value;
+    }
+
     let theme = theme::resolve_theme(theme_name);
     match token {
         StyleToken::None => "",
@@ -41,11 +87,41 @@ fn style_spec_for_token(token: StyleToken, theme_name: &str) -> &'static str {
         StyleToken::PromptCommand => theme.palette.success,
         StyleToken::TableHeader => theme.palette.accent,
         StyleToken::MregKey => theme.palette.accent,
+        StyleToken::JsonKey => theme.palette.accent,
+        StyleToken::Code => theme.palette.text,
+        StyleToken::PanelBorder => theme.palette.border,
+        StyleToken::PanelTitle => theme.palette.title,
+        StyleToken::Value => theme.palette.text,
+        StyleToken::Number => theme.palette.success,
+        StyleToken::BoolTrue => theme.palette.success,
+        StyleToken::BoolFalse => theme.palette.error,
+        StyleToken::Null => theme.palette.muted,
+        StyleToken::Ipv4 => theme.palette.border,
+        StyleToken::Ipv6 => theme.palette.border,
         StyleToken::MessageError => theme.palette.error,
         StyleToken::MessageWarning => theme.palette.warning,
         StyleToken::MessageSuccess => theme.palette.success,
         StyleToken::MessageInfo => theme.palette.info,
         StyleToken::MessageTrace => theme.palette.border,
+    }
+}
+
+fn override_for_token<'a>(token: StyleToken, overrides: &'a StyleOverrides) -> Option<&'a str> {
+    match token {
+        StyleToken::TableHeader => overrides.table_header.as_deref(),
+        StyleToken::MregKey => overrides.mreg_key.as_deref(),
+        StyleToken::JsonKey => overrides.json_key.as_deref(),
+        StyleToken::Code => overrides.code.as_deref(),
+        StyleToken::PanelBorder => overrides.panel_border.as_deref(),
+        StyleToken::PanelTitle => overrides.panel_title.as_deref(),
+        StyleToken::Value => overrides.value.as_deref(),
+        StyleToken::Number => overrides.number.as_deref(),
+        StyleToken::BoolTrue => overrides.bool_true.as_deref(),
+        StyleToken::BoolFalse => overrides.bool_false.as_deref(),
+        StyleToken::Null => overrides.null_value.as_deref(),
+        StyleToken::Ipv4 => overrides.ipv4.as_deref(),
+        StyleToken::Ipv6 => overrides.ipv6.as_deref(),
+        _ => None,
     }
 }
 
@@ -102,7 +178,7 @@ fn parse_hex_rgb(value: &str) -> Option<(u8, u8, u8)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{StyleToken, apply_style};
+    use super::{StyleOverrides, StyleToken, apply_style, apply_style_with_overrides};
 
     #[test]
     fn plain_theme_disables_styling_even_with_color_enabled() {
@@ -128,5 +204,20 @@ mod tests {
     fn color_toggle_off_returns_plain_text() {
         let out = apply_style("warn", StyleToken::MessageWarning, false, "nord");
         assert_eq!(out, "warn");
+    }
+
+    #[test]
+    fn explicit_override_takes_precedence_over_theme_token() {
+        let out = apply_style_with_overrides(
+            "head",
+            StyleToken::TableHeader,
+            true,
+            "nord",
+            &StyleOverrides {
+                table_header: Some("#ff0000".to_string()),
+                ..Default::default()
+            },
+        );
+        assert!(out.starts_with("\x1b[38;2;255;0;0m"));
     }
 }

@@ -1,6 +1,7 @@
 use crate::document::{
     Block, CodeBlock, Document, JsonBlock, LineBlock, LinePart, PanelBlock, PanelRules,
 };
+use crate::style::StyleToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageKind {
@@ -116,6 +117,8 @@ impl MessageFormatter {
                 body,
                 rules: options.rules.to_panel_rules(),
                 kind: Some(options.kind.as_label().to_string()),
+                border_token: Some(kind_border_token(options.kind)),
+                title_token: Some(kind_title_token(options.kind)),
             })],
         }
     }
@@ -144,7 +147,7 @@ fn build_flat_message(content: MessageContent, options: &MessageOptions) -> Docu
                 };
 
                 output.push(Block::Line(LineBlock {
-                    parts: vec![LinePart { text }],
+                    parts: vec![LinePart { text, token: None }],
                 }));
             }
             Document { blocks: output }
@@ -168,6 +171,7 @@ fn normalize_content_to_document(content: MessageContent) -> Document {
                     Block::Line(LineBlock {
                         parts: vec![LinePart {
                             text: line.to_string(),
+                            token: None,
                         }],
                     })
                 })
@@ -185,6 +189,20 @@ fn trim_blank_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<&'a str
         values.pop();
     }
     values
+}
+
+fn kind_border_token(kind: MessageKind) -> StyleToken {
+    match kind {
+        MessageKind::Error => StyleToken::MessageError,
+        MessageKind::Warning => StyleToken::MessageWarning,
+        MessageKind::Success => StyleToken::MessageSuccess,
+        MessageKind::Info => StyleToken::MessageInfo,
+        MessageKind::Trace => StyleToken::MessageTrace,
+    }
+}
+
+fn kind_title_token(kind: MessageKind) -> StyleToken {
+    kind_border_token(kind)
 }
 
 #[cfg(test)]

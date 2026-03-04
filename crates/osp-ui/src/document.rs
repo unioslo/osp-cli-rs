@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::style::StyleToken;
+
 #[derive(Debug, Clone, Default)]
 pub struct Document {
     pub blocks: Vec<Block>,
@@ -24,6 +26,7 @@ pub struct LineBlock {
 #[derive(Debug, Clone)]
 pub struct LinePart {
     pub text: String,
+    pub token: Option<StyleToken>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +35,8 @@ pub struct PanelBlock {
     pub body: Document,
     pub rules: PanelRules,
     pub kind: Option<String>,
+    pub border_token: Option<StyleToken>,
+    pub title_token: Option<StyleToken>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,13 +62,24 @@ pub struct JsonBlock {
 pub struct TableBlock {
     pub style: TableStyle,
     pub headers: Vec<String>,
-    pub rows: Vec<Vec<String>>,
+    pub rows: Vec<Vec<Value>>,
+    pub header_pairs: Vec<(String, Value)>,
+    pub align: Option<Vec<TableAlign>>,
+    pub depth: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableStyle {
     Grid,
     Markdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAlign {
+    Default,
+    Left,
+    Center,
+    Right,
 }
 
 #[derive(Debug, Clone)]
@@ -84,11 +100,12 @@ pub struct MregRow {
 #[derive(Debug, Clone)]
 pub struct MregEntry {
     pub key: String,
+    pub depth: usize,
     pub value: MregValue,
 }
 
 #[derive(Debug, Clone)]
 pub enum MregValue {
-    Scalar(String),
-    List(Vec<String>),
+    Scalar(Value),
+    List(Vec<Value>),
 }

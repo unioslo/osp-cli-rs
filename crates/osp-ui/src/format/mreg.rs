@@ -3,8 +3,6 @@ use serde_json::Value;
 
 use crate::document::{MregBlock, MregEntry, MregRow, MregValue};
 
-use super::common::value_to_display;
-
 pub fn build_mreg_block(rows: &[Row]) -> MregBlock {
     let mut block_rows = Vec::new();
 
@@ -17,11 +15,10 @@ pub fn build_mreg_block(rows: &[Row]) -> MregBlock {
             .filter_map(|key| row.get(&key).map(|value| (key, value)))
             .map(|(key, value)| MregEntry {
                 key,
+                depth: 0,
                 value: match value {
-                    Value::Array(items) if !items.is_empty() => {
-                        MregValue::List(items.iter().map(value_to_display).collect())
-                    }
-                    _ => MregValue::Scalar(value_to_display(value)),
+                    Value::Array(items) if !items.is_empty() => MregValue::List(items.clone()),
+                    _ => MregValue::Scalar(value.clone()),
                 },
             })
             .collect::<Vec<MregEntry>>();

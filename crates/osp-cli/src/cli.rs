@@ -1,8 +1,8 @@
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use osp_config::{ConfigValue, ResolvedConfig};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use osp_ui::RenderSettings;
 use osp_ui::theme::DEFAULT_THEME_NAME;
+use osp_ui::{RenderSettings, StyleOverrides};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -309,7 +309,15 @@ impl Cli {
             color: self.color.into(),
             unicode,
             width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
             theme_name: DEFAULT_THEME_NAME.to_string(),
+            style_overrides: StyleOverrides::default(),
         }
     }
 
@@ -363,6 +371,66 @@ impl Cli {
                 _ => {}
             }
         }
+
+        if let Some(value) = config_int(config, "ui.margin")
+            && value >= 0
+        {
+            settings.margin = value as usize;
+        }
+
+        if let Some(value) = config_int(config, "ui.indent")
+            && value > 0
+        {
+            settings.indent_size = value as usize;
+        }
+
+        if let Some(value) = config_int(config, "ui.short_list_max")
+            && value > 0
+        {
+            settings.short_list_max = value as usize;
+        }
+
+        if let Some(value) = config_int(config, "ui.medium_list_max")
+            && value > 0
+        {
+            settings.medium_list_max = value as usize;
+        }
+
+        if let Some(value) = config_int(config, "ui.grid_padding")
+            && value > 0
+        {
+            settings.grid_padding = value as usize;
+        }
+
+        if let Some(value) = config_int(config, "ui.grid_columns") {
+            settings.grid_columns = if value > 0 {
+                Some(value as usize)
+            } else {
+                None
+            };
+        }
+
+        if let Some(value) = config_int(config, "ui.column_weight")
+            && value > 0
+        {
+            settings.column_weight = value as usize;
+        }
+
+        settings.style_overrides = StyleOverrides {
+            table_header: config_non_empty_string(config, "color.table.header"),
+            mreg_key: config_non_empty_string(config, "color.mreg.key"),
+            value: config_non_empty_string(config, "color.value"),
+            number: config_non_empty_string(config, "color.value.number"),
+            bool_true: config_non_empty_string(config, "color.value.bool_true"),
+            bool_false: config_non_empty_string(config, "color.value.bool_false"),
+            null_value: config_non_empty_string(config, "color.value.null"),
+            ipv4: config_non_empty_string(config, "color.value.ipv4"),
+            ipv6: config_non_empty_string(config, "color.value.ipv6"),
+            panel_border: config_non_empty_string(config, "color.panel.border"),
+            panel_title: config_non_empty_string(config, "color.panel.title"),
+            code: config_non_empty_string(config, "color.code"),
+            json_key: config_non_empty_string(config, "color.json.key"),
+        };
     }
 
     pub fn selected_theme_name(&self, config: &ResolvedConfig) -> String {
@@ -411,6 +479,22 @@ fn parse_unicode_mode(value: &str) -> Option<UnicodeMode> {
         "never" => Some(UnicodeMode::Never),
         _ => None,
     }
+}
+
+fn config_int(config: &ResolvedConfig, key: &str) -> Option<i64> {
+    match config.get(key) {
+        Some(ConfigValue::Integer(value)) => Some(*value),
+        Some(ConfigValue::String(raw)) => raw.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn config_non_empty_string(config: &ResolvedConfig, key: &str) -> Option<String> {
+    config
+        .get_string(key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub fn parse_inline_command_tokens(tokens: &[String]) -> Result<Option<Commands>, clap::Error> {

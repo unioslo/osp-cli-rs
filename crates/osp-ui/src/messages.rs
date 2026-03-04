@@ -3,7 +3,7 @@ use crate::format::message::{
     MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules,
 };
 use crate::renderer::render_document;
-use crate::style::{StyleToken, apply_style};
+use crate::style::{StyleOverrides, StyleToken, apply_style_with_overrides};
 use crate::{RenderBackend, ResolvedRenderSettings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -67,6 +67,22 @@ impl MessageLevel {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageRenderFormat {
+    Groups,
+    Rules,
+}
+
+impl MessageRenderFormat {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "groups" | "grouped" | "plain" => Some(Self::Groups),
+            "rules" | "panel" | "boxes" | "boxed" => Some(Self::Rules),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UiMessage {
     pub level: MessageLevel,
@@ -111,7 +127,14 @@ impl MessageBuffer {
     }
 
     pub fn render_grouped(&self, max_level: MessageLevel) -> String {
-        self.render_grouped_styled(max_level, false, false, None, "plain", false)
+        self.render_grouped_styled(
+            max_level,
+            false,
+            false,
+            None,
+            "plain",
+            MessageRenderFormat::Rules,
+        )
     }
 
     pub fn render_grouped_styled(
@@ -121,9 +144,30 @@ impl MessageBuffer {
         unicode: bool,
         width: Option<usize>,
         theme_name: &str,
-        boxed: bool,
+        format: MessageRenderFormat,
     ) -> String {
-        let document = self.build_grouped_document(max_level, boxed);
+        self.render_grouped_styled_with_overrides(
+            max_level,
+            color,
+            unicode,
+            width,
+            theme_name,
+            format,
+            &StyleOverrides::default(),
+        )
+    }
+
+    pub fn render_grouped_styled_with_overrides(
+        &self,
+        max_level: MessageLevel,
+        color: bool,
+        unicode: bool,
+        width: Option<usize>,
+        theme_name: &str,
+        format: MessageRenderFormat,
+        style_overrides: &StyleOverrides,
+    ) -> String {
+        let document = self.build_grouped_document(max_level, format);
         if document.blocks.is_empty() {
             return String::new();
         }
@@ -137,12 +181,24 @@ impl MessageBuffer {
             color,
             unicode,
             width,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
             theme_name: theme_name.to_string(),
+            style_overrides: style_overrides.clone(),
         };
         render_document(&document, resolved)
     }
 
-    fn build_grouped_document(&self, max_level: MessageLevel, boxed: bool) -> Document {
+    fn build_grouped_document(
+        &self,
+        max_level: MessageLevel,
+        format: MessageRenderFormat,
+    ) -> Document {
         let mut blocks = Vec::new();
 
         for level in [
@@ -171,12 +227,13 @@ impl MessageBuffer {
                     Block::Line(LineBlock {
                         parts: vec![LinePart {
                             text: format!("- {}", entry.text),
+                            token: None,
                         }],
                     })
                 })
                 .collect::<Vec<Block>>();
 
-            if boxed {
+            if matches!(format, MessageRenderFormat::Rules) {
                 let rendered = MessageFormatter::build(
                     MessageContent::Document(Document { blocks: body }),
                     MessageOptions {
@@ -190,6 +247,7 @@ impl MessageBuffer {
                 blocks.push(Block::Line(LineBlock {
                     parts: vec![LinePart {
                         text: format!("{}:", level.title()),
+                        token: None,
                     }],
                 }));
                 blocks.extend(body);
@@ -198,6 +256,7 @@ impl MessageBuffer {
             blocks.push(Block::Line(LineBlock {
                 parts: vec![LinePart {
                     text: String::new(),
+                    token: None,
                 }],
             }));
         }
@@ -213,6 +272,26 @@ pub fn render_section_divider(
     color: bool,
     theme_name: &str,
     token: StyleToken,
+) -> String {
+    render_section_divider_with_overrides(
+        title,
+        unicode,
+        width,
+        color,
+        theme_name,
+        token,
+        &StyleOverrides::default(),
+    )
+}
+
+pub fn render_section_divider_with_overrides(
+    title: &str,
+    unicode: bool,
+    width: Option<usize>,
+    color: bool,
+    theme_name: &str,
+    token: StyleToken,
+    style_overrides: &StyleOverrides,
 ) -> String {
     let fill_char = if unicode { '─' } else { '-' };
     let target_width = width
@@ -246,7 +325,7 @@ pub fn render_section_divider(
     };
 
     if color {
-        apply_style(&raw, token, true, theme_name)
+        apply_style_with_overrides(&raw, token, true, theme_name, style_overrides)
     } else {
         raw
     }
@@ -259,7 +338,7 @@ pub fn adjust_verbosity(base: MessageLevel, verbose: u8, quiet: u8) -> MessageLe
 
 #[cfg(test)]
 mod tests {
-    use super::{MessageBuffer, MessageLevel, adjust_verbosity};
+    use super::{MessageBuffer, MessageLevel, MessageRenderFormat, adjust_verbosity};
 
     #[test]
     fn default_success_hides_info_and_debug() {
@@ -271,11 +350,11 @@ mod tests {
         messages.trace("trace");
 
         let rendered = messages.render_grouped(MessageLevel::Success);
-        assert!(rendered.contains("Errors:"));
-        assert!(rendered.contains("Warnings:"));
-        assert!(rendered.contains("Success:"));
-        assert!(!rendered.contains("Info:"));
-        assert!(!rendered.contains("Trace:"));
+        assert!(rendered.contains("Errors"));
+        assert!(rendered.contains("Warnings"));
+        assert!(rendered.contains("Success"));
+        assert!(!rendered.contains("Info"));
+        assert!(!rendered.contains("Trace"));
     }
 
     #[test]
@@ -288,7 +367,7 @@ mod tests {
             true,
             Some(24),
             "rose-pine-moon",
-            true,
+            MessageRenderFormat::Rules,
         );
         assert!(rendered.contains("─ Errors "));
         assert!(
@@ -309,7 +388,7 @@ mod tests {
             false,
             Some(28),
             "rose-pine-moon",
-            true,
+            MessageRenderFormat::Rules,
         );
         let colored = messages.render_grouped_styled(
             MessageLevel::Warning,
@@ -317,7 +396,7 @@ mod tests {
             false,
             Some(28),
             "rose-pine-moon",
-            true,
+            MessageRenderFormat::Rules,
         );
         assert!(!plain.contains("\x1b["));
         assert!(colored.contains("\x1b["));

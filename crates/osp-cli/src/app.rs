@@ -7,19 +7,23 @@ use osp_config::{
     build_runtime_pipeline, set_scoped_value_in_toml,
 };
 use osp_core::output::OutputFormat;
-use osp_core::plugin::{ResponseMessageLevelV1, ResponseV1};
+use osp_core::output_model::{OutputItems, OutputMeta, OutputResult};
+use osp_core::plugin::{ResponseMessageLevelV1, ResponseMetaV1, ResponseV1};
 use osp_core::row::Row;
 use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use osp_dsl::{apply_pipeline, parse_pipeline};
 use osp_repl::{ReplPrompt, run_repl};
-use osp_ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity, render_section_divider};
-use osp_ui::render_rows;
+use osp_ui::messages::{
+    MessageBuffer, MessageLevel, MessageRenderFormat, adjust_verbosity,
+    render_section_divider_with_overrides,
+};
+use osp_ui::render_output;
 use osp_ui::style::{StyleToken, apply_style, apply_style_spec};
 use osp_ui::theme::{
     DEFAULT_THEME_NAME, available_theme_names, find_theme, is_known_theme, normalize_theme_name,
 };
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 
 use crate::cli::{
@@ -74,7 +78,7 @@ struct ReplDispatchOverrides {
 }
 
 enum ReplCommandOutput {
-    Rows(Vec<Row>),
+    Output(OutputResult),
     Text(String),
 }
 
@@ -422,13 +426,14 @@ fn render_repl_intro(state: &AppState) -> String {
     );
 
     let mut out = String::new();
-    out.push_str(&render_section_divider(
+    out.push_str(&render_section_divider_with_overrides(
         "OSP",
         resolved.unicode,
         resolved.width,
         resolved.color,
         theme_name,
         StyleToken::MessageInfo,
+        &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&format!("Welcome {user_text}!\n"));
@@ -594,10 +599,16 @@ fn execute_repl_plugin_line(state: &mut AppState, line: &str) -> Result<String> 
     }
 
     match run_repl_command(state, command, overrides)? {
-        ReplCommandOutput::Rows(mut rows) => {
-            rows = apply_pipeline(rows, &parsed.stages).map_err(|err| miette!("{err:#}"))?;
-            let rendered = render_rows(&rows, &state.ui.render_settings);
-            state.record_repl_rows(line, rows);
+        ReplCommandOutput::Output(mut output) => {
+            if !parsed.stages.is_empty() {
+                let rows = output_to_rows(&output);
+                let rows =
+                    apply_pipeline(rows, &parsed.stages).map_err(|err| miette!("{err:#}"))?;
+                output = rows_to_output_result(rows);
+            }
+
+            let rendered = render_output(&output, &state.ui.render_settings);
+            state.record_repl_rows(line, output_to_rows(&output));
             Ok(rendered)
         }
         ReplCommandOutput::Text(text) => Ok(text),
@@ -651,13 +662,19 @@ fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result<i32> {
     match args.command {
         ThemeCommands::List => {
             let rows = theme_list_rows(&state.ui.render_settings.theme_name);
-            print!("{}", render_rows(&rows, &state.ui.render_settings));
+            print!(
+                "{}",
+                render_output(&rows_to_output_result(rows), &state.ui.render_settings)
+            );
             Ok(0)
         }
         ThemeCommands::Show(ThemeShowArgs { name }) => {
             let selected = name.unwrap_or_else(|| state.ui.render_settings.theme_name.clone());
             let rows = theme_show_rows(&selected)?;
-            print!("{}", render_rows(&rows, &state.ui.render_settings));
+            print!(
+                "{}",
+                render_output(&rows_to_output_result(rows), &state.ui.render_settings)
+            );
             Ok(0)
         }
         ThemeCommands::Use(ThemeUseArgs { name }) => {
@@ -772,7 +789,10 @@ fn run_repl_external_command(
     if !messages.is_empty() {
         emit_messages_with_verbosity(state, &messages, overrides.message_verbosity);
     }
-    Ok(ReplCommandOutput::Rows(response_to_rows(response.data)))
+    Ok(ReplCommandOutput::Output(plugin_data_to_output_result(
+        response.data,
+        Some(&response.meta),
+    )))
 }
 
 fn run_plugins_repl_command(state: &AppState, args: PluginsArgs) -> Result<ReplCommandOutput> {
@@ -783,16 +803,22 @@ fn run_plugins_repl_command(state: &AppState, args: PluginsArgs) -> Result<ReplC
                 .list_plugins()
                 .map_err(|err| miette!("{err:#}"))?;
             plugins.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
-            Ok(ReplCommandOutput::Rows(plugin_list_rows(&plugins)))
+            Ok(ReplCommandOutput::Output(rows_to_output_result(
+                plugin_list_rows(&plugins),
+            )))
         }
         PluginsCommands::Commands => {
             let mut commands = authorized_command_catalog(state)?;
             commands.sort_by(|a, b| a.name.cmp(&b.name));
-            Ok(ReplCommandOutput::Rows(command_catalog_rows(&commands)))
+            Ok(ReplCommandOutput::Output(rows_to_output_result(
+                command_catalog_rows(&commands),
+            )))
         }
         PluginsCommands::Doctor => {
             let report = plugin_manager.doctor().map_err(|err| miette!("{err:#}"))?;
-            Ok(ReplCommandOutput::Rows(doctor_rows(&report)))
+            Ok(ReplCommandOutput::Output(rows_to_output_result(
+                doctor_rows(&report),
+            )))
         }
         PluginsCommands::Enable(PluginToggleArgs { plugin_id }) => {
             plugin_manager
@@ -815,12 +841,14 @@ fn run_plugins_repl_command(state: &AppState, args: PluginsArgs) -> Result<ReplC
 
 fn run_theme_repl_command(state: &mut AppState, args: ThemeArgs) -> Result<ReplCommandOutput> {
     match args.command {
-        ThemeCommands::List => Ok(ReplCommandOutput::Rows(theme_list_rows(
-            &state.ui.render_settings.theme_name,
+        ThemeCommands::List => Ok(ReplCommandOutput::Output(rows_to_output_result(
+            theme_list_rows(&state.ui.render_settings.theme_name),
         ))),
         ThemeCommands::Show(ThemeShowArgs { name }) => {
             let selected = name.unwrap_or_else(|| state.ui.render_settings.theme_name.clone());
-            Ok(ReplCommandOutput::Rows(theme_show_rows(&selected)?))
+            Ok(ReplCommandOutput::Output(rows_to_output_result(
+                theme_show_rows(&selected)?,
+            )))
         }
         ThemeCommands::Use(ThemeUseArgs { name }) => {
             let selected = resolve_known_theme_name(&name)?;
@@ -868,12 +896,18 @@ fn run_config_command(state: &mut AppState, args: ConfigArgs) -> Result<i32> {
     match args.command {
         ConfigCommands::Show(show) => {
             let rows = config_show_rows(state, show);
-            print!("{}", render_rows(&rows, &state.ui.render_settings));
+            print!(
+                "{}",
+                render_output(&rows_to_output_result(rows), &state.ui.render_settings)
+            );
             Ok(0)
         }
         ConfigCommands::Get(get) => match config_get_rows(state, get)? {
             Some(rows) => {
-                print!("{}", render_rows(&rows, &state.ui.render_settings));
+                print!(
+                    "{}",
+                    render_output(&rows_to_output_result(rows), &state.ui.render_settings)
+                );
                 Ok(0)
             }
             None => Ok(1),
@@ -888,7 +922,10 @@ fn run_config_command(state: &mut AppState, args: ConfigArgs) -> Result<i32> {
         ConfigCommands::Set(set) => run_config_set(state, set),
         ConfigCommands::Diagnostics => {
             let rows = config_diagnostics_rows(state);
-            print!("{}", render_rows(&rows, &state.ui.render_settings));
+            print!(
+                "{}",
+                render_output(&rows_to_output_result(rows), &state.ui.render_settings)
+            );
             Ok(0)
         }
     }
@@ -896,9 +933,11 @@ fn run_config_command(state: &mut AppState, args: ConfigArgs) -> Result<i32> {
 
 fn run_config_repl_command(state: &mut AppState, args: ConfigArgs) -> Result<ReplCommandOutput> {
     match args.command {
-        ConfigCommands::Show(show) => Ok(ReplCommandOutput::Rows(config_show_rows(state, show))),
+        ConfigCommands::Show(show) => Ok(ReplCommandOutput::Output(rows_to_output_result(
+            config_show_rows(state, show),
+        ))),
         ConfigCommands::Get(get) => match config_get_rows(state, get)? {
-            Some(rows) => Ok(ReplCommandOutput::Rows(rows)),
+            Some(rows) => Ok(ReplCommandOutput::Output(rows_to_output_result(rows))),
             None => Ok(ReplCommandOutput::Text(String::new())),
         },
         ConfigCommands::Explain(explain) => match config_explain_output(state, explain)? {
@@ -909,7 +948,9 @@ fn run_config_repl_command(state: &mut AppState, args: ConfigArgs) -> Result<Rep
             run_config_set(state, set)?;
             Ok(ReplCommandOutput::Text(String::new()))
         }
-        ConfigCommands::Diagnostics => Ok(ReplCommandOutput::Rows(config_diagnostics_rows(state))),
+        ConfigCommands::Diagnostics => Ok(ReplCommandOutput::Output(rows_to_output_result(
+            config_diagnostics_rows(state),
+        ))),
     }
 }
 
@@ -1095,7 +1136,10 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<i32> {
             print!("{}", render_config_explain_text(&explain, false));
         }
     } else {
-        print!("{}", render_rows(&rows, &state.ui.render_settings));
+        print!(
+            "{}",
+            render_output(&rows_to_output_result(rows), &state.ui.render_settings)
+        );
     }
 
     messages.success(format!(
@@ -1594,32 +1638,8 @@ fn run_external_command(state: &AppState, tokens: &[String]) -> Result<i32> {
         emit_messages(state, &messages);
     }
 
-    let data = response.data;
-    match data {
-        serde_json::Value::Array(items)
-            if items
-                .iter()
-                .all(|item| matches!(item, serde_json::Value::Object(_))) =>
-        {
-            let rows = items
-                .into_iter()
-                .filter_map(|item| item.as_object().cloned())
-                .collect::<Vec<Row>>();
-            print!("{}", render_rows(&rows, settings));
-        }
-        serde_json::Value::Object(map) => {
-            let rows = vec![map];
-            print!("{}", render_rows(&rows, settings));
-        }
-        scalar => {
-            let rows = vec![{
-                let mut row = Row::new();
-                row.insert("value".to_string(), scalar);
-                row
-            }];
-            print!("{}", render_rows(&rows, settings));
-        }
-    }
+    let output = plugin_data_to_output_result(response.data, Some(&response.meta));
+    print!("{}", render_output(&output, settings));
 
     Ok(0)
 }
@@ -1829,18 +1849,20 @@ fn emit_messages_with_verbosity(
     verbosity: MessageLevel,
 ) {
     let resolved = state.ui.render_settings.resolve_render_settings();
-    let boxed = state
+    let message_format = state
         .config
         .resolved()
-        .get_bool("ui.messages.boxed")
-        .unwrap_or(true);
-    let rendered = messages.render_grouped_styled(
+        .get_string("ui.messages.format")
+        .and_then(MessageRenderFormat::parse)
+        .unwrap_or(MessageRenderFormat::Rules);
+    let rendered = messages.render_grouped_styled_with_overrides(
         verbosity,
         resolved.color,
         resolved.unicode,
         resolved.width,
         &resolved.theme_name,
-        boxed,
+        message_format,
+        &resolved.style_overrides,
     );
     if !rendered.is_empty() {
         eprint!("{rendered}");
@@ -1865,6 +1887,87 @@ fn response_to_rows(data: serde_json::Value) -> Vec<Row> {
             row.insert("value".to_string(), scalar);
             vec![row]
         }
+    }
+}
+
+fn rows_to_output_result(rows: Vec<Row>) -> OutputResult {
+    OutputResult {
+        meta: OutputMeta {
+            key_index: compute_key_index(&rows),
+            wants_copy: false,
+            grouped: false,
+        },
+        items: OutputItems::Rows(rows),
+    }
+}
+
+fn output_to_rows(output: &OutputResult) -> Vec<Row> {
+    match &output.items {
+        OutputItems::Rows(rows) => rows.clone(),
+        OutputItems::Groups(groups) => {
+            let mut out = Vec::new();
+            for group in groups {
+                if group.rows.is_empty() {
+                    out.push(merge_group_header_row(group));
+                    continue;
+                }
+                for row in &group.rows {
+                    out.push(merge_group_row(group, row));
+                }
+            }
+            out
+        }
+    }
+}
+
+fn compute_key_index(rows: &[Row]) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut seen = HashSet::new();
+    for row in rows {
+        for key in row.keys() {
+            if seen.insert(key.clone()) {
+                keys.push(key.clone());
+            }
+        }
+    }
+    keys
+}
+
+fn merge_group_header_row(group: &osp_core::output_model::Group) -> Row {
+    let mut row = group.groups.clone();
+    for (key, value) in &group.aggregates {
+        row.insert(key.clone(), value.clone());
+    }
+    row
+}
+
+fn merge_group_row(group: &osp_core::output_model::Group, row: &Row) -> Row {
+    let mut merged = group.groups.clone();
+    for (key, value) in &group.aggregates {
+        merged.insert(key.clone(), value.clone());
+    }
+    for (key, value) in row {
+        merged.insert(key.clone(), value.clone());
+    }
+    merged
+}
+
+fn plugin_data_to_output_result(
+    data: serde_json::Value,
+    meta: Option<&ResponseMetaV1>,
+) -> OutputResult {
+    let rows = response_to_rows(data);
+    let key_index = meta
+        .and_then(|value| value.columns.clone())
+        .filter(|columns| !columns.is_empty())
+        .unwrap_or_else(|| compute_key_index(&rows));
+    OutputResult {
+        items: OutputItems::Rows(rows),
+        meta: OutputMeta {
+            key_index,
+            wants_copy: false,
+            grouped: false,
+        },
     }
 }
 
@@ -2489,7 +2592,15 @@ JSON
             color: ColorMode::Never,
             unicode: UnicodeMode::Never,
             width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
             theme_name: DEFAULT_THEME_NAME.to_string(),
+            style_overrides: osp_ui::StyleOverrides::default(),
         };
 
         AppState::new(

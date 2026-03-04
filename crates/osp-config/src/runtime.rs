@@ -12,7 +12,13 @@ pub const DEFAULT_DEBUG_LEVEL: i64 = 0;
 pub const DEFAULT_LOG_FILE_ENABLED: bool = false;
 pub const DEFAULT_LOG_FILE_LEVEL: &str = "warn";
 pub const DEFAULT_UI_WIDTH: i64 = 72;
-pub const DEFAULT_UI_MESSAGES_BOXED: bool = true;
+pub const DEFAULT_UI_MARGIN: i64 = 0;
+pub const DEFAULT_UI_INDENT: i64 = 2;
+pub const DEFAULT_UI_MESSAGES_FORMAT: &str = "rules";
+pub const DEFAULT_UI_SHORT_LIST_MAX: i64 = 1;
+pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
+pub const DEFAULT_UI_GRID_PADDING: i64 = 4;
+pub const DEFAULT_UI_COLUMN_WEIGHT: i64 = 3;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
@@ -89,9 +95,29 @@ pub struct RuntimeDefaults {
     pub log_file_path: String,
     pub log_file_level: String,
     pub ui_width: i64,
-    pub ui_messages_boxed: bool,
+    pub ui_margin: i64,
+    pub ui_indent: i64,
+    pub ui_messages_format: String,
+    pub ui_short_list_max: i64,
+    pub ui_medium_list_max: i64,
+    pub ui_grid_padding: i64,
+    pub ui_grid_columns: Option<i64>,
+    pub ui_column_weight: i64,
     pub color_prompt_text: String,
     pub color_prompt_command: String,
+    pub color_table_header: String,
+    pub color_mreg_key: String,
+    pub color_value: String,
+    pub color_value_number: String,
+    pub color_value_bool_true: String,
+    pub color_value_bool_false: String,
+    pub color_value_null: String,
+    pub color_value_ipv4: String,
+    pub color_value_ipv6: String,
+    pub color_panel_border: String,
+    pub color_panel_title: String,
+    pub color_code: String,
+    pub color_json_key: String,
 }
 
 impl RuntimeDefaults {
@@ -113,9 +139,29 @@ impl RuntimeDefaults {
             log_file_path: default_log_file_path(),
             log_file_level: DEFAULT_LOG_FILE_LEVEL.to_string(),
             ui_width: DEFAULT_UI_WIDTH,
-            ui_messages_boxed: DEFAULT_UI_MESSAGES_BOXED,
+            ui_margin: DEFAULT_UI_MARGIN,
+            ui_indent: DEFAULT_UI_INDENT,
+            ui_messages_format: DEFAULT_UI_MESSAGES_FORMAT.to_string(),
+            ui_short_list_max: DEFAULT_UI_SHORT_LIST_MAX,
+            ui_medium_list_max: DEFAULT_UI_MEDIUM_LIST_MAX,
+            ui_grid_padding: DEFAULT_UI_GRID_PADDING,
+            ui_grid_columns: None,
+            ui_column_weight: DEFAULT_UI_COLUMN_WEIGHT,
             color_prompt_text: String::new(),
             color_prompt_command: String::new(),
+            color_table_header: String::new(),
+            color_mreg_key: String::new(),
+            color_value: String::new(),
+            color_value_number: String::new(),
+            color_value_bool_true: String::new(),
+            color_value_bool_false: String::new(),
+            color_value_null: String::new(),
+            color_value_ipv4: String::new(),
+            color_value_ipv6: String::new(),
+            color_panel_border: String::new(),
+            color_panel_title: String::new(),
+            color_code: String::new(),
+            color_json_key: String::new(),
         }
     }
 
@@ -137,9 +183,34 @@ impl RuntimeDefaults {
         layer.set("log.file.path", self.log_file_path.clone());
         layer.set("log.file.level", self.log_file_level.clone());
         layer.set("ui.width", self.ui_width);
-        layer.set("ui.messages.boxed", self.ui_messages_boxed);
+        layer.set("ui.margin", self.ui_margin);
+        layer.set("ui.indent", self.ui_indent);
+        layer.set("ui.messages.format", self.ui_messages_format.clone());
+        layer.set("ui.short_list_max", self.ui_short_list_max);
+        layer.set("ui.medium_list_max", self.ui_medium_list_max);
+        layer.set("ui.grid_padding", self.ui_grid_padding);
+        if let Some(value) = self.ui_grid_columns {
+            layer.set("ui.grid_columns", value);
+        }
+        layer.set("ui.column_weight", self.ui_column_weight);
         layer.set("color.prompt.text", self.color_prompt_text.clone());
         layer.set("color.prompt.command", self.color_prompt_command.clone());
+        layer.set("color.table.header", self.color_table_header.clone());
+        layer.set("color.mreg.key", self.color_mreg_key.clone());
+        layer.set("color.value", self.color_value.clone());
+        layer.set("color.value.number", self.color_value_number.clone());
+        layer.set("color.value.bool_true", self.color_value_bool_true.clone());
+        layer.set(
+            "color.value.bool_false",
+            self.color_value_bool_false.clone(),
+        );
+        layer.set("color.value.null", self.color_value_null.clone());
+        layer.set("color.value.ipv4", self.color_value_ipv4.clone());
+        layer.set("color.value.ipv6", self.color_value_ipv6.clone());
+        layer.set("color.panel.border", self.color_panel_border.clone());
+        layer.set("color.panel.title", self.color_panel_title.clone());
+        layer.set("color.code", self.color_code.clone());
+        layer.set("color.json.key", self.color_json_key.clone());
         layer
     }
 }

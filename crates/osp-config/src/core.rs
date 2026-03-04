@@ -201,7 +201,17 @@ impl Default for ConfigSchema {
             SchemaEntry::string().with_allowed_values(["auto", "always", "never"]),
         );
         schema.insert("ui.width", SchemaEntry::integer());
-        schema.insert("ui.messages.boxed", SchemaEntry::boolean());
+        schema.insert("ui.margin", SchemaEntry::integer());
+        schema.insert("ui.indent", SchemaEntry::integer());
+        schema.insert(
+            "ui.messages.format",
+            SchemaEntry::string().with_allowed_values(["rules", "groups", "boxes"]),
+        );
+        schema.insert("ui.short_list_max", SchemaEntry::integer());
+        schema.insert("ui.medium_list_max", SchemaEntry::integer());
+        schema.insert("ui.grid_padding", SchemaEntry::integer());
+        schema.insert("ui.grid_columns", SchemaEntry::integer());
+        schema.insert("ui.column_weight", SchemaEntry::integer());
         schema.insert(
             "ui.verbosity.level",
             SchemaEntry::string()
@@ -218,6 +228,19 @@ impl Default for ConfigSchema {
         schema.insert("session.cache.max_results", SchemaEntry::integer());
         schema.insert("color.prompt.text", SchemaEntry::string());
         schema.insert("color.prompt.command", SchemaEntry::string());
+        schema.insert("color.table.header", SchemaEntry::string());
+        schema.insert("color.mreg.key", SchemaEntry::string());
+        schema.insert("color.value", SchemaEntry::string());
+        schema.insert("color.value.number", SchemaEntry::string());
+        schema.insert("color.value.bool_true", SchemaEntry::string());
+        schema.insert("color.value.bool_false", SchemaEntry::string());
+        schema.insert("color.value.null", SchemaEntry::string());
+        schema.insert("color.value.ipv4", SchemaEntry::string());
+        schema.insert("color.value.ipv6", SchemaEntry::string());
+        schema.insert("color.panel.border", SchemaEntry::string());
+        schema.insert("color.panel.title", SchemaEntry::string());
+        schema.insert("color.code", SchemaEntry::string());
+        schema.insert("color.json.key", SchemaEntry::string());
         schema.insert("auth.visible.builtins", SchemaEntry::string());
         schema.insert("auth.visible.plugins", SchemaEntry::string());
         schema.insert("debug.level", SchemaEntry::integer());
