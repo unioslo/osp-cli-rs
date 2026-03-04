@@ -1,5 +1,6 @@
 pub mod document;
 mod formatter;
+mod layout;
 pub mod messages;
 mod renderer;
 pub mod style;
@@ -11,8 +12,8 @@ use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_core::row::Row;
 
 pub use document::{
-    Document, JsonBlock, MregBlock, MregEntry, MregRow, MregValue, TableBlock, TableStyle,
-    ValueBlock,
+    CodeBlock, Document, JsonBlock, LineBlock, LinePart, MregBlock, MregEntry, MregRow, MregValue,
+    PanelBlock, PanelRules, TableBlock, TableStyle, ValueBlock,
 };
 
 #[derive(Debug, Clone)]
@@ -123,8 +124,20 @@ pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {
         theme_name: settings.theme_name.clone(),
     };
     let document = formatter::build_document(rows, &copy_settings);
+    render_document_for_copy(&document, &copy_settings)
+}
+
+pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) -> String {
+    let copy_settings = RenderSettings {
+        format: settings.format,
+        mode: RenderMode::Plain,
+        color: ColorMode::Never,
+        unicode: UnicodeMode::Never,
+        width: settings.width,
+        theme_name: settings.theme_name.clone(),
+    };
     let resolved = copy_settings.resolve_render_settings();
-    renderer::render_document(&document, resolved)
+    renderer::render_document(document, resolved)
 }
 
 #[cfg(test)]

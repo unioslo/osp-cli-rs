@@ -7,10 +7,44 @@ pub struct Document {
 
 #[derive(Debug, Clone)]
 pub enum Block {
+    Line(LineBlock),
+    Panel(PanelBlock),
+    Code(CodeBlock),
     Json(JsonBlock),
     Table(TableBlock),
     Value(ValueBlock),
     Mreg(MregBlock),
+}
+
+#[derive(Debug, Clone)]
+pub struct LineBlock {
+    pub parts: Vec<LinePart>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LinePart {
+    pub text: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PanelBlock {
+    pub title: Option<String>,
+    pub body: Document,
+    pub rules: PanelRules,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelRules {
+    None,
+    Top,
+    Bottom,
+    Both,
+}
+
+#[derive(Debug, Clone)]
+pub struct CodeBlock {
+    pub code: String,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone)]
