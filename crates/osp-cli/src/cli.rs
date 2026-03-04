@@ -1,8 +1,7 @@
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use osp_config::ResolvedConfig;
+use osp_config::{ConfigValue, ResolvedConfig};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_ui::RenderSettings;
-use osp_ui::messages::{MessageLevel, adjust_verbosity};
 use osp_ui::theme::DEFAULT_THEME_NAME;
 use std::path::PathBuf;
 
@@ -149,6 +148,15 @@ pub struct InlineCommandCli {
 #[derive(Debug, Parser)]
 #[command(name = "osp", no_binary_name = true)]
 pub struct ReplCli {
+    #[arg(short = 'v', long = "verbose", action = ArgAction::Count)]
+    pub verbose: u8,
+
+    #[arg(short = 'q', long = "quiet", action = ArgAction::Count)]
+    pub quiet: u8,
+
+    #[arg(short = 'd', long = "debug", action = ArgAction::Count)]
+    pub debug: u8,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -305,10 +313,6 @@ impl Cli {
         }
     }
 
-    pub fn message_verbosity(&self) -> MessageLevel {
-        adjust_verbosity(MessageLevel::Success, self.verbose, self.quiet)
-    }
-
     pub fn seed_render_settings_from_config(
         &self,
         settings: &mut RenderSettings,
@@ -342,6 +346,22 @@ impl Cli {
             && let Some(parsed) = parse_color_mode(value)
         {
             settings.color = parsed;
+        }
+
+        if settings.width.is_none() {
+            match config.get("ui.width") {
+                Some(ConfigValue::Integer(width)) if *width > 0 => {
+                    settings.width = Some(*width as usize);
+                }
+                Some(ConfigValue::String(raw)) => {
+                    if let Ok(width) = raw.trim().parse::<usize>()
+                        && width > 0
+                    {
+                        settings.width = Some(width);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 

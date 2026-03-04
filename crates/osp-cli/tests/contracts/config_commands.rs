@@ -199,10 +199,10 @@ fn config_explain_reports_interpolation_trace_contract() {
 [default]
 profile.default = "uio"
 base.dir = "/etc/osp"
-ui.prompt = "${profile.active}:${ldap.url}:${base.dir}"
+ui.prompt = "${profile.active}:${extensions.uio.ldap.url}:${base.dir}"
 
 [profile.uio]
-ldap.url = "ldaps://ldap.uio.no"
+extensions.uio.ldap.url = "ldaps://ldap.uio.no"
 "#,
     );
 
@@ -216,9 +216,11 @@ ldap.url = "ldaps://ldap.uio.no"
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"interpolation\""))
-        .stdout(predicate::str::contains("\"placeholder\": \"ldap.url\""))
         .stdout(predicate::str::contains(
-            "\"template\": \"${profile.active}:${ldap.url}:${base.dir}\"",
+            "\"placeholder\": \"extensions.uio.ldap.url\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"template\": \"${profile.active}:${extensions.uio.ldap.url}:${base.dir}\"",
         ));
 
     let _ = std::fs::remove_dir_all(&home);
@@ -233,7 +235,7 @@ fn config_explain_redacts_secrets_unless_flag_contract() {
         r#"
 [default]
 profile.default = "uio"
-ldap.bind_password = "file-secret"
+extensions.uio.ldap.bind_password = "file-secret"
 "#,
     );
 
@@ -241,7 +243,12 @@ ldap.bind_password = "file-secret"
     redacted
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "config", "explain", "ldap.bind_password"]);
+        .args([
+            "--json",
+            "config",
+            "explain",
+            "extensions.uio.ldap.bind_password",
+        ]);
     redacted
         .assert()
         .success()
@@ -253,7 +260,7 @@ ldap.bind_password = "file-secret"
         "--json",
         "config",
         "explain",
-        "ldap.bind_password",
+        "extensions.uio.ldap.bind_password",
         "--show-secrets",
     ]);
     clear

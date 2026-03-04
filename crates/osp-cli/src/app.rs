@@ -1,15 +1,18 @@
 use clap::Parser;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
-    ChainedLoader, ConfigExplain, ConfigLayer, ConfigResolver, ConfigValue, EnvSecretsLoader,
-    EnvVarLoader, LoaderPipeline, ResolveOptions, ResolvedConfig, ResolvedValue, SecretsTomlLoader,
-    StaticLayerLoader, TomlFileLoader,
+    ConfigExplain, ConfigLayer, ConfigResolver, ConfigSchema, ConfigValue,
+    DEFAULT_REPL_HISTORY_MAX_ENTRIES, DEFAULT_SESSION_CACHE_MAX_RESULTS, DEFAULT_UI_WIDTH,
+    ResolveOptions, ResolvedConfig, ResolvedValue, RuntimeConfigPaths, RuntimeDefaults, Scope,
+    build_runtime_pipeline, set_scoped_value_in_toml,
 };
 use osp_core::output::OutputFormat;
+use osp_core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use osp_core::row::Row;
+use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use osp_dsl::{apply_pipeline, parse_pipeline};
 use osp_repl::{ReplPrompt, run_repl};
-use osp_ui::messages::{MessageBuffer, render_section_divider};
+use osp_ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity, render_section_divider};
 use osp_ui::render_rows;
 use osp_ui::style::{StyleToken, apply_style, apply_style_spec};
 use osp_ui::theme::{
@@ -20,13 +23,16 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::cli::{
-    Cli, Commands, ConfigArgs, ConfigCommands, ConfigExplainArgs, ConfigGetArgs, ConfigShowArgs,
-    PluginToggleArgs, PluginsArgs, PluginsCommands, ThemeArgs, ThemeCommands, ThemeShowArgs,
-    ThemeUseArgs, parse_inline_command_tokens, parse_repl_tokens,
+    Cli, Commands, ConfigArgs, ConfigCommands, ConfigExplainArgs, ConfigGetArgs, ConfigSetArgs,
+    ConfigShowArgs, PluginToggleArgs, PluginsArgs, PluginsCommands, ThemeArgs, ThemeCommands,
+    ThemeShowArgs, ThemeUseArgs, parse_inline_command_tokens, parse_repl_tokens,
 };
-use crate::logging::init_developer_logging;
+use crate::logging::{
+    DeveloperLoggingConfig, FileLoggingConfig, init_developer_logging, parse_level_filter,
+};
 use crate::plugin_manager::{
-    CommandCatalogEntry, DoctorReport, PluginDispatchError, PluginManager, PluginSummary,
+    CommandCatalogEntry, DoctorReport, PluginDispatchContext, PluginDispatchError, PluginManager,
+    PluginSummary,
 };
 use crate::state::{AppState, RuntimeContext, TerminalKind};
 
@@ -46,11 +52,25 @@ const CMD_LIST: &str = "list";
 const CMD_SHOW: &str = "show";
 const CMD_USE: &str = "use";
 const DEFAULT_REPL_PROMPT: &str = "╭─{user}@{domain} {indicator}\n╰─{profile}> ";
+const CURRENT_TERMINAL_SENTINEL: &str = "__current__";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigStore {
+    Session,
+    Config,
+    Secrets,
+}
 
 #[derive(Debug, Clone)]
 struct ReplCommandSpec {
     name: Cow<'static, str>,
     supports_dsl: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReplDispatchOverrides {
+    message_verbosity: MessageLevel,
+    debug_verbosity: u8,
 }
 
 enum ReplCommandOutput {
@@ -73,10 +93,7 @@ where
 }
 
 fn run(mut cli: Cli) -> Result<i32> {
-    init_developer_logging(cli.debug);
-    tracing::debug!(debug_count = cli.debug, "developer logging initialized");
-
-    let initial_config = resolve_runtime_config(cli.profile.clone(), Some("cli"))?;
+    let initial_config = resolve_runtime_config(cli.profile.clone(), Some("cli"), None)?;
     let known_profiles = initial_config.known_profiles().clone();
     let dispatch = build_dispatch_plan(&mut cli, &known_profiles)?;
 
@@ -96,19 +113,31 @@ fn run(mut cli: Cli) -> Result<i32> {
     let config = resolve_runtime_config(
         runtime_context.profile_override().map(ToOwned::to_owned),
         Some(runtime_context.terminal_kind().as_config_terminal()),
+        None,
     )?;
     let mut render_settings = cli.render_settings();
     cli.seed_render_settings_from_config(&mut render_settings, &config);
+    if render_settings.width.is_none() {
+        render_settings.width = Some(config_usize(&config, "ui.width", DEFAULT_UI_WIDTH as usize));
+    }
     render_settings.theme_name = resolve_theme_name(&cli, &config)?;
+    let message_verbosity = effective_message_verbosity(&cli, &config);
+    let debug_verbosity = effective_debug_verbosity(&cli, &config);
+    init_developer_logging(build_logging_config(&config, debug_verbosity));
+    tracing::debug!(
+        debug_count = debug_verbosity,
+        "developer logging initialized"
+    );
 
     let mut state = AppState::new(
         runtime_context,
         config,
         render_settings,
-        cli.message_verbosity(),
-        cli.debug,
+        message_verbosity,
+        debug_verbosity,
         PluginManager::new(cli.plugin_dirs.clone()),
     );
+    ensure_dispatch_visibility(&state, &dispatch.action)?;
 
     tracing::info!(
         profile = %state.config.resolved().active_profile(),
@@ -120,7 +149,7 @@ fn run(mut cli: Cli) -> Result<i32> {
         RunAction::Repl => run_plugin_repl(&mut state),
         RunAction::Plugins(args) => run_plugins_command(&state, args),
         RunAction::Theme(args) => run_theme_command(&mut state, args),
-        RunAction::Config(args) => run_config_command(&state, args),
+        RunAction::Config(args) => run_config_command(&mut state, args),
         RunAction::External(tokens) => run_external_command(&state, &tokens),
     }
 }
@@ -189,24 +218,65 @@ fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Resu
     }
 }
 
+fn ensure_dispatch_visibility(state: &AppState, action: &RunAction) -> Result<()> {
+    match action {
+        RunAction::Plugins(_) => ensure_builtin_visible(state, CMD_PLUGINS),
+        RunAction::Theme(_) => ensure_builtin_visible(state, CMD_THEME),
+        RunAction::Config(_) => ensure_builtin_visible(state, CMD_CONFIG),
+        RunAction::External(tokens) => {
+            if let Some(command) = tokens.first() {
+                ensure_plugin_visible(state, command)?;
+            }
+            Ok(())
+        }
+        RunAction::Repl => Ok(()),
+    }
+}
+
+fn ensure_builtin_visible(state: &AppState, command: &str) -> Result<()> {
+    if state.auth.is_builtin_visible(command) {
+        Ok(())
+    } else {
+        Err(miette!(
+            "command `{command}` is hidden by current auth policy"
+        ))
+    }
+}
+
+fn ensure_plugin_visible(state: &AppState, command: &str) -> Result<()> {
+    if state.auth.is_plugin_command_visible(command) {
+        Ok(())
+    } else {
+        Err(miette!(
+            "plugin command `{command}` is hidden by current auth policy"
+        ))
+    }
+}
+
 fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
-    let mut words = state
-        .clients
-        .plugins
-        .completion_words()
-        .map_err(|err| miette!("{err:#}"))?;
-    words.extend(
-        [
-            CMD_PLUGINS,
-            CMD_CONFIG,
-            CMD_THEME,
-            CMD_LIST,
-            CMD_SHOW,
-            CMD_USE,
-        ]
-        .into_iter()
-        .map(str::to_string),
-    );
+    let catalog = authorized_command_catalog(state)?;
+    let mut words = catalog_completion_words(&catalog);
+    if state.auth.is_builtin_visible(CMD_PLUGINS) {
+        words.extend([CMD_PLUGINS.to_string(), CMD_LIST.to_string()]);
+    }
+    if state.auth.is_builtin_visible(CMD_THEME) {
+        words.extend([
+            CMD_THEME.to_string(),
+            CMD_LIST.to_string(),
+            CMD_SHOW.to_string(),
+            CMD_USE.to_string(),
+        ]);
+    }
+    if state.auth.is_builtin_visible(CMD_CONFIG) {
+        words.extend([
+            CMD_CONFIG.to_string(),
+            "get".to_string(),
+            "show".to_string(),
+            "explain".to_string(),
+            "set".to_string(),
+            "diagnostics".to_string(),
+        ]);
+    }
     words.extend(
         available_theme_names()
             .into_iter()
@@ -215,13 +285,15 @@ fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     words.sort();
     words.dedup();
 
-    let mut help_text = state
-        .clients
-        .plugins
-        .repl_help_text()
-        .map_err(|err| miette!("{err:#}"))?;
-    help_text
-        .push_str("Backbone theme commands: theme list | theme show [name] | theme use <name>\n");
+    let mut help_text = catalog_help_text(&catalog);
+    if state.auth.is_builtin_visible(CMD_THEME) {
+        help_text.push_str(
+            "Backbone theme commands: theme list | theme show [name] | theme use <name>\n",
+        );
+    }
+    if state.auth.is_builtin_visible(CMD_CONFIG) {
+        help_text.push_str("Backbone config commands: config show|get|explain|set|diagnostics\n");
+    }
     if state
         .config
         .resolved()
@@ -231,10 +303,91 @@ fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
         print!("{}", render_repl_intro(state));
     }
     let prompt = build_repl_prompt(state);
-    run_repl(prompt, words, help_text, |line| {
-        execute_repl_plugin_line(state, line).map_err(|err| anyhow::anyhow!("{err:#}"))
-    })
+    let history_path = state
+        .config
+        .resolved()
+        .get_string("repl.history.path")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let defaults =
+                RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
+            PathBuf::from(defaults.repl_history_path)
+        });
+    let history_max_entries = config_usize(
+        state.config.resolved(),
+        "repl.history.max_entries",
+        DEFAULT_REPL_HISTORY_MAX_ENTRIES as usize,
+    );
+    run_repl(
+        prompt,
+        words,
+        help_text,
+        history_path,
+        history_max_entries,
+        |line| execute_repl_plugin_line(state, line).map_err(|err| anyhow::anyhow!("{err:#}")),
+    )
     .map_err(|err| miette!("{err:#}"))
+}
+
+fn authorized_command_catalog(state: &AppState) -> Result<Vec<CommandCatalogEntry>> {
+    let all = state
+        .clients
+        .plugins
+        .command_catalog()
+        .map_err(|err| miette!("{err:#}"))?;
+    Ok(all
+        .into_iter()
+        .filter(|entry| state.auth.is_plugin_command_visible(&entry.name))
+        .collect())
+}
+
+fn catalog_completion_words(catalog: &[CommandCatalogEntry]) -> Vec<String> {
+    let mut words = vec![
+        "help".to_string(),
+        "exit".to_string(),
+        "quit".to_string(),
+        "P".to_string(),
+        "F".to_string(),
+        "V".to_string(),
+        "|".to_string(),
+    ];
+    for entry in catalog {
+        words.push(entry.name.clone());
+        words.extend(entry.subcommands.clone());
+    }
+    words.sort();
+    words.dedup();
+    words
+}
+
+fn catalog_help_text(catalog: &[CommandCatalogEntry]) -> String {
+    let mut out = String::new();
+    out.push_str("Backbone commands: help, exit, quit\n");
+    if catalog.is_empty() {
+        out.push_str("No plugin commands available.\n");
+        return out;
+    }
+
+    out.push_str("Plugin commands:\n");
+    for command in catalog {
+        let subs = if command.subcommands.is_empty() {
+            "".to_string()
+        } else {
+            format!(" [{}]", command.subcommands.join(", "))
+        };
+        let about = if command.about.trim().is_empty() {
+            "-".to_string()
+        } else {
+            command.about.clone()
+        };
+        out.push_str(&format!(
+            "  {name}{subs} - {about} ({provider}/{source})\n",
+            name = command.name,
+            provider = command.provider,
+            source = command.source,
+        ));
+    }
+    out
 }
 
 fn render_repl_intro(state: &AppState) -> String {
@@ -417,6 +570,18 @@ fn execute_repl_plugin_line(state: &mut AppState, line: &str) -> Result<String> 
             return Err(miette!(err.to_string()));
         }
     };
+    let overrides = ReplDispatchOverrides {
+        message_verbosity: adjust_verbosity(
+            state.ui.message_verbosity,
+            parsed_command.verbose,
+            parsed_command.quiet,
+        ),
+        debug_verbosity: if parsed_command.debug > 0 {
+            parsed_command.debug.min(3)
+        } else {
+            state.ui.debug_verbosity
+        },
+    };
     let command = parsed_command
         .command
         .ok_or_else(|| miette!("missing command"))?;
@@ -428,7 +593,7 @@ fn execute_repl_plugin_line(state: &mut AppState, line: &str) -> Result<String> 
         ));
     }
 
-    match run_repl_command(state, command)? {
+    match run_repl_command(state, command, overrides)? {
         ReplCommandOutput::Rows(mut rows) => {
             rows = apply_pipeline(rows, &parsed.stages).map_err(|err| miette!("{err:#}"))?;
             let rendered = render_rows(&rows, &state.ui.render_settings);
@@ -451,9 +616,7 @@ fn run_plugins_command(state: &AppState, args: PluginsArgs) -> Result<i32> {
             Ok(0)
         }
         PluginsCommands::Commands => {
-            let mut commands = plugin_manager
-                .command_catalog()
-                .map_err(|err| miette!("{err:#}"))?;
+            let mut commands = authorized_command_catalog(state)?;
             commands.sort_by(|a, b| a.name.cmp(&b.name));
             print!("{}", format_command_catalog(&commands));
             Ok(0)
@@ -512,26 +675,67 @@ fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result<i32> {
     }
 }
 
-fn run_repl_command(state: &mut AppState, command: Commands) -> Result<ReplCommandOutput> {
+fn run_repl_command(
+    state: &mut AppState,
+    command: Commands,
+    overrides: ReplDispatchOverrides,
+) -> Result<ReplCommandOutput> {
     match command {
-        Commands::Plugins(args) => run_plugins_repl_command(&state.clients.plugins, args),
-        Commands::Theme(args) => run_theme_repl_command(state, args),
-        Commands::Config(_args) => Err(miette!(
-            "config commands are not yet available inside repl in this build"
-        )),
-        Commands::External(tokens) => run_repl_external_command(state, tokens),
+        Commands::Plugins(args) => {
+            ensure_builtin_visible(state, CMD_PLUGINS)?;
+            with_repl_verbosity_overrides(state, overrides, |state| {
+                run_plugins_repl_command(state, args)
+            })
+        }
+        Commands::Theme(args) => {
+            ensure_builtin_visible(state, CMD_THEME)?;
+            with_repl_verbosity_overrides(state, overrides, |state| {
+                run_theme_repl_command(state, args)
+            })
+        }
+        Commands::Config(args) => {
+            ensure_builtin_visible(state, CMD_CONFIG)?;
+            with_repl_verbosity_overrides(state, overrides, |state| {
+                run_config_repl_command(state, args)
+            })
+        }
+        Commands::External(tokens) => run_repl_external_command(state, tokens, overrides),
     }
 }
 
-fn run_repl_external_command(state: &AppState, tokens: Vec<String>) -> Result<ReplCommandOutput> {
+fn with_repl_verbosity_overrides<T, F>(
+    state: &mut AppState,
+    overrides: ReplDispatchOverrides,
+    run: F,
+) -> Result<T>
+where
+    F: FnOnce(&mut AppState) -> Result<T>,
+{
+    let previous_message = state.ui.message_verbosity;
+    let previous_debug = state.ui.debug_verbosity;
+    state.ui.message_verbosity = overrides.message_verbosity;
+    state.ui.debug_verbosity = overrides.debug_verbosity;
+    let result = run(state);
+    state.ui.message_verbosity = previous_message;
+    state.ui.debug_verbosity = previous_debug;
+    result
+}
+
+fn run_repl_external_command(
+    state: &AppState,
+    tokens: Vec<String>,
+    overrides: ReplDispatchOverrides,
+) -> Result<ReplCommandOutput> {
     let (command, args) = tokens
         .split_first()
         .ok_or_else(|| miette!("missing command"))?;
+    ensure_plugin_visible(state, command)?;
     if is_help_passthrough(args) {
+        let dispatch_context = plugin_dispatch_context(state, Some(overrides));
         let raw = state
             .clients
             .plugins
-            .dispatch_passthrough(command, args)
+            .dispatch_passthrough(command, args, &dispatch_context)
             .map_err(enrich_dispatch_error)?;
         if raw.status_code != 0 {
             return Err(miette!(
@@ -547,24 +751,32 @@ fn run_repl_external_command(state: &AppState, tokens: Vec<String>) -> Result<Re
         return Ok(ReplCommandOutput::Text(out));
     }
 
+    let dispatch_context = plugin_dispatch_context(state, Some(overrides));
     let response = state
         .clients
         .plugins
-        .dispatch(command, args)
+        .dispatch(command, args, &dispatch_context)
         .map_err(enrich_dispatch_error)?;
+    let mut messages = plugin_response_messages(&response);
     if !response.ok {
-        if let Some(error) = response.error {
-            return Err(miette!("{}: {}", error.code, error.message));
-        }
-        return Err(miette!("plugin command failed"));
+        let report = if let Some(error) = response.error {
+            messages.error(format!("{}: {}", error.code, error.message));
+            miette!("{}: {}", error.code, error.message)
+        } else {
+            messages.error("plugin command failed");
+            miette!("plugin command failed")
+        };
+        emit_messages_with_verbosity(state, &messages, overrides.message_verbosity);
+        return Err(report);
+    }
+    if !messages.is_empty() {
+        emit_messages_with_verbosity(state, &messages, overrides.message_verbosity);
     }
     Ok(ReplCommandOutput::Rows(response_to_rows(response.data)))
 }
 
-fn run_plugins_repl_command(
-    plugin_manager: &PluginManager,
-    args: PluginsArgs,
-) -> Result<ReplCommandOutput> {
+fn run_plugins_repl_command(state: &AppState, args: PluginsArgs) -> Result<ReplCommandOutput> {
+    let plugin_manager = &state.clients.plugins;
     match args.command {
         PluginsCommands::List => {
             let mut plugins = plugin_manager
@@ -574,9 +786,7 @@ fn run_plugins_repl_command(
             Ok(ReplCommandOutput::Rows(plugin_list_rows(&plugins)))
         }
         PluginsCommands::Commands => {
-            let mut commands = plugin_manager
-                .command_catalog()
-                .map_err(|err| miette!("{err:#}"))?;
+            let mut commands = authorized_command_catalog(state)?;
             commands.sort_by(|a, b| a.name.cmp(&b.name));
             Ok(ReplCommandOutput::Rows(command_catalog_rows(&commands)))
         }
@@ -644,61 +854,93 @@ fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
             name: Cow::Borrowed(CMD_THEME),
             supports_dsl: matches!(args.command, ThemeCommands::List | ThemeCommands::Show(_)),
         },
-        Commands::Config(_args) => ReplCommandSpec {
+        Commands::Config(args) => ReplCommandSpec {
             name: Cow::Borrowed(CMD_CONFIG),
-            supports_dsl: false,
+            supports_dsl: matches!(
+                args.command,
+                ConfigCommands::Show(_) | ConfigCommands::Get(_) | ConfigCommands::Diagnostics
+            ),
         },
     }
 }
 
-fn run_config_command(state: &AppState, args: ConfigArgs) -> Result<i32> {
+fn run_config_command(state: &mut AppState, args: ConfigArgs) -> Result<i32> {
     match args.command {
         ConfigCommands::Show(show) => {
-            run_config_show(state, show);
+            let rows = config_show_rows(state, show);
+            print!("{}", render_rows(&rows, &state.ui.render_settings));
             Ok(0)
         }
-        ConfigCommands::Get(get) => run_config_get(state, get),
-        ConfigCommands::Explain(explain) => run_config_explain(state, explain),
-        ConfigCommands::Set(_set) => Err(miette!(
-            "`config set` implementation is in progress; use the existing osprov-cli for writes currently"
-        )),
+        ConfigCommands::Get(get) => match config_get_rows(state, get)? {
+            Some(rows) => {
+                print!("{}", render_rows(&rows, &state.ui.render_settings));
+                Ok(0)
+            }
+            None => Ok(1),
+        },
+        ConfigCommands::Explain(explain) => match config_explain_output(state, explain)? {
+            Some(output) => {
+                print!("{output}");
+                Ok(0)
+            }
+            None => Ok(1),
+        },
+        ConfigCommands::Set(set) => run_config_set(state, set),
         ConfigCommands::Diagnostics => {
-            run_config_diagnostics(state);
+            let rows = config_diagnostics_rows(state);
+            print!("{}", render_rows(&rows, &state.ui.render_settings));
             Ok(0)
         }
     }
 }
 
-fn run_config_show(state: &AppState, args: ConfigShowArgs) {
-    let rows = state
+fn run_config_repl_command(state: &mut AppState, args: ConfigArgs) -> Result<ReplCommandOutput> {
+    match args.command {
+        ConfigCommands::Show(show) => Ok(ReplCommandOutput::Rows(config_show_rows(state, show))),
+        ConfigCommands::Get(get) => match config_get_rows(state, get)? {
+            Some(rows) => Ok(ReplCommandOutput::Rows(rows)),
+            None => Ok(ReplCommandOutput::Text(String::new())),
+        },
+        ConfigCommands::Explain(explain) => match config_explain_output(state, explain)? {
+            Some(output) => Ok(ReplCommandOutput::Text(output)),
+            None => Ok(ReplCommandOutput::Text(String::new())),
+        },
+        ConfigCommands::Set(set) => {
+            run_config_set(state, set)?;
+            Ok(ReplCommandOutput::Text(String::new()))
+        }
+        ConfigCommands::Diagnostics => Ok(ReplCommandOutput::Rows(config_diagnostics_rows(state))),
+    }
+}
+
+fn config_show_rows(state: &AppState, args: ConfigShowArgs) -> Vec<Row> {
+    state
         .config
         .resolved()
         .values()
         .iter()
         .map(|(key, entry)| config_entry_row(key, entry, args.sources, args.raw))
-        .collect::<Vec<Row>>();
-
-    print!("{}", render_rows(&rows, &state.ui.render_settings));
+        .collect::<Vec<Row>>()
 }
 
-fn run_config_get(state: &AppState, args: ConfigGetArgs) -> Result<i32> {
+fn config_get_rows(state: &AppState, args: ConfigGetArgs) -> Result<Option<Vec<Row>>> {
     let Some(entry) = state.config.resolved().get_value_entry(&args.key) else {
         let mut messages = MessageBuffer::default();
         messages.error(format!("config key not found: {}", args.key));
         emit_messages(state, &messages);
-        return Ok(1);
+        return Ok(None);
     };
 
     let row = config_entry_row(&args.key, entry, args.sources, args.raw);
-    print!("{}", render_rows(&vec![row], &state.ui.render_settings));
-    Ok(0)
+    Ok(Some(vec![row]))
 }
 
-fn run_config_explain(state: &AppState, args: ConfigExplainArgs) -> Result<i32> {
+fn config_explain_output(state: &AppState, args: ConfigExplainArgs) -> Result<Option<String>> {
     let explain = explain_runtime_config(
         Some(state.config.resolved().active_profile().to_string()),
         state.config.resolved().terminal(),
         &args.key,
+        Some(state.session.config_overrides.clone()),
     )?;
 
     if explain.final_entry.is_none() && explain.layers.is_empty() {
@@ -709,26 +951,24 @@ fn run_config_explain(state: &AppState, args: ConfigExplainArgs) -> Result<i32> 
             messages.info(format!("did you mean: {}", suggestions.join(", ")));
         }
         emit_messages(state, &messages);
-        return Ok(1);
+        return Ok(None);
     }
 
     if matches!(state.ui.render_settings.format, OutputFormat::Json) {
         let payload = config_explain_json(&explain, args.show_secrets);
-        println!(
-            "{}",
+        return Ok(Some(format!(
+            "{}\n",
             serde_json::to_string_pretty(&payload).into_diagnostic()?
-        );
-        return Ok(0);
+        )));
     }
 
-    print!(
-        "{}",
-        render_config_explain_text(&explain, args.show_secrets)
-    );
-    Ok(0)
+    Ok(Some(render_config_explain_text(
+        &explain,
+        args.show_secrets,
+    )))
 }
 
-fn run_config_diagnostics(state: &AppState) {
+fn config_diagnostics_rows(state: &AppState) -> Vec<Row> {
     let mut row = Row::new();
     row.insert("status".to_string(), "ok".into());
     row.insert(
@@ -751,40 +991,258 @@ fn run_config_diagnostics(state: &AppState) {
         "resolved_keys".to_string(),
         (state.config.resolved().values().len() as i64).into(),
     );
+    vec![row]
+}
 
-    print!("{}", render_rows(&vec![row], &state.ui.render_settings));
+fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<i32> {
+    let key = args.key.trim().to_ascii_lowercase();
+    let schema = ConfigSchema::default();
+    let value = schema
+        .parse_input_value(&key, &args.value)
+        .into_diagnostic()
+        .wrap_err("invalid value for key")?;
+    let store = resolve_config_store(state, &args);
+    let scopes = resolve_config_scopes(state, &args)?;
+
+    let mut rows = Vec::new();
+    let mut messages = MessageBuffer::default();
+    if matches!(store, ConfigStore::Config) && is_sensitive_key(&key) {
+        messages.warning("writing a sensitive key to config store; prefer --secrets");
+    }
+
+    let paths = RuntimeConfigPaths::discover();
+    for scope in &scopes {
+        let mut row = Row::new();
+        row.insert("key".to_string(), key.clone().into());
+        row.insert("value".to_string(), config_value_to_json(&value));
+        row.insert("scope".to_string(), format_scope(scope).into());
+        row.insert("store".to_string(), config_store_name(store).into());
+        row.insert("dry_run".to_string(), serde_json::Value::Bool(args.dry_run));
+
+        match store {
+            ConfigStore::Session => {
+                if !args.dry_run {
+                    state.session.config_overrides.insert(
+                        key.clone(),
+                        value.clone(),
+                        scope.clone(),
+                    );
+                }
+                row.insert("path".to_string(), serde_json::Value::Null);
+                row.insert("changed".to_string(), serde_json::Value::Bool(true));
+            }
+            ConfigStore::Config | ConfigStore::Secrets => {
+                let target_path = match store {
+                    ConfigStore::Config => paths.config_file.as_deref(),
+                    ConfigStore::Secrets => paths.secrets_file.as_deref(),
+                    ConfigStore::Session => None,
+                }
+                .ok_or_else(|| {
+                    miette!(
+                        "unable to resolve config path for {}",
+                        config_store_name(store)
+                    )
+                })?;
+
+                let set_result = set_scoped_value_in_toml(
+                    target_path,
+                    &key,
+                    &value,
+                    scope,
+                    args.dry_run,
+                    matches!(store, ConfigStore::Secrets),
+                )
+                .into_diagnostic()
+                .wrap_err("failed to persist config change")?;
+
+                row.insert("path".to_string(), target_path.display().to_string().into());
+                row.insert(
+                    "changed".to_string(),
+                    serde_json::Value::Bool(set_result.previous.as_ref() != Some(&value)),
+                );
+                row.insert(
+                    "previous".to_string(),
+                    set_result
+                        .previous
+                        .as_ref()
+                        .map(config_value_to_json)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+        }
+
+        rows.push(row);
+    }
+
+    if !args.dry_run {
+        refresh_runtime_config(state)?;
+    }
+
+    if args.explain {
+        let explain = explain_runtime_config(
+            Some(state.config.resolved().active_profile().to_string()),
+            state.config.resolved().terminal(),
+            &key,
+            Some(state.session.config_overrides.clone()),
+        )?;
+        if matches!(state.ui.render_settings.format, OutputFormat::Json) {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&config_explain_json(&explain, false))
+                    .into_diagnostic()?
+            );
+        } else {
+            print!("{}", render_config_explain_text(&explain, false));
+        }
+    } else {
+        print!("{}", render_rows(&rows, &state.ui.render_settings));
+    }
+
+    messages.success(format!(
+        "{} value for {} at {} scope",
+        if args.dry_run { "would set" } else { "set" },
+        key,
+        scopes
+            .first()
+            .map(format_scope)
+            .unwrap_or_else(|| "global".to_string())
+    ));
+    emit_messages(state, &messages);
+    Ok(0)
+}
+
+fn resolve_config_store(state: &AppState, args: &ConfigSetArgs) -> ConfigStore {
+    if args.session {
+        return ConfigStore::Session;
+    }
+    if args.config_store {
+        return ConfigStore::Config;
+    }
+    if args.secrets {
+        return ConfigStore::Secrets;
+    }
+    if args.save {
+        return ConfigStore::Config;
+    }
+    if matches!(state.context.terminal_kind(), TerminalKind::Repl) {
+        ConfigStore::Session
+    } else {
+        ConfigStore::Config
+    }
+}
+
+fn config_store_name(store: ConfigStore) -> &'static str {
+    match store {
+        ConfigStore::Session => "session",
+        ConfigStore::Config => "config",
+        ConfigStore::Secrets => "secrets",
+    }
+}
+
+fn resolve_config_scopes(state: &AppState, args: &ConfigSetArgs) -> Result<Vec<Scope>> {
+    let terminal = resolve_terminal_selector(state, args.terminal.as_deref());
+
+    if args.profile_all {
+        let profiles = if state.config.resolved().known_profiles().is_empty() {
+            vec![state.config.resolved().active_profile().to_string()]
+        } else {
+            state
+                .config
+                .resolved()
+                .known_profiles()
+                .iter()
+                .cloned()
+                .collect::<Vec<String>>()
+        };
+
+        let scopes = profiles
+            .into_iter()
+            .map(|profile| {
+                terminal.as_deref().map_or_else(
+                    || Scope::profile(&profile),
+                    |current| Scope::profile_terminal(&profile, current),
+                )
+            })
+            .collect::<Vec<Scope>>();
+        return Ok(scopes);
+    }
+
+    if args.global {
+        return Ok(vec![
+            terminal
+                .as_deref()
+                .map_or_else(Scope::global, Scope::terminal),
+        ]);
+    }
+
+    let profile = args
+        .profile
+        .as_deref()
+        .unwrap_or_else(|| state.config.resolved().active_profile());
+    Ok(vec![terminal.as_deref().map_or_else(
+        || Scope::profile(profile),
+        |current| Scope::profile_terminal(profile, current),
+    )])
+}
+
+fn resolve_terminal_selector(state: &AppState, selector: Option<&str>) -> Option<String> {
+    let value = selector?;
+    if value == CURRENT_TERMINAL_SENTINEL {
+        return Some(
+            state
+                .context
+                .terminal_kind()
+                .as_config_terminal()
+                .to_string(),
+        );
+    }
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_ascii_lowercase())
+    }
+}
+
+fn refresh_runtime_config(state: &mut AppState) -> Result<()> {
+    let next = resolve_runtime_config(
+        state.context.profile_override().map(ToOwned::to_owned),
+        Some(state.context.terminal_kind().as_config_terminal()),
+        Some(state.session.config_overrides.clone()),
+    )?;
+    let changed = state.config.replace_resolved(next);
+    if changed {
+        state.clients.sync_config_revision(state.config.revision());
+        state.auth = crate::state::AuthState::from_resolved(state.config.resolved());
+        state.ui.render_settings.theme_name = state
+            .config
+            .resolved()
+            .get_string("theme.name")
+            .unwrap_or(DEFAULT_THEME_NAME)
+            .to_string();
+        state.ui.render_settings.width = Some(config_usize(
+            state.config.resolved(),
+            "ui.width",
+            DEFAULT_UI_WIDTH as usize,
+        ));
+        state.session.max_cached_results = config_usize(
+            state.config.resolved(),
+            "session.cache.max_results",
+            DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
+        );
+    }
+    Ok(())
 }
 
 fn explain_runtime_config(
     profile_override: Option<String>,
     terminal: Option<&str>,
     key: &str,
+    session_layer: Option<ConfigLayer>,
 ) -> Result<ConfigExplain> {
-    let mut defaults = ConfigLayer::default();
-    defaults.set("profile.default", "default");
-    defaults.set("theme.name", DEFAULT_THEME_NAME);
-    defaults.set("user.name", default_user_name());
-    defaults.set("domain", default_domain_name());
-    defaults.set("repl.prompt", DEFAULT_REPL_PROMPT);
-    defaults.set("repl.simple_prompt", false);
-    defaults.set("repl.shell_indicator", "[{shell}]");
-    defaults.set("repl.intro", true);
-    defaults.set("ui.messages.boxed", true);
-    defaults.set("color.prompt.text", "");
-    defaults.set("color.prompt.command", "");
-    let mut pipeline = LoaderPipeline::new(StaticLayerLoader::new(defaults))
-        .with_env(EnvVarLoader::from_process_env());
-
-    if let Some(path) = config_path() {
-        pipeline = pipeline.with_file(TomlFileLoader::new(path).optional());
-    }
-    if let Some(path) = secrets_path() {
-        let secret_chain = ChainedLoader::new(SecretsTomlLoader::new(path).optional())
-            .with(EnvSecretsLoader::from_process_env());
-        pipeline = pipeline.with_secrets(secret_chain);
-    } else {
-        pipeline = pipeline.with_secrets(ChainedLoader::new(EnvSecretsLoader::from_process_env()));
-    }
+    let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
+    let paths = RuntimeConfigPaths::discover();
+    let pipeline = build_runtime_pipeline(defaults.to_layer(), &paths, None, session_layer);
 
     let layers = pipeline
         .load_layers()
@@ -1095,6 +1553,7 @@ fn run_external_command(state: &AppState, tokens: &[String]) -> Result<i32> {
     let (command, args) = tokens
         .split_first()
         .ok_or_else(|| miette!("missing external command"))?;
+    ensure_plugin_visible(state, command)?;
 
     tracing::debug!(
         command = %command,
@@ -1103,8 +1562,9 @@ fn run_external_command(state: &AppState, tokens: &[String]) -> Result<i32> {
     );
 
     if is_help_passthrough(args) {
+        let dispatch_context = plugin_dispatch_context(state, None);
         let raw = plugin_manager
-            .dispatch_passthrough(command, args)
+            .dispatch_passthrough(command, args, &dispatch_context)
             .map_err(enrich_dispatch_error)?;
         if !raw.stdout.is_empty() {
             print!("{}", raw.stdout);
@@ -1115,12 +1575,13 @@ fn run_external_command(state: &AppState, tokens: &[String]) -> Result<i32> {
         return Ok(raw.status_code);
     }
 
+    let dispatch_context = plugin_dispatch_context(state, None);
     let response = plugin_manager
-        .dispatch(command, args)
+        .dispatch(command, args, &dispatch_context)
         .map_err(enrich_dispatch_error)?;
 
+    let mut messages = plugin_response_messages(&response);
     if !response.ok {
-        let mut messages = MessageBuffer::default();
         if let Some(error) = response.error {
             messages.error(format!("{}: {}", error.code, error.message));
         } else {
@@ -1128,6 +1589,9 @@ fn run_external_command(state: &AppState, tokens: &[String]) -> Result<i32> {
         }
         emit_messages(state, &messages);
         return Ok(1);
+    }
+    if !messages.is_empty() {
+        emit_messages(state, &messages);
     }
 
     let data = response.data;
@@ -1235,7 +1699,135 @@ fn enrich_dispatch_error(err: PluginDispatchError) -> miette::Report {
     }
 }
 
+fn config_usize(config: &ResolvedConfig, key: &str, fallback: usize) -> usize {
+    match config.get(key) {
+        Some(ConfigValue::Integer(value)) if *value > 0 => *value as usize,
+        Some(ConfigValue::String(raw)) => raw
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .unwrap_or(fallback),
+        _ => fallback,
+    }
+}
+
+fn build_logging_config(config: &ResolvedConfig, debug_verbosity: u8) -> DeveloperLoggingConfig {
+    let file = if config.get_bool("log.file.enabled").unwrap_or(false) {
+        let level = config
+            .get_string("log.file.level")
+            .and_then(parse_level_filter)
+            .or_else(|| parse_level_filter("warn"))
+            .unwrap_or(tracing_subscriber::filter::LevelFilter::WARN);
+        let path = config
+            .get_string("log.file.path")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        path.map(|path| FileLoggingConfig { path, level })
+    } else {
+        None
+    };
+
+    DeveloperLoggingConfig {
+        debug_count: debug_verbosity,
+        file,
+    }
+}
+
+fn effective_message_verbosity(cli: &Cli, config: &ResolvedConfig) -> MessageLevel {
+    let base = config
+        .get_string("ui.verbosity.level")
+        .and_then(parse_message_level)
+        .unwrap_or(MessageLevel::Success);
+    adjust_verbosity(base, cli.verbose, cli.quiet)
+}
+
+fn effective_debug_verbosity(cli: &Cli, config: &ResolvedConfig) -> u8 {
+    if cli.debug > 0 {
+        return cli.debug.min(3);
+    }
+
+    match config.get("debug.level") {
+        Some(ConfigValue::Integer(level)) => (*level).clamp(0, 3) as u8,
+        Some(ConfigValue::String(raw)) => raw.trim().parse::<u8>().unwrap_or(0).min(3),
+        _ => 0,
+    }
+}
+
+fn parse_message_level(value: &str) -> Option<MessageLevel> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "error" => Some(MessageLevel::Error),
+        "warning" | "warn" => Some(MessageLevel::Warning),
+        "success" => Some(MessageLevel::Success),
+        "info" => Some(MessageLevel::Info),
+        "trace" => Some(MessageLevel::Trace),
+        _ => None,
+    }
+}
+
+fn to_ui_verbosity(level: MessageLevel) -> UiVerbosity {
+    match level {
+        MessageLevel::Error => UiVerbosity::Error,
+        MessageLevel::Warning => UiVerbosity::Warning,
+        MessageLevel::Success => UiVerbosity::Success,
+        MessageLevel::Info => UiVerbosity::Info,
+        MessageLevel::Trace => UiVerbosity::Trace,
+    }
+}
+
+fn plugin_dispatch_context(
+    state: &AppState,
+    overrides: Option<ReplDispatchOverrides>,
+) -> PluginDispatchContext {
+    let ui_verbosity = overrides
+        .map(|value| value.message_verbosity)
+        .unwrap_or(state.ui.message_verbosity);
+    let debug_verbosity = overrides
+        .map(|value| value.debug_verbosity)
+        .unwrap_or(state.ui.debug_verbosity);
+    let terminal_kind = match state.context.terminal_kind() {
+        TerminalKind::Cli => RuntimeTerminalKind::Cli,
+        TerminalKind::Repl => RuntimeTerminalKind::Repl,
+    };
+    PluginDispatchContext {
+        runtime_hints: RuntimeHints {
+            ui_verbosity: to_ui_verbosity(ui_verbosity),
+            debug_level: debug_verbosity.min(3),
+            format: state.ui.render_settings.format,
+            color: state.ui.render_settings.color,
+            unicode: state.ui.render_settings.unicode,
+            profile: Some(state.config.resolved().active_profile().to_string()),
+            terminal: state.context.terminal_env().map(ToOwned::to_owned),
+            terminal_kind,
+        },
+    }
+}
+
+fn plugin_response_messages(response: &ResponseV1) -> MessageBuffer {
+    let mut out = MessageBuffer::default();
+    for message in &response.messages {
+        let level = match message.level {
+            ResponseMessageLevelV1::Error => MessageLevel::Error,
+            ResponseMessageLevelV1::Warning => MessageLevel::Warning,
+            ResponseMessageLevelV1::Success => MessageLevel::Success,
+            ResponseMessageLevelV1::Info => MessageLevel::Info,
+            ResponseMessageLevelV1::Trace => MessageLevel::Trace,
+        };
+        out.push(level, message.text.clone());
+    }
+    out
+}
+
 fn emit_messages(state: &AppState, messages: &MessageBuffer) {
+    emit_messages_with_verbosity(state, messages, state.ui.message_verbosity);
+}
+
+fn emit_messages_with_verbosity(
+    state: &AppState,
+    messages: &MessageBuffer,
+    verbosity: MessageLevel,
+) {
     let resolved = state.ui.render_settings.resolve_render_settings();
     let boxed = state
         .config
@@ -1243,7 +1835,7 @@ fn emit_messages(state: &AppState, messages: &MessageBuffer) {
         .get_bool("ui.messages.boxed")
         .unwrap_or(true);
     let rendered = messages.render_grouped_styled(
-        state.ui.message_verbosity,
+        verbosity,
         resolved.color,
         resolved.unicode,
         resolved.width,
@@ -1562,37 +2154,16 @@ fn config_value_to_json(value: &ConfigValue) -> serde_json::Value {
 fn resolve_runtime_config(
     profile_override: Option<String>,
     terminal: Option<&str>,
+    session_layer: Option<ConfigLayer>,
 ) -> Result<ResolvedConfig> {
     tracing::debug!(
         profile_override = ?profile_override,
         terminal = ?terminal,
         "resolving runtime config"
     );
-    let mut defaults = ConfigLayer::default();
-    defaults.set("profile.default", "default");
-    defaults.set("theme.name", DEFAULT_THEME_NAME);
-    defaults.set("user.name", default_user_name());
-    defaults.set("domain", default_domain_name());
-    defaults.set("repl.prompt", DEFAULT_REPL_PROMPT);
-    defaults.set("repl.simple_prompt", false);
-    defaults.set("repl.shell_indicator", "[{shell}]");
-    defaults.set("repl.intro", true);
-    defaults.set("ui.messages.boxed", true);
-    defaults.set("color.prompt.text", "");
-    defaults.set("color.prompt.command", "");
-    let mut pipeline = LoaderPipeline::new(StaticLayerLoader::new(defaults))
-        .with_env(EnvVarLoader::from_process_env());
-
-    if let Some(path) = config_path() {
-        pipeline = pipeline.with_file(TomlFileLoader::new(path).optional());
-    }
-    if let Some(path) = secrets_path() {
-        let secret_chain = ChainedLoader::new(SecretsTomlLoader::new(path).optional())
-            .with(EnvSecretsLoader::from_process_env());
-        pipeline = pipeline.with_secrets(secret_chain);
-    } else {
-        pipeline = pipeline.with_secrets(ChainedLoader::new(EnvSecretsLoader::from_process_env()));
-    }
+    let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
+    let paths = RuntimeConfigPaths::discover();
+    let pipeline = build_runtime_pipeline(defaults.to_layer(), &paths, None, session_layer);
 
     let options = ResolveOptions {
         profile_override,
@@ -1603,51 +2174,6 @@ fn resolve_runtime_config(
         .resolve(options)
         .into_diagnostic()
         .wrap_err("config resolution failed")
-}
-
-fn config_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("OSP_CONFIG_FILE") {
-        return Some(PathBuf::from(path));
-    }
-
-    let home = std::env::var("HOME").ok()?;
-    let mut path = PathBuf::from(home);
-    path.push(".config");
-    path.push("osp");
-    path.push("config.toml");
-    Some(path)
-}
-
-fn secrets_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("OSP_SECRETS_FILE") {
-        return Some(PathBuf::from(path));
-    }
-
-    let home = std::env::var("HOME").ok()?;
-    let mut path = PathBuf::from(home);
-    path.push(".config");
-    path.push("osp");
-    path.push("secrets.toml");
-    Some(path)
-}
-
-fn default_user_name() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "anonymous".to_string())
-}
-
-fn default_domain_name() -> String {
-    let host = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "localhost".to_string());
-    host.split_once('.')
-        .map(|(_, domain)| domain.to_string())
-        .filter(|domain| !domain.trim().is_empty())
-        .unwrap_or_else(|| "local".to_string())
 }
 
 fn normalize_identifier(value: &str) -> String {
@@ -1811,11 +2337,36 @@ mod tests {
                 name: "nord".to_string(),
             }),
         });
+        let config_show = Commands::Config(crate::cli::ConfigArgs {
+            command: ConfigCommands::Show(crate::cli::ConfigShowArgs {
+                sources: false,
+                raw: false,
+            }),
+        });
+        let config_set = Commands::Config(crate::cli::ConfigArgs {
+            command: ConfigCommands::Set(crate::cli::ConfigSetArgs {
+                key: "ui.mode".to_string(),
+                value: "plain".to_string(),
+                global: false,
+                profile: None,
+                profile_all: false,
+                terminal: None,
+                session: false,
+                config_store: false,
+                secrets: false,
+                save: false,
+                dry_run: false,
+                yes: false,
+                explain: false,
+            }),
+        });
 
         assert!(super::repl_command_spec(&plugins_list).supports_dsl);
         assert!(!super::repl_command_spec(&plugins_enable).supports_dsl);
         assert!(super::repl_command_spec(&theme_show).supports_dsl);
         assert!(!super::repl_command_spec(&theme_use).supports_dsl);
+        assert!(super::repl_command_spec(&config_show).supports_dsl);
+        assert!(!super::repl_command_spec(&config_set).supports_dsl);
     }
 
     #[test]

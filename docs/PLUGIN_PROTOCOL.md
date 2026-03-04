@@ -70,6 +70,9 @@ Rules:
   "ok": true,
   "data": {},
   "error": null,
+  "messages": [
+    { "level": "info", "text": "Using profile: uio" }
+  ],
   "meta": {
     "format_hint": "table",
     "columns": ["uid", "cn"]
@@ -82,6 +85,19 @@ Rules:
 - `ok=true` implies `error=null`.
 - `ok=false` implies `error` is present.
 - `data` is always present (empty object/array is allowed).
+- `messages` is optional and defaults to an empty list.
+
+Message levels:
+- `error`
+- `warning`
+- `success`
+- `info`
+- `trace`
+
+Backbone behavior:
+- plugin `messages` are rendered by `osp-ui` on stderr using the same
+  grouping/theme/verbosity rules as built-in commands.
+- plugin data remains on stdout.
 
 ## Error Shape
 
@@ -107,3 +123,20 @@ Rules:
 - Backbone rejects unsupported `protocol_version`.
 - Backbone may reject plugins below required `min_osp_version`.
 - New fields must be additive and optional.
+
+## Runtime Hints Environment
+
+Backbone injects runtime hints into each plugin subprocess. Plugins can use
+`osp_core::runtime::RuntimeHints::from_env()` to parse them.
+
+Required hints:
+- `OSP_UI_VERBOSITY=error|warning|success|info|trace`
+- `OSP_DEBUG_LEVEL=0|1|2|3`
+- `OSP_FORMAT=auto|json|table|md|mreg|value`
+- `OSP_COLOR=auto|always|never`
+- `OSP_UNICODE=auto|always|never`
+- `OSP_TERMINAL_KIND=cli|repl|unknown`
+
+Optional hints:
+- `OSP_PROFILE=<active-profile>`
+- `OSP_TERMINAL=<raw-TERM-value>`

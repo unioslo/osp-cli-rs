@@ -67,7 +67,7 @@ Behavior:
 ## What To Fix in Rust
 
 - Do not emit developer logs to `stdout`; use `stderr`.
-- Do not hand-roll per-record file writes; use non-blocking appenders.
+- Do not scatter ad-hoc `eprintln!` logging across command code.
 - Do not rely on undocumented config keys (for example rotation/retention).
 - Do not flatten structured fields into message strings.
 - Do not depend on runtime signature mutation/decorators for verbosity flags.
@@ -78,7 +78,6 @@ Behavior:
 Use `tracing` stack:
 - `tracing`
 - `tracing-subscriber`
-- `tracing-appender`
 
 ### Model
 
@@ -90,9 +89,6 @@ Use `tracing` stack:
 
 - `-v/-vv/-vvv` and `-q/-qq` for user-facing output detail.
 - `-d/-dd/-ddd` for developer diagnostics.
-- Optional overrides:
-  - `--log-level <warn|info|debug|trace>`
-  - `--log-dir <path>`
 
 ### Recommended mapping
 
@@ -109,14 +105,27 @@ Use `tracing` stack:
   - `-ddd+` -> `trace`
 - Keep `RUST_LOG` support for advanced users; CLI flag should win.
 
+## Plugin Integration Contract
+
+Backbone propagates verbosity/debug settings to plugins through runtime hints:
+
+- `OSP_UI_VERBOSITY=error|warning|success|info|trace`
+- `OSP_DEBUG_LEVEL=0|1|2|3`
+
+Plugins should:
+- use `OSP_UI_VERBOSITY` for user-facing detail/messages.
+- use `OSP_DEBUG_LEVEL` for developer logging level.
+- avoid printing data-format output to stderr.
+
+`osp-core` exposes `RuntimeHints::from_env()` for plugin-side parsing to avoid
+duplicate env parsing logic in each plugin.
+
 ## Config Keys to Add in `osp-config`
 
 - `ui.verbosity.level` (enum or bounded integer)
 - `log.file.enabled` (bool)
 - `log.file.path` (string/path)
 - `log.file.level` (`warn|info|debug|trace`)
-- `log.file.format` (`json|text`)
-- `log.stderr.level` (optional default when `-d` is not used)
 
 Keep all keys in schema and surfaced through `config show/get/explain`.
 
@@ -164,6 +173,6 @@ Keep all keys in schema and surfaced through `config show/get/explain`.
 - Strong typed config contract (no hidden keys).
 - Proper structured logs end-to-end (no message flattening).
 - Correct stream separation (data on stdout, diagnostics on stderr).
-- Real non-blocking logging pipeline and reliable file output.
+- Config-driven file sink and reliable append behavior.
 - Cleaner CLI model without decorator/runtime signature mutation.
 - Easier tests: deterministic levels, deterministic sinks, deterministic context.

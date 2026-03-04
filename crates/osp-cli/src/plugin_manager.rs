@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, anyhow};
+use osp_config::{default_cache_root_dir, default_config_root_dir};
 use osp_core::plugin::{DescribeCommandV1, DescribeV1, ResponseV1};
+use osp_core::runtime::RuntimeHints;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -98,6 +100,11 @@ pub struct RawPluginOutput {
     pub status_code: i32,
     pub stdout: String,
     pub stderr: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PluginDispatchContext {
+    pub runtime_hints: RuntimeHints,
 }
 
 #[derive(Debug)]
@@ -394,10 +401,11 @@ impl PluginManager {
         &self,
         command: &str,
         args: &[String],
+        context: &PluginDispatchContext,
     ) -> std::result::Result<ResponseV1, PluginDispatchError> {
         let provider = self.resolve_provider(command)?;
 
-        let raw = run_provider(&provider, args)?;
+        let raw = run_provider(&provider, args, context)?;
         if raw.status_code != 0 {
             return Err(PluginDispatchError::NonZeroExit {
                 plugin_id: provider.plugin_id.clone(),
@@ -427,9 +435,10 @@ impl PluginManager {
         &self,
         command: &str,
         args: &[String],
+        context: &PluginDispatchContext,
     ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
         let provider = self.resolve_provider(command)?;
-        run_provider(&provider, args)
+        run_provider(&provider, args, context)
     }
 
     fn resolve_provider(
@@ -858,9 +867,15 @@ fn describe_plugin(path: &Path) -> Result<DescribeV1> {
 fn run_provider(
     provider: &DiscoveredPlugin,
     args: &[String],
+    context: &PluginDispatchContext,
 ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
-    let output = Command::new(&provider.executable)
-        .args(args)
+    let mut command = Command::new(&provider.executable);
+    command.args(args);
+    for (key, value) in context.runtime_hints.env_pairs() {
+        command.env(key, value);
+    }
+
+    let output = command
         .output()
         .map_err(|source| PluginDispatchError::ExecuteFailed {
             plugin_id: provider.plugin_id.clone(),
@@ -941,35 +956,19 @@ fn is_plugin_executable(path: &Path) -> bool {
 }
 
 fn user_plugin_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let mut path = PathBuf::from(home);
-    path.push(".config");
-    path.push("osp");
+    let mut path = default_config_root_dir()?;
     path.push("plugins");
     Some(path)
 }
 
 fn plugin_state_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let mut path = PathBuf::from(home);
-    path.push(".config");
-    path.push("osp");
+    let mut path = default_config_root_dir()?;
     path.push("plugins.json");
     Some(path)
 }
 
 fn describe_cache_path() -> Option<PathBuf> {
-    if let Ok(base) = std::env::var("XDG_CACHE_HOME") {
-        let mut path = PathBuf::from(base);
-        path.push("osp");
-        path.push("describe-v1.json");
-        return Some(path);
-    }
-
-    let home = std::env::var("HOME").ok()?;
-    let mut path = PathBuf::from(home);
-    path.push(".cache");
-    path.push("osp");
+    let mut path = default_cache_root_dir()?;
     path.push("describe-v1.json");
     Some(path)
 }

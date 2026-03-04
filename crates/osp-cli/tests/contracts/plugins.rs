@@ -167,6 +167,41 @@ fn external_plugin_dispatch_contract() {
 
 #[cfg(unix)]
 #[test]
+fn plugin_dispatch_propagates_runtime_hints_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-runtime-hints");
+    let _plugin_path = write_hints_plugin(&dir);
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("TERM", "xterm-256color")
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args([
+            "--profile",
+            "tsd",
+            "-vv",
+            "-ddd",
+            "--json",
+            "--color",
+            "never",
+            "--unicode",
+            "always",
+            "hints",
+        ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"ui_verbosity\": \"trace\""))
+        .stdout(predicate::str::contains("\"debug_level\": \"3\""))
+        .stdout(predicate::str::contains("\"format\": \"json\""))
+        .stdout(predicate::str::contains("\"color\": \"never\""))
+        .stdout(predicate::str::contains("\"unicode\": \"always\""))
+        .stdout(predicate::str::contains("\"profile\": \"tsd\""))
+        .stdout(predicate::str::contains("\"terminal_kind\": \"cli\""))
+        .stdout(predicate::str::contains("\"terminal\": \"xterm-256color\""));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn external_plugin_help_is_passed_through_contract() {
     let dir = make_temp_dir("osp-cli-plugin-help");
     let _plugin_path = write_hello_plugin(&dir);
@@ -363,6 +398,42 @@ fi
 
 cat <<'JSON'
 {"protocol_version":1,"ok":true,"data":{"message":"hello-from-plugin"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}
+JSON
+"#;
+
+    std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_hints_plugin(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join("osp-hints");
+    let plugin_script = r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"hints","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hints","about":"runtime hints plugin","subcommands":[]}]}
+JSON
+  exit 0
+fi
+
+cat <<JSON
+{"protocol_version":1,"ok":true,"data":{
+  "ui_verbosity":"${OSP_UI_VERBOSITY:-}",
+  "debug_level":"${OSP_DEBUG_LEVEL:-}",
+  "format":"${OSP_FORMAT:-}",
+  "color":"${OSP_COLOR:-}",
+  "unicode":"${OSP_UNICODE:-}",
+  "profile":"${OSP_PROFILE:-}",
+  "terminal_kind":"${OSP_TERMINAL_KIND:-}",
+  "terminal":"${OSP_TERMINAL:-}"
+},"error":null,"meta":{"format_hint":"table","columns":["ui_verbosity","debug_level","format","color","unicode","profile","terminal_kind","terminal"]}}
 JSON
 "#;
 

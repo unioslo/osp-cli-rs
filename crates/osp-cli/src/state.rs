@@ -1,6 +1,6 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
-use osp_config::{ConfigLayer, ResolvedConfig};
+use osp_config::{ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS, ResolvedConfig};
 use osp_core::row::Row;
 use osp_ui::RenderSettings;
 use osp_ui::messages::MessageLevel;
@@ -120,13 +120,14 @@ pub struct SessionState {
 }
 
 impl SessionState {
-    pub fn with_defaults() -> Self {
+    pub fn with_cache_limit(max_cached_results: usize) -> Self {
+        let bounded = max_cached_results.max(1);
         Self {
             shell_stack: Vec::new(),
             last_rows: Vec::new(),
             result_cache: HashMap::new(),
             cache_order: VecDeque::new(),
-            max_cached_results: 64,
+            max_cached_results: bounded,
             config_overrides: ConfigLayer::default(),
         }
     }
@@ -179,10 +180,33 @@ impl ClientsState {
     }
 }
 
+pub struct AuthState {
+    builtins_allowlist: Option<HashSet<String>>,
+    plugins_allowlist: Option<HashSet<String>>,
+}
+
+impl AuthState {
+    pub fn from_resolved(config: &ResolvedConfig) -> Self {
+        Self {
+            builtins_allowlist: parse_allowlist(config.get_string("auth.visible.builtins")),
+            plugins_allowlist: parse_allowlist(config.get_string("auth.visible.plugins")),
+        }
+    }
+
+    pub fn is_builtin_visible(&self, command: &str) -> bool {
+        is_visible_in_allowlist(&self.builtins_allowlist, command)
+    }
+
+    pub fn is_plugin_command_visible(&self, command: &str) -> bool {
+        is_visible_in_allowlist(&self.plugins_allowlist, command)
+    }
+}
+
 pub struct AppState {
     pub context: RuntimeContext,
     pub config: ConfigState,
     pub ui: UiState,
+    pub auth: AuthState,
     pub repl: ReplState,
     pub session: SessionState,
     pub clients: ClientsState,
@@ -199,6 +223,12 @@ impl AppState {
     ) -> Self {
         let config_state = ConfigState::new(config);
         let config_revision = config_state.revision();
+        let auth_state = AuthState::from_resolved(config_state.resolved());
+        let session_cache_max_results = configured_usize(
+            config_state.resolved(),
+            "session.cache.max_results",
+            DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
+        );
 
         Self {
             context,
@@ -208,11 +238,12 @@ impl AppState {
                 message_verbosity,
                 debug_verbosity,
             },
+            auth: auth_state,
             repl: ReplState {
                 prompt_prefix: "osp".to_string(),
                 history_enabled: true,
             },
-            session: SessionState::with_defaults(),
+            session: SessionState::with_cache_limit(session_cache_max_results),
             clients: ClientsState::new(plugins, config_revision),
         }
     }
@@ -237,5 +268,47 @@ impl AppState {
 
     pub fn repl_cache_size(&self) -> usize {
         self.session.result_cache.len()
+    }
+}
+
+fn parse_allowlist(raw: Option<&str>) -> Option<HashSet<String>> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return None;
+    };
+
+    if raw == "*" {
+        return None;
+    }
+
+    let values = raw
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<HashSet<String>>();
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
+fn is_visible_in_allowlist(allowlist: &Option<HashSet<String>>, command: &str) -> bool {
+    match allowlist {
+        None => true,
+        Some(values) => values.contains(&command.trim().to_ascii_lowercase()),
+    }
+}
+
+fn configured_usize(config: &ResolvedConfig, key: &str, fallback: usize) -> usize {
+    match config.get(key) {
+        Some(osp_config::ConfigValue::Integer(value)) if *value > 0 => *value as usize,
+        Some(osp_config::ConfigValue::String(raw)) => raw
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .unwrap_or(fallback),
+        _ => fallback,
     }
 }

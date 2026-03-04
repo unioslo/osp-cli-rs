@@ -42,6 +42,16 @@ impl MessageLevel {
         }
     }
 
+    pub fn as_env_str(self) -> &'static str {
+        match self {
+            MessageLevel::Error => "error",
+            MessageLevel::Warning => "warning",
+            MessageLevel::Success => "success",
+            MessageLevel::Info => "info",
+            MessageLevel::Trace => "trace",
+        }
+    }
+
     fn from_rank(rank: i8) -> Self {
         match rank {
             i8::MIN..=0 => MessageLevel::Error,
@@ -195,7 +205,15 @@ pub fn render_section_divider(
     token: StyleToken,
 ) -> String {
     let fill_char = if unicode { '─' } else { '-' };
-    let target_width = width.unwrap_or(72).max(12);
+    let target_width = width
+        .or_else(|| {
+            std::env::var("COLUMNS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(12)
+        .max(12);
     let title = title.trim();
 
     let raw = if title.is_empty() {

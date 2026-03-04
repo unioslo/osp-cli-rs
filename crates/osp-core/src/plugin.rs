@@ -25,6 +25,8 @@ pub struct ResponseV1 {
     pub ok: bool,
     pub data: serde_json::Value,
     pub error: Option<ResponseErrorV1>,
+    #[serde(default)]
+    pub messages: Vec<ResponseMessageV1>,
     pub meta: ResponseMetaV1,
 }
 
@@ -40,6 +42,22 @@ pub struct ResponseErrorV1 {
 pub struct ResponseMetaV1 {
     pub format_hint: Option<String>,
     pub columns: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResponseMessageLevelV1 {
+    Error,
+    Warning,
+    Success,
+    Info,
+    Trace,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseMessageV1 {
+    pub level: ResponseMessageLevelV1,
+    pub text: String,
 }
 
 impl DescribeV1 {
@@ -70,6 +88,13 @@ impl ResponseV1 {
         }
         if !self.ok && self.error.is_none() {
             return Err("ok=false requires error payload".to_string());
+        }
+        if self
+            .messages
+            .iter()
+            .any(|message| message.text.trim().is_empty())
+        {
+            return Err("response messages must not contain empty text".to_string());
         }
         Ok(())
     }

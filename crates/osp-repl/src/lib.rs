@@ -26,6 +26,8 @@ pub fn run_repl<F>(
     prompt: ReplPrompt,
     mut completion_words: Vec<String>,
     help_text: String,
+    history_path: PathBuf,
+    history_max_entries: usize,
     mut execute: F,
 ) -> Result<i32>
 where
@@ -41,7 +43,10 @@ where
 
     let completer = Box::new(DefaultCompleter::new_with_wordlen(completion_words, 2));
     let mut editor = Reedline::create().with_completer(completer);
-    let history = FileBackedHistory::with_file(1000, repl_history_path())?;
+    if let Some(parent) = history_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let history = FileBackedHistory::with_file(history_max_entries.max(1), history_path)?;
     editor = editor.with_history(Box::new(history));
 
     let prompt = OspPrompt::new(prompt.left, prompt.indicator);
@@ -122,16 +127,6 @@ impl Prompt for OspPrompt {
             history_search.term
         ))
     }
-}
-
-fn repl_history_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let mut path = PathBuf::from(home);
-    path.push(".config");
-    path.push("osp-cli-rust");
-    std::fs::create_dir_all(&path).ok();
-    path.push("history.txt");
-    path
 }
 
 fn expand_history(input: &str, history: &[String]) -> Option<String> {
