@@ -1,0 +1,360 @@
+use std::path::PathBuf;
+
+use crate::{
+    ConfigError, ConfigLayer, ConfigResolver, ConfigSchema, ResolveOptions, ResolvedConfig,
+    core::parse_env_key, store::validate_secrets_permissions, with_path_context,
+};
+
+pub trait ConfigLoader: Send + Sync {
+    fn load(&self) -> Result<ConfigLayer, ConfigError>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StaticLayerLoader {
+    layer: ConfigLayer,
+}
+
+impl StaticLayerLoader {
+    pub fn new(layer: ConfigLayer) -> Self {
+        Self { layer }
+    }
+}
+
+impl ConfigLoader for StaticLayerLoader {
+    fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        Ok(self.layer.clone())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TomlFileLoader {
+    path: PathBuf,
+    missing_ok: bool,
+}
+
+impl TomlFileLoader {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            missing_ok: true,
+        }
+    }
+
+    pub fn required(mut self) -> Self {
+        self.missing_ok = false;
+        self
+    }
+
+    pub fn optional(mut self) -> Self {
+        self.missing_ok = true;
+        self
+    }
+}
+
+impl ConfigLoader for TomlFileLoader {
+    fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        if !self.path.exists() {
+            if self.missing_ok {
+                return Ok(ConfigLayer::default());
+            }
+            return Err(ConfigError::FileRead {
+                path: self.path.display().to_string(),
+                reason: "file not found".to_string(),
+            });
+        }
+
+        let raw = std::fs::read_to_string(&self.path).map_err(|err| ConfigError::FileRead {
+            path: self.path.display().to_string(),
+            reason: err.to_string(),
+        })?;
+
+        let mut layer = ConfigLayer::from_toml_str(&raw)
+            .map_err(|err| with_path_context(self.path.display().to_string(), err))?;
+        let origin = self.path.display().to_string();
+        for entry in &mut layer.entries {
+            entry.origin = Some(origin.clone());
+        }
+        Ok(layer)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EnvVarLoader {
+    vars: Vec<(String, String)>,
+}
+
+impl EnvVarLoader {
+    pub fn from_process_env() -> Self {
+        Self {
+            vars: std::env::vars().collect(),
+        }
+    }
+
+    pub fn from_iter<I, K, V>(vars: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        Self {
+            vars: vars
+                .into_iter()
+                .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl ConfigLoader for EnvVarLoader {
+    fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        ConfigLayer::from_env_iter(self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SecretsTomlLoader {
+    path: PathBuf,
+    missing_ok: bool,
+    strict_permissions: bool,
+}
+
+impl SecretsTomlLoader {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            missing_ok: true,
+            strict_permissions: true,
+        }
+    }
+
+    pub fn required(mut self) -> Self {
+        self.missing_ok = false;
+        self
+    }
+
+    pub fn optional(mut self) -> Self {
+        self.missing_ok = true;
+        self
+    }
+
+    pub fn with_strict_permissions(mut self, strict: bool) -> Self {
+        self.strict_permissions = strict;
+        self
+    }
+}
+
+impl ConfigLoader for SecretsTomlLoader {
+    fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        if !self.path.exists() {
+            if self.missing_ok {
+                return Ok(ConfigLayer::default());
+            }
+            return Err(ConfigError::FileRead {
+                path: self.path.display().to_string(),
+                reason: "file not found".to_string(),
+            });
+        }
+
+        validate_secrets_permissions(&self.path, self.strict_permissions)?;
+
+        let raw = std::fs::read_to_string(&self.path).map_err(|err| ConfigError::FileRead {
+            path: self.path.display().to_string(),
+            reason: err.to_string(),
+        })?;
+
+        let mut layer = ConfigLayer::from_toml_str(&raw)
+            .map_err(|err| with_path_context(self.path.display().to_string(), err))?;
+        let origin = self.path.display().to_string();
+        for entry in &mut layer.entries {
+            entry.origin = Some(origin.clone());
+        }
+        Ok(layer)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EnvSecretsLoader {
+    vars: Vec<(String, String)>,
+}
+
+impl EnvSecretsLoader {
+    pub fn from_process_env() -> Self {
+        Self {
+            vars: std::env::vars().collect(),
+        }
+    }
+
+    pub fn from_iter<I, K, V>(vars: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        Self {
+            vars: vars
+                .into_iter()
+                .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl ConfigLoader for EnvSecretsLoader {
+    fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        let mut layer = ConfigLayer::default();
+
+        for (name, value) in &self.vars {
+            let Some(rest) = name.strip_prefix("OSP_SECRET__") else {
+                continue;
+            };
+
+            let synthetic = format!("OSP__{rest}");
+            let spec = parse_env_key(&synthetic)?;
+            layer.insert_with_origin(spec.key, value.clone(), spec.scope, Some(name.clone()));
+        }
+
+        Ok(layer)
+    }
+}
+
+#[derive(Default)]
+pub struct ChainedLoader {
+    loaders: Vec<Box<dyn ConfigLoader>>,
+}
+
+impl ChainedLoader {
+    pub fn new<L>(loader: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        Self {
+            loaders: vec![Box::new(loader)],
+        }
+    }
+
+    pub fn with<L>(mut self, loader: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        self.loaders.push(Box::new(loader));
+        self
+    }
+}
+
+impl ConfigLoader for ChainedLoader {
+    fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        let mut merged = ConfigLayer::default();
+        for loader in &self.loaders {
+            let layer = loader.load()?;
+            merged.entries.extend(layer.entries);
+        }
+        Ok(merged)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LoadedLayers {
+    pub defaults: ConfigLayer,
+    pub file: ConfigLayer,
+    pub secrets: ConfigLayer,
+    pub env: ConfigLayer,
+    pub cli: ConfigLayer,
+    pub session: ConfigLayer,
+}
+
+pub struct LoaderPipeline {
+    defaults: Box<dyn ConfigLoader>,
+    file: Option<Box<dyn ConfigLoader>>,
+    secrets: Option<Box<dyn ConfigLoader>>,
+    env: Option<Box<dyn ConfigLoader>>,
+    cli: Option<Box<dyn ConfigLoader>>,
+    session: Option<Box<dyn ConfigLoader>>,
+    schema: ConfigSchema,
+}
+
+impl LoaderPipeline {
+    pub fn new<L>(defaults: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        Self {
+            defaults: Box::new(defaults),
+            file: None,
+            secrets: None,
+            env: None,
+            cli: None,
+            session: None,
+            schema: ConfigSchema::default(),
+        }
+    }
+
+    pub fn with_file<L>(mut self, loader: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        self.file = Some(Box::new(loader));
+        self
+    }
+
+    pub fn with_secrets<L>(mut self, loader: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        self.secrets = Some(Box::new(loader));
+        self
+    }
+
+    pub fn with_env<L>(mut self, loader: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        self.env = Some(Box::new(loader));
+        self
+    }
+
+    pub fn with_cli<L>(mut self, loader: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        self.cli = Some(Box::new(loader));
+        self
+    }
+
+    pub fn with_session<L>(mut self, loader: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        self.session = Some(Box::new(loader));
+        self
+    }
+
+    pub fn with_schema(mut self, schema: ConfigSchema) -> Self {
+        self.schema = schema;
+        self
+    }
+
+    pub fn load_layers(&self) -> Result<LoadedLayers, ConfigError> {
+        Ok(LoadedLayers {
+            defaults: self.defaults.load()?,
+            file: load_optional_loader(self.file.as_deref())?,
+            secrets: load_optional_loader(self.secrets.as_deref())?,
+            env: load_optional_loader(self.env.as_deref())?,
+            cli: load_optional_loader(self.cli.as_deref())?,
+            session: load_optional_loader(self.session.as_deref())?,
+        })
+    }
+
+    pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
+        let layers = self.load_layers()?;
+        let mut resolver = ConfigResolver::from_loaded_layers(layers);
+        resolver.set_schema(self.schema.clone());
+        resolver.resolve(options)
+    }
+}
+
+fn load_optional_loader(loader: Option<&dyn ConfigLoader>) -> Result<ConfigLayer, ConfigError> {
+    match loader {
+        Some(loader) => loader.load(),
+        None => Ok(ConfigLayer::default()),
+    }
+}

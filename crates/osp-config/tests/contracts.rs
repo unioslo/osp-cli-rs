@@ -82,10 +82,13 @@ fn placeholder_interpolation_happens_after_merge_contract() {
     defaults.set("base.dir", "/etc/osp");
 
     let mut file = ConfigLayer::default();
-    file.set_for_profile("uio", "ldap.url", "ldaps://ldap.uio.no");
+    file.set_for_profile("uio", "extensions.uio.ldap.url", "ldaps://ldap.uio.no");
 
     let mut env = ConfigLayer::default();
-    env.set("ui.prompt", "${profile.active}:${ldap.url}:${base.dir}");
+    env.set(
+        "ui.prompt",
+        "${profile.active}:${extensions.uio.ldap.url}:${base.dir}",
+    );
 
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
@@ -161,7 +164,7 @@ profile.default = "uio"
 ui.format = "table"
 
 [profile.uio]
-osp.url = "https://osp-orchestrator.uio.no"
+extensions.uio.osp.url = "https://osp-orchestrator.uio.no"
 
 [profile.tsd]
 ui.format = "json"
@@ -193,7 +196,7 @@ ui.format = "table"
         .expect("uio cli should resolve");
 
     assert_eq!(
-        uio_cli.get_string("osp.url"),
+        uio_cli.get_string("extensions.uio.osp.url"),
         Some("https://osp-orchestrator.uio.no")
     );
 }
@@ -412,14 +415,14 @@ fn explain_reports_interpolation_trace_contract() {
     );
     defaults.insert_with_origin(
         "ui.prompt",
-        "${profile.active}:${ldap.url}:${base.dir}",
+        "${profile.active}:${extensions.uio.ldap.url}:${base.dir}",
         osp_config::Scope::global(),
         Some("defaults"),
     );
 
     let mut file = ConfigLayer::default();
     file.insert_with_origin(
-        "ldap.url",
+        "extensions.uio.ldap.url",
         "ldaps://ldap.uio.no",
         osp_config::Scope::profile("uio"),
         Some("/tmp/config.toml"),
@@ -436,7 +439,10 @@ fn explain_reports_interpolation_trace_contract() {
     let trace = explain
         .interpolation
         .expect("interpolation trace should exist");
-    assert_eq!(trace.template, "${profile.active}:${ldap.url}:${base.dir}");
+    assert_eq!(
+        trace.template,
+        "${profile.active}:${extensions.uio.ldap.url}:${base.dir}"
+    );
 
     let placeholders = trace
         .steps
@@ -444,6 +450,6 @@ fn explain_reports_interpolation_trace_contract() {
         .map(|step| step.placeholder.clone())
         .collect::<Vec<String>>();
     assert!(placeholders.contains(&"profile.active".to_string()));
-    assert!(placeholders.contains(&"ldap.url".to_string()));
+    assert!(placeholders.contains(&"extensions.uio.ldap.url".to_string()));
     assert!(placeholders.contains(&"base.dir".to_string()));
 }

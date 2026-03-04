@@ -136,7 +136,7 @@ fn secrets_loader_combines_file_and_env_backends_contract() {
         &secrets_path,
         r#"
 [default]
-ldap.bind_password = "file-secret"
+extensions.uio.ldap.bind_password = "file-secret"
 "#,
     )
     .expect("secrets file should be written");
@@ -144,12 +144,15 @@ ldap.bind_password = "file-secret"
 
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
-    defaults.set("ldap.bind_password", "default-secret");
+    defaults.set("extensions.uio.ldap.bind_password", "default-secret");
 
-    let secrets_loader =
-        ChainedLoader::new(SecretsTomlLoader::new(secrets_path.clone()).required()).with(
-            EnvSecretsLoader::from_iter([("OSP_SECRET__LDAP__BIND_PASSWORD", "env-secret")]),
-        );
+    let secrets_loader = ChainedLoader::new(
+        SecretsTomlLoader::new(secrets_path.clone()).required(),
+    )
+    .with(EnvSecretsLoader::from_iter([(
+        "OSP_SECRET__EXTENSIONS__UIO__LDAP__BIND_PASSWORD",
+        "env-secret",
+    )]));
 
     let pipeline =
         LoaderPipeline::new(StaticLayerLoader::new(defaults)).with_secrets(secrets_loader);
@@ -159,12 +162,12 @@ ldap.bind_password = "file-secret"
         .expect("pipeline should resolve");
 
     assert_eq!(
-        resolved.get_string("ldap.bind_password"),
+        resolved.get_string("extensions.uio.ldap.bind_password"),
         Some("env-secret")
     );
     assert_eq!(
         resolved
-            .get_value_entry("ldap.bind_password")
+            .get_value_entry("extensions.uio.ldap.bind_password")
             .expect("entry should exist")
             .source,
         ConfigSource::Secrets
@@ -182,7 +185,7 @@ fn insecure_secrets_permissions_are_rejected_contract() {
         &secrets_path,
         r#"
 [default]
-ldap.bind_password = "file-secret"
+extensions.uio.ldap.bind_password = "file-secret"
 "#,
     )
     .expect("secrets file should be written");
