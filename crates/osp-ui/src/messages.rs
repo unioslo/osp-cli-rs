@@ -1,6 +1,10 @@
-use std::fmt::Write;
-
+use crate::document::{Block, Document, LineBlock, LinePart};
+use crate::format::message::{
+    MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules,
+};
+use crate::renderer::render_document;
 use crate::style::{StyleToken, apply_style};
+use crate::{RenderBackend, ResolvedRenderSettings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MessageLevel {
@@ -22,16 +26,6 @@ impl MessageLevel {
         }
     }
 
-    fn style_token(self) -> StyleToken {
-        match self {
-            MessageLevel::Error => StyleToken::MessageError,
-            MessageLevel::Warning => StyleToken::MessageWarning,
-            MessageLevel::Success => StyleToken::MessageSuccess,
-            MessageLevel::Info => StyleToken::MessageInfo,
-            MessageLevel::Trace => StyleToken::MessageTrace,
-        }
-    }
-
     fn as_rank(self) -> i8 {
         match self {
             MessageLevel::Error => 0,
@@ -49,6 +43,16 @@ impl MessageLevel {
             MessageLevel::Success => "success",
             MessageLevel::Info => "info",
             MessageLevel::Trace => "trace",
+        }
+    }
+
+    fn as_kind(self) -> MessageKind {
+        match self {
+            MessageLevel::Error => MessageKind::Error,
+            MessageLevel::Warning => MessageKind::Warning,
+            MessageLevel::Success => MessageKind::Success,
+            MessageLevel::Info => MessageKind::Info,
+            MessageLevel::Trace => MessageKind::Trace,
         }
     }
 
@@ -107,34 +111,7 @@ impl MessageBuffer {
     }
 
     pub fn render_grouped(&self, max_level: MessageLevel) -> String {
-        let mut out = String::new();
-
-        for level in [
-            MessageLevel::Error,
-            MessageLevel::Warning,
-            MessageLevel::Success,
-            MessageLevel::Info,
-            MessageLevel::Trace,
-        ] {
-            if level > max_level {
-                continue;
-            }
-
-            let mut wrote_header = false;
-            for entry in self.entries.iter().filter(|entry| entry.level == level) {
-                if !wrote_header {
-                    let _ = writeln!(out, "{}:", level.title());
-                    wrote_header = true;
-                }
-                let _ = writeln!(out, "- {}", entry.text);
-            }
-
-            if wrote_header {
-                out.push('\n');
-            }
-        }
-
-        out
+        self.render_grouped_styled(max_level, false, false, None, "plain", false)
     }
 
     pub fn render_grouped_styled(
@@ -146,7 +123,27 @@ impl MessageBuffer {
         theme_name: &str,
         boxed: bool,
     ) -> String {
-        let mut out = String::new();
+        let document = self.build_grouped_document(max_level, boxed);
+        if document.blocks.is_empty() {
+            return String::new();
+        }
+
+        let resolved = ResolvedRenderSettings {
+            backend: if color || unicode {
+                RenderBackend::Rich
+            } else {
+                RenderBackend::Plain
+            },
+            color,
+            unicode,
+            width,
+            theme_name: theme_name.to_string(),
+        };
+        render_document(&document, resolved)
+    }
+
+    fn build_grouped_document(&self, max_level: MessageLevel, boxed: bool) -> Document {
+        let mut blocks = Vec::new();
 
         for level in [
             MessageLevel::Error,
@@ -159,40 +156,53 @@ impl MessageBuffer {
                 continue;
             }
 
-            let mut wrote_header = false;
-            for entry in self.entries.iter().filter(|entry| entry.level == level) {
-                if !wrote_header {
-                    let header = render_section_divider(
-                        level.title(),
-                        unicode,
-                        width,
-                        color,
-                        theme_name,
-                        level.style_token(),
-                    );
-                    let _ = writeln!(out, "{header}");
-                    wrote_header = true;
-                }
-                let _ = writeln!(out, "- {}", entry.text);
+            let grouped = self
+                .entries
+                .iter()
+                .filter(|entry| entry.level == level)
+                .collect::<Vec<&UiMessage>>();
+            if grouped.is_empty() {
+                continue;
             }
 
-            if wrote_header {
-                if boxed {
-                    let footer = render_section_divider(
-                        "",
-                        unicode,
-                        width,
-                        color,
-                        theme_name,
-                        level.style_token(),
-                    );
-                    let _ = writeln!(out, "{footer}");
-                }
-                out.push('\n');
+            let body = grouped
+                .iter()
+                .map(|entry| {
+                    Block::Line(LineBlock {
+                        parts: vec![LinePart {
+                            text: format!("- {}", entry.text),
+                        }],
+                    })
+                })
+                .collect::<Vec<Block>>();
+
+            if boxed {
+                let rendered = MessageFormatter::build(
+                    MessageContent::Document(Document { blocks: body }),
+                    MessageOptions {
+                        rules: MessageRules::Both,
+                        kind: level.as_kind(),
+                        title: Some(level.title().to_string()),
+                    },
+                );
+                blocks.extend(rendered.blocks);
+            } else {
+                blocks.push(Block::Line(LineBlock {
+                    parts: vec![LinePart {
+                        text: format!("{}:", level.title()),
+                    }],
+                }));
+                blocks.extend(body);
             }
+
+            blocks.push(Block::Line(LineBlock {
+                parts: vec![LinePart {
+                    text: String::new(),
+                }],
+            }));
         }
 
-        out
+        Document { blocks }
     }
 }
 
@@ -284,7 +294,7 @@ mod tests {
         assert!(
             rendered
                 .lines()
-                .any(|line| line.trim() == "────────────────────────")
+                .any(|line| line.trim().chars().all(|ch| ch == '─'))
         );
     }
 

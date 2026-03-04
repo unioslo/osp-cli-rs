@@ -153,6 +153,7 @@ fn render_panel_block(
 ) -> String {
     let divider = section_divider(
         block.title.as_deref().unwrap_or(""),
+        block.kind.as_deref(),
         unicode,
         width,
         color,
@@ -254,6 +255,7 @@ fn render_mreg_block(
 
 fn section_divider(
     title: &str,
+    kind: Option<&str>,
     unicode: bool,
     width: Option<usize>,
     color: bool,
@@ -291,9 +293,25 @@ fn section_divider(
     };
 
     if color {
-        apply_style(&raw, StyleToken::MessageInfo, true, theme_name)
+        apply_style(
+            &raw,
+            section_style_token(kind).unwrap_or(StyleToken::MessageInfo),
+            true,
+            theme_name,
+        )
     } else {
         raw
+    }
+}
+
+fn section_style_token(kind: Option<&str>) -> Option<StyleToken> {
+    match kind.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("error") => Some(StyleToken::MessageError),
+        Some("warning") => Some(StyleToken::MessageWarning),
+        Some("success") => Some(StyleToken::MessageSuccess),
+        Some("info") => Some(StyleToken::MessageInfo),
+        Some("trace") => Some(StyleToken::MessageTrace),
+        _ => None,
     }
 }
 

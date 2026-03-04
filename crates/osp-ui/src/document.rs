@@ -31,6 +31,7 @@ pub struct PanelBlock {
     pub title: Option<String>,
     pub body: Document,
     pub rules: PanelRules,
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

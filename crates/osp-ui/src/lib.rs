@@ -1,5 +1,6 @@
+pub mod clipboard;
 pub mod document;
-mod formatter;
+pub mod format;
 mod layout;
 pub mod messages;
 mod renderer;
@@ -109,7 +110,7 @@ impl RenderSettings {
 }
 
 pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
-    let document = formatter::build_document(rows, settings);
+    let document = format::build_document(rows, settings);
     let resolved = settings.resolve_render_settings();
     renderer::render_document(&document, resolved)
 }
@@ -123,7 +124,7 @@ pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {
         width: settings.width,
         theme_name: settings.theme_name.clone(),
     };
-    let document = formatter::build_document(rows, &copy_settings);
+    let document = format::build_document(rows, &copy_settings);
     render_document_for_copy(&document, &copy_settings)
 }
 
@@ -140,9 +141,26 @@ pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) 
     renderer::render_document(document, resolved)
 }
 
+pub fn copy_rows_to_clipboard(
+    rows: &[Row],
+    settings: &RenderSettings,
+    clipboard: &clipboard::ClipboardService,
+) -> Result<(), clipboard::ClipboardError> {
+    let copy_settings = RenderSettings {
+        format: settings.format,
+        mode: RenderMode::Plain,
+        color: ColorMode::Never,
+        unicode: UnicodeMode::Never,
+        width: settings.width,
+        theme_name: settings.theme_name.clone(),
+    };
+    let document = format::build_document(rows, &copy_settings);
+    clipboard.copy_document(&document, &copy_settings)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RenderBackend, RenderSettings, formatter, render_rows_for_copy};
+    use super::{RenderBackend, RenderSettings, format, render_rows_for_copy};
     use crate::document::{Block, MregValue, TableStyle};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_core::row::Row;
@@ -167,7 +185,7 @@ mod tests {
             row
         }];
 
-        let document = formatter::build_document(&rows, &settings(OutputFormat::Auto));
+        let document = format::build_document(&rows, &settings(OutputFormat::Auto));
         assert!(matches!(document.blocks[0], Block::Value(_)));
     }
 
@@ -179,7 +197,7 @@ mod tests {
             row
         }];
 
-        let document = formatter::build_document(&rows, &settings(OutputFormat::Auto));
+        let document = format::build_document(&rows, &settings(OutputFormat::Auto));
         assert!(matches!(document.blocks[0], Block::Mreg(_)));
     }
 
@@ -198,7 +216,7 @@ mod tests {
             },
         ];
 
-        let document = formatter::build_document(&rows, &settings(OutputFormat::Auto));
+        let document = format::build_document(&rows, &settings(OutputFormat::Auto));
         assert!(matches!(document.blocks[0], Block::Table(_)));
     }
 
@@ -211,7 +229,7 @@ mod tests {
             row
         }];
 
-        let document = formatter::build_document(&rows, &settings(OutputFormat::Mreg));
+        let document = format::build_document(&rows, &settings(OutputFormat::Mreg));
         let Block::Mreg(block) = &document.blocks[0] else {
             panic!("expected mreg block");
         };
@@ -238,7 +256,7 @@ mod tests {
             row
         }];
 
-        let document = formatter::build_document(&rows, &settings(OutputFormat::Markdown));
+        let document = format::build_document(&rows, &settings(OutputFormat::Markdown));
         let Block::Table(table) = &document.blocks[0] else {
             panic!("expected table block");
         };
