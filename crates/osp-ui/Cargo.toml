@@ -1,0 +1,10 @@
+[package]
+name = "osp-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+comfy-table.workspace = true
+serde_json.workspace = true
+unicode-width.workspace = true
+osp-core = { path = "../osp-core" }

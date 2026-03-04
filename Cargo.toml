@@ -1,0 +1,35 @@
+[workspace]
+members = [
+  "crates/osp-core",
+  "crates/osp-config",
+  "crates/osp-dsl",
+  "crates/osp-ports",
+  "crates/osp-api",
+  "crates/osp-services",
+  "crates/osp-ui",
+  "crates/osp-repl",
+  "crates/osp-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0"
+assert_cmd = "2.0"
+clap = { version = "4.5", features = ["derive"] }
+comfy-table = "7.1"
+miette = { version = "7.4", features = ["fancy"] }
+predicates = "3.1"
+reedline = "0.33"
+regex = "1.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+shell-words = "1.1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+unicode-width = "0.2"

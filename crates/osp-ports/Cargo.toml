@@ -1,0 +1,10 @@
+[package]
+name = "osp-ports"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+osp-core = { path = "../osp-core" }

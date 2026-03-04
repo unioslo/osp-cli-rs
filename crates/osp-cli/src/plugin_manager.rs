@@ -1,0 +1,1099 @@
+use anyhow::{Context, Result, anyhow};
+use osp_core::plugin::{DescribeCommandV1, DescribeV1, ResponseV1};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+use std::error::Error as StdError;
+use std::fmt::{Display, Formatter, Write as FmtWrite};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
+use std::time::UNIX_EPOCH;
+
+const PLUGIN_EXECUTABLE_PREFIX: &str = "osp-";
+const BUNDLED_MANIFEST_FILE: &str = "manifest.toml";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginSource {
+    Explicit,
+    Env,
+    Bundled,
+    UserConfig,
+    Path,
+}
+
+impl Display for PluginSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            PluginSource::Explicit => "explicit",
+            PluginSource::Env => "env",
+            PluginSource::Bundled => "bundled",
+            PluginSource::UserConfig => "user",
+            PluginSource::Path => "path",
+        };
+        write!(f, "{value}")
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SearchRoot {
+    path: PathBuf,
+    source: PluginSource,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginCommandSpec {
+    pub name: String,
+    pub about: String,
+    pub subcommands: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiscoveredPlugin {
+    pub plugin_id: String,
+    pub plugin_version: Option<String>,
+    pub executable: PathBuf,
+    pub source: PluginSource,
+    pub commands: Vec<String>,
+    pub command_specs: Vec<PluginCommandSpec>,
+    pub issue: Option<String>,
+    pub default_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginSummary {
+    pub plugin_id: String,
+    pub plugin_version: Option<String>,
+    pub executable: PathBuf,
+    pub source: PluginSource,
+    pub commands: Vec<String>,
+    pub enabled: bool,
+    pub healthy: bool,
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandConflict {
+    pub command: String,
+    pub providers: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DoctorReport {
+    pub plugins: Vec<PluginSummary>,
+    pub conflicts: Vec<CommandConflict>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandCatalogEntry {
+    pub name: String,
+    pub about: String,
+    pub subcommands: Vec<String>,
+    pub provider: String,
+    pub source: PluginSource,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawPluginOutput {
+    pub status_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug)]
+pub enum PluginDispatchError {
+    CommandNotFound {
+        command: String,
+    },
+    ExecuteFailed {
+        plugin_id: String,
+        source: std::io::Error,
+    },
+    NonZeroExit {
+        plugin_id: String,
+        status_code: i32,
+        stderr: String,
+    },
+    InvalidJsonResponse {
+        plugin_id: String,
+        source: serde_json::Error,
+    },
+    InvalidResponsePayload {
+        plugin_id: String,
+        reason: String,
+    },
+}
+
+impl Display for PluginDispatchError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PluginDispatchError::CommandNotFound { command } => {
+                write!(f, "no plugin provides command: {command}")
+            }
+            PluginDispatchError::ExecuteFailed { plugin_id, source } => {
+                write!(f, "failed to execute plugin {plugin_id}: {source}")
+            }
+            PluginDispatchError::NonZeroExit {
+                plugin_id,
+                status_code,
+                stderr,
+            } => {
+                if stderr.trim().is_empty() {
+                    write!(f, "plugin {plugin_id} exited with status {status_code}")
+                } else {
+                    write!(
+                        f,
+                        "plugin {plugin_id} exited with status {status_code}: {}",
+                        stderr.trim()
+                    )
+                }
+            }
+            PluginDispatchError::InvalidJsonResponse { plugin_id, source } => {
+                write!(f, "invalid JSON response from plugin {plugin_id}: {source}")
+            }
+            PluginDispatchError::InvalidResponsePayload { plugin_id, reason } => {
+                write!(f, "invalid plugin response from {plugin_id}: {reason}")
+            }
+        }
+    }
+}
+
+impl StdError for PluginDispatchError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            PluginDispatchError::ExecuteFailed { source, .. } => Some(source),
+            PluginDispatchError::InvalidJsonResponse { source, .. } => Some(source),
+            PluginDispatchError::CommandNotFound { .. }
+            | PluginDispatchError::NonZeroExit { .. }
+            | PluginDispatchError::InvalidResponsePayload { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct PluginState {
+    #[serde(default)]
+    enabled: Vec<String>,
+    #[serde(default)]
+    disabled: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BundledManifest {
+    protocol_version: u32,
+    #[serde(default)]
+    plugin: Vec<ManifestPlugin>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ManifestPlugin {
+    id: String,
+    exe: String,
+    version: String,
+    #[serde(default = "default_true")]
+    enabled_by_default: bool,
+    checksum_sha256: Option<String>,
+    #[serde(default)]
+    commands: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ValidatedBundledManifest {
+    by_exe: HashMap<String, ManifestPlugin>,
+}
+
+enum ManifestState {
+    NotBundled,
+    Missing,
+    Invalid(String),
+    Valid(ValidatedBundledManifest),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct DescribeCacheFile {
+    #[serde(default)]
+    entries: Vec<DescribeCacheEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DescribeCacheEntry {
+    path: String,
+    size: u64,
+    mtime_secs: u64,
+    mtime_nanos: u32,
+    describe: DescribeV1,
+}
+
+pub struct PluginManager {
+    explicit_dirs: Vec<PathBuf>,
+    discovered_cache: OnceLock<Vec<DiscoveredPlugin>>,
+}
+
+impl PluginManager {
+    pub fn new(explicit_dirs: Vec<PathBuf>) -> Self {
+        Self {
+            explicit_dirs,
+            discovered_cache: OnceLock::new(),
+        }
+    }
+
+    pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
+        let discovered = self.discover();
+        let state = self.load_state().unwrap_or_default();
+
+        Ok(discovered
+            .into_iter()
+            .map(|plugin| PluginSummary {
+                enabled: is_enabled(&state, &plugin.plugin_id, plugin.default_enabled),
+                healthy: plugin.issue.is_none(),
+                issue: plugin.issue.clone(),
+                plugin_id: plugin.plugin_id,
+                plugin_version: plugin.plugin_version,
+                executable: plugin.executable,
+                source: plugin.source,
+                commands: plugin.commands,
+            })
+            .collect())
+    }
+
+    pub fn command_catalog(&self) -> Result<Vec<CommandCatalogEntry>> {
+        let state = self.load_state().unwrap_or_default();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+
+        for plugin in self.discover() {
+            if plugin.issue.is_some()
+                || !is_enabled(&state, &plugin.plugin_id, plugin.default_enabled)
+            {
+                continue;
+            }
+
+            for spec in plugin.command_specs {
+                if !seen.insert(spec.name.clone()) {
+                    continue;
+                }
+                out.push(CommandCatalogEntry {
+                    name: spec.name,
+                    about: spec.about,
+                    subcommands: spec.subcommands,
+                    provider: plugin.plugin_id.clone(),
+                    source: plugin.source,
+                });
+            }
+        }
+
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
+    pub fn completion_words(&self) -> Result<Vec<String>> {
+        let catalog = self.command_catalog()?;
+        let mut words = vec![
+            "help".to_string(),
+            "exit".to_string(),
+            "quit".to_string(),
+            "P".to_string(),
+            "F".to_string(),
+            "V".to_string(),
+            "|".to_string(),
+        ];
+
+        for command in catalog {
+            words.push(command.name);
+            words.extend(command.subcommands);
+        }
+
+        words.sort();
+        words.dedup();
+        Ok(words)
+    }
+
+    pub fn repl_help_text(&self) -> Result<String> {
+        let catalog = self.command_catalog()?;
+        let mut out = String::new();
+
+        out.push_str("Backbone commands: help, exit, quit\n");
+        if catalog.is_empty() {
+            out.push_str("No plugin commands available.\n");
+            return Ok(out);
+        }
+
+        out.push_str("Plugin commands:\n");
+        for command in catalog {
+            let subs = if command.subcommands.is_empty() {
+                "".to_string()
+            } else {
+                format!(" [{}]", command.subcommands.join(", "))
+            };
+            let about = if command.about.trim().is_empty() {
+                "-".to_string()
+            } else {
+                command.about.clone()
+            };
+            out.push_str(&format!(
+                "  {name}{subs} - {about} ({provider}/{source})\n",
+                name = command.name,
+                provider = command.provider,
+                source = command.source,
+            ));
+        }
+
+        Ok(out)
+    }
+
+    pub fn doctor(&self) -> Result<DoctorReport> {
+        let plugins = self.list_plugins()?;
+        let mut conflicts_index: HashMap<String, Vec<String>> = HashMap::new();
+
+        for plugin in &plugins {
+            if !plugin.enabled || !plugin.healthy {
+                continue;
+            }
+            for command in &plugin.commands {
+                conflicts_index
+                    .entry(command.clone())
+                    .or_default()
+                    .push(format!("{} ({})", plugin.plugin_id, plugin.source));
+            }
+        }
+
+        let mut conflicts = conflicts_index
+            .into_iter()
+            .filter_map(|(command, providers)| {
+                if providers.len() > 1 {
+                    Some(CommandConflict { command, providers })
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<CommandConflict>>();
+        conflicts.sort_by(|a, b| a.command.cmp(&b.command));
+
+        Ok(DoctorReport { plugins, conflicts })
+    }
+
+    pub fn set_enabled(&self, plugin_id: &str, enabled: bool) -> Result<()> {
+        let mut state = self.load_state().unwrap_or_default();
+        state.enabled.retain(|id| id != plugin_id);
+        state.disabled.retain(|id| id != plugin_id);
+
+        if enabled {
+            state.enabled.push(plugin_id.to_string());
+        } else {
+            state.disabled.push(plugin_id.to_string());
+        }
+
+        state.enabled.sort();
+        state.enabled.dedup();
+        state.disabled.sort();
+        state.disabled.dedup();
+        self.save_state(&state)
+    }
+
+    pub fn dispatch(
+        &self,
+        command: &str,
+        args: &[String],
+    ) -> std::result::Result<ResponseV1, PluginDispatchError> {
+        let provider = self.resolve_provider(command)?;
+
+        let raw = run_provider(&provider, args)?;
+        if raw.status_code != 0 {
+            return Err(PluginDispatchError::NonZeroExit {
+                plugin_id: provider.plugin_id.clone(),
+                status_code: raw.status_code,
+                stderr: raw.stderr,
+            });
+        }
+
+        let response: ResponseV1 = serde_json::from_str(&raw.stdout).map_err(|source| {
+            PluginDispatchError::InvalidJsonResponse {
+                plugin_id: provider.plugin_id.clone(),
+                source,
+            }
+        })?;
+
+        response
+            .validate_v1()
+            .map_err(|reason| PluginDispatchError::InvalidResponsePayload {
+                plugin_id: provider.plugin_id.clone(),
+                reason,
+            })?;
+
+        Ok(response)
+    }
+
+    pub fn dispatch_passthrough(
+        &self,
+        command: &str,
+        args: &[String],
+    ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
+        let provider = self.resolve_provider(command)?;
+        run_provider(&provider, args)
+    }
+
+    fn resolve_provider(
+        &self,
+        command: &str,
+    ) -> std::result::Result<DiscoveredPlugin, PluginDispatchError> {
+        let state = self.load_state().unwrap_or_default();
+        self.discover()
+            .into_iter()
+            .find(|plugin| {
+                plugin.issue.is_none()
+                    && is_enabled(&state, &plugin.plugin_id, plugin.default_enabled)
+                    && plugin.commands.iter().any(|c| c == command)
+            })
+            .ok_or_else(|| PluginDispatchError::CommandNotFound {
+                command: command.to_string(),
+            })
+    }
+
+    fn discover(&self) -> Vec<DiscoveredPlugin> {
+        self.discovered_cache
+            .get_or_init(|| self.discover_uncached())
+            .clone()
+    }
+
+    fn discover_uncached(&self) -> Vec<DiscoveredPlugin> {
+        let mut plugins: Vec<DiscoveredPlugin> = Vec::new();
+        let mut seen_paths: HashSet<PathBuf> = HashSet::new();
+        let mut describe_cache = self.load_describe_cache().unwrap_or_default();
+        let mut cache_dirty = false;
+
+        for root in self.search_roots() {
+            let manifest_state = load_manifest_state(&root);
+            let Ok(entries) = std::fs::read_dir(&root.path) else {
+                continue;
+            };
+
+            let mut executables = entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| is_plugin_executable(path))
+                .collect::<Vec<PathBuf>>();
+            executables.sort();
+
+            for executable in executables {
+                if !seen_paths.insert(executable.clone()) {
+                    continue;
+                }
+
+                let file_name = executable
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+
+                let fallback_id = file_name
+                    .strip_prefix(PLUGIN_EXECUTABLE_PREFIX)
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let manifest_entry = match &manifest_state {
+                    ManifestState::Valid(manifest) => manifest.by_exe.get(&file_name).cloned(),
+                    _ => None,
+                };
+
+                let mut plugin_id = manifest_entry
+                    .as_ref()
+                    .map(|entry| entry.id.clone())
+                    .unwrap_or_else(|| fallback_id.clone());
+                let mut plugin_version = manifest_entry.as_ref().map(|entry| entry.version.clone());
+                let mut commands = manifest_entry
+                    .as_ref()
+                    .map(|entry| entry.commands.clone())
+                    .unwrap_or_default();
+                let mut command_specs = commands
+                    .iter()
+                    .map(|name| PluginCommandSpec {
+                        name: name.clone(),
+                        about: String::new(),
+                        subcommands: Vec::new(),
+                    })
+                    .collect::<Vec<PluginCommandSpec>>();
+                let mut default_enabled = manifest_entry
+                    .as_ref()
+                    .map(|entry| entry.enabled_by_default)
+                    .unwrap_or(true);
+                let mut issue: Option<String> = None;
+
+                match &manifest_state {
+                    ManifestState::Missing => {
+                        merge_issue(
+                            &mut issue,
+                            format!("bundled {} not found", BUNDLED_MANIFEST_FILE),
+                        );
+                    }
+                    ManifestState::Invalid(err) => {
+                        merge_issue(&mut issue, format!("bundled manifest invalid: {err}"));
+                    }
+                    ManifestState::Valid(_) if manifest_entry.is_none() => {
+                        merge_issue(
+                            &mut issue,
+                            "plugin executable not present in bundled manifest".to_string(),
+                        );
+                    }
+                    ManifestState::NotBundled | ManifestState::Valid(_) => {}
+                }
+
+                match describe_with_cache(&executable, &mut describe_cache, &mut cache_dirty) {
+                    Ok(describe) => {
+                        plugin_id = describe.plugin_id.clone();
+                        plugin_version = Some(describe.plugin_version.clone());
+                        commands = describe
+                            .commands
+                            .iter()
+                            .map(|cmd| cmd.name.clone())
+                            .collect::<Vec<String>>();
+                        command_specs = describe
+                            .commands
+                            .iter()
+                            .map(to_command_spec)
+                            .collect::<Vec<PluginCommandSpec>>();
+
+                        if let Some(entry) = &manifest_entry {
+                            default_enabled = entry.enabled_by_default;
+                            if let Err(err) = validate_manifest_entry(entry, &describe, &executable)
+                            {
+                                merge_issue(&mut issue, err.to_string());
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        merge_issue(&mut issue, err.to_string());
+                    }
+                }
+
+                plugins.push(DiscoveredPlugin {
+                    plugin_id,
+                    plugin_version,
+                    executable,
+                    source: root.source,
+                    commands,
+                    command_specs,
+                    issue,
+                    default_enabled,
+                });
+            }
+        }
+
+        if cache_dirty {
+            let _ = self.save_describe_cache(&describe_cache);
+        }
+
+        plugins
+    }
+
+    fn search_roots(&self) -> Vec<SearchRoot> {
+        let mut ordered = Vec::new();
+
+        ordered.extend(self.explicit_dirs.iter().cloned().map(|path| SearchRoot {
+            path,
+            source: PluginSource::Explicit,
+        }));
+
+        if let Ok(raw) = std::env::var("OSP_PLUGIN_PATH") {
+            ordered.extend(
+                std::env::split_paths(&raw)
+                    .map(|path| SearchRoot {
+                        path,
+                        source: PluginSource::Env,
+                    })
+                    .collect::<Vec<SearchRoot>>(),
+            );
+        }
+
+        ordered.extend(
+            bundled_plugin_dirs()
+                .into_iter()
+                .map(|path| SearchRoot {
+                    path,
+                    source: PluginSource::Bundled,
+                })
+                .collect::<Vec<SearchRoot>>(),
+        );
+
+        if let Some(user_dir) = user_plugin_dir() {
+            ordered.push(SearchRoot {
+                path: user_dir,
+                source: PluginSource::UserConfig,
+            });
+        }
+
+        if let Ok(raw) = std::env::var("PATH") {
+            ordered.extend(
+                std::env::split_paths(&raw)
+                    .map(|path| SearchRoot {
+                        path,
+                        source: PluginSource::Path,
+                    })
+                    .collect::<Vec<SearchRoot>>(),
+            );
+        }
+
+        let mut deduped_paths: HashSet<PathBuf> = HashSet::new();
+        ordered
+            .into_iter()
+            .filter(|root| root.path.is_dir() && deduped_paths.insert(root.path.clone()))
+            .collect()
+    }
+
+    fn load_state(&self) -> Result<PluginState> {
+        let path =
+            plugin_state_path().ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
+        if !path.exists() {
+            return Ok(PluginState::default());
+        }
+
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read plugin state from {}", path.display()))?;
+        let state = serde_json::from_str::<PluginState>(&raw)
+            .with_context(|| format!("failed to parse plugin state at {}", path.display()))?;
+        Ok(state)
+    }
+
+    fn save_state(&self, state: &PluginState) -> Result<()> {
+        let path =
+            plugin_state_path().ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create plugin state dir {}", parent.display())
+            })?;
+        }
+
+        let payload = serde_json::to_string_pretty(state)?;
+        std::fs::write(&path, payload)
+            .with_context(|| format!("failed to write plugin state to {}", path.display()))
+    }
+
+    fn load_describe_cache(&self) -> Result<DescribeCacheFile> {
+        let Some(path) = describe_cache_path() else {
+            return Ok(DescribeCacheFile::default());
+        };
+        if !path.exists() {
+            return Ok(DescribeCacheFile::default());
+        }
+
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read describe cache {}", path.display()))?;
+        let cache = serde_json::from_str::<DescribeCacheFile>(&raw)
+            .with_context(|| format!("failed to parse describe cache {}", path.display()))?;
+        Ok(cache)
+    }
+
+    fn save_describe_cache(&self, cache: &DescribeCacheFile) -> Result<()> {
+        let Some(path) = describe_cache_path() else {
+            return Ok(());
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create describe cache dir {}", parent.display())
+            })?;
+        }
+
+        let payload = serde_json::to_string_pretty(cache)?;
+        std::fs::write(&path, payload)
+            .with_context(|| format!("failed to write describe cache {}", path.display()))
+    }
+}
+
+fn to_command_spec(command: &DescribeCommandV1) -> PluginCommandSpec {
+    PluginCommandSpec {
+        name: command.name.clone(),
+        about: command.about.clone(),
+        subcommands: command.subcommands.clone(),
+    }
+}
+
+fn load_manifest_state(root: &SearchRoot) -> ManifestState {
+    if root.source != PluginSource::Bundled {
+        return ManifestState::NotBundled;
+    }
+
+    let path = root.path.join(BUNDLED_MANIFEST_FILE);
+    if !path.exists() {
+        return ManifestState::Missing;
+    }
+
+    match load_and_validate_manifest(&path) {
+        Ok(manifest) => ManifestState::Valid(manifest),
+        Err(err) => ManifestState::Invalid(err.to_string()),
+    }
+}
+
+fn load_and_validate_manifest(path: &Path) -> Result<ValidatedBundledManifest> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read manifest {}", path.display()))?;
+
+    let manifest = toml::from_str::<BundledManifest>(&raw)
+        .with_context(|| format!("failed to parse manifest TOML at {}", path.display()))?;
+
+    if manifest.protocol_version != 1 {
+        return Err(anyhow!(
+            "unsupported manifest protocol_version {}",
+            manifest.protocol_version
+        ));
+    }
+
+    let mut by_exe: HashMap<String, ManifestPlugin> = HashMap::new();
+    let mut ids = HashSet::new();
+
+    for plugin in manifest.plugin {
+        if plugin.id.trim().is_empty() {
+            return Err(anyhow!("manifest plugin id must not be empty"));
+        }
+        if plugin.exe.trim().is_empty() {
+            return Err(anyhow!("manifest plugin exe must not be empty"));
+        }
+        if plugin.version.trim().is_empty() {
+            return Err(anyhow!("manifest plugin version must not be empty"));
+        }
+        if plugin.commands.is_empty() {
+            return Err(anyhow!(
+                "manifest plugin {} must declare at least one command",
+                plugin.id
+            ));
+        }
+        if !ids.insert(plugin.id.clone()) {
+            return Err(anyhow!("duplicate plugin id in manifest: {}", plugin.id));
+        }
+        if by_exe.contains_key(&plugin.exe) {
+            return Err(anyhow!("duplicate plugin exe in manifest: {}", plugin.exe));
+        }
+        by_exe.insert(plugin.exe.clone(), plugin);
+    }
+
+    Ok(ValidatedBundledManifest { by_exe })
+}
+
+fn validate_manifest_entry(
+    entry: &ManifestPlugin,
+    describe: &DescribeV1,
+    path: &Path,
+) -> Result<()> {
+    if entry.id != describe.plugin_id {
+        return Err(anyhow!(
+            "manifest id mismatch: expected {}, got {}",
+            entry.id,
+            describe.plugin_id
+        ));
+    }
+
+    if entry.version != describe.plugin_version {
+        return Err(anyhow!(
+            "manifest version mismatch for {}: expected {}, got {}",
+            entry.id,
+            entry.version,
+            describe.plugin_version
+        ));
+    }
+
+    let mut expected = entry.commands.clone();
+    expected.sort();
+    expected.dedup();
+
+    let mut actual = describe
+        .commands
+        .iter()
+        .map(|cmd| cmd.name.clone())
+        .collect::<Vec<String>>();
+    actual.sort();
+    actual.dedup();
+
+    if expected != actual {
+        return Err(anyhow!(
+            "manifest commands mismatch for {}: expected {:?}, got {:?}",
+            entry.id,
+            expected,
+            actual
+        ));
+    }
+
+    if let Some(expected_checksum) = entry.checksum_sha256.as_deref() {
+        let expected_checksum = normalize_checksum(expected_checksum)?;
+        let actual_checksum = file_sha256_hex(path)?;
+        if expected_checksum != actual_checksum {
+            return Err(anyhow!(
+                "checksum mismatch for {}: expected {}, got {}",
+                entry.id,
+                expected_checksum,
+                actual_checksum
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn describe_plugin(path: &Path) -> Result<DescribeV1> {
+    let output = Command::new(path)
+        .arg("--describe")
+        .output()
+        .with_context(|| format!("failed to execute --describe for {}", path.display()))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let message = if stderr.is_empty() {
+            format!("--describe failed with status {}", output.status)
+        } else {
+            format!(
+                "--describe failed with status {}: {}",
+                output.status, stderr
+            )
+        };
+        return Err(anyhow!(message));
+    }
+
+    let describe: DescribeV1 = serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("invalid describe JSON from {}", path.display()))?;
+
+    describe
+        .validate_v1()
+        .map_err(|err| anyhow!("invalid describe payload from {}: {err}", path.display()))?;
+
+    Ok(describe)
+}
+
+fn run_provider(
+    provider: &DiscoveredPlugin,
+    args: &[String],
+) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
+    let output = Command::new(&provider.executable)
+        .args(args)
+        .output()
+        .map_err(|source| PluginDispatchError::ExecuteFailed {
+            plugin_id: provider.plugin_id.clone(),
+            source,
+        })?;
+
+    Ok(RawPluginOutput {
+        status_code: output.status.code().unwrap_or(1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+fn describe_with_cache(
+    path: &Path,
+    cache: &mut DescribeCacheFile,
+    cache_dirty: &mut bool,
+) -> Result<DescribeV1> {
+    let key = path.to_string_lossy().to_string();
+    let (size, mtime_secs, mtime_nanos) = file_fingerprint(path)?;
+
+    if let Some(entry) = cache.entries.iter().find(|entry| {
+        entry.path == key
+            && entry.size == size
+            && entry.mtime_secs == mtime_secs
+            && entry.mtime_nanos == mtime_nanos
+    }) {
+        return Ok(entry.describe.clone());
+    }
+
+    let describe = describe_plugin(path)?;
+    if let Some(entry) = cache.entries.iter_mut().find(|entry| entry.path == key) {
+        entry.size = size;
+        entry.mtime_secs = mtime_secs;
+        entry.mtime_nanos = mtime_nanos;
+        entry.describe = describe.clone();
+    } else {
+        cache.entries.push(DescribeCacheEntry {
+            path: key,
+            size,
+            mtime_secs,
+            mtime_nanos,
+            describe: describe.clone(),
+        });
+    }
+    *cache_dirty = true;
+
+    Ok(describe)
+}
+
+fn file_fingerprint(path: &Path) -> Result<(u64, u64, u32)> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("failed to read metadata for {}", path.display()))?;
+    let size = metadata.len();
+    let modified = metadata
+        .modified()
+        .with_context(|| format!("failed to read mtime for {}", path.display()))?;
+    let dur = modified
+        .duration_since(UNIX_EPOCH)
+        .with_context(|| format!("mtime before unix epoch for {}", path.display()))?;
+    Ok((size, dur.as_secs(), dur.subsec_nanos()))
+}
+
+fn is_plugin_executable(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if !name.starts_with(PLUGIN_EXECUTABLE_PREFIX) {
+        return false;
+    }
+    if !has_supported_plugin_extension(path) {
+        return false;
+    }
+    if !has_valid_plugin_suffix(name) {
+        return false;
+    }
+    is_executable_file(path)
+}
+
+fn user_plugin_dir() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let mut path = PathBuf::from(home);
+    path.push(".config");
+    path.push("osp");
+    path.push("plugins");
+    Some(path)
+}
+
+fn plugin_state_path() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let mut path = PathBuf::from(home);
+    path.push(".config");
+    path.push("osp");
+    path.push("plugins.json");
+    Some(path)
+}
+
+fn describe_cache_path() -> Option<PathBuf> {
+    if let Ok(base) = std::env::var("XDG_CACHE_HOME") {
+        let mut path = PathBuf::from(base);
+        path.push("osp");
+        path.push("describe-v1.json");
+        return Some(path);
+    }
+
+    let home = std::env::var("HOME").ok()?;
+    let mut path = PathBuf::from(home);
+    path.push(".cache");
+    path.push("osp");
+    path.push("describe-v1.json");
+    Some(path)
+}
+
+fn bundled_plugin_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Ok(path) = std::env::var("OSP_BUNDLED_PLUGIN_DIR") {
+        dirs.push(PathBuf::from(path));
+    }
+
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(bin_dir) = exe_path.parent()
+    {
+        dirs.push(bin_dir.join("plugins"));
+        dirs.push(bin_dir.join("../lib/osp/plugins"));
+    }
+
+    dirs
+}
+
+fn is_enabled(state: &PluginState, plugin_id: &str, default_enabled: bool) -> bool {
+    if state.disabled.iter().any(|id| id == plugin_id) {
+        return false;
+    }
+
+    if state.enabled.is_empty() {
+        return default_enabled;
+    }
+
+    state.enabled.iter().any(|id| id == plugin_id)
+}
+
+fn merge_issue(target: &mut Option<String>, message: String) {
+    if message.trim().is_empty() {
+        return;
+    }
+
+    match target {
+        Some(existing) => {
+            existing.push_str("; ");
+            existing.push_str(&message);
+        }
+        None => *target = Some(message),
+    }
+}
+
+fn normalize_checksum(checksum: &str) -> Result<String> {
+    let trimmed = checksum.trim().to_ascii_lowercase();
+    if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(anyhow!(
+            "checksum must be a 64-char lowercase/uppercase hex string"
+        ));
+    }
+    Ok(trimmed)
+}
+
+fn file_sha256_hex(path: &Path) -> Result<String> {
+    let content = std::fs::read(path).with_context(|| {
+        format!(
+            "failed to read plugin executable for checksum: {}",
+            path.display()
+        )
+    })?;
+    let digest = Sha256::digest(content);
+
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    Ok(out)
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[cfg(windows)]
+fn has_supported_plugin_extension(path: &Path) -> bool {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        None => true,
+        Some(ext) => ext.eq_ignore_ascii_case("exe"),
+    }
+}
+
+#[cfg(not(windows))]
+fn has_supported_plugin_extension(path: &Path) -> bool {
+    path.extension().is_none()
+}
+
+#[cfg(windows)]
+fn has_valid_plugin_suffix(file_name: &str) -> bool {
+    let base = file_name.strip_suffix(".exe").unwrap_or(file_name);
+    let Some(suffix) = base.strip_prefix(PLUGIN_EXECUTABLE_PREFIX) else {
+        return false;
+    };
+    !suffix.is_empty()
+        && suffix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+#[cfg(not(windows))]
+fn has_valid_plugin_suffix(file_name: &str) -> bool {
+    let Some(suffix) = file_name.strip_prefix(PLUGIN_EXECUTABLE_PREFIX) else {
+        return false;
+    };
+    !suffix.is_empty()
+        && suffix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => meta.permissions().mode() & 0o111 != 0,
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}

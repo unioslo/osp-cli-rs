@@ -1,0 +1,8 @@
+[package]
+name = "osp-repl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+reedline.workspace = true
