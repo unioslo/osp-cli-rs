@@ -47,8 +47,11 @@ semantics.
 
 Current block family:
 
+- `Block::Line { parts(tokenized text) }`
+- `Block::Panel { title, body, rules, style tokens }`
+- `Block::Code { code, language }`
 - `Block::Json { payload }`
-- `Block::Table { style, headers, rows }`
+- `Block::Table { style, headers, rows, header_pairs, align, depth }`
 - `Block::Value { values }`
 - `Block::Mreg { rows(entries...) }`
 
@@ -61,10 +64,11 @@ Forbidden IR shape:
 ## Data Flow Contract
 
 1. Command returns response payload.
-2. Caller converts payload to rows.
+2. Caller converts payload to `osp_core::output_model::OutputResult` (or rows
+   as a temporary compatibility path).
 3. Caller checks command DSL capability metadata.
 4. Caller applies DSL pipeline when capability allows it.
-5. Caller passes rows + `RenderSettings` into `osp-ui`.
+5. Caller passes normalized output + `RenderSettings` into `osp-ui`.
 6. `osp-ui` builds document blocks.
 7. Renderer emits terminal text.
 

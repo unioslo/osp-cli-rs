@@ -217,4 +217,4 @@ These keys now drive REPL chrome and message rendering:
 - `repl.intro`
 - `color.prompt.text`
 - `color.prompt.command`
-- `ui.messages.boxed`
+- `ui.messages.format`

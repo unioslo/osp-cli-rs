@@ -13,7 +13,7 @@ Data flows through fixed stages:
 
 1. Command returns raw data (list/dict/scalar).
 2. DSL pipeline (optional) transforms the data.
-3. Bucketing + normalization (`to_buckets`, `normalise_buckets`).
+3. Caller normalizes output into `osp_core::output_model::OutputResult`.
 4. Formatter selection (auto or explicit format).
 5. Intermediate Representation (IR) document.
 6. Renderer materializes IR as plain text or rich output.
@@ -57,11 +57,11 @@ This is non-negotiable for the MVP.
 Define minimal, stable blocks to decouple formatting from rendering:
 
 - `Line { parts: Vec<(String, StyleToken)>, depth }`
-- `Table { headers, rows, header_pairs, align, style }`
+- `Table { headers, rows, header_pairs, align, style, depth }`
 - `JsonBlock { payload: serde_json::Value }`
 - `Panel { title, body, rules, border_style, title_style }`
 - `CodeBlock { code, language }`
-- `LineBlock / VerticalListBlock / GridBlock` for MREG-like layouts
+- `Mreg { rows(entries...) }` with scalar/list rendering strategies
 
 The `Document = Vec<Block>` stays stable across renderers.
 
@@ -75,6 +75,10 @@ Mirror existing behavior:
 - `mreg` -> `MregDocument` -> semantic blocks
 - `table` -> standard tables
 - `auto` -> values if value-only, mreg for single row, table otherwise
+- grouped payloads (`OutputItems::Groups`) render as:
+  - structured JSON (`groups`, `aggregates`, `rows`) for `json`
+  - one table per group with `header_pairs` for `table`/`md`
+  - merged rows for `mreg`/`value`
 
 Auto selection must stay pure: only payload shape + render settings are inputs.
 No command-specific branches in UI selection.
@@ -122,10 +126,11 @@ These are the core controls and should be part of schema:
 
 ## Message Blocks
 
-Message groups on `stderr` now use themed section dividers and optional boxed
-footers:
+Message groups on `stderr` now use themed section dividers with explicit
+message formatting modes:
 
-- `ui.messages.boxed`: `true|false` (default: `true`)
+- `ui.messages.format`: `rules | groups | boxes` (default: `rules`)
+- `boxes` is accepted as a config alias and currently maps to `rules`
 - divider style follows unicode/ascii mode
 - divider width follows resolved output width
 

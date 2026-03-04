@@ -81,3 +81,35 @@ The following must stay green:
   - width truncation
   - color/unicode toggles
 
+## Progress Snapshot
+
+### Implemented in the 60% -> 80% tranche
+
+- UI knobs are now config-driven through render settings:
+  - `ui.indent`, `ui.short_list_max`, `ui.medium_list_max`
+  - `ui.grid_padding`, `ui.grid_columns`, `ui.column_weight`
+- Table and MREG IR now preserve raw JSON values until render time.
+- Markdown renderer now supports alignment-aware separators and padded columns.
+- MREG grid layout now uses column-wise fill and list-threshold decisions from
+  render settings.
+- Message rendering switched to `ui.messages.format` (`rules|groups|boxes`).
+- Line parts can carry style tokens and are rendered accordingly in rich mode.
+- Layout context now keys metrics by stable block identity (pointer id), not
+  enumeration index, to avoid drift when block ordering changes.
+- Introduced `osp_core::output_model` as the shared UI/DSL boundary contract
+  (`OutputResult`, `OutputItems`, `Group`, `OutputMeta`).
+- `osp-ui` now supports rendering directly from `OutputResult` (rows or grouped
+  payloads), with row-based helpers retained as compatibility wrappers.
+- Grouped table rendering now carries `header_pairs` metadata and renders
+  summary pairs before each table.
+- `osp-cli` now routes one-shot plugin responses and REPL command outputs
+  through `OutputResult` + `render_output`, preserving metadata-driven column
+  ordering where available.
+
+### Remaining for the 80% -> 95% tranche
+
+- Add non-default table alignment metadata plumbing from grouped payloads to
+  markdown/grid renderers.
+- Add richer value-style mapping from config keys (`color.value.*`,
+  `color.panel.title`, etc.) instead of theme-only token mapping.
+- Add doc/help panel formatting parity and richer code/JSON styling options.

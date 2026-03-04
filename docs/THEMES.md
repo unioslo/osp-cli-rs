@@ -45,7 +45,7 @@ leave behind.
   - `repl.prompt`, `repl.simple_prompt`, `repl.shell_indicator`, `repl.intro`
   - `color.prompt.text`, `color.prompt.command`
 - Message blocks:
-  - themed divider/boxed rendering with `ui.messages.boxed`
+  - themed divider/rule rendering with `ui.messages.format`
 - Theme palette inspection:
   - hex palette values render in truecolor when color is enabled
 
