@@ -10,7 +10,7 @@ use osp_ui::style::StyleToken;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::app::{
-    CMD_CONFIG, CMD_HISTORY, CMD_LIST, CMD_PLUGINS, CMD_SHOW, CMD_THEME, CMD_USE,
+    CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_LIST, CMD_PLUGINS, CMD_SHOW, CMD_THEME, CMD_USE,
     CURRENT_TERMINAL_SENTINEL,
 };
 use crate::plugin_manager::CommandCatalogEntry;
@@ -68,6 +68,9 @@ pub(crate) fn build_repl_completion_tree(
 
     if state.auth.is_builtin_visible(CMD_PLUGINS) {
         specs.push(plugins_command_spec(catalog));
+    }
+    if state.auth.is_builtin_visible(CMD_DOCTOR) {
+        specs.push(doctor_command_spec());
     }
     if state.auth.is_builtin_visible(CMD_THEME) {
         specs.push(theme_command_spec(state));
@@ -397,6 +400,32 @@ fn config_command_spec(state: &AppState) -> CommandSpec {
             CommandSpec {
                 name: "diagnostics".to_string(),
                 tooltip: Some("Show config diagnostics".to_string()),
+                ..CommandSpec::default()
+            },
+        ],
+        ..CommandSpec::default()
+    }
+}
+
+fn doctor_command_spec() -> CommandSpec {
+    CommandSpec {
+        name: CMD_DOCTOR.to_string(),
+        tooltip: Some("Run diagnostics checks".to_string()),
+        subcommands: vec![
+            CommandSpec {
+                name: "all".to_string(),
+                ..CommandSpec::default()
+            },
+            CommandSpec {
+                name: CMD_CONFIG.to_string(),
+                ..CommandSpec::default()
+            },
+            CommandSpec {
+                name: CMD_PLUGINS.to_string(),
+                ..CommandSpec::default()
+            },
+            CommandSpec {
+                name: CMD_THEME.to_string(),
                 ..CommandSpec::default()
             },
         ],

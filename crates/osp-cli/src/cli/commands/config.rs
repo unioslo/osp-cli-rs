@@ -69,7 +69,7 @@ fn config_get_rows(state: &AppState, args: ConfigGetArgs) -> Result<Option<Vec<R
     Ok(Some(vec![row]))
 }
 
-fn config_diagnostics_rows(state: &AppState) -> Vec<Row> {
+pub(crate) fn config_diagnostics_rows(state: &AppState) -> Vec<Row> {
     let known_profiles = serde_json::Value::Array(
         state
             .config

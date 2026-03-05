@@ -22,10 +22,11 @@ use std::path::PathBuf;
 use terminal_size::{Width, terminal_size};
 
 use crate::cli::commands::{
-    config as config_cmd, history as history_cmd, plugins as plugins_cmd, theme as theme_cmd,
+    config as config_cmd, doctor as doctor_cmd, history as history_cmd, plugins as plugins_cmd,
+    theme as theme_cmd,
 };
 use crate::cli::{
-    Cli, Commands, ConfigArgs, HistoryArgs, PluginsArgs, ThemeArgs,
+    Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, PluginsArgs, ThemeArgs,
     parse_inline_command_tokens,
 };
 use crate::logging::{
@@ -54,6 +55,7 @@ use crate::theme_loader;
 enum RunAction {
     Repl,
     Plugins(PluginsArgs),
+    Doctor(DoctorArgs),
     Theme(ThemeArgs),
     Config(ConfigArgs),
     History(HistoryArgs),
@@ -61,6 +63,7 @@ enum RunAction {
 }
 
 pub(crate) const CMD_PLUGINS: &str = "plugins";
+pub(crate) const CMD_DOCTOR: &str = "doctor";
 pub(crate) const CMD_CONFIG: &str = "config";
 pub(crate) const CMD_THEME: &str = "theme";
 pub(crate) const CMD_HISTORY: &str = "history";
@@ -155,7 +158,7 @@ fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
             print!("{err}");
             Ok(0)
         }
-        _ => Err(miette::Report::new(err)),
+        _ => Err(miette!(err.to_string())),
     }
 }
 
@@ -171,6 +174,7 @@ fn run(mut cli: Cli) -> Result<i32> {
     let terminal_kind = match dispatch.action {
         RunAction::Repl => TerminalKind::Repl,
         RunAction::Plugins(_)
+        | RunAction::Doctor(_)
         | RunAction::Theme(_)
         | RunAction::Config(_)
         | RunAction::History(_)
@@ -230,6 +234,10 @@ fn run(mut cli: Cli) -> Result<i32> {
             let result = plugins_cmd::run_plugins_command(&state, args)?;
             run_cli_command(&state, result)
         }
+        RunAction::Doctor(args) => {
+            let result = doctor_cmd::run_doctor_command(&mut state, args)?;
+            run_cli_command(&state, result)
+        }
         RunAction::Theme(args) => {
             let result = theme_cmd::run_theme_command(&mut state, args)?;
             run_cli_command(&state, result)
@@ -284,6 +292,10 @@ fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Resu
             action: RunAction::Plugins(args),
             profile_override: explicit_profile,
         }),
+        Some(Commands::Doctor(args)) => Ok(DispatchPlan {
+            action: RunAction::Doctor(args),
+            profile_override: explicit_profile,
+        }),
         Some(Commands::Theme(args)) => Ok(DispatchPlan {
             action: RunAction::Theme(args),
             profile_override: explicit_profile,
@@ -314,10 +326,11 @@ fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Resu
                             profile_override: Some(normalized),
                         });
                     }
-                    let parsed =
-                        parse_inline_command_tokens(&remaining).map_err(miette::Report::new)?;
+                    let parsed = parse_inline_command_tokens(&remaining)
+                        .map_err(|err| miette!(err.to_string()))?;
                     let action = match parsed {
                         Some(Commands::Plugins(args)) => RunAction::Plugins(args),
+                        Some(Commands::Doctor(args)) => RunAction::Doctor(args),
                         Some(Commands::Theme(args)) => RunAction::Theme(args),
                         Some(Commands::Config(args)) => RunAction::Config(args),
                         Some(Commands::History(args)) => RunAction::History(args),
@@ -343,6 +356,7 @@ fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Resu
 fn ensure_dispatch_visibility(state: &AppState, action: &RunAction) -> Result<()> {
     match action {
         RunAction::Plugins(_) => ensure_builtin_visible(state, CMD_PLUGINS),
+        RunAction::Doctor(_) => ensure_builtin_visible(state, CMD_DOCTOR),
         RunAction::Theme(_) => ensure_builtin_visible(state, CMD_THEME),
         RunAction::Config(_) => ensure_builtin_visible(state, CMD_CONFIG),
         RunAction::History(_) => ensure_builtin_visible(state, CMD_HISTORY),
@@ -413,7 +427,7 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
                 );
                 return Ok(0);
             }
-            return Err(miette::Report::new(err));
+            return Err(miette!(err.to_string()));
         }
     };
 
@@ -428,6 +442,17 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
                 }
                 ensure_builtin_visible(state, CMD_PLUGINS)?;
                 let result = plugins_cmd::run_plugins_command(state, args)?;
+                return run_cli_command(state, result);
+            }
+            Commands::Doctor(args) => {
+                if !stages.is_empty() {
+                    return Err(miette!(
+                        "`{}` does not support DSL pipeline stages",
+                        CMD_DOCTOR
+                    ));
+                }
+                ensure_builtin_visible(state, CMD_DOCTOR)?;
+                let result = doctor_cmd::run_doctor_command(state, args)?;
                 return run_cli_command(state, result);
             }
             Commands::Theme(args) => {

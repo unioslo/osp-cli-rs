@@ -13,10 +13,12 @@ use osp_ui::style::{StyleToken, apply_style_spec, apply_style_with_theme};
 use std::borrow::Cow;
 
 use crate::cli::commands::{
-    config as config_cmd, history as history_cmd, plugins as plugins_cmd, theme as theme_cmd,
+    config as config_cmd, doctor as doctor_cmd, history as history_cmd, plugins as plugins_cmd,
+    theme as theme_cmd,
 };
 use crate::cli::{
-    Commands, ConfigCommands, HistoryCommands, PluginsCommands, ThemeCommands, parse_repl_tokens,
+    Commands, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands, ThemeCommands,
+    parse_repl_tokens,
 };
 use crate::pipeline::parse_command_text_with_aliases;
 use crate::plugin_manager::CommandCatalogEntry;
@@ -25,8 +27,8 @@ use crate::state::AppState;
 
 use crate::app;
 use crate::app::{
-    CMD_CONFIG, CMD_HELP, CMD_HISTORY, CMD_LIST, CMD_PLUGINS, CMD_SHOW, CMD_THEME, CMD_USE,
-    DEFAULT_REPL_PROMPT, REPL_SHELLABLE_COMMANDS, ReplCommandOutput, ReplCommandSpec,
+    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_LIST, CMD_PLUGINS, CMD_SHOW, CMD_THEME,
+    CMD_USE, DEFAULT_REPL_PROMPT, REPL_SHELLABLE_COMMANDS, ReplCommandOutput, ReplCommandSpec,
     ReplDispatchOverrides,
 };
 
@@ -36,6 +38,9 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     let mut words = completion::catalog_completion_words(&catalog);
     if state.auth.is_builtin_visible(CMD_PLUGINS) {
         words.extend([CMD_PLUGINS.to_string(), CMD_LIST.to_string()]);
+    }
+    if state.auth.is_builtin_visible(CMD_DOCTOR) {
+        words.push(CMD_DOCTOR.to_string());
     }
     if state.auth.is_builtin_visible(CMD_THEME) {
         words.extend([
@@ -263,6 +268,9 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
 
     if state.auth.is_builtin_visible(CMD_PLUGINS) {
         out.push_str("  plugins      subcommands: list, commands, enable, disable, doctor\n");
+    }
+    if state.auth.is_builtin_visible(CMD_DOCTOR) {
+        out.push_str("  doctor       subcommands: all, config, plugins, theme\n");
     }
     if state.auth.is_builtin_visible(CMD_CONFIG) {
         out.push_str("  config       subcommands: show, get, explain, set, diagnostics\n");
@@ -702,6 +710,12 @@ fn run_repl_command(
                 theme_cmd::run_theme_repl_command(state, args)
             })
         }
+        Commands::Doctor(args) => {
+            app::ensure_builtin_visible(state, CMD_DOCTOR)?;
+            with_repl_verbosity_overrides(state, overrides, |state| {
+                doctor_cmd::run_doctor_repl_command(state, args, overrides.message_verbosity)
+            })
+        }
         Commands::Config(args) => {
             app::ensure_builtin_visible(state, CMD_CONFIG)?;
             with_repl_verbosity_overrides(state, overrides, |state| {
@@ -822,6 +836,15 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
             supports_dsl: matches!(
                 args.command,
                 ConfigCommands::Show(_) | ConfigCommands::Get(_) | ConfigCommands::Diagnostics
+            ),
+        },
+        Commands::Doctor(args) => ReplCommandSpec {
+            name: Cow::Borrowed(CMD_DOCTOR),
+            supports_dsl: matches!(
+                args.command,
+                Some(DoctorCommands::Config)
+                    | Some(DoctorCommands::Plugins)
+                    | Some(DoctorCommands::Theme)
             ),
         },
         Commands::History(args) => ReplCommandSpec {

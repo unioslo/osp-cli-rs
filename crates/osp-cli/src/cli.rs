@@ -4,7 +4,7 @@ use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use osp_config::{ConfigValue, ResolvedConfig};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_ui::theme::DEFAULT_THEME_NAME;
-use osp_ui::{RenderSettings, StyleOverrides};
+use osp_ui::{RenderSettings, StyleOverrides, TableOverflow};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -137,6 +137,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     Plugins(PluginsArgs),
+    Doctor(DoctorArgs),
     Theme(ThemeArgs),
     Config(ConfigArgs),
     History(HistoryArgs),
@@ -171,6 +172,20 @@ pub struct ReplCli {
 pub struct PluginsArgs {
     #[command(subcommand)]
     pub command: PluginsCommands,
+}
+
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    #[command(subcommand)]
+    pub command: Option<DoctorCommands>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DoctorCommands {
+    All,
+    Config,
+    Plugins,
+    Theme,
 }
 
 #[derive(Debug, Subcommand)]
@@ -340,6 +355,7 @@ impl Cli {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: DEFAULT_THEME_NAME.to_string(),
@@ -453,6 +469,12 @@ impl Cli {
             && value >= 100
         {
             settings.mreg_stack_overflow_ratio = value as usize;
+        }
+
+        if let Some(value) = config.get_string("ui.table.overflow")
+            && let Some(parsed) = TableOverflow::parse(value)
+        {
+            settings.table_overflow = parsed;
         }
 
         settings.style_overrides = StyleOverrides {

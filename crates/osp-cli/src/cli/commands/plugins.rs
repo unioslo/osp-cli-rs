@@ -188,7 +188,7 @@ fn command_catalog_rows(commands: &[CommandCatalogEntry]) -> Vec<Row> {
         .collect()
 }
 
-fn doctor_rows(report: &DoctorReport) -> Vec<Row> {
+pub(crate) fn doctor_rows(report: &DoctorReport) -> Vec<Row> {
     let mut rows = Vec::new();
 
     let broken_enabled = report
