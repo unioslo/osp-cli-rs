@@ -149,6 +149,7 @@ fn config_value_to_toml(value: &ConfigValue) -> toml::Value {
         ConfigValue::List(values) => {
             toml::Value::Array(values.iter().map(config_value_to_toml).collect())
         }
+        ConfigValue::Secret(secret) => config_value_to_toml(secret.expose()),
     }
 }
 

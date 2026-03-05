@@ -167,9 +167,14 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
 
     let paths = RuntimeConfigPaths::discover();
     for scope in &scopes {
+        let display_value = if matches!(store, ConfigStore::Secrets) {
+            value.clone().into_secret()
+        } else {
+            value.clone()
+        };
         let mut row = RowBuilder::new();
         row.insert("key", key.clone());
-        row.insert("value", config_value_to_json(&value));
+        row.insert("value", config_value_to_json(&display_value));
         row.insert("scope", format_scope(scope));
         row.insert("store", config_store_name(store));
         row.insert("dry_run", args.dry_run);
@@ -217,7 +222,14 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
                     set_result
                         .previous
                         .as_ref()
-                        .map(config_value_to_json)
+                        .map(|previous| {
+                            let previous = if matches!(store, ConfigStore::Secrets) {
+                                previous.clone().into_secret()
+                            } else {
+                                previous.clone()
+                            };
+                            config_value_to_json(&previous)
+                        })
                         .unwrap_or(serde_json::Value::Null),
                 );
             }

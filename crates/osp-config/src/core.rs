@@ -41,9 +41,28 @@ pub enum ConfigValue {
     Integer(i64),
     Float(f64),
     List(Vec<ConfigValue>),
+    Secret(SecretValue),
 }
 
 impl ConfigValue {
+    pub fn is_secret(&self) -> bool {
+        matches!(self, ConfigValue::Secret(_))
+    }
+
+    pub fn reveal(&self) -> &ConfigValue {
+        match self {
+            ConfigValue::Secret(secret) => secret.expose(),
+            other => other,
+        }
+    }
+
+    pub fn into_secret(self) -> ConfigValue {
+        match self {
+            ConfigValue::Secret(_) => self,
+            other => ConfigValue::Secret(SecretValue::new(other)),
+        }
+    }
+
     pub(crate) fn from_toml(path: &str, value: &toml::Value) -> Result<Self, ConfigError> {
         match value {
             toml::Value::String(v) => Ok(Self::String(v.clone())),
@@ -70,7 +89,7 @@ impl ConfigValue {
         key: &str,
         placeholder: &str,
     ) -> Result<String, ConfigError> {
-        match self {
+        match self.reveal() {
             ConfigValue::String(value) => Ok(value.clone()),
             ConfigValue::Bool(value) => Ok(value.to_string()),
             ConfigValue::Integer(value) => Ok(value.to_string()),
@@ -79,7 +98,40 @@ impl ConfigValue {
                 key: key.to_string(),
                 placeholder: placeholder.to_string(),
             }),
+            ConfigValue::Secret(_) => Err(ConfigError::NonScalarPlaceholder {
+                key: key.to_string(),
+                placeholder: placeholder.to_string(),
+            }),
         }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct SecretValue(Box<ConfigValue>);
+
+impl SecretValue {
+    pub fn new(value: ConfigValue) -> Self {
+        Self(Box::new(value))
+    }
+
+    pub fn expose(&self) -> &ConfigValue {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> ConfigValue {
+        *self.0
+    }
+}
+
+impl std::fmt::Debug for SecretValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[REDACTED]")
+    }
+}
+
+impl Display for SecretValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[REDACTED]")
     }
 }
 
@@ -428,6 +480,7 @@ impl Display for ConfigValue {
                     .join(",");
                 write!(f, "[{joined}]")
             }
+            ConfigValue::Secret(secret) => write!(f, "{secret}"),
         }
     }
 }
@@ -581,6 +634,14 @@ impl ConfigLayer {
             scope: normalize_scope(scope),
             origin: origin.map(Into::into),
         });
+    }
+
+    pub fn mark_all_secret(&mut self) {
+        for entry in &mut self.entries {
+            if !entry.value.is_secret() {
+                entry.value = entry.value.clone().into_secret();
+            }
+        }
     }
 
     pub fn from_toml_str(raw: &str) -> Result<Self, ConfigError> {
@@ -813,31 +874,39 @@ impl ResolvedConfig {
     }
 
     pub fn get_string(&self, key: &str) -> Option<&str> {
-        match self.get(key) {
+        match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::String(value)) => Some(value),
             _ => None,
         }
     }
 
     pub fn get_bool(&self, key: &str) -> Option<bool> {
-        match self.get(key) {
+        match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::Bool(value)) => Some(*value),
             _ => None,
         }
     }
 
     pub fn get_string_list(&self, key: &str) -> Option<Vec<String>> {
-        match self.get(key) {
+        match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::List(values)) => Some(
                 values
                     .iter()
                     .filter_map(|value| match value {
                         ConfigValue::String(text) => Some(text.clone()),
+                        ConfigValue::Secret(secret) => match secret.expose() {
+                            ConfigValue::String(text) => Some(text.clone()),
+                            _ => None,
+                        },
                         _ => None,
                     })
                     .collect(),
             ),
             Some(ConfigValue::String(value)) => Some(vec![value.clone()]),
+            Some(ConfigValue::Secret(secret)) => match secret.expose() {
+                ConfigValue::String(value) => Some(vec![value.clone()]),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -887,6 +956,11 @@ fn adapt_value_for_schema(
     value: &ConfigValue,
     schema: &SchemaEntry,
 ) -> Result<ConfigValue, ConfigError> {
+    let (is_secret, value) = match value {
+        ConfigValue::Secret(secret) => (true, secret.expose()),
+        other => (false, other),
+    };
+
     let adapted = match schema.value_type {
         SchemaValueType::String => match value {
             ConfigValue::String(value) => ConfigValue::String(value.clone()),
@@ -968,6 +1042,18 @@ fn adapt_value_for_schema(
                 for value in values {
                     match value {
                         ConfigValue::String(value) => out.push(ConfigValue::String(value.clone())),
+                        ConfigValue::Secret(secret) => match secret.expose() {
+                            ConfigValue::String(value) => {
+                                out.push(ConfigValue::String(value.clone()))
+                            }
+                            other => {
+                                return Err(ConfigError::InvalidValueType {
+                                    key: key.to_string(),
+                                    expected: SchemaValueType::StringList,
+                                    actual: value_type_name(other).to_string(),
+                                });
+                            }
+                        },
                         other => {
                             return Err(ConfigError::InvalidValueType {
                                 key: key.to_string(),
@@ -983,6 +1069,19 @@ fn adapt_value_for_schema(
                 let items = parse_string_list(value);
                 ConfigValue::List(items.into_iter().map(ConfigValue::String).collect())
             }
+            ConfigValue::Secret(secret) => match secret.expose() {
+                ConfigValue::String(value) => {
+                    let items = parse_string_list(value);
+                    ConfigValue::List(items.into_iter().map(ConfigValue::String).collect())
+                }
+                other => {
+                    return Err(ConfigError::InvalidValueType {
+                        key: key.to_string(),
+                        expected: SchemaValueType::StringList,
+                        actual: value_type_name(other).to_string(),
+                    });
+                }
+            },
             other => {
                 return Err(ConfigError::InvalidValueType {
                     key: key.to_string(),
@@ -993,8 +1092,14 @@ fn adapt_value_for_schema(
         },
     };
 
+    let adapted = if is_secret {
+        adapted.into_secret()
+    } else {
+        adapted
+    };
+
     if let Some(allowed_values) = &schema.allowed_values
-        && let ConfigValue::String(value) = &adapted
+        && let ConfigValue::String(value) = adapted.reveal()
     {
         let normalized = value.to_ascii_lowercase();
         if !allowed_values.contains(&normalized) {
@@ -1048,12 +1153,13 @@ fn parse_string_list(value: &str) -> Vec<String> {
 }
 
 fn value_type_name(value: &ConfigValue) -> &'static str {
-    match value {
+    match value.reveal() {
         ConfigValue::String(_) => "string",
         ConfigValue::Bool(_) => "bool",
         ConfigValue::Integer(_) => "integer",
         ConfigValue::Float(_) => "float",
         ConfigValue::List(_) => "list",
+        ConfigValue::Secret(_) => "string",
     }
 }
 

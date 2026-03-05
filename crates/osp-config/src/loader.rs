@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::{
-    ConfigError, ConfigLayer, ConfigResolver, ConfigSchema, ResolveOptions, ResolvedConfig,
-    core::parse_env_key, store::validate_secrets_permissions, with_path_context,
+    ConfigError, ConfigLayer, ConfigResolver, ConfigSchema, ConfigValue, ResolveOptions,
+    ResolvedConfig, core::parse_env_key, store::validate_secrets_permissions, with_path_context,
 };
 
 pub trait ConfigLoader: Send + Sync {
@@ -168,6 +168,7 @@ impl ConfigLoader for SecretsTomlLoader {
         for entry in &mut layer.entries {
             entry.origin = Some(origin.clone());
         }
+        layer.mark_all_secret();
         Ok(layer)
     }
 }
@@ -210,7 +211,12 @@ impl ConfigLoader for EnvSecretsLoader {
 
             let synthetic = format!("OSP__{rest}");
             let spec = parse_env_key(&synthetic)?;
-            layer.insert_with_origin(spec.key, value.clone(), spec.scope, Some(name.clone()));
+            layer.insert_with_origin(
+                spec.key,
+                ConfigValue::String(value.clone()).into_secret(),
+                spec.scope,
+                Some(name.clone()),
+            );
         }
 
         Ok(layer)

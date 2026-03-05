@@ -618,7 +618,7 @@ pub(crate) fn enrich_dispatch_error(err: PluginDispatchError) -> miette::Report 
 }
 
 pub(crate) fn config_usize(config: &ResolvedConfig, key: &str, fallback: usize) -> usize {
-    match config.get(key) {
+    match config.get(key).map(ConfigValue::reveal) {
         Some(ConfigValue::Integer(value)) if *value > 0 => *value as usize,
         Some(ConfigValue::String(raw)) => raw
             .trim()
@@ -688,7 +688,7 @@ fn effective_debug_verbosity(cli: &Cli, config: &ResolvedConfig) -> u8 {
         return cli.debug.min(3);
     }
 
-    match config.get("debug.level") {
+    match config.get("debug.level").map(ConfigValue::reveal) {
         Some(ConfigValue::Integer(level)) => (*level).clamp(0, 3) as u8,
         Some(ConfigValue::String(raw)) => raw.trim().parse::<u8>().unwrap_or(0).min(3),
         _ => 0,

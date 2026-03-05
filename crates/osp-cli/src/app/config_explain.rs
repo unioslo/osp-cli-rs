@@ -49,13 +49,21 @@ pub(crate) fn config_explain_output(
 }
 
 pub(crate) fn config_value_to_json(value: &ConfigValue) -> serde_json::Value {
+    if value.is_secret() {
+        return "[REDACTED]".into();
+    }
+    config_value_to_json_exposed(value)
+}
+
+fn config_value_to_json_exposed(value: &ConfigValue) -> serde_json::Value {
     match value {
+        ConfigValue::Secret(secret) => config_value_to_json_exposed(secret.expose()),
         ConfigValue::String(v) => v.clone().into(),
         ConfigValue::Bool(v) => (*v).into(),
         ConfigValue::Integer(v) => (*v).into(),
         ConfigValue::Float(v) => (*v).into(),
         ConfigValue::List(values) => {
-            serde_json::Value::Array(values.iter().map(config_value_to_json).collect())
+            serde_json::Value::Array(values.iter().map(config_value_to_json_exposed).collect())
         }
     }
 }
@@ -291,28 +299,47 @@ fn effective_precedence_chain(
 }
 
 fn config_value_type(value: &ConfigValue) -> &'static str {
-    match value {
+    match value.reveal() {
         ConfigValue::String(_) => "string",
         ConfigValue::Bool(_) => "bool",
         ConfigValue::Integer(_) => "integer",
         ConfigValue::Float(_) => "float",
         ConfigValue::List(_) => "list",
+        ConfigValue::Secret(_) => "string",
     }
 }
 
 fn redact_value_json(key: &str, value: &ConfigValue, show_secrets: bool) -> serde_json::Value {
+    if value.is_secret() {
+        return if show_secrets {
+            config_value_to_json_exposed(value)
+        } else {
+            "[REDACTED]".into()
+        };
+    }
     if show_secrets || !is_sensitive_key(key) {
-        return config_value_to_json(value);
+        return config_value_to_json_exposed(value);
     }
 
     "[REDACTED]".into()
 }
 
 fn display_value(key: &str, value: &ConfigValue, show_secrets: bool) -> String {
+    if value.is_secret() {
+        return if show_secrets {
+            match value.reveal() {
+                ConfigValue::String(v) => v.clone(),
+                _ => config_value_to_json_exposed(value).to_string(),
+            }
+        } else {
+            "[REDACTED]".to_string()
+        };
+    }
+
     if show_secrets || !is_sensitive_key(key) {
-        return match value {
+        return match value.reveal() {
             ConfigValue::String(v) => v.clone(),
-            _ => config_value_to_json(value).to_string(),
+            _ => config_value_to_json_exposed(value).to_string(),
         };
     }
 
@@ -349,11 +376,19 @@ fn contains_sensitive_values(explain: &ConfigExplain) -> bool {
         return true;
     }
 
+    if explain
+        .final_entry
+        .as_ref()
+        .is_some_and(|entry| entry.value.is_secret())
+    {
+        return true;
+    }
+
     explain.interpolation.as_ref().is_some_and(|trace| {
         trace
             .steps
             .iter()
-            .any(|step| is_sensitive_key(&step.placeholder))
+            .any(|step| step.value.is_secret() || is_sensitive_key(&step.placeholder))
     })
 }
 

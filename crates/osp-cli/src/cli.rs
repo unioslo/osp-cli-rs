@@ -384,7 +384,7 @@ impl Cli {
         }
 
         if settings.width.is_none() {
-            match config.get("ui.width") {
+            match config.get("ui.width").map(ConfigValue::reveal) {
                 Some(ConfigValue::Integer(width)) if *width > 0 => {
                     settings.width = Some(*width as usize);
                 }
@@ -524,7 +524,7 @@ fn parse_unicode_mode(value: &str) -> Option<UnicodeMode> {
 }
 
 fn config_int(config: &ResolvedConfig, key: &str) -> Option<i64> {
-    match config.get(key) {
+    match config.get(key).map(ConfigValue::reveal) {
         Some(ConfigValue::Integer(value)) => Some(*value),
         Some(ConfigValue::String(raw)) => raw.trim().parse::<i64>().ok(),
         _ => None,

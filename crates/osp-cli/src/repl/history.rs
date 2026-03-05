@@ -148,11 +148,15 @@ fn history_entries_rows(entries: Vec<HistoryEntry>) -> Vec<Row> {
 }
 
 fn config_string_list(config: &ResolvedConfig, key: &str) -> Vec<String> {
-    match config.get(key) {
+    match config.get(key).map(ConfigValue::reveal) {
         Some(ConfigValue::List(values)) => values
             .iter()
             .filter_map(|value| match value {
                 ConfigValue::String(value) => Some(value.clone()),
+                ConfigValue::Secret(secret) => match secret.expose() {
+                    ConfigValue::String(value) => Some(value.clone()),
+                    _ => None,
+                },
                 _ => None,
             })
             .collect(),

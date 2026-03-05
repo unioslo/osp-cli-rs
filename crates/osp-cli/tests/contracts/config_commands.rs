@@ -2,6 +2,9 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+#[cfg(unix)]
 #[test]
 fn config_show_contract() {
     let home = make_temp_dir("osp-cli-config-show");
@@ -273,6 +276,66 @@ extensions.uio.ldap.bind_password = "file-secret"
 
 #[cfg(unix)]
 #[test]
+fn config_explain_redacts_secrets_source_even_without_sensitive_key_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-secret-source");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    );
+    write_secrets(
+        &home,
+        r#"
+[default]
+extensions.demo.potato = "sekrit"
+"#,
+    );
+
+    let mut redacted = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    redacted
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--json",
+            "config",
+            "explain",
+            "extensions.demo.potato",
+        ]);
+    redacted
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[REDACTED]"));
+
+    let mut clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    clear.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "config",
+        "explain",
+        "extensions.demo.potato",
+        "--show-secrets",
+    ]);
+    clear
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\": \"sekrit\""));
+
+    let mut get_redacted = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    get_redacted
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "get", "extensions.demo.potato"]);
+    get_redacted
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[REDACTED]"));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn positional_and_explicit_profile_resolve_equivalent_config_contract() {
     let home = make_temp_dir("osp-cli-config-profile-equivalent");
     write_config(
@@ -394,6 +457,19 @@ fn write_config(home: &std::path::Path, config: &str) {
     let config_dir = home.join(".config").join("osp");
     std::fs::create_dir_all(&config_dir).expect("config dir should be created");
     std::fs::write(config_dir.join("config.toml"), config).expect("config should be written");
+}
+
+#[cfg(unix)]
+fn write_secrets(home: &std::path::Path, secrets: &str) {
+    let config_dir = home.join(".config").join("osp");
+    std::fs::create_dir_all(&config_dir).expect("config dir should be created");
+    let secrets_path = config_dir.join("secrets.toml");
+    std::fs::write(&secrets_path, secrets).expect("secrets should be written");
+    let mut perms = std::fs::metadata(&secrets_path)
+        .expect("secrets metadata")
+        .permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&secrets_path, perms).expect("secrets permissions");
 }
 
 #[cfg(unix)]

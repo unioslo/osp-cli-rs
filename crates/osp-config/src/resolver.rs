@@ -295,10 +295,12 @@ impl ConfigResolver {
 
         match picked {
             None => Ok("default".to_string()),
-            Some(ConfigValue::String(profile)) if !profile.trim().is_empty() => {
-                Ok(normalize_identifier(&profile))
-            }
-            Some(other) => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
+            Some(value) => match value.reveal() {
+                ConfigValue::String(profile) if !profile.trim().is_empty() => {
+                    Ok(normalize_identifier(profile))
+                }
+                other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
+            },
         }
     }
 
@@ -468,8 +470,23 @@ fn resolve_interpolated_value(
     stack.push(key.to_string());
 
     let resolved = match value {
+        ConfigValue::Secret(secret) => match secret.into_inner() {
+            ConfigValue::String(template) => {
+                let (interpolated, _contains_secret) =
+                    interpolate_string(key, &template, raw, cache, stack)?;
+                ConfigValue::String(interpolated).into_secret()
+            }
+            other => other.into_secret(),
+        },
         ConfigValue::String(template) => {
-            ConfigValue::String(interpolate_string(key, &template, raw, cache, stack)?)
+            let (interpolated, contains_secret) =
+                interpolate_string(key, &template, raw, cache, stack)?;
+            let value = ConfigValue::String(interpolated);
+            if contains_secret {
+                value.into_secret()
+            } else {
+                value
+            }
         }
         other => other,
     };
@@ -486,9 +503,10 @@ fn interpolate_string(
     raw: &HashMap<String, ConfigValue>,
     cache: &mut HashMap<String, ConfigValue>,
     stack: &mut Vec<String>,
-) -> Result<String, ConfigError> {
+) -> Result<(String, bool), ConfigError> {
     let mut out = String::new();
     let mut cursor = 0usize;
+    let mut contains_secret = false;
 
     while let Some(rel_start) = template[cursor..].find("${") {
         let start = cursor + rel_start;
@@ -518,15 +536,18 @@ fn interpolate_string(
             });
         }
 
-        let interpolated = resolve_interpolated_value(placeholder, raw, cache, stack)?
-            .as_interpolation_string(key, placeholder)?;
+        let resolved = resolve_interpolated_value(placeholder, raw, cache, stack)?;
+        if resolved.is_secret() {
+            contains_secret = true;
+        }
+        let interpolated = resolved.as_interpolation_string(key, placeholder)?;
         out.push_str(&interpolated);
 
         cursor = end + 1;
     }
 
     out.push_str(&template[cursor..]);
-    Ok(out)
+    Ok((out, contains_secret))
 }
 
 fn explain_interpolation(
@@ -540,7 +561,7 @@ fn explain_interpolation(
     let Some(entry) = pre_interpolated.get(key) else {
         return Ok(None);
     };
-    let ConfigValue::String(template) = &entry.raw_value else {
+    let ConfigValue::String(template) = entry.raw_value.reveal() else {
         return Ok(None);
     };
     if !template.contains("${") {
@@ -586,7 +607,7 @@ fn collect_interpolation_steps_recursive(
         return Err(ConfigError::PlaceholderCycle { cycle });
     }
 
-    let Some(ConfigValue::String(template)) = raw.get(key) else {
+    let Some(ConfigValue::String(template)) = raw.get(key).map(ConfigValue::reveal) else {
         return Ok(());
     };
     if !template.contains("${") {

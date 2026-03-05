@@ -320,7 +320,7 @@ fn is_visible_in_allowlist(allowlist: &Option<HashSet<String>>, command: &str) -
 }
 
 fn configured_usize(config: &ResolvedConfig, key: &str, fallback: usize) -> usize {
-    match config.get(key) {
+    match config.get(key).map(osp_config::ConfigValue::reveal) {
         Some(osp_config::ConfigValue::Integer(value)) if *value > 0 => *value as usize,
         Some(osp_config::ConfigValue::String(raw)) => raw
             .trim()
