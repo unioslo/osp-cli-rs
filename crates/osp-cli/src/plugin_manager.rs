@@ -670,7 +670,13 @@ impl PluginManager {
         let mut deduped_paths: HashSet<PathBuf> = HashSet::new();
         ordered
             .into_iter()
-            .filter(|root| root.path.is_dir() && deduped_paths.insert(root.path.clone()))
+            .filter(|root| {
+                if !root.path.is_dir() {
+                    return false;
+                }
+                let canonical = root.path.canonicalize().unwrap_or_else(|_| root.path.clone());
+                deduped_paths.insert(canonical)
+            })
             .collect()
     }
 
