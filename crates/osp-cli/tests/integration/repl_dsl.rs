@@ -28,6 +28,8 @@ fn dsl_pipeline_project_works_on_ldap_user_data() {
         grid_padding: 4,
         grid_columns: None,
         column_weight: 3,
+        mreg_stack_min_col_width: 10,
+        mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
         style_overrides: StyleOverrides::default(),
     };
@@ -45,7 +47,7 @@ fn dsl_pipeline_values_works_on_netgroup_members() {
         .netgroup("ucore", None, None)
         .expect("query should succeed");
 
-    let parsed = parse_pipeline("ldap netgroup ucore | P members | V members");
+    let parsed = parse_pipeline("ldap netgroup ucore | P members | VAL members");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
 
     let settings = RenderSettings {
@@ -61,6 +63,8 @@ fn dsl_pipeline_values_works_on_netgroup_members() {
         grid_padding: 4,
         grid_columns: None,
         column_weight: 3,
+        mreg_stack_min_col_width: 10,
+        mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
         style_overrides: StyleOverrides::default(),
     };
@@ -93,6 +97,8 @@ fn dsl_pipeline_filter_works() {
         grid_padding: 4,
         grid_columns: None,
         column_weight: 3,
+        mreg_stack_min_col_width: 10,
+        mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
         style_overrides: StyleOverrides::default(),
     };
@@ -124,6 +130,8 @@ fn dsl_pipeline_markdown_table_format_works() {
         grid_padding: 4,
         grid_columns: None,
         column_weight: 3,
+        mreg_stack_min_col_width: 10,
+        mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
         style_overrides: StyleOverrides::default(),
     };

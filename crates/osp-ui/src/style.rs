@@ -92,7 +92,7 @@ fn style_spec_for_token<'a>(
         StyleToken::PanelBorder => theme.palette.border,
         StyleToken::PanelTitle => theme.palette.title,
         StyleToken::Value => theme.palette.text,
-        StyleToken::Number => theme.palette.success,
+        StyleToken::Number => theme.value_number_spec(),
         StyleToken::BoolTrue => theme.palette.success,
         StyleToken::BoolFalse => theme.palette.error,
         StyleToken::Null => theme.palette.muted,
@@ -198,6 +198,12 @@ mod tests {
         let nord = apply_style("info", StyleToken::MessageInfo, true, "nord");
         let dracula = apply_style("info", StyleToken::MessageInfo, true, "dracula");
         assert_ne!(nord, dracula);
+    }
+
+    #[test]
+    fn dracula_number_uses_theme_override_color() {
+        let out = apply_style("42", StyleToken::Number, true, "dracula");
+        assert!(out.starts_with("\x1b[38;2;255;121;198m"));
     }
 
     #[test]

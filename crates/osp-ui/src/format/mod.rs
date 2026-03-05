@@ -2,8 +2,8 @@ use osp_core::output::OutputFormat;
 use osp_core::output_model::{Group, OutputItems, OutputResult};
 use osp_core::row::Row;
 
-use crate::RenderSettings;
 use crate::document::{Block, Document, JsonBlock, TableStyle};
+use crate::{RenderBackend, RenderSettings};
 
 mod common;
 pub mod help;
@@ -35,8 +35,20 @@ pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettin
         OutputFormat::Markdown => build_table_document(output, TableStyle::Markdown),
         OutputFormat::Mreg => {
             let rows = materialize_rows(output);
+            let resolved = settings.resolve_render_settings();
+            let width_hint = resolved.width.unwrap_or(100).max(24);
+            let prefer_stacked_object_lists = resolved.backend == RenderBackend::Rich;
             Document {
-                blocks: vec![Block::Mreg(mreg::build_mreg_block(&rows))],
+                blocks: mreg::build_mreg_blocks(
+                    &rows,
+                    Some(&output.meta.key_index),
+                    settings.short_list_max,
+                    width_hint,
+                    settings.indent_size.max(1),
+                    prefer_stacked_object_lists,
+                    settings.mreg_stack_min_col_width.max(1),
+                    settings.mreg_stack_overflow_ratio.max(100),
+                ),
             }
         }
         OutputFormat::Value => {
@@ -250,6 +262,8 @@ mod tests {
             grid_padding: 2,
             grid_columns: None,
             column_weight: 3,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
             theme_name: "plain".to_string(),
             style_overrides: crate::style::StyleOverrides::default(),
         }

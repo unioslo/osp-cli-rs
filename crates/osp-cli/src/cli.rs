@@ -1,3 +1,5 @@
+pub(crate) mod commands;
+
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use osp_config::{ConfigValue, ResolvedConfig};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
@@ -89,6 +91,9 @@ pub struct Cli {
     #[arg(short = 'u', long = "user")]
     pub user: Option<String>,
 
+    #[arg(short = 'i', long = "incognito", global = true)]
+    pub incognito: bool,
+
     #[arg(long = "profile", global = true)]
     pub profile: Option<String>,
 
@@ -134,6 +139,7 @@ pub enum Commands {
     Plugins(PluginsArgs),
     Theme(ThemeArgs),
     Config(ConfigArgs),
+    History(HistoryArgs),
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -208,6 +214,24 @@ pub struct PluginToggleArgs {
 pub struct ConfigArgs {
     #[command(subcommand)]
     pub command: ConfigCommands,
+}
+
+#[derive(Debug, Args)]
+pub struct HistoryArgs {
+    #[command(subcommand)]
+    pub command: HistoryCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HistoryCommands {
+    List,
+    Prune(HistoryPruneArgs),
+    Clear,
+}
+
+#[derive(Debug, Args)]
+pub struct HistoryPruneArgs {
+    pub keep: usize,
 }
 
 #[derive(Debug, Subcommand)]
@@ -316,6 +340,8 @@ impl Cli {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
             theme_name: DEFAULT_THEME_NAME.to_string(),
             style_overrides: StyleOverrides::default(),
         }
@@ -414,6 +440,18 @@ impl Cli {
             && value > 0
         {
             settings.column_weight = value as usize;
+        }
+
+        if let Some(value) = config_int(config, "ui.mreg.stack_min_col_width")
+            && value > 0
+        {
+            settings.mreg_stack_min_col_width = value as usize;
+        }
+
+        if let Some(value) = config_int(config, "ui.mreg.stack_overflow_ratio")
+            && value >= 100
+        {
+            settings.mreg_stack_overflow_ratio = value as usize;
         }
 
         settings.style_overrides = StyleOverrides {

@@ -65,6 +65,7 @@ pub struct TableBlock {
     pub rows: Vec<Vec<Value>>,
     pub header_pairs: Vec<(String, Value)>,
     pub align: Option<Vec<TableAlign>>,
+    pub shrink_to_fit: bool,
     pub depth: usize,
 }
 
@@ -106,6 +107,8 @@ pub struct MregEntry {
 
 #[derive(Debug, Clone)]
 pub enum MregValue {
+    Group,
+    Separator,
     Scalar(Value),
     List(Vec<Value>),
 }

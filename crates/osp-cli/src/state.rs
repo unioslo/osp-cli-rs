@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use osp_config::{ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS, ResolvedConfig};
 use osp_core::row::Row;
+use osp_repl::HistoryShellContext;
 use osp_ui::RenderSettings;
 use osp_ui::messages::MessageLevel;
 
@@ -107,6 +108,7 @@ pub struct UiState {
 pub struct ReplState {
     pub prompt_prefix: String,
     pub history_enabled: bool,
+    pub history_shell: Option<HistoryShellContext>,
 }
 
 #[derive(Default)]
@@ -242,6 +244,7 @@ impl AppState {
             repl: ReplState {
                 prompt_prefix: "osp".to_string(),
                 history_enabled: true,
+                history_shell: None,
             },
             session: SessionState::with_cache_limit(session_cache_max_results),
             clients: ClientsState::new(plugins, config_revision),
@@ -250,6 +253,18 @@ impl AppState {
 
     pub fn prompt_prefix(&self) -> String {
         self.repl.prompt_prefix.clone()
+    }
+
+    pub fn sync_history_shell_context(&self) {
+        let Some(context) = &self.repl.history_shell else {
+            return;
+        };
+        let prefix = if self.session.shell_stack.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", self.session.shell_stack.join(" "))
+        };
+        context.set_prefix(prefix);
     }
 
     pub fn record_repl_rows(&mut self, command_line: &str, rows: Vec<Row>) {

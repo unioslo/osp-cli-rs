@@ -3,14 +3,15 @@ use std::collections::HashMap;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
-use crate::ResolvedRenderSettings;
 use crate::document::{Block, Document, MregBlock, TableBlock};
+use crate::{RenderBackend, ResolvedRenderSettings};
 
 #[derive(Debug, Clone)]
 struct TableDescriptor {
     block_id: usize,
     headers: Vec<String>,
     raw_widths: Vec<usize>,
+    shrink_to_fit: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -30,7 +31,12 @@ pub fn prepare_layout_context(
     settings: &ResolvedRenderSettings,
 ) -> LayoutContext {
     LayoutContext {
-        table_column_widths: prepare_table_widths(document, settings.width, settings.unicode),
+        table_column_widths: prepare_table_widths(
+            document,
+            settings.width,
+            settings.unicode,
+            settings.backend == RenderBackend::Rich,
+        ),
         mreg_metrics: prepare_mreg_metrics(
             document,
             settings.width,
@@ -44,6 +50,7 @@ fn prepare_table_widths(
     document: &Document,
     width_limit: Option<usize>,
     unicode: bool,
+    force_shrink_to_fit: bool,
 ) -> HashMap<usize, Vec<usize>> {
     let min_column_width = if unicode { 4 } else { 6 };
 
@@ -59,6 +66,7 @@ fn prepare_table_widths(
             block_id,
             headers: table.headers.clone(),
             raw_widths,
+            shrink_to_fit: table.shrink_to_fit || force_shrink_to_fit,
         });
     }
 
@@ -87,16 +95,20 @@ fn prepare_table_widths(
 
     let mut output = HashMap::new();
     for table in &tables {
-        let widths = table
-            .headers
-            .iter()
-            .map(|header| {
-                global_width_by_header
-                    .get(header)
-                    .copied()
-                    .unwrap_or(min_column_width)
-            })
-            .collect::<Vec<usize>>();
+        let widths = if table.shrink_to_fit || force_shrink_to_fit {
+            table
+                .headers
+                .iter()
+                .map(|header| {
+                    global_width_by_header
+                        .get(header)
+                        .copied()
+                        .unwrap_or(min_column_width)
+                })
+                .collect::<Vec<usize>>()
+        } else {
+            table.raw_widths.clone()
+        };
         output.insert(table.block_id, widths);
     }
 
@@ -130,7 +142,9 @@ fn shrink_global_widths_to_fit(
     loop {
         let oversized = tables
             .iter()
-            .filter(|table| table_width(table, global_width_by_header) > width_limit)
+            .filter(|table| {
+                table.shrink_to_fit && table_width(table, global_width_by_header) > width_limit
+            })
             .collect::<Vec<_>>();
 
         if oversized.is_empty() {
@@ -191,7 +205,7 @@ fn prepare_mreg_metrics(
         };
         let block_id = block_identity(block);
 
-        let key_width = compute_mreg_key_width(mreg).max(3);
+        let key_width = compute_mreg_key_width(mreg, indent_size).max(3);
         let available_width = width_limit.unwrap_or(100);
         let reserved = margin + indent_size + key_width + 4;
         let content_width = available_width.saturating_sub(reserved).max(16);
@@ -208,14 +222,31 @@ fn prepare_mreg_metrics(
     metrics
 }
 
-fn compute_mreg_key_width(block: &MregBlock) -> usize {
+fn compute_mreg_key_width(block: &MregBlock, indent_size: usize) -> usize {
     block
         .rows
         .iter()
         .flat_map(|row| row.entries.iter())
-        .map(|entry| display_width(&entry.key))
+        .map(|entry| entry.depth * indent_size + mreg_alignment_key_width(&entry.key))
         .max()
         .unwrap_or(0)
+}
+
+fn mreg_alignment_key_width(key: &str) -> usize {
+    display_width(strip_count_suffix(key))
+}
+
+fn strip_count_suffix(key: &str) -> &str {
+    if let Some(prefix_end) = key.rfind(" (") {
+        let suffix = &key[prefix_end + 2..];
+        if let Some(count) = suffix.strip_suffix(')')
+            && !count.is_empty()
+            && count.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return &key[..prefix_end];
+        }
+    }
+    key
 }
 
 fn display_width(value: &str) -> usize {
@@ -287,6 +318,24 @@ mod tests {
         }
     }
 
+    fn plain_settings(width: Option<usize>) -> ResolvedRenderSettings {
+        ResolvedRenderSettings {
+            backend: RenderBackend::Plain,
+            color: false,
+            unicode: false,
+            width,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            theme_name: DEFAULT_THEME_NAME.to_string(),
+            style_overrides: crate::style::StyleOverrides::default(),
+        }
+    }
+
     #[test]
     fn shares_column_widths_by_header_name_across_tables() {
         let document = Document {
@@ -297,6 +346,7 @@ mod tests {
                     rows: vec![vec![json!("short"), json!("abc")]],
                     header_pairs: Vec::new(),
                     align: None,
+                    shrink_to_fit: true,
                     depth: 0,
                 }),
                 Block::Table(TableBlock {
@@ -305,6 +355,7 @@ mod tests {
                     rows: vec![vec![json!("very-long-name"), json!("x")]],
                     header_pairs: Vec::new(),
                     align: None,
+                    shrink_to_fit: true,
                     depth: 0,
                 }),
             ],
@@ -338,6 +389,7 @@ mod tests {
                 ]],
                 header_pairs: Vec::new(),
                 align: None,
+                shrink_to_fit: true,
                 depth: 0,
             })],
         };
@@ -351,6 +403,41 @@ mod tests {
 
         let total: usize = widths.iter().sum::<usize>() + widths.len() * 3 + 1;
         assert!(total <= 36);
+    }
+
+    #[test]
+    fn rich_mode_shrinks_even_when_table_opted_out() {
+        let document = Document {
+            blocks: vec![Block::Table(TableBlock {
+                style: TableStyle::Grid,
+                headers: vec!["name".to_string(), "description".to_string()],
+                rows: vec![vec![
+                    json!("alpha"),
+                    json!("this text is intentionally long and should shrink"),
+                ]],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: false,
+                depth: 0,
+            })],
+        };
+
+        let rich_context = prepare_layout_context(&document, &rich_settings(Some(36)));
+        let plain_context = prepare_layout_context(&document, &plain_settings(Some(36)));
+        let table_id = block_identity(&document.blocks[0]);
+        let rich_widths = rich_context
+            .table_column_widths
+            .get(&table_id)
+            .expect("rich table widths should exist");
+        let plain_widths = plain_context
+            .table_column_widths
+            .get(&table_id)
+            .expect("plain table widths should exist");
+
+        let rich_total: usize = rich_widths.iter().sum::<usize>() + rich_widths.len() * 3 + 1;
+        let plain_total: usize = plain_widths.iter().sum::<usize>() + plain_widths.len() * 3 + 1;
+        assert!(rich_total <= 36);
+        assert!(plain_total > 36);
     }
 
     #[test]

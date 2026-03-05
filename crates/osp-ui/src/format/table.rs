@@ -16,7 +16,11 @@ pub fn build_table_block(
         .map(|row| {
             headers
                 .iter()
-                .map(|key| row.get(key).cloned().unwrap_or(Value::Null))
+                .map(|key| {
+                    row.get(key)
+                        .cloned()
+                        .unwrap_or_else(|| Value::String(String::new()))
+                })
                 .collect::<Vec<Value>>()
         })
         .collect::<Vec<Vec<Value>>>();
@@ -27,6 +31,7 @@ pub fn build_table_block(
         rows: rendered_rows,
         header_pairs: Vec::new(),
         align: None,
+        shrink_to_fit: true,
         depth: 0,
     }
 }
@@ -83,5 +88,18 @@ mod tests {
             table.headers[1..].to_vec(),
             vec!["role".to_string(), "uid".to_string()]
         );
+    }
+
+    #[test]
+    fn missing_values_render_as_empty_cells_not_null() {
+        let mut row1 = Row::new();
+        row1.insert("host".to_string(), json!("login1.uio.no"));
+        row1.insert("vlan".to_string(), json!("303"));
+        let mut row2 = Row::new();
+        row2.insert("host".to_string(), json!("login2.uio.no"));
+
+        let preferred = vec!["host".to_string(), "vlan".to_string()];
+        let table = build_table_block(&[row1, row2], TableStyle::Grid, Some(&preferred));
+        assert_eq!(table.rows[1][1], json!(""));
     }
 }

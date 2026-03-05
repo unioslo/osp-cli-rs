@@ -84,6 +84,7 @@ fn render_block_plain(
             &settings.theme_name,
             settings.margin,
             settings.indent_size,
+            false,
             layout
                 .table_column_widths
                 .get(&block_identity(block))
@@ -146,6 +147,7 @@ fn render_block_rich(
             &settings.theme_name,
             settings.margin,
             settings.indent_size,
+            true,
             layout
                 .table_column_widths
                 .get(&block_identity(block))
@@ -383,38 +385,54 @@ fn render_mreg_block(
 
     let key_width = metrics
         .map(|value| value.key_width)
-        .unwrap_or_else(|| compute_mreg_key_width(block).max(3));
-    let available_width = metrics
-        .map(|value| value.content_width)
-        .unwrap_or_else(|| width.unwrap_or(100).saturating_sub(key_width + 4).max(16));
-
+        .unwrap_or_else(|| compute_mreg_key_width(block, indent_size).max(3));
+    let value_column = key_width + 2;
     let mut out = String::new();
     for (row_index, row) in block.rows.iter().enumerate() {
         for entry in &row.entries {
             let key_indent = " ".repeat(entry.depth * indent_size);
             let margin_indent = " ".repeat(margin);
-            let padded_key = pad_display_width(&entry.key, key_width);
             let key_text = apply_style_with_overrides(
-                &padded_key,
+                &entry.key,
                 StyleToken::MregKey,
                 color,
                 theme_name,
                 style_overrides,
             );
+            let key_len = display_width(&entry.key);
+            let base_key_len = mreg_alignment_key_width(&entry.key);
+            let base_len = entry.depth * indent_size + base_key_len + 1;
+            let full_len = entry.depth * indent_size + key_len + 1;
+            let scalar_gap_width = value_column.saturating_sub(base_len).max(1);
+            let scalar_gap = " ".repeat(scalar_gap_width);
 
             match &entry.value {
+                MregValue::Group => {
+                    out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
+                }
+                MregValue::Separator => {
+                    out.push_str(&format!("{margin_indent}{key_indent}---\n"));
+                }
                 MregValue::Scalar(value) => {
+                    if value.is_null() {
+                        out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
+                        continue;
+                    }
                     let raw = value_to_string(value);
                     let value_text =
                         style_value_cell(value, &raw, color, theme_name, style_overrides);
                     out.push_str(&format!(
-                        "{margin_indent}{key_indent}{key_text}: {value_text}\n"
+                        "{margin_indent}{key_indent}{key_text}:{scalar_gap}{value_text}\n"
                     ));
                 }
                 MregValue::List(values) => {
+                    let list_available_width = width
+                        .unwrap_or(100)
+                        .saturating_sub(margin + (entry.depth + 1) * indent_size)
+                        .max(16);
                     let rendered = render_mreg_list(
                         values,
-                        available_width,
+                        list_available_width,
                         unicode,
                         short_list_max,
                         medium_list_max,
@@ -425,39 +443,31 @@ fn render_mreg_block(
                     match rendered {
                         MregListRender::Inline(line) => {
                             out.push_str(&format!(
-                                "{margin_indent}{key_indent}{key_text}: {line}\n"
+                                "{margin_indent}{key_indent}{key_text}:{scalar_gap}{line}\n"
                             ));
                         }
                         MregListRender::Vertical(lines) => {
-                            let heading = apply_style_with_overrides(
-                                &format!("{} ({})", entry.key, values.len()),
-                                StyleToken::MregKey,
-                                color,
-                                theme_name,
-                                style_overrides,
-                            );
-                            let bullet = if unicode { "•" } else { "-" };
-                            out.push_str(&format!("{margin_indent}{key_indent}{heading}\n"));
-                            for line in lines {
+                            if let Some((first, rest)) = lines.split_first() {
+                                let first_value_col = value_column.max(full_len + 1);
+                                let first_gap_width = first_value_col.saturating_sub(full_len);
                                 out.push_str(&format!(
-                                    "{margin_indent}{key_indent}  {bullet} {line}\n"
+                                    "{margin_indent}{key_indent}{key_text}:{}{first}\n",
+                                    " ".repeat(first_gap_width)
                                 ));
+                                let hanging = " ".repeat(margin + first_value_col);
+                                for line in rest {
+                                    out.push_str(&format!("{hanging}{line}\n"));
+                                }
+                            } else {
+                                out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
                             }
                         }
                         MregListRender::Grid(lines) => {
-                            let heading = apply_style_with_overrides(
-                                &format!("{} ({})", entry.key, values.len()),
-                                StyleToken::MregKey,
-                                color,
-                                theme_name,
-                                style_overrides,
-                            );
-                            out.push_str(&format!("{margin_indent}{key_indent}{heading}\n"));
+                            out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
                             for line in lines {
-                                out.push_str(&margin_indent);
-                                out.push_str(&key_indent);
-                                out.push_str("  ");
-                                out.push_str(&line.join(&" ".repeat(grid_padding)));
+                                out.push_str(&" ".repeat(margin + (entry.depth + 1) * indent_size));
+                                let joined = line.join(&" ".repeat(grid_padding));
+                                out.push_str(joined.trim_end());
                                 out.push('\n');
                             }
                         }
@@ -569,7 +579,7 @@ fn render_mreg_list(
     if values.is_empty() {
         return MregListRender::Inline(String::new());
     }
-    let values = values.iter().map(value_to_string).collect::<Vec<String>>();
+    let mut values = values.iter().map(value_to_string).collect::<Vec<String>>();
 
     let inline = values.join(", ");
     if values.len() <= short_list_max && display_width(&inline) <= available_width {
@@ -579,6 +589,8 @@ fn render_mreg_list(
     if values.len() <= medium_list_max {
         return MregListRender::Vertical(values.to_vec());
     }
+
+    values.sort_by_key(|value| value.to_ascii_lowercase());
 
     let columns = choose_grid_columns(
         &values,
@@ -613,19 +625,16 @@ fn render_mreg_list(
         .map(|row| {
             row.into_iter()
                 .enumerate()
-                .filter_map(|(index, value)| {
-                    if value.is_empty() {
-                        return None;
-                    }
+                .map(|(index, value)| {
                     if index == columns - 1 {
-                        Some(value)
+                        value
                     } else {
-                        Some(pad_display_width(&value, column_widths[index]))
+                        pad_display_width(&value, column_widths[index])
                     }
                 })
                 .collect::<Vec<String>>()
         })
-        .filter(|row| !row.is_empty())
+        .filter(|row| row.iter().any(|cell| !cell.trim_end().is_empty()))
         .collect::<Vec<Vec<String>>>();
 
     MregListRender::Grid(rows)
@@ -639,6 +648,7 @@ fn render_table_block(
     theme_name: &str,
     margin: usize,
     indent_size: usize,
+    respect_depth: bool,
     column_widths: Option<&[usize]>,
     style_overrides: &StyleOverrides,
 ) -> String {
@@ -653,11 +663,19 @@ fn render_table_block(
         theme_name,
         margin,
         indent_size,
+        respect_depth,
         style_overrides,
     );
     if !header_pairs.is_empty() {
         out.push_str(&header_pairs);
     }
+
+    let effective_margin = margin
+        + if respect_depth {
+            block.depth * indent_size
+        } else {
+            0
+        };
 
     let table_body = match block.style {
         TableStyle::Grid => render_grid_table(
@@ -666,13 +684,13 @@ fn render_table_block(
             color,
             width,
             theme_name,
-            margin,
+            effective_margin,
             indent_size,
             column_widths,
             style_overrides,
         ),
         TableStyle::Markdown => {
-            render_markdown_table(block, unicode, margin, indent_size, column_widths)
+            render_markdown_table(block, unicode, effective_margin, indent_size, column_widths)
         }
     };
 
@@ -686,6 +704,7 @@ fn render_table_header_pairs(
     theme_name: &str,
     margin: usize,
     indent_size: usize,
+    respect_depth: bool,
     style_overrides: &StyleOverrides,
 ) -> String {
     if block.header_pairs.is_empty() {
@@ -693,7 +712,14 @@ fn render_table_header_pairs(
     }
 
     let mut out = String::new();
-    let prefix = " ".repeat(margin + block.depth * indent_size);
+    let prefix = " ".repeat(
+        margin
+            + if respect_depth {
+                block.depth * indent_size
+            } else {
+                0
+            },
+    );
     for (key, value) in &block.header_pairs {
         let key_text = apply_style_with_overrides(
             key,
@@ -717,13 +743,13 @@ fn render_table_header_pairs(
 fn render_grid_table(
     block: &TableBlock,
     unicode: bool,
-    color: bool,
+    _color: bool,
     _width: Option<usize>,
-    theme_name: &str,
+    _theme_name: &str,
     margin: usize,
-    indent_size: usize,
+    _indent_size: usize,
     column_widths: Option<&[usize]>,
-    style_overrides: &StyleOverrides,
+    _style_overrides: &StyleOverrides,
 ) -> String {
     if block.rows.is_empty() {
         return String::new();
@@ -732,45 +758,98 @@ fn render_grid_table(
         truncate_table_to_widths(&block.headers, &block.rows, column_widths, unicode);
 
     let mut table = Table::new();
-    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table.set_content_arrangement(ContentArrangement::Disabled);
     if unicode {
-        table.load_preset(presets::UTF8_FULL);
+        table.load_preset(presets::UTF8_FULL_CONDENSED);
     } else {
-        table.load_preset(presets::ASCII_FULL);
+        table.load_preset(presets::ASCII_FULL_CONDENSED);
     }
 
     let header_cells = headers
         .iter()
-        .map(|header| {
-            Cell::new(apply_style_with_overrides(
-                header,
-                StyleToken::TableHeader,
-                color,
-                theme_name,
-                style_overrides,
-            ))
-        })
+        .map(|header| Cell::new(header))
         .collect::<Vec<Cell>>();
     table.set_header(header_cells);
 
     for row in &rows {
         let styled_row = row
             .iter()
-            .map(|(value, text)| style_value_cell(value, text, color, theme_name, style_overrides))
+            .map(|(_, text)| text.clone())
             .map(Cell::new)
             .collect::<Vec<Cell>>();
         table.add_row(styled_row);
     }
 
     let rendered = format!("{table}");
-    indent_lines(&rendered, margin + block.depth * indent_size)
+    let rendered = if unicode {
+        normalize_rich_table_chrome(&rendered)
+    } else {
+        normalize_ascii_table_chrome(&rendered)
+    };
+    indent_lines(&rendered, margin)
+}
+
+fn normalize_rich_table_chrome(rendered: &str) -> String {
+    let mut out = String::new();
+    let lines = rendered.lines().collect::<Vec<&str>>();
+    for (index, line) in lines.iter().enumerate() {
+        let mut normalized = line.replace('┆', "│");
+        if normalized.starts_with('┌') {
+            normalized = normalized
+                .replace('┌', "┏")
+                .replace('┬', "┳")
+                .replace('┐', "┓")
+                .replace('─', "━");
+        } else if index == 1 && normalized.starts_with('│') {
+            normalized = normalized.replace('│', "┃");
+        } else if normalized.starts_with('╞') {
+            normalized = normalized
+                .replace('╞', "┡")
+                .replace('╪', "╇")
+                .replace('╡', "┩")
+                .replace('═', "━");
+        }
+        out.push_str(&normalized);
+        if index + 1 < lines.len() || rendered.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn normalize_ascii_table_chrome(rendered: &str) -> String {
+    let mut out = String::new();
+    let lines = rendered.lines().collect::<Vec<&str>>();
+    for (index, line) in lines.iter().enumerate() {
+        let normalized = if line.starts_with('+')
+            && line.ends_with('+')
+            && line.bytes().all(|byte| byte == b'+' || byte == b'=')
+        {
+            if let Some(previous) = lines[..index]
+                .iter()
+                .rev()
+                .find(|candidate| candidate.starts_with('+') && candidate.contains('-'))
+            {
+                previous.replace('=', "-")
+            } else {
+                line.replace('=', "-")
+            }
+        } else {
+            (*line).to_string()
+        };
+        out.push_str(&normalized);
+        if index + 1 < lines.len() || rendered.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn render_markdown_table(
     block: &TableBlock,
     unicode: bool,
     margin: usize,
-    indent_size: usize,
+    _indent_size: usize,
     column_widths: Option<&[usize]>,
 ) -> String {
     let (headers, rows, _widths) =
@@ -833,7 +912,7 @@ fn render_markdown_table(
         out.push('\n');
     }
 
-    indent_lines(&out, margin + block.depth * indent_size)
+    indent_lines(&out, margin)
 }
 
 fn truncate_table_to_widths(
@@ -851,7 +930,7 @@ fn truncate_table_to_widths(
     let headers = headers
         .iter()
         .zip(&widths)
-        .map(|(header, width)| truncate_display_width(header, *width, unicode))
+        .map(|(header, width)| truncate_display_width_crop(header, *width))
         .collect::<Vec<String>>();
 
     let rows = rows
@@ -862,7 +941,7 @@ fn truncate_table_to_widths(
                 .map(|(index, cell)| {
                     let width = widths.get(index).copied().unwrap_or(8);
                     let raw = value_to_string(cell);
-                    (cell.clone(), truncate_display_width(&raw, width, unicode))
+                    (cell.clone(), truncate_display_width_crop(&raw, width))
                 })
                 .collect::<Vec<(Value, String)>>()
         })
@@ -951,14 +1030,31 @@ fn is_hex_color(value: &str) -> bool {
         .all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn compute_mreg_key_width(block: &MregBlock) -> usize {
+fn compute_mreg_key_width(block: &MregBlock, indent_size: usize) -> usize {
     block
         .rows
         .iter()
         .flat_map(|row| row.entries.iter())
-        .map(|entry| display_width(&entry.key))
+        .map(|entry| entry.depth * indent_size + mreg_alignment_key_width(&entry.key))
         .max()
         .unwrap_or(0)
+}
+
+fn mreg_alignment_key_width(key: &str) -> usize {
+    display_width(strip_count_suffix(key))
+}
+
+fn strip_count_suffix(key: &str) -> &str {
+    if let Some(prefix_end) = key.rfind(" (") {
+        let suffix = &key[prefix_end + 2..];
+        if let Some(count) = suffix.strip_suffix(')')
+            && !count.is_empty()
+            && count.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return &key[..prefix_end];
+        }
+    }
+    key
 }
 
 fn display_width(value: &str) -> usize {
@@ -1003,6 +1099,24 @@ fn truncate_display_width(value: &str, max_width: usize, unicode: bool) -> Strin
         width += ch_width;
     }
     out.push_str(suffix);
+    out
+}
+
+fn truncate_display_width_crop(value: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= max_width {
+        return value.to_string();
+    }
+
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in value.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width > max_width {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
+    }
     out
 }
 
@@ -1284,7 +1398,7 @@ mod tests {
             },
         );
 
-        assert!(rendered.contains("members (12)"));
+        assert!(rendered.contains("members:"));
         assert!(
             rendered
                 .lines()
@@ -1327,6 +1441,7 @@ mod tests {
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: Vec::new(),
                 align: None,
+                shrink_to_fit: true,
                 depth: 0,
             })],
         };
@@ -1334,7 +1449,8 @@ mod tests {
         let unicode = render_document(&document, settings(RenderBackend::Rich, false, true));
         let ascii = render_document(&document, settings(RenderBackend::Plain, false, false));
 
-        assert!(unicode.contains('┌'));
+        assert!(unicode.contains('┏'));
+        assert!(unicode.contains('│'));
         assert!(ascii.contains('+'));
     }
 
@@ -1347,6 +1463,7 @@ mod tests {
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: vec![("group".to_string(), json!("ops"))],
                 align: None,
+                shrink_to_fit: true,
                 depth: 0,
             })],
         };
@@ -1365,6 +1482,7 @@ mod tests {
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: Vec::new(),
                 align: None,
+                shrink_to_fit: true,
                 depth: 0,
             })],
         };
@@ -1382,6 +1500,7 @@ mod tests {
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: Vec::new(),
                 align: None,
+                shrink_to_fit: true,
                 depth: 0,
             })],
         };
@@ -1393,6 +1512,58 @@ mod tests {
     }
 
     #[test]
+    fn plain_ascii_table_uses_dash_header_separator() {
+        let document = Document {
+            blocks: vec![Block::Table(TableBlock {
+                style: TableStyle::Grid,
+                headers: vec!["uid".to_string()],
+                rows: vec![vec![json!("oistes")]],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: true,
+                depth: 0,
+            })],
+        };
+
+        let rendered = render_document(&document, settings(RenderBackend::Plain, false, false));
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.starts_with("+-") && line.contains('-'))
+        );
+        assert!(!rendered.lines().any(|line| line.starts_with("+=")));
+    }
+
+    #[test]
+    fn mreg_alignment_accounts_for_nested_depth() {
+        let document = Document {
+            blocks: vec![Block::Mreg(MregBlock {
+                rows: vec![MregRow {
+                    entries: vec![
+                        MregEntry {
+                            key: "parent".to_string(),
+                            depth: 0,
+                            value: MregValue::Scalar(json!("root")),
+                        },
+                        MregEntry {
+                            key: "nested".to_string(),
+                            depth: 1,
+                            value: MregValue::Scalar(json!("leaf")),
+                        },
+                    ],
+                }],
+            })],
+        };
+
+        let rendered = render_document(&document, settings(RenderBackend::Plain, false, false));
+        let mut lines = rendered.lines();
+        let top = lines.next().unwrap_or_default();
+        let nested = lines.next().unwrap_or_default();
+        assert!(top.starts_with("parent:  "));
+        assert!(nested.starts_with("  nested: "));
+    }
+
+    #[test]
     fn markdown_table_render_has_pipe_format() {
         let document = Document {
             blocks: vec![Block::Table(TableBlock {
@@ -1401,6 +1572,7 @@ mod tests {
                 rows: vec![vec![json!("oistes"), json!("uio")]],
                 header_pairs: Vec::new(),
                 align: None,
+                shrink_to_fit: true,
                 depth: 0,
             })],
         };
@@ -1423,6 +1595,7 @@ mod tests {
                 ]],
                 header_pairs: Vec::new(),
                 align: None,
+                shrink_to_fit: true,
                 depth: 0,
             })],
         };
@@ -1446,19 +1619,21 @@ mod tests {
             },
         );
 
-        assert!(rendered.contains("..."));
+        assert!(!rendered.contains("..."));
+        assert!(!rendered.contains("this-is-a-very-long-cell-that-should-truncate"));
     }
 
     #[test]
     fn plain_theme_does_not_style_hex_cells() {
         let document = Document {
-            blocks: vec![Block::Table(TableBlock {
-                style: TableStyle::Grid,
-                headers: vec!["color".to_string()],
-                rows: vec![vec![json!("#ff00ff")]],
-                header_pairs: Vec::new(),
-                align: None,
-                depth: 0,
+            blocks: vec![Block::Mreg(MregBlock {
+                rows: vec![MregRow {
+                    entries: vec![MregEntry {
+                        key: "color".to_string(),
+                        depth: 0,
+                        value: MregValue::Scalar(json!("#ff00ff")),
+                    }],
+                }],
             })],
         };
 
@@ -1486,13 +1661,14 @@ mod tests {
     #[test]
     fn theme_hex_values_render_with_truecolor_when_enabled() {
         let document = Document {
-            blocks: vec![Block::Table(TableBlock {
-                style: TableStyle::Grid,
-                headers: vec!["color".to_string()],
-                rows: vec![vec![json!("#ff00ff")]],
-                header_pairs: Vec::new(),
-                align: None,
-                depth: 0,
+            blocks: vec![Block::Mreg(MregBlock {
+                rows: vec![MregRow {
+                    entries: vec![MregEntry {
+                        key: "color".to_string(),
+                        depth: 0,
+                        value: MregValue::Scalar(json!("#ff00ff")),
+                    }],
+                }],
             })],
         };
 

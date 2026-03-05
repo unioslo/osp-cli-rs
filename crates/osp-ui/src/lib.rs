@@ -33,6 +33,8 @@ pub struct RenderSettings {
     pub grid_padding: usize,
     pub grid_columns: Option<usize>,
     pub column_weight: usize,
+    pub mreg_stack_min_col_width: usize,
+    pub mreg_stack_overflow_ratio: usize,
     pub theme_name: String,
     pub style_overrides: StyleOverrides,
 }
@@ -88,10 +90,11 @@ impl RenderSettings {
             RenderMode::Plain => RenderBackend::Plain,
             RenderMode::Rich => RenderBackend::Rich,
             RenderMode::Auto => {
-                if std::io::stdout().is_terminal() {
-                    RenderBackend::Rich
-                } else {
+                let term = std::env::var("TERM").unwrap_or_default();
+                if term == "dumb" {
                     RenderBackend::Plain
+                } else {
+                    RenderBackend::Rich
                 }
             }
         };
@@ -183,6 +186,8 @@ pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) 
         grid_padding: settings.grid_padding,
         grid_columns: settings.grid_columns,
         column_weight: settings.column_weight,
+        mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
+        mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
         style_overrides: settings.style_overrides.clone(),
     };
@@ -204,6 +209,8 @@ pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) 
         grid_padding: settings.grid_padding,
         grid_columns: settings.grid_columns,
         column_weight: settings.column_weight,
+        mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
+        mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
         style_overrides: settings.style_overrides.clone(),
     };
@@ -244,6 +251,8 @@ pub fn copy_output_to_clipboard(
         grid_padding: settings.grid_padding,
         grid_columns: settings.grid_columns,
         column_weight: settings.column_weight,
+        mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
+        mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
         style_overrides: settings.style_overrides.clone(),
     };
@@ -273,6 +282,8 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             style_overrides: crate::style::StyleOverrides::default(),
         }
@@ -379,6 +390,8 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             style_overrides: crate::style::StyleOverrides::default(),
         };
@@ -404,6 +417,8 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             style_overrides: crate::style::StyleOverrides::default(),
         };
@@ -439,6 +454,8 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             style_overrides: crate::style::StyleOverrides::default(),
         };

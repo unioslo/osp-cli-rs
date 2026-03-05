@@ -15,9 +15,46 @@ pub struct ThemePalette {
 pub struct ThemeDefinition {
     pub name: &'static str,
     pub palette: ThemePalette,
+    pub overrides: ThemeOverrides,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThemeOverrides {
+    pub value_number: Option<&'static str>,
+    pub repl_completion_text: Option<&'static str>,
+    pub repl_completion_background: Option<&'static str>,
+    pub repl_completion_highlight: Option<&'static str>,
+}
+
+impl ThemeDefinition {
+    pub fn value_number_spec(&self) -> &'static str {
+        self.overrides.value_number.unwrap_or(self.palette.success)
+    }
+
+    pub fn repl_completion_text_spec(&self) -> &'static str {
+        self.overrides.repl_completion_text.unwrap_or("#000000")
+    }
+
+    pub fn repl_completion_background_spec(&self) -> &'static str {
+        self.overrides
+            .repl_completion_background
+            .unwrap_or(self.palette.accent)
+    }
+
+    pub fn repl_completion_highlight_spec(&self) -> &'static str {
+        self.overrides
+            .repl_completion_highlight
+            .unwrap_or(self.palette.border)
+    }
 }
 
 pub const DEFAULT_THEME_NAME: &str = "rose-pine-moon";
+const NO_THEME_OVERRIDES: ThemeOverrides = ThemeOverrides {
+    value_number: None,
+    repl_completion_text: None,
+    repl_completion_background: None,
+    repl_completion_highlight: None,
+};
 
 const THEMES: &[ThemeDefinition] = &[
     ThemeDefinition {
@@ -33,6 +70,7 @@ const THEMES: &[ThemeDefinition] = &[
             border: "",
             title: "",
         },
+        overrides: NO_THEME_OVERRIDES,
     },
     ThemeDefinition {
         name: "nord",
@@ -47,6 +85,7 @@ const THEMES: &[ThemeDefinition] = &[
             border: "#81a1c1",
             title: "#81a1c1",
         },
+        overrides: NO_THEME_OVERRIDES,
     },
     ThemeDefinition {
         name: "dracula",
@@ -60,6 +99,10 @@ const THEMES: &[ThemeDefinition] = &[
             error: "bold #ff5555",
             border: "#ff79c6",
             title: "#ff79c6",
+        },
+        overrides: ThemeOverrides {
+            value_number: Some("#ff79c6"),
+            ..NO_THEME_OVERRIDES
         },
     },
     ThemeDefinition {
@@ -75,6 +118,7 @@ const THEMES: &[ThemeDefinition] = &[
             border: "#fabd2f",
             title: "#fabd2f",
         },
+        overrides: NO_THEME_OVERRIDES,
     },
     ThemeDefinition {
         name: "tokyonight",
@@ -89,6 +133,7 @@ const THEMES: &[ThemeDefinition] = &[
             border: "#e0af68",
             title: "#e0af68",
         },
+        overrides: NO_THEME_OVERRIDES,
     },
     ThemeDefinition {
         name: "molokai",
@@ -103,6 +148,7 @@ const THEMES: &[ThemeDefinition] = &[
             border: "#E6DB74",
             title: "#E6DB74",
         },
+        overrides: NO_THEME_OVERRIDES,
     },
     ThemeDefinition {
         name: "catppuccin",
@@ -117,6 +163,7 @@ const THEMES: &[ThemeDefinition] = &[
             border: "#89dceb",
             title: "#89dceb",
         },
+        overrides: NO_THEME_OVERRIDES,
     },
     ThemeDefinition {
         name: "rose-pine-moon",
@@ -131,6 +178,7 @@ const THEMES: &[ThemeDefinition] = &[
             border: "#e8dff6",
             title: "#e8dff6",
         },
+        overrides: NO_THEME_OVERRIDES,
     },
 ];
 
@@ -164,4 +212,26 @@ pub fn resolve_theme(name: &str) -> &'static ThemeDefinition {
 
 pub fn is_known_theme(name: &str) -> bool {
     find_theme(name).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_theme, resolve_theme};
+
+    #[test]
+    fn dracula_number_override_matches_python_theme_preset() {
+        let dracula = find_theme("dracula").expect("dracula theme should exist");
+        assert_eq!(dracula.value_number_spec(), "#ff79c6");
+    }
+
+    #[test]
+    fn repl_completion_defaults_follow_python_late_defaults() {
+        let theme = resolve_theme("rose-pine-moon");
+        assert_eq!(theme.repl_completion_text_spec(), "#000000");
+        assert_eq!(
+            theme.repl_completion_background_spec(),
+            theme.palette.accent
+        );
+        assert_eq!(theme.repl_completion_highlight_spec(), theme.palette.border);
+    }
 }

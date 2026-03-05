@@ -234,6 +234,8 @@ struct DescribeCacheEntry {
 pub struct PluginManager {
     explicit_dirs: Vec<PathBuf>,
     discovered_cache: OnceLock<Vec<DiscoveredPlugin>>,
+    config_root: Option<PathBuf>,
+    cache_root: Option<PathBuf>,
 }
 
 impl PluginManager {
@@ -241,7 +243,15 @@ impl PluginManager {
         Self {
             explicit_dirs,
             discovered_cache: OnceLock::new(),
+            config_root: None,
+            cache_root: None,
         }
+    }
+
+    pub fn with_roots(mut self, config_root: Option<PathBuf>, cache_root: Option<PathBuf>) -> Self {
+        self.config_root = config_root;
+        self.cache_root = cache_root;
+        self
     }
 
     pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
@@ -623,7 +633,7 @@ impl PluginManager {
                 .collect::<Vec<SearchRoot>>(),
         );
 
-        if let Some(user_dir) = user_plugin_dir() {
+        if let Some(user_dir) = self.user_plugin_dir() {
             ordered.push(SearchRoot {
                 path: user_dir,
                 source: PluginSource::UserConfig,
@@ -649,8 +659,9 @@ impl PluginManager {
     }
 
     fn load_state(&self) -> Result<PluginState> {
-        let path =
-            plugin_state_path().ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
+        let path = self
+            .plugin_state_path()
+            .ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
         if !path.exists() {
             return Ok(PluginState::default());
         }
@@ -663,8 +674,9 @@ impl PluginManager {
     }
 
     fn save_state(&self, state: &PluginState) -> Result<()> {
-        let path =
-            plugin_state_path().ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
+        let path = self
+            .plugin_state_path()
+            .ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create plugin state dir {}", parent.display())
@@ -677,7 +689,7 @@ impl PluginManager {
     }
 
     fn load_describe_cache(&self) -> Result<DescribeCacheFile> {
-        let Some(path) = describe_cache_path() else {
+        let Some(path) = self.describe_cache_path() else {
             return Ok(DescribeCacheFile::default());
         };
         if !path.exists() {
@@ -692,7 +704,7 @@ impl PluginManager {
     }
 
     fn save_describe_cache(&self, cache: &DescribeCacheFile) -> Result<()> {
-        let Some(path) = describe_cache_path() else {
+        let Some(path) = self.describe_cache_path() else {
             return Ok(());
         };
         if let Some(parent) = path.parent() {
@@ -704,6 +716,24 @@ impl PluginManager {
         let payload = serde_json::to_string_pretty(cache)?;
         std::fs::write(&path, payload)
             .with_context(|| format!("failed to write describe cache {}", path.display()))
+    }
+
+    fn user_plugin_dir(&self) -> Option<PathBuf> {
+        let mut path = self.config_root.clone().or_else(default_config_root_dir)?;
+        path.push("plugins");
+        Some(path)
+    }
+
+    fn plugin_state_path(&self) -> Option<PathBuf> {
+        let mut path = self.config_root.clone().or_else(default_config_root_dir)?;
+        path.push("plugins.json");
+        Some(path)
+    }
+
+    fn describe_cache_path(&self) -> Option<PathBuf> {
+        let mut path = self.cache_root.clone().or_else(default_cache_root_dir)?;
+        path.push("describe-v1.json");
+        Some(path)
     }
 }
 
@@ -955,23 +985,7 @@ fn is_plugin_executable(path: &Path) -> bool {
     is_executable_file(path)
 }
 
-fn user_plugin_dir() -> Option<PathBuf> {
-    let mut path = default_config_root_dir()?;
-    path.push("plugins");
-    Some(path)
-}
-
-fn plugin_state_path() -> Option<PathBuf> {
-    let mut path = default_config_root_dir()?;
-    path.push("plugins.json");
-    Some(path)
-}
-
-fn describe_cache_path() -> Option<PathBuf> {
-    let mut path = default_cache_root_dir()?;
-    path.push("describe-v1.json");
-    Some(path)
-}
+// moved into PluginManager to allow test overrides
 
 fn bundled_plugin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();

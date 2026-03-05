@@ -32,6 +32,10 @@ Key metadata used today:
 - `__args__` for positional argument metadata.
 - `__request_hints__` for `--request key=value` completion.
 - `__flag_hints__` for provider-scoped flag visibility.
+- `__context_only__` for flags that should influence suggestions even when
+  typed later on the line.
+- `__context_scope__ = "subtree" | "global"` to control whether context merge
+  is path-scoped or global-by-name.
 - `__os_versions__` and `__os_provider_map__` for the OS two-step.
 
 ### Input parsing
@@ -49,6 +53,8 @@ Key metadata used today:
 - Handles `--request` CSV completions with prefix preservation.
 - Merges full-line flags into cursor context so later flags influence
   earlier completions.
+- Uses fuzzy scoring (`fuzzy-matcher` / skim) after exact/prefix checks to
+  rank close command/flag/value matches.
 
 ### Dynamic augmentation
 
@@ -67,6 +73,23 @@ This keeps the completion engine pure while still offering rich hints.
 - Two-layer history: prompt_toolkit history for navigation and a separate
   HistoryManager for `!!`, `!123`, `!prefix` expansion.
 
+## Crate Placement Decision
+
+Completion logic should live in a dedicated crate: `crates/osp-completion`.
+
+Rationale:
+
+- `osp-core` stays low-level and stable.
+- Completion has fast-moving logic (tokenization quirks, hint rules, sort rules).
+- REPL/editor dependencies stay out of core.
+- We can unit-test completion behavior in isolation.
+
+Boundaries:
+
+- `osp-completion`: pure `build -> parse -> suggest` logic only.
+- `osp-cli`: static tree construction and dynamic hint injection.
+- `osp-repl`: reedline adapter and menu rendering behavior.
+
 ## Rust Design (Simplified, Still Sophisticated)
 
 We keep the same three-phase engine but simplify the tree and metadata
@@ -74,15 +97,15 @@ to a smaller, stable schema.
 
 ### Proposed completion tree schema
 
-- `CommandNode { children, flags, args, meta }`
-- `FlagNode { name, takes_value, multi, suggestions, meta }`
-- `ArgNode { suggestions, meta }`
+- `CompletionNode { children, flags, args, tooltip, value_key, value_leaf }`
+- `FlagNode { flag_only, multi, value_type, suggestions, hints... }`
+- `ArgNode { suggestions, value_type, tooltip }`
 
 Dynamic hints are attached at runtime by the REPL layer.
 
 ### Input parsing
 
-Use a small parser based on `shell-words`:
+Use a dedicated parser:
 
 - Tokenize with `|` as a separate token.
 - Keep a parsed structure: `head`, `flags`, `flag_order`, `pipes`.
@@ -110,49 +133,19 @@ Implement in Rust exactly as today:
 
 This is independent of the line editor’s own history.
 
-## Line Editor Choices (Prompt Toolkit Equivalent)
+## Editor Integration
 
-### Recommended: `reedline`
-
-Pros:
-
-- Built-in menus and multi-column completions.
-- Reverse search and history menus.
-- Custom prompt rendering (left and right prompts).
-- Highlighters and validators.
-- Completion and hint APIs are flexible.
-
-Cons:
-
-- Slightly heavier dependency tree.
-
-### Alternative: `rustyline`
-
-Pros:
-
-- Lighter dependency tree.
-- Familiar readline-like behavior.
-
-Cons:
-
-- Less powerful completion UI.
-- More manual work for multi-column menus and metadata.
-
-## Suggested Rust Crates
-
-- `reedline` for the REPL line editor.
-- `fuzzy-matcher` for fuzzy ranking of suggestions.
-- `unicode-width` for prompt width calculations.
-- `anstyle` or `nu-ansi-term` for styled prompts and hints.
+Reedline integration belongs in `osp-repl`. `osp-completion` emits typed
+suggestions and a path sentinel only; UI behavior stays in the adapter.
 
 ## Implementation Outline
 
-1. Build a static completion tree from the command registry and config schema.
-2. Add a `CompletionAugmentor` that injects dynamic hints when needed.
-3. Implement a pure `CompletionEngine` with parse + suggest stages.
-4. Integrate with `reedline` `Completer` and `Highlighter` traits.
-5. Add history manager with bang-expansion and prefix search.
-6. Add tests for completion parity and history expansion.
+1. Create `osp-completion` with typed model, parser, and suggestion engine.
+2. Build static trees from `osp-cli` command metadata and `osp-config` schema.
+3. Inject dynamic hints in `osp-cli` (orch capabilities/openapi/provider hints).
+4. Wire a reedline completer adapter in `osp-repl`.
+5. Port parity tests from Python completion suite in slices.
+6. Add REPL integration tests for menu behavior and path sentinel handling.
 
 ## Tests to Port Early
 
