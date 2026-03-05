@@ -374,6 +374,12 @@ impl PluginManager {
         out
     }
 
+    pub fn selected_provider_label(&self, command: &str) -> Option<String> {
+        self.resolve_provider(command)
+            .ok()
+            .map(|plugin| format!("{} ({})", plugin.plugin_id, plugin.source))
+    }
+
     pub fn doctor(&self) -> Result<DoctorReport> {
         let plugins = self.list_plugins()?;
         let mut conflicts_index: HashMap<String, Vec<String>> = HashMap::new();

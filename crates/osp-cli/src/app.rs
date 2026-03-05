@@ -314,8 +314,8 @@ fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Resu
                             profile_override: Some(normalized),
                         });
                     }
-                    let parsed = parse_inline_command_tokens(&remaining)
-                        .map_err(|err| miette!(err.to_string()))?;
+                    let parsed =
+                        parse_inline_command_tokens(&remaining).map_err(miette::Report::new)?;
                     let action = match parsed {
                         Some(Commands::Plugins(args)) => RunAction::Plugins(args),
                         Some(Commands::Theme(args)) => RunAction::Theme(args),
@@ -413,7 +413,7 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
                 );
                 return Ok(0);
             }
-            return Err(miette!(err.to_string()));
+            return Err(miette::Report::new(err));
         }
     };
 
@@ -539,10 +539,14 @@ fn emit_command_conflict_warning(state: &AppState, command: &str, plugin_manager
     if providers.len() <= 1 {
         return;
     }
-    let selected = providers
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "unknown".to_string());
+    let selected = plugin_manager
+        .selected_provider_label(command)
+        .unwrap_or_else(|| {
+            providers
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string())
+        });
     let mut messages = MessageBuffer::default();
     messages.warning(format!(
         "command `{command}` is provided by multiple plugins: {}. Using {selected}.",
