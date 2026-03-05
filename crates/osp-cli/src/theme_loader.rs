@@ -16,9 +16,15 @@ pub(crate) struct ThemeLoadIssue {
 }
 
 #[derive(Debug, Clone, Default)]
+pub(crate) struct ThemeState {
+    pub(crate) origins: BTreeMap<String, PathBuf>,
+    pub(crate) issues: Vec<ThemeLoadIssue>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ThemeLoadResult {
     pub(crate) themes: Vec<ThemeDefinition>,
-    pub(crate) issues: Vec<ThemeLoadIssue>,
+    pub(crate) state: ThemeState,
 }
 
 struct ThemePathSelection {
@@ -29,6 +35,7 @@ struct ThemePathSelection {
 pub(crate) fn load_custom_themes(config: &ResolvedConfig) -> ThemeLoadResult {
     let mut issues = Vec::new();
     let mut catalog: BTreeMap<String, ThemeDefinition> = BTreeMap::new();
+    let mut origins: BTreeMap<String, PathBuf> = BTreeMap::new();
 
     let selection = resolve_theme_paths(config);
     for dir in selection.paths {
@@ -66,6 +73,23 @@ pub(crate) fn load_custom_themes(config: &ResolvedConfig) -> ThemeLoadResult {
 
             match parse_theme_file(&path) {
                 Ok(theme) => {
+                    if let Some(existing) = origins.get(&theme.id) {
+                        issues.push(ThemeLoadIssue {
+                            path: path.clone(),
+                            message: format!(
+                                "theme id collision: {} overridden (previous: {})",
+                                theme.id,
+                                existing.display()
+                            ),
+                        });
+                    }
+                    if find_builtin_theme(&theme.id).is_some() {
+                        issues.push(ThemeLoadIssue {
+                            path: path.clone(),
+                            message: format!("custom theme overrides builtin: {}", theme.id),
+                        });
+                    }
+                    origins.insert(theme.id.clone(), path.clone());
                     catalog.insert(theme.id.clone(), theme);
                 }
                 Err(err) => {
@@ -80,7 +104,7 @@ pub(crate) fn load_custom_themes(config: &ResolvedConfig) -> ThemeLoadResult {
 
     ThemeLoadResult {
         themes: catalog.into_values().collect(),
-        issues,
+        state: ThemeState { origins, issues },
     }
 }
 

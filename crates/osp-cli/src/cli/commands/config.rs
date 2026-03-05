@@ -79,11 +79,26 @@ fn config_diagnostics_rows(state: &AppState) -> Vec<Row> {
             .map(|value| value.clone().into())
             .collect(),
     );
+    let theme_issues = serde_json::Value::Array(
+        state
+            .themes
+            .issues
+            .iter()
+            .map(|issue| {
+                serde_json::json!({
+                    "path": issue.path.to_string_lossy().to_string(),
+                    "message": issue.message,
+                })
+            })
+            .collect(),
+    );
     vec![crate::row! {
         "status" => "ok",
         "active_profile" => state.config.resolved().active_profile().to_string(),
         "known_profiles" => known_profiles,
         "resolved_keys" => state.config.resolved().values().len() as i64,
+        "theme_issue_count" => state.themes.issues.len() as i64,
+        "theme_issues" => theme_issues,
     }]
 }
 
@@ -360,8 +375,9 @@ fn refresh_runtime_config(state: &mut AppState) -> Result<()> {
         state.clients.sync_config_revision(state.config.revision());
         state.auth = AuthState::from_resolved(state.config.resolved());
         let theme_load = theme_loader::load_custom_themes(state.config.resolved());
+        state.themes = theme_load.state.clone();
         osp_ui::theme::set_custom_themes(theme_load.themes);
-        theme_loader::log_theme_issues(&theme_load.issues);
+        theme_loader::log_theme_issues(&state.themes.issues);
         state.ui.render_settings.theme_name = state
             .config
             .resolved()

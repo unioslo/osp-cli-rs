@@ -179,7 +179,7 @@ fn run(mut cli: Cli) -> Result<i32> {
         session_layer.clone(),
     )?;
     let theme_load = theme_loader::load_custom_themes(&config);
-    let theme_issues = theme_load.issues;
+    let theme_state = theme_load.state.clone();
     osp_ui::theme::set_custom_themes(theme_load.themes);
     let mut render_settings = cli.render_settings();
     cli.seed_render_settings_from_config(&mut render_settings, &config);
@@ -188,7 +188,7 @@ fn run(mut cli: Cli) -> Result<i32> {
     let message_verbosity = effective_message_verbosity(&cli, &config);
     let debug_verbosity = effective_debug_verbosity(&cli, &config);
     init_developer_logging(build_logging_config(&config, debug_verbosity));
-    theme_loader::log_theme_issues(&theme_issues);
+    theme_loader::log_theme_issues(&theme_state.issues);
     tracing::debug!(
         debug_count = debug_verbosity,
         "developer logging initialized"
@@ -201,6 +201,7 @@ fn run(mut cli: Cli) -> Result<i32> {
         message_verbosity,
         debug_verbosity,
         PluginManager::new(cli.plugin_dirs.clone()),
+        theme_state.clone(),
     );
     if let Some(layer) = session_layer {
         state.session.config_overrides = layer;
@@ -1393,6 +1394,7 @@ mod tests {
             MessageLevel::Success,
             0,
             PluginManager::new(Vec::new()),
+            crate::theme_loader::ThemeState::default(),
         )
     }
 
@@ -2015,6 +2017,7 @@ JSON
             MessageLevel::Success,
             0,
             PluginManager::new(plugin_dirs).with_roots(Some(config_root), Some(cache_root)),
+            crate::theme_loader::ThemeState::default(),
         )
     }
 

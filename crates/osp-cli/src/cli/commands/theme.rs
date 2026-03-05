@@ -13,13 +13,13 @@ use osp_ui::theme::{
 pub(crate) fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result<CliCommandResult> {
     match args.command {
         ThemeCommands::List => Ok(CliCommandResult::output(
-            rows_to_output_result(theme_list_rows(&state.ui.render_settings.theme_name)),
+            rows_to_output_result(theme_list_rows(state, &state.ui.render_settings.theme_name)),
             None,
         )),
         ThemeCommands::Show(ThemeShowArgs { name }) => {
             let selected = name.unwrap_or_else(|| state.ui.render_settings.theme_name.clone());
             Ok(CliCommandResult::output(
-                rows_to_output_result(theme_show_rows(&selected)?),
+                rows_to_output_result(theme_show_rows(state, &selected)?),
                 None,
             ))
         }
@@ -44,13 +44,13 @@ pub(crate) fn run_theme_repl_command(
 ) -> Result<ReplCommandOutput> {
     match args.command {
         ThemeCommands::List => Ok(ReplCommandOutput::Output {
-            output: rows_to_output_result(theme_list_rows(&state.ui.render_settings.theme_name)),
+            output: rows_to_output_result(theme_list_rows(state, &state.ui.render_settings.theme_name)),
             format_hint: None,
         }),
         ThemeCommands::Show(ThemeShowArgs { name }) => {
             let selected = name.unwrap_or_else(|| state.ui.render_settings.theme_name.clone());
             Ok(ReplCommandOutput::Output {
-                output: rows_to_output_result(theme_show_rows(&selected)?),
+                output: rows_to_output_result(theme_show_rows(state, &selected)?),
                 format_hint: None,
             })
         }
@@ -64,15 +64,24 @@ pub(crate) fn run_theme_repl_command(
     }
 }
 
-fn theme_list_rows(active_theme: &str) -> Vec<Row> {
+fn theme_list_rows(state: &AppState, active_theme: &str) -> Vec<Row> {
     let active = normalize_theme_name(active_theme);
-    all_themes()
+    let mut themes = all_themes();
+    themes.sort_by(|left, right| left.id.cmp(&right.id));
+    themes
         .into_iter()
         .map(|theme| {
+            let origin = state
+                .themes
+                .origins
+                .get(&theme.id)
+                .map(|path| serde_json::Value::from(path.to_string_lossy().to_string()))
+                .unwrap_or(serde_json::Value::Null);
             crate::row! {
                 "id" => theme.id.to_string(),
                 "name" => theme.name.to_string(),
                 "source" => if is_custom_theme(&theme.id) { "custom" } else { "builtin" },
+                "origin" => origin,
                 "active" => theme.id == active.as_str(),
                 "default" => theme.id == DEFAULT_THEME_NAME,
             }
@@ -80,11 +89,17 @@ fn theme_list_rows(active_theme: &str) -> Vec<Row> {
         .collect()
 }
 
-fn theme_show_rows(name: &str) -> Result<Vec<Row>> {
+fn theme_show_rows(state: &AppState, name: &str) -> Result<Vec<Row>> {
     let selected = resolve_known_theme_name(name)?;
     let theme =
         find_theme(&selected).ok_or_else(|| miette::miette!("theme missing: {selected}"))?;
     let palette = &theme.palette;
+    let origin = state
+        .themes
+        .origins
+        .get(&theme.id)
+        .map(|path| serde_json::Value::from(path.to_string_lossy().to_string()))
+        .unwrap_or(serde_json::Value::Null);
     let bg = palette
         .bg
         .clone()
@@ -105,6 +120,7 @@ fn theme_show_rows(name: &str) -> Result<Vec<Row>> {
             .map(serde_json::Value::from)
             .unwrap_or(serde_json::Value::Null),
         "source" => if is_custom_theme(&theme.id) { "custom" } else { "builtin" },
+        "origin" => origin,
         "text" => palette.text.to_string(),
         "muted" => palette.muted.to_string(),
         "accent" => palette.accent.to_string(),

@@ -86,3 +86,5 @@ Rules:
 - `base` is optional and can only reference built-in themes.
   - If `base` is omitted or set to `"none"`, missing palette keys have no color.
   - If `base` is set, missing palette keys inherit from that base theme.
+- `theme list` shows `source` (`builtin`/`custom`) and `origin` for custom themes.
+- `theme show` includes `base`, `source`, and `origin`.
