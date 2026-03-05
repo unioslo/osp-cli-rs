@@ -358,6 +358,22 @@ impl PluginManager {
         Ok(out)
     }
 
+    pub fn command_providers(&self, command: &str) -> Vec<String> {
+        let state = self.load_state().unwrap_or_default();
+        let mut out = Vec::new();
+        for plugin in self.discover() {
+            if plugin.issue.is_some()
+                || !is_enabled(&state, &plugin.plugin_id, plugin.default_enabled)
+            {
+                continue;
+            }
+            if plugin.commands.iter().any(|name| name == command) {
+                out.push(format!("{} ({})", plugin.plugin_id, plugin.source));
+            }
+        }
+        out
+    }
+
     pub fn doctor(&self) -> Result<DoctorReport> {
         let plugins = self.list_plugins()?;
         let mut conflicts_index: HashMap<String, Vec<String>> = HashMap::new();

@@ -151,9 +151,11 @@ fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
 }
 
 fn run(mut cli: Cli) -> Result<i32> {
+    let normalized_profile = normalize_profile_override(cli.profile.clone());
+    cli.profile = normalized_profile.clone();
     let session_layer = build_cli_session_layer(&cli);
     let initial_config =
-        resolve_runtime_config(cli.profile.clone(), Some("cli"), session_layer.clone())?;
+        resolve_runtime_config(normalized_profile, Some("cli"), session_layer.clone())?;
     let known_profiles = initial_config.known_profiles().clone();
     let dispatch = build_dispatch_plan(&mut cli, &known_profiles)?;
 
@@ -256,8 +258,13 @@ fn build_cli_session_layer(cli: &Cli) -> Option<ConfigLayer> {
 }
 
 fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Result<DispatchPlan> {
-    let explicit_profile = cli.profile.clone();
+    let explicit_profile = normalize_profile_override(cli.profile.clone());
+    cli.profile = explicit_profile.clone();
     let command = cli.command.take();
+    let normalized_profiles = known_profiles
+        .iter()
+        .map(|profile| normalize_identifier(profile))
+        .collect::<BTreeSet<_>>();
 
     match command {
         None => Ok(DispatchPlan {
@@ -290,7 +297,7 @@ fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Resu
 
             if explicit_profile.is_none() {
                 let normalized = normalize_identifier(first);
-                if known_profiles.contains(&normalized) {
+                if normalized_profiles.contains(&normalized) {
                     let remaining = tokens[1..].to_vec();
                     if remaining.is_empty() {
                         return Ok(DispatchPlan {
@@ -384,7 +391,7 @@ struct HelpRenderOverrides {
 
 fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
     let overrides = parse_help_render_overrides(args);
-    let profile_override = overrides.profile.clone();
+    let profile_override = normalize_profile_override(overrides.profile.clone());
     let config = resolve_runtime_config(profile_override, Some("cli"), None).ok();
     let mut catalog: Option<theme_loader::ThemeCatalog> = None;
 
@@ -1008,6 +1015,7 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
         .split_first()
         .ok_or_else(|| miette!("missing external command"))?;
     ensure_plugin_visible(state, command)?;
+    emit_command_conflict_warning(state, command, plugin_manager);
 
     tracing::debug!(
         command = %command,
@@ -1063,6 +1071,23 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
     maybe_copy_output(state, &output);
 
     Ok(0)
+}
+
+fn emit_command_conflict_warning(state: &AppState, command: &str, plugin_manager: &PluginManager) {
+    let providers = plugin_manager.command_providers(command);
+    if providers.len() <= 1 {
+        return;
+    }
+    let selected = providers
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
+    let mut messages = MessageBuffer::default();
+    messages.warning(format!(
+        "command `{command}` is provided by multiple plugins: {}. Using {selected}.",
+        providers.join(", ")
+    ));
+    emit_messages_with_verbosity(state, &messages, state.ui.message_verbosity);
 }
 
 fn resolve_theme_name(
@@ -1372,6 +1397,17 @@ fn normalize_identifier(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
+fn normalize_profile_override(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let normalized = normalize_identifier(&value);
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1589,6 +1625,14 @@ mod tests {
             }
             _ => panic!("expected external action"),
         }
+    }
+
+    #[test]
+    fn explicit_profile_is_normalized_unit() {
+        let mut cli = Cli::parse_from(["osp", "--profile", "TSD"]);
+        let plan = build_dispatch_plan(&mut cli, &profiles(&["tsd"]))
+            .expect("dispatch plan should parse");
+        assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
     }
 
     #[test]
