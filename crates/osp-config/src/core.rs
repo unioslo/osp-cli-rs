@@ -89,6 +89,7 @@ pub enum SchemaValueType {
     Bool,
     Integer,
     Float,
+    StringList,
 }
 
 impl Display for SchemaValueType {
@@ -98,6 +99,7 @@ impl Display for SchemaValueType {
             SchemaValueType::Bool => "bool",
             SchemaValueType::Integer => "integer",
             SchemaValueType::Float => "float",
+            SchemaValueType::StringList => "list",
         };
         write!(f, "{value}")
     }
@@ -143,6 +145,14 @@ impl SchemaEntry {
         }
     }
 
+    pub fn string_list() -> Self {
+        Self {
+            value_type: SchemaValueType::StringList,
+            required: false,
+            allowed_values: None,
+        }
+    }
+
     pub fn required(mut self) -> Self {
         self.required = true;
         self
@@ -160,6 +170,14 @@ impl SchemaEntry {
                 .collect(),
         );
         self
+    }
+
+    pub fn value_type(&self) -> SchemaValueType {
+        self.value_type
+    }
+
+    pub fn allowed_values(&self) -> Option<&[String]> {
+        self.allowed_values.as_deref()
     }
 }
 
@@ -212,6 +230,8 @@ impl Default for ConfigSchema {
         schema.insert("ui.grid_padding", SchemaEntry::integer());
         schema.insert("ui.grid_columns", SchemaEntry::integer());
         schema.insert("ui.column_weight", SchemaEntry::integer());
+        schema.insert("ui.mreg.stack_min_col_width", SchemaEntry::integer());
+        schema.insert("ui.mreg.stack_overflow_ratio", SchemaEntry::integer());
         schema.insert(
             "ui.verbosity.level",
             SchemaEntry::string()
@@ -225,9 +245,16 @@ impl Default for ConfigSchema {
         schema.insert("repl.intro", SchemaEntry::boolean());
         schema.insert("repl.history.path", SchemaEntry::string());
         schema.insert("repl.history.max_entries", SchemaEntry::integer());
+        schema.insert("repl.history.enabled", SchemaEntry::boolean());
+        schema.insert("repl.history.dedupe", SchemaEntry::boolean());
+        schema.insert("repl.history.profile_scoped", SchemaEntry::boolean());
+        schema.insert("repl.history.exclude", SchemaEntry::string_list());
         schema.insert("session.cache.max_results", SchemaEntry::integer());
         schema.insert("color.prompt.text", SchemaEntry::string());
         schema.insert("color.prompt.command", SchemaEntry::string());
+        schema.insert("color.prompt.completion.text", SchemaEntry::string());
+        schema.insert("color.prompt.completion.background", SchemaEntry::string());
+        schema.insert("color.prompt.completion.highlight", SchemaEntry::string());
         schema.insert("color.table.header", SchemaEntry::string());
         schema.insert("color.mreg.key", SchemaEntry::string());
         schema.insert("color.value", SchemaEntry::string());
@@ -270,6 +297,12 @@ impl ConfigSchema {
         self.entries.contains_key(key) || self.is_extension_key(key)
     }
 
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &SchemaEntry)> {
+        self.entries
+            .iter()
+            .map(|(key, entry)| (key.as_str(), entry))
+    }
+
     pub fn expected_type(&self, key: &str) -> Option<SchemaValueType> {
         self.entries.get(key).map(|entry| entry.value_type)
     }
@@ -307,6 +340,10 @@ impl ConfigSchema {
                             actual: "string".to_string(),
                         })?;
                 ConfigValue::Float(parsed)
+            }
+            Some(SchemaValueType::StringList) => {
+                let items = parse_string_list(raw);
+                ConfigValue::List(items.into_iter().map(ConfigValue::String).collect())
             }
         };
 
@@ -366,7 +403,8 @@ impl ConfigSchema {
     }
 
     fn is_extension_key(&self, key: &str) -> bool {
-        self.allow_extensions_namespace && key.starts_with("extensions.")
+        self.allow_extensions_namespace
+            && (key.starts_with("extensions.") || key.starts_with("alias."))
     }
 }
 
@@ -897,6 +935,35 @@ fn adapt_value_for_schema(
                 });
             }
         },
+        SchemaValueType::StringList => match value {
+            ConfigValue::List(values) => {
+                let mut out = Vec::with_capacity(values.len());
+                for value in values {
+                    match value {
+                        ConfigValue::String(value) => out.push(ConfigValue::String(value.clone())),
+                        other => {
+                            return Err(ConfigError::InvalidValueType {
+                                key: key.to_string(),
+                                expected: SchemaValueType::StringList,
+                                actual: value_type_name(other).to_string(),
+                            });
+                        }
+                    }
+                }
+                ConfigValue::List(out)
+            }
+            ConfigValue::String(value) => {
+                let items = parse_string_list(value);
+                ConfigValue::List(items.into_iter().map(ConfigValue::String).collect())
+            }
+            other => {
+                return Err(ConfigError::InvalidValueType {
+                    key: key.to_string(),
+                    expected: SchemaValueType::StringList,
+                    actual: value_type_name(other).to_string(),
+                });
+            }
+        },
     };
 
     if let Some(allowed_values) = &schema.allowed_values
@@ -921,6 +988,36 @@ fn parse_bool(value: &str) -> Option<bool> {
         "false" => Some(false),
         _ => None,
     }
+}
+
+fn parse_string_list(value: &str) -> Vec<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let inner = trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(trimmed);
+
+    inner
+        .split(',')
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .or_else(|| {
+                    value
+                        .strip_prefix('\'')
+                        .and_then(|value| value.strip_suffix('\''))
+                })
+                .unwrap_or(value)
+                .to_string()
+        })
+        .collect()
 }
 
 fn value_type_name(value: &ConfigValue) -> &'static str {

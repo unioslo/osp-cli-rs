@@ -460,6 +460,11 @@ fn resolve_interpolated_value(
             placeholder: key.to_string(),
         })?;
 
+    if key.starts_with("alias.") {
+        cache.insert(key.to_string(), value.clone());
+        return Ok(value);
+    }
+
     stack.push(key.to_string());
 
     let resolved = match value {
@@ -529,6 +534,9 @@ fn explain_interpolation(
     pre_interpolated: &BTreeMap<String, ResolvedValue>,
     final_values: &BTreeMap<String, ResolvedValue>,
 ) -> Result<Option<ExplainInterpolation>, ConfigError> {
+    if key.starts_with("alias.") {
+        return Ok(None);
+    }
     let Some(entry) = pre_interpolated.get(key) else {
         return Ok(None);
     };
@@ -569,6 +577,9 @@ fn collect_interpolation_steps_recursive(
     seen: &mut BTreeSet<String>,
     stack: &mut Vec<String>,
 ) -> Result<(), ConfigError> {
+    if key.starts_with("alias.") {
+        return Ok(());
+    }
     if let Some(index) = stack.iter().position(|item| item == key) {
         let mut cycle = stack[index..].to_vec();
         cycle.push(key.to_string());

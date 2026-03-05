@@ -7,6 +7,9 @@ use crate::{
 
 pub const DEFAULT_PROFILE_NAME: &str = "default";
 pub const DEFAULT_REPL_HISTORY_MAX_ENTRIES: i64 = 1000;
+pub const DEFAULT_REPL_HISTORY_ENABLED: bool = true;
+pub const DEFAULT_REPL_HISTORY_DEDUPE: bool = true;
+pub const DEFAULT_REPL_HISTORY_PROFILE_SCOPED: bool = true;
 pub const DEFAULT_SESSION_CACHE_MAX_RESULTS: i64 = 64;
 pub const DEFAULT_DEBUG_LEVEL: i64 = 0;
 pub const DEFAULT_LOG_FILE_ENABLED: bool = false;
@@ -19,6 +22,8 @@ pub const DEFAULT_UI_SHORT_LIST_MAX: i64 = 1;
 pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
 pub const DEFAULT_UI_GRID_PADDING: i64 = 4;
 pub const DEFAULT_UI_COLUMN_WEIGHT: i64 = 3;
+pub const DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH: i64 = 10;
+pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
@@ -89,6 +94,9 @@ pub struct RuntimeDefaults {
     pub repl_intro: bool,
     pub repl_history_path: String,
     pub repl_history_max_entries: i64,
+    pub repl_history_enabled: bool,
+    pub repl_history_dedupe: bool,
+    pub repl_history_profile_scoped: bool,
     pub session_cache_max_results: i64,
     pub debug_level: i64,
     pub log_file_enabled: bool,
@@ -103,6 +111,8 @@ pub struct RuntimeDefaults {
     pub ui_grid_padding: i64,
     pub ui_grid_columns: Option<i64>,
     pub ui_column_weight: i64,
+    pub ui_mreg_stack_min_col_width: i64,
+    pub ui_mreg_stack_overflow_ratio: i64,
     pub color_prompt_text: String,
     pub color_prompt_command: String,
     pub color_table_header: String,
@@ -133,6 +143,9 @@ impl RuntimeDefaults {
             repl_intro: true,
             repl_history_path: default_repl_history_path(),
             repl_history_max_entries: DEFAULT_REPL_HISTORY_MAX_ENTRIES,
+            repl_history_enabled: DEFAULT_REPL_HISTORY_ENABLED,
+            repl_history_dedupe: DEFAULT_REPL_HISTORY_DEDUPE,
+            repl_history_profile_scoped: DEFAULT_REPL_HISTORY_PROFILE_SCOPED,
             session_cache_max_results: DEFAULT_SESSION_CACHE_MAX_RESULTS,
             debug_level: DEFAULT_DEBUG_LEVEL,
             log_file_enabled: DEFAULT_LOG_FILE_ENABLED,
@@ -147,6 +160,8 @@ impl RuntimeDefaults {
             ui_grid_padding: DEFAULT_UI_GRID_PADDING,
             ui_grid_columns: None,
             ui_column_weight: DEFAULT_UI_COLUMN_WEIGHT,
+            ui_mreg_stack_min_col_width: DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH,
+            ui_mreg_stack_overflow_ratio: DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO,
             color_prompt_text: String::new(),
             color_prompt_command: String::new(),
             color_table_header: String::new(),
@@ -177,6 +192,12 @@ impl RuntimeDefaults {
         layer.set("repl.intro", self.repl_intro);
         layer.set("repl.history.path", self.repl_history_path.clone());
         layer.set("repl.history.max_entries", self.repl_history_max_entries);
+        layer.set("repl.history.enabled", self.repl_history_enabled);
+        layer.set("repl.history.dedupe", self.repl_history_dedupe);
+        layer.set(
+            "repl.history.profile_scoped",
+            self.repl_history_profile_scoped,
+        );
         layer.set("session.cache.max_results", self.session_cache_max_results);
         layer.set("debug.level", self.debug_level);
         layer.set("log.file.enabled", self.log_file_enabled);
@@ -193,6 +214,14 @@ impl RuntimeDefaults {
             layer.set("ui.grid_columns", value);
         }
         layer.set("ui.column_weight", self.ui_column_weight);
+        layer.set(
+            "ui.mreg.stack_min_col_width",
+            self.ui_mreg_stack_min_col_width,
+        );
+        layer.set(
+            "ui.mreg.stack_overflow_ratio",
+            self.ui_mreg_stack_overflow_ratio,
+        );
         layer.set("color.prompt.text", self.color_prompt_text.clone());
         layer.set("color.prompt.command", self.color_prompt_command.clone());
         layer.set("color.table.header", self.color_table_header.clone());
@@ -299,7 +328,8 @@ fn default_repl_history_path() -> String {
         fallback.push("osp");
         fallback
     });
-    path.push("history.txt");
+    path.push("history");
+    path.push("${user.name}@${context}.history");
     path.display().to_string()
 }
 
