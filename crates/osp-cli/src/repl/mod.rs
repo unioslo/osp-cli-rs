@@ -57,7 +57,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             "show".to_string(),
             "explain".to_string(),
             "set".to_string(),
-            "diagnostics".to_string(),
+            "doctor".to_string(),
         ]);
     }
     if history_enabled && state.auth.is_builtin_visible(CMD_HISTORY) {
@@ -273,7 +273,7 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
         out.push_str("  doctor       subcommands: all, config, plugins, theme\n");
     }
     if state.auth.is_builtin_visible(CMD_CONFIG) {
-        out.push_str("  config       subcommands: show, get, explain, set, diagnostics\n");
+        out.push_str("  config       subcommands: show, get, explain, set, doctor\n");
     }
     if state.auth.is_builtin_visible(CMD_THEME) {
         out.push_str("  theme        subcommands: list, show, use\n");
@@ -835,7 +835,7 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
             name: Cow::Borrowed(CMD_CONFIG),
             supports_dsl: matches!(
                 args.command,
-                ConfigCommands::Show(_) | ConfigCommands::Get(_) | ConfigCommands::Diagnostics
+                ConfigCommands::Show(_) | ConfigCommands::Get(_) | ConfigCommands::Doctor
             ),
         },
         Commands::Doctor(args) => ReplCommandSpec {

@@ -255,7 +255,8 @@ pub enum ConfigCommands {
     Get(ConfigGetArgs),
     Explain(ConfigExplainArgs),
     Set(ConfigSetArgs),
-    Diagnostics,
+    #[command(alias = "diagnostics")]
+    Doctor,
 }
 
 #[derive(Debug, Args)]

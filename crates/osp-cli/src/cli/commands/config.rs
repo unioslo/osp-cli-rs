@@ -40,7 +40,7 @@ pub(crate) fn run_config_command(
             exit_code: 0,
             output: Some(run_config_set(state, set)?),
         }),
-        ConfigCommands::Diagnostics => Ok(CliCommandResult::output(
+        ConfigCommands::Doctor => Ok(CliCommandResult::output(
             rows_to_output_result(config_diagnostics_rows(state)),
             None,
         )),
@@ -435,7 +435,7 @@ pub(crate) fn run_config_repl_command(
             None => Ok(ReplCommandOutput::Text(String::new())),
         },
         ConfigCommands::Set(set) => run_config_set(state, set),
-        ConfigCommands::Diagnostics => Ok(ReplCommandOutput::Output {
+        ConfigCommands::Doctor => Ok(ReplCommandOutput::Output {
             output: rows_to_output_result(config_diagnostics_rows(state)),
             format_hint: None,
         }),

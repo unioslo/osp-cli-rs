@@ -22,7 +22,7 @@ pub(crate) fn run_doctor_command(
         DoctorCommands::Config => {
             ensure_builtin_visible(state, CMD_CONFIG)?;
             config_cmd::run_config_command(state, ConfigArgs {
-                command: ConfigCommands::Diagnostics,
+                command: ConfigCommands::Doctor,
             })
         }
         DoctorCommands::Plugins => {

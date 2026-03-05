@@ -67,8 +67,8 @@ ui.format = "table"
 
 #[cfg(unix)]
 #[test]
-fn config_diagnostics_contract() {
-    let home = make_temp_dir("osp-cli-config-diagnostics");
+fn config_doctor_contract() {
+    let home = make_temp_dir("osp-cli-config-doctor");
     write_config(
         &home,
         r#"
@@ -86,7 +86,7 @@ ui.format = "json"
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd.env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "config", "diagnostics"]);
+        .args(["--json", "config", "doctor"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"status\": \"ok\""))

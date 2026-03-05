@@ -398,7 +398,7 @@ fn config_command_spec(state: &AppState) -> CommandSpec {
                 ..CommandSpec::default()
             },
             CommandSpec {
-                name: "diagnostics".to_string(),
+                name: "doctor".to_string(),
                 tooltip: Some("Show config diagnostics".to_string()),
                 ..CommandSpec::default()
             },
