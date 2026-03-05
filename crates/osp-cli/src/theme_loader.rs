@@ -73,6 +73,12 @@ pub(crate) fn load_custom_themes(config: &ResolvedConfig) -> ThemeLoadResult {
 
             match parse_theme_file(&path) {
                 Ok(theme) => {
+                    for message in validate_theme_specs(&theme) {
+                        issues.push(ThemeLoadIssue {
+                            path: path.clone(),
+                            message,
+                        });
+                    }
                     if let Some(existing) = origins.get(&theme.id) {
                         issues.push(ThemeLoadIssue {
                             path: path.clone(),
@@ -309,6 +315,104 @@ fn parse_theme_file(path: &Path) -> Result<ThemeDefinition, String> {
     })
 }
 
+fn validate_theme_specs(theme: &ThemeDefinition) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    check_spec(&mut issues, "palette.text", &theme.palette.text);
+    check_spec(&mut issues, "palette.muted", &theme.palette.muted);
+    check_spec(&mut issues, "palette.accent", &theme.palette.accent);
+    check_spec(&mut issues, "palette.info", &theme.palette.info);
+    check_spec(&mut issues, "palette.warning", &theme.palette.warning);
+    check_spec(&mut issues, "palette.success", &theme.palette.success);
+    check_spec(&mut issues, "palette.error", &theme.palette.error);
+    check_spec(&mut issues, "palette.border", &theme.palette.border);
+    check_spec(&mut issues, "palette.title", &theme.palette.title);
+    check_spec(&mut issues, "palette.selection", &theme.palette.selection);
+    check_spec(&mut issues, "palette.link", &theme.palette.link);
+    if let Some(value) = &theme.palette.bg {
+        check_spec(&mut issues, "palette.bg", value);
+    }
+    if let Some(value) = &theme.palette.bg_alt {
+        check_spec(&mut issues, "palette.bg_alt", value);
+    }
+    if let Some(value) = &theme.overrides.value_number {
+        check_spec(&mut issues, "overrides.value_number", value);
+    }
+    if let Some(value) = &theme.overrides.repl_completion_text {
+        check_spec(&mut issues, "overrides.repl_completion_text", value);
+    }
+    if let Some(value) = &theme.overrides.repl_completion_background {
+        check_spec(&mut issues, "overrides.repl_completion_background", value);
+    }
+    if let Some(value) = &theme.overrides.repl_completion_highlight {
+        check_spec(&mut issues, "overrides.repl_completion_highlight", value);
+    }
+
+    issues
+}
+
+fn check_spec(issues: &mut Vec<String>, key: &str, value: &str) {
+    if is_valid_color_spec(value) {
+        return;
+    }
+    issues.push(format!("invalid color spec for {key}: {value}"));
+}
+
+fn is_valid_color_spec(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    for raw in trimmed.split_whitespace() {
+        let token = raw.trim().to_ascii_lowercase();
+        if is_known_style_token(&token) {
+            continue;
+        }
+        if parse_hex_rgb(&token).is_some() {
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
+fn is_known_style_token(token: &str) -> bool {
+    matches!(
+        token,
+        "bold"
+            | "dim"
+            | "italic"
+            | "underline"
+            | "black"
+            | "red"
+            | "green"
+            | "yellow"
+            | "blue"
+            | "magenta"
+            | "cyan"
+            | "white"
+            | "bright-black"
+            | "bright-red"
+            | "bright-green"
+            | "bright-yellow"
+            | "bright-blue"
+            | "bright-magenta"
+            | "bright-cyan"
+            | "bright-white"
+    )
+}
+
+fn parse_hex_rgb(value: &str) -> Option<(u8, u8, u8)> {
+    if !value.starts_with('#') || value.len() != 7 {
+        return None;
+    }
+    let r = u8::from_str_radix(&value[1..3], 16).ok()?;
+    let g = u8::from_str_radix(&value[3..5], 16).ok()?;
+    let b = u8::from_str_radix(&value[5..7], 16).ok()?;
+    Some((r, g, b))
+}
+
 fn empty_palette() -> ThemePalette {
     ThemePalette {
         text: String::new(),
@@ -329,7 +433,7 @@ fn empty_palette() -> ThemePalette {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_theme_file;
+    use super::{is_valid_color_spec, parse_theme_file};
     use std::fs;
     #[test]
     fn theme_file_defaults_id_and_name_from_file_stem() {
@@ -383,5 +487,18 @@ accent = "#123456"
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn color_spec_validation_accepts_known_tokens() {
+        assert!(is_valid_color_spec(""));
+        assert!(is_valid_color_spec("bold #ff00ff"));
+        assert!(is_valid_color_spec("bright-blue"));
+    }
+
+    #[test]
+    fn color_spec_validation_rejects_unknown_tokens() {
+        assert!(!is_valid_color_spec("nope"));
+        assert!(!is_valid_color_spec("#12345"));
     }
 }

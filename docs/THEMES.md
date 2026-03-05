@@ -88,3 +88,5 @@ Rules:
   - If `base` is set, missing palette keys inherit from that base theme.
 - `theme list` shows `source` (`builtin`/`custom`) and `origin` for custom themes.
 - `theme show` includes `base`, `source`, and `origin`.
+- Color specs accept `#RRGGBB` and named colors, optionally prefixed
+  with `bold`, `dim`, `italic`, or `underline`.
