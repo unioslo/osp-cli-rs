@@ -17,6 +17,7 @@ use osp_ui::{RenderSettings, copy_output_to_clipboard, render_output};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use terminal_size::{Width, terminal_size};
 
@@ -154,7 +155,7 @@ fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
             print!("{err}");
             Ok(0)
         }
-        _ => Err(miette!(err.to_string())),
+        _ => Err(miette::Report::new(err)),
     }
 }
 
@@ -647,6 +648,9 @@ fn resolve_default_render_width(config: &ResolvedConfig) -> usize {
 }
 
 fn detect_terminal_width() -> Option<usize> {
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
     terminal_size()
         .map(|(Width(columns), _)| columns as usize)
         .filter(|value| *value > 0)
@@ -919,6 +923,7 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: osp_ui::TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: DEFAULT_THEME_NAME.to_string(),
@@ -985,6 +990,7 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: osp_ui::TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: DEFAULT_THEME_NAME.to_string(),
@@ -1573,6 +1579,7 @@ JSON
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: osp_ui::TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: DEFAULT_THEME_NAME.to_string(),

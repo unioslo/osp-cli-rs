@@ -278,21 +278,32 @@ fn effective_precedence_chain(
     let mut chain = Vec::new();
 
     for layer in &explain.layers {
-        let Some(candidate) = layer
+        let mut candidates = layer
             .candidates
             .iter()
-            .find(|candidate| candidate.selected_in_layer && candidate.rank.is_some())
-        else {
+            .filter_map(|candidate| candidate.rank.map(|rank| (rank, candidate)))
+            .collect::<Vec<(u8, &osp_config::ExplainCandidate)>>();
+        if candidates.is_empty() {
             continue;
-        };
+        }
 
-        chain.push((
-            winner_source == Some(layer.source),
-            layer.source.to_string(),
-            format_scope(&candidate.scope),
-            candidate.origin.clone(),
-            candidate.value.clone(),
-        ));
+        candidates.sort_by(|(left_rank, left), (right_rank, right)| {
+            left_rank
+                .cmp(right_rank)
+                .then_with(|| right.entry_index.cmp(&left.entry_index))
+        });
+
+        for (_rank, candidate) in candidates {
+            let is_winner = winner_source == Some(layer.source)
+                && layer.selected_entry_index == Some(candidate.entry_index);
+            chain.push((
+                is_winner,
+                layer.source.to_string(),
+                format_scope(&candidate.scope),
+                candidate.origin.clone(),
+                candidate.value.clone(),
+            ));
+        }
     }
 
     chain
