@@ -1,10 +1,10 @@
 use clap::Parser;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
-    ConfigExplain, ConfigLayer, ConfigResolver, ConfigValue, DEFAULT_UI_WIDTH, ResolveOptions,
-    ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults, build_runtime_pipeline,
+    ConfigLayer, ConfigValue, DEFAULT_UI_WIDTH, ResolveOptions, ResolvedConfig,
+    RuntimeConfigPaths, RuntimeDefaults, build_runtime_pipeline,
 };
-use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+use osp_core::output::OutputFormat;
 use osp_core::output_model::OutputResult;
 use osp_core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
@@ -24,7 +24,7 @@ use crate::cli::commands::{
     config as config_cmd, history as history_cmd, plugins as plugins_cmd, theme as theme_cmd,
 };
 use crate::cli::{
-    Cli, Commands, ConfigArgs, ConfigExplainArgs, HistoryArgs, PluginsArgs, ThemeArgs,
+    Cli, Commands, ConfigArgs, HistoryArgs, PluginsArgs, ThemeArgs,
     parse_inline_command_tokens,
 };
 use crate::logging::{
@@ -38,8 +38,16 @@ use crate::rows::output::{output_to_rows, plugin_data_to_output_result, rows_to_
 use crate::state::{AppState, RuntimeContext, TerminalKind};
 
 use crate::repl;
+
+mod config_explain;
+mod help;
+
+pub(crate) use config_explain::{
+    config_explain_json, config_explain_output, config_value_to_json, explain_runtime_config,
+    format_scope, is_sensitive_key, render_config_explain_text,
+};
 use crate::repl::completion;
-use crate::repl::help;
+use crate::repl::help as repl_help;
 use crate::theme_loader;
 
 enum RunAction {
@@ -134,8 +142,8 @@ where
 fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
     match err.kind() {
         clap::error::ErrorKind::DisplayHelp => {
-            let settings = render_settings_for_help(args);
-            let rendered = help::render_help_with_chrome(
+            let settings = help::render_settings_for_help(args);
+            let rendered = repl_help::render_help_with_chrome(
                 &err.to_string(),
                 &settings.resolve_render_settings(),
             );
@@ -379,554 +387,6 @@ pub(crate) fn authorized_command_catalog(state: &AppState) -> Result<Vec<Command
         .collect())
 }
 
-#[derive(Debug, Clone, Default)]
-struct HelpRenderOverrides {
-    profile: Option<String>,
-    theme: Option<String>,
-    mode: Option<RenderMode>,
-    color: Option<ColorMode>,
-    unicode: Option<UnicodeMode>,
-    ascii_legacy: bool,
-}
-
-fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
-    let overrides = parse_help_render_overrides(args);
-    let profile_override = normalize_profile_override(overrides.profile.clone());
-    let config = resolve_runtime_config(profile_override, Some("cli"), None).ok();
-    let mut catalog: Option<theme_loader::ThemeCatalog> = None;
-
-    let default_cli = Cli::try_parse_from(["osp"]).expect("default cli parse should succeed");
-    let mut settings = default_cli.render_settings();
-    if let Some(config) = config.as_ref() {
-        let loaded = theme_loader::load_theme_catalog(config);
-        default_cli.seed_render_settings_from_config(&mut settings, config);
-        settings.width = Some(resolve_default_render_width(config));
-        let selected = default_cli.selected_theme_name(config);
-        settings.theme_name =
-            resolve_known_theme_name(selected.as_str(), &loaded)
-                .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
-        settings.theme = loaded
-            .resolve(&settings.theme_name)
-            .map(|entry| entry.theme.clone());
-        catalog = Some(loaded);
-    }
-
-    if let Some(mode) = overrides.mode {
-        settings.mode = mode;
-    }
-    if let Some(color) = overrides.color {
-        settings.color = color;
-    }
-    if let Some(unicode) = overrides.unicode {
-        settings.unicode = unicode;
-    }
-    if overrides.ascii_legacy {
-        settings.unicode = UnicodeMode::Never;
-    }
-    if let Some(theme) = overrides.theme.as_deref() {
-        settings.theme_name = if let Some(catalog) = catalog.as_ref() {
-            resolve_known_theme_name(theme, catalog)
-                .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string())
-        } else {
-            normalize_theme_name(theme)
-        };
-    }
-    settings.theme = if let Some(catalog) = catalog.as_ref() {
-        catalog
-            .resolve(&settings.theme_name)
-            .map(|entry| entry.theme.clone())
-    } else {
-        Some(osp_ui::theme::resolve_theme(&settings.theme_name))
-    };
-
-    settings
-}
-
-fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverrides {
-    let mut out = HelpRenderOverrides::default();
-    let mut iter = args
-        .iter()
-        .skip(1)
-        .filter_map(|value| value.to_str())
-        .peekable();
-
-    while let Some(token) = iter.next() {
-        if let Some(value) = token.strip_prefix("--profile=") {
-            if !value.trim().is_empty() {
-                out.profile = Some(value.trim().to_string());
-            }
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("--theme=") {
-            if !value.trim().is_empty() {
-                out.theme = Some(value.trim().to_string());
-            }
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("--mode=") {
-            out.mode = parse_render_mode_arg(value);
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("--color=") {
-            out.color = parse_color_mode_arg(value);
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("--unicode=") {
-            out.unicode = parse_unicode_mode_arg(value);
-            continue;
-        }
-
-        match token {
-            "--profile" => {
-                if let Some(value) = iter.peek().copied()
-                    && !value.starts_with('-')
-                {
-                    out.profile = Some(value.to_string());
-                    iter.next();
-                }
-            }
-            "--theme" => {
-                if let Some(value) = iter.peek().copied()
-                    && !value.starts_with('-')
-                {
-                    out.theme = Some(value.to_string());
-                    iter.next();
-                }
-            }
-            "--mode" => {
-                if let Some(value) = iter.peek().copied()
-                    && !value.starts_with('-')
-                    && let Some(parsed) = parse_render_mode_arg(value)
-                {
-                    out.mode = Some(parsed);
-                    iter.next();
-                }
-            }
-            "--color" => {
-                if let Some(value) = iter.peek().copied()
-                    && !value.starts_with('-')
-                    && let Some(parsed) = parse_color_mode_arg(value)
-                {
-                    out.color = Some(parsed);
-                    iter.next();
-                }
-            }
-            "--unicode" => {
-                if let Some(value) = iter.peek().copied()
-                    && !value.starts_with('-')
-                    && let Some(parsed) = parse_unicode_mode_arg(value)
-                {
-                    out.unicode = Some(parsed);
-                    iter.next();
-                }
-            }
-            "--ascii" => out.ascii_legacy = true,
-            _ => {}
-        }
-    }
-
-    out
-}
-
-fn parse_render_mode_arg(value: &str) -> Option<RenderMode> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(RenderMode::Auto),
-        "plain" => Some(RenderMode::Plain),
-        "rich" => Some(RenderMode::Rich),
-        _ => None,
-    }
-}
-
-fn parse_color_mode_arg(value: &str) -> Option<ColorMode> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(ColorMode::Auto),
-        "always" => Some(ColorMode::Always),
-        "never" => Some(ColorMode::Never),
-        _ => None,
-    }
-}
-
-fn parse_unicode_mode_arg(value: &str) -> Option<UnicodeMode> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(UnicodeMode::Auto),
-        "always" => Some(UnicodeMode::Always),
-        "never" => Some(UnicodeMode::Never),
-        _ => None,
-    }
-}
-
-pub(crate) fn config_explain_output(
-    state: &AppState,
-    args: ConfigExplainArgs,
-) -> Result<Option<String>> {
-    let explain = explain_runtime_config(
-        Some(state.config.resolved().active_profile().to_string()),
-        state.config.resolved().terminal(),
-        &args.key,
-        Some(state.session.config_overrides.clone()),
-    )?;
-
-    if explain.final_entry.is_none() && explain.layers.is_empty() {
-        let suggestions = suggest_config_keys(state.config.resolved(), &args.key);
-        let mut messages = MessageBuffer::default();
-        messages.error(format!("config key not found: {}", args.key));
-        if !suggestions.is_empty() {
-            messages.info(format!("did you mean: {}", suggestions.join(", ")));
-        }
-        emit_messages(state, &messages);
-        return Ok(None);
-    }
-
-    if matches!(state.ui.render_settings.format, OutputFormat::Json) {
-        let payload = config_explain_json(&explain, args.show_secrets);
-        return Ok(Some(format!(
-            "{}\n",
-            serde_json::to_string_pretty(&payload).into_diagnostic()?
-        )));
-    }
-
-    Ok(Some(render_config_explain_text(
-        &explain,
-        args.show_secrets,
-    )))
-}
-
-pub(crate) fn config_value_to_json(value: &ConfigValue) -> serde_json::Value {
-    match value {
-        ConfigValue::String(v) => v.clone().into(),
-        ConfigValue::Bool(v) => (*v).into(),
-        ConfigValue::Integer(v) => (*v).into(),
-        ConfigValue::Float(v) => (*v).into(),
-        ConfigValue::List(values) => {
-            serde_json::Value::Array(values.iter().map(config_value_to_json).collect())
-        }
-    }
-}
-
-pub(crate) fn explain_runtime_config(
-    profile_override: Option<String>,
-    terminal: Option<&str>,
-    key: &str,
-    session_layer: Option<ConfigLayer>,
-) -> Result<ConfigExplain> {
-    let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
-    let paths = RuntimeConfigPaths::discover();
-    let pipeline = build_runtime_pipeline(defaults.to_layer(), &paths, None, session_layer);
-
-    let layers = pipeline
-        .load_layers()
-        .into_diagnostic()
-        .wrap_err("config layer loading failed")?;
-    let resolver = ConfigResolver::from_loaded_layers(layers);
-    resolver
-        .explain_key(
-            key,
-            ResolveOptions {
-                profile_override,
-                terminal: terminal.map(|value| value.to_string()),
-            },
-        )
-        .into_diagnostic()
-        .wrap_err("config explain failed")
-}
-
-pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: bool) -> String {
-    let mut out = String::new();
-    out.push_str(&format!("key: {}\n", explain.key));
-
-    if let Some(final_entry) = &explain.final_entry {
-        let value_display = display_value(&explain.key, &final_entry.value, show_secrets);
-        out.push_str(&format!(
-            "value: {} ({})\n\n",
-            value_display,
-            config_value_type(&final_entry.value)
-        ));
-        out.push_str("winner:\n");
-        out.push_str(&format!("  source: {}\n", final_entry.source));
-        out.push_str(&format!("  scope: {}\n", format_scope(&final_entry.scope)));
-        out.push_str(&format!(
-            "  origin: {}\n\n",
-            final_entry.origin.as_deref().unwrap_or("-")
-        ));
-    } else {
-        out.push_str("value: not set\n\n");
-    }
-
-    out.push_str("context:\n");
-    out.push_str(&format!("  active_profile: {}\n", explain.active_profile));
-    out.push_str(&format!(
-        "  terminal: {}\n\n",
-        explain.terminal.as_deref().unwrap_or("none")
-    ));
-
-    let precedence = effective_precedence_chain(explain);
-    if !precedence.is_empty() {
-        out.push_str("candidates (in priority order):\n");
-        for (is_winner, source, scope, origin, value) in precedence {
-            let marker = if is_winner { "  ✅" } else { "   " };
-            out.push_str(&format!(
-                "{marker} {source} ({scope}) = {}",
-                display_value(&explain.key, &value, show_secrets),
-            ));
-            if let Some(origin_hint) = origin {
-                out.push_str(&format!(" [{origin_hint}]"));
-            }
-            out.push('\n');
-        }
-        out.push('\n');
-    }
-
-    if let Some(interpolation) = &explain.interpolation {
-        out.push_str("interpolation:\n");
-        out.push_str(&format!(
-            "  template: {}\n",
-            display_value(
-                &explain.key,
-                &ConfigValue::String(interpolation.template.clone()),
-                show_secrets
-            )
-        ));
-        for step in &interpolation.steps {
-            out.push_str(&format!(
-                "  ${{{}}} -> {} (from {}, {})\n",
-                step.placeholder,
-                display_value(&step.placeholder, &step.value, show_secrets),
-                step.source,
-                format_scope(&step.scope),
-            ));
-        }
-        if !show_secrets && contains_sensitive_values(explain) {
-            out.push_str("  note: some values are redacted; pass --show-secrets to display them\n");
-        }
-    }
-
-    out
-}
-
-pub(crate) fn config_explain_json(
-    explain: &ConfigExplain,
-    show_secrets: bool,
-) -> serde_json::Value {
-    let mut root = serde_json::Map::new();
-    root.insert("key".to_string(), explain.key.clone().into());
-    root.insert(
-        "active_profile".to_string(),
-        explain.active_profile.clone().into(),
-    );
-    root.insert(
-        "terminal".to_string(),
-        explain
-            .terminal
-            .clone()
-            .map_or(serde_json::Value::Null, Into::into),
-    );
-
-    if let Some(final_entry) = &explain.final_entry {
-        root.insert(
-            "value".to_string(),
-            redact_value_json(&explain.key, &final_entry.value, show_secrets),
-        );
-        root.insert(
-            "value_type".to_string(),
-            config_value_type(&final_entry.value).to_string().into(),
-        );
-        root.insert("source".to_string(), final_entry.source.to_string().into());
-        root.insert("scope".to_string(), format_scope(&final_entry.scope).into());
-        root.insert(
-            "origin".to_string(),
-            final_entry
-                .origin
-                .clone()
-                .map_or(serde_json::Value::Null, Into::into),
-        );
-    } else {
-        root.insert("value".to_string(), serde_json::Value::Null);
-        root.insert("value_type".to_string(), "none".into());
-        root.insert("source".to_string(), serde_json::Value::Null);
-        root.insert("scope".to_string(), serde_json::Value::Null);
-        root.insert("origin".to_string(), serde_json::Value::Null);
-    }
-
-    let mut candidates = Vec::new();
-    for (is_winner, source, scope, origin, value) in effective_precedence_chain(explain) {
-        let mut row = serde_json::Map::new();
-        row.insert("winner".to_string(), is_winner.into());
-        row.insert("source".to_string(), source.to_string().into());
-        row.insert("scope".to_string(), scope.into());
-        row.insert(
-            "origin".to_string(),
-            origin.map_or(serde_json::Value::Null, Into::into),
-        );
-        row.insert(
-            "value".to_string(),
-            redact_value_json(&explain.key, &value, show_secrets),
-        );
-        candidates.push(serde_json::Value::Object(row));
-    }
-    root.insert(
-        "candidates".to_string(),
-        serde_json::Value::Array(candidates),
-    );
-
-    if let Some(interpolation) = &explain.interpolation {
-        let mut section = serde_json::Map::new();
-        section.insert(
-            "template".to_string(),
-            redact_value_json(
-                &explain.key,
-                &ConfigValue::String(interpolation.template.clone()),
-                show_secrets,
-            ),
-        );
-        let mut steps = Vec::new();
-        for step in &interpolation.steps {
-            let mut item = serde_json::Map::new();
-            item.insert("placeholder".to_string(), step.placeholder.clone().into());
-            item.insert(
-                "value".to_string(),
-                redact_value_json(&step.placeholder, &step.value, show_secrets),
-            );
-            item.insert("source".to_string(), step.source.to_string().into());
-            item.insert("scope".to_string(), format_scope(&step.scope).into());
-            item.insert(
-                "origin".to_string(),
-                step.origin
-                    .clone()
-                    .map_or(serde_json::Value::Null, Into::into),
-            );
-            steps.push(serde_json::Value::Object(item));
-        }
-        section.insert("steps".to_string(), serde_json::Value::Array(steps));
-        root.insert(
-            "interpolation".to_string(),
-            serde_json::Value::Object(section),
-        );
-    }
-
-    serde_json::Value::Object(root)
-}
-
-fn effective_precedence_chain(
-    explain: &ConfigExplain,
-) -> Vec<(bool, String, String, Option<String>, ConfigValue)> {
-    let winner_source = explain.final_entry.as_ref().map(|entry| entry.source);
-    let mut chain = Vec::new();
-
-    for layer in &explain.layers {
-        let Some(candidate) = layer
-            .candidates
-            .iter()
-            .find(|candidate| candidate.selected_in_layer && candidate.rank.is_some())
-        else {
-            continue;
-        };
-
-        chain.push((
-            winner_source == Some(layer.source),
-            layer.source.to_string(),
-            format_scope(&candidate.scope),
-            candidate.origin.clone(),
-            candidate.value.clone(),
-        ));
-    }
-
-    chain
-}
-
-fn config_value_type(value: &ConfigValue) -> &'static str {
-    match value {
-        ConfigValue::String(_) => "string",
-        ConfigValue::Bool(_) => "bool",
-        ConfigValue::Integer(_) => "integer",
-        ConfigValue::Float(_) => "float",
-        ConfigValue::List(_) => "list",
-    }
-}
-
-fn redact_value_json(key: &str, value: &ConfigValue, show_secrets: bool) -> serde_json::Value {
-    if show_secrets || !is_sensitive_key(key) {
-        return config_value_to_json(value);
-    }
-
-    "[REDACTED]".into()
-}
-
-fn display_value(key: &str, value: &ConfigValue, show_secrets: bool) -> String {
-    if show_secrets || !is_sensitive_key(key) {
-        return match value {
-            ConfigValue::String(v) => v.clone(),
-            _ => config_value_to_json(value).to_string(),
-        };
-    }
-
-    "[REDACTED]".to_string()
-}
-
-pub(crate) fn is_sensitive_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase();
-    normalized.contains("password")
-        || normalized.contains("token")
-        || normalized.contains("secret")
-        || normalized.contains("apikey")
-        || normalized.contains("api_key")
-        || normalized.contains("access_key")
-        || normalized.contains("private_key")
-        || normalized.contains("ssh_key")
-        || normalized.contains("client_secret")
-        || normalized.contains("bearer")
-        || normalized.contains("jwt")
-        || normalized.ends_with(".key")
-}
-
-pub(crate) fn format_scope(scope: &osp_config::Scope) -> String {
-    match (scope.profile.as_deref(), scope.terminal.as_deref()) {
-        (Some(profile), Some(terminal)) => format!("profile:{profile} terminal:{terminal}"),
-        (Some(profile), None) => format!("profile:{profile}"),
-        (None, Some(terminal)) => format!("terminal:{terminal}"),
-        (None, None) => "global".to_string(),
-    }
-}
-
-fn contains_sensitive_values(explain: &ConfigExplain) -> bool {
-    if is_sensitive_key(&explain.key) {
-        return true;
-    }
-
-    explain.interpolation.as_ref().is_some_and(|trace| {
-        trace
-            .steps
-            .iter()
-            .any(|step| is_sensitive_key(&step.placeholder))
-    })
-}
-
-fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
-    let key_lc = key.to_ascii_lowercase();
-    let mut prefix_matches = config
-        .values()
-        .keys()
-        .filter(|candidate| candidate.starts_with(&key_lc) || candidate.contains(&key_lc))
-        .take(5)
-        .cloned()
-        .collect::<Vec<String>>();
-
-    if prefix_matches.is_empty() {
-        prefix_matches = config
-            .values()
-            .keys()
-            .filter(|candidate| {
-                let left = candidate.split('.').next().unwrap_or_default();
-                let right = key_lc.split('.').next().unwrap_or_default();
-                left == right
-            })
-            .take(5)
-            .cloned()
-            .collect();
-    }
-
-    prefix_matches
-}
-
 fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> {
     let parsed = parse_command_tokens_with_aliases(tokens, state.config.resolved())?;
     if parsed.tokens.is_empty() {
@@ -948,7 +408,7 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
                 let resolved = state.ui.render_settings.resolve_render_settings();
                 print!(
                     "{}",
-                    help::render_help_with_chrome(&err.to_string(), &resolved)
+                    repl_help::render_help_with_chrome(&err.to_string(), &resolved)
                 );
                 return Ok(0);
             }
@@ -1030,7 +490,7 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
             .map_err(enrich_dispatch_error)?;
         if !raw.stdout.is_empty() {
             let resolved = settings.resolve_render_settings();
-            print!("{}", help::render_help_with_chrome(&raw.stdout, &resolved));
+            print!("{}", repl_help::render_help_with_chrome(&raw.stdout, &resolved));
         }
         if !raw.stderr.is_empty() {
             eprint!("{}", raw.stderr);
@@ -1411,13 +871,14 @@ fn normalize_profile_override(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunAction, build_dispatch_plan, parse_help_render_overrides, parse_output_format_hint,
+        RunAction, build_dispatch_plan, parse_output_format_hint,
         resolve_effective_render_settings, is_sensitive_key,
     };
+    use super::help::parse_help_render_overrides;
     use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
     use crate::repl;
-    use crate::repl::{completion, help};
+    use crate::repl::{completion, help as repl_help};
     use crate::state::{AppState, RuntimeContext, TerminalKind};
     use clap::Parser;
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
@@ -1833,7 +1294,7 @@ mod tests {
         let state = make_completion_state(None);
         let raw =
             "Usage: config <COMMAND>\n\nCommands:\n  show\n\nOptions:\n  -h, --help  Print help\n";
-        let rendered = help::render_repl_help_with_chrome(&state, raw);
+        let rendered = repl_help::render_repl_help_with_chrome(&state, raw);
         assert!(rendered.contains("- Usage "));
         assert!(rendered.contains("  config <COMMAND>"));
         assert!(rendered.contains("- Commands "));
@@ -1846,7 +1307,7 @@ mod tests {
     fn repl_help_chrome_passthrough_without_known_sections_unit() {
         let state = make_completion_state(None);
         let raw = "custom help text";
-        assert_eq!(help::render_repl_help_with_chrome(&state, raw), raw);
+        assert_eq!(repl_help::render_repl_help_with_chrome(&state, raw), raw);
     }
 
     #[test]
@@ -1891,7 +1352,7 @@ mod tests {
         let state = make_completion_state(None);
         let mut resolved = state.ui.render_settings.resolve_render_settings();
         resolved.unicode = true;
-        let rendered = help::render_help_with_chrome(
+        let rendered = repl_help::render_help_with_chrome(
             "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
             &resolved,
         );
