@@ -395,6 +395,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fuzzy-matcher"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54614a3312934d066701a80f20f15fa3b56d67ac7722b39eea5b4c9dd1d66c94"
+dependencies = [
+ "thread_local",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -663,6 +672,7 @@ dependencies = [
  "clap",
  "miette",
  "osp-api",
+ "osp-completion",
  "osp-config",
  "osp-core",
  "osp-dsl",
@@ -674,9 +684,17 @@ dependencies = [
  "serde_json",
  "sha2",
  "shell-words",
+ "terminal_size",
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "osp-completion"
+version = "0.1.0"
+dependencies = [
+ "fuzzy-matcher",
 ]
 
 [[package]]
@@ -719,7 +737,13 @@ name = "osp-repl"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fuzzy-matcher",
+ "nu-ansi-term",
+ "osp-completion",
  "reedline",
+ "serde",
+ "serde_json",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -953,6 +977,7 @@ version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

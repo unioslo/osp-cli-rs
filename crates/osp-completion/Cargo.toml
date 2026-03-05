@@ -1,0 +1,7 @@
+[package]
+name = "osp-completion"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fuzzy-matcher.workspace = true
