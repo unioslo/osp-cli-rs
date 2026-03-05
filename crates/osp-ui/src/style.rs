@@ -1,4 +1,4 @@
-use crate::theme;
+use crate::theme::{self, ThemeDefinition};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyleOverrides {
@@ -57,11 +57,31 @@ pub fn apply_style_with_overrides(
     theme_name: &str,
     overrides: &StyleOverrides,
 ) -> String {
+    let theme = theme::resolve_theme(theme_name);
+    apply_style_with_theme_overrides(text, token, color, &theme, overrides)
+}
+
+pub fn apply_style_with_theme(
+    text: &str,
+    token: StyleToken,
+    color: bool,
+    theme: &ThemeDefinition,
+) -> String {
+    apply_style_with_theme_overrides(text, token, color, theme, &StyleOverrides::default())
+}
+
+pub fn apply_style_with_theme_overrides(
+    text: &str,
+    token: StyleToken,
+    color: bool,
+    theme: &ThemeDefinition,
+    overrides: &StyleOverrides,
+) -> String {
     if !color || matches!(token, StyleToken::None) {
         return text.to_string();
     }
 
-    let spec = style_spec_for_token(token, theme_name, overrides);
+    let spec = style_spec_for_token(token, theme, overrides);
     apply_style_spec(text, spec.as_str(), color)
 }
 
@@ -77,38 +97,37 @@ pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
 
 fn style_spec_for_token<'a>(
     token: StyleToken,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     overrides: &'a StyleOverrides,
 ) -> String {
     if let Some(value) = override_for_token(token, overrides) {
         return value.to_string();
     }
 
-    let theme = theme::resolve_theme(theme_name);
     match token {
         StyleToken::None => String::new(),
-        StyleToken::Key => theme.palette.accent,
-        StyleToken::Muted => theme.palette.muted,
-        StyleToken::PromptText => theme.palette.text,
-        StyleToken::PromptCommand => theme.palette.success,
-        StyleToken::TableHeader => theme.palette.accent,
-        StyleToken::MregKey => theme.palette.accent,
-        StyleToken::JsonKey => theme.palette.accent,
-        StyleToken::Code => theme.palette.text,
-        StyleToken::PanelBorder => theme.palette.border,
-        StyleToken::PanelTitle => theme.palette.title,
-        StyleToken::Value => theme.palette.text,
+        StyleToken::Key => theme.palette.accent.clone(),
+        StyleToken::Muted => theme.palette.muted.clone(),
+        StyleToken::PromptText => theme.palette.text.clone(),
+        StyleToken::PromptCommand => theme.palette.success.clone(),
+        StyleToken::TableHeader => theme.palette.accent.clone(),
+        StyleToken::MregKey => theme.palette.accent.clone(),
+        StyleToken::JsonKey => theme.palette.accent.clone(),
+        StyleToken::Code => theme.palette.text.clone(),
+        StyleToken::PanelBorder => theme.palette.border.clone(),
+        StyleToken::PanelTitle => theme.palette.title.clone(),
+        StyleToken::Value => theme.palette.text.clone(),
         StyleToken::Number => theme.value_number_spec().to_string(),
-        StyleToken::BoolTrue => theme.palette.success,
-        StyleToken::BoolFalse => theme.palette.error,
-        StyleToken::Null => theme.palette.muted,
-        StyleToken::Ipv4 => theme.palette.border,
-        StyleToken::Ipv6 => theme.palette.border,
-        StyleToken::MessageError => theme.palette.error,
-        StyleToken::MessageWarning => theme.palette.warning,
-        StyleToken::MessageSuccess => theme.palette.success,
-        StyleToken::MessageInfo => theme.palette.info,
-        StyleToken::MessageTrace => theme.palette.border,
+        StyleToken::BoolTrue => theme.palette.success.clone(),
+        StyleToken::BoolFalse => theme.palette.error.clone(),
+        StyleToken::Null => theme.palette.muted.clone(),
+        StyleToken::Ipv4 => theme.palette.border.clone(),
+        StyleToken::Ipv6 => theme.palette.border.clone(),
+        StyleToken::MessageError => theme.palette.error.clone(),
+        StyleToken::MessageWarning => theme.palette.warning.clone(),
+        StyleToken::MessageSuccess => theme.palette.success.clone(),
+        StyleToken::MessageInfo => theme.palette.info.clone(),
+        StyleToken::MessageTrace => theme.palette.border.clone(),
     }
 }
 

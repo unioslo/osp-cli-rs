@@ -314,6 +314,7 @@ mod tests {
             grid_columns: None,
             column_weight: 3,
             theme_name: DEFAULT_THEME_NAME.to_string(),
+            theme: crate::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
         }
     }
@@ -332,6 +333,7 @@ mod tests {
             grid_columns: None,
             column_weight: 3,
             theme_name: DEFAULT_THEME_NAME.to_string(),
+            theme: crate::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
         }
     }

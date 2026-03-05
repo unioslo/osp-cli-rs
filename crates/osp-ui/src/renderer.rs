@@ -6,7 +6,10 @@ use crate::document::{
     Block, Document, MregBlock, MregValue, PanelRules, TableAlign, TableBlock, TableStyle,
 };
 use crate::layout::{LayoutContext, MregMetrics, block_identity, prepare_layout_context};
-use crate::style::{StyleOverrides, StyleToken, apply_style_spec, apply_style_with_overrides};
+use crate::style::{
+    StyleOverrides, StyleToken, apply_style_spec, apply_style_with_theme_overrides,
+};
+use crate::theme::ThemeDefinition;
 use crate::{RenderBackend, ResolvedRenderSettings};
 
 const DEFAULT_SHORT_LIST_MAX: usize = 1;
@@ -43,7 +46,7 @@ fn render_block_plain(
         Block::Line(line) => render_line_block(
             line,
             false,
-            &settings.theme_name,
+            &settings.theme,
             settings.margin,
             &settings.style_overrides,
         ),
@@ -52,7 +55,7 @@ fn render_block_plain(
             code,
             settings.margin,
             false,
-            &settings.theme_name,
+            &settings.theme,
             &settings.style_overrides,
         ),
         Block::Json(json) => indent_lines(
@@ -72,7 +75,7 @@ fn render_block_plain(
             settings.grid_padding.max(DEFAULT_GRID_PADDING),
             settings.grid_columns,
             settings.column_weight.max(DEFAULT_COLUMN_WEIGHT),
-            &settings.theme_name,
+            &settings.theme,
             &settings.style_overrides,
             layout.mreg_metrics.get(&block_identity(block)).copied(),
         ),
@@ -81,7 +84,7 @@ fn render_block_plain(
             false,
             false,
             settings.width,
-            &settings.theme_name,
+            &settings.theme,
             settings.margin,
             settings.indent_size,
             false,
@@ -103,7 +106,7 @@ fn render_block_rich(
         Block::Line(line) => render_line_block(
             line,
             settings.color,
-            &settings.theme_name,
+            &settings.theme,
             settings.margin,
             &settings.style_overrides,
         ),
@@ -112,14 +115,14 @@ fn render_block_rich(
             code,
             settings.margin,
             settings.color,
-            &settings.theme_name,
+            &settings.theme,
             &settings.style_overrides,
         ),
         Block::Json(json) => render_json_block(
             &json.payload,
             settings.margin,
             settings.color,
-            &settings.theme_name,
+            &settings.theme,
             &settings.style_overrides,
         ),
         Block::Value(values) => render_value_block(&values.values, settings.margin),
@@ -135,7 +138,7 @@ fn render_block_rich(
             settings.grid_padding.max(DEFAULT_GRID_PADDING),
             settings.grid_columns,
             settings.column_weight.max(DEFAULT_COLUMN_WEIGHT),
-            &settings.theme_name,
+            &settings.theme,
             &settings.style_overrides,
             layout.mreg_metrics.get(&block_identity(block)).copied(),
         ),
@@ -144,7 +147,7 @@ fn render_block_rich(
             settings.unicode,
             settings.color,
             settings.width,
-            &settings.theme_name,
+            &settings.theme,
             settings.margin,
             settings.indent_size,
             true,
@@ -171,7 +174,7 @@ fn render_value_block(values: &[String], margin: usize) -> String {
 fn render_line_block(
     block: &crate::document::LineBlock,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     margin: usize,
     style_overrides: &StyleOverrides,
 ) -> String {
@@ -179,11 +182,11 @@ fn render_line_block(
     out.push_str(&" ".repeat(margin));
     for part in &block.parts {
         if let Some(token) = part.token {
-            out.push_str(&apply_style_with_overrides(
+            out.push_str(&apply_style_with_theme_overrides(
                 &part.text,
                 token,
                 color,
-                theme_name,
+                theme,
                 style_overrides,
             ));
         } else {
@@ -198,7 +201,7 @@ fn render_code_block(
     block: &crate::document::CodeBlock,
     margin: usize,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     style_overrides: &StyleOverrides,
 ) -> String {
     let code = if block.code.ends_with('\n') {
@@ -208,8 +211,13 @@ fn render_code_block(
     };
     let mut out = String::new();
     for line in code.trim_end_matches('\n').lines() {
-        let line =
-            apply_style_with_overrides(line, StyleToken::Code, color, theme_name, style_overrides);
+        let line = apply_style_with_theme_overrides(
+            line,
+            StyleToken::Code,
+            color,
+            theme,
+            style_overrides,
+        );
         out.push_str(&" ".repeat(margin));
         out.push_str(&line);
         out.push('\n');
@@ -221,10 +229,10 @@ fn render_json_block(
     payload: &Value,
     margin: usize,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     style_overrides: &StyleOverrides,
 ) -> String {
-    let rendered = render_json_value(payload, 0, color, theme_name, style_overrides);
+    let rendered = render_json_value(payload, 0, color, theme, style_overrides);
     indent_lines(&rendered, margin)
 }
 
@@ -232,7 +240,7 @@ fn render_json_value(
     value: &Value,
     depth: usize,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     style_overrides: &StyleOverrides,
 ) -> String {
     let indent = "  ".repeat(depth);
@@ -248,15 +256,15 @@ fn render_json_value(
             for (index, (key, item)) in map.iter().enumerate() {
                 let comma = if index + 1 < map.len() { "," } else { "" };
                 let key_json = serde_json::to_string(key).unwrap_or_else(|_| format!("\"{key}\""));
-                let key_text = apply_style_with_overrides(
+                let key_text = apply_style_with_theme_overrides(
                     &key_json,
                     StyleToken::JsonKey,
                     color,
-                    theme_name,
+                    theme,
                     style_overrides,
                 );
                 let value_text =
-                    render_json_value(item, depth + 1, color, theme_name, style_overrides);
+                    render_json_value(item, depth + 1, color, theme, style_overrides);
                 out.push_str(&next_indent);
                 out.push_str(&key_text);
                 out.push_str(": ");
@@ -277,13 +285,7 @@ fn render_json_value(
             for (index, item) in values.iter().enumerate() {
                 let comma = if index + 1 < values.len() { "," } else { "" };
                 out.push_str(&next_indent);
-                out.push_str(&render_json_value(
-                    item,
-                    depth + 1,
-                    color,
-                    theme_name,
-                    style_overrides,
-                ));
+                out.push_str(&render_json_value(item, depth + 1, color, theme, style_overrides));
                 out.push_str(comma);
                 out.push('\n');
             }
@@ -293,22 +295,22 @@ fn render_json_value(
         }
         Value::String(raw) => {
             let quoted = serde_json::to_string(raw).unwrap_or_else(|_| format!("\"{raw}\""));
-            apply_style_with_overrides(
+            apply_style_with_theme_overrides(
                 &quoted,
                 StyleToken::Value,
                 color,
-                theme_name,
+                theme,
                 style_overrides,
             )
         }
-        Value::Number(number) => apply_style_with_overrides(
+        Value::Number(number) => apply_style_with_theme_overrides(
             &number.to_string(),
             StyleToken::Number,
             color,
-            theme_name,
+            theme,
             style_overrides,
         ),
-        Value::Bool(boolean) => apply_style_with_overrides(
+        Value::Bool(boolean) => apply_style_with_theme_overrides(
             if *boolean { "true" } else { "false" },
             if *boolean {
                 StyleToken::BoolTrue
@@ -316,11 +318,11 @@ fn render_json_value(
                 StyleToken::BoolFalse
             },
             color,
-            theme_name,
+            theme,
             style_overrides,
         ),
         Value::Null => {
-            apply_style_with_overrides("null", StyleToken::Null, color, theme_name, style_overrides)
+            apply_style_with_theme_overrides("null", StyleToken::Null, color, theme, style_overrides)
         }
     }
 }
@@ -334,7 +336,7 @@ fn render_panel_block(
     let color = settings.color;
     let unicode = settings.unicode;
     let width = settings.width;
-    let theme_name = settings.theme_name.as_str();
+    let theme = &settings.theme;
     let title_token = block.title_token.unwrap_or(StyleToken::PanelTitle);
     let divider = section_divider(
         block.title.as_deref().unwrap_or(""),
@@ -343,7 +345,7 @@ fn render_panel_block(
         unicode,
         width,
         color,
-        theme_name,
+        theme,
         &settings.style_overrides,
     );
     let mut child_settings = settings.clone();
@@ -375,7 +377,7 @@ fn render_mreg_block(
     grid_padding: usize,
     grid_columns: Option<usize>,
     column_weight: usize,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     style_overrides: &StyleOverrides,
     metrics: Option<MregMetrics>,
 ) -> String {
@@ -392,11 +394,11 @@ fn render_mreg_block(
         for entry in &row.entries {
             let key_indent = " ".repeat(entry.depth * indent_size);
             let margin_indent = " ".repeat(margin);
-            let key_text = apply_style_with_overrides(
+            let key_text = apply_style_with_theme_overrides(
                 &entry.key,
                 StyleToken::MregKey,
                 color,
-                theme_name,
+                theme,
                 style_overrides,
             );
             let key_len = display_width(&entry.key);
@@ -419,8 +421,7 @@ fn render_mreg_block(
                         continue;
                     }
                     let raw = value_to_string(value);
-                    let value_text =
-                        style_value_cell(value, &raw, color, theme_name, style_overrides);
+                    let value_text = style_value_cell(value, &raw, color, theme, style_overrides);
                     out.push_str(&format!(
                         "{margin_indent}{key_indent}{key_text}:{scalar_gap}{value_text}\n"
                     ));
@@ -491,7 +492,7 @@ fn section_divider(
     unicode: bool,
     width: Option<usize>,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     style_overrides: &StyleOverrides,
 ) -> String {
     let fill_char = if unicode { '─' } else { '-' };
@@ -509,11 +510,11 @@ fn section_divider(
     if title.is_empty() {
         let raw = fill_char.to_string().repeat(target_width);
         if color {
-            return apply_style_with_overrides(
+            return apply_style_with_theme_overrides(
                 &raw,
                 StyleToken::PanelBorder,
                 true,
-                theme_name,
+                theme,
                 style_overrides,
             );
         }
@@ -534,16 +535,16 @@ fn section_divider(
     }
 
     if title_token == border_token {
-        return apply_style_with_overrides(&raw, border_token, true, theme_name, style_overrides);
+        return apply_style_with_theme_overrides(&raw, border_token, true, theme, style_overrides);
     }
 
-    let border = apply_style_with_overrides(left, border_token, true, theme_name, style_overrides);
-    let title = apply_style_with_overrides(title, title_token, true, theme_name, style_overrides);
-    let trailing = apply_style_with_overrides(
+    let border = apply_style_with_theme_overrides(left, border_token, true, theme, style_overrides);
+    let title = apply_style_with_theme_overrides(title, title_token, true, theme, style_overrides);
+    let trailing = apply_style_with_theme_overrides(
         &format!(" {suffix}"),
         border_token,
         true,
-        theme_name,
+        theme,
         style_overrides,
     );
     format!("{border}{title}{trailing}")
@@ -645,7 +646,7 @@ fn render_table_block(
     unicode: bool,
     color: bool,
     width: Option<usize>,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     margin: usize,
     indent_size: usize,
     respect_depth: bool,
@@ -660,7 +661,7 @@ fn render_table_block(
     let header_pairs = render_table_header_pairs(
         block,
         color,
-        theme_name,
+        theme,
         margin,
         indent_size,
         respect_depth,
@@ -683,7 +684,6 @@ fn render_table_block(
             unicode,
             color,
             width,
-            theme_name,
             effective_margin,
             indent_size,
             column_widths,
@@ -701,7 +701,7 @@ fn render_table_block(
 fn render_table_header_pairs(
     block: &TableBlock,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     margin: usize,
     indent_size: usize,
     respect_depth: bool,
@@ -721,15 +721,15 @@ fn render_table_header_pairs(
             },
     );
     for (key, value) in &block.header_pairs {
-        let key_text = apply_style_with_overrides(
+        let key_text = apply_style_with_theme_overrides(
             key,
             StyleToken::MregKey,
             color,
-            theme_name,
+            theme,
             style_overrides,
         );
         let raw = value_to_string(value);
-        let value_text = style_value_cell(value, &raw, color, theme_name, style_overrides);
+        let value_text = style_value_cell(value, &raw, color, theme, style_overrides);
         out.push_str(&prefix);
         out.push_str(&key_text);
         out.push_str(": ");
@@ -745,7 +745,6 @@ fn render_grid_table(
     unicode: bool,
     _color: bool,
     _width: Option<usize>,
-    _theme_name: &str,
     margin: usize,
     _indent_size: usize,
     column_widths: Option<&[usize]>,
@@ -976,11 +975,11 @@ fn style_value_cell(
     value: &Value,
     text: &str,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     style_overrides: &StyleOverrides,
 ) -> String {
     let trimmed = text.trim();
-    if !color || theme_name.eq_ignore_ascii_case("plain") {
+    if !color || theme.id.eq_ignore_ascii_case("plain") {
         return text.to_string();
     }
 
@@ -989,29 +988,29 @@ fn style_value_cell(
     }
 
     match value {
-        Value::Bool(true) => apply_style_with_overrides(
+        Value::Bool(true) => apply_style_with_theme_overrides(
             text,
             StyleToken::BoolTrue,
             true,
-            theme_name,
+            theme,
             style_overrides,
         ),
-        Value::Bool(false) => apply_style_with_overrides(
+        Value::Bool(false) => apply_style_with_theme_overrides(
             text,
             StyleToken::BoolFalse,
             true,
-            theme_name,
+            theme,
             style_overrides,
         ),
         Value::Null => {
-            apply_style_with_overrides(text, StyleToken::Null, true, theme_name, style_overrides)
+            apply_style_with_theme_overrides(text, StyleToken::Null, true, theme, style_overrides)
         }
         Value::Number(_) => {
-            apply_style_with_overrides(text, StyleToken::Number, true, theme_name, style_overrides)
+            apply_style_with_theme_overrides(text, StyleToken::Number, true, theme, style_overrides)
         }
         Value::String(raw) => {
             if let Some(token) = value_style_token_for_string(raw) {
-                return apply_style_with_overrides(text, token, true, theme_name, style_overrides);
+                return apply_style_with_theme_overrides(text, token, true, theme, style_overrides);
             }
             text.to_string()
         }
@@ -1281,6 +1280,7 @@ mod tests {
             grid_columns: None,
             column_weight: 3,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
         }
     }
@@ -1356,6 +1356,7 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+                theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
             },
         );
@@ -1394,6 +1395,7 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+                theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
             },
         );
@@ -1615,6 +1617,7 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+                theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
             },
         );
@@ -1652,6 +1655,7 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 theme_name: "plain".to_string(),
+                theme: crate::theme::resolve_theme("plain"),
                 style_overrides: crate::style::StyleOverrides::default(),
             },
         );
@@ -1687,6 +1691,7 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+                theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
             },
         );
@@ -1718,6 +1723,7 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+                theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides {
                     code: Some("#00ff00".to_string()),
                     ..Default::default()

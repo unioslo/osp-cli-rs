@@ -474,14 +474,14 @@ pub(crate) fn maybe_render_dsl_help(state: &AppState, stages: &[String]) -> Opti
 
 fn render_dsl_help(state: &AppState, spec: &str) -> String {
     let resolved = state.ui.render_settings.resolve_render_settings();
-    let theme_name = resolved.theme_name.as_str();
+    let theme = &resolved.theme;
     let mut out = String::new();
     out.push_str(&render_section_divider_with_overrides(
         "DSL Help",
         resolved.unicode,
         resolved.width,
         resolved.color,
-        theme_name,
+        theme,
         StyleToken::MessageInfo,
         &resolved.style_overrides,
     ));

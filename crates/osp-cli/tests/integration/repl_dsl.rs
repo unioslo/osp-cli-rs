@@ -31,6 +31,7 @@ fn dsl_pipeline_project_works_on_ldap_user_data() {
         mreg_stack_min_col_width: 10,
         mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        theme: None,
         style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);
@@ -66,6 +67,7 @@ fn dsl_pipeline_values_works_on_netgroup_members() {
         mreg_stack_min_col_width: 10,
         mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        theme: None,
         style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);
@@ -100,6 +102,7 @@ fn dsl_pipeline_filter_works() {
         mreg_stack_min_col_width: 10,
         mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        theme: None,
         style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);
@@ -133,6 +136,7 @@ fn dsl_pipeline_markdown_table_format_works() {
         mreg_stack_min_col_width: 10,
         mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        theme: None,
         style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);

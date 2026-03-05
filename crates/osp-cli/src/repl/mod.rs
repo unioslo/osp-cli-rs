@@ -9,8 +9,7 @@ use osp_repl::{ReplAppearance, ReplPrompt, SharedHistory, run_repl};
 use osp_ui::messages::{adjust_verbosity, render_section_divider_with_overrides};
 use osp_ui::render_inline;
 use osp_ui::render_output;
-use osp_ui::style::{StyleToken, apply_style, apply_style_spec};
-use osp_ui::theme::resolve_theme;
+use osp_ui::style::{StyleToken, apply_style_spec, apply_style_with_theme};
 use std::borrow::Cow;
 
 use crate::cli::commands::{
@@ -105,13 +104,13 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
 fn render_repl_intro(state: &AppState) -> String {
     let resolved = state.ui.render_settings.resolve_render_settings();
     let config = state.config.resolved();
-    let theme_name = resolved.theme_name.as_str();
+    let theme = &resolved.theme;
 
     let user = config.get_string("user.name").unwrap_or("anonymous");
     let profile = config.active_profile();
-    let theme = state.ui.render_settings.theme_name.clone();
+    let theme_id = state.ui.render_settings.theme_name.clone();
     let version = env!("CARGO_PKG_VERSION");
-    let theme_display = theme_display_name(&theme);
+    let theme_display = theme_display_name(&theme_id);
 
     let mut out = String::new();
     out.push_str(&render_section_divider_with_overrides(
@@ -119,7 +118,7 @@ fn render_repl_intro(state: &AppState) -> String {
         resolved.unicode,
         resolved.width,
         resolved.color,
-        theme_name,
+        theme,
         StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
@@ -127,28 +126,28 @@ fn render_repl_intro(state: &AppState) -> String {
     out.push_str(&render_inline(
         &format!("  Welcome `{user}`!"),
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
         &format!("  Logged in as: `{user}`"),
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
         &format!("  Theme: `{theme_display}`"),
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
         &format!("  Version: `{version}`"),
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push_str("\n\n");
@@ -157,7 +156,7 @@ fn render_repl_intro(state: &AppState) -> String {
         resolved.unicode,
         resolved.width,
         resolved.color,
-        theme_name,
+        theme,
         StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
@@ -165,21 +164,21 @@ fn render_repl_intro(state: &AppState) -> String {
     out.push_str(&render_inline(
         "  `Ctrl-D`    **exit**",
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
         "  `Ctrl-L`    **clear screen**",
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
         "  `Ctrl-R`    **reverse search history**",
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push_str("\n\n");
@@ -188,7 +187,7 @@ fn render_repl_intro(state: &AppState) -> String {
         resolved.unicode,
         resolved.width,
         resolved.color,
-        theme_name,
+        theme,
         StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
@@ -196,35 +195,35 @@ fn render_repl_intro(state: &AppState) -> String {
     out.push_str(&render_inline(
         "    `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2",
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
         "    *|* `A` metric() *|* `L` limit offset *|* `C` count",
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
         "    `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*",
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
         "    *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`",
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push_str("\n\n");
     out.push_str(&render_inline(
         &format!("Current profile: `{profile}`"),
         resolved.color,
-        theme_name,
+        theme,
         &resolved.style_overrides,
     ));
     out.push_str("\n\n");
@@ -233,7 +232,7 @@ fn render_repl_intro(state: &AppState) -> String {
 
 fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry]) -> String {
     let resolved = state.ui.render_settings.resolve_render_settings();
-    let theme_name = resolved.theme_name.as_str();
+    let theme = &resolved.theme;
     let mut out = String::new();
 
     out.push_str(&render_section_divider_with_overrides(
@@ -241,7 +240,7 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
         resolved.unicode,
         resolved.width,
         resolved.color,
-        theme_name,
+        theme,
         StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
@@ -253,7 +252,7 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
         resolved.unicode,
         resolved.width,
         resolved.color,
-        theme_name,
+        theme,
         StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
@@ -301,7 +300,7 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
         resolved.unicode,
         resolved.width,
         resolved.color,
-        theme_name,
+        theme,
         StyleToken::MessageInfo,
         &resolved.style_overrides,
     ));
@@ -336,8 +335,7 @@ fn build_repl_appearance(state: &AppState) -> ReplAppearance {
     if !resolved.color {
         return ReplAppearance::default();
     }
-    let theme_name = resolved.theme_name.as_str();
-    let theme = resolve_theme(theme_name);
+    let theme = &resolved.theme;
     let config = state.config.resolved();
 
     let completion_text_style = config
@@ -368,7 +366,7 @@ fn build_repl_appearance(state: &AppState) -> ReplAppearance {
 fn build_repl_prompt(state: &AppState) -> ReplPrompt {
     let resolved = state.ui.render_settings.resolve_render_settings();
     let config = state.config.resolved();
-    let theme_name = resolved.theme_name.as_str();
+    let theme = &resolved.theme;
     let simple = config.get_bool("repl.simple_prompt").unwrap_or(false);
     let profile = config.active_profile();
     let user = config.get_string("user.name").unwrap_or("anonymous");
@@ -380,28 +378,28 @@ fn build_repl_prompt(state: &AppState) -> ReplPrompt {
         user,
         StyleToken::PromptText,
         resolved.color,
-        theme_name,
+        theme,
     );
     let domain_text = style_prompt_fragment(
         config.get_string("color.prompt.text"),
         domain,
         StyleToken::PromptText,
         resolved.color,
-        theme_name,
+        theme,
     );
     let profile_text = style_prompt_fragment(
         config.get_string("color.prompt.command"),
         profile,
         StyleToken::PromptCommand,
         resolved.color,
-        theme_name,
+        theme,
     );
     let indicator_text = style_prompt_fragment(
         config.get_string("color.prompt.text"),
         &indicator,
         StyleToken::PromptText,
         resolved.color,
-        theme_name,
+        theme,
     );
 
     let prompt = if simple {
@@ -470,11 +468,11 @@ fn style_prompt_fragment(
     value: &str,
     fallback: StyleToken,
     color: bool,
-    theme_name: &str,
+    theme: &osp_ui::theme::ThemeDefinition,
 ) -> String {
     match config_style.map(str::trim) {
         Some(spec) if !spec.is_empty() => apply_style_spec(value, spec, color),
-        _ => apply_style(value, fallback, color, theme_name),
+        _ => apply_style_with_theme(value, fallback, color, theme),
     }
 }
 

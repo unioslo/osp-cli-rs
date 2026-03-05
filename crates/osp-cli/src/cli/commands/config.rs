@@ -376,7 +376,6 @@ fn refresh_runtime_config(state: &mut AppState) -> Result<()> {
         state.auth = AuthState::from_resolved(state.config.resolved());
         let theme_catalog = theme_loader::load_theme_catalog(state.config.resolved());
         state.themes = theme_catalog.clone();
-        osp_ui::theme::set_custom_themes(theme_catalog.custom_themes());
         theme_loader::log_theme_issues(&theme_catalog.issues);
         let selected = state
             .config
@@ -386,6 +385,9 @@ fn refresh_runtime_config(state: &mut AppState) -> Result<()> {
         state.ui.render_settings.theme_name =
             resolve_known_theme_name(selected, &theme_catalog)
                 .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
+        state.ui.render_settings.theme = theme_catalog
+            .resolve(&state.ui.render_settings.theme_name)
+            .map(|entry| entry.theme.clone());
         state.ui.render_settings.width = Some(config_usize(
             state.config.resolved(),
             "ui.width",

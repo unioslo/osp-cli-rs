@@ -25,6 +25,10 @@ pub(crate) fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result
         ThemeCommands::Use(ThemeUseArgs { name }) => {
             let selected = resolve_known_theme_name(&name, &state.themes)?;
             state.ui.render_settings.theme_name = selected.clone();
+            state.ui.render_settings.theme = state
+                .themes
+                .resolve(&selected)
+                .map(|entry| entry.theme.clone());
 
             let mut messages = osp_ui::messages::MessageBuffer::default();
             messages.success(format!("active theme set to: {selected}"));
@@ -56,6 +60,10 @@ pub(crate) fn run_theme_repl_command(
         ThemeCommands::Use(ThemeUseArgs { name }) => {
             let selected = resolve_known_theme_name(&name, &state.themes)?;
             state.ui.render_settings.theme_name = selected.clone();
+            state.ui.render_settings.theme = state
+                .themes
+                .resolve(&selected)
+                .map(|entry| entry.theme.clone());
             Ok(ReplCommandOutput::Text(format!(
                 "active theme set to: {selected}\n"
             )))

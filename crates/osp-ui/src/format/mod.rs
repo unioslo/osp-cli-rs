@@ -265,6 +265,7 @@ mod tests {
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: "plain".to_string(),
+            theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
         }
     }

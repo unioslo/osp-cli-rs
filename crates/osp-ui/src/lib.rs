@@ -20,6 +20,7 @@ pub use document::{
 };
 pub use inline::{line_from_inline, parts_from_inline, render_inline};
 pub use style::StyleOverrides;
+use theme::ThemeDefinition;
 
 #[derive(Debug, Clone)]
 pub struct RenderSettings {
@@ -38,6 +39,7 @@ pub struct RenderSettings {
     pub mreg_stack_min_col_width: usize,
     pub mreg_stack_overflow_ratio: usize,
     pub theme_name: String,
+    pub theme: Option<ThemeDefinition>,
     pub style_overrides: StyleOverrides,
 }
 
@@ -61,6 +63,7 @@ pub struct ResolvedRenderSettings {
     pub grid_columns: Option<usize>,
     pub column_weight: usize,
     pub theme_name: String,
+    pub theme: ThemeDefinition,
     pub style_overrides: StyleOverrides,
 }
 
@@ -101,6 +104,12 @@ impl RenderSettings {
             }
         };
 
+        let theme = self
+            .theme
+            .clone()
+            .unwrap_or_else(|| theme::resolve_theme(&self.theme_name));
+        let theme_name = theme::normalize_theme_name(&theme.id);
+
         match backend {
             // Plain mode is a strict no-color/no-unicode fallback.
             RenderBackend::Plain => ResolvedRenderSettings {
@@ -115,7 +124,8 @@ impl RenderSettings {
                 grid_padding: self.grid_padding.max(1),
                 grid_columns: self.grid_columns.filter(|value| *value > 0),
                 column_weight: self.column_weight.max(1),
-                theme_name: theme::normalize_theme_name(&self.theme_name),
+                theme_name,
+                theme: theme.clone(),
                 style_overrides: self.style_overrides.clone(),
             },
             RenderBackend::Rich => ResolvedRenderSettings {
@@ -130,7 +140,8 @@ impl RenderSettings {
                 grid_padding: self.grid_padding.max(1),
                 grid_columns: self.grid_columns.filter(|value| *value > 0),
                 column_weight: self.column_weight.max(1),
-                theme_name: theme::normalize_theme_name(&self.theme_name),
+                theme_name,
+                theme,
                 style_overrides: self.style_overrides.clone(),
             },
         }
@@ -191,6 +202,7 @@ pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) 
         mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
         mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
+        theme: settings.theme.clone(),
         style_overrides: settings.style_overrides.clone(),
     };
     let document = format::build_document_from_output(output, &copy_settings);
@@ -214,6 +226,7 @@ pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) 
         mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
         mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
+        theme: settings.theme.clone(),
         style_overrides: settings.style_overrides.clone(),
     };
     let resolved = copy_settings.resolve_render_settings();
@@ -256,6 +269,7 @@ pub fn copy_output_to_clipboard(
         mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
         mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
+        theme: settings.theme.clone(),
         style_overrides: settings.style_overrides.clone(),
     };
     let document = format::build_document_from_output(output, &copy_settings);
@@ -287,6 +301,7 @@ mod tests {
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
         }
     }
@@ -395,6 +410,7 @@ mod tests {
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
         };
 
@@ -422,6 +438,7 @@ mod tests {
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
         };
 
@@ -459,6 +476,7 @@ mod tests {
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
         };
 

@@ -33,16 +33,6 @@ impl ThemeCatalog {
         }
         self.entries.get(&normalized)
     }
-
-    pub(crate) fn custom_themes(&self) -> Vec<ThemeDefinition> {
-        self.entries
-            .values()
-            .filter_map(|entry| match entry.source {
-                ThemeSource::Custom => Some(entry.theme.clone()),
-                ThemeSource::Builtin => None,
-            })
-            .collect()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

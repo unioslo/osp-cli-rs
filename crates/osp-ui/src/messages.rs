@@ -3,7 +3,8 @@ use crate::format::message::{
     MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules,
 };
 use crate::renderer::render_document;
-use crate::style::{StyleOverrides, StyleToken, apply_style_with_overrides};
+use crate::style::{StyleOverrides, StyleToken, apply_style_with_theme_overrides};
+use crate::theme::ThemeDefinition;
 use crate::{RenderBackend, ResolvedRenderSettings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,12 +128,13 @@ impl MessageBuffer {
     }
 
     pub fn render_grouped(&self, max_level: MessageLevel) -> String {
+        let theme = crate::theme::resolve_theme("plain");
         self.render_grouped_styled(
             max_level,
             false,
             false,
             None,
-            "plain",
+            &theme,
             MessageRenderFormat::Rules,
         )
     }
@@ -143,7 +145,7 @@ impl MessageBuffer {
         color: bool,
         unicode: bool,
         width: Option<usize>,
-        theme_name: &str,
+        theme: &ThemeDefinition,
         format: MessageRenderFormat,
     ) -> String {
         self.render_grouped_styled_with_overrides(
@@ -151,7 +153,7 @@ impl MessageBuffer {
             color,
             unicode,
             width,
-            theme_name,
+            theme,
             format,
             &StyleOverrides::default(),
         )
@@ -163,7 +165,7 @@ impl MessageBuffer {
         color: bool,
         unicode: bool,
         width: Option<usize>,
-        theme_name: &str,
+        theme: &ThemeDefinition,
         format: MessageRenderFormat,
         style_overrides: &StyleOverrides,
     ) -> String {
@@ -188,7 +190,8 @@ impl MessageBuffer {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
-            theme_name: theme_name.to_string(),
+            theme_name: theme.id.clone(),
+            theme: theme.clone(),
             style_overrides: style_overrides.clone(),
         };
         render_document(&document, resolved)
@@ -270,7 +273,7 @@ pub fn render_section_divider(
     unicode: bool,
     width: Option<usize>,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     token: StyleToken,
 ) -> String {
     render_section_divider_with_overrides(
@@ -278,7 +281,7 @@ pub fn render_section_divider(
         unicode,
         width,
         color,
-        theme_name,
+        theme,
         token,
         &StyleOverrides::default(),
     )
@@ -289,7 +292,7 @@ pub fn render_section_divider_with_overrides(
     unicode: bool,
     width: Option<usize>,
     color: bool,
-    theme_name: &str,
+    theme: &ThemeDefinition,
     token: StyleToken,
     style_overrides: &StyleOverrides,
 ) -> String {
@@ -325,7 +328,7 @@ pub fn render_section_divider_with_overrides(
     };
 
     if color {
-        apply_style_with_overrides(&raw, token, true, theme_name, style_overrides)
+        apply_style_with_theme_overrides(&raw, token, true, theme, style_overrides)
     } else {
         raw
     }
@@ -361,12 +364,13 @@ mod tests {
     fn styled_render_uses_boxed_headers() {
         let mut messages = MessageBuffer::default();
         messages.error("bad");
+        let theme = crate::theme::resolve_theme("rose-pine-moon");
         let rendered = messages.render_grouped_styled(
             MessageLevel::Error,
             false,
             true,
             Some(24),
-            "rose-pine-moon",
+            &theme,
             MessageRenderFormat::Rules,
         );
         assert!(rendered.contains("─ Errors "));
@@ -381,13 +385,14 @@ mod tests {
     fn styled_render_color_toggle_controls_ansi() {
         let mut messages = MessageBuffer::default();
         messages.warning("careful");
+        let theme = crate::theme::resolve_theme("rose-pine-moon");
 
         let plain = messages.render_grouped_styled(
             MessageLevel::Warning,
             false,
             false,
             Some(28),
-            "rose-pine-moon",
+            &theme,
             MessageRenderFormat::Rules,
         );
         let colored = messages.render_grouped_styled(
@@ -395,7 +400,7 @@ mod tests {
             true,
             false,
             Some(28),
-            "rose-pine-moon",
+            &theme,
             MessageRenderFormat::Rules,
         );
         assert!(!plain.contains("\x1b["));

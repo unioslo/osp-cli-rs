@@ -177,11 +177,13 @@ fn run(mut cli: Cli) -> Result<i32> {
         session_layer.clone(),
     )?;
     let theme_catalog = theme_loader::load_theme_catalog(&config);
-    osp_ui::theme::set_custom_themes(theme_catalog.custom_themes());
     let mut render_settings = cli.render_settings();
     cli.seed_render_settings_from_config(&mut render_settings, &config);
     render_settings.width = Some(resolve_default_render_width(&config));
     render_settings.theme_name = resolve_theme_name(&cli, &config, &theme_catalog)?;
+    render_settings.theme = theme_catalog
+        .resolve(&render_settings.theme_name)
+        .map(|entry| entry.theme.clone());
     let message_verbosity = effective_message_verbosity(&cli, &config);
     let debug_verbosity = effective_debug_verbosity(&cli, &config);
     init_developer_logging(build_logging_config(&config, debug_verbosity));
@@ -390,13 +392,15 @@ fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
     let mut settings = default_cli.render_settings();
     if let Some(config) = config.as_ref() {
         let loaded = theme_loader::load_theme_catalog(config);
-        osp_ui::theme::set_custom_themes(loaded.custom_themes());
         default_cli.seed_render_settings_from_config(&mut settings, config);
         settings.width = Some(resolve_default_render_width(config));
         let selected = default_cli.selected_theme_name(config);
         settings.theme_name =
             resolve_known_theme_name(selected.as_str(), &loaded)
                 .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
+        settings.theme = loaded
+            .resolve(&settings.theme_name)
+            .map(|entry| entry.theme.clone());
         catalog = Some(loaded);
     }
 
@@ -420,6 +424,13 @@ fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
             normalize_theme_name(theme)
         };
     }
+    settings.theme = if let Some(catalog) = catalog.as_ref() {
+        catalog
+            .resolve(&settings.theme_name)
+            .map(|entry| entry.theme.clone())
+    } else {
+        Some(osp_ui::theme::resolve_theme(&settings.theme_name))
+    };
 
     settings
 }
@@ -1267,7 +1278,7 @@ pub(crate) fn emit_messages_with_verbosity(
         resolved.color,
         resolved.unicode,
         resolved.width,
-        &resolved.theme_name,
+        &resolved.theme,
         message_format,
         &resolved.style_overrides,
     );
@@ -1397,6 +1408,7 @@ mod tests {
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: DEFAULT_THEME_NAME.to_string(),
+            theme: None,
             style_overrides: osp_ui::StyleOverrides::default(),
         };
 
@@ -1462,6 +1474,7 @@ mod tests {
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: DEFAULT_THEME_NAME.to_string(),
+            theme: None,
             style_overrides: osp_ui::StyleOverrides::default(),
         };
         let hinted = resolve_effective_render_settings(&base, Some(OutputFormat::Table));
@@ -2017,6 +2030,7 @@ JSON
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: DEFAULT_THEME_NAME.to_string(),
+            theme: None,
             style_overrides: osp_ui::StyleOverrides::default(),
         };
 

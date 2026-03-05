@@ -52,6 +52,7 @@ fn alias_expands_internal_and_user_pipes() {
         mreg_stack_min_col_width: 10,
         mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
+        theme: None,
         style_overrides: StyleOverrides::default(),
     };
     let output = render_rows(&transformed, &settings);

@@ -13,7 +13,7 @@ pub(crate) fn render_help_with_chrome(
     help_text: &str,
     resolved: &ResolvedRenderSettings,
 ) -> String {
-    let theme_name = resolved.theme_name.as_str();
+    let theme = &resolved.theme;
     let mut out = String::new();
     let mut rendered_sections = false;
 
@@ -41,7 +41,7 @@ pub(crate) fn render_help_with_chrome(
                 resolved.unicode,
                 resolved.width,
                 resolved.color,
-                theme_name,
+                theme,
                 StyleToken::MessageInfo,
                 &resolved.style_overrides,
             ));
@@ -80,7 +80,7 @@ pub(crate) fn render_help_with_chrome(
         resolved.unicode,
         resolved.width,
         resolved.color,
-        theme_name,
+        theme,
         StyleToken::MessageInfo,
         &resolved.style_overrides,
     ));

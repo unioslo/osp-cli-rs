@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemePalette {
@@ -240,26 +239,6 @@ pub fn builtin_themes() -> Vec<ThemeDefinition> {
     builtin_theme_defs().to_vec()
 }
 
-fn custom_themes() -> &'static RwLock<Vec<ThemeDefinition>> {
-    static THEMES: OnceLock<RwLock<Vec<ThemeDefinition>>> = OnceLock::new();
-    THEMES.get_or_init(|| RwLock::new(Vec::new()))
-}
-
-pub fn set_custom_themes(themes: Vec<ThemeDefinition>) {
-    let mut guard = match custom_themes().write() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    *guard = themes;
-}
-
-fn custom_themes_snapshot() -> Vec<ThemeDefinition> {
-    match custom_themes().read() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
-    }
-}
-
 pub fn normalize_theme_name(value: &str) -> String {
     let mut out = String::new();
     let mut pending_dash = false;
@@ -303,14 +282,7 @@ pub fn display_name_from_id(value: &str) -> String {
 }
 
 pub fn all_themes() -> Vec<ThemeDefinition> {
-    let mut catalog: BTreeMap<String, ThemeDefinition> = BTreeMap::new();
-    for theme in builtin_theme_defs() {
-        catalog.insert(theme.id.clone(), theme.clone());
-    }
-    for theme in custom_themes_snapshot() {
-        catalog.insert(theme.id.clone(), theme);
-    }
-    catalog.into_values().collect()
+    builtin_theme_defs().to_vec()
 }
 
 pub fn available_theme_names() -> Vec<String> {
@@ -328,26 +300,10 @@ pub fn find_builtin_theme(name: &str) -> Option<ThemeDefinition> {
         .cloned()
 }
 
-pub fn is_custom_theme(name: &str) -> bool {
-    let normalized = normalize_theme_name(name);
-    if normalized.is_empty() {
-        return false;
-    }
-    custom_themes_snapshot()
-        .iter()
-        .any(|theme| theme.id == normalized)
-}
-
 pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
     let normalized = normalize_theme_name(name);
     if normalized.is_empty() {
         return None;
-    }
-    if let Some(theme) = custom_themes_snapshot()
-        .into_iter()
-        .find(|theme| theme.id == normalized)
-    {
-        return Some(theme);
     }
     builtin_theme_defs()
         .iter()
