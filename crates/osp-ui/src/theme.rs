@@ -22,6 +22,7 @@ pub struct ThemePalette {
 pub struct ThemeDefinition {
     pub id: String,
     pub name: String,
+    pub base: Option<String>,
     pub palette: ThemePalette,
     pub overrides: ThemeOverrides,
 }
@@ -105,12 +106,14 @@ fn builtin_themes() -> &'static [ThemeDefinition] {
             ThemeDefinition {
                 id: "plain".to_string(),
                 name: "Plain".to_string(),
+                base: None,
                 palette: palette("", "", "", "", "", "", "", "", ""),
                 overrides: ThemeOverrides::default(),
             },
             ThemeDefinition {
                 id: "nord".to_string(),
                 name: "Nord".to_string(),
+                base: None,
                 palette: palette(
                     "#d8dee9",
                     "#6d7688",
@@ -127,6 +130,7 @@ fn builtin_themes() -> &'static [ThemeDefinition] {
             ThemeDefinition {
                 id: "dracula".to_string(),
                 name: "Dracula".to_string(),
+                base: None,
                 palette: palette(
                     "#f8f8f2",
                     "#6879ad",
@@ -146,6 +150,7 @@ fn builtin_themes() -> &'static [ThemeDefinition] {
             ThemeDefinition {
                 id: "gruvbox".to_string(),
                 name: "Gruvbox".to_string(),
+                base: None,
                 palette: palette(
                     "#ebdbb2",
                     "#a89984",
@@ -162,6 +167,7 @@ fn builtin_themes() -> &'static [ThemeDefinition] {
             ThemeDefinition {
                 id: "tokyonight".to_string(),
                 name: "Tokyo Night".to_string(),
+                base: None,
                 palette: palette(
                     "#c0caf5",
                     "#9aa5ce",
@@ -178,6 +184,7 @@ fn builtin_themes() -> &'static [ThemeDefinition] {
             ThemeDefinition {
                 id: "molokai".to_string(),
                 name: "Molokai".to_string(),
+                base: None,
                 palette: palette(
                     "#F8F8F2",
                     "#75715E",
@@ -194,6 +201,7 @@ fn builtin_themes() -> &'static [ThemeDefinition] {
             ThemeDefinition {
                 id: "catppuccin".to_string(),
                 name: "Catppuccin".to_string(),
+                base: None,
                 palette: palette(
                     "#cdd6f4",
                     "#89b4fa",
@@ -210,6 +218,7 @@ fn builtin_themes() -> &'static [ThemeDefinition] {
             ThemeDefinition {
                 id: "rose-pine-moon".to_string(),
                 name: "Rose Pine Moon".to_string(),
+                base: None,
                 palette: palette(
                     "#e0def4",
                     "#908caa",
@@ -313,6 +322,16 @@ pub fn find_builtin_theme(name: &str) -> Option<ThemeDefinition> {
         .iter()
         .find(|theme| theme.id == normalized)
         .cloned()
+}
+
+pub fn is_custom_theme(name: &str) -> bool {
+    let normalized = normalize_theme_name(name);
+    if normalized.is_empty() {
+        return false;
+    }
+    custom_themes_snapshot()
+        .iter()
+        .any(|theme| theme.id == normalized)
 }
 
 pub fn find_theme(name: &str) -> Option<ThemeDefinition> {

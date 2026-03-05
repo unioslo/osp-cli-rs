@@ -6,7 +6,9 @@ use crate::rows::output::rows_to_output_result;
 use crate::state::AppState;
 use miette::Result;
 use osp_core::row::Row;
-use osp_ui::theme::{DEFAULT_THEME_NAME, all_themes, find_theme, normalize_theme_name};
+use osp_ui::theme::{
+    DEFAULT_THEME_NAME, all_themes, find_theme, is_custom_theme, normalize_theme_name,
+};
 
 pub(crate) fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result<CliCommandResult> {
     match args.command {
@@ -70,6 +72,7 @@ fn theme_list_rows(active_theme: &str) -> Vec<Row> {
             crate::row! {
                 "id" => theme.id.to_string(),
                 "name" => theme.name.to_string(),
+                "source" => if is_custom_theme(&theme.id) { "custom" } else { "builtin" },
                 "active" => theme.id == active.as_str(),
                 "default" => theme.id == DEFAULT_THEME_NAME,
             }
@@ -96,6 +99,12 @@ fn theme_show_rows(name: &str) -> Result<Vec<Row>> {
     Ok(vec![crate::row! {
         "id" => theme.id.to_string(),
         "name" => theme.name.to_string(),
+        "base" => theme
+            .base
+            .as_deref()
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null),
+        "source" => if is_custom_theme(&theme.id) { "custom" } else { "builtin" },
         "text" => palette.text.to_string(),
         "muted" => palette.muted.to_string(),
         "accent" => palette.accent.to_string(),

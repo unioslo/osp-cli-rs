@@ -8,6 +8,7 @@ use crate::cli::{ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, Confi
 use crate::rows::RowBuilder;
 use crate::rows::output::rows_to_output_result;
 use crate::state::{AppState, AuthState, TerminalKind};
+use crate::theme_loader;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
     ConfigSchema, DEFAULT_SESSION_CACHE_MAX_RESULTS, DEFAULT_UI_WIDTH, ResolvedValue,
@@ -358,6 +359,9 @@ fn refresh_runtime_config(state: &mut AppState) -> Result<()> {
     if changed {
         state.clients.sync_config_revision(state.config.revision());
         state.auth = AuthState::from_resolved(state.config.resolved());
+        let theme_load = theme_loader::load_custom_themes(state.config.resolved());
+        osp_ui::theme::set_custom_themes(theme_load.themes);
+        theme_loader::log_theme_issues(&theme_load.issues);
         state.ui.render_settings.theme_name = state
             .config
             .resolved()

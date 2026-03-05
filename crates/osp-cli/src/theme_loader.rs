@@ -279,6 +279,7 @@ fn parse_theme_file(path: &Path) -> Result<ThemeDefinition, String> {
     Ok(ThemeDefinition {
         id,
         name,
+        base: base_id,
         palette,
         overrides,
     })
