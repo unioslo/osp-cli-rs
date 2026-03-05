@@ -3,6 +3,71 @@
 This document summarizes how the current osprov-cli DSL works and proposes a
 cleaner, more expressive Rust design that preserves user-facing behavior.
 
+## Current Rust DSL Structure (Implemented Foundation)
+
+The `osp-dsl` crate now has an explicit module layout to avoid the old
+single-file implementation:
+
+```text
+crates/osp-dsl/src/
+  lib.rs
+  model.rs
+  parse/
+    mod.rs
+    lexer.rs
+    pipeline.rs
+    key_spec.rs
+    path.rs
+    quick.rs
+  eval/
+    mod.rs
+    context.rs
+    engine.rs
+    errors.rs
+    flatten.rs
+    matchers.rs
+  stages/
+    mod.rs
+    common.rs
+    filter.rs
+    project.rs
+    values.rs
+    quick.rs
+    copy.rs
+```
+
+### Lexer Contract (Now in place)
+
+- Pipeline splitter: `split_pipeline(...)` in `parse/lexer.rs`
+  - splits on `|` while respecting quotes and escapes
+  - returns stage segments with byte spans
+- Stage tokenizer: `tokenize_stage(...)` in `parse/lexer.rs`
+  - shell-like tokenization
+  - operator token splitting (`<= >= == != < > =`)
+  - preserves prefix forms (`==foo`, `!?bar`, `!foo`, `?foo`) as single tokens
+  - returns tokens with byte spans
+
+### Runtime Behavior (Current)
+
+- `parse_pipeline(...)` still returns `{ command, stages }` for compatibility
+  with `osp-cli`/`osp-services`.
+- `apply_pipeline(...)` supports existing working verbs: `P`, `F`, `G`, `A`,
+  `S`, `C`, `L`, `Z`, quick search (`term`, `K term`, `V term`), plus
+  explicit `VAL`/`VALUE` extraction.
+- `Y` copy-hint stage is wired in the engine metadata path.
+- Unknown verbs currently fall back to quick-search stage behavior, so the
+  parser/execution boundary is ready for no-verb quick mode expansion.
+
+### Parity Verification (Current)
+
+- Ported regression tests from Python DSL coverage for current Rust-implemented
+  behavior (`F` + quick + parser edge cases), placed under:
+  - `crates/osp-dsl/tests/ported_python_filter_and_quick.rs`
+- Added a Python-reference parity test for parser/tokenizer behavior:
+  - `crates/osp-dsl/tests/python_parser_parity.rs`
+  - Compares Rust parser/tokenizer output against `osprov-cli` reference
+    behavior when Python reference env is available.
+
 ## Current DSL Summary (osprov-cli)
 
 ### Pipeline model
