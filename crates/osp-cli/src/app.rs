@@ -42,6 +42,7 @@ use crate::state::{AppState, RuntimeContext, TerminalKind};
 use crate::repl;
 use crate::repl::completion;
 use crate::repl::help;
+use crate::theme_loader;
 
 enum RunAction {
     Repl,
@@ -177,6 +178,9 @@ fn run(mut cli: Cli) -> Result<i32> {
         Some(runtime_context.terminal_kind().as_config_terminal()),
         session_layer.clone(),
     )?;
+    let theme_load = theme_loader::load_custom_themes(&config);
+    let theme_issues = theme_load.issues;
+    osp_ui::theme::set_custom_themes(theme_load.themes);
     let mut render_settings = cli.render_settings();
     cli.seed_render_settings_from_config(&mut render_settings, &config);
     render_settings.width = Some(resolve_default_render_width(&config));
@@ -184,6 +188,7 @@ fn run(mut cli: Cli) -> Result<i32> {
     let message_verbosity = effective_message_verbosity(&cli, &config);
     let debug_verbosity = effective_debug_verbosity(&cli, &config);
     init_developer_logging(build_logging_config(&config, debug_verbosity));
+    theme_loader::log_theme_issues(&theme_issues);
     tracing::debug!(
         debug_count = debug_verbosity,
         "developer logging initialized"

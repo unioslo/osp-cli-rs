@@ -63,4 +63,26 @@ leave behind.
 ## Current Gaps
 
 - Persistent write path for `theme.name` waits on `config set` completion.
-- User-defined theme files (theme directory loader) are not implemented yet.
+
+## Custom Themes
+
+Custom themes live in `theme.path` directories (default:
+`~/.config/osp/themes`). Each `*.toml` file defines a theme.
+
+Example:
+
+```toml
+base = "dracula"
+
+[palette]
+accent = "#123456"
+```
+
+Rules:
+
+- `id` and `name` are optional.
+  - If missing, `id` defaults to the filename stem.
+  - `name` defaults to a title-cased display name of `id`.
+- `base` is optional and can only reference built-in themes.
+  - If `base` is omitted or set to `"none"`, missing palette keys have no color.
+  - If `base` is set, missing palette keys inherit from that base theme.

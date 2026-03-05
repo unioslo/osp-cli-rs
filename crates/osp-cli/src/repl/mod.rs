@@ -7,6 +7,7 @@ use miette::{Result, miette};
 use osp_dsl::apply_pipeline;
 use osp_repl::{ReplAppearance, ReplPrompt, SharedHistory, run_repl};
 use osp_ui::messages::{adjust_verbosity, render_section_divider_with_overrides};
+use osp_ui::render_inline;
 use osp_ui::render_output;
 use osp_ui::style::{StyleToken, apply_style, apply_style_spec};
 use osp_ui::theme::{available_theme_names, resolve_theme};
@@ -66,11 +67,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     for (alias_name, _) in completion::collect_alias_entries(state.config.resolved()) {
         words.push(alias_name);
     }
-    words.extend(
-        available_theme_names()
-            .into_iter()
-            .map(std::string::ToString::to_string),
-    );
+    words.extend(available_theme_names());
     words.sort();
     words.dedup();
 
@@ -116,28 +113,6 @@ fn render_repl_intro(state: &AppState) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let theme_display = theme_display_name(&theme);
 
-    let user_text = style_prompt_fragment(
-        config.get_string("color.prompt.text"),
-        user,
-        StyleToken::PromptText,
-        resolved.color,
-        theme_name,
-    );
-    let profile_text = style_prompt_fragment(
-        config.get_string("color.prompt.command"),
-        profile,
-        StyleToken::PromptCommand,
-        resolved.color,
-        theme_name,
-    );
-    let theme_text = style_prompt_fragment(
-        config.get_string("color.prompt.command"),
-        &theme_display,
-        StyleToken::PromptCommand,
-        resolved.color,
-        theme_name,
-    );
-
     let mut out = String::new();
     out.push_str(&render_section_divider_with_overrides(
         "OSP",
@@ -145,44 +120,114 @@ fn render_repl_intro(state: &AppState) -> String {
         resolved.width,
         resolved.color,
         theme_name,
-        StyleToken::MessageInfo,
+        StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
     out.push('\n');
-    out.push_str(&format!("  Welcome {user_text}!\n"));
-    out.push_str(&format!("  Logged in as: {user}\n"));
-    out.push_str(&format!("  Theme: {theme_text}\n"));
-    out.push_str(&format!("  Version: {version}\n\n"));
+    out.push_str(&render_inline(
+        &format!("  Welcome `{user}`!"),
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push('\n');
+    out.push_str(&render_inline(
+        &format!("  Logged in as: `{user}`"),
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push('\n');
+    out.push_str(&render_inline(
+        &format!("  Theme: `{theme_display}`"),
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push('\n');
+    out.push_str(&render_inline(
+        &format!("  Version: `{version}`"),
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push_str("\n\n");
     out.push_str(&render_section_divider_with_overrides(
         "Keybindings",
         resolved.unicode,
         resolved.width,
         resolved.color,
         theme_name,
-        StyleToken::MessageInfo,
+        StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
     out.push('\n');
-    out.push_str("  Ctrl-D    exit\n");
-    out.push_str("  Ctrl-L    clear screen\n");
-    out.push_str("  Ctrl-R    reverse search history\n\n");
+    out.push_str(&render_inline(
+        "  `Ctrl-D`    **exit**",
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push('\n');
+    out.push_str(&render_inline(
+        "  `Ctrl-L`    **clear screen**",
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push('\n');
+    out.push_str(&render_inline(
+        "  `Ctrl-R`    **reverse search history**",
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push_str("\n\n");
     out.push_str(&render_section_divider_with_overrides(
         "Pipes",
         resolved.unicode,
         resolved.width,
         resolved.color,
         theme_name,
-        StyleToken::MessageInfo,
+        StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
     out.push('\n');
-    out.push_str("  F key>3 | P col1 col2 | S sort_key | G group_by_k1 k2\n");
-    out.push_str("  | A metric() | L limit offset | C count\n");
-    out.push_str(
-        "  K key | V value | contains | !not | ?exist | !?not_exist (= exact, == case-sens.)\n",
-    );
-    out.push_str("  Help: | H or | H <verb> e.g. | H F\n\n");
-    out.push_str(&format!("Current profile: {profile_text}\n\n"));
+    out.push_str(&render_inline(
+        "    `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2",
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push('\n');
+    out.push_str(&render_inline(
+        "    *|* `A` metric() *|* `L` limit offset *|* `C` count",
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push('\n');
+    out.push_str(&render_inline(
+        "    `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*",
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push('\n');
+    out.push_str(&render_inline(
+        "    *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`",
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push_str("\n\n");
+    out.push_str(&render_inline(
+        &format!("Current profile: `{profile}`"),
+        resolved.color,
+        theme_name,
+        &resolved.style_overrides,
+    ));
+    out.push_str("\n\n");
     out
 }
 
@@ -197,7 +242,7 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
         resolved.width,
         resolved.color,
         theme_name,
-        StyleToken::MessageInfo,
+        StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
     out.push('\n');
@@ -209,7 +254,7 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
         resolved.width,
         resolved.color,
         theme_name,
-        StyleToken::MessageInfo,
+        StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
     out.push('\n');

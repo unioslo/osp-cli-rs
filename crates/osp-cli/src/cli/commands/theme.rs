@@ -6,7 +6,7 @@ use crate::rows::output::rows_to_output_result;
 use crate::state::AppState;
 use miette::Result;
 use osp_core::row::Row;
-use osp_ui::theme::{DEFAULT_THEME_NAME, available_theme_names, find_theme, normalize_theme_name};
+use osp_ui::theme::{DEFAULT_THEME_NAME, all_themes, find_theme, normalize_theme_name};
 
 pub(crate) fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result<CliCommandResult> {
     match args.command {
@@ -64,13 +64,14 @@ pub(crate) fn run_theme_repl_command(
 
 fn theme_list_rows(active_theme: &str) -> Vec<Row> {
     let active = normalize_theme_name(active_theme);
-    available_theme_names()
+    all_themes()
         .into_iter()
-        .map(|name| {
+        .map(|theme| {
             crate::row! {
-                "name" => name.to_string(),
-                "active" => name == active.as_str(),
-                "default" => name == DEFAULT_THEME_NAME,
+                "id" => theme.id.to_string(),
+                "name" => theme.name.to_string(),
+                "active" => theme.id == active.as_str(),
+                "default" => theme.id == DEFAULT_THEME_NAME,
             }
         })
         .collect()
@@ -80,9 +81,20 @@ fn theme_show_rows(name: &str) -> Result<Vec<Row>> {
     let selected = resolve_known_theme_name(name)?;
     let theme =
         find_theme(&selected).ok_or_else(|| miette::miette!("theme missing: {selected}"))?;
-    let palette = theme.palette;
+    let palette = &theme.palette;
+    let bg = palette
+        .bg
+        .clone()
+        .map(serde_json::Value::from)
+        .unwrap_or(serde_json::Value::Null);
+    let bg_alt = palette
+        .bg_alt
+        .clone()
+        .map(serde_json::Value::from)
+        .unwrap_or(serde_json::Value::Null);
 
     Ok(vec![crate::row! {
+        "id" => theme.id.to_string(),
         "name" => theme.name.to_string(),
         "text" => palette.text.to_string(),
         "muted" => palette.muted.to_string(),
@@ -93,5 +105,9 @@ fn theme_show_rows(name: &str) -> Result<Vec<Row>> {
         "error" => palette.error.to_string(),
         "border" => palette.border.to_string(),
         "title" => palette.title.to_string(),
+        "selection" => palette.selection.to_string(),
+        "link" => palette.link.to_string(),
+        "bg" => bg,
+        "bg_alt" => bg_alt,
     }])
 }

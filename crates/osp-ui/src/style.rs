@@ -2,6 +2,8 @@ use crate::theme;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyleOverrides {
+    pub key: Option<String>,
+    pub muted: Option<String>,
     pub table_header: Option<String>,
     pub mreg_key: Option<String>,
     pub value: Option<String>,
@@ -20,6 +22,8 @@ pub struct StyleOverrides {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleToken {
     None,
+    Key,
+    Muted,
     PromptText,
     PromptCommand,
     TableHeader,
@@ -58,7 +62,7 @@ pub fn apply_style_with_overrides(
     }
 
     let spec = style_spec_for_token(token, theme_name, overrides);
-    apply_style_spec(text, spec, color)
+    apply_style_spec(text, spec.as_str(), color)
 }
 
 pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
@@ -75,14 +79,16 @@ fn style_spec_for_token<'a>(
     token: StyleToken,
     theme_name: &str,
     overrides: &'a StyleOverrides,
-) -> &'a str {
+) -> String {
     if let Some(value) = override_for_token(token, overrides) {
-        return value;
+        return value.to_string();
     }
 
     let theme = theme::resolve_theme(theme_name);
     match token {
-        StyleToken::None => "",
+        StyleToken::None => String::new(),
+        StyleToken::Key => theme.palette.accent,
+        StyleToken::Muted => theme.palette.muted,
         StyleToken::PromptText => theme.palette.text,
         StyleToken::PromptCommand => theme.palette.success,
         StyleToken::TableHeader => theme.palette.accent,
@@ -92,7 +98,7 @@ fn style_spec_for_token<'a>(
         StyleToken::PanelBorder => theme.palette.border,
         StyleToken::PanelTitle => theme.palette.title,
         StyleToken::Value => theme.palette.text,
-        StyleToken::Number => theme.value_number_spec(),
+        StyleToken::Number => theme.value_number_spec().to_string(),
         StyleToken::BoolTrue => theme.palette.success,
         StyleToken::BoolFalse => theme.palette.error,
         StyleToken::Null => theme.palette.muted,
@@ -108,6 +114,8 @@ fn style_spec_for_token<'a>(
 
 fn override_for_token<'a>(token: StyleToken, overrides: &'a StyleOverrides) -> Option<&'a str> {
     match token {
+        StyleToken::Key => overrides.key.as_deref(),
+        StyleToken::Muted => overrides.muted.as_deref(),
         StyleToken::TableHeader => overrides.table_header.as_deref(),
         StyleToken::MregKey => overrides.mreg_key.as_deref(),
         StyleToken::JsonKey => overrides.json_key.as_deref(),

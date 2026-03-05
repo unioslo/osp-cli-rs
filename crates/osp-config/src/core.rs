@@ -198,6 +198,7 @@ impl Default for ConfigSchema {
         schema.insert("profile.active", SchemaEntry::string().required());
         schema.insert("context", SchemaEntry::string());
         schema.insert("theme.name", SchemaEntry::string());
+        schema.insert("theme.path", SchemaEntry::string_list());
         schema.insert("user.name", SchemaEntry::string());
         schema.insert("domain", SchemaEntry::string());
 
@@ -255,6 +256,10 @@ impl Default for ConfigSchema {
         schema.insert("color.prompt.completion.text", SchemaEntry::string());
         schema.insert("color.prompt.completion.background", SchemaEntry::string());
         schema.insert("color.prompt.completion.highlight", SchemaEntry::string());
+        schema.insert("color.text", SchemaEntry::string());
+        schema.insert("color.text.muted", SchemaEntry::string());
+        schema.insert("color.key", SchemaEntry::string());
+        schema.insert("color.border", SchemaEntry::string());
         schema.insert("color.table.header", SchemaEntry::string());
         schema.insert("color.mreg.key", SchemaEntry::string());
         schema.insert("color.value", SchemaEntry::string());
@@ -454,6 +459,12 @@ impl From<i64> for ConfigValue {
 impl From<f64> for ConfigValue {
     fn from(value: f64) -> Self {
         ConfigValue::Float(value)
+    }
+}
+
+impl From<Vec<String>> for ConfigValue {
+    fn from(values: Vec<String>) -> Self {
+        ConfigValue::List(values.into_iter().map(ConfigValue::String).collect())
     }
 }
 
@@ -811,6 +822,22 @@ impl ResolvedConfig {
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         match self.get(key) {
             Some(ConfigValue::Bool(value)) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn get_string_list(&self, key: &str) -> Option<Vec<String>> {
+        match self.get(key) {
+            Some(ConfigValue::List(values)) => Some(
+                values
+                    .iter()
+                    .filter_map(|value| match value {
+                        ConfigValue::String(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            Some(ConfigValue::String(value)) => Some(vec![value.clone()]),
             _ => None,
         }
     }

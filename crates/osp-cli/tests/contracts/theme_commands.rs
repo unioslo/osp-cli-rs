@@ -9,8 +9,10 @@ fn theme_list_contract() {
         .args(["--json", "theme", "list"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("\"name\": \"dracula\""))
-        .stdout(predicate::str::contains("\"name\": \"rose-pine-moon\""));
+        .stdout(predicate::str::contains("\"id\": \"dracula\""))
+        .stdout(predicate::str::contains("\"name\": \"Dracula\""))
+        .stdout(predicate::str::contains("\"id\": \"rose-pine-moon\""))
+        .stdout(predicate::str::contains("\"name\": \"Rose Pine Moon\""));
 }
 
 #[cfg(unix)]
@@ -21,7 +23,8 @@ fn theme_show_contract() {
         .args(["--json", "theme", "show", "dracula"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("\"name\": \"dracula\""))
+        .stdout(predicate::str::contains("\"id\": \"dracula\""))
+        .stdout(predicate::str::contains("\"name\": \"Dracula\""))
         .stdout(predicate::str::contains("\"accent\": \"#bd93f9\""));
 }
 
@@ -44,7 +47,7 @@ theme.name = "nord"
         .args(["--json", "--theme", "dracula", "theme", "show"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("\"name\": \"dracula\""));
+        .stdout(predicate::str::contains("\"id\": \"dracula\""));
 
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -68,7 +71,7 @@ theme.name = "nord"
         .args(["--json", "theme", "show"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("\"name\": \"nord\""));
+        .stdout(predicate::str::contains("\"id\": \"nord\""));
 
     let _ = std::fs::remove_dir_all(&home);
 }

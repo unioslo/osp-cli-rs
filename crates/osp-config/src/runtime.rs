@@ -86,6 +86,7 @@ impl RuntimeConfigPaths {
 pub struct RuntimeDefaults {
     pub profile_default: String,
     pub theme_name: String,
+    pub theme_path: Vec<String>,
     pub user_name: String,
     pub domain: String,
     pub repl_prompt: String,
@@ -113,6 +114,10 @@ pub struct RuntimeDefaults {
     pub ui_column_weight: i64,
     pub ui_mreg_stack_min_col_width: i64,
     pub ui_mreg_stack_overflow_ratio: i64,
+    pub color_text: String,
+    pub color_text_muted: String,
+    pub color_key: String,
+    pub color_border: String,
     pub color_prompt_text: String,
     pub color_prompt_command: String,
     pub color_table_header: String,
@@ -135,6 +140,7 @@ impl RuntimeDefaults {
         Self {
             profile_default: DEFAULT_PROFILE_NAME.to_string(),
             theme_name: default_theme_name.to_string(),
+            theme_path: default_theme_paths(),
             user_name: default_user_name(),
             domain: default_domain_name(),
             repl_prompt: default_repl_prompt.to_string(),
@@ -162,6 +168,10 @@ impl RuntimeDefaults {
             ui_column_weight: DEFAULT_UI_COLUMN_WEIGHT,
             ui_mreg_stack_min_col_width: DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH,
             ui_mreg_stack_overflow_ratio: DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO,
+            color_text: String::new(),
+            color_text_muted: String::new(),
+            color_key: String::new(),
+            color_border: String::new(),
             color_prompt_text: String::new(),
             color_prompt_command: String::new(),
             color_table_header: String::new(),
@@ -184,6 +194,9 @@ impl RuntimeDefaults {
         let mut layer = ConfigLayer::default();
         layer.set("profile.default", self.profile_default.clone());
         layer.set("theme.name", self.theme_name.clone());
+        if !self.theme_path.is_empty() {
+            layer.set("theme.path", self.theme_path.clone());
+        }
         layer.set("user.name", self.user_name.clone());
         layer.set("domain", self.domain.clone());
         layer.set("repl.prompt", self.repl_prompt.clone());
@@ -222,6 +235,10 @@ impl RuntimeDefaults {
             "ui.mreg.stack_overflow_ratio",
             self.ui_mreg_stack_overflow_ratio,
         );
+        layer.set("color.text", self.color_text.clone());
+        layer.set("color.text.muted", self.color_text_muted.clone());
+        layer.set("color.key", self.color_key.clone());
+        layer.set("color.border", self.color_border.clone());
         layer.set("color.prompt.text", self.color_prompt_text.clone());
         layer.set("color.prompt.command", self.color_prompt_command.clone());
         layer.set("color.table.header", self.color_table_header.clone());
@@ -287,6 +304,16 @@ pub fn default_config_root_dir() -> Option<PathBuf> {
     root.push(".config");
     root.push("osp");
     Some(root)
+}
+
+fn default_theme_paths() -> Vec<String> {
+    default_config_root_dir()
+        .map(|mut root| {
+            root.push("themes");
+            root.to_string_lossy().to_string()
+        })
+        .into_iter()
+        .collect()
 }
 
 fn default_user_name() -> String {

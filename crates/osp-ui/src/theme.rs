@@ -1,213 +1,346 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use std::collections::BTreeMap;
+use std::sync::{OnceLock, RwLock};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemePalette {
-    pub text: &'static str,
-    pub muted: &'static str,
-    pub accent: &'static str,
-    pub info: &'static str,
-    pub warning: &'static str,
-    pub success: &'static str,
-    pub error: &'static str,
-    pub border: &'static str,
-    pub title: &'static str,
+    pub text: String,
+    pub muted: String,
+    pub accent: String,
+    pub info: String,
+    pub warning: String,
+    pub success: String,
+    pub error: String,
+    pub border: String,
+    pub title: String,
+    pub selection: String,
+    pub link: String,
+    pub bg: Option<String>,
+    pub bg_alt: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeDefinition {
-    pub name: &'static str,
+    pub id: String,
+    pub name: String,
     pub palette: ThemePalette,
     pub overrides: ThemeOverrides,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ThemeOverrides {
-    pub value_number: Option<&'static str>,
-    pub repl_completion_text: Option<&'static str>,
-    pub repl_completion_background: Option<&'static str>,
-    pub repl_completion_highlight: Option<&'static str>,
+    pub value_number: Option<String>,
+    pub repl_completion_text: Option<String>,
+    pub repl_completion_background: Option<String>,
+    pub repl_completion_highlight: Option<String>,
 }
 
 impl ThemeDefinition {
-    pub fn value_number_spec(&self) -> &'static str {
-        self.overrides.value_number.unwrap_or(self.palette.success)
+    pub fn value_number_spec(&self) -> &str {
+        self.overrides
+            .value_number
+            .as_deref()
+            .unwrap_or(&self.palette.success)
     }
 
-    pub fn repl_completion_text_spec(&self) -> &'static str {
-        self.overrides.repl_completion_text.unwrap_or("#000000")
+    pub fn repl_completion_text_spec(&self) -> &str {
+        self.overrides
+            .repl_completion_text
+            .as_deref()
+            .unwrap_or("#000000")
     }
 
-    pub fn repl_completion_background_spec(&self) -> &'static str {
+    pub fn repl_completion_background_spec(&self) -> &str {
         self.overrides
             .repl_completion_background
-            .unwrap_or(self.palette.accent)
+            .as_deref()
+            .unwrap_or(&self.palette.accent)
     }
 
-    pub fn repl_completion_highlight_spec(&self) -> &'static str {
+    pub fn repl_completion_highlight_spec(&self) -> &str {
         self.overrides
             .repl_completion_highlight
-            .unwrap_or(self.palette.border)
+            .as_deref()
+            .unwrap_or(&self.palette.border)
+    }
+
+    pub fn display_name(&self) -> &str {
+        self.name.as_str()
     }
 }
 
 pub const DEFAULT_THEME_NAME: &str = "rose-pine-moon";
-const NO_THEME_OVERRIDES: ThemeOverrides = ThemeOverrides {
-    value_number: None,
-    repl_completion_text: None,
-    repl_completion_background: None,
-    repl_completion_highlight: None,
-};
 
-const THEMES: &[ThemeDefinition] = &[
-    ThemeDefinition {
-        name: "plain",
-        palette: ThemePalette {
-            text: "",
-            muted: "",
-            accent: "",
-            info: "",
-            warning: "",
-            success: "",
-            error: "",
-            border: "",
-            title: "",
-        },
-        overrides: NO_THEME_OVERRIDES,
-    },
-    ThemeDefinition {
-        name: "nord",
-        palette: ThemePalette {
-            text: "#d8dee9",
-            muted: "#6d7688",
-            accent: "#88c0d0",
-            info: "#81a1c1",
-            warning: "#ebcb8b",
-            success: "#a3be8c",
-            error: "bold #bf616a",
-            border: "#81a1c1",
-            title: "#81a1c1",
-        },
-        overrides: NO_THEME_OVERRIDES,
-    },
-    ThemeDefinition {
-        name: "dracula",
-        palette: ThemePalette {
-            text: "#f8f8f2",
-            muted: "#6879ad",
-            accent: "#bd93f9",
-            info: "#8be9fd",
-            warning: "#f1fa8c",
-            success: "#50fa7b",
-            error: "bold #ff5555",
-            border: "#ff79c6",
-            title: "#ff79c6",
-        },
-        overrides: ThemeOverrides {
-            value_number: Some("#ff79c6"),
-            ..NO_THEME_OVERRIDES
-        },
-    },
-    ThemeDefinition {
-        name: "gruvbox",
-        palette: ThemePalette {
-            text: "#ebdbb2",
-            muted: "#a89984",
-            accent: "#8ec07c",
-            info: "#83a598",
-            warning: "#fe8019",
-            success: "#b8bb26",
-            error: "bold #fb4934",
-            border: "#fabd2f",
-            title: "#fabd2f",
-        },
-        overrides: NO_THEME_OVERRIDES,
-    },
-    ThemeDefinition {
-        name: "tokyonight",
-        palette: ThemePalette {
-            text: "#c0caf5",
-            muted: "#9aa5ce",
-            accent: "#7aa2f7",
-            info: "#7dcfff",
-            warning: "#e0af68",
-            success: "#9ece6a",
-            error: "bold #f7768e",
-            border: "#e0af68",
-            title: "#e0af68",
-        },
-        overrides: NO_THEME_OVERRIDES,
-    },
-    ThemeDefinition {
-        name: "molokai",
-        palette: ThemePalette {
-            text: "#F8F8F2",
-            muted: "#75715E",
-            accent: "#FD971F",
-            info: "#66D9EF",
-            warning: "#E6DB74",
-            success: "#A6E22E",
-            error: "bold #F92672",
-            border: "#E6DB74",
-            title: "#E6DB74",
-        },
-        overrides: NO_THEME_OVERRIDES,
-    },
-    ThemeDefinition {
-        name: "catppuccin",
-        palette: ThemePalette {
-            text: "#cdd6f4",
-            muted: "#89b4fa",
-            accent: "#fab387",
-            info: "#89dceb",
-            warning: "#f9e2af",
-            success: "#a6e3a1",
-            error: "bold #f38ba8",
-            border: "#89dceb",
-            title: "#89dceb",
-        },
-        overrides: NO_THEME_OVERRIDES,
-    },
-    ThemeDefinition {
-        name: "rose-pine-moon",
-        palette: ThemePalette {
-            text: "#e0def4",
-            muted: "#908caa",
-            accent: "#c4a7e7",
-            info: "#9ccfd8",
-            warning: "#f6c177",
-            success: "#8bd5ca",
-            error: "bold #eb6f92",
-            border: "#e8dff6",
-            title: "#e8dff6",
-        },
-        overrides: NO_THEME_OVERRIDES,
-    },
-];
+fn palette(
+    text: &str,
+    muted: &str,
+    accent: &str,
+    info: &str,
+    warning: &str,
+    success: &str,
+    error: &str,
+    border: &str,
+    title: &str,
+) -> ThemePalette {
+    ThemePalette {
+        text: text.to_string(),
+        muted: muted.to_string(),
+        accent: accent.to_string(),
+        info: info.to_string(),
+        warning: warning.to_string(),
+        success: success.to_string(),
+        error: error.to_string(),
+        border: border.to_string(),
+        title: title.to_string(),
+        selection: accent.to_string(),
+        link: accent.to_string(),
+        bg: None,
+        bg_alt: None,
+    }
+}
+
+fn builtin_themes() -> &'static [ThemeDefinition] {
+    static THEMES: OnceLock<Vec<ThemeDefinition>> = OnceLock::new();
+    THEMES.get_or_init(|| {
+        vec![
+            ThemeDefinition {
+                id: "plain".to_string(),
+                name: "Plain".to_string(),
+                palette: palette("", "", "", "", "", "", "", "", ""),
+                overrides: ThemeOverrides::default(),
+            },
+            ThemeDefinition {
+                id: "nord".to_string(),
+                name: "Nord".to_string(),
+                palette: palette(
+                    "#d8dee9",
+                    "#6d7688",
+                    "#88c0d0",
+                    "#81a1c1",
+                    "#ebcb8b",
+                    "#a3be8c",
+                    "bold #bf616a",
+                    "#81a1c1",
+                    "#81a1c1",
+                ),
+                overrides: ThemeOverrides::default(),
+            },
+            ThemeDefinition {
+                id: "dracula".to_string(),
+                name: "Dracula".to_string(),
+                palette: palette(
+                    "#f8f8f2",
+                    "#6879ad",
+                    "#bd93f9",
+                    "#8be9fd",
+                    "#f1fa8c",
+                    "#50fa7b",
+                    "bold #ff5555",
+                    "#ff79c6",
+                    "#ff79c6",
+                ),
+                overrides: ThemeOverrides {
+                    value_number: Some("#ff79c6".to_string()),
+                    ..ThemeOverrides::default()
+                },
+            },
+            ThemeDefinition {
+                id: "gruvbox".to_string(),
+                name: "Gruvbox".to_string(),
+                palette: palette(
+                    "#ebdbb2",
+                    "#a89984",
+                    "#8ec07c",
+                    "#83a598",
+                    "#fe8019",
+                    "#b8bb26",
+                    "bold #fb4934",
+                    "#fabd2f",
+                    "#fabd2f",
+                ),
+                overrides: ThemeOverrides::default(),
+            },
+            ThemeDefinition {
+                id: "tokyonight".to_string(),
+                name: "Tokyo Night".to_string(),
+                palette: palette(
+                    "#c0caf5",
+                    "#9aa5ce",
+                    "#7aa2f7",
+                    "#7dcfff",
+                    "#e0af68",
+                    "#9ece6a",
+                    "bold #f7768e",
+                    "#e0af68",
+                    "#e0af68",
+                ),
+                overrides: ThemeOverrides::default(),
+            },
+            ThemeDefinition {
+                id: "molokai".to_string(),
+                name: "Molokai".to_string(),
+                palette: palette(
+                    "#F8F8F2",
+                    "#75715E",
+                    "#FD971F",
+                    "#66D9EF",
+                    "#E6DB74",
+                    "#A6E22E",
+                    "bold #F92672",
+                    "#E6DB74",
+                    "#E6DB74",
+                ),
+                overrides: ThemeOverrides::default(),
+            },
+            ThemeDefinition {
+                id: "catppuccin".to_string(),
+                name: "Catppuccin".to_string(),
+                palette: palette(
+                    "#cdd6f4",
+                    "#89b4fa",
+                    "#fab387",
+                    "#89dceb",
+                    "#f9e2af",
+                    "#a6e3a1",
+                    "bold #f38ba8",
+                    "#89dceb",
+                    "#89dceb",
+                ),
+                overrides: ThemeOverrides::default(),
+            },
+            ThemeDefinition {
+                id: "rose-pine-moon".to_string(),
+                name: "Rose Pine Moon".to_string(),
+                palette: palette(
+                    "#e0def4",
+                    "#908caa",
+                    "#c4a7e7",
+                    "#9ccfd8",
+                    "#f6c177",
+                    "#8bd5ca",
+                    "bold #eb6f92",
+                    "#e8dff6",
+                    "#e8dff6",
+                ),
+                overrides: ThemeOverrides::default(),
+            },
+        ]
+    })
+}
+
+fn custom_themes() -> &'static RwLock<Vec<ThemeDefinition>> {
+    static THEMES: OnceLock<RwLock<Vec<ThemeDefinition>>> = OnceLock::new();
+    THEMES.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+pub fn set_custom_themes(themes: Vec<ThemeDefinition>) {
+    let mut guard = match custom_themes().write() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *guard = themes;
+}
+
+fn custom_themes_snapshot() -> Vec<ThemeDefinition> {
+    match custom_themes().read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
 
 pub fn normalize_theme_name(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+    let mut out = String::new();
+    let mut pending_dash = false;
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            pending_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
 }
 
-pub fn all_themes() -> &'static [ThemeDefinition] {
-    THEMES
+pub fn display_name_from_id(value: &str) -> String {
+    let trimmed = value.trim_matches('-');
+    let mut out = String::new();
+    for segment in trimmed.split(|ch| ch == '-' || ch == '_') {
+        if segment.is_empty() {
+            continue;
+        }
+        let mut chars = segment.chars();
+        if let Some(first) = chars.next() {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push(first.to_ascii_uppercase());
+            for ch in chars {
+                out.push(ch.to_ascii_lowercase());
+            }
+        }
+    }
+    if out.is_empty() {
+        trimmed.to_string()
+    } else {
+        out
+    }
 }
 
-pub fn available_theme_names() -> Vec<&'static str> {
-    let mut names = THEMES.iter().map(|theme| theme.name).collect::<Vec<_>>();
-    names.sort_unstable();
-    names
+pub fn all_themes() -> Vec<ThemeDefinition> {
+    let mut catalog: BTreeMap<String, ThemeDefinition> = BTreeMap::new();
+    for theme in builtin_themes() {
+        catalog.insert(theme.id.clone(), theme.clone());
+    }
+    for theme in custom_themes_snapshot() {
+        catalog.insert(theme.id.clone(), theme);
+    }
+    catalog.into_values().collect()
 }
 
-pub fn find_theme(name: &str) -> Option<&'static ThemeDefinition> {
+pub fn available_theme_names() -> Vec<String> {
+    all_themes().into_iter().map(|theme| theme.id).collect()
+}
+
+pub fn find_builtin_theme(name: &str) -> Option<ThemeDefinition> {
     let normalized = normalize_theme_name(name);
-    THEMES.iter().find(|theme| theme.name == normalized)
+    if normalized.is_empty() {
+        return None;
+    }
+    builtin_themes()
+        .iter()
+        .find(|theme| theme.id == normalized)
+        .cloned()
 }
 
-pub fn resolve_theme(name: &str) -> &'static ThemeDefinition {
-    find_theme(name).unwrap_or_else(|| {
-        THEMES
-            .iter()
-            .find(|theme| theme.name == DEFAULT_THEME_NAME)
-            .expect("default theme must exist")
-    })
+pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
+    let normalized = normalize_theme_name(name);
+    if normalized.is_empty() {
+        return None;
+    }
+    if let Some(theme) = custom_themes_snapshot()
+        .into_iter()
+        .find(|theme| theme.id == normalized)
+    {
+        return Some(theme);
+    }
+    builtin_themes()
+        .iter()
+        .find(|theme| theme.id == normalized)
+        .cloned()
+}
+
+pub fn resolve_theme(name: &str) -> ThemeDefinition {
+    find_theme(name)
+        .unwrap_or_else(|| {
+            builtin_themes()
+                .iter()
+                .find(|theme| theme.id == DEFAULT_THEME_NAME)
+                .expect("default theme must exist")
+                .clone()
+        })
 }
 
 pub fn is_known_theme(name: &str) -> bool {
@@ -216,7 +349,7 @@ pub fn is_known_theme(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_theme, resolve_theme};
+    use super::{display_name_from_id, find_theme, resolve_theme};
 
     #[test]
     fn dracula_number_override_matches_python_theme_preset() {
@@ -228,10 +361,13 @@ mod tests {
     fn repl_completion_defaults_follow_python_late_defaults() {
         let theme = resolve_theme("rose-pine-moon");
         assert_eq!(theme.repl_completion_text_spec(), "#000000");
-        assert_eq!(
-            theme.repl_completion_background_spec(),
-            theme.palette.accent
-        );
+        assert_eq!(theme.repl_completion_background_spec(), theme.palette.accent);
         assert_eq!(theme.repl_completion_highlight_spec(), theme.palette.border);
+    }
+
+    #[test]
+    fn display_name_from_id_formats_title_case() {
+        assert_eq!(display_name_from_id("rose-pine-moon"), "Rose Pine Moon");
+        assert_eq!(display_name_from_id("solarized-dark"), "Solarized Dark");
     }
 }

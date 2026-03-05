@@ -209,6 +209,7 @@ Minimum contract tests:
 These keys now drive REPL chrome and message rendering:
 
 - `theme.name`
+- `theme.path`
 - `user.name`
 - `domain`
 - `repl.prompt`
