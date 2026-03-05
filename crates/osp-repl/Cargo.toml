@@ -6,3 +6,9 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 reedline.workspace = true
+osp-completion = { path = "../osp-completion" }
+nu-ansi-term.workspace = true
+fuzzy-matcher.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-width.workspace = true
