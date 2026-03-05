@@ -12,9 +12,7 @@ use osp_dsl::apply_pipeline;
 
 use osp_ui::clipboard::ClipboardService;
 use osp_ui::messages::{MessageBuffer, MessageLevel, MessageRenderFormat, adjust_verbosity};
-use osp_ui::theme::{
-    DEFAULT_THEME_NAME, available_theme_names, is_known_theme, normalize_theme_name,
-};
+use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 use osp_ui::{RenderSettings, copy_output_to_clipboard, render_output};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -178,17 +176,16 @@ fn run(mut cli: Cli) -> Result<i32> {
         Some(runtime_context.terminal_kind().as_config_terminal()),
         session_layer.clone(),
     )?;
-    let theme_load = theme_loader::load_custom_themes(&config);
-    let theme_state = theme_load.state.clone();
-    osp_ui::theme::set_custom_themes(theme_load.themes);
+    let theme_catalog = theme_loader::load_theme_catalog(&config);
+    osp_ui::theme::set_custom_themes(theme_catalog.custom_themes());
     let mut render_settings = cli.render_settings();
     cli.seed_render_settings_from_config(&mut render_settings, &config);
     render_settings.width = Some(resolve_default_render_width(&config));
-    render_settings.theme_name = resolve_theme_name(&cli, &config)?;
+    render_settings.theme_name = resolve_theme_name(&cli, &config, &theme_catalog)?;
     let message_verbosity = effective_message_verbosity(&cli, &config);
     let debug_verbosity = effective_debug_verbosity(&cli, &config);
     init_developer_logging(build_logging_config(&config, debug_verbosity));
-    theme_loader::log_theme_issues(&theme_state.issues);
+    theme_loader::log_theme_issues(&theme_catalog.issues);
     tracing::debug!(
         debug_count = debug_verbosity,
         "developer logging initialized"
@@ -201,7 +198,7 @@ fn run(mut cli: Cli) -> Result<i32> {
         message_verbosity,
         debug_verbosity,
         PluginManager::new(cli.plugin_dirs.clone()),
-        theme_state.clone(),
+        theme_catalog.clone(),
     );
     if let Some(layer) = session_layer {
         state.session.config_overrides = layer;
@@ -387,15 +384,20 @@ fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
     let overrides = parse_help_render_overrides(args);
     let profile_override = overrides.profile.clone();
     let config = resolve_runtime_config(profile_override, Some("cli"), None).ok();
+    let mut catalog: Option<theme_loader::ThemeCatalog> = None;
 
     let default_cli = Cli::try_parse_from(["osp"]).expect("default cli parse should succeed");
     let mut settings = default_cli.render_settings();
     if let Some(config) = config.as_ref() {
+        let loaded = theme_loader::load_theme_catalog(config);
+        osp_ui::theme::set_custom_themes(loaded.custom_themes());
         default_cli.seed_render_settings_from_config(&mut settings, config);
         settings.width = Some(resolve_default_render_width(config));
+        let selected = default_cli.selected_theme_name(config);
         settings.theme_name =
-            resolve_known_theme_name(default_cli.selected_theme_name(config).as_str())
+            resolve_known_theme_name(selected.as_str(), &loaded)
                 .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
+        catalog = Some(loaded);
     }
 
     if let Some(mode) = overrides.mode {
@@ -411,8 +413,12 @@ fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
         settings.unicode = UnicodeMode::Never;
     }
     if let Some(theme) = overrides.theme.as_deref() {
-        settings.theme_name =
-            resolve_known_theme_name(theme).unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
+        settings.theme_name = if let Some(catalog) = catalog.as_ref() {
+            resolve_known_theme_name(theme, catalog)
+                .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string())
+        } else {
+            normalize_theme_name(theme)
+        };
     }
 
     settings
@@ -1031,9 +1037,13 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
     Ok(0)
 }
 
-fn resolve_theme_name(cli: &Cli, config: &ResolvedConfig) -> Result<String> {
+fn resolve_theme_name(
+    cli: &Cli,
+    config: &ResolvedConfig,
+    catalog: &theme_loader::ThemeCatalog,
+) -> Result<String> {
     let selected = cli.selected_theme_name(config);
-    resolve_known_theme_name(&selected)
+    resolve_known_theme_name(&selected, catalog)
 }
 
 fn run_cli_command(state: &AppState, result: CliCommandResult) -> Result<i32> {
@@ -1060,13 +1070,16 @@ fn render_cli_output(state: &AppState, output: ReplCommandOutput) {
     }
 }
 
-pub(crate) fn resolve_known_theme_name(value: &str) -> Result<String> {
+pub(crate) fn resolve_known_theme_name(
+    value: &str,
+    catalog: &theme_loader::ThemeCatalog,
+) -> Result<String> {
     let normalized = normalize_theme_name(value);
-    if is_known_theme(&normalized) {
+    if catalog.resolve(&normalized).is_some() {
         return Ok(normalized);
     }
 
-    let known = available_theme_names().join(", ");
+    let known = catalog.ids().join(", ");
     Err(miette!("unknown theme: {value}. available themes: {known}"))
 }
 
@@ -1394,7 +1407,7 @@ mod tests {
             MessageLevel::Success,
             0,
             PluginManager::new(Vec::new()),
-            crate::theme_loader::ThemeState::default(),
+            crate::theme_loader::ThemeCatalog::default(),
         )
     }
 
@@ -2017,7 +2030,7 @@ JSON
             MessageLevel::Success,
             0,
             PluginManager::new(plugin_dirs).with_roots(Some(config_root), Some(cache_root)),
-            crate::theme_loader::ThemeState::default(),
+            crate::theme_loader::ThemeCatalog::default(),
         )
     }
 

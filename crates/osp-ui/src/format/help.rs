@@ -1,16 +1,12 @@
-use crate::document::{Block, CodeBlock, Document, LineBlock, LinePart, PanelBlock, PanelRules};
+use crate::document::{Block, CodeBlock, Document, PanelBlock, PanelRules};
+use crate::inline::line_from_inline;
 use crate::style::StyleToken;
 
 pub fn build_help_document(raw: &str, title: Option<&str>) -> Document {
     let sections = parse_sections(raw);
     if sections.is_empty() {
         return Document {
-            blocks: vec![Block::Line(LineBlock {
-                parts: vec![LinePart {
-                    text: raw.trim().to_string(),
-                    token: None,
-                }],
-            })],
+            blocks: vec![Block::Line(line_from_inline(raw.trim()))],
         };
     }
 
@@ -132,12 +128,7 @@ fn section_lines_to_document(lines: &[String]) -> Document {
             continue;
         }
 
-        blocks.push(Block::Line(LineBlock {
-            parts: vec![LinePart {
-                text: trimmed.to_string(),
-                token: None,
-            }],
-        }));
+        blocks.push(Block::Line(line_from_inline(trimmed)));
     }
 
     if in_code && !code_lines.is_empty() {

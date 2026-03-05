@@ -99,7 +99,7 @@ fn palette(
     }
 }
 
-fn builtin_themes() -> &'static [ThemeDefinition] {
+fn builtin_theme_defs() -> &'static [ThemeDefinition] {
     static THEMES: OnceLock<Vec<ThemeDefinition>> = OnceLock::new();
     THEMES.get_or_init(|| {
         vec![
@@ -236,6 +236,10 @@ fn builtin_themes() -> &'static [ThemeDefinition] {
     })
 }
 
+pub fn builtin_themes() -> Vec<ThemeDefinition> {
+    builtin_theme_defs().to_vec()
+}
+
 fn custom_themes() -> &'static RwLock<Vec<ThemeDefinition>> {
     static THEMES: OnceLock<RwLock<Vec<ThemeDefinition>>> = OnceLock::new();
     THEMES.get_or_init(|| RwLock::new(Vec::new()))
@@ -300,7 +304,7 @@ pub fn display_name_from_id(value: &str) -> String {
 
 pub fn all_themes() -> Vec<ThemeDefinition> {
     let mut catalog: BTreeMap<String, ThemeDefinition> = BTreeMap::new();
-    for theme in builtin_themes() {
+    for theme in builtin_theme_defs() {
         catalog.insert(theme.id.clone(), theme.clone());
     }
     for theme in custom_themes_snapshot() {
@@ -318,7 +322,7 @@ pub fn find_builtin_theme(name: &str) -> Option<ThemeDefinition> {
     if normalized.is_empty() {
         return None;
     }
-    builtin_themes()
+    builtin_theme_defs()
         .iter()
         .find(|theme| theme.id == normalized)
         .cloned()
@@ -345,7 +349,7 @@ pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
     {
         return Some(theme);
     }
-    builtin_themes()
+    builtin_theme_defs()
         .iter()
         .find(|theme| theme.id == normalized)
         .cloned()
@@ -354,7 +358,7 @@ pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
 pub fn resolve_theme(name: &str) -> ThemeDefinition {
     find_theme(name)
         .unwrap_or_else(|| {
-            builtin_themes()
+            builtin_theme_defs()
                 .iter()
                 .find(|theme| theme.id == DEFAULT_THEME_NAME)
                 .expect("default theme must exist")

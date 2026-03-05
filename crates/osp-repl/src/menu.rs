@@ -479,8 +479,18 @@ impl Menu for OspCompletionMenu {
                     self.reset_position();
                     self.update_values(editor, completer);
                 }
-                MenuEvent::NextElement => self.move_next(),
-                MenuEvent::PreviousElement => self.move_previous(),
+                MenuEvent::NextElement => {
+                    self.move_next();
+                    self.replace_in_buffer(editor);
+                    self.update_values(editor, completer);
+                    self.reset_position();
+                }
+                MenuEvent::PreviousElement => {
+                    self.move_previous();
+                    self.replace_in_buffer(editor);
+                    self.update_values(editor, completer);
+                    self.reset_position();
+                }
                 MenuEvent::MoveUp => self.move_up(),
                 MenuEvent::MoveDown => self.move_down(),
                 MenuEvent::MoveLeft => self.move_left(),
@@ -631,12 +641,8 @@ fn indent_lines(text: &str, indent: usize) -> String {
 }
 
 impl OspCompletionMenu {
-    fn compute_input_indent(&self, editor: &Editor, screen_width: u16) -> u16 {
-        let buffer = editor.get_buffer();
-        let cursor = editor.line_buffer().insertion_point();
-        let before = buffer.get(..cursor).unwrap_or(buffer);
-        let before_width = before.width() as u16;
-        let indent = self.cursor_col.saturating_sub(before_width);
-        indent.min(screen_width.saturating_sub(1))
+    fn compute_input_indent(&self, _editor: &Editor, screen_width: u16) -> u16 {
+        let max_indent = screen_width.saturating_sub(1);
+        if max_indent == 0 { 0 } else { 1 }
     }
 }

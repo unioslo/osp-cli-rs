@@ -455,6 +455,8 @@ impl Cli {
         }
 
         settings.style_overrides = StyleOverrides {
+            key: config_non_empty_string(config, "color.key"),
+            muted: config_non_empty_string(config, "color.text.muted"),
             table_header: config_non_empty_string(config, "color.table.header"),
             mreg_key: config_non_empty_string(config, "color.mreg.key"),
             value: config_non_empty_string(config, "color.value"),
@@ -464,7 +466,8 @@ impl Cli {
             null_value: config_non_empty_string(config, "color.value.null"),
             ipv4: config_non_empty_string(config, "color.value.ipv4"),
             ipv6: config_non_empty_string(config, "color.value.ipv6"),
-            panel_border: config_non_empty_string(config, "color.panel.border"),
+            panel_border: config_non_empty_string(config, "color.panel.border")
+                .or_else(|| config_non_empty_string(config, "color.border")),
             panel_title: config_non_empty_string(config, "color.panel.title"),
             code: config_non_empty_string(config, "color.code"),
             json_key: config_non_empty_string(config, "color.json.key"),

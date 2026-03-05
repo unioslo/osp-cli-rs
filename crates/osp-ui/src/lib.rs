@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod document;
+pub mod inline;
 pub mod format;
 mod layout;
 pub mod messages;
@@ -17,6 +18,7 @@ pub use document::{
     CodeBlock, Document, JsonBlock, LineBlock, LinePart, MregBlock, MregEntry, MregRow, MregValue,
     PanelBlock, PanelRules, TableAlign, TableBlock, TableStyle, ValueBlock,
 };
+pub use inline::{line_from_inline, parts_from_inline, render_inline};
 pub use style::StyleOverrides;
 
 #[derive(Debug, Clone)]

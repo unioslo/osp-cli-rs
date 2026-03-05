@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use osp_config::{ConfigSource, ResolvedConfig};
 use osp_ui::theme::{
-    ThemeDefinition, ThemeOverrides, ThemePalette, display_name_from_id, find_builtin_theme,
-    normalize_theme_name,
+    ThemeDefinition, ThemeOverrides, ThemePalette, builtin_themes, display_name_from_id,
+    find_builtin_theme, normalize_theme_name,
 };
 
 #[derive(Debug, Clone)]
@@ -16,15 +16,53 @@ pub(crate) struct ThemeLoadIssue {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ThemeState {
-    pub(crate) origins: BTreeMap<String, PathBuf>,
+pub(crate) struct ThemeCatalog {
+    pub(crate) entries: BTreeMap<String, ThemeEntry>,
     pub(crate) issues: Vec<ThemeLoadIssue>,
 }
 
+impl ThemeCatalog {
+    pub(crate) fn ids(&self) -> Vec<String> {
+        self.entries.keys().cloned().collect()
+    }
+
+    pub(crate) fn resolve(&self, input: &str) -> Option<&ThemeEntry> {
+        let normalized = normalize_theme_name(input);
+        if normalized.is_empty() {
+            return None;
+        }
+        self.entries.get(&normalized)
+    }
+
+    pub(crate) fn custom_themes(&self) -> Vec<ThemeDefinition> {
+        self.entries
+            .values()
+            .filter_map(|entry| match entry.source {
+                ThemeSource::Custom => Some(entry.theme.clone()),
+                ThemeSource::Builtin => None,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThemeSource {
+    Builtin,
+    Custom,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ThemeEntry {
+    pub(crate) theme: ThemeDefinition,
+    pub(crate) source: ThemeSource,
+    pub(crate) origin: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ThemeLoadResult {
-    pub(crate) themes: Vec<ThemeDefinition>,
-    pub(crate) state: ThemeState,
+struct CustomThemeLoad {
+    themes: Vec<ThemeDefinition>,
+    origins: BTreeMap<String, PathBuf>,
+    issues: Vec<ThemeLoadIssue>,
 }
 
 struct ThemePathSelection {
@@ -32,7 +70,45 @@ struct ThemePathSelection {
     explicit: bool,
 }
 
-pub(crate) fn load_custom_themes(config: &ResolvedConfig) -> ThemeLoadResult {
+pub(crate) fn load_theme_catalog(config: &ResolvedConfig) -> ThemeCatalog {
+    let custom = load_custom_themes(config);
+    let mut entries: BTreeMap<String, ThemeEntry> = BTreeMap::new();
+    for theme in builtin_themes() {
+        entries.insert(
+            theme.id.clone(),
+            ThemeEntry {
+                theme,
+                source: ThemeSource::Builtin,
+                origin: None,
+            },
+        );
+    }
+
+    let mut issues = custom.issues;
+    for theme in custom.themes {
+        let origin = custom.origins.get(&theme.id).cloned();
+        if let Some(path) = origin.clone() {
+            if entries.contains_key(&theme.id) {
+                issues.push(ThemeLoadIssue {
+                    path,
+                    message: format!("custom theme overrides builtin: {}", theme.id),
+                });
+            }
+        }
+        entries.insert(
+            theme.id.clone(),
+            ThemeEntry {
+                theme,
+                source: ThemeSource::Custom,
+                origin,
+            },
+        );
+    }
+
+    ThemeCatalog { entries, issues }
+}
+
+fn load_custom_themes(config: &ResolvedConfig) -> CustomThemeLoad {
     let mut issues = Vec::new();
     let mut catalog: BTreeMap<String, ThemeDefinition> = BTreeMap::new();
     let mut origins: BTreeMap<String, PathBuf> = BTreeMap::new();
@@ -89,12 +165,6 @@ pub(crate) fn load_custom_themes(config: &ResolvedConfig) -> ThemeLoadResult {
                             ),
                         });
                     }
-                    if find_builtin_theme(&theme.id).is_some() {
-                        issues.push(ThemeLoadIssue {
-                            path: path.clone(),
-                            message: format!("custom theme overrides builtin: {}", theme.id),
-                        });
-                    }
                     origins.insert(theme.id.clone(), path.clone());
                     catalog.insert(theme.id.clone(), theme);
                 }
@@ -108,9 +178,10 @@ pub(crate) fn load_custom_themes(config: &ResolvedConfig) -> ThemeLoadResult {
         }
     }
 
-    ThemeLoadResult {
+    CustomThemeLoad {
         themes: catalog.into_values().collect(),
-        state: ThemeState { origins, issues },
+        origins,
+        issues,
     }
 }
 

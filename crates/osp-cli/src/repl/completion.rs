@@ -70,7 +70,7 @@ pub(crate) fn build_repl_completion_tree(
         specs.push(plugins_command_spec(catalog));
     }
     if state.auth.is_builtin_visible(CMD_THEME) {
-        specs.push(theme_command_spec());
+        specs.push(theme_command_spec(state));
     }
     if state.auth.is_builtin_visible(CMD_CONFIG) {
         specs.push(config_command_spec(state));
@@ -225,8 +225,10 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
     }
 }
 
-fn theme_command_spec() -> CommandSpec {
-    let theme_names = osp_ui::theme::available_theme_names()
+fn theme_command_spec(state: &AppState) -> CommandSpec {
+    let theme_names = state
+        .themes
+        .ids()
         .into_iter()
         .map(SuggestionEntry::value)
         .collect::<Vec<_>>();
@@ -423,7 +425,7 @@ fn config_set_key_specs() -> Vec<ConfigKeySpec> {
 
             ConfigKeySpec {
                 key: key.to_string(),
-                tooltip: Some(format!("type: {}", schema_type_label(entry.value_type()))),
+                tooltip: None,
                 value_suggestions,
             }
         })
@@ -436,16 +438,6 @@ fn config_key_suggestions() -> Vec<SuggestionEntry> {
         .entries()
         .map(|(key, _)| SuggestionEntry::value(key.to_string()))
         .collect()
-}
-
-fn schema_type_label(value_type: SchemaValueType) -> &'static str {
-    match value_type {
-        SchemaValueType::String => "string",
-        SchemaValueType::Bool => "bool",
-        SchemaValueType::Integer => "integer",
-        SchemaValueType::Float => "float",
-        SchemaValueType::StringList => "list",
-    }
 }
 
 fn default_pipe_verbs() -> BTreeMap<String, String> {

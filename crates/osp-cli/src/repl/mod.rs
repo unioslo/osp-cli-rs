@@ -10,7 +10,7 @@ use osp_ui::messages::{adjust_verbosity, render_section_divider_with_overrides};
 use osp_ui::render_inline;
 use osp_ui::render_output;
 use osp_ui::style::{StyleToken, apply_style, apply_style_spec};
-use osp_ui::theme::{available_theme_names, resolve_theme};
+use osp_ui::theme::resolve_theme;
 use std::borrow::Cow;
 
 use crate::cli::commands::{
@@ -67,7 +67,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     for (alias_name, _) in completion::collect_alias_entries(state.config.resolved()) {
         words.push(alias_name);
     }
-    words.extend(available_theme_names());
+    words.extend(state.themes.ids());
     words.sort();
     words.dedup();
 

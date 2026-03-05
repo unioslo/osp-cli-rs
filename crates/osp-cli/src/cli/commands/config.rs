@@ -2,7 +2,7 @@ use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, ReplCommandOutput, config_explain_json,
     config_explain_output, config_usize, config_value_to_json, emit_messages,
     explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
-    resolve_runtime_config,
+    resolve_known_theme_name, resolve_runtime_config,
 };
 use crate::cli::{ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs};
 use crate::rows::RowBuilder;
@@ -374,16 +374,18 @@ fn refresh_runtime_config(state: &mut AppState) -> Result<()> {
     if changed {
         state.clients.sync_config_revision(state.config.revision());
         state.auth = AuthState::from_resolved(state.config.resolved());
-        let theme_load = theme_loader::load_custom_themes(state.config.resolved());
-        state.themes = theme_load.state.clone();
-        osp_ui::theme::set_custom_themes(theme_load.themes);
-        theme_loader::log_theme_issues(&state.themes.issues);
-        state.ui.render_settings.theme_name = state
+        let theme_catalog = theme_loader::load_theme_catalog(state.config.resolved());
+        state.themes = theme_catalog.clone();
+        osp_ui::theme::set_custom_themes(theme_catalog.custom_themes());
+        theme_loader::log_theme_issues(&theme_catalog.issues);
+        let selected = state
             .config
             .resolved()
             .get_string("theme.name")
-            .unwrap_or(DEFAULT_THEME_NAME)
-            .to_string();
+            .unwrap_or(DEFAULT_THEME_NAME);
+        state.ui.render_settings.theme_name =
+            resolve_known_theme_name(selected, &theme_catalog)
+                .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
         state.ui.render_settings.width = Some(config_usize(
             state.config.resolved(),
             "ui.width",

@@ -7,7 +7,7 @@ use osp_ui::RenderSettings;
 use osp_ui::messages::MessageLevel;
 
 use crate::plugin_manager::PluginManager;
-use crate::theme_loader::ThemeState;
+use crate::theme_loader::ThemeCatalog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalKind {
@@ -210,7 +210,7 @@ pub struct AppState {
     pub config: ConfigState,
     pub ui: UiState,
     pub auth: AuthState,
-    pub(crate) themes: ThemeState,
+    pub(crate) themes: ThemeCatalog,
     pub repl: ReplState,
     pub session: SessionState,
     pub clients: ClientsState,
@@ -224,7 +224,7 @@ impl AppState {
         message_verbosity: MessageLevel,
         debug_verbosity: u8,
         plugins: PluginManager,
-        themes: ThemeState,
+        themes: ThemeCatalog,
     ) -> Self {
         let config_state = ConfigState::new(config);
         let config_revision = config_state.revision();

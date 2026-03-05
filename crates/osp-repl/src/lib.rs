@@ -504,13 +504,9 @@ fn build_completion_menu(appearance: &ReplAppearance) -> OspCompletionMenu {
         .with_column_padding(2)
         .with_text_style(style_with_fg_bg(text_color, background_color))
         .with_description_text_style(style_with_fg_bg(text_color, highlight_color))
-        .with_match_text_style(style_with_fg_bg(highlight_color, background_color).underline())
-        .with_selected_text_style(style_with_fg_bg(highlight_color, text_color).bold())
-        .with_selected_match_text_style(
-            style_with_fg_bg(highlight_color, text_color)
-                .bold()
-                .underline(),
-        )
+        .with_match_text_style(style_with_fg_bg(highlight_color, background_color))
+        .with_selected_text_style(style_with_fg_bg(highlight_color, text_color))
+        .with_selected_match_text_style(style_with_fg_bg(highlight_color, text_color))
 }
 
 fn build_repl_highlighter(

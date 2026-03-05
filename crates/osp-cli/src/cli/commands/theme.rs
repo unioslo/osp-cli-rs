@@ -6,9 +6,8 @@ use crate::rows::output::rows_to_output_result;
 use crate::state::AppState;
 use miette::Result;
 use osp_core::row::Row;
-use osp_ui::theme::{
-    DEFAULT_THEME_NAME, all_themes, find_theme, is_custom_theme, normalize_theme_name,
-};
+use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
+use crate::theme_loader::ThemeSource;
 
 pub(crate) fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result<CliCommandResult> {
     match args.command {
@@ -24,7 +23,7 @@ pub(crate) fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result
             ))
         }
         ThemeCommands::Use(ThemeUseArgs { name }) => {
-            let selected = resolve_known_theme_name(&name)?;
+            let selected = resolve_known_theme_name(&name, &state.themes)?;
             state.ui.render_settings.theme_name = selected.clone();
 
             let mut messages = osp_ui::messages::MessageBuffer::default();
@@ -55,7 +54,7 @@ pub(crate) fn run_theme_repl_command(
             })
         }
         ThemeCommands::Use(ThemeUseArgs { name }) => {
-            let selected = resolve_known_theme_name(&name)?;
+            let selected = resolve_known_theme_name(&name, &state.themes)?;
             state.ui.render_settings.theme_name = selected.clone();
             Ok(ReplCommandOutput::Text(format!(
                 "active theme set to: {selected}\n"
@@ -66,38 +65,43 @@ pub(crate) fn run_theme_repl_command(
 
 fn theme_list_rows(state: &AppState, active_theme: &str) -> Vec<Row> {
     let active = normalize_theme_name(active_theme);
-    let mut themes = all_themes();
-    themes.sort_by(|left, right| left.id.cmp(&right.id));
-    themes
-        .into_iter()
-        .map(|theme| {
-            let origin = state
-                .themes
-                .origins
-                .get(&theme.id)
+    state
+        .themes
+        .entries
+        .values()
+        .map(|entry| {
+            let origin = entry
+                .origin
+                .as_ref()
                 .map(|path| serde_json::Value::from(path.to_string_lossy().to_string()))
                 .unwrap_or(serde_json::Value::Null);
             crate::row! {
-                "id" => theme.id.to_string(),
-                "name" => theme.name.to_string(),
-                "source" => if is_custom_theme(&theme.id) { "custom" } else { "builtin" },
+                "id" => entry.theme.id.to_string(),
+                "name" => entry.theme.name.to_string(),
+                "source" => match entry.source {
+                    ThemeSource::Builtin => "builtin",
+                    ThemeSource::Custom => "custom",
+                },
                 "origin" => origin,
-                "active" => theme.id == active.as_str(),
-                "default" => theme.id == DEFAULT_THEME_NAME,
+                "active" => entry.theme.id == active.as_str(),
+                "default" => entry.theme.id == DEFAULT_THEME_NAME,
             }
         })
         .collect()
 }
 
 fn theme_show_rows(state: &AppState, name: &str) -> Result<Vec<Row>> {
-    let selected = resolve_known_theme_name(name)?;
-    let theme =
-        find_theme(&selected).ok_or_else(|| miette::miette!("theme missing: {selected}"))?;
-    let palette = &theme.palette;
-    let origin = state
+    let selected = resolve_known_theme_name(name, &state.themes)?;
+    let entry = state
         .themes
-        .origins
-        .get(&theme.id)
+        .entries
+        .get(&selected)
+        .ok_or_else(|| miette::miette!("theme missing: {selected}"))?;
+    let theme = &entry.theme;
+    let palette = &theme.palette;
+    let origin = entry
+        .origin
+        .as_ref()
         .map(|path| serde_json::Value::from(path.to_string_lossy().to_string()))
         .unwrap_or(serde_json::Value::Null);
     let bg = palette
@@ -119,7 +123,10 @@ fn theme_show_rows(state: &AppState, name: &str) -> Result<Vec<Row>> {
             .as_deref()
             .map(serde_json::Value::from)
             .unwrap_or(serde_json::Value::Null),
-        "source" => if is_custom_theme(&theme.id) { "custom" } else { "builtin" },
+        "source" => match entry.source {
+            ThemeSource::Builtin => "builtin",
+            ThemeSource::Custom => "custom",
+        },
         "origin" => origin,
         "text" => palette.text.to_string(),
         "muted" => palette.muted.to_string(),
