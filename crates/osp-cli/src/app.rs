@@ -487,20 +487,29 @@ fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverrides {
                 }
             }
             "--mode" => {
-                if let Some(value) = iter.peek().copied() {
-                    out.mode = parse_render_mode_arg(value);
+                if let Some(value) = iter.peek().copied()
+                    && !value.starts_with('-')
+                    && let Some(parsed) = parse_render_mode_arg(value)
+                {
+                    out.mode = Some(parsed);
                     iter.next();
                 }
             }
             "--color" => {
-                if let Some(value) = iter.peek().copied() {
-                    out.color = parse_color_mode_arg(value);
+                if let Some(value) = iter.peek().copied()
+                    && !value.starts_with('-')
+                    && let Some(parsed) = parse_color_mode_arg(value)
+                {
+                    out.color = Some(parsed);
                     iter.next();
                 }
             }
             "--unicode" => {
-                if let Some(value) = iter.peek().copied() {
-                    out.unicode = parse_unicode_mode_arg(value);
+                if let Some(value) = iter.peek().copied()
+                    && !value.starts_with('-')
+                    && let Some(parsed) = parse_unicode_mode_arg(value)
+                {
+                    out.unicode = Some(parsed);
                     iter.next();
                 }
             }
@@ -851,6 +860,14 @@ pub(crate) fn is_sensitive_key(key: &str) -> bool {
     normalized.contains("password")
         || normalized.contains("token")
         || normalized.contains("secret")
+        || normalized.contains("apikey")
+        || normalized.contains("api_key")
+        || normalized.contains("access_key")
+        || normalized.contains("private_key")
+        || normalized.contains("ssh_key")
+        || normalized.contains("client_secret")
+        || normalized.contains("bearer")
+        || normalized.contains("jwt")
         || normalized.ends_with(".key")
 }
 
@@ -1359,7 +1376,7 @@ fn normalize_identifier(value: &str) -> String {
 mod tests {
     use super::{
         RunAction, build_dispatch_plan, parse_help_render_overrides, parse_output_format_hint,
-        resolve_effective_render_settings,
+        resolve_effective_render_settings, is_sensitive_key,
     };
     use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
@@ -1813,6 +1830,19 @@ mod tests {
     }
 
     #[test]
+    fn help_render_overrides_skips_next_flag_value_unit() {
+        let args = vec![
+            OsString::from("osp"),
+            OsString::from("--mode"),
+            OsString::from("--profile"),
+            OsString::from("tsd"),
+        ];
+        let parsed = parse_help_render_overrides(&args);
+        assert_eq!(parsed.mode, None);
+        assert_eq!(parsed.profile.as_deref(), Some("tsd"));
+    }
+
+    #[test]
     fn help_chrome_uses_unicode_dividers_when_enabled_unit() {
         let state = make_completion_state(None);
         let mut resolved = state.ui.render_settings.resolve_render_settings();
@@ -1824,6 +1854,17 @@ mod tests {
         assert!(rendered.contains("─ Usage "));
         assert!(rendered.contains("─ Commands "));
         assert!(rendered.contains("─ Options "));
+    }
+
+    #[test]
+    fn sensitive_key_detection_handles_common_variants_unit() {
+        assert!(is_sensitive_key("auth.api_key"));
+        assert!(is_sensitive_key("ssh.private_key"));
+        assert!(is_sensitive_key("oauth.access_token"));
+        assert!(is_sensitive_key("client_secret"));
+        assert!(is_sensitive_key("bearer_token"));
+        assert!(!is_sensitive_key("ui.keybinding"));
+        assert!(!is_sensitive_key("monkey.business"));
     }
 
     #[test]
