@@ -155,14 +155,18 @@ ui.format = "json"
 fn external_plugin_dispatch_contract() {
     let dir = make_temp_dir("osp-cli-plugin-exec");
     let _plugin_path = write_hello_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-exec-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("OSP_PLUGIN_PATH", &dir).args(["hello"]);
+    cmd.env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["hello"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("hello-from-plugin"));
 
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -170,9 +174,11 @@ fn external_plugin_dispatch_contract() {
 fn plugin_dispatch_propagates_runtime_hints_contract() {
     let dir = make_temp_dir("osp-cli-plugin-runtime-hints");
     let _plugin_path = write_hints_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-runtime-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd.env("TERM", "xterm-256color")
+        .env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args([
             "--profile",
@@ -198,6 +204,7 @@ fn plugin_dispatch_propagates_runtime_hints_contract() {
         .stdout(predicate::str::contains("\"terminal\": \"xterm-256color\""));
 
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -205,15 +212,19 @@ fn plugin_dispatch_propagates_runtime_hints_contract() {
 fn external_plugin_help_is_passed_through_contract() {
     let dir = make_temp_dir("osp-cli-plugin-help");
     let _plugin_path = write_hello_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-help-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("OSP_PLUGIN_PATH", &dir).args(["hello", "--help"]);
+    cmd.env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["hello", "--help"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("hello plugin help text"));
 
     let mut cmd_help_subcommand = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd_help_subcommand
+        .env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["hello", "help"]);
     cmd_help_subcommand
@@ -222,6 +233,7 @@ fn external_plugin_help_is_passed_through_contract() {
         .stdout(predicate::str::contains("hello plugin help text"));
 
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -264,7 +276,8 @@ fn bundled_plugin_requires_manifest_contract() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("bundled manifest.toml not found"))
-        .stdout(predicate::str::contains("error\tbundled"));
+        .stdout(predicate::str::contains("healthy:        false"))
+        .stdout(predicate::str::contains("source:         bundled"));
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -360,22 +373,30 @@ commands = ["ldap"]
 fn oneshot_dispatch_does_not_use_repl_session_cache_contract() {
     let dir = make_temp_dir("osp-cli-plugin-counter");
     let _plugin_path = write_counter_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-counter-home");
 
     let mut first = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    first.env("OSP_PLUGIN_PATH", &dir).args(["counter"]);
+    first
+        .env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--unicode", "never", "counter"]);
     first
         .assert()
         .success()
-        .stdout(predicate::str::contains("count: 1"));
+        .stdout(predicate::str::contains("| 1"));
 
     let mut second = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    second.env("OSP_PLUGIN_PATH", &dir).args(["counter"]);
+    second
+        .env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--unicode", "never", "counter"]);
     second
         .assert()
         .success()
-        .stdout(predicate::str::contains("count: 2"));
+        .stdout(predicate::str::contains("| 2"));
 
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
