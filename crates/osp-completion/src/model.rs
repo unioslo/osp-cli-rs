@@ -140,7 +140,41 @@ pub struct CompletionAnalysis {
     pub full_cmd: CommandLine,
     pub cursor_cmd: CommandLine,
     pub stub: String,
+    pub context: CompletionContext,
+}
+
+/// Resolved completion state for the cursor position.
+///
+/// The parser only knows about tokens. This structure captures the derived
+/// command context the suggester/debug layers actually care about:
+/// which command path matched, which node contributes visible flags, and
+/// whether the cursor is still in subcommand-selection mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompletionContext {
     pub matched_path: Vec<String>,
+    pub flag_scope_path: Vec<String>,
+    pub subcommand_context: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchKind {
+    Pipe,
+    Flag,
+    Command,
+    Subcommand,
+    Value,
+}
+
+impl MatchKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pipe => "pipe",
+            Self::Flag => "flag",
+            Self::Command => "command",
+            Self::Subcommand => "subcommand",
+            Self::Value => "value",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

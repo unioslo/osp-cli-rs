@@ -1,6 +1,6 @@
 use crate::model::{
-    CommandLine, CompletionNode, CompletionTree, Suggestion, SuggestionEntry, SuggestionOutput,
-    ValueType,
+    CommandLine, CompletionAnalysis, CompletionNode, CompletionTree, Suggestion, SuggestionEntry,
+    SuggestionOutput, ValueType,
 };
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -17,15 +17,21 @@ impl SuggestionEngine {
         Self { tree }
     }
 
-    pub fn generate(&self, cmd: &CommandLine, stub: &str) -> Vec<SuggestionOutput> {
+    pub fn generate(&self, analysis: &CompletionAnalysis) -> Vec<SuggestionOutput> {
+        let cmd = &analysis.cursor_cmd;
+        let stub = analysis.stub.as_str();
         if cmd.has_pipe {
             let mut out = self.pipe_suggestions(stub);
             sort_suggestion_outputs(&mut out);
             return out;
         }
 
-        let (context_node, matched_path, has_subcommands) = self.resolve_context_state(cmd, stub);
-        let flag_scope = self.nearest_flag_scope(&matched_path);
+        let context_node = self
+            .resolve_exact(&analysis.context.matched_path)
+            .unwrap_or(&self.tree.root);
+        let flag_scope = self
+            .resolve_exact(&analysis.context.flag_scope_path)
+            .unwrap_or(&self.tree.root);
 
         if stub.starts_with('-') {
             let mut out = self
@@ -49,7 +55,7 @@ impl SuggestionEngine {
         let mut arg_tokens: Vec<String> = cmd
             .head
             .iter()
-            .skip(matched_path.len())
+            .skip(analysis.context.matched_path.len())
             .filter(|token| token.as_str() != stub)
             .cloned()
             .collect();
@@ -60,10 +66,7 @@ impl SuggestionEngine {
                 .cloned(),
         );
 
-        let subcommand_context =
-            context_node.value_key || (has_subcommands && arg_tokens.is_empty());
-
-        if subcommand_context {
+        if analysis.context.subcommand_context {
             out.extend(
                 self.subcommand_suggestions(context_node, stub)
                     .into_iter()
@@ -73,7 +76,7 @@ impl SuggestionEngine {
             out.extend(self.arg_value_suggestions(context_node, arg_tokens.len(), stub));
         }
 
-        if stub.is_empty() && !needs_value && !subcommand_context {
+        if stub.is_empty() && !needs_value && !analysis.context.subcommand_context {
             out.extend(
                 self.flag_name_suggestions(flag_scope, stub, cmd)
                     .into_iter()
@@ -104,24 +107,6 @@ impl SuggestionEngine {
             .collect()
     }
 
-    fn resolve_context_state<'a>(
-        &'a self,
-        cmd: &CommandLine,
-        stub: &str,
-    ) -> (&'a CompletionNode, Vec<String>, bool) {
-        let (pre_node, _) = self.resolve_context(&cmd.head);
-        let has_subcommands = !pre_node.children.is_empty();
-
-        let head_for_context = if !stub.is_empty() && !stub.starts_with('-') && has_subcommands {
-            &cmd.head[..cmd.head.len().saturating_sub(1)]
-        } else {
-            cmd.head.as_slice()
-        };
-
-        let (node, matched) = self.resolve_context(head_for_context);
-        (node, matched, has_subcommands)
-    }
-
     fn resolve_context<'a>(&'a self, path: &[String]) -> (&'a CompletionNode, Vec<String>) {
         let mut node = &self.tree.root;
         let mut matched = Vec::new();
@@ -140,15 +125,9 @@ impl SuggestionEngine {
         (node, matched)
     }
 
-    fn nearest_flag_scope<'a>(&'a self, path: &[String]) -> &'a CompletionNode {
-        for i in (0..=path.len()).rev() {
-            let prefix = &path[..i];
-            let (node, matched) = self.resolve_context(prefix);
-            if matched.len() == prefix.len() && !node.flags.is_empty() {
-                return node;
-            }
-        }
-        &self.tree.root
+    fn resolve_exact<'a>(&'a self, path: &[String]) -> Option<&'a CompletionNode> {
+        let (node, matched) = self.resolve_context(path);
+        (matched.len() == path.len()).then_some(node)
     }
 
     fn flag_name_suggestions(
@@ -544,7 +523,7 @@ mod tests {
         SuggestionOutput, ValueType,
     };
 
-    use super::SuggestionEngine;
+    use crate::CompletionEngine;
 
     fn tree() -> CompletionTree {
         let mut provision = CompletionNode::default();
@@ -589,34 +568,39 @@ mod tests {
             .collect()
     }
 
+    fn generate(engine: &CompletionEngine, cmd: CommandLine, stub: &str) -> Vec<SuggestionOutput> {
+        let analysis = engine.analyze_command(cmd.clone(), cmd, stub.to_string());
+        engine.suggestions_for_analysis(&analysis)
+    }
+
     #[test]
     fn suggests_flags_in_scope() {
-        let engine = SuggestionEngine::new(tree());
+        let engine = CompletionEngine::new(tree());
         let cmd = CommandLine {
             head: vec!["orch".to_string(), "provision".to_string()],
             ..CommandLine::default()
         };
 
-        let values = values(engine.generate(&cmd, "--"));
+        let values = values(generate(&engine, cmd, "--"));
         assert!(values.contains(&"--provider".to_string()));
         assert!(values.contains(&"--os".to_string()));
     }
 
     #[test]
     fn fuzzy_matches_flag_names() {
-        let engine = SuggestionEngine::new(tree());
+        let engine = CompletionEngine::new(tree());
         let cmd = CommandLine {
             head: vec!["orch".to_string(), "provision".to_string()],
             ..CommandLine::default()
         };
 
-        let values = values(engine.generate(&cmd, "--prv"));
+        let values = values(generate(&engine, cmd, "--prv"));
         assert!(values.contains(&"--provider".to_string()));
     }
 
     #[test]
     fn suggests_flag_values() {
-        let engine = SuggestionEngine::new(tree());
+        let engine = CompletionEngine::new(tree());
         let cmd = CommandLine {
             head: vec!["orch".to_string(), "provision".to_string()],
             flags: BTreeMap::from([("--provider".to_string(), Vec::new())]),
@@ -624,7 +608,7 @@ mod tests {
             ..CommandLine::default()
         };
 
-        let values = values(engine.generate(&cmd, ""));
+        let values = values(generate(&engine, cmd, ""));
 
         assert!(values.contains(&"nrec".to_string()));
         assert!(values.contains(&"vmware".to_string()));
@@ -632,7 +616,7 @@ mod tests {
 
     #[test]
     fn filters_provider_values_by_os() {
-        let engine = SuggestionEngine::new(tree());
+        let engine = CompletionEngine::new(tree());
         let cmd = CommandLine {
             head: vec!["orch".to_string(), "provision".to_string()],
             flags: BTreeMap::from([
@@ -643,7 +627,7 @@ mod tests {
             ..CommandLine::default()
         };
 
-        let values = values(engine.generate(&cmd, ""));
+        let values = values(generate(&engine, cmd, ""));
 
         assert!(values.contains(&"nrec".to_string()));
         assert!(!values.contains(&"vmware".to_string()));
@@ -651,13 +635,13 @@ mod tests {
 
     #[test]
     fn suggests_pipe_verbs_after_pipe() {
-        let engine = SuggestionEngine::new(tree());
+        let engine = CompletionEngine::new(tree());
         let cmd = CommandLine {
             has_pipe: true,
             ..CommandLine::default()
         };
 
-        let output = engine.generate(&cmd, "F");
+        let output = generate(&engine, cmd, "F");
         assert!(
             output
                 .iter()
@@ -672,13 +656,13 @@ mod tests {
             .insert("VALUE".to_string(), "Extract values".to_string());
         tree.pipe_verbs
             .insert("VAL".to_string(), "Extract".to_string());
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
         let cmd = CommandLine {
             has_pipe: true,
             ..CommandLine::default()
         };
 
-        let output = engine.generate(&cmd, "vlu");
+        let output = generate(&engine, cmd, "vlu");
         assert!(
             output
                 .iter()
@@ -714,7 +698,7 @@ mod tests {
             root: CompletionNode::default().with_child("alias", cmd_node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
 
         let cmd = CommandLine {
             head: vec!["alias".to_string()],
@@ -722,7 +706,7 @@ mod tests {
             flag_order: vec!["--context".to_string()],
             ..CommandLine::default()
         };
-        let values = values(engine.generate(&cmd, ""));
+        let values = values(generate(&engine, cmd, ""));
         assert!(!values.contains(&"uio".to_string()));
         assert!(values.contains(&"--terminal".to_string()));
     }
@@ -754,7 +738,7 @@ mod tests {
             root: CompletionNode::default().with_child("tag", cmd_node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
 
         let cmd = CommandLine {
             head: vec!["tag".to_string()],
@@ -762,11 +746,11 @@ mod tests {
             flag_order: vec!["--tags".to_string()],
             ..CommandLine::default()
         };
-        let values_for_space = values(engine.generate(&cmd, ""));
+        let values_for_space = values(generate(&engine, cmd.clone(), ""));
         assert!(values_for_space.contains(&"red".to_string()));
         assert!(!values_for_space.contains(&"--mode".to_string()));
 
-        let values_for_dash = values(engine.generate(&cmd, "-"));
+        let values_for_dash = values(generate(&engine, cmd, "-"));
         assert!(values_for_dash.contains(&"--mode".to_string()));
     }
 
@@ -789,14 +773,14 @@ mod tests {
             root: CompletionNode::default().with_child("cmd", cmd_node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
         let cmd = CommandLine {
             head: vec!["cmd".to_string()],
             args: vec!["one".to_string()],
             ..CommandLine::default()
         };
 
-        let values = values(engine.generate(&cmd, ""));
+        let values = values(generate(&engine, cmd, ""));
         assert!(values.contains(&"two".to_string()));
         assert!(values.contains(&"three".to_string()));
         assert!(!values.contains(&"one".to_string()));
@@ -815,13 +799,13 @@ mod tests {
             root: CompletionNode::default().with_child("cmd", cmd_node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
         let cmd = CommandLine {
             head: vec!["cmd".to_string()],
             ..CommandLine::default()
         };
 
-        let output = engine.generate(&cmd, "");
+        let output = generate(&engine, cmd, "");
         assert!(
             output
                 .iter()
@@ -876,7 +860,7 @@ mod tests {
             root: CompletionNode::default().with_child("provision", node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
 
         let cmd = CommandLine {
             head: vec!["provision".to_string()],
@@ -884,7 +868,7 @@ mod tests {
             flag_order: vec!["--provider".to_string()],
             ..CommandLine::default()
         };
-        let output = engine.generate(&cmd, "--");
+        let output = generate(&engine, cmd, "--");
         let values = values(output.clone());
         assert!(values.contains(&"--comment".to_string()));
         assert!(values.contains(&"--flavor".to_string()));
@@ -942,7 +926,7 @@ mod tests {
             root: CompletionNode::default().with_child("provision", node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
         let cmd = CommandLine {
             head: vec!["provision".to_string()],
             flags: BTreeMap::from([("--nrec".to_string(), Vec::new())]),
@@ -950,7 +934,7 @@ mod tests {
             ..CommandLine::default()
         };
 
-        let values = values(engine.generate(&cmd, "--"));
+        let values = values(generate(&engine, cmd, "--"));
         assert!(values.contains(&"--flavor".to_string()));
         assert!(!values.contains(&"--provider".to_string()));
     }
@@ -970,7 +954,7 @@ mod tests {
             root: CompletionNode::default().with_child("cmd", node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
         let cmd = CommandLine {
             head: vec!["cmd".to_string()],
             flags: BTreeMap::from([("--file".to_string(), Vec::new())]),
@@ -978,7 +962,7 @@ mod tests {
             ..CommandLine::default()
         };
 
-        let output = engine.generate(&cmd, "");
+        let output = generate(&engine, cmd, "");
         assert!(
             output
                 .iter()
@@ -1008,7 +992,7 @@ mod tests {
             root: CompletionNode::default().with_child("orch", node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
         let cmd = CommandLine {
             head: vec!["orch".to_string()],
             flags: BTreeMap::from([("--flavor".to_string(), Vec::new())]),
@@ -1016,7 +1000,7 @@ mod tests {
             ..CommandLine::default()
         };
 
-        let output = engine.generate(&cmd, "");
+        let output = generate(&engine, cmd, "");
         let items = output
             .into_iter()
             .filter_map(|entry| match entry {
@@ -1060,13 +1044,13 @@ mod tests {
             root: CompletionNode::default().with_child("cmd", cmd_node),
             ..CompletionTree::default()
         };
-        let engine = SuggestionEngine::new(tree);
+        let engine = CompletionEngine::new(tree);
         let cmd = CommandLine {
             head: vec!["cmd".to_string()],
             ..CommandLine::default()
         };
 
-        let values = values(engine.generate(&cmd, ""));
+        let values = values(generate(&engine, cmd, ""));
         assert_eq!(values, vec!["v2".to_string(), "v10".to_string()]);
     }
 }

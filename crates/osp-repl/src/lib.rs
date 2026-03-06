@@ -14,8 +14,7 @@ pub use history::{
 use menu::{MenuDebug, MenuStyleDebug, OspCompletionMenu, debug_snapshot, display_text};
 use nu_ansi_term::{Color, Style};
 use osp_completion::{
-    ArgNode, CommandLine, CommandLineParser, CompletionEngine, CompletionNode, CompletionTree,
-    SuggestionEntry, SuggestionOutput,
+    ArgNode, CompletionEngine, CompletionNode, CompletionTree, SuggestionEntry, SuggestionOutput,
 };
 use reedline::{
     Completer, EditCommand, EditMode, Editor, Emacs, Highlighter, KeyCode, KeyModifiers, Menu,
@@ -332,6 +331,8 @@ fn snapshot_completion_debug(
     let line = editor.get_buffer().to_string();
     let cursor = editor.line_buffer().insertion_point();
     let values = menu.get_values();
+    let engine = CompletionEngine::new(tree.clone());
+    let analysis = engine.analyze(&line, cursor);
 
     let (stub, replace_range) = if let Some(first) = values.first() {
         let start = first.span.start;
@@ -339,17 +340,9 @@ fn snapshot_completion_debug(
         let stub = line.get(start..end).unwrap_or("").to_string();
         (stub, [start, end])
     } else {
-        let engine = CompletionEngine::new(tree.clone());
-        let (stub, _) = engine.suggestions_with_stub(&line, cursor);
-        let start = cursor.saturating_sub(stub.len());
-        (stub, [start, cursor])
+        let start = cursor.saturating_sub(analysis.stub.len());
+        (analysis.stub.clone(), [start, cursor])
     };
-
-    let parser = CommandLineParser;
-    let tokens = parser.tokenize(&line);
-    let cmd = parser.parse(&tokens);
-    let (context_node, matched_path) = debug_resolve_context_state(tree, &cmd, &stub);
-    let flag_scope = debug_nearest_flag_scope(tree, &matched_path);
 
     let matches = values
         .iter()
@@ -357,7 +350,10 @@ fn snapshot_completion_debug(
             id: item.value.clone(),
             label: display_text(item).to_string(),
             description: item.description.clone(),
-            kind: debug_match_kind(&cmd, &item.value, context_node, &matched_path, flag_scope),
+            kind: engine
+                .classify_match(&analysis, &item.value)
+                .as_str()
+                .to_string(),
         })
         .collect::<Vec<_>>();
 
@@ -1151,78 +1147,6 @@ pub(crate) fn trace_completion_enabled() -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "" | "0" | "false" | "off" | "no"
     )
-}
-
-fn debug_resolve_context_state<'a>(
-    tree: &'a CompletionTree,
-    cmd: &CommandLine,
-    stub: &str,
-) -> (&'a CompletionNode, Vec<String>) {
-    let (pre_node, _) = debug_resolve_context(tree, &cmd.head);
-    let has_subcommands = !pre_node.children.is_empty();
-
-    let head_for_context = if !stub.is_empty() && !stub.starts_with('-') && has_subcommands {
-        &cmd.head[..cmd.head.len().saturating_sub(1)]
-    } else {
-        cmd.head.as_slice()
-    };
-
-    debug_resolve_context(tree, head_for_context)
-}
-
-fn debug_resolve_context<'a>(
-    tree: &'a CompletionTree,
-    path: &[String],
-) -> (&'a CompletionNode, Vec<String>) {
-    let mut node = &tree.root;
-    let mut matched = Vec::new();
-
-    for segment in path {
-        let Some(next) = node.children.get(segment) else {
-            break;
-        };
-        node = next;
-        matched.push(segment.clone());
-        if node.value_leaf {
-            break;
-        }
-    }
-
-    (node, matched)
-}
-
-fn debug_nearest_flag_scope<'a>(tree: &'a CompletionTree, path: &[String]) -> &'a CompletionNode {
-    for i in (0..=path.len()).rev() {
-        let prefix = &path[..i];
-        let (node, matched) = debug_resolve_context(tree, prefix);
-        if matched.len() == prefix.len() && !node.flags.is_empty() {
-            return node;
-        }
-    }
-    &tree.root
-}
-
-fn debug_match_kind(
-    cmd: &CommandLine,
-    value: &str,
-    context_node: &CompletionNode,
-    matched_path: &[String],
-    flag_scope: &CompletionNode,
-) -> String {
-    if cmd.has_pipe {
-        return "pipe".to_string();
-    }
-    if value.starts_with("--") || flag_scope.flags.contains_key(value) {
-        return "flag".to_string();
-    }
-    if context_node.children.contains_key(value) {
-        return if matched_path.is_empty() {
-            "command".to_string()
-        } else {
-            "subcommand".to_string()
-        };
-    }
-    "value".to_string()
 }
 
 fn path_suggestions(stub: &str, span: Span) -> Vec<Suggestion> {

@@ -1,7 +1,7 @@
 use crate::{
     model::{
-        CommandLine, CompletionAnalysis, CompletionNode, CompletionTree, ContextScope,
-        SuggestionOutput,
+        CommandLine, CompletionAnalysis, CompletionContext, CompletionNode, CompletionTree,
+        ContextScope, MatchKind, SuggestionOutput,
     },
     parse::CommandLineParser,
     suggest::SuggestionEngine,
@@ -33,10 +33,12 @@ impl CompletionEngine {
         cursor: usize,
     ) -> (String, Vec<SuggestionOutput>) {
         let analysis = self.analyze(line, cursor);
-        let suggestions = self
-            .suggester
-            .generate(&analysis.cursor_cmd, &analysis.stub);
+        let suggestions = self.suggestions_for_analysis(&analysis);
         (analysis.stub, suggestions)
+    }
+
+    pub fn suggestions_for_analysis(&self, analysis: &CompletionAnalysis) -> Vec<SuggestionOutput> {
+        self.suggester.generate(analysis)
     }
 
     pub fn analyze(&self, line: &str, cursor: usize) -> CompletionAnalysis {
@@ -47,23 +49,44 @@ impl CompletionEngine {
         let full_cmd = self.parser.parse(&full_tokens);
 
         let cursor_tokens = self.parser.tokenize(before_cursor);
-        let mut cursor_cmd = self.parser.parse(&cursor_tokens);
         let stub = self.parser.compute_stub(before_cursor, &cursor_tokens);
+        let mut analysis =
+            self.analyze_command_parts(full_cmd, self.parser.parse(&cursor_tokens), stub);
+        analysis.safe_cursor = safe_cursor;
+        analysis.full_tokens = full_tokens;
+        analysis.cursor_tokens = cursor_tokens;
+        analysis
+    }
 
+    pub fn analyze_command(
+        &self,
+        full_cmd: CommandLine,
+        cursor_cmd: CommandLine,
+        stub: impl Into<String>,
+    ) -> CompletionAnalysis {
+        self.analyze_command_parts(full_cmd, cursor_cmd, stub.into())
+    }
+
+    fn analyze_command_parts(
+        &self,
+        full_cmd: CommandLine,
+        mut cursor_cmd: CommandLine,
+        stub: String,
+    ) -> CompletionAnalysis {
         if !cursor_cmd.has_pipe {
             self.merge_context_flags(&mut cursor_cmd, &full_cmd, &stub);
         }
 
-        let matched_path = self.resolve_context_state(&cursor_cmd, &stub);
+        let context = self.resolve_completion_context(&cursor_cmd, &stub);
 
         CompletionAnalysis {
-            safe_cursor,
-            full_tokens,
-            cursor_tokens,
+            safe_cursor: 0,
+            full_tokens: Vec::new(),
+            cursor_tokens: Vec::new(),
             full_cmd,
             cursor_cmd,
             stub,
-            matched_path,
+            context,
         }
     }
 
@@ -95,16 +118,40 @@ impl CompletionEngine {
         matched
     }
 
+    pub fn classify_match(&self, analysis: &CompletionAnalysis, value: &str) -> MatchKind {
+        if analysis.cursor_cmd.has_pipe {
+            return MatchKind::Pipe;
+        }
+        let context_node = self
+            .resolve_context_exact(&analysis.context.matched_path)
+            .unwrap_or(&self.tree.root);
+        let flag_scope = self
+            .resolve_context_exact(&analysis.context.flag_scope_path)
+            .unwrap_or(&self.tree.root);
+
+        if value.starts_with("--") || flag_scope.flags.contains_key(value) {
+            return MatchKind::Flag;
+        }
+        if context_node.children.contains_key(value) {
+            return if analysis.context.matched_path.is_empty() {
+                MatchKind::Command
+            } else {
+                MatchKind::Subcommand
+            };
+        }
+        MatchKind::Value
+    }
+
     fn merge_context_flags(
         &self,
         cursor_cmd: &mut CommandLine,
         full_cmd: &CommandLine,
         stub: &str,
     ) {
-        let matched_path = self.resolve_context_state(cursor_cmd, stub);
+        let context = self.resolve_completion_context(cursor_cmd, stub);
         let mut scoped_flags = BTreeSet::new();
-        for i in (0..=matched_path.len()).rev() {
-            let (node, matched) = self.resolve_context(&matched_path[..i]);
+        for i in (0..=context.matched_path.len()).rev() {
+            let (node, matched) = self.resolve_context(&context.matched_path[..i]);
             if matched.len() == i {
                 scoped_flags.extend(node.flags.keys().cloned());
             }
@@ -122,7 +169,7 @@ impl CompletionEngine {
         }
     }
 
-    fn resolve_context_state(&self, cmd: &CommandLine, stub: &str) -> Vec<String> {
+    fn resolve_completion_context(&self, cmd: &CommandLine, stub: &str) -> CompletionContext {
         let (pre_node, _) = self.resolve_context(&cmd.head);
         let has_subcommands = !pre_node.children.is_empty();
         let head_for_context = if !stub.is_empty() && !stub.starts_with('-') && has_subcommands {
@@ -131,7 +178,33 @@ impl CompletionEngine {
             cmd.head.as_slice()
         };
         let (_, matched) = self.resolve_context(head_for_context);
-        matched
+        let flag_scope_path = self.resolve_flag_scope_path(&matched);
+
+        let arg_tokens: Vec<String> = cmd
+            .head
+            .iter()
+            .skip(matched.len())
+            .filter(|token| token.as_str() != stub)
+            .cloned()
+            .chain(
+                cmd.args
+                    .iter()
+                    .filter(|token| token.as_str() != stub)
+                    .cloned(),
+            )
+            .collect();
+
+        let context_node = self
+            .resolve_context_exact(&matched)
+            .unwrap_or(&self.tree.root);
+        let subcommand_context =
+            context_node.value_key || (has_subcommands && arg_tokens.is_empty());
+
+        CompletionContext {
+            matched_path: matched,
+            flag_scope_path,
+            subcommand_context,
+        }
     }
 
     fn resolve_context<'a>(&'a self, path: &[String]) -> (&'a CompletionNode, Vec<String>) {
@@ -148,6 +221,24 @@ impl CompletionEngine {
             }
         }
         (node, matched)
+    }
+
+    fn resolve_context_exact<'a>(&'a self, path: &[String]) -> Option<&'a CompletionNode> {
+        let (node, matched) = self.resolve_context(path);
+        (matched.len() == path.len()).then_some(node)
+    }
+
+    fn resolve_flag_scope_path(&self, matched_path: &[String]) -> Vec<String> {
+        for i in (0..=matched_path.len()).rev() {
+            let prefix = &matched_path[..i];
+            let Some(node) = self.resolve_context_exact(prefix) else {
+                continue;
+            };
+            if !node.flags.is_empty() {
+                return prefix.to_vec();
+            }
+        }
+        Vec::new()
     }
 }
 
@@ -434,7 +525,9 @@ mod tests {
         let analysis = engine.analyze(line, cursor);
 
         assert_eq!(analysis.stub, "");
-        assert_eq!(analysis.matched_path, vec!["orch", "provision"]);
+        assert_eq!(analysis.context.matched_path, vec!["orch", "provision"]);
+        assert_eq!(analysis.context.flag_scope_path, vec!["orch", "provision"]);
+        assert!(!analysis.context.subcommand_context);
         assert_eq!(
             analysis
                 .cursor_cmd

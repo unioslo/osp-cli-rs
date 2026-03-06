@@ -16,8 +16,8 @@ pub mod tree;
 
 pub use engine::CompletionEngine;
 pub use model::{
-    ArgNode, CommandLine, CompletionAnalysis, CompletionNode, CompletionTree, ContextScope,
-    FlagNode, Suggestion, SuggestionEntry, SuggestionOutput, ValueType,
+    ArgNode, CommandLine, CompletionAnalysis, CompletionContext, CompletionNode, CompletionTree,
+    ContextScope, FlagNode, MatchKind, Suggestion, SuggestionEntry, SuggestionOutput, ValueType,
 };
 pub use parse::CommandLineParser;
 pub use suggest::SuggestionEngine;
