@@ -51,20 +51,7 @@ impl SuggestionEngine {
         }
 
         let mut out: Vec<SuggestionOutput> = Vec::new();
-
-        let mut arg_tokens: Vec<String> = cmd
-            .head
-            .iter()
-            .skip(analysis.context.matched_path.len())
-            .filter(|token| token.as_str() != stub)
-            .cloned()
-            .collect();
-        arg_tokens.extend(
-            cmd.args
-                .iter()
-                .filter(|token| token.as_str() != stub)
-                .cloned(),
-        );
+        let arg_index = self.arg_index(cmd, stub, analysis.context.matched_path.len());
 
         if analysis.context.subcommand_context {
             out.extend(
@@ -73,7 +60,7 @@ impl SuggestionEngine {
                     .map(SuggestionOutput::Item),
             );
         } else {
-            out.extend(self.arg_value_suggestions(context_node, arg_tokens.len(), stub));
+            out.extend(self.arg_value_suggestions(context_node, arg_index, stub));
         }
 
         if stub.is_empty() && !needs_value && !analysis.context.subcommand_context {
@@ -181,54 +168,13 @@ impl SuggestionEngine {
             return vec![SuggestionOutput::PathSentinel];
         }
 
-        if flag == "--provider" {
-            let os_token = cmd
-                .flags
-                .get("--os")
-                .and_then(|vals| vals.first())
-                .map(|value| normalize_token(value));
-            if let Some(os_token) = os_token {
-                let filtered: Vec<SuggestionOutput> = flag_node
-                    .suggestions
-                    .iter()
-                    .filter(|entry| {
-                        flag_node
-                            .os_provider_map
-                            .get(&os_token)
-                            .is_none_or(|providers| providers.iter().any(|p| p == &entry.value))
-                    })
-                    .filter_map(|entry| {
-                        let score = self.match_score(stub, &entry.value)?;
-                        Some(SuggestionOutput::Item(entry_to_suggestion(entry, score)))
-                    })
-                    .collect();
-                if !filtered.is_empty() {
-                    return filtered;
-                }
-            }
-        }
-
-        if !flag_node.suggestions_by_provider.is_empty()
-            && let Some(provider) = selected_provider(cmd)
-            && let Some(provider_values) = flag_node.suggestions_by_provider.get(&provider)
+        if let Some(output) =
+            self.provider_specific_flag_value_suggestions(flag_node, flag, stub, cmd)
         {
-            return provider_values
-                .iter()
-                .filter_map(|entry| {
-                    let score = self.match_score(stub, &entry.value)?;
-                    Some(SuggestionOutput::Item(entry_to_suggestion(entry, score)))
-                })
-                .collect();
+            return output;
         }
 
-        flag_node
-            .suggestions
-            .iter()
-            .filter_map(|entry| {
-                let score = self.match_score(stub, &entry.value)?;
-                Some(SuggestionOutput::Item(entry_to_suggestion(entry, score)))
-            })
-            .collect()
+        self.entry_suggestions(&flag_node.suggestions, stub)
     }
 
     fn arg_value_suggestions(
@@ -245,13 +191,7 @@ impl SuggestionEngine {
             return vec![SuggestionOutput::PathSentinel];
         }
 
-        arg.suggestions
-            .iter()
-            .filter_map(|entry| {
-                let score = self.match_score(stub, &entry.value)?;
-                Some(SuggestionOutput::Item(entry_to_suggestion(entry, score)))
-            })
-            .collect()
+        self.entry_suggestions(&arg.suggestions, stub)
     }
 
     fn subcommand_suggestions(&self, node: &CompletionNode, stub: &str) -> Vec<Suggestion> {
@@ -305,6 +245,61 @@ impl SuggestionEngine {
         }
 
         (flag_node.multi, Some(last_flag.clone()))
+    }
+
+    fn arg_index(&self, cmd: &CommandLine, stub: &str, matched_head_len: usize) -> usize {
+        cmd.head
+            .iter()
+            .skip(matched_head_len)
+            .chain(cmd.args.iter())
+            .filter(|token| token.as_str() != stub)
+            .count()
+    }
+
+    fn provider_specific_flag_value_suggestions(
+        &self,
+        flag_node: &crate::model::FlagNode,
+        flag: &str,
+        stub: &str,
+        cmd: &CommandLine,
+    ) -> Option<Vec<SuggestionOutput>> {
+        if flag == "--provider" {
+            let os_token = cmd
+                .flags
+                .get("--os")
+                .and_then(|vals| vals.first())
+                .map(|value| normalize_token(value));
+            if let Some(os_token) = os_token {
+                let filtered = flag_node
+                    .suggestions
+                    .iter()
+                    .filter(|entry| {
+                        flag_node
+                            .os_provider_map
+                            .get(&os_token)
+                            .is_none_or(|providers| providers.iter().any(|p| p == &entry.value))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !filtered.is_empty() {
+                    return Some(self.entry_suggestions(&filtered, stub));
+                }
+            }
+        }
+
+        let provider = selected_provider(cmd)?;
+        let provider_values = flag_node.suggestions_by_provider.get(&provider)?;
+        Some(self.entry_suggestions(provider_values, stub))
+    }
+
+    fn entry_suggestions(&self, entries: &[SuggestionEntry], stub: &str) -> Vec<SuggestionOutput> {
+        entries
+            .iter()
+            .filter_map(|entry| {
+                let score = self.match_score(stub, &entry.value)?;
+                Some(SuggestionOutput::Item(entry_to_suggestion(entry, score)))
+            })
+            .collect()
     }
 
     fn match_score(&self, stub: &str, candidate: &str) -> Option<u32> {
