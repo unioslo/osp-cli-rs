@@ -1,4 +1,4 @@
-use crate::model::{ParsedPipeline, ParsedStage};
+use crate::model::{ParsedPipeline, ParsedStage, ParsedStageKind};
 
 use super::lexer::{LexerError, StageSegment, split_pipeline, tokenize_stage};
 
@@ -28,7 +28,11 @@ pub fn parse_pipeline(line: &str) -> Result<Pipeline, LexerError> {
     Ok(Pipeline { command, stages })
 }
 
-pub fn parse_stage(raw_stage: &str) -> ParsedStage {
+const EXPLICIT_STAGE_VERBS: &[&str] = &[
+    "P", "V", "K", "VAL", "VALUE", "F", "G", "A", "S", "L", "Z", "C", "Y", "U", "?", "JQ",
+];
+
+pub fn parse_stage(raw_stage: &str) -> Result<ParsedStage, LexerError> {
     let segment = StageSegment {
         raw: raw_stage.trim().to_string(),
         span: super::lexer::Span {
@@ -38,21 +42,13 @@ pub fn parse_stage(raw_stage: &str) -> ParsedStage {
     };
 
     if segment.raw.is_empty() {
-        return ParsedStage::new("", "", raw_stage);
+        return Ok(ParsedStage::new(ParsedStageKind::Quick, "", "", raw_stage));
     }
 
-    let tokens = match tokenize_stage(&segment) {
-        Ok(tokens) => tokens,
-        Err(_) => {
-            let mut parts = segment.raw.splitn(2, char::is_whitespace);
-            let verb = parts.next().unwrap_or_default().to_ascii_uppercase();
-            let spec = parts.next().unwrap_or_default().trim().to_string();
-            return ParsedStage::new(verb, spec, raw_stage);
-        }
-    };
+    let tokens = tokenize_stage(&segment)?;
 
     let Some(first) = tokens.first() else {
-        return ParsedStage::new("", "", raw_stage);
+        return Ok(ParsedStage::new(ParsedStageKind::Quick, "", "", raw_stage));
     };
 
     let verb = first.text.to_ascii_uppercase();
@@ -62,19 +58,41 @@ pub fn parse_stage(raw_stage: &str) -> ParsedStage {
         String::new()
     };
 
-    ParsedStage::new(verb, spec, segment.raw)
+    Ok(ParsedStage::new(
+        classify_stage_kind(&verb),
+        verb,
+        spec,
+        segment.raw,
+    ))
 }
 
-pub fn parse_stage_list(stages: &[String]) -> ParsedPipeline {
-    ParsedPipeline {
+pub fn parse_stage_list(stages: &[String]) -> Result<ParsedPipeline, LexerError> {
+    Ok(ParsedPipeline {
         raw: stages.join(" | "),
-        stages: stages.iter().map(|stage| parse_stage(stage)).collect(),
+        stages: stages
+            .iter()
+            .map(|stage| parse_stage(stage))
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn classify_stage_kind(verb: &str) -> ParsedStageKind {
+    if EXPLICIT_STAGE_VERBS.contains(&verb) {
+        return ParsedStageKind::Explicit;
     }
+
+    if verb.len() == 1 && verb.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return ParsedStageKind::UnknownExplicit;
+    }
+
+    ParsedStageKind::Quick
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LexerError, parse_pipeline, parse_stage};
+    use crate::model::ParsedStageKind;
+
+    use super::{LexerError, parse_pipeline, parse_stage, parse_stage_list};
 
     #[test]
     fn parse_pipeline_extracts_command_and_stages() {
@@ -101,15 +119,32 @@ mod tests {
 
     #[test]
     fn parse_stage_extracts_verb_and_spec() {
-        let parsed = parse_stage("F uid=oistes");
+        let parsed = parse_stage("F uid=oistes").expect("stage should parse");
+        assert_eq!(parsed.kind, ParsedStageKind::Explicit);
         assert_eq!(parsed.verb, "F");
         assert_eq!(parsed.spec, "uid=oistes");
     }
 
     #[test]
     fn parse_stage_with_only_term_becomes_quick_candidate() {
-        let parsed = parse_stage("uid");
+        let parsed = parse_stage("uid").expect("stage should parse");
+        assert_eq!(parsed.kind, ParsedStageKind::Quick);
         assert_eq!(parsed.verb, "UID");
         assert_eq!(parsed.spec, "");
+    }
+
+    #[test]
+    fn parse_stage_marks_unknown_single_letter_verb_as_explicit() {
+        let parsed = parse_stage("R oist").expect("stage should parse");
+        assert_eq!(parsed.kind, ParsedStageKind::UnknownExplicit);
+        assert_eq!(parsed.verb, "R");
+        assert_eq!(parsed.spec, "oist");
+    }
+
+    #[test]
+    fn parse_stage_list_rejects_invalid_quoted_stage() {
+        let err = parse_stage_list(&[r#"F note="oops"#.to_string()])
+            .expect_err("invalid quotes should fail");
+        assert!(matches!(err, LexerError::UnterminatedDoubleQuote { .. }));
     }
 }

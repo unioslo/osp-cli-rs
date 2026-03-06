@@ -9,15 +9,29 @@ pub enum StageCapability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedStageKind {
+    Explicit,
+    UnknownExplicit,
+    Quick,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedStage {
+    pub kind: ParsedStageKind,
     pub verb: String,
     pub spec: String,
     pub raw: String,
 }
 
 impl ParsedStage {
-    pub fn new(verb: impl Into<String>, spec: impl Into<String>, raw: impl Into<String>) -> Self {
+    pub fn new(
+        kind: ParsedStageKind,
+        verb: impl Into<String>,
+        spec: impl Into<String>,
+        raw: impl Into<String>,
+    ) -> Self {
         Self {
+            kind,
             verb: verb.into(),
             spec: spec.into(),
             raw: raw.into(),

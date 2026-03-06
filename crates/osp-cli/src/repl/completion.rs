@@ -493,7 +493,9 @@ fn default_pipe_verbs() -> BTreeMap<String, String> {
 
 pub(crate) fn maybe_render_dsl_help(state: &AppState, stages: &[String]) -> Option<String> {
     for raw in stages {
-        let parsed = parse_stage(raw);
+        let Ok(parsed) = parse_stage(raw) else {
+            continue;
+        };
         if parsed.verb.eq_ignore_ascii_case("H") {
             return Some(render_dsl_help(state, &parsed.spec));
         }

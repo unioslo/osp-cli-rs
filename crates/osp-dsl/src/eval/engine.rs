@@ -29,7 +29,7 @@ fn execute_pipeline_items(
     initial_wants_copy: bool,
     stages: &[String],
 ) -> Result<OutputResult> {
-    let parsed = parse_stage_list(stages);
+    let parsed = parse_stage_list(stages)?;
     let mut wants_copy = initial_wants_copy;
 
     for stage in parsed.stages {
@@ -37,81 +37,90 @@ fn execute_pipeline_items(
             continue;
         }
 
-        items = match stage.verb.as_str() {
-            "P" => match items {
-                OutputItems::Rows(rows) => OutputItems::Rows(project::apply(rows, &stage.spec)?),
-                OutputItems::Groups(groups) => {
-                    OutputItems::Groups(project::apply_groups(groups, &stage.spec)?)
-                }
-            },
-            // `V` is a quick-search scope alias ("value-only"), not a
-            // value-output stage.
-            "V" => map_rows(items, |rows| {
-                let quick_spec = if stage.spec.is_empty() {
-                    "V".to_string()
-                } else {
-                    format!("V {}", stage.spec)
-                };
-                quick::apply(rows, &quick_spec)
-            })?,
-            "K" => map_rows(items, |rows| {
-                let quick_spec = if stage.spec.is_empty() {
-                    "K".to_string()
-                } else {
-                    format!("K {}", stage.spec)
-                };
-                quick::apply(rows, &quick_spec)
-            })?,
-            // Explicit extraction stage producing `{\"value\": ...}` rows.
-            // Kept separate from `V` so verbs do not imply output format mode.
-            "VAL" | "VALUE" => map_rows(items, |rows| values::apply(rows, &stage.spec))?,
-            "F" => match items {
-                OutputItems::Rows(rows) => OutputItems::Rows(filter::apply(rows, &stage.spec)?),
-                OutputItems::Groups(groups) => {
-                    OutputItems::Groups(filter::apply_groups(groups, &stage.spec)?)
-                }
-            },
-            "G" => match items {
-                OutputItems::Rows(rows) => {
-                    OutputItems::Groups(group::group_rows(rows, &stage.spec)?)
-                }
-                OutputItems::Groups(groups) => {
-                    OutputItems::Groups(group::regroup_groups(groups, &stage.spec)?)
-                }
-            },
-            "A" => aggregate::apply(items, &stage.spec)?,
-            "S" => sort::apply(items, &stage.spec)?,
-            "L" => match items {
-                OutputItems::Rows(rows) => OutputItems::Rows(limit::apply(rows, &stage.spec)?),
-                OutputItems::Groups(groups) => {
-                    OutputItems::Groups(limit::apply(groups, &stage.spec)?)
-                }
-            },
-            "Z" => collapse::apply(items),
-            "C" => aggregate::count_macro(items, &stage.spec)?,
-            "Y" => {
-                wants_copy = true;
-                map_rows(items, |rows| Ok(copy::apply(rows)))?
-            }
-            "U" => {
-                let field = stage.spec.trim();
-                if field.is_empty() {
-                    return Err(anyhow!("U: missing field name to unroll"));
-                }
-                let selector = format!("{field}[]");
-                match items {
-                    OutputItems::Rows(rows) => OutputItems::Rows(project::apply(rows, &selector)?),
-                    OutputItems::Groups(groups) => {
-                        OutputItems::Groups(project::apply_groups(groups, &selector)?)
-                    }
-                }
-            }
-            "?" => question::apply(items, &stage.spec)?,
-            "JQ" => jq::apply(items, &stage.spec)?,
-            _ if is_quick_candidate(&stage) => {
+        items = match stage.kind {
+            crate::model::ParsedStageKind::Quick => {
                 map_rows(items, |rows| quick::apply(rows, &stage.raw))?
             }
-            _ => return Err(anyhow!("unknown DSL verb: {}", stage.verb)),
+            crate::model::ParsedStageKind::UnknownExplicit => {
+                return Err(anyhow!("unknown DSL verb: {}", stage.verb));
+            }
+            crate::model::ParsedStageKind::Explicit => match stage.verb.as_str() {
+                "P" => match items {
+                    OutputItems::Rows(rows) => {
+                        OutputItems::Rows(project::apply(rows, &stage.spec)?)
+                    }
+                    OutputItems::Groups(groups) => {
+                        OutputItems::Groups(project::apply_groups(groups, &stage.spec)?)
+                    }
+                },
+                // `V` is a quick-search scope alias ("value-only"), not a
+                // value-output stage.
+                "V" => map_rows(items, |rows| {
+                    let quick_spec = if stage.spec.is_empty() {
+                        "V".to_string()
+                    } else {
+                        format!("V {}", stage.spec)
+                    };
+                    quick::apply(rows, &quick_spec)
+                })?,
+                "K" => map_rows(items, |rows| {
+                    let quick_spec = if stage.spec.is_empty() {
+                        "K".to_string()
+                    } else {
+                        format!("K {}", stage.spec)
+                    };
+                    quick::apply(rows, &quick_spec)
+                })?,
+                // Explicit extraction stage producing `{\"value\": ...}` rows.
+                // Kept separate from `V` so verbs do not imply output format mode.
+                "VAL" | "VALUE" => map_rows(items, |rows| values::apply(rows, &stage.spec))?,
+                "F" => match items {
+                    OutputItems::Rows(rows) => OutputItems::Rows(filter::apply(rows, &stage.spec)?),
+                    OutputItems::Groups(groups) => {
+                        OutputItems::Groups(filter::apply_groups(groups, &stage.spec)?)
+                    }
+                },
+                "G" => match items {
+                    OutputItems::Rows(rows) => {
+                        OutputItems::Groups(group::group_rows(rows, &stage.spec)?)
+                    }
+                    OutputItems::Groups(groups) => {
+                        OutputItems::Groups(group::regroup_groups(groups, &stage.spec)?)
+                    }
+                },
+                "A" => aggregate::apply(items, &stage.spec)?,
+                "S" => sort::apply(items, &stage.spec)?,
+                "L" => match items {
+                    OutputItems::Rows(rows) => OutputItems::Rows(limit::apply(rows, &stage.spec)?),
+                    OutputItems::Groups(groups) => {
+                        OutputItems::Groups(limit::apply(groups, &stage.spec)?)
+                    }
+                },
+                "Z" => collapse::apply(items),
+                "C" => aggregate::count_macro(items, &stage.spec)?,
+                "Y" => {
+                    wants_copy = true;
+                    map_rows(items, |rows| Ok(copy::apply(rows)))?
+                }
+                "U" => {
+                    let field = stage.spec.trim();
+                    if field.is_empty() {
+                        return Err(anyhow!("U: missing field name to unroll"));
+                    }
+                    let selector = format!("{field}[]");
+                    match items {
+                        OutputItems::Rows(rows) => {
+                            OutputItems::Rows(project::apply(rows, &selector)?)
+                        }
+                        OutputItems::Groups(groups) => {
+                            OutputItems::Groups(project::apply_groups(groups, &selector)?)
+                        }
+                    }
+                }
+                "?" => question::apply(items, &stage.spec)?,
+                "JQ" => jq::apply(items, &stage.spec)?,
+                _ => return Err(anyhow!("unknown DSL verb: {}", stage.verb)),
+            },
         };
     }
 
@@ -140,21 +149,6 @@ fn execute_pipeline_items(
             grouped,
         },
     })
-}
-
-fn is_quick_candidate(stage: &crate::model::ParsedStage) -> bool {
-    let verb = stage.verb.trim();
-    if verb.is_empty() {
-        return false;
-    }
-
-    // A single-letter alphabetic token looks like an explicit DSL verb.
-    // Treating it as quick search hides typos such as `| R foo`.
-    if verb.len() == 1 && verb.chars().all(|ch| ch.is_ascii_alphabetic()) {
-        return false;
-    }
-
-    true
 }
 
 fn map_rows(

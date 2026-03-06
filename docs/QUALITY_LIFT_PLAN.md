@@ -41,8 +41,8 @@ Definition of done:
 
 ### 2. Make DSL Strict By Default
 
-- [ ] Keep one parser and one stage model.
-- [ ] Unknown verbs error by default.
+- [x] Keep one parser and one stage model.
+- [x] Unknown verbs error by default.
 - [x] Malformed quotes and malformed pipelines error by default.
 - [ ] Put any Python-compat fallbacks behind explicit compatibility flags or
       isolated translation layers.
@@ -117,9 +117,9 @@ Own parsing, stage typing, and pipeline execution semantics.
 
 Checklist:
 
-- [ ] Remove silent fallback from unknown verbs to quick search.
+- [x] Remove silent fallback from unknown verbs to quick search.
 - [x] Remove naive fallback parsing for malformed quoted pipelines.
-- [ ] Make the parser and execution contracts strict by default.
+- [x] Make the parser and execution contracts strict by default.
 - [ ] Keep compatibility shims isolated and opt-in if they are still needed.
 - [x] Make `OutputResult` the primary execution result surface.
 - [x] Remove or redesign lossy helpers that return `Vec<Row>` only.
