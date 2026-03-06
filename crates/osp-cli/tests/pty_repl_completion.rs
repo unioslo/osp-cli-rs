@@ -294,3 +294,38 @@ fn repl_tab_accepts_single_visible_completion() {
         let _ = session.child.wait();
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn repl_close_menu_keeps_typed_input() {
+    let mut session = spawn_repl(true);
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\t");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\"selected_index\":-1",
+            Duration::from_secs(3)
+        ),
+        "expected menu activation trace; output:\n{}",
+        output_snapshot(&session.output, 2000),
+    );
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\x1b");
+    write_bytes(&mut session, b"co");
+    assert!(
+        wait_for_output_since(&session.output, start, "co", Duration::from_secs(3)),
+        "expected typed input after closing menu; output:\n{}",
+        output_snapshot(&session.output, 2000),
+    );
+
+    write_bytes(&mut session, b"\x03");
+    write_bytes(&mut session, b"exit\r\r");
+    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+}

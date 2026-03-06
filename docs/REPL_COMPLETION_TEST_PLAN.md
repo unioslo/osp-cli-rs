@@ -173,8 +173,8 @@ Primary file:
 - [x] pipe verb suggestions
 - [x] fuzzy long-verb pipe matching
 - [x] provider-aware flag filtering
-- [ ] explicit regression for quoted token replace ranges in completion debug output
-- [ ] explicit regression for Unicode completion tokens
+- [x] explicit regression for quoted token replace ranges in completion debug output
+- [x] explicit regression for Unicode completion tokens
 
 ### REPL Layout
 
@@ -193,14 +193,14 @@ Primary file:
 - [x] completion and dispatch prefixing agree in scoped shells
 - [x] plugin `--describe` metadata feeds REPL completion
 - [x] LDAP contract covers plugin subcommands and flags
-- [ ] alias-expanded partial completion agreement test
+- [x] alias-expanded partial completion agreement test
 
 ### PTY Smoke
 
 - [x] open menu with `tab`
 - [x] move selection with repeated `tab`
 - [x] accept selection and update buffer
-- [ ] explicit close-menu-and-keep-typing assertion
+- [x] explicit close-menu-and-keep-typing assertion
 
 ## Determinism Rules
 
@@ -221,16 +221,9 @@ PTY assertions should stay small and structural:
 
 Avoid full-screen snapshots.
 
-## Remaining High-Value Additions
+## Status
 
-These are still worth doing, in roughly this order:
+The planned completion-specific gaps are closed.
 
-1. Add an explicit completion debug test for quoted-token replacement ranges.
-2. Add an explicit Unicode token regression in `osp-completion`.
-3. Add one alias-expanded partial completion agreement test at the `osp-cli`
-   layer.
-4. Add one PTY assertion that closes the menu and keeps typing on the same
-   line.
-
-That should be enough. The goal is not a giant completion test framework; the
-goal is a small, durable surface that catches semantic drift quickly.
+Future additions should be driven by concrete bugs or new completion features,
+not by growing this into a generic test framework.

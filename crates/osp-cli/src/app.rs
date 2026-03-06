@@ -1057,10 +1057,20 @@ mod tests {
     }
 
     fn make_completion_state(auth_visible_builtins: Option<&str>) -> AppState {
+        make_completion_state_with_entries(auth_visible_builtins, &[])
+    }
+
+    fn make_completion_state_with_entries(
+        auth_visible_builtins: Option<&str>,
+        entries: &[(&str, &str)],
+    ) -> AppState {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         if let Some(allowlist) = auth_visible_builtins {
             defaults.set("auth.visible.builtins", allowlist);
+        }
+        for (key, value) in entries {
+            defaults.set(*key, *value);
         }
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
@@ -1563,6 +1573,28 @@ mod tests {
                 "alma".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn repl_alias_partial_completion_does_not_trigger_shell_entry_unit() {
+        let state = make_completion_state_with_entries(
+            None,
+            &[("alias.ops", "orch provision --provider vmware")],
+        );
+        let catalog = sample_catalog();
+        let surface = surface::build_repl_surface(&state, &catalog);
+        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let engine = osp_completion::CompletionEngine::new(tree);
+
+        let (_, suggestions) = engine.suggestions_with_stub("op", 2);
+        assert!(suggestions.into_iter().any(|entry| matches!(
+            entry,
+            osp_completion::SuggestionOutput::Item(item) if item.text == "ops"
+        )));
+
+        let parsed = repl::ReplParsedLine::parse("op", state.config.resolved())
+            .expect("partial alias should parse");
+        assert_eq!(parsed.shell_entry_command(&state.session.scope), None);
     }
 
     #[test]

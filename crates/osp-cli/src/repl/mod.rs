@@ -55,15 +55,12 @@ impl ReplLoopState {
     }
 
     fn render_cycle_chrome(&mut self, state: &AppState, help_text: &str) {
-        if self.show_intro {
-            print!("\x1b[2J\x1b[H");
-            print!("{}", render_repl_intro(state));
-            print!("{help_text}");
+        let output =
+            build_cycle_chrome_output(state, help_text, self.show_intro, &self.pending_output);
+        if !output.is_empty() {
+            print!("{output}");
         }
-        if !self.pending_output.is_empty() {
-            print!("{}", self.pending_output);
-            self.pending_output.clear();
-        }
+        self.pending_output.clear();
     }
 
     fn apply_run_result(&mut self, result: ReplRunResult) -> Option<i32> {
@@ -81,6 +78,22 @@ impl ReplLoopState {
             }
         }
     }
+}
+
+fn build_cycle_chrome_output(
+    state: &AppState,
+    help_text: &str,
+    show_intro: bool,
+    pending_output: &str,
+) -> String {
+    let mut out = String::new();
+    if show_intro {
+        out.push_str("\x1b[2J\x1b[H");
+        out.push_str(&render_repl_intro(state));
+        out.push_str(help_text);
+    }
+    out.push_str(pending_output);
+    out
 }
 
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
@@ -172,4 +185,82 @@ fn run_repl_debug_complete(state: &AppState, args: DebugCompleteArgs) -> Result<
 
 fn build_repl_completion_tree(state: &AppState, surface: &ReplSurface) -> CompletionTree {
     completion::build_repl_completion_tree(state, surface)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_cycle_chrome_output;
+    use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+    use osp_ui::messages::MessageLevel;
+    use osp_ui::theme::DEFAULT_THEME_NAME;
+    use osp_ui::{RenderRuntime, RenderSettings};
+
+    fn make_state() -> AppState {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let config = resolver
+            .resolve(ResolveOptions::default().with_terminal("repl"))
+            .expect("test config should resolve");
+
+        let settings = RenderSettings {
+            format: OutputFormat::Json,
+            mode: RenderMode::Plain,
+            color: ColorMode::Never,
+            unicode: UnicodeMode::Never,
+            width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            table_overflow: osp_ui::TableOverflow::Clip,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
+            theme_name: DEFAULT_THEME_NAME.to_string(),
+            theme: None,
+            style_overrides: osp_ui::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
+        };
+
+        AppState::new(
+            RuntimeContext::new(None, TerminalKind::Repl, None),
+            config,
+            settings,
+            MessageLevel::Success,
+            0,
+            crate::plugin_manager::PluginManager::new(Vec::new()),
+            crate::theme_loader::ThemeCatalog::default(),
+            LaunchContext::default(),
+        )
+    }
+
+    #[test]
+    fn cycle_chrome_renders_intro_then_help_then_pending_output() {
+        let state = make_state();
+        let output = build_cycle_chrome_output(&state, "HELP\n", true, "PENDING\n");
+
+        let intro_pos = output.find("Welcome").expect("intro should render");
+        let help_pos = output.find("HELP").expect("help should render");
+        let pending_pos = output
+            .find("PENDING")
+            .expect("pending output should render");
+
+        assert!(output.starts_with("\x1b[2J\x1b[H"));
+        assert!(intro_pos < help_pos);
+        assert!(help_pos < pending_pos);
+    }
+
+    #[test]
+    fn cycle_chrome_without_intro_keeps_pending_output_only() {
+        let state = make_state();
+        let output = build_cycle_chrome_output(&state, "HELP\n", false, "PENDING\n");
+
+        assert_eq!(output, "PENDING\n");
+    }
 }

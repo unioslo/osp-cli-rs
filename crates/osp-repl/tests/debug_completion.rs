@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use osp_completion::{CompletionNode, CompletionTree};
+use osp_completion::{ArgNode, CompletionNode, CompletionTree, SuggestionEntry};
 use osp_repl::{
     CompletionDebugOptions, DebugStep, ReplAppearance, debug_completion, debug_completion_steps,
 };
@@ -79,4 +79,30 @@ fn debug_completion_steps_accepts_after_second_tab() {
     assert_eq!(frames[0].state.selected, -1);
     assert!(!frames[0].state.rendered.is_empty());
     assert_eq!(frames[2].state.line, "config ");
+}
+
+#[test]
+fn debug_completion_tracks_replace_range_inside_open_quotes() {
+    let mut user = CompletionNode::default();
+    user.args = vec![ArgNode {
+        name: Some("uid".to_string()),
+        suggestions: vec![SuggestionEntry::value("oistes")],
+        ..ArgNode::default()
+    }];
+
+    let mut ldap = CompletionNode::default();
+    ldap.children.insert("user".to_string(), user);
+
+    let tree = CompletionTree {
+        root: CompletionNode::default().with_child("ldap", ldap),
+        pipe_verbs: BTreeMap::new(),
+    };
+
+    let line = "ldap user \"oi";
+    let debug = debug_completion(&tree, line, line.len(), CompletionDebugOptions::new(40, 5));
+
+    let start = line.find("oi").expect("quoted stub should exist");
+    assert_eq!(debug.stub, "oi");
+    assert_eq!(debug.replace_range, [start, line.len()]);
+    assert!(debug.matches.iter().any(|entry| entry.label == "oistes"));
 }

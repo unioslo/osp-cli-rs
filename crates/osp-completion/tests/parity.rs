@@ -98,3 +98,26 @@ fn fuzzy_pipe_completion_for_long_verb() {
     let suggestions = values("ldap user | vlu", "ldap user | vlu".len());
     assert!(suggestions.contains(&"VALUE".to_string()));
 }
+
+#[test]
+fn unicode_root_command_completion() {
+    let mut root = CompletionNode::default();
+    root.children
+        .insert("søk".to_string(), CompletionNode::default());
+
+    let engine = CompletionEngine::new(CompletionTree {
+        root,
+        pipe_verbs: BTreeMap::new(),
+    });
+
+    let (_, suggestions) = engine.suggestions_with_stub("sø", "sø".len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            SuggestionOutput::Item(item) => Some(item.text),
+            SuggestionOutput::PathSentinel => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(values.contains(&"søk".to_string()));
+}

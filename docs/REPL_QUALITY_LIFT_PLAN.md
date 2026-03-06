@@ -19,14 +19,14 @@ The target is a clearer split:
 
 ## Architecture Targets
 
-- [ ] Add a typed `ReplSurface` model for visible commands, aliases, help rows, and completion inputs
-- [ ] Split `repl/mod.rs` into product seams: surface, scope, presentation, dispatch, session
-- [ ] Move host policy out of `osp-repl::run_repl()` and keep `osp-repl` focused on terminal mechanics
+- [x] Add a typed `ReplSurface` model for visible commands, aliases, help rows, and completion inputs
+- [x] Split `repl/mod.rs` into product seams: surface, scope, presentation, dispatch, session
+- [x] Move host policy out of `osp-repl::run_repl()` and keep `osp-repl` focused on terminal mechanics
 - [x] Replace stringly `shell_stack` prefixing with a typed scope/frame model
 - [ ] Unify completion, highlighting, and execution around one parsed REPL input shape
 - [x] Unify rich and basic fallback loops around one submit pipeline
 - [ ] Keep history store boring and move scope/recording policy to the host
-- [ ] Consolidate intro/help/prompt rendering into one presentation policy
+- [x] Consolidate intro/help/prompt rendering into one presentation policy
 
 ## Concrete Work
 
@@ -34,7 +34,7 @@ The target is a clearer split:
 
 - [x] Extract one builder for root commands, aliases, overview rows, and completion specs
 - [x] Remove duplicated built-in command assembly between overview and completion
-- [ ] Add tests for built-in visibility and alias inclusion
+- [x] Add tests for built-in visibility and alias inclusion
 
 ### Session
 
@@ -52,14 +52,14 @@ The target is a clearer split:
 
 - [x] Move intro, overview, and prompt rendering under one module
 - [x] Keep prompt templating pure and testable
-- [ ] Add sequencing tests for intro/help/prompt behavior
+- [x] Add sequencing tests for intro/help/prompt behavior
 
 ### Completion
 
-- [ ] Keep one source of truth for REPL-visible commands and DSL help surface
+- [x] Keep one source of truth for REPL-visible commands and DSL help surface
 - [x] Root completion/highlighting to the active shell scope
-- [ ] Move toward one parsed input model shared by completer, highlighter, and dispatch
-- [ ] Add tests for completion/highlight/dispatch agreement on partial lines
+- [x] Move toward one parsed input model shared by completer, highlighter, and dispatch
+- [x] Add tests for completion/highlight/dispatch agreement on partial lines
 
 ### History
 
@@ -67,6 +67,14 @@ The target is a clearer split:
 - [x] Add tests for shell-scoped history behavior and bang expansion
 - [x] Revisit whether history expansion belongs in `osp-repl` or the host
 
-## Current Slice
+## Landed
 
 - [x] Introduce `ReplSurface`
+- [x] Introduce typed REPL scope state
+- [x] Share rich/basic submission flow
+- [x] Split presentation and dispatch modules
+- [x] Move history exclusions and bang semantics to the host
+- [x] Expand bang history in place instead of executing immediately
+- [x] Simplify completer/repl adapter boundaries
+- [x] Share completion analysis state
+- [x] Add a parsed `ReplParsedLine` model for dispatch and shell-entry policy

@@ -44,7 +44,7 @@ Definition of done:
 - [x] Keep one parser and one stage model.
 - [x] Unknown verbs error by default.
 - [x] Malformed quotes and malformed pipelines error by default.
-- [ ] Put any Python-compat fallbacks behind explicit compatibility flags or
+- [x] Put any Python-compat fallbacks behind explicit compatibility flags or
       isolated translation layers.
 - [x] Make ambiguous key resolution explicit and testable.
 
@@ -55,7 +55,7 @@ the DSL stops "helping" by guessing when input is invalid.
 
 - [x] Remove APIs that silently downgrade grouped output to flat rows or empty
       vectors.
-- [ ] Standardize command, DSL, and rendering boundaries on
+- [x] Standardize command, DSL, and rendering boundaries on
       `osp_core::output_model::OutputResult`.
 - [ ] Keep rows as a convenience input only where there is no information loss.
 - [ ] Ensure copy/group/meta flags survive end-to-end.
@@ -191,9 +191,9 @@ Own completion structures and completion-specific algorithms.
 
 Checklist:
 
-- [ ] Ensure completion reuses the same parser/token rules as the CLI/DSL where
+- [x] Ensure completion reuses the same parser/token rules as the CLI/DSL where
       possible.
-- [ ] Remove schema drift between completion metadata and real command syntax.
+- [x] Remove schema drift between completion metadata and real command syntax.
 - [ ] Keep completion nodes typed; avoid magic keys and implicit side channels.
 - [ ] Keep dynamic completion augmentation isolated and cache-aware.
 
@@ -205,10 +205,10 @@ Own interactive loop, history expansion, completion plumbing, and shell state.
 Checklist:
 
 - [ ] Keep REPL runtime state separate from config, auth, and UI policy.
-- [ ] Reuse the same strict parser and dispatcher semantics as one-shot mode.
+- [x] Reuse the same strict parser and dispatcher semantics as one-shot mode.
 - [ ] Avoid reintroducing hidden mutable state that changes command semantics.
 - [ ] Keep history expansion explicit and well tested.
-- [ ] Ensure REPL shells do not bypass the `OutputResult` rendering contract.
+- [x] Ensure REPL shells do not bypass the `OutputResult` rendering contract.
 
 ## `osp-cli`
 
@@ -222,8 +222,8 @@ Checklist:
 - [ ] Keep flags in one parser, not in decorator-like wrappers.
 - [ ] Remove remaining command grammar hacks where possible instead of
       normalizing them later.
-- [ ] Make alias expansion a parser concern only.
-- [ ] Enforce the strict DSL defaults from this document.
+- [x] Make alias expansion a parser concern only.
+- [x] Enforce the strict DSL defaults from this document.
 - [ ] Keep `AppState` as a thin integration root, not a new monolith.
 - [x] Audit direct row-based helper paths and move them to `OutputResult` where
       shape can vary.
