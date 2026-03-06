@@ -47,27 +47,6 @@ impl CompletionEngine {
         (stub, suggestions)
     }
 
-    pub fn subcommands_for(&self, line: &str, cursor: usize, value: &str) -> Option<Vec<String>> {
-        let safe_cursor = clamp_to_char_boundary(line, cursor.min(line.len()));
-        let before_cursor = &line[..safe_cursor];
-        let tokens = self.parser.tokenize(before_cursor);
-        let cmd = self.parser.parse(&tokens);
-        let stub = self.parser.compute_stub(before_cursor, &tokens);
-
-        let matched_path = self.resolve_context_state(&cmd, &stub);
-        let (node, matched) = self.resolve_context(&matched_path);
-        if matched.len() != matched_path.len() {
-            return None;
-        }
-
-        let child = node.children.get(value)?;
-        if child.children.is_empty() {
-            return None;
-        }
-
-        Some(child.children.keys().cloned().collect())
-    }
-
     fn merge_context_flags(
         &self,
         cursor_cmd: &mut CommandLine,
@@ -363,5 +342,36 @@ mod tests {
             .collect();
         assert!(values.contains(&"rhel".to_string()));
         assert!(values.contains(&"alma".to_string()));
+    }
+
+    #[test]
+    fn subcommand_meta_includes_tooltip_and_preview() {
+        let mut ldap = CompletionNode::default();
+        ldap.tooltip = Some("Directory lookup".to_string());
+        ldap.children
+            .insert("user".to_string(), CompletionNode::default());
+        ldap.children
+            .insert("host".to_string(), CompletionNode::default());
+
+        let tree = CompletionTree {
+            root: CompletionNode::default().with_child("ldap", ldap),
+            ..CompletionTree::default()
+        };
+        let engine = CompletionEngine::new(tree);
+
+        let (_, suggestions) = engine.suggestions_with_stub("ld", 2);
+        let meta = suggestions
+            .into_iter()
+            .find_map(|entry| match entry {
+                SuggestionOutput::Item(item) if item.text == "ldap" => item.meta,
+                SuggestionOutput::PathSentinel => None,
+                _ => None,
+            })
+            .expect("ldap suggestion should have metadata");
+
+        assert!(meta.contains("Directory lookup"));
+        assert!(meta.contains("subcommands:"));
+        assert!(meta.contains("host"));
+        assert!(meta.contains("user"));
     }
 }

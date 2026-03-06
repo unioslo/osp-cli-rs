@@ -2,11 +2,8 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use anyhow::Result;
-use fuzzy_matcher::FuzzyMatcher;
-use fuzzy_matcher::skim::SkimMatcherV2;
 mod history;
 mod menu;
 mod menu_core;
@@ -678,20 +675,15 @@ where
 
 struct ReplCompleter {
     engine: CompletionEngine,
-    fallback_words: Vec<String>,
-    use_fallback_words: bool,
 }
 
 impl ReplCompleter {
     fn new(mut words: Vec<String>, completion_tree: Option<CompletionTree>) -> Self {
         words.sort();
         words.dedup();
-        let use_fallback_words = completion_tree.is_none();
         let tree = completion_tree.unwrap_or_else(|| build_repl_tree(&words));
         Self {
             engine: CompletionEngine::new(tree),
-            fallback_words: words,
-            use_fallback_words,
         }
     }
 }
@@ -713,40 +705,20 @@ impl Completer for ReplCompleter {
         let mut has_path_sentinel = false;
         for output in outputs {
             match output {
-                SuggestionOutput::Item(item) => ranked.push(RankedSuggestion {
-                    value: item.text,
-                    description: item.meta,
-                    display: item.display,
-                    sort: item.sort,
-                    match_score: item.match_score,
-                    is_exact: item.is_exact,
-                }),
+                SuggestionOutput::Item(item) => ranked.push(item),
                 SuggestionOutput::PathSentinel => has_path_sentinel = true,
             }
         }
 
-        if ranked.is_empty() && self.use_fallback_words {
-            ranked.extend(word_suggestions(&self.fallback_words, &stub));
-        }
-
-        ranked = dedupe_ranked_suggestions(ranked);
-        sort_ranked_suggestions(&mut ranked);
         let mut suggestions = ranked
             .into_iter()
-            .map(|item| {
-                let description = self
-                    .engine
-                    .subcommands_for(line, pos, &item.value)
-                    .map(|subs| format!("subcommands: {}", subs.join(", ")))
-                    .or(item.description);
-                Suggestion {
-                    value: item.value,
-                    description,
-                    extra: item.display.map(|display| vec![display]),
-                    span,
-                    append_whitespace: true,
-                    ..Suggestion::default()
-                }
+            .map(|item| Suggestion {
+                value: item.text,
+                description: item.meta,
+                extra: item.display.map(|display| vec![display]),
+                span,
+                append_whitespace: true,
+                ..Suggestion::default()
             })
             .collect::<Vec<_>>();
 
@@ -756,16 +728,6 @@ impl Completer for ReplCompleter {
 
         suggestions
     }
-}
-
-#[derive(Debug, Clone)]
-struct RankedSuggestion {
-    value: String,
-    description: Option<String>,
-    display: Option<String>,
-    sort: Option<String>,
-    match_score: u32,
-    is_exact: bool,
 }
 
 pub fn default_pipe_verbs() -> BTreeMap<String, String> {
@@ -1075,66 +1037,6 @@ fn parse_color_token(token: &str) -> Option<Color> {
     }
 }
 
-fn dedupe_ranked_suggestions(items: Vec<RankedSuggestion>) -> Vec<RankedSuggestion> {
-    let mut out: Vec<RankedSuggestion> = Vec::new();
-    for item in items {
-        if let Some(existing) = out.iter_mut().find(|entry| entry.value == item.value) {
-            if existing.description.is_none() {
-                existing.description = item.description;
-            }
-            if existing.display.is_none() {
-                existing.display = item.display;
-            }
-            if existing.sort.is_none() {
-                existing.sort = item.sort;
-            }
-            existing.is_exact |= item.is_exact;
-            existing.match_score = existing.match_score.min(item.match_score);
-            continue;
-        }
-        out.push(item);
-    }
-    out
-}
-
-fn sort_ranked_suggestions(items: &mut [RankedSuggestion]) {
-    let all_numeric =
-        !items.is_empty() && items.iter().all(|item| numeric_sort_value(item).is_some());
-
-    if all_numeric {
-        items.sort_by(|left, right| {
-            let left_sort = numeric_sort_value(left).unwrap_or(f64::MAX);
-            let right_sort = numeric_sort_value(right).unwrap_or(f64::MAX);
-            (not_exact(left), left.match_score)
-                .cmp(&(not_exact(right), right.match_score))
-                .then_with(|| {
-                    left_sort
-                        .partial_cmp(&right_sort)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| {
-                    left.value
-                        .to_ascii_lowercase()
-                        .cmp(&right.value.to_ascii_lowercase())
-                })
-        });
-        return;
-    }
-
-    items.sort_by(|left, right| {
-        (
-            not_exact(left),
-            left.match_score,
-            left.value.to_ascii_lowercase(),
-        )
-            .cmp(&(
-                not_exact(right),
-                right.match_score,
-                right.value.to_ascii_lowercase(),
-            ))
-    });
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CompletionTraceMenuState {
     pub selected_index: i64,
@@ -1352,81 +1254,6 @@ fn debug_match_kind(
     "value".to_string()
 }
 
-fn not_exact(item: &RankedSuggestion) -> bool {
-    !item.is_exact
-}
-
-fn numeric_sort_value(item: &RankedSuggestion) -> Option<f64> {
-    item.sort
-        .as_deref()
-        .and_then(|value| value.parse::<f64>().ok())
-        .or_else(|| item.value.parse::<f64>().ok())
-        .or_else(|| {
-            item.description
-                .as_deref()
-                .and_then(|value| value.parse::<f64>().ok())
-        })
-}
-
-fn word_suggestions(words: &[String], stub: &str) -> Vec<RankedSuggestion> {
-    words
-        .iter()
-        .filter_map(|word| {
-            let score = fuzzy_match_score(stub, word)?;
-            Some(RankedSuggestion {
-                value: word.clone(),
-                description: None,
-                display: None,
-                sort: None,
-                match_score: score,
-                is_exact: score == 0,
-            })
-        })
-        .collect()
-}
-
-fn fuzzy_match_score(stub: &str, candidate: &str) -> Option<u32> {
-    if stub.is_empty() {
-        return Some(1_000);
-    }
-
-    let stub_lc = stub.to_ascii_lowercase();
-    let candidate_lc = candidate.to_ascii_lowercase();
-    if stub_lc == candidate_lc {
-        return Some(0);
-    }
-    if candidate_lc.starts_with(&stub_lc) {
-        return Some(100 + (candidate_lc.len().saturating_sub(stub_lc.len())) as u32);
-    }
-
-    if let Some(boundary) = boundary_prefix_index(&candidate_lc, &stub_lc) {
-        return Some(200 + boundary as u32);
-    }
-
-    let fuzzy = fuzzy_matcher().fuzzy_match(&candidate_lc, &stub_lc)?;
-    let normalized = fuzzy.max(0) as u32;
-    let penalty = 100_000u32.saturating_sub(normalized);
-    Some(10_000 + penalty)
-}
-
-fn fuzzy_matcher() -> &'static SkimMatcherV2 {
-    static MATCHER: OnceLock<SkimMatcherV2> = OnceLock::new();
-    MATCHER.get_or_init(SkimMatcherV2::default)
-}
-
-fn boundary_prefix_index(candidate: &str, stub: &str) -> Option<usize> {
-    candidate
-        .match_indices(stub)
-        .find(|(idx, _)| {
-            *idx == 0
-                || candidate
-                    .as_bytes()
-                    .get(idx.saturating_sub(1))
-                    .is_some_and(|byte| matches!(byte, b'-' | b'_' | b'.' | b':' | b'/'))
-        })
-        .map(|(idx, _)| idx)
-}
-
 fn path_suggestions(stub: &str, span: Span) -> Vec<Suggestion> {
     let (lookup, insert_prefix, typed_prefix) = split_path_stub(stub);
     let read_dir = std::fs::read_dir(&lookup);
@@ -1563,10 +1390,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        HistoryConfig, HistoryShellContext, RankedSuggestion, ReplCompleter, ReplHighlighter,
-        ReplLineResult, SharedHistory, SubmissionContext, SubmissionResult, color_from_style_spec,
-        dedupe_ranked_suggestions, default_pipe_verbs, expand_history, process_submission,
-        sort_ranked_suggestions,
+        HistoryConfig, HistoryShellContext, ReplCompleter, ReplHighlighter, ReplLineResult,
+        SharedHistory, SubmissionContext, SubmissionResult, color_from_style_spec,
+        default_pipe_verbs, expand_history, process_submission,
     };
 
     fn token_styles(styled: &StyledText) -> Vec<(String, Option<Color>)> {
@@ -1761,6 +1587,35 @@ mod tests {
     }
 
     #[test]
+    fn completer_uses_engine_metadata_for_subcommands() {
+        let mut ldap = CompletionNode::default();
+        ldap.tooltip = Some("Directory lookup".to_string());
+        ldap.children
+            .insert("user".to_string(), CompletionNode::default());
+        ldap.children
+            .insert("host".to_string(), CompletionNode::default());
+
+        let tree = CompletionTree {
+            root: CompletionNode::default().with_child("ldap", ldap),
+            ..CompletionTree::default()
+        };
+
+        let mut completer = ReplCompleter::new(Vec::new(), Some(tree));
+        let completion = completer
+            .complete("ld", 2)
+            .into_iter()
+            .find(|item| item.value == "ldap")
+            .expect("ldap completion should exist");
+
+        assert!(completion.description.as_deref().is_some_and(|value| {
+            value.contains("Directory lookup")
+                && value.contains("subcommands:")
+                && value.contains("host")
+                && value.contains("user")
+        }));
+    }
+
+    #[test]
     fn color_parser_extracts_hex_and_named_colors() {
         assert_eq!(
             color_from_style_spec("bold #ff79c6"),
@@ -1776,73 +1631,6 @@ mod tests {
             Some(Color::Rgb(80, 250, 123))
         );
         assert!(color_from_style_spec("not-a-color").is_none());
-    }
-
-    #[test]
-    fn dedupe_ranked_suggestions_preserves_meta_and_display() {
-        let input = vec![
-            RankedSuggestion {
-                value: "x".to_string(),
-                description: Some("meta".to_string()),
-                display: None,
-                sort: None,
-                match_score: 120,
-                is_exact: false,
-            },
-            RankedSuggestion {
-                value: "x".to_string(),
-                description: None,
-                display: Some("Display".to_string()),
-                sort: Some("10".to_string()),
-                match_score: 80,
-                is_exact: false,
-            },
-        ];
-
-        let deduped = dedupe_ranked_suggestions(input);
-        assert_eq!(deduped.len(), 1);
-        let only = &deduped[0];
-        assert_eq!(only.description.as_deref(), Some("meta"));
-        assert_eq!(only.display.as_deref(), Some("Display"));
-        assert_eq!(only.sort.as_deref(), Some("10"));
-        assert_eq!(only.match_score, 80);
-    }
-
-    #[test]
-    fn sort_ranked_suggestions_prioritizes_exact_then_match_score() {
-        let mut items = vec![
-            RankedSuggestion {
-                value: "ldap-user".to_string(),
-                description: None,
-                display: None,
-                sort: None,
-                match_score: 180,
-                is_exact: false,
-            },
-            RankedSuggestion {
-                value: "ldap".to_string(),
-                description: None,
-                display: None,
-                sort: None,
-                match_score: 0,
-                is_exact: true,
-            },
-            RankedSuggestion {
-                value: "plugins".to_string(),
-                description: None,
-                display: None,
-                sort: None,
-                match_score: 420,
-                is_exact: false,
-            },
-        ];
-
-        sort_ranked_suggestions(&mut items);
-        let ordered = items
-            .iter()
-            .map(|item| item.value.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(ordered, vec!["ldap", "ldap-user", "plugins"]);
     }
 
     #[test]

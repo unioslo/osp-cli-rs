@@ -282,7 +282,7 @@ impl SuggestionEngine {
                 let score = self.match_score(stub, name)?;
                 Some(Suggestion {
                     text: name.clone(),
-                    meta: child.tooltip.clone(),
+                    meta: child_completion_meta(child),
                     display: None,
                     is_exact: score == 0,
                     sort: None,
@@ -395,6 +395,33 @@ impl SuggestionEngine {
         }
         required
     }
+}
+
+fn child_completion_meta(child: &CompletionNode) -> Option<String> {
+    let summary = child_subcommand_summary(child);
+    match (child.tooltip.as_deref(), summary) {
+        (Some(tooltip), Some(summary)) => Some(format!("{tooltip} ({summary})")),
+        (Some(tooltip), None) => Some(tooltip.to_string()),
+        (None, Some(summary)) => Some(summary),
+        (None, None) => None,
+    }
+}
+
+fn child_subcommand_summary(child: &CompletionNode) -> Option<String> {
+    if child.children.is_empty() {
+        return None;
+    }
+
+    let preview = child.children.keys().take(3).cloned().collect::<Vec<_>>();
+    if preview.is_empty() {
+        return None;
+    }
+
+    let mut summary = format!("subcommands: {}", preview.join(", "));
+    if child.children.len() > preview.len() {
+        summary.push_str(", ...");
+    }
+    Some(summary)
 }
 
 fn sort_suggestion_outputs(outputs: &mut Vec<SuggestionOutput>) {
