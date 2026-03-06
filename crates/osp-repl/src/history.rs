@@ -187,10 +187,10 @@ pub struct OspHistoryStore {
 impl OspHistoryStore {
     pub fn new(config: HistoryConfig) -> Result<Self> {
         let mut records = Vec::new();
-        if config.persist_enabled() {
-            if let Some(path) = &config.path {
-                records = load_records(path);
-            }
+        if config.persist_enabled()
+            && let Some(path) = &config.path
+        {
+            records = load_records(path);
         }
         let mut store = Self { config, records };
         store.trim_to_capacity();
@@ -377,8 +377,7 @@ impl OspHistoryStore {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
         for record in &self.records {
-            let payload = serde_json::to_string(record)
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+            let payload = serde_json::to_string(record).map_err(std::io::Error::other)?;
             writer.write_all(payload.as_bytes())?;
             writer.write_all(b"\n")?;
         }
@@ -427,15 +426,15 @@ impl OspHistoryStore {
                 return false;
             }
         }
-        if let Some(hostname) = &filter.hostname {
-            if record.hostname.as_deref() != Some(hostname.as_str()) {
-                return false;
-            }
+        if let Some(hostname) = &filter.hostname
+            && record.hostname.as_deref() != Some(hostname.as_str())
+        {
+            return false;
         }
-        if let Some(cwd) = &filter.cwd_exact {
-            if record.cwd.as_deref() != Some(cwd.as_str()) {
-                return false;
-            }
+        if let Some(cwd) = &filter.cwd_exact
+            && record.cwd.as_deref() != Some(cwd.as_str())
+        {
+            return false;
         }
         if let Some(prefix) = &filter.cwd_prefix {
             match record.cwd.as_deref() {
@@ -449,10 +448,10 @@ impl OspHistoryStore {
                 return false;
             }
         }
-        if let Some(session) = filter.session {
-            if record.session_id != Some(i64::from(session)) {
-                return false;
-            }
+        if let Some(session) = filter.session
+            && record.session_id != Some(i64::from(session))
+        {
+            return false;
         }
         true
     }
@@ -466,7 +465,7 @@ impl OspHistoryStore {
             exit_status: item.exit_status,
             cwd: item.cwd.clone(),
             hostname: item.hostname.clone(),
-            session_id: item.session_id.map(|id| i64::from(id)),
+            session_id: item.session_id.map(i64::from),
             profile: self.config.profile.clone(),
             terminal: self.config.terminal.clone(),
         }
@@ -555,10 +554,10 @@ impl History for OspHistoryStore {
             let last_match = self.records.iter().rev().find(|record| {
                 self.profile_allows(record) && self.shell_allows(record, shell_prefix.as_deref())
             });
-            if let Some(last) = last_match {
-                if last.command_line == expanded_full {
-                    return Ok(h);
-                }
+            if let Some(last) = last_match
+                && last.command_line == expanded_full
+            {
+                return Ok(h);
             }
         }
 
@@ -781,7 +780,7 @@ impl History for SharedHistory {
         let mut guard = self
             .inner
             .lock()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "history lock poisoned"))?;
+            .map_err(|_| std::io::Error::other("history lock poisoned"))?;
         History::sync(&mut *guard)
     }
 
@@ -801,7 +800,7 @@ fn load_records(path: &Path) -> Vec<HistoryRecord> {
     };
     let reader = BufReader::new(file);
     let mut records = Vec::new();
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -1007,12 +1006,11 @@ fn matches_pattern(pattern: &str, command: &str) -> bool {
         first = false;
     }
 
-    if !pattern.ends_with('*') {
-        if let Some(last) = parts.iter().rev().find(|part| !part.is_empty()) {
-            if !command.ends_with(last) {
-                return false;
-            }
-        }
+    if !pattern.ends_with('*')
+        && let Some(last) = parts.iter().rev().find(|part| !part.is_empty())
+        && !command.ends_with(last)
+    {
+        return false;
     }
 
     true

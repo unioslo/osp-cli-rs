@@ -45,7 +45,7 @@ fn config_get_with_sources_contract() {
         r#"
 [default]
 profile.default = "uio"
-ui.format = "table"
+ui.mode = "plain"
 "#,
     );
 
@@ -54,13 +54,13 @@ ui.format = "table"
         "--json",
         "config",
         "get",
-        "ui.format",
+        "ui.mode",
         "--sources",
     ]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"source\": \"file\""))
-        .stdout(predicate::str::contains("\"value\": \"table\""));
+        .stdout(predicate::str::contains("\"value\": \"plain\""));
 
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -171,18 +171,18 @@ fn config_explain_reports_winner_and_candidates_contract() {
         r#"
 [default]
 profile.default = "uio"
-ui.format = "table"
+ui.mode = "rich"
 
 [profile.uio]
-ui.format = "mreg"
+ui.mode = "plain"
 "#,
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd.env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .env("OSP__UI__FORMAT", "json")
-        .args(["--json", "config", "explain", "ui.format"]);
+        .env("OSP__UI__MODE", "auto")
+        .args(["--json", "config", "explain", "ui.mode"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"source\": \"env\""))
@@ -297,12 +297,7 @@ extensions.demo.potato = "sekrit"
     redacted
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args([
-            "--json",
-            "config",
-            "explain",
-            "extensions.demo.potato",
-        ]);
+        .args(["--json", "config", "explain", "extensions.demo.potato"]);
     redacted
         .assert()
         .success()
@@ -378,6 +373,35 @@ ui.mode = "plain"
         .clone();
 
     assert_eq!(positional_out, explicit_out);
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_json_flag_seeds_session_format_contract() {
+    let home = make_temp_dir("osp-cli-config-launch-json");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+ui.format = "table"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "config",
+        "get",
+        "ui.format",
+        "--sources",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"source\": \"session\""))
+        .stdout(predicate::str::contains("\"value\": \"json\""));
 
     let _ = std::fs::remove_dir_all(&home);
 }

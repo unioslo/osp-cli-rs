@@ -9,27 +9,358 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 mod history;
 mod menu;
+mod menu_core;
 pub use history::{
     HistoryConfig, HistoryEntry, HistoryShellContext, OspHistoryStore, SharedHistory,
     expand_history,
 };
-use menu::OspCompletionMenu;
+use menu::{MenuDebug, MenuStyleDebug, OspCompletionMenu, debug_snapshot, display_text};
 use nu_ansi_term::{Color, Style};
 use osp_completion::{
-    ArgNode, CommandLineParser, CompletionEngine, CompletionNode, CompletionTree, SuggestionEntry,
-    SuggestionOutput,
+    ArgNode, CommandLine, CommandLineParser, CompletionEngine, CompletionNode, CompletionTree,
+    SuggestionEntry, SuggestionOutput,
 };
 use reedline::{
-    Completer, EditCommand, EditMode, Emacs, Highlighter, KeyCode, KeyModifiers, Prompt,
-    PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline, ReedlineEvent,
-    ReedlineMenu, ReedlineRawEvent, Signal, Span, StyledText, Suggestion,
-    default_emacs_keybindings,
+    Completer, EditCommand, EditMode, Editor, Emacs, Highlighter, KeyCode, KeyModifiers, Menu,
+    MenuEvent, Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline,
+    ReedlineEvent, ReedlineMenu, ReedlineRawEvent, Signal, Span, StyledText, Suggestion,
+    UndoBehavior, default_emacs_keybindings,
 };
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct ReplPrompt {
     pub left: String,
     pub indicator: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplReloadKind {
+    Default,
+    WithIntro,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplLineResult {
+    Continue(String),
+    Restart {
+        output: String,
+        reload: ReplReloadKind,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplRunResult {
+    Exit(i32),
+    Restart {
+        output: String,
+        reload: ReplReloadKind,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionDebugMatch {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionDebug {
+    pub line: String,
+    pub cursor: usize,
+    pub replace_range: [usize; 2],
+    pub stub: String,
+    pub matches: Vec<CompletionDebugMatch>,
+    pub selected: i64,
+    pub selected_row: u16,
+    pub selected_col: u16,
+    pub columns: u16,
+    pub rows: u16,
+    pub visible_rows: u16,
+    pub menu_indent: u16,
+    pub menu_styles: MenuStyleDebug,
+    pub menu_description: Option<String>,
+    pub menu_description_rendered: Option<String>,
+    pub width: u16,
+    pub height: u16,
+    pub unicode: bool,
+    pub color: bool,
+    pub rendered: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugStep {
+    Tab,
+    BackTab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Accept,
+    Close,
+}
+
+impl DebugStep {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "tab" => Some(Self::Tab),
+            "backtab" | "shift-tab" | "shift_tab" => Some(Self::BackTab),
+            "up" => Some(Self::Up),
+            "down" => Some(Self::Down),
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            "accept" | "enter" => Some(Self::Accept),
+            "close" | "esc" | "escape" => Some(Self::Close),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Tab => "tab",
+            Self::BackTab => "backtab",
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Accept => "accept",
+            Self::Close => "close",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionDebugFrame {
+    pub step: String,
+    pub state: CompletionDebug,
+}
+
+pub fn debug_completion(
+    tree: &CompletionTree,
+    line: &str,
+    cursor: usize,
+    width: u16,
+    height: u16,
+    ansi: bool,
+    unicode: bool,
+    appearance: Option<&ReplAppearance>,
+) -> CompletionDebug {
+    let mut editor = Editor::default();
+    editor.edit_buffer(
+        |buf| {
+            buf.set_buffer(line.to_string());
+            buf.set_insertion_point(cursor.min(buf.get_buffer().len()));
+        },
+        UndoBehavior::CreateUndoPoint,
+    );
+
+    let mut completer = ReplCompleter::new(Vec::new(), Some(tree.clone()));
+    let mut menu = if let Some(appearance) = appearance {
+        build_completion_menu(appearance)
+    } else {
+        OspCompletionMenu::default()
+    };
+
+    menu.menu_event(MenuEvent::Activate(false));
+    menu.apply_event(&mut editor, &mut completer);
+
+    snapshot_completion_debug(tree, &mut menu, &editor, width, height, ansi, unicode)
+}
+
+pub fn debug_completion_steps(
+    tree: &CompletionTree,
+    line: &str,
+    cursor: usize,
+    width: u16,
+    height: u16,
+    ansi: bool,
+    unicode: bool,
+    appearance: Option<&ReplAppearance>,
+    steps: &[DebugStep],
+) -> Vec<CompletionDebugFrame> {
+    let mut editor = Editor::default();
+    editor.edit_buffer(
+        |buf| {
+            buf.set_buffer(line.to_string());
+            buf.set_insertion_point(cursor.min(buf.get_buffer().len()));
+        },
+        UndoBehavior::CreateUndoPoint,
+    );
+
+    let mut completer = ReplCompleter::new(Vec::new(), Some(tree.clone()));
+    let mut menu = if let Some(appearance) = appearance {
+        build_completion_menu(appearance)
+    } else {
+        OspCompletionMenu::default()
+    };
+
+    let steps = steps.to_vec();
+    if steps.is_empty() {
+        return Vec::new();
+    }
+
+    let mut frames = Vec::with_capacity(steps.len());
+    for step in steps {
+        apply_debug_step(step, &mut menu, &mut editor, &mut completer);
+        let state =
+            snapshot_completion_debug(tree, &mut menu, &editor, width, height, ansi, unicode);
+        frames.push(CompletionDebugFrame {
+            step: step.as_str().to_string(),
+            state,
+        });
+    }
+
+    frames
+}
+
+fn apply_debug_step(
+    step: DebugStep,
+    menu: &mut OspCompletionMenu,
+    editor: &mut Editor,
+    completer: &mut ReplCompleter,
+) {
+    match step {
+        DebugStep::Tab => {
+            if menu.is_active() {
+                dispatch_menu_event(menu, editor, completer, MenuEvent::NextElement);
+            } else {
+                dispatch_menu_event(menu, editor, completer, MenuEvent::Activate(false));
+            }
+        }
+        DebugStep::BackTab => {
+            if menu.is_active() {
+                dispatch_menu_event(menu, editor, completer, MenuEvent::PreviousElement);
+            } else {
+                dispatch_menu_event(menu, editor, completer, MenuEvent::Activate(false));
+            }
+        }
+        DebugStep::Up => {
+            if menu.is_active() {
+                dispatch_menu_event(menu, editor, completer, MenuEvent::MoveUp);
+            }
+        }
+        DebugStep::Down => {
+            if menu.is_active() {
+                dispatch_menu_event(menu, editor, completer, MenuEvent::MoveDown);
+            }
+        }
+        DebugStep::Left => {
+            if menu.is_active() {
+                dispatch_menu_event(menu, editor, completer, MenuEvent::MoveLeft);
+            }
+        }
+        DebugStep::Right => {
+            if menu.is_active() {
+                dispatch_menu_event(menu, editor, completer, MenuEvent::MoveRight);
+            }
+        }
+        DebugStep::Accept => {
+            if menu.is_active() {
+                menu.replace_in_buffer(editor);
+                dispatch_menu_event(menu, editor, completer, MenuEvent::Deactivate);
+            }
+        }
+        DebugStep::Close => {
+            dispatch_menu_event(menu, editor, completer, MenuEvent::Deactivate);
+        }
+    }
+}
+
+fn dispatch_menu_event(
+    menu: &mut OspCompletionMenu,
+    editor: &mut Editor,
+    completer: &mut ReplCompleter,
+    event: MenuEvent,
+) {
+    menu.menu_event(event);
+    menu.apply_event(editor, completer);
+}
+
+fn snapshot_completion_debug(
+    tree: &CompletionTree,
+    menu: &mut OspCompletionMenu,
+    editor: &Editor,
+    width: u16,
+    height: u16,
+    ansi: bool,
+    unicode: bool,
+) -> CompletionDebug {
+    let line = editor.get_buffer().to_string();
+    let cursor = editor.line_buffer().insertion_point();
+    let values = menu.get_values();
+
+    let (stub, replace_range) = if let Some(first) = values.first() {
+        let start = first.span.start;
+        let end = first.span.end;
+        let stub = line.get(start..end).unwrap_or("").to_string();
+        (stub, [start, end])
+    } else {
+        let engine = CompletionEngine::new(tree.clone());
+        let (stub, _) = engine.suggestions_with_stub(&line, cursor);
+        let start = cursor.saturating_sub(stub.len());
+        (stub, [start, cursor])
+    };
+
+    let parser = CommandLineParser;
+    let tokens = parser.tokenize(&line);
+    let cmd = parser.parse(&tokens);
+    let (context_node, matched_path) = debug_resolve_context_state(tree, &cmd, &stub);
+    let flag_scope = debug_nearest_flag_scope(tree, &matched_path);
+
+    let matches = values
+        .iter()
+        .map(|item| CompletionDebugMatch {
+            id: item.value.clone(),
+            label: display_text(item).to_string(),
+            description: item.description.clone(),
+            kind: debug_match_kind(&cmd, &item.value, context_node, &matched_path, flag_scope),
+        })
+        .collect::<Vec<_>>();
+
+    let MenuDebug {
+        columns,
+        rows,
+        visible_rows,
+        indent,
+        selected_index,
+        selected_row,
+        selected_col,
+        description,
+        description_rendered,
+        styles,
+        rendered,
+    } = debug_snapshot(menu, editor, width, height, ansi);
+
+    let selected = if matches.is_empty() {
+        -1
+    } else {
+        selected_index
+    };
+
+    CompletionDebug {
+        line,
+        cursor,
+        replace_range,
+        stub,
+        matches,
+        selected,
+        selected_row,
+        selected_col,
+        columns,
+        rows,
+        visible_rows,
+        menu_indent: indent,
+        menu_styles: styles,
+        menu_description: description,
+        menu_description_rendered: description_rendered,
+        width,
+        height,
+        unicode,
+        color: ansi,
+        rendered,
+    }
 }
 
 impl ReplPrompt {
@@ -124,9 +455,9 @@ pub fn run_repl<F>(
     help_text: String,
     history_config: HistoryConfig,
     mut execute: F,
-) -> Result<i32>
+) -> Result<ReplRunResult>
 where
-    F: FnMut(&str, &SharedHistory) -> Result<String>,
+    F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
     completion_words.extend(
         ["help", "exit", "quit", "P", "F", "V", "|"]
@@ -199,7 +530,7 @@ where
             &history_store,
             &mut execute,
         )?;
-        return Ok(0);
+        return Ok(ReplRunResult::Exit(0));
     }
 
     loop {
@@ -221,7 +552,7 @@ falling back to basic input mode."
                         &history_store,
                         &mut execute,
                     )?;
-                    return Ok(0);
+                    return Ok(ReplRunResult::Exit(0));
                 }
                 return Err(err.into());
             }
@@ -249,12 +580,15 @@ falling back to basic input mode."
 
                 let in_shell = shell_prefix.is_some();
                 match command_line.as_str() {
-                    "exit" | "quit" if !in_shell => return Ok(0),
+                    "exit" | "quit" if !in_shell => return Ok(ReplRunResult::Exit(0)),
                     "help" | "--help" | "-h" if !in_shell => {
                         print!("{help_text}");
                     }
                     _ => match execute(&command_line, &history_store) {
-                        Ok(output) => print!("{output}"),
+                        Ok(ReplLineResult::Continue(output)) => print!("{output}"),
+                        Ok(ReplLineResult::Restart { output, reload }) => {
+                            return Ok(ReplRunResult::Restart { output, reload });
+                        }
                         Err(err) => eprintln!("{err}"),
                     },
                 }
@@ -277,7 +611,7 @@ falling back to basic input mode."
                     command_history = history_store.recent_commands();
                 }
             }
-            Signal::CtrlD => return Ok(0),
+            Signal::CtrlD => return Ok(ReplRunResult::Exit(0)),
             Signal::CtrlC => continue,
         }
     }
@@ -304,7 +638,7 @@ fn run_repl_basic<F>(
     execute: &mut F,
 ) -> Result<()>
 where
-    F: FnMut(&str, &SharedHistory) -> Result<String>,
+    F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
     let stdin = io::stdin();
     let history_enabled = history_limit > 0;
@@ -342,7 +676,11 @@ where
                 print!("{help_text}");
             }
             _ => match execute(&command_line, history_store) {
-                Ok(output) => print!("{output}"),
+                Ok(ReplLineResult::Continue(output)) => print!("{output}"),
+                Ok(ReplLineResult::Restart { output, .. }) => {
+                    print!("{output}");
+                    break;
+                }
                 Err(err) => eprintln!("{err}"),
             },
         }
@@ -389,6 +727,11 @@ impl ReplCompleter {
 
 impl Completer for ReplCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        debug_assert!(
+            pos <= line.len(),
+            "completer received pos {pos} beyond line length {}",
+            line.len()
+        );
         let (stub, outputs) = self.engine.suggestions_with_stub(line, pos);
         let span = Span {
             start: pos.saturating_sub(stub.len()),
@@ -417,16 +760,22 @@ impl Completer for ReplCompleter {
 
         ranked = dedupe_ranked_suggestions(ranked);
         sort_ranked_suggestions(&mut ranked);
-
         let mut suggestions = ranked
             .into_iter()
-            .map(|item| Suggestion {
-                value: item.value,
-                description: item.description,
-                extra: item.display.map(|display| vec![display]),
-                span,
-                append_whitespace: true,
-                ..Suggestion::default()
+            .map(|item| {
+                let description = self
+                    .engine
+                    .subcommands_for(line, pos, &item.value)
+                    .map(|subs| format!("subcommands: {}", subs.join(", ")))
+                    .or(item.description);
+                Suggestion {
+                    value: item.value,
+                    description,
+                    extra: item.display.map(|display| vec![display]),
+                    span,
+                    append_whitespace: true,
+                    ..Suggestion::default()
+                }
             })
             .collect::<Vec<_>>();
 
@@ -517,10 +866,7 @@ fn build_repl_highlighter(
         .command_highlight_style
         .as_deref()
         .and_then(color_from_style_spec);
-    if command_color.is_none() {
-        return None;
-    }
-    Some(ReplHighlighter::new(tree.clone(), command_color))
+    Some(ReplHighlighter::new(tree.clone(), command_color?))
 }
 
 fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
@@ -541,10 +887,10 @@ struct ReplHighlighter {
 }
 
 impl ReplHighlighter {
-    fn new(tree: CompletionTree, command_color: Option<Color>) -> Self {
+    fn new(tree: CompletionTree, command_color: Color) -> Self {
         Self {
             tree,
-            command_color: command_color.unwrap_or(Color::Green),
+            command_color,
             parser: CommandLineParser,
         }
     }
@@ -575,22 +921,6 @@ impl ReplHighlighter {
 
         matched
     }
-}
-
-fn is_flag_token(token: &str) -> bool {
-    if !token.starts_with('-') {
-        return false;
-    }
-    if token == "-" || token == "--" {
-        return false;
-    }
-    if token.starts_with("--") {
-        return token.len() > 2;
-    }
-    token
-        .chars()
-        .nth(1)
-        .is_some_and(|ch| ch.is_ascii_alphabetic())
 }
 
 impl Highlighter for ReplHighlighter {
@@ -624,8 +954,6 @@ impl Highlighter for ReplHighlighter {
 
             let style = if index < matched_len {
                 Style::new().fg(self.command_color)
-            } else if is_flag_token(token) {
-                Style::new().fg(self.command_color)
             } else if let Some(color) = parse_hex_color_token(token) {
                 Style::new().fg(color)
             } else {
@@ -646,9 +974,7 @@ impl Highlighter for ReplHighlighter {
 
 fn parse_hex_color_token(token: &str) -> Option<Color> {
     let normalized = token.trim();
-    let Some(hex) = normalized.strip_prefix('#') else {
-        return None;
-    };
+    let hex = normalized.strip_prefix('#')?;
     if hex.len() == 6 {
         let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
         let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
@@ -827,6 +1153,223 @@ fn sort_ranked_suggestions(items: &mut [RankedSuggestion]) {
     });
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CompletionTraceMenuState {
+    pub selected_index: i64,
+    pub selected_row: u16,
+    pub selected_col: u16,
+    pub active: bool,
+    pub just_activated: bool,
+    pub columns: u16,
+    pub visible_rows: u16,
+    pub rows: u16,
+    pub menu_indent: u16,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CompletionTracePayload<'a> {
+    event: &'a str,
+    line: &'a str,
+    cursor: usize,
+    stub: &'a str,
+    matches: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    buffer_before: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    buffer_after: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor_before: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor_after: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accepted_value: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replace_range: Option<[usize; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_index: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_row: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_col: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    just_activated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    columns: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visible_rows: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rows: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    menu_indent: Option<u16>,
+}
+
+pub(crate) fn trace_completion(
+    event: &str,
+    line: &str,
+    cursor: usize,
+    stub: &str,
+    matches: Vec<String>,
+    replace_range: Option<[usize; 2]>,
+    menu: Option<CompletionTraceMenuState>,
+    buffer_before: Option<&str>,
+    buffer_after: Option<&str>,
+    cursor_before: Option<usize>,
+    cursor_after: Option<usize>,
+    accepted_value: Option<&str>,
+) {
+    if !trace_completion_enabled() {
+        return;
+    }
+
+    let (
+        selected_index,
+        selected_row,
+        selected_col,
+        active,
+        just_activated,
+        columns,
+        visible_rows,
+        rows,
+        menu_indent,
+    ) = if let Some(menu) = menu {
+        (
+            Some(menu.selected_index),
+            Some(menu.selected_row),
+            Some(menu.selected_col),
+            Some(menu.active),
+            Some(menu.just_activated),
+            Some(menu.columns),
+            Some(menu.visible_rows),
+            Some(menu.rows),
+            Some(menu.menu_indent),
+        )
+    } else {
+        (None, None, None, None, None, None, None, None, None)
+    };
+
+    let payload = CompletionTracePayload {
+        event,
+        line,
+        cursor,
+        stub,
+        matches,
+        buffer_before,
+        buffer_after,
+        cursor_before,
+        cursor_after,
+        accepted_value,
+        replace_range,
+        selected_index,
+        selected_row,
+        selected_col,
+        active,
+        just_activated,
+        columns,
+        visible_rows,
+        rows,
+        menu_indent,
+    };
+
+    let serialized = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+    if let Ok(path) = std::env::var("OSP_REPL_TRACE_PATH")
+        && !path.trim().is_empty()
+    {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{serialized}");
+        }
+    } else {
+        eprintln!("{serialized}");
+    }
+}
+
+pub(crate) fn trace_completion_enabled() -> bool {
+    let Ok(raw) = std::env::var("OSP_REPL_TRACE_COMPLETION") else {
+        return false;
+    };
+    !matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "" | "0" | "false" | "off" | "no"
+    )
+}
+
+fn debug_resolve_context_state<'a>(
+    tree: &'a CompletionTree,
+    cmd: &CommandLine,
+    stub: &str,
+) -> (&'a CompletionNode, Vec<String>) {
+    let (pre_node, _) = debug_resolve_context(tree, &cmd.head);
+    let has_subcommands = !pre_node.children.is_empty();
+
+    let head_for_context = if !stub.is_empty() && !stub.starts_with('-') && has_subcommands {
+        &cmd.head[..cmd.head.len().saturating_sub(1)]
+    } else {
+        cmd.head.as_slice()
+    };
+
+    debug_resolve_context(tree, head_for_context)
+}
+
+fn debug_resolve_context<'a>(
+    tree: &'a CompletionTree,
+    path: &[String],
+) -> (&'a CompletionNode, Vec<String>) {
+    let mut node = &tree.root;
+    let mut matched = Vec::new();
+
+    for segment in path {
+        let Some(next) = node.children.get(segment) else {
+            break;
+        };
+        node = next;
+        matched.push(segment.clone());
+        if node.value_leaf {
+            break;
+        }
+    }
+
+    (node, matched)
+}
+
+fn debug_nearest_flag_scope<'a>(tree: &'a CompletionTree, path: &[String]) -> &'a CompletionNode {
+    for i in (0..=path.len()).rev() {
+        let prefix = &path[..i];
+        let (node, matched) = debug_resolve_context(tree, prefix);
+        if matched.len() == prefix.len() && !node.flags.is_empty() {
+            return node;
+        }
+    }
+    &tree.root
+}
+
+fn debug_match_kind(
+    cmd: &CommandLine,
+    value: &str,
+    context_node: &CompletionNode,
+    matched_path: &[String],
+    flag_scope: &CompletionNode,
+) -> String {
+    if cmd.has_pipe {
+        return "pipe".to_string();
+    }
+    if value.starts_with("--") || flag_scope.flags.contains_key(value) {
+        return "flag".to_string();
+    }
+    if context_node.children.contains_key(value) {
+        return if matched_path.is_empty() {
+            "command".to_string()
+        } else {
+            "subcommand".to_string()
+        };
+    }
+    "value".to_string()
+}
+
 fn not_exact(item: &RankedSuggestion) -> bool {
     !item.is_exact
 }
@@ -967,10 +1510,10 @@ fn expand_home(path: &str) -> String {
     if path == "~" {
         return std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
     }
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return format!("{home}/{rest}");
     }
     path.to_string()
 }
@@ -1016,18 +1559,54 @@ impl Prompt for OspPrompt {
             history_search.term
         ))
     }
+
+    fn get_prompt_color(&self) -> reedline::Color {
+        reedline::Color::Reset
+    }
+
+    fn get_indicator_color(&self) -> reedline::Color {
+        reedline::Color::Reset
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use nu_ansi_term::Color;
     use osp_completion::{CompletionNode, CompletionTree};
-    use reedline::Completer;
+    use reedline::{Completer, Highlighter, StyledText};
 
     use super::{
-        RankedSuggestion, ReplCompleter, color_from_style_spec, dedupe_ranked_suggestions,
-        expand_history, sort_ranked_suggestions,
+        RankedSuggestion, ReplCompleter, ReplHighlighter, color_from_style_spec,
+        dedupe_ranked_suggestions, expand_history, sort_ranked_suggestions,
     };
+
+    fn token_styles(styled: &StyledText) -> Vec<(String, Option<Color>)> {
+        styled
+            .buffer
+            .iter()
+            .filter_map(|(style, text)| {
+                if text.chars().all(|ch| ch.is_whitespace()) {
+                    None
+                } else {
+                    Some((text.clone(), style.foreground))
+                }
+            })
+            .collect()
+    }
+
+    fn completion_tree_with_config_show() -> CompletionTree {
+        let mut config = CompletionNode::default();
+        config
+            .children
+            .insert("show".to_string(), CompletionNode::default());
+
+        let mut root = CompletionNode::default();
+        root.children.insert("config".to_string(), config);
+        CompletionTree {
+            root,
+            ..CompletionTree::default()
+        }
+    }
 
     #[test]
     fn expands_double_bang() {
@@ -1209,5 +1788,47 @@ mod tests {
             .map(|item| item.value.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ordered, vec!["ldap", "ldap-user", "plugins"]);
+    }
+
+    #[test]
+    fn highlighter_colors_full_command_chain_only() {
+        let tree = completion_tree_with_config_show();
+        let highlighter = ReplHighlighter::new(tree, Color::Green);
+
+        let styled = highlighter.highlight("config show", 0);
+        let tokens = token_styles(&styled);
+        assert_eq!(
+            tokens,
+            vec![
+                ("config".to_string(), Some(Color::Green)),
+                ("show".to_string(), Some(Color::Green)),
+            ]
+        );
+    }
+
+    #[test]
+    fn highlighter_skips_partial_subcommand_and_flags() {
+        let tree = completion_tree_with_config_show();
+        let highlighter = ReplHighlighter::new(tree, Color::Green);
+
+        let styled = highlighter.highlight("config sho", 0);
+        let tokens = token_styles(&styled);
+        assert_eq!(
+            tokens,
+            vec![
+                ("config".to_string(), Some(Color::Green)),
+                ("sho".to_string(), None),
+            ]
+        );
+
+        let styled = highlighter.highlight("config --flag", 0);
+        let tokens = token_styles(&styled);
+        assert_eq!(
+            tokens,
+            vec![
+                ("config".to_string(), Some(Color::Green)),
+                ("--flag".to_string(), None),
+            ]
+        );
     }
 }

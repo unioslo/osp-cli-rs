@@ -1,10 +1,11 @@
 use miette::{IntoDiagnostic, Result};
 
 use crate::app::{
-    CliCommandResult, ReplCommandOutput, ensure_builtin_visible, CMD_CONFIG, CMD_PLUGINS,
-    CMD_THEME,
+    CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, ReplCommandOutput, ensure_builtin_visible,
 };
-use crate::cli::{ConfigArgs, ConfigCommands, DoctorArgs, DoctorCommands, PluginsArgs, PluginsCommands};
+use crate::cli::{
+    ConfigArgs, ConfigCommands, DoctorArgs, DoctorCommands, PluginsArgs, PluginsCommands,
+};
 use crate::rows::output::rows_to_output_result;
 use crate::state::AppState;
 use osp_core::output::OutputFormat;
@@ -21,9 +22,12 @@ pub(crate) fn run_doctor_command(
     match command {
         DoctorCommands::Config => {
             ensure_builtin_visible(state, CMD_CONFIG)?;
-            config_cmd::run_config_command(state, ConfigArgs {
-                command: ConfigCommands::Doctor,
-            })
+            config_cmd::run_config_command(
+                state,
+                ConfigArgs {
+                    command: ConfigCommands::Doctor,
+                },
+            )
         }
         DoctorCommands::Plugins => {
             ensure_builtin_visible(state, CMD_PLUGINS)?;

@@ -49,6 +49,7 @@ Current invariants:
 - table column widths are shared globally by header key
 - table widths shrink-to-fit by reducing the widest participating column
 - mreg metrics include key-width and available content width
+- table overflow behavior is configurable (`clip`, `ellipsis`, `wrap`, `none`)
 
 ## MREG Requirements
 
@@ -94,8 +95,9 @@ The following must stay green:
   render settings.
 - Message rendering switched to `ui.messages.format` (`rules|groups|boxes`).
 - Line parts can carry style tokens and are rendered accordingly in rich mode.
-- Layout context now keys metrics by stable block identity (pointer id), not
-  enumeration index, to avoid drift when block ordering changes.
+- Layout context now keys metrics by stable block id, not enumeration index, to
+  avoid drift when block ordering changes.
+- Table overflow config (`ui.table.overflow`) is available for clip/ellipsis/wrap/none.
 - Introduced `osp_core::output_model` as the shared UI/DSL boundary contract
   (`OutputResult`, `OutputItems`, `Group`, `OutputMeta`).
 - `osp-ui` now supports rendering directly from `OutputResult` (rows or grouped

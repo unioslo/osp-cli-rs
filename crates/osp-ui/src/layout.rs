@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
+use crate::display::value_to_display;
 use crate::document::{Block, Document, MregBlock, TableBlock};
-use crate::{RenderBackend, ResolvedRenderSettings};
+use crate::{RenderBackend, ResolvedRenderSettings, TableOverflow};
 
 #[derive(Debug, Clone)]
 struct TableDescriptor {
-    block_id: usize,
+    block_id: u64,
     headers: Vec<String>,
     raw_widths: Vec<usize>,
     shrink_to_fit: bool,
@@ -16,8 +17,8 @@ struct TableDescriptor {
 
 #[derive(Debug, Clone, Default)]
 pub struct LayoutContext {
-    pub table_column_widths: HashMap<usize, Vec<usize>>,
-    pub mreg_metrics: HashMap<usize, MregMetrics>,
+    pub table_column_widths: HashMap<u64, Vec<usize>>,
+    pub mreg_metrics: HashMap<u64, MregMetrics>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,12 +31,19 @@ pub fn prepare_layout_context(
     document: &Document,
     settings: &ResolvedRenderSettings,
 ) -> LayoutContext {
+    let allow_shrink = settings.backend == RenderBackend::Rich
+        && !matches!(settings.table_overflow, TableOverflow::None);
+    let width_limit = if matches!(settings.table_overflow, TableOverflow::None) {
+        None
+    } else {
+        settings.width
+    };
     LayoutContext {
         table_column_widths: prepare_table_widths(
             document,
-            settings.width,
+            width_limit,
             settings.unicode,
-            settings.backend == RenderBackend::Rich,
+            allow_shrink,
         ),
         mreg_metrics: prepare_mreg_metrics(
             document,
@@ -51,7 +59,7 @@ fn prepare_table_widths(
     width_limit: Option<usize>,
     unicode: bool,
     force_shrink_to_fit: bool,
-) -> HashMap<usize, Vec<usize>> {
+) -> HashMap<u64, Vec<usize>> {
     let min_column_width = if unicode { 4 } else { 6 };
 
     let mut tables = Vec::new();
@@ -59,7 +67,7 @@ fn prepare_table_widths(
         let Block::Table(table) = block else {
             continue;
         };
-        let block_id = block_identity(block);
+        let block_id = table.block_id;
 
         let raw_widths = compute_raw_table_widths(table, min_column_width);
         tables.push(TableDescriptor {
@@ -196,14 +204,14 @@ fn prepare_mreg_metrics(
     width_limit: Option<usize>,
     indent_size: usize,
     margin: usize,
-) -> HashMap<usize, MregMetrics> {
+) -> HashMap<u64, MregMetrics> {
     let mut metrics = HashMap::new();
 
     for block in &document.blocks {
         let Block::Mreg(mreg) = block else {
             continue;
         };
-        let block_id = block_identity(block);
+        let block_id = mreg.block_id;
 
         let key_width = compute_mreg_key_width(mreg, indent_size).max(3);
         let available_width = width_limit.unwrap_or(100);
@@ -254,45 +262,12 @@ fn display_width(value: &str) -> usize {
 }
 
 fn json_display_width(value: &Value) -> usize {
-    match value {
-        Value::Null => display_width("null"),
-        Value::Bool(v) => display_width(if *v { "true" } else { "false" }),
-        Value::Number(v) => display_width(&v.to_string()),
-        Value::String(v) => display_width(v),
-        Value::Array(values) => {
-            let joined = values
-                .iter()
-                .map(json_display_string)
-                .collect::<Vec<String>>()
-                .join(", ");
-            display_width(&joined)
-        }
-        Value::Object(_) => display_width(&value.to_string()),
-    }
-}
-
-fn json_display_string(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(v) => v.to_string().to_ascii_lowercase(),
-        Value::Number(v) => v.to_string(),
-        Value::String(v) => v.clone(),
-        Value::Array(values) => values
-            .iter()
-            .map(json_display_string)
-            .collect::<Vec<String>>()
-            .join(", "),
-        Value::Object(_) => value.to_string(),
-    }
-}
-
-pub(crate) fn block_identity(block: &Block) -> usize {
-    block as *const Block as usize
+    display_width(&value_to_display(value))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{block_identity, prepare_layout_context};
+    use super::prepare_layout_context;
     use crate::document::{
         Block, Document, MregBlock, MregEntry, MregRow, MregValue, TableBlock, TableStyle,
     };
@@ -313,6 +288,7 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: crate::TableOverflow::Clip,
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: crate::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
@@ -332,6 +308,7 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: crate::TableOverflow::Clip,
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: crate::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
@@ -343,6 +320,7 @@ mod tests {
         let document = Document {
             blocks: vec![
                 Block::Table(TableBlock {
+                    block_id: 1,
                     style: TableStyle::Grid,
                     headers: vec!["name".to_string(), "value".to_string()],
                     rows: vec![vec![json!("short"), json!("abc")]],
@@ -352,6 +330,7 @@ mod tests {
                     depth: 0,
                 }),
                 Block::Table(TableBlock {
+                    block_id: 2,
                     style: TableStyle::Grid,
                     headers: vec!["name".to_string(), "value".to_string()],
                     rows: vec![vec![json!("very-long-name"), json!("x")]],
@@ -364,8 +343,14 @@ mod tests {
         };
 
         let context = prepare_layout_context(&document, &rich_settings(None));
-        let first_id = block_identity(&document.blocks[0]);
-        let second_id = block_identity(&document.blocks[1]);
+        let first_id = match &document.blocks[0] {
+            Block::Table(table) => table.block_id,
+            _ => 0,
+        };
+        let second_id = match &document.blocks[1] {
+            Block::Table(table) => table.block_id,
+            _ => 0,
+        };
         let first = context
             .table_column_widths
             .get(&first_id)
@@ -383,6 +368,7 @@ mod tests {
     fn shrinks_global_table_widths_when_terminal_is_narrow() {
         let document = Document {
             blocks: vec![Block::Table(TableBlock {
+                block_id: 1,
                 style: TableStyle::Grid,
                 headers: vec!["name".to_string(), "description".to_string()],
                 rows: vec![vec![
@@ -397,7 +383,10 @@ mod tests {
         };
 
         let context = prepare_layout_context(&document, &rich_settings(Some(36)));
-        let table_id = block_identity(&document.blocks[0]);
+        let table_id = match &document.blocks[0] {
+            Block::Table(table) => table.block_id,
+            _ => 0,
+        };
         let widths = context
             .table_column_widths
             .get(&table_id)
@@ -411,6 +400,7 @@ mod tests {
     fn rich_mode_shrinks_even_when_table_opted_out() {
         let document = Document {
             blocks: vec![Block::Table(TableBlock {
+                block_id: 1,
                 style: TableStyle::Grid,
                 headers: vec!["name".to_string(), "description".to_string()],
                 rows: vec![vec![
@@ -426,7 +416,10 @@ mod tests {
 
         let rich_context = prepare_layout_context(&document, &rich_settings(Some(36)));
         let plain_context = prepare_layout_context(&document, &plain_settings(Some(36)));
-        let table_id = block_identity(&document.blocks[0]);
+        let table_id = match &document.blocks[0] {
+            Block::Table(table) => table.block_id,
+            _ => 0,
+        };
         let rich_widths = rich_context
             .table_column_widths
             .get(&table_id)
@@ -446,6 +439,7 @@ mod tests {
     fn computes_mreg_key_and_content_metrics() {
         let document = Document {
             blocks: vec![Block::Mreg(MregBlock {
+                block_id: 1,
                 rows: vec![MregRow {
                     entries: vec![
                         MregEntry {
@@ -464,7 +458,10 @@ mod tests {
         };
 
         let context = prepare_layout_context(&document, &rich_settings(Some(60)));
-        let mreg_id = block_identity(&document.blocks[0]);
+        let mreg_id = match &document.blocks[0] {
+            Block::Mreg(mreg) => mreg.block_id,
+            _ => 0,
+        };
         let metrics = context
             .mreg_metrics
             .get(&mreg_id)

@@ -1,5 +1,5 @@
 use clap::CommandFactory;
-use osp_cli::cli::Cli;
+use osp_cli::Cli;
 use std::collections::BTreeSet;
 
 fn set(values: &[&str]) -> BTreeSet<String> {
@@ -14,23 +14,16 @@ fn subcommand_names(cmd: &clap::Command) -> BTreeSet<String> {
 }
 
 fn is_ignored_subcommand(name: &str) -> bool {
-    matches!(name, "help" | "completion" | "external")
+    matches!(name, "help" | "completion" | "external" | "repl")
 }
 
-fn assert_subcommands(
-    cmd: &clap::Command,
-    name: &str,
-    allowed: BTreeSet<String>,
-) {
+fn assert_subcommands(cmd: &clap::Command, name: &str, allowed: BTreeSet<String>) {
     let sub = cmd
         .get_subcommands()
         .find(|sub| sub.get_name() == name)
         .unwrap_or_else(|| panic!("missing subcommand: {name}"));
     let actual = subcommand_names(sub);
-    assert_eq!(
-        actual, allowed,
-        "unexpected subcommands for `{name}`"
-    );
+    assert_eq!(actual, allowed, "unexpected subcommands for `{name}`");
 }
 
 #[test]
@@ -59,6 +52,10 @@ fn builtin_command_verbs_are_consistent() {
     assert_subcommands(&cmd, "doctor", set(&["config", "plugins", "theme", "all"]));
 
     for name in top_level {
-        assert_eq!(name, name.to_ascii_lowercase(), "command `{name}` should be lowercase");
+        assert_eq!(
+            name,
+            name.to_ascii_lowercase(),
+            "command `{name}` should be lowercase"
+        );
     }
 }

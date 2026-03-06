@@ -11,7 +11,7 @@ The decorator:
 - Adds flags: `--format`, `--mode`, legacy `--json/--table/--value/--md`,
   and `--rich/--plain`.
 - Supports `--cache` in REPL.
-- Resolves defaults from config (`ui.format`, `ui.output.render`).
+- Resolves defaults from config (`ui.format`, `ui.mode`).
 - Executes the command, then calls `state.ui.format_output(...)`.
 - Applies the DSL pipeline.
 - Supports clipboard copy via DSL `| Y`.
@@ -54,6 +54,19 @@ We keep the same user-facing flags:
 
 Legacy flags (`--json`, `--table`, `--value`, `--md`, `--rich`, `--plain`) can
 be supported temporarily, but should not be advertised.
+
+## Current Session Semantics
+
+The current Rust CLI uses one in-memory session layer for formatting defaults:
+
+- launch `osp --json`, `osp --mode plain`, `osp --color never`, `osp --ascii`
+  seed session-scoped config values
+- REPL `config set --session ui.format ...` writes into that same layer
+- REPL reload rebuilds from that layer
+- command-local formatting flags stay ephemeral and do not persist
+
+This means config introspection may show launch formatting flags as
+`source=session`, which is intentional.
 
 ## Caching (REPL)
 

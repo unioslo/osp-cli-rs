@@ -103,6 +103,11 @@ No command-specific branches in UI selection.
 - Renderer accepts optional width from render settings.
 - If width is set (or discovered from `COLUMNS`), wide table cells are truncated.
 - Truncation is display-width aware and uses `…`/`...` based on unicode mode.
+- `ui.table.overflow` controls table behavior when content exceeds width:
+  - `clip`: truncate cells without suffix
+  - `ellipsis`: truncate with `…` / `...`
+  - `wrap`: wrap cells to multiple lines
+  - `none`: disable shrink-to-fit (no truncation or wrapping)
 
 ## Config Knobs (Explicit)
 
@@ -116,6 +121,7 @@ These are the core controls and should be part of schema:
 - `ui.width`: optional override for terminal width
 - `ui.format`: default output format
 - `ui.short_list_max`, `ui.medium_list_max`, `ui.grid_padding`, `ui.grid_columns`
+- `ui.table.overflow`: `clip | ellipsis | wrap | none`
 
 ### Auto behavior
 
@@ -153,13 +159,17 @@ If prompt color keys are unset, semantic theme tokens are used.
 
 ## CLI Flags
 
-These should map directly to config overrides:
+These map directly to in-memory session config overrides:
 
 - `--format {json,table,mreg,value,md,auto}`
 - `--mode {plain,rich,auto}`
 - `--color {auto,always,never}` and `--no-color`
 - `--unicode {auto,always,never}` and `--ascii`
 - `--theme <name>`
+
+Command-local flags are still more specific than the session default for that
+invocation. In config introspection these launch defaults may show up as
+`source=session`.
 
 ## Clipboard
 

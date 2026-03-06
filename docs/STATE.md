@@ -60,12 +60,16 @@ Key observations:
   - explain/introspection APIs
 - `UiState`
   - render settings
-  - user-facing toggles (`format/mode/color/unicode`)
+  - resolved user-facing toggles (`format/mode/color/unicode`)
 - `ReplState`
   - prompt mode, history behavior, shell stack
   - no auth/config mutation logic
 - `SessionState`
-  - in-memory command-scoped values (result cache, previous rows)
+  - in-memory session layer + command-scoped values
+  - carries launch defaults that map to config keys (`--json`, `--mode`,
+    `--color`, `--ascii`, `-v/-q`, `-d`, `--theme`, `-u`) and REPL
+    `config set --session ...` mutations
+  - also carries result cache and previous rows
   - dies with process
 - `ClientsState`
   - lazy adapters (`ldap`, later `mreg`, `osp`, etc.)
@@ -83,6 +87,11 @@ Key observations:
 - `ClientsState` tracks the config revision it was built against.
   - if config revision changes, clients are invalidated/rebuilt.
 - `SessionState` and `ReplState` are the only runtime-mutable state domains.
+- There is one in-memory session config layer.
+  - Launch-time defaults and REPL session mutations share that same layer.
+  - REPL reload rebuilds config from that layer instead of patching live state.
+- Command-local flags are not persisted.
+  - They are applied ephemerally during dispatch only.
 
 ## RuntimeContext Contract
 
@@ -146,6 +155,9 @@ Start with high-signal contract tests, then fill unit gaps.
 - REPL cache does not affect one-shot commands.
 - shell/history expansion behavior is deterministic.
 - pipeline artifacts are command-local.
+- launch flags that map to config keys become session-scoped defaults.
+- session `config set` overwrites those defaults in the same in-memory layer.
+- per-command `-v/-q/-d` do not leak across commands.
 
 ### 3) Config mutation contracts (later)
 

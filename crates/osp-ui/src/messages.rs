@@ -190,6 +190,7 @@ impl MessageBuffer {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: crate::TableOverflow::Clip,
             theme_name: theme.id.clone(),
             theme: theme.clone(),
             style_overrides: style_overrides.clone(),
@@ -327,11 +328,48 @@ pub fn render_section_divider_with_overrides(
         }
     };
 
-    if color {
-        apply_style_with_theme_overrides(&raw, token, true, theme, style_overrides)
-    } else {
-        raw
+    if !color {
+        return raw;
     }
+
+    if title.is_empty() || token != StyleToken::PanelBorder {
+        return apply_style_with_theme_overrides(&raw, token, true, theme, style_overrides);
+    }
+
+    let prefix = if unicode { "─ " } else { "- " };
+    let title_text = title;
+    let prefix_width = prefix.chars().count();
+    let title_width = title_text.chars().count();
+    let base_width = prefix_width + title_width + 1;
+    let fill_len = target_width.saturating_sub(base_width);
+    let suffix = if fill_len == 0 {
+        " ".to_string()
+    } else {
+        format!(" {}", fill_char.to_string().repeat(fill_len))
+    };
+
+    let styled_prefix = apply_style_with_theme_overrides(
+        prefix,
+        StyleToken::PanelBorder,
+        true,
+        theme,
+        style_overrides,
+    );
+    let styled_title = apply_style_with_theme_overrides(
+        title_text,
+        StyleToken::PanelTitle,
+        true,
+        theme,
+        style_overrides,
+    );
+    let styled_suffix = apply_style_with_theme_overrides(
+        &suffix,
+        StyleToken::PanelBorder,
+        true,
+        theme,
+        style_overrides,
+    );
+    format!("{styled_prefix}{styled_title}{styled_suffix}")
 }
 
 pub fn adjust_verbosity(base: MessageLevel, verbose: u8, quiet: u8) -> MessageLevel {

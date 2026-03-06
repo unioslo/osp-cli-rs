@@ -83,15 +83,20 @@ impl ClipboardService {
     pub fn copy_text(&self, text: &str) -> Result<(), ClipboardError> {
         let mut attempts = Vec::new();
 
-        if self.prefer_osc52 && std::io::stdout().is_terminal() {
-            attempts.push("osc52".to_string());
-            self.copy_via_osc52(text)?;
-            return Ok(());
+        if self.prefer_osc52 && std::io::stdout().is_terminal() && osc52_enabled() {
+            let max_bytes = osc52_max_bytes();
+            let encoded_len = base64_encoded_len(text.len());
+            if encoded_len <= max_bytes {
+                attempts.push("osc52".to_string());
+                self.copy_via_osc52(text)?;
+                return Ok(());
+            }
+            attempts.push(format!("osc52 (payload {encoded_len} > {max_bytes})"));
         }
 
         for backend in platform_backends() {
             attempts.push(backend.command.to_string());
-            match copy_via_command(&backend.command, &backend.args, text) {
+            match copy_via_command(backend.command, backend.args, text) {
                 Ok(()) => return Ok(()),
                 Err(ClipboardError::SpawnFailed { .. }) => continue,
                 Err(error) => return Err(error),
@@ -158,6 +163,10 @@ fn platform_backends() -> Vec<ClipboardBackend> {
         command: "xclip",
         args: &["-selection", "clipboard"],
     });
+    backends.push(ClipboardBackend {
+        command: "xsel",
+        args: &["--clipboard", "--input"],
+    });
 
     backends
 }
@@ -196,6 +205,29 @@ fn copy_via_command(command: &str, args: &[&str], text: &str) -> Result<(), Clip
 }
 
 const BASE64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const OSC52_MAX_BYTES_DEFAULT: usize = 100_000;
+
+fn osc52_enabled() -> bool {
+    match std::env::var("OSC52") {
+        Ok(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            !(value == "0" || value == "false" || value == "off")
+        }
+        Err(_) => true,
+    }
+}
+
+fn osc52_max_bytes() -> usize {
+    std::env::var("OSC52_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(OSC52_MAX_BYTES_DEFAULT)
+}
+
+fn base64_encoded_len(input_len: usize) -> usize {
+    input_len.saturating_add(2).div_ceil(3).saturating_mul(4)
+}
 
 fn base64_encode(input: &[u8]) -> String {
     if input.is_empty() {
@@ -242,6 +274,16 @@ fn base64_encode(input: &[u8]) -> String {
 mod tests {
     use super::{ClipboardError, ClipboardService, base64_encode};
 
+    fn set_path_for_test(value: Option<&str>) {
+        let key = "PATH";
+        // Safety: these tests mutate process-global environment state in a
+        // scoped setup/teardown pattern and do not spawn concurrent threads.
+        match value {
+            Some(value) => unsafe { std::env::set_var(key, value) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
     #[test]
     fn base64_encoder_matches_known_values() {
         assert_eq!(base64_encode(b""), "");
@@ -255,21 +297,15 @@ mod tests {
     fn copy_without_osc52_reports_no_backend_when_path_is_empty() {
         let key = "PATH";
         let original = std::env::var(key).ok();
-        unsafe {
-            std::env::set_var(key, "");
-        }
+        set_path_for_test(Some(""));
 
         let service = ClipboardService::new().with_osc52(false);
         let result = service.copy_text("hello");
 
         if let Some(value) = original {
-            unsafe {
-                std::env::set_var(key, value);
-            }
+            set_path_for_test(Some(&value));
         } else {
-            unsafe {
-                std::env::remove_var(key);
-            }
+            set_path_for_test(None);
         }
 
         match result {

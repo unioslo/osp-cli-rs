@@ -49,28 +49,24 @@ pub fn init_developer_logging(config: DeveloperLoggingConfig) {
                         .with(stderr_layer)
                         .with(file_layer)
                         .try_init()
+                        && config.debug_count >= 2
                     {
-                        if config.debug_count >= 2 {
-                            eprintln!("logging already initialized: {err}");
-                        }
+                        eprintln!("logging already initialized: {err}");
                     }
                 }
                 Err(err) => {
                     if let Err(err) = tracing_subscriber::registry().with(stderr_layer).try_init()
+                        && config.debug_count >= 2
                     {
-                        if config.debug_count >= 2 {
-                            eprintln!("logging already initialized: {err}");
-                        }
+                        eprintln!("logging already initialized: {err}");
                     }
                     eprintln!("failed to initialize file logging: {err}");
                 }
             }
-        } else {
-            if let Err(err) = tracing_subscriber::registry().with(stderr_layer).try_init() {
-                if config.debug_count >= 2 {
-                    eprintln!("logging already initialized: {err}");
-                }
-            }
+        } else if let Err(err) = tracing_subscriber::registry().with(stderr_layer).try_init()
+            && config.debug_count >= 2
+        {
+            eprintln!("logging already initialized: {err}");
         }
     });
 }

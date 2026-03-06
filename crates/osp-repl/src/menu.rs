@@ -1,34 +1,15 @@
-use nu_ansi_term::ansi::RESET;
 use reedline::{
-    Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Suggestion,
-    menu_functions::{can_partially_complete, completer_input, replace_in_buffer},
+    Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
+    menu_functions::{can_partially_complete, replace_in_buffer},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use std::cell::Cell;
+use unicode_width::UnicodeWidthStr;
 
-#[derive(Debug, Clone)]
-struct DefaultGridDetails {
-    columns: u16,
-    col_padding: usize,
-    max_rows: u16,
-    description_rows: usize,
-}
+use crate::CompletionTraceMenuState;
+use crate::menu_core::{MenuAction, MenuCore};
 
-impl Default for DefaultGridDetails {
-    fn default() -> Self {
-        Self {
-            columns: 20,
-            col_padding: 2,
-            max_rows: 20,
-            description_rows: 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct WorkingGridDetails {
-    columns: u16,
-    col_widths: Vec<usize>,
-}
+#[allow(unused_imports)]
+pub(crate) use crate::menu_core::{MenuDebug, MenuStyleDebug, StyleDebug, display_text};
 
 /// Completion menu with adaptive column layout and an optional meta line.
 ///
@@ -39,18 +20,24 @@ struct WorkingGridDetails {
 pub struct OspCompletionMenu {
     name: String,
     marker: String,
+    // When true, only pass the buffer prefix up to the cursor to the completer.
     only_buffer_difference: bool,
     colors: MenuTextStyle,
-    active: bool,
-    default_details: DefaultGridDetails,
-    working_details: WorkingGridDetails,
-    values: Vec<Suggestion>,
-    col_pos: u16,
-    row_pos: u16,
+    core: MenuCore,
+    replace_span: Option<Span>,
     cursor_col: u16,
-    input_indent: u16,
+    last_available_lines: u16,
     event: Option<MenuEvent>,
-    input: Option<String>,
+}
+
+thread_local! {
+    static ACTIVE_EDITOR: Cell<*mut Editor> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApplyMode {
+    Cycle,
+    Accept,
 }
 
 impl Default for OspCompletionMenu {
@@ -58,18 +45,13 @@ impl Default for OspCompletionMenu {
         Self {
             name: "completion_menu".to_string(),
             marker: "| ".to_string(),
-            only_buffer_difference: true,
+            only_buffer_difference: false,
             colors: MenuTextStyle::default(),
-            active: false,
-            default_details: DefaultGridDetails::default(),
-            working_details: WorkingGridDetails::default(),
-            values: Vec::new(),
-            col_pos: 0,
-            row_pos: 0,
+            core: MenuCore::default(),
+            replace_span: None,
             cursor_col: 0,
-            input_indent: 0,
+            last_available_lines: 0,
             event: None,
-            input: None,
         }
     }
 }
@@ -80,33 +62,33 @@ impl OspCompletionMenu {
         self
     }
 
-    pub fn with_marker(mut self, marker: &str) -> Self {
-        self.marker = marker.to_string();
-        self
-    }
-
     pub fn with_only_buffer_difference(mut self, only_buffer_difference: bool) -> Self {
         self.only_buffer_difference = only_buffer_difference;
         self
     }
 
+    pub fn with_marker(mut self, marker: &str) -> Self {
+        self.marker = marker.to_string();
+        self
+    }
+
     pub fn with_columns(mut self, columns: u16) -> Self {
-        self.default_details.columns = columns.max(1);
+        self.core.set_columns(columns);
         self
     }
 
     pub fn with_column_padding(mut self, col_padding: usize) -> Self {
-        self.default_details.col_padding = col_padding;
+        self.core.set_column_padding(col_padding);
         self
     }
 
     pub fn with_max_rows(mut self, max_rows: u16) -> Self {
-        self.default_details.max_rows = max_rows.max(1);
+        self.core.set_max_rows(max_rows);
         self
     }
 
     pub fn with_description_rows(mut self, description_rows: usize) -> Self {
-        self.default_details.description_rows = description_rows;
+        self.core.set_description_rows(description_rows);
         self
     }
 
@@ -135,260 +117,134 @@ impl OspCompletionMenu {
         self
     }
 
-    fn reset_position(&mut self) {
-        self.col_pos = 0;
-        self.row_pos = 0;
-    }
-
-    fn index(&self) -> usize {
-        (self.row_pos * self.get_cols() + self.col_pos) as usize
-    }
-
-    fn get_cols(&self) -> u16 {
-        self.working_details.columns.max(1)
-    }
-
-    fn get_col_width(&self, column: u16) -> usize {
-        self.working_details
-            .col_widths
-            .get(column as usize)
-            .copied()
-            .unwrap_or(1)
-    }
-
-    fn get_rows(&self) -> u16 {
-        let values = self.values.len() as u16;
-        if values == 0 {
-            return 1;
-        }
-        let cols = self.get_cols();
-        let rows = values / cols;
-        if values % cols != 0 { rows + 1 } else { rows }
-    }
-
-    fn compute_column_layout(&self, available_width: usize) -> (u16, Vec<usize>) {
-        let total = self.values.len();
-        if total == 0 {
-            return (1, vec![available_width.max(1)]);
-        }
-        let max_cols = self.default_details.columns.max(1) as usize;
-        let max_cols = max_cols.min(total);
-        let pad = self.default_details.col_padding;
-
-        for cols in (1..=max_cols).rev() {
-            let mut widths = vec![0usize; cols];
-            for (idx, suggestion) in self.values.iter().enumerate() {
-                let col = idx % cols;
-                let w = display_text(suggestion).width();
-                if w > widths[col] {
-                    widths[col] = w;
-                }
+    pub(crate) fn apply_event(&mut self, editor: &mut Editor, completer: &mut dyn Completer) {
+        if let Some(event) = self.event.take() {
+            let action = self.core.handle_event(event);
+            if matches!(action, MenuAction::UpdateValues) {
+                self.update_values(editor, completer);
             }
-            let total_width = widths.iter().sum::<usize>() + pad.saturating_mul(cols.saturating_sub(1));
-            if total_width <= available_width || cols == 1 {
-                let mut col_widths = Vec::with_capacity(cols);
-                for (i, w) in widths.into_iter().enumerate() {
-                    let mut width = w;
-                    if i + 1 < cols {
-                        width = width.saturating_add(pad);
-                    }
-                    if width == 0 {
-                        width = 1;
-                    }
-                    col_widths.push(width);
-                }
-                return (cols as u16, col_widths);
+            if matches!(action, MenuAction::ApplySelection) {
+                self.apply_selection_in_buffer(editor, ApplyMode::Cycle);
             }
         }
-
-        (1, vec![available_width.max(1)])
     }
 
-    fn end_of_line(&self, column: u16, index: usize, last_index: usize) -> &str {
-        if column == self.get_cols().saturating_sub(1) || index == last_index {
-            "\r\n"
-        } else {
-            ""
-        }
-    }
-
-    fn move_next(&mut self) {
-        let mut new_col = self.col_pos + 1;
-        let mut new_row = self.row_pos;
-
-        if new_col >= self.get_cols() {
-            new_row += 1;
-            new_col = 0;
-        }
-
-        if new_row >= self.get_rows() {
-            new_row = 0;
-            new_col = 0;
-        }
-
-        let position = new_row * self.get_cols() + new_col;
-        if position >= self.values.len() as u16 {
-            self.reset_position();
-        } else {
-            self.col_pos = new_col;
-            self.row_pos = new_row;
-        }
-    }
-
-    fn move_previous(&mut self) {
-        let new_col = self.col_pos.checked_sub(1);
-
-        let (new_col, new_row) = match new_col {
-            Some(col) => (col, self.row_pos),
-            None => match self.row_pos.checked_sub(1) {
-                Some(row) => (self.get_cols().saturating_sub(1), row),
-                None => (
-                    self.get_cols().saturating_sub(1),
-                    self.get_rows().saturating_sub(1),
-                ),
-            },
-        };
-
-        let position = new_row * self.get_cols() + new_col;
-        if position >= self.values.len() as u16 {
-            self.col_pos = (self.values.len() as u16 % self.get_cols()).saturating_sub(1);
-            self.row_pos = self.get_rows().saturating_sub(1);
-        } else {
-            self.col_pos = new_col;
-            self.row_pos = new_row;
-        }
-    }
-
-    fn move_up(&mut self) {
-        self.row_pos = if let Some(new_row) = self.row_pos.checked_sub(1) {
-            new_row
-        } else {
-            let new_row = self.get_rows().saturating_sub(1);
-            let index = new_row * self.get_cols() + self.col_pos;
-            if index >= self.values.len() as u16 {
-                new_row.saturating_sub(1)
+    fn apply_selection_in_buffer(&mut self, editor: &mut Editor, mode: ApplyMode) {
+        if let Some((start, value_len, prefixed_space)) = self.apply_selection(editor, mode)
+            && matches!(mode, ApplyMode::Cycle)
+        {
+            let token_start = if prefixed_space {
+                start.saturating_add(1)
             } else {
-                new_row
-            }
+                start
+            };
+            self.replace_span = Some(Span {
+                start: token_start,
+                end: token_start + value_len,
+            });
         }
     }
 
-    fn move_down(&mut self) {
-        let new_row = self.row_pos + 1;
-        self.row_pos = if new_row >= self.get_rows() {
-            0
-        } else {
-            let index = new_row * self.get_cols() + self.col_pos;
-            if index >= self.values.len() as u16 {
-                0
-            } else {
-                new_row
-            }
-        }
-    }
-
-    fn move_left(&mut self) {
-        self.col_pos = if let Some(col) = self.col_pos.checked_sub(1) {
-            col
-        } else if self.index() + 1 == self.values.len() {
-            0
-        } else {
-            self.get_cols().saturating_sub(1)
-        }
-    }
-
-    fn move_right(&mut self) {
-        let new_col = self.col_pos + 1;
-        self.col_pos = if new_col >= self.get_cols() || self.index() + 2 > self.values.len() {
-            0
-        } else {
-            new_col
-        };
-    }
-
-    fn get_value(&self) -> Option<Suggestion> {
-        self.values.get(self.index()).cloned()
-    }
-
-    fn description_line(&self) -> Option<String> {
-        let description = self
-            .get_value()
-            .and_then(|suggestion| suggestion.description)
-            .unwrap_or_default();
-        if description.trim().is_empty() {
-            return None;
-        }
-        Some(
-            description
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .replace('\n', " "),
-        )
-    }
-
-    fn create_entry_string(
+    fn apply_selection(
         &self,
-        suggestion: &Suggestion,
-        index: usize,
-        column: u16,
-        empty_space: usize,
-        last_index: usize,
-        use_ansi_coloring: bool,
-    ) -> String {
-        let display = display_text(suggestion);
-        let styled = if index == self.index() {
-            self.colors.selected_text_style.prefix()
+        editor: &mut Editor,
+        mode: ApplyMode,
+    ) -> Option<(usize, usize, bool)> {
+        let suggestion = match mode {
+            ApplyMode::Accept => self
+                .core
+                .selected_value()
+                .or_else(|| {
+                    if self.core.just_activated() {
+                        self.core.values().first()
+                    } else {
+                        None
+                    }
+                })?
+                .clone(),
+            ApplyMode::Cycle => self.core.selected_value()?.clone(),
+        };
+        let line_before = editor.get_buffer().to_string();
+        let cursor_before = editor.line_buffer().insertion_point();
+
+        let base_span = self.replace_span.unwrap_or(suggestion.span);
+        let start = base_span.start.min(line_before.len());
+        let mut end = base_span.end.min(line_before.len());
+        if end < start {
+            end = start;
+        }
+
+        let stub = line_before.get(start..end).unwrap_or("").to_string();
+        let replace_range = Some([start, end]);
+        let matches = self
+            .core
+            .values()
+            .iter()
+            .map(|item| item.value.clone())
+            .collect::<Vec<_>>();
+
+        let available_lines = if self.last_available_lines > 0 {
+            self.last_available_lines
         } else {
-            self.colors.text_style.prefix()
+            u16::MAX
+        };
+        let menu_state = CompletionTraceMenuState {
+            selected_index: self
+                .core
+                .selected_index()
+                .map(|idx| idx as i64)
+                .unwrap_or(-1),
+            selected_row: self.core.selected_row(),
+            selected_col: self.core.selected_col(),
+            active: self.core.is_active(),
+            just_activated: self.core.just_activated(),
+            columns: self.core.columns(),
+            visible_rows: self.core.visible_rows_for(available_lines),
+            rows: self.core.rows(),
+            menu_indent: self.core.input_indent(),
         };
 
-        if use_ansi_coloring {
-            format!(
-                "{}{}{:>empty$}{}{}",
-                styled,
-                display,
-                "",
-                RESET,
-                self.end_of_line(column, index, last_index),
-                empty = empty_space,
-            )
-        } else {
-            let line = format!(
-                "{}{:>empty$}{}",
-                display,
-                "",
-                self.end_of_line(column, index, last_index),
-                empty = empty_space,
+        let prefixed_space = needs_space_prefix(&line_before, start, end);
+        let mut replacement = String::new();
+        if prefixed_space {
+            replacement.push(' ');
+        }
+        replacement.push_str(&suggestion.value);
+        if matches!(mode, ApplyMode::Accept) && suggestion.append_whitespace {
+            replacement.push(' ');
+        }
+
+        let mut adjusted = suggestion.clone();
+        adjusted.value = replacement.clone();
+        adjusted.span = Span { start, end };
+        adjusted.append_whitespace = false;
+
+        replace_in_buffer(Some(adjusted), editor);
+
+        if crate::trace_completion_enabled() {
+            let line_after = editor.get_buffer().to_string();
+            let cursor_after = editor.line_buffer().insertion_point();
+            let event = match mode {
+                ApplyMode::Cycle => "cycle",
+                ApplyMode::Accept => "accept",
+            };
+            crate::trace_completion(
+                event,
+                &line_before,
+                cursor_before,
+                &stub,
+                matches,
+                replace_range,
+                Some(menu_state),
+                Some(&line_before),
+                Some(&line_after),
+                Some(cursor_before),
+                Some(cursor_after),
+                Some(&suggestion.value),
             );
-            if index == self.index() {
-                line.to_uppercase()
-            } else {
-                line
-            }
         }
-    }
 
-    fn create_description_string(
-        &self,
-        description: &str,
-        width: usize,
-        use_ansi_coloring: bool,
-    ) -> String {
-        let truncated = truncate_to_width(description, width);
-        let padding = width.saturating_sub(truncated.width());
-        if use_ansi_coloring {
-            format!(
-                "{}{}{:>pad$}{}",
-                self.colors.description_style.prefix(),
-                truncated,
-                "",
-                RESET,
-                pad = padding,
-            )
-        } else {
-            format!("{truncated:>pad$}", pad = padding)
-        }
+        Some((start, suggestion.value.len(), prefixed_space))
     }
 }
 
@@ -398,7 +254,7 @@ impl Menu for OspCompletionMenu {
     }
 
     fn indicator(&self) -> &str {
-        if self.values.is_empty() {
+        if self.core.values().is_empty() {
             ""
         } else {
             &self.marker
@@ -406,7 +262,7 @@ impl Menu for OspCompletionMenu {
     }
 
     fn is_active(&self) -> bool {
-        self.active
+        self.core.is_active()
     }
 
     fn can_quick_complete(&self) -> bool {
@@ -423,7 +279,7 @@ impl Menu for OspCompletionMenu {
             self.update_values(editor, completer);
         }
 
-        if can_partially_complete(&self.values, editor) {
+        if can_partially_complete(self.core.values(), editor) {
             self.update_values(editor, completer);
             true
         } else {
@@ -432,33 +288,47 @@ impl Menu for OspCompletionMenu {
     }
 
     fn menu_event(&mut self, event: MenuEvent) {
-        match &event {
-            MenuEvent::Activate(_) => {
-                self.active = true;
-                self.values.clear();
-            }
-            MenuEvent::Deactivate => {
-                self.active = false;
-                self.input = None;
-            }
-            _ => {}
+        self.core.pre_event(&event);
+        if matches!(event, MenuEvent::Activate(_) | MenuEvent::Deactivate) {
+            self.replace_span = None;
         }
+
+        if matches!(
+            event,
+            MenuEvent::NextElement
+                | MenuEvent::PreviousElement
+                | MenuEvent::MoveUp
+                | MenuEvent::MoveDown
+                | MenuEvent::MoveLeft
+                | MenuEvent::MoveRight
+        ) {
+            let ptr = ACTIVE_EDITOR.with(|cell| cell.get());
+            if !ptr.is_null() {
+                // SAFETY: Editor is owned by reedline for the duration of the session.
+                // We only use this on the same thread when a menu event is handled.
+                let editor = unsafe { &mut *ptr };
+                let action = self.core.handle_event(event);
+                if matches!(action, MenuAction::ApplySelection) {
+                    self.apply_selection_in_buffer(editor, ApplyMode::Cycle);
+                }
+                return;
+            }
+        }
+
         self.event = Some(event);
     }
 
     fn update_values(&mut self, editor: &mut Editor, completer: &mut dyn Completer) {
-        let (input, pos) = completer_input(
-            editor.get_buffer(),
-            editor.line_buffer().insertion_point(),
-            self.input.as_deref(),
-            self.only_buffer_difference,
-        );
-        self.values = completer.complete(&input, pos);
-        if self.values.is_empty() {
-            self.active = false;
-            self.input = None;
-        }
-        self.reset_position();
+        let buffer = editor.get_buffer();
+        let pos = editor.line_buffer().insertion_point();
+        let input = if self.only_buffer_difference {
+            buffer.get(0..pos).unwrap_or(buffer)
+        } else {
+            buffer
+        };
+        let values = completer.complete(input, pos);
+        self.core.set_values(values);
+        self.replace_span = self.core.values().first().map(|item| item.span);
     }
 
     fn update_working_details(
@@ -467,119 +337,25 @@ impl Menu for OspCompletionMenu {
         completer: &mut dyn Completer,
         painter: &Painter,
     ) {
-        if let Some(event) = self.event.take() {
-            match event {
-                MenuEvent::Activate(_) => {
-                    self.active = true;
-                    self.input = Some(editor.get_buffer().to_string());
-                    self.update_values(editor, completer);
-                }
-                MenuEvent::Deactivate => self.active = false,
-                MenuEvent::Edit(_) => {
-                    self.reset_position();
-                    self.update_values(editor, completer);
-                }
-                MenuEvent::NextElement => {
-                    self.move_next();
-                    self.replace_in_buffer(editor);
-                    self.update_values(editor, completer);
-                    self.reset_position();
-                }
-                MenuEvent::PreviousElement => {
-                    self.move_previous();
-                    self.replace_in_buffer(editor);
-                    self.update_values(editor, completer);
-                    self.reset_position();
-                }
-                MenuEvent::MoveUp => self.move_up(),
-                MenuEvent::MoveDown => self.move_down(),
-                MenuEvent::MoveLeft => self.move_left(),
-                MenuEvent::MoveRight => self.move_right(),
-                MenuEvent::NextPage | MenuEvent::PreviousPage => {}
-            }
-        }
-
-        self.input_indent = self.compute_input_indent(editor, painter.screen_width());
-        let available_width = painter.screen_width().saturating_sub(self.input_indent).max(1);
-        let (cols, col_widths) = self.compute_column_layout(available_width as usize);
-        self.working_details.columns = cols.max(1);
-        self.working_details.col_widths = col_widths;
+        ACTIVE_EDITOR.with(|cell| cell.set(editor as *mut Editor));
+        self.apply_event(editor, completer);
+        self.last_available_lines = painter.remaining_lines();
+        let indent = compute_menu_indent(self, editor);
+        self.core.update_layout(painter.screen_width(), indent);
+        trace_menu_state(self, editor, painter);
     }
 
     fn replace_in_buffer(&self, editor: &mut Editor) {
-        if let Some(suggestion) = self.get_value() {
-            replace_in_buffer(Some(suggestion), editor);
-        }
+        self.apply_selection(editor, ApplyMode::Accept);
     }
 
     fn menu_required_lines(&self, _terminal_columns: u16) -> u16 {
-        let rows = self.get_rows().min(self.default_details.max_rows).max(1);
-        let desc_line = self.description_line().map(|_| 1).unwrap_or(0);
-        rows + desc_line
+        self.core.menu_required_lines()
     }
 
     fn menu_string(&self, available_lines: u16, use_ansi_coloring: bool) -> String {
-        if self.values.is_empty() {
-            return String::new();
-        }
-
-        let desc_line = self.description_line();
-        let desc_rows = if desc_line.is_some() {
-            self.default_details.description_rows.max(1)
-        } else {
-            0
-        };
-        let available_rows = available_lines.saturating_sub(desc_rows as u16).max(1);
-        let total_rows = self.get_rows();
-        let visible_rows = available_rows
-            .min(total_rows)
-            .min(self.default_details.max_rows);
-
-        let skip_values = if self.row_pos >= visible_rows {
-            let skip_lines = self.row_pos.saturating_sub(visible_rows) + 1;
-            (skip_lines * self.get_cols()) as usize
-        } else {
-            0
-        };
-        let available_values = (visible_rows * self.get_cols()) as usize;
-        let last_index = self.values.len().saturating_sub(1).min(
-            skip_values
-                .saturating_add(available_values)
-                .saturating_sub(1),
-        );
-
-        let selection_values: String = self
-            .values
-            .iter()
-            .skip(skip_values)
-            .take(available_values)
-            .enumerate()
-            .map(|(index, suggestion)| {
-                let index = index + skip_values;
-                let column = index as u16 % self.get_cols();
-                let display_width = display_text(suggestion).width();
-                let empty_space = self.get_col_width(column).saturating_sub(display_width);
-                self.create_entry_string(
-                    suggestion,
-                    index,
-                    column,
-                    empty_space,
-                    last_index,
-                    use_ansi_coloring,
-                )
-            })
-            .collect();
-
-        let output = if let Some(description) = desc_line {
-            let menu_width = self.working_details.col_widths.iter().sum::<usize>();
-            let description_line =
-                self.create_description_string(&description, menu_width.max(1), use_ansi_coloring);
-            format!("{selection_values}{description_line}")
-        } else {
-            selection_values
-        };
-
-        indent_lines(&output, self.input_indent as usize)
+        self.core
+            .menu_string(available_lines, use_ansi_coloring, &self.colors)
     }
 
     fn min_rows(&self) -> u16 {
@@ -587,7 +363,7 @@ impl Menu for OspCompletionMenu {
     }
 
     fn get_values(&self) -> &[Suggestion] {
-        &self.values
+        self.core.values()
     }
 
     fn set_cursor_pos(&mut self, pos: (u16, u16)) {
@@ -595,54 +371,508 @@ impl Menu for OspCompletionMenu {
     }
 }
 
-fn display_text(suggestion: &Suggestion) -> &str {
-    suggestion
-        .extra
-        .as_ref()
-        .and_then(|extra| extra.first())
-        .map(String::as_str)
-        .unwrap_or(&suggestion.value)
+pub(crate) fn debug_snapshot(
+    menu: &mut OspCompletionMenu,
+    editor: &Editor,
+    screen_width: u16,
+    screen_height: u16,
+    ansi: bool,
+) -> MenuDebug {
+    let indent = compute_menu_indent(menu, editor);
+    menu.core
+        .debug_snapshot(&menu.colors, screen_width, screen_height, indent, ansi)
 }
 
-fn truncate_to_width(input: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
+fn trace_menu_state(menu: &OspCompletionMenu, editor: &Editor, painter: &Painter) {
+    if !crate::trace_completion_enabled() {
+        return;
     }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in input.chars() {
-        let w = ch.width().unwrap_or(0);
-        if used + w > width {
-            break;
-        }
-        out.push(ch);
-        used += w;
-    }
-    out
+    let line = editor.get_buffer().to_string();
+    let cursor = editor.line_buffer().insertion_point();
+    let values = menu.core.values();
+    let (stub, replace_range) = if let Some(first) = values.first() {
+        let start = first.span.start;
+        let end = first.span.end;
+        let stub = line.get(start..end).unwrap_or("").to_string();
+        (stub, Some([start, end]))
+    } else {
+        (String::new(), None)
+    };
+    let matches = values
+        .iter()
+        .map(|item| item.value.clone())
+        .collect::<Vec<_>>();
+
+    let available_lines = painter.remaining_lines();
+    let selected_index = menu
+        .core
+        .selected_index()
+        .map(|idx| idx as i64)
+        .unwrap_or(-1);
+
+    let menu_state = CompletionTraceMenuState {
+        selected_index,
+        selected_row: menu.core.selected_row(),
+        selected_col: menu.core.selected_col(),
+        active: menu.core.is_active(),
+        just_activated: menu.core.just_activated(),
+        columns: menu.core.columns(),
+        visible_rows: menu.core.visible_rows_for(available_lines),
+        rows: menu.core.rows(),
+        menu_indent: menu.core.input_indent(),
+    };
+
+    crate::trace_completion(
+        "complete",
+        &line,
+        cursor,
+        &stub,
+        matches,
+        replace_range,
+        Some(menu_state),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
 }
 
-fn indent_lines(text: &str, indent: usize) -> String {
-    if indent == 0 || text.is_empty() {
-        return text.to_string();
+fn needs_space_prefix(line: &str, start: usize, end: usize) -> bool {
+    if start != end || start == 0 {
+        return false;
     }
-    let pad = " ".repeat(indent);
-    let mut out = String::new();
-    for chunk in text.split_inclusive("\r\n") {
-        if let Some(body) = chunk.strip_suffix("\r\n") {
-            out.push_str(&pad);
-            out.push_str(body);
-            out.push_str("\r\n");
-        } else {
-            out.push_str(&pad);
-            out.push_str(chunk);
-        }
-    }
-    out
+    let Some(prefix) = line.get(..start) else {
+        return false;
+    };
+    let Some(prev) = prefix.chars().last() else {
+        return false;
+    };
+    !prev.is_whitespace() && prev != '='
 }
 
+fn compute_menu_indent(menu: &OspCompletionMenu, editor: &Editor) -> u16 {
+    let line = editor.get_buffer();
+    let span_start = menu
+        .core
+        .values()
+        .first()
+        .map(|s| s.span.start.min(line.len()))
+        .unwrap_or_else(|| editor.line_buffer().insertion_point().min(line.len()));
+    let prefix = line.get(0..span_start).unwrap_or("");
+    let prefix_width = prefix.width();
+    let cursor = editor.line_buffer().insertion_point().min(line.len());
+    let cursor_prefix = line.get(0..cursor).unwrap_or("");
+    let cursor_prefix_width = cursor_prefix.width();
+    let prompt_width = menu
+        .cursor_col
+        .saturating_sub(cursor_prefix_width.min(u16::MAX as usize) as u16);
+    let width = prompt_width as usize + prefix_width;
+    width.min(u16::MAX as usize) as u16
+}
+
+#[cfg(test)]
 impl OspCompletionMenu {
-    fn compute_input_indent(&self, _editor: &Editor, screen_width: u16) -> u16 {
-        let max_indent = screen_width.saturating_sub(1);
-        if max_indent == 0 { 0 } else { 1 }
+    fn update_for_test(
+        &mut self,
+        editor: &mut Editor,
+        completer: &mut dyn Completer,
+        screen_width: u16,
+    ) {
+        ACTIVE_EDITOR.with(|cell| cell.set(editor as *mut Editor));
+        self.apply_event(editor, completer);
+        let indent = compute_menu_indent(self, editor);
+        self.core.update_layout(screen_width, indent);
+    }
+
+    fn columns_for_test(&self) -> u16 {
+        self.core.columns_for_test()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OspCompletionMenu;
+    use nu_ansi_term::{Color, Style};
+    use reedline::{Completer, Editor, Menu, MenuEvent, Span, Suggestion, UndoBehavior};
+    use unicode_width::UnicodeWidthStr;
+
+    #[derive(Clone)]
+    struct FixedCompleter {
+        suggestions: Vec<Suggestion>,
+    }
+
+    impl Completer for FixedCompleter {
+        fn complete(&mut self, _line: &str, _pos: usize) -> Vec<Suggestion> {
+            self.suggestions.clone()
+        }
+    }
+
+    #[derive(Clone)]
+    struct DynamicSpanCompleter;
+
+    impl Completer for DynamicSpanCompleter {
+        fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+            let start = line
+                .get(..pos)
+                .unwrap_or("")
+                .rfind(|ch: char| ch.is_whitespace())
+                .map(|idx| idx + 1)
+                .unwrap_or(0);
+            let span = Span { start, end: pos };
+            vec![suggestion("config", span), suggestion("doctor", span)]
+        }
+    }
+
+    fn set_buffer(editor: &mut Editor, buffer: &str) {
+        editor.edit_buffer(
+            |buf| buf.set_buffer(buffer.to_string()),
+            UndoBehavior::CreateUndoPoint,
+        );
+    }
+
+    fn suggestion(value: &str, span: Span) -> Suggestion {
+        Suggestion {
+            value: value.to_string(),
+            span,
+            append_whitespace: true,
+            ..Suggestion::default()
+        }
+    }
+
+    fn split_lines(output: &str) -> Vec<&str> {
+        output.split_terminator("\r\n").collect()
+    }
+
+    #[test]
+    fn tab_cycles_selection_replaces_buffer() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "co");
+
+        let mut completer = DynamicSpanCompleter;
+        let mut menu = OspCompletionMenu::default();
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
+        assert_eq!(debug.selected_index, -1);
+        assert_eq!(editor.line_buffer().get_buffer(), "co");
+
+        menu.menu_event(MenuEvent::NextElement);
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
+        assert_eq!(debug.selected_index, 0);
+        assert_eq!(editor.line_buffer().get_buffer(), "config");
+
+        menu.menu_event(MenuEvent::NextElement);
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
+        assert_eq!(debug.selected_index, 1);
+        assert_eq!(editor.line_buffer().get_buffer(), "doctor");
+    }
+
+    #[test]
+    fn enter_accepts_selected_completion() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "doctor ");
+        let insert_at = editor.line_buffer().len();
+
+        let suggestions = vec![
+            suggestion(
+                "all",
+                Span {
+                    start: insert_at,
+                    end: insert_at,
+                },
+            ),
+            suggestion(
+                "config",
+                Span {
+                    start: insert_at,
+                    end: insert_at,
+                },
+            ),
+            suggestion(
+                "plugins",
+                Span {
+                    start: insert_at,
+                    end: insert_at,
+                },
+            ),
+            suggestion(
+                "theme",
+                Span {
+                    start: insert_at,
+                    end: insert_at,
+                },
+            ),
+        ];
+        let mut completer = FixedCompleter { suggestions };
+        let mut menu = OspCompletionMenu::default();
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        menu.replace_in_buffer(&mut editor);
+
+        assert_eq!(editor.line_buffer().get_buffer(), "doctor all ");
+    }
+
+    #[test]
+    fn menu_uses_display_text_when_present() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+        let mut menu = OspCompletionMenu::default();
+
+        let mut first = suggestion("config", Span { start: 0, end: 0 });
+        first.extra = Some(vec!["Configure".to_string()]);
+        let second = suggestion("doctor", Span { start: 0, end: 0 });
+
+        let mut completer = FixedCompleter {
+            suggestions: vec![first, second],
+        };
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let output = menu.menu_string(10, false);
+        assert!(output.contains("Configure"));
+        assert!(output.contains("doctor"));
+    }
+
+    #[test]
+    fn menu_shows_description_for_selected_item() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+        let mut menu = OspCompletionMenu::default();
+
+        let mut first = suggestion("config", Span { start: 0, end: 0 });
+        first.description = Some("Inspect and edit runtime config".to_string());
+        let second = suggestion("doctor", Span { start: 0, end: 0 });
+
+        let mut completer = FixedCompleter {
+            suggestions: vec![first, second],
+        };
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        menu.menu_event(MenuEvent::NextElement);
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let output = menu.menu_string(10, false);
+        let lines = split_lines(&output);
+        let last = lines.last().map(|line| line.trim()).unwrap_or_default();
+        assert!(!last.is_empty());
+        assert!("Inspect and edit runtime config".starts_with(last));
+    }
+
+    #[test]
+    fn menu_truncates_description_on_narrow_width() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+        let mut menu = OspCompletionMenu::default();
+
+        let mut first = suggestion("config", Span { start: 0, end: 0 });
+        first.description = Some("this description is very long".to_string());
+
+        let mut completer = FixedCompleter {
+            suggestions: vec![first],
+        };
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 10);
+
+        menu.menu_event(MenuEvent::NextElement);
+        menu.update_for_test(&mut editor, &mut completer, 10);
+
+        let output = menu.menu_string(10, false);
+        assert!(output.contains("this"));
+        assert!(!output.contains("description is very long"));
+    }
+
+    #[test]
+    fn menu_narrows_columns_on_small_width() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+
+        let suggestions = vec![
+            suggestion("alpha", Span { start: 0, end: 0 }),
+            suggestion("bravo", Span { start: 0, end: 0 }),
+            suggestion("charlie", Span { start: 0, end: 0 }),
+            suggestion("delta", Span { start: 0, end: 0 }),
+        ];
+
+        let mut completer = FixedCompleter {
+            suggestions: suggestions.clone(),
+        };
+        let mut menu_small = OspCompletionMenu::default();
+        menu_small.menu_event(MenuEvent::Activate(false));
+        menu_small.update_for_test(&mut editor, &mut completer, 10);
+        assert_eq!(menu_small.columns_for_test(), 1);
+
+        let mut completer = FixedCompleter { suggestions };
+        let mut menu_large = OspCompletionMenu::default();
+        menu_large.menu_event(MenuEvent::Activate(false));
+        menu_large.update_for_test(&mut editor, &mut completer, 80);
+        assert!(menu_large.columns_for_test() > 1);
+    }
+
+    #[test]
+    fn menu_respects_available_lines() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+        let mut menu = OspCompletionMenu::default();
+
+        let mut suggestions = Vec::new();
+        for idx in 0..10 {
+            suggestions.push(suggestion(&format!("item{idx}"), Span { start: 0, end: 0 }));
+        }
+        let mut completer = FixedCompleter { suggestions };
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let output = menu.menu_string(1, false);
+        let lines = split_lines(&output);
+        assert!(!lines.is_empty());
+        assert!(lines.len() <= 1);
+    }
+
+    #[test]
+    fn menu_ansi_coloring_preserves_case_and_resets() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+        let mut menu = OspCompletionMenu::default();
+
+        let suggestions = vec![
+            suggestion("config", Span { start: 0, end: 0 }),
+            suggestion("doctor", Span { start: 0, end: 0 }),
+        ];
+        let mut completer = FixedCompleter { suggestions };
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let output = menu.menu_string(10, true);
+        assert!(output.contains("config"));
+        assert!(!output.contains("CONFIG"));
+        assert!(output.contains("\u{1b}["));
+        assert!(output.contains("\u{1b}[0m"));
+    }
+
+    #[test]
+    fn menu_non_ansi_marks_selected_item() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+        let mut menu = OspCompletionMenu::default();
+
+        let suggestions = vec![
+            suggestion("config", Span { start: 0, end: 0 }),
+            suggestion("doctor", Span { start: 0, end: 0 }),
+        ];
+        let mut completer = FixedCompleter { suggestions };
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        menu.menu_event(MenuEvent::NextElement);
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let output = menu.menu_string(10, false);
+        assert!(output.contains("> config"));
+        assert!(output.contains("  doctor"));
+    }
+
+    #[test]
+    fn menu_width_never_exceeds_screen_width_without_ansi() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+        let mut menu = OspCompletionMenu::default();
+
+        let suggestions = vec![
+            suggestion("alpha", Span { start: 0, end: 0 }),
+            suggestion("bravo", Span { start: 0, end: 0 }),
+            suggestion("charlie", Span { start: 0, end: 0 }),
+        ];
+        let mut completer = FixedCompleter { suggestions };
+
+        let screen_width = 20;
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, screen_width);
+
+        let output = menu.menu_string(10, false);
+        for line in split_lines(&output) {
+            assert!(line.width() <= screen_width as usize);
+        }
+    }
+
+    #[test]
+    fn menu_description_is_omitted_when_no_lines_available() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "");
+        let mut menu = OspCompletionMenu::default();
+
+        let mut first = suggestion("config", Span { start: 0, end: 0 });
+        first.description = Some("Long description".to_string());
+        let mut completer = FixedCompleter {
+            suggestions: vec![first],
+        };
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        menu.menu_event(MenuEvent::NextElement);
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        let output = menu.menu_string(1, false);
+        let lines = split_lines(&output);
+        assert_eq!(lines.len(), 1);
+        assert!(!output.contains("Long description"));
+    }
+
+    #[test]
+    fn menu_debug_reports_styles_and_selection() {
+        let span = Span { start: 0, end: 0 };
+        let suggestions = vec![suggestion("config", span)];
+        let mut menu = OspCompletionMenu::default()
+            .with_text_style(Style::new().fg(Color::Red).on(Color::Black))
+            .with_selected_text_style(Style::new().fg(Color::Green).on(Color::Blue))
+            .with_description_text_style(Style::new().fg(Color::Yellow))
+            .with_match_text_style(Style::new().fg(Color::Cyan))
+            .with_selected_match_text_style(Style::new().fg(Color::Magenta));
+
+        let mut editor = Editor::default();
+        let mut completer = FixedCompleter { suggestions };
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 20);
+
+        let debug = super::debug_snapshot(&mut menu, &editor, 20, 5, false);
+        assert_eq!(debug.styles.text.foreground.as_deref(), Some("red"));
+        assert_eq!(debug.styles.text.background.as_deref(), Some("black"));
+        assert_eq!(
+            debug.styles.selected_text.foreground.as_deref(),
+            Some("green")
+        );
+        assert_eq!(
+            debug.styles.selected_text.background.as_deref(),
+            Some("blue")
+        );
+        assert_eq!(
+            debug.styles.description.foreground.as_deref(),
+            Some("yellow")
+        );
+        assert_eq!(debug.styles.match_text.foreground.as_deref(), Some("cyan"));
+        assert_eq!(
+            debug.styles.selected_match.foreground.as_deref(),
+            Some("magenta")
+        );
+        assert_eq!(debug.selected_index, -1);
+        assert_eq!(debug.selected_row, 0);
+        assert_eq!(debug.selected_col, 0);
     }
 }

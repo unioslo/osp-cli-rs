@@ -1,23 +1,19 @@
 use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, ReplCommandOutput, config_explain_json,
-    config_explain_output, config_usize, config_value_to_json, emit_messages,
-    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
-    resolve_known_theme_name, resolve_runtime_config,
+    config_explain_output, config_value_to_json, emit_messages, explain_runtime_config,
+    format_scope, is_sensitive_key, render_config_explain_text,
 };
 use crate::cli::{ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs};
 use crate::rows::RowBuilder;
 use crate::rows::output::rows_to_output_result;
-use crate::state::{AppState, AuthState, TerminalKind};
-use crate::theme_loader;
+use crate::state::{AppState, TerminalKind};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
-    ConfigSchema, DEFAULT_SESSION_CACHE_MAX_RESULTS, DEFAULT_UI_WIDTH, ResolvedValue,
-    RuntimeConfigPaths, Scope, set_scoped_value_in_toml,
+    ConfigSchema, ResolvedValue, RuntimeConfigPaths, Scope, set_scoped_value_in_toml,
 };
 use osp_core::output::OutputFormat;
 use osp_core::row::Row;
 use osp_ui::messages::MessageBuffer;
-use osp_ui::theme::DEFAULT_THEME_NAME;
 
 pub(crate) fn run_config_command(
     state: &mut AppState,
@@ -238,10 +234,6 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
         rows.push(row.build());
     }
 
-    if !args.dry_run {
-        refresh_runtime_config(state)?;
-    }
-
     let output = if args.explain {
         let explain = explain_runtime_config(
             Some(state.config.resolved().active_profile().to_string()),
@@ -374,44 +366,6 @@ fn resolve_terminal_selector(state: &AppState, selector: Option<&str>) -> Option
     } else {
         Some(trimmed.to_ascii_lowercase())
     }
-}
-
-fn refresh_runtime_config(state: &mut AppState) -> Result<()> {
-    let next = resolve_runtime_config(
-        state.context.profile_override().map(ToOwned::to_owned),
-        Some(state.context.terminal_kind().as_config_terminal()),
-        Some(state.session.config_overrides.clone()),
-    )?;
-    let changed = state.config.replace_resolved(next);
-    if changed {
-        state.clients.sync_config_revision(state.config.revision());
-        state.auth = AuthState::from_resolved(state.config.resolved());
-        let theme_catalog = theme_loader::load_theme_catalog(state.config.resolved());
-        state.themes = theme_catalog.clone();
-        theme_loader::log_theme_issues(&theme_catalog.issues);
-        let selected = state
-            .config
-            .resolved()
-            .get_string("theme.name")
-            .unwrap_or(DEFAULT_THEME_NAME);
-        state.ui.render_settings.theme_name =
-            resolve_known_theme_name(selected, &theme_catalog)
-                .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
-        state.ui.render_settings.theme = theme_catalog
-            .resolve(&state.ui.render_settings.theme_name)
-            .map(|entry| entry.theme.clone());
-        state.ui.render_settings.width = Some(config_usize(
-            state.config.resolved(),
-            "ui.width",
-            DEFAULT_UI_WIDTH as usize,
-        ));
-        state.session.max_cached_results = config_usize(
-            state.config.resolved(),
-            "session.cache.max_results",
-            DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
-        );
-    }
-    Ok(())
 }
 
 pub(crate) fn run_config_repl_command(

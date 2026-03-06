@@ -4,6 +4,7 @@ use osp_core::row::Row;
 use serde_json::{Map, Value};
 use unicode_width::UnicodeWidthStr;
 
+use crate::display::value_to_display;
 use crate::document::{Block, MregBlock, MregEntry, MregRow, MregValue, TableBlock, TableStyle};
 
 pub fn build_mreg_blocks(
@@ -15,6 +16,7 @@ pub fn build_mreg_blocks(
     prefer_stacked_object_lists: bool,
     stack_min_col_width: usize,
     stack_overflow_ratio: usize,
+    next_block_id: &mut u64,
 ) -> Vec<Block> {
     let mut blocks = Vec::new();
     for row in rows {
@@ -25,6 +27,7 @@ pub fn build_mreg_blocks(
             prefer_stacked_object_lists,
             stack_min_col_width.max(1),
             stack_overflow_ratio.max(100),
+            next_block_id,
         );
         builder.visit_object(row, 0, key_order);
         builder.flush_entries();
@@ -33,7 +36,7 @@ pub fn build_mreg_blocks(
     blocks
 }
 
-struct MregBuilder {
+struct MregBuilder<'a> {
     blocks: Vec<Block>,
     entries: Vec<MregEntry>,
     short_list_max: usize,
@@ -42,9 +45,10 @@ struct MregBuilder {
     prefer_stacked_object_lists: bool,
     stack_min_col_width: usize,
     stack_overflow_ratio: usize,
+    next_block_id: &'a mut u64,
 }
 
-impl MregBuilder {
+impl<'a> MregBuilder<'a> {
     fn new(
         short_list_max: usize,
         width_hint: usize,
@@ -52,6 +56,7 @@ impl MregBuilder {
         prefer_stacked_object_lists: bool,
         stack_min_col_width: usize,
         stack_overflow_ratio: usize,
+        next_block_id: &'a mut u64,
     ) -> Self {
         Self {
             blocks: Vec::new(),
@@ -62,6 +67,7 @@ impl MregBuilder {
             prefer_stacked_object_lists,
             stack_min_col_width,
             stack_overflow_ratio,
+            next_block_id,
         }
     }
 
@@ -69,10 +75,11 @@ impl MregBuilder {
         if self.entries.is_empty() {
             return;
         }
+        let block_id = self.allocate_block_id();
+        let entries = std::mem::take(&mut self.entries);
         self.blocks.push(Block::Mreg(MregBlock {
-            rows: vec![MregRow {
-                entries: std::mem::take(&mut self.entries),
-            }],
+            block_id,
+            rows: vec![MregRow { entries }],
         }));
     }
 
@@ -134,27 +141,28 @@ impl MregBuilder {
                 }
 
                 let key_with_count = label_with_count(key, items.len());
-                if items.iter().any(Value::is_object) {
-                    if let Some(table) = table_block_from_object_list(items, depth + 1) {
-                        if self.prefer_stacked_object_lists
-                            && should_stack_object_list_table(
-                                &table,
-                                self.width_hint,
-                                self.indent_size,
-                                depth + 1,
-                                self.stack_min_col_width,
-                                self.stack_overflow_ratio,
-                            )
-                        {
-                            self.push_group_entry(key_with_count, depth);
-                            self.visit_object_list(items, depth + 1);
-                            return;
-                        }
+                if items.iter().any(Value::is_object)
+                    && let Some(mut table) = table_block_from_object_list(items, depth + 1)
+                {
+                    if self.prefer_stacked_object_lists
+                        && should_stack_object_list_table(
+                            &table,
+                            self.width_hint,
+                            self.indent_size,
+                            depth + 1,
+                            self.stack_min_col_width,
+                            self.stack_overflow_ratio,
+                        )
+                    {
                         self.push_group_entry(key_with_count, depth);
-                        self.flush_entries();
-                        self.blocks.push(Block::Table(table));
+                        self.visit_object_list(items, depth + 1);
                         return;
                     }
+                    self.push_group_entry(key_with_count, depth);
+                    self.flush_entries();
+                    table.block_id = self.allocate_block_id();
+                    self.blocks.push(Block::Table(table));
+                    return;
                 }
 
                 if items.len() <= self.short_list_max {
@@ -180,6 +188,11 @@ impl MregBuilder {
             }
             self.visit_object(map, depth, None);
         }
+    }
+    fn allocate_block_id(&mut self) -> u64 {
+        let id = *self.next_block_id;
+        *self.next_block_id = self.next_block_id.saturating_add(1);
+        id
     }
 }
 
@@ -246,6 +259,7 @@ fn table_block_from_object_list(items: &[Value], depth: usize) -> Option<TableBl
     }
 
     Some(TableBlock {
+        block_id: 0,
         style: TableStyle::Grid,
         headers,
         rows,
@@ -297,27 +311,12 @@ fn estimate_table_width(table: &TableBlock) -> usize {
     for row in &table.rows {
         for (idx, cell) in row.iter().enumerate() {
             if let Some(width) = widths.get_mut(idx) {
-                *width = (*width).max(display_width(&value_to_string(cell)).max(1));
+                *width = (*width).max(display_width(&value_to_display(cell)).max(1));
             }
         }
     }
 
     widths.iter().sum::<usize>() + widths.len() * 3 + 1
-}
-
-fn value_to_string(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(v) => v.to_string().to_ascii_lowercase(),
-        Value::Number(v) => v.to_string(),
-        Value::String(v) => v.clone(),
-        Value::Array(values) => values
-            .iter()
-            .map(value_to_string)
-            .collect::<Vec<String>>()
-            .join(", "),
-        Value::Object(_) => value.to_string(),
-    }
 }
 
 fn display_width(value: &str) -> usize {
@@ -354,13 +353,35 @@ mod tests {
 
     #[test]
     fn keeps_object_lists_as_tables_in_plain_mode() {
-        let blocks = build_mreg_blocks(&[sample_row()], None, 1, 80, 2, false, 10, 200);
+        let mut next_block_id = 1;
+        let blocks = build_mreg_blocks(
+            &[sample_row()],
+            None,
+            1,
+            80,
+            2,
+            false,
+            10,
+            200,
+            &mut next_block_id,
+        );
         assert!(blocks.iter().any(|block| matches!(block, Block::Table(_))));
     }
 
     #[test]
     fn stacks_object_lists_when_rich_width_is_tight() {
-        let blocks = build_mreg_blocks(&[sample_row()], None, 1, 40, 2, true, 10, 200);
+        let mut next_block_id = 1;
+        let blocks = build_mreg_blocks(
+            &[sample_row()],
+            None,
+            1,
+            40,
+            2,
+            true,
+            10,
+            200,
+            &mut next_block_id,
+        );
         assert!(!blocks.iter().any(|block| matches!(block, Block::Table(_))));
         let has_separator = blocks.iter().any(|block| match block {
             Block::Mreg(mreg) => mreg.rows.iter().any(|row| {

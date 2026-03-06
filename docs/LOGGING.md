@@ -13,7 +13,7 @@ Source:
 - `osprov-cli/src/osprov_cli/errors.py`
 
 Behavior:
-- Global callback maps `-v/-q` into `ui.verbosity.level`.
+- Global callback maps `-v/-q` into the base session verbosity.
 - Per-command wrapper stores command-local verbosity delta in `ContextVar`.
 - Error renderer combines base level + delta to decide detail level.
 
@@ -85,6 +85,15 @@ Use `tracing` stack:
 - `debug.level`: controls developer logs shown on `stderr`.
 - `log.file.*`: controls persistent file logging.
 
+Current Rust semantics:
+
+- Launch `-v/-q` seeds `ui.verbosity.level` into the in-memory session layer.
+- Launch `-d` seeds `debug.level` into that same session layer.
+- REPL command-local `-v/-q/-d` applies on top of the current session base for
+  that invocation only.
+- REPL reload rebuilds from the session layer, so these launch defaults survive
+  reloads.
+
 ### CLI flags
 
 - `-v/-vv/-vvv` and `-q/-qq` for user-facing output detail.
@@ -104,6 +113,12 @@ Use `tracing` stack:
   - `-dd` -> `debug`
   - `-ddd+` -> `trace`
 - Keep `RUST_LOG` support for advanced users; CLI flag should win.
+
+Precedence:
+
+1. command-local REPL `-v/-q/-d`
+2. session layer (`osp -q`, `osp -d`, `config set --session ui.verbosity.level`)
+3. env/file/default config
 
 ## Plugin Integration Contract
 

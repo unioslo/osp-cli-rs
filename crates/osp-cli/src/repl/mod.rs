@@ -5,11 +5,16 @@ pub(crate) mod history;
 use anyhow::anyhow;
 use miette::{Result, miette};
 use osp_dsl::apply_pipeline;
-use osp_repl::{ReplAppearance, ReplPrompt, SharedHistory, run_repl};
+use osp_repl::{
+    DebugStep, ReplAppearance, ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunResult,
+    SharedHistory, run_repl,
+};
 use osp_ui::messages::{adjust_verbosity, render_section_divider_with_overrides};
 use osp_ui::render_inline;
 use osp_ui::render_output;
-use osp_ui::style::{StyleToken, apply_style_spec, apply_style_with_theme};
+use osp_ui::style::{
+    StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
+};
 use std::borrow::Cow;
 
 use crate::cli::commands::{
@@ -17,8 +22,8 @@ use crate::cli::commands::{
     theme as theme_cmd,
 };
 use crate::cli::{
-    Commands, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands, ThemeCommands,
-    parse_repl_tokens,
+    Commands, ConfigArgs, ConfigCommands, DebugCompleteArgs, DoctorCommands, HistoryCommands,
+    PluginsCommands, ReplArgs, ReplCommands, ThemeArgs, ThemeCommands, parse_repl_tokens,
 };
 use crate::pipeline::parse_command_text_with_aliases;
 use crate::plugin_manager::CommandCatalogEntry;
@@ -28,14 +33,124 @@ use crate::state::AppState;
 use crate::app;
 use crate::app::{
     CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_LIST, CMD_PLUGINS, CMD_SHOW, CMD_THEME,
-    CMD_USE, DEFAULT_REPL_PROMPT, REPL_SHELLABLE_COMMANDS, ReplCommandOutput, ReplCommandSpec,
-    ReplDispatchOverrides,
+    CMD_USE, CliCommandResult, DEFAULT_REPL_PROMPT, REPL_SHELLABLE_COMMANDS, ReplCommandOutput,
+    ReplCommandSpec, ReplDispatchOverrides,
 };
+use osp_completion::CompletionTree;
 
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
+    let mut force_intro = state
+        .config
+        .resolved()
+        .get_bool("repl.intro")
+        .unwrap_or(true);
+    let mut pending_reload = false;
+    let mut pending_output = String::new();
+
+    loop {
+        if std::mem::take(&mut pending_reload) {
+            let next = app::rebuild_repl_state(state)?;
+            *state = next;
+        }
+        let catalog = app::authorized_command_catalog(state)?;
+        let (words, completion_tree) = build_repl_completion_inputs(state, &catalog);
+        let help_text = render_repl_command_overview(state, &catalog);
+
+        if force_intro {
+            print!("\x1b[2J\x1b[H");
+            print!("{}", render_repl_intro(state));
+            print!("{help_text}");
+        }
+        if !pending_output.is_empty() {
+            print!("{pending_output}");
+            pending_output.clear();
+        }
+
+        let prompt = build_repl_prompt(state);
+        let appearance = build_repl_appearance(state);
+        let history_config = history::build_history_config(state);
+        print!("Preparing prompt...\r");
+
+        match run_repl(
+            prompt,
+            words,
+            Some(completion_tree),
+            appearance,
+            help_text,
+            history_config,
+            |line, history| {
+                execute_repl_plugin_line(state, history, line).map_err(|err| anyhow!("{err:#}"))
+            },
+        )
+        .map_err(|err| miette!("{err:#}"))?
+        {
+            ReplRunResult::Exit(code) => return Ok(code),
+            ReplRunResult::Restart { output, reload } => {
+                pending_reload = true;
+                force_intro = matches!(reload, ReplReloadKind::WithIntro);
+                if force_intro {
+                    pending_output = output;
+                } else if !output.is_empty() {
+                    print!("{output}");
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn run_repl_debug_command(state: &AppState, args: ReplArgs) -> Result<CliCommandResult> {
+    match args.command {
+        ReplCommands::DebugComplete(args) => run_repl_debug_complete(state, args),
+    }
+}
+
+fn run_repl_debug_complete(state: &AppState, args: DebugCompleteArgs) -> Result<CliCommandResult> {
     let catalog = app::authorized_command_catalog(state)?;
+    let (_words, completion_tree) = build_repl_completion_inputs(state, &catalog);
+    let appearance = build_repl_appearance(state);
+    let cursor = args.cursor.unwrap_or(args.line.len());
+
+    let steps = args
+        .steps
+        .iter()
+        .map(|raw| DebugStep::parse(raw).ok_or_else(|| miette!("Unknown debug step '{raw}'")))
+        .collect::<Result<Vec<_>>>()?;
+
+    let payload = if steps.is_empty() {
+        let debug = osp_repl::debug_completion(
+            &completion_tree,
+            &args.line,
+            cursor,
+            args.width,
+            args.height,
+            args.menu_ansi,
+            args.menu_unicode,
+            Some(&appearance),
+        );
+        serde_json::to_string_pretty(&debug).map_err(|err| miette!("{err:#}"))?
+    } else {
+        let frames = osp_repl::debug_completion_steps(
+            &completion_tree,
+            &args.line,
+            cursor,
+            args.width,
+            args.height,
+            args.menu_ansi,
+            args.menu_unicode,
+            Some(&appearance),
+            &steps,
+        );
+        serde_json::to_string_pretty(&frames).map_err(|err| miette!("{err:#}"))?
+    };
+    Ok(CliCommandResult::text(format!("{payload}\n")))
+}
+
+fn build_repl_completion_inputs(
+    state: &AppState,
+    catalog: &[CommandCatalogEntry],
+) -> (Vec<String>, CompletionTree) {
     let history_enabled = history::repl_history_enabled(state.config.resolved());
-    let mut words = completion::catalog_completion_words(&catalog);
+    let mut words = completion::catalog_completion_words(catalog);
     if state.auth.is_builtin_visible(CMD_PLUGINS) {
         words.extend([CMD_PLUGINS.to_string(), CMD_LIST.to_string()]);
     }
@@ -75,35 +190,8 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     words.sort();
     words.dedup();
 
-    let help_text = render_repl_command_overview(state, &catalog);
-    if state
-        .config
-        .resolved()
-        .get_bool("repl.intro")
-        .unwrap_or(true)
-    {
-        // Match Python REPL startup behavior: clear screen before intro.
-        print!("\x1b[2J\x1b[H");
-        print!("{}", render_repl_intro(state));
-        print!("{}", render_repl_command_overview(state, &catalog));
-    }
-    let prompt = build_repl_prompt(state);
-    let appearance = build_repl_appearance(state);
-    let history_config = history::build_history_config(state);
-    let completion_tree = completion::build_repl_completion_tree(state, &catalog, &words);
-    print!("Preparing prompt...\r");
-    run_repl(
-        prompt,
-        words,
-        Some(completion_tree),
-        appearance,
-        help_text,
-        history_config,
-        |line, history| {
-            execute_repl_plugin_line(state, history, line).map_err(|err| anyhow!("{err:#}"))
-        },
-    )
-    .map_err(|err| miette!("{err:#}"))
+    let tree = completion::build_repl_completion_tree(state, catalog, &words);
+    (words, tree)
 }
 
 fn render_repl_intro(state: &AppState) -> String {
@@ -112,12 +200,16 @@ fn render_repl_intro(state: &AppState) -> String {
     let theme = &resolved.theme;
 
     let user = config.get_string("user.name").unwrap_or("anonymous");
-    let profile = config.active_profile();
+    let display_name = config
+        .get_string("user.display_name")
+        .or_else(|| config.get_string("user.full_name"))
+        .unwrap_or(user);
     let theme_id = state.ui.render_settings.theme_name.clone();
     let version = env!("CARGO_PKG_VERSION");
     let theme_display = theme_display_name(&theme_id);
 
     let mut out = String::new();
+    out.push('\n');
     out.push_str(&render_section_divider_with_overrides(
         "OSP",
         resolved.unicode,
@@ -129,7 +221,7 @@ fn render_repl_intro(state: &AppState) -> String {
     ));
     out.push('\n');
     out.push_str(&render_inline(
-        &format!("  Welcome `{user}`!"),
+        &format!("  Welcome `{display_name}`!"),
         resolved.color,
         theme,
         &resolved.style_overrides,
@@ -198,35 +290,28 @@ fn render_repl_intro(state: &AppState) -> String {
     ));
     out.push('\n');
     out.push_str(&render_inline(
-        "    `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2",
+        "  `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2",
         resolved.color,
         theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
-        "    *|* `A` metric() *|* `L` limit offset *|* `C` count",
+        "  *|* `A` metric() *|* `L` limit offset *|* `C` count",
         resolved.color,
         theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
-        "    `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*",
+        "  `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*",
         resolved.color,
         theme,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out.push_str(&render_inline(
-        "    *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`",
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push_str("\n\n");
-    out.push_str(&render_inline(
-        &format!("Current profile: `{profile}`"),
+        "  *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`",
         resolved.color,
         theme,
         &resolved.style_overrides,
@@ -240,16 +325,19 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
     let theme = &resolved.theme;
     let mut out = String::new();
 
-    out.push_str(&render_section_divider_with_overrides(
-        "Usage",
-        resolved.unicode,
-        resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::PanelBorder,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
+    let usage_label = if resolved.color {
+        apply_style_with_theme_overrides(
+            "Usage:",
+            StyleToken::MessageInfo,
+            true,
+            theme,
+            &resolved.style_overrides,
+        )
+    } else {
+        "Usage:".to_string()
+    };
+    out.push(' ');
+    out.push_str(&usage_label);
     out.push_str("  [OPTIONS] COMMAND [ARGS]...\n\n");
 
     out.push_str(&render_section_divider_with_overrides(
@@ -263,25 +351,62 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
     ));
     out.push('\n');
 
-    out.push_str("  exit         Exit application.\n");
-    out.push_str("  help         Show this command overview.\n");
+    let exit_name = if resolved.color {
+        apply_style_with_theme_overrides(
+            "exit         ",
+            StyleToken::Key,
+            true,
+            theme,
+            &resolved.style_overrides,
+        )
+    } else {
+        "exit         ".to_string()
+    };
+    out.push_str("  ");
+    out.push_str(&exit_name);
+    out.push_str("Exit application.\n");
+
+    let help_name = if resolved.color {
+        apply_style_with_theme_overrides(
+            "help         ",
+            StyleToken::Key,
+            true,
+            theme,
+            &resolved.style_overrides,
+        )
+    } else {
+        "help         ".to_string()
+    };
+    out.push_str("  ");
+    out.push_str(&help_name);
+    out.push_str("Show this command overview.\n");
 
     if state.auth.is_builtin_visible(CMD_PLUGINS) {
-        out.push_str("  plugins      subcommands: list, commands, enable, disable, doctor\n");
+        out.push_str("  ");
+        out.push_str(&style_command_name(&resolved, theme, "plugins      "));
+        out.push_str("subcommands: list, commands, enable, disable, doctor\n");
     }
     if state.auth.is_builtin_visible(CMD_DOCTOR) {
-        out.push_str("  doctor       subcommands: all, config, plugins, theme\n");
+        out.push_str("  ");
+        out.push_str(&style_command_name(&resolved, theme, "doctor       "));
+        out.push_str("subcommands: all, config, plugins, theme\n");
     }
     if state.auth.is_builtin_visible(CMD_CONFIG) {
-        out.push_str("  config       subcommands: show, get, explain, set, doctor\n");
+        out.push_str("  ");
+        out.push_str(&style_command_name(&resolved, theme, "config       "));
+        out.push_str("subcommands: show, get, explain, set, doctor\n");
     }
     if state.auth.is_builtin_visible(CMD_THEME) {
-        out.push_str("  theme        subcommands: list, show, use\n");
+        out.push_str("  ");
+        out.push_str(&style_command_name(&resolved, theme, "theme        "));
+        out.push_str("subcommands: list, show, use\n");
     }
     if history::repl_history_enabled(state.config.resolved())
         && state.auth.is_builtin_visible(CMD_HISTORY)
     {
-        out.push_str("  history      subcommands: list, prune, clear\n");
+        out.push_str("  ");
+        out.push_str(&style_command_name(&resolved, theme, "history      "));
+        out.push_str("subcommands: list, prune, clear\n");
     }
 
     for entry in catalog {
@@ -291,29 +416,51 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
             entry.about.clone()
         };
         if entry.subcommands.is_empty() {
-            out.push_str(&format!("  {:<12} {about}\n", entry.name));
+            let name = format!("{:<12}", entry.name);
+            out.push_str("  ");
+            out.push_str(&style_command_name(&resolved, theme, &name));
+            out.push_str(&format!("{about}\n"));
         } else {
+            let name = format!("{:<12}", entry.name);
+            out.push_str("  ");
+            out.push_str(&style_command_name(&resolved, theme, &name));
             out.push_str(&format!(
-                "  {:<12} {} (subcommands: {})\n",
-                entry.name,
+                "{} (subcommands: {})\n",
                 about,
                 entry.subcommands.join(", ")
             ));
         }
     }
 
-    out.push('\n');
     out.push_str(&render_section_divider_with_overrides(
         "",
         resolved.unicode,
         resolved.width,
         resolved.color,
         theme,
-        StyleToken::MessageInfo,
+        StyleToken::PanelBorder,
         &resolved.style_overrides,
     ));
     out.push('\n');
     out
+}
+
+fn style_command_name(
+    resolved: &osp_ui::ResolvedRenderSettings,
+    theme: &osp_ui::theme::ThemeDefinition,
+    name: &str,
+) -> String {
+    if resolved.color {
+        apply_style_with_theme_overrides(
+            name,
+            StyleToken::Key,
+            true,
+            theme,
+            &resolved.style_overrides,
+        )
+    } else {
+        name.to_string()
+    }
 }
 
 pub(crate) fn theme_display_name(slug: &str) -> String {
@@ -346,22 +493,22 @@ fn build_repl_appearance(state: &AppState) -> ReplAppearance {
     let theme = &resolved.theme;
     let config = state.config.resolved();
 
-    let completion_text_style = config
-        .get_string("color.prompt.completion.text")
-        .map(ToOwned::to_owned)
+    let config_style = |key: &str| {
+        config
+            .get_string(key)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+
+    let completion_text_style = config_style("color.prompt.completion.text")
         .unwrap_or_else(|| theme.repl_completion_text_spec().to_string());
-    let completion_background_style = config
-        .get_string("color.prompt.completion.background")
-        .map(ToOwned::to_owned)
+    let completion_background_style = config_style("color.prompt.completion.background")
         .unwrap_or_else(|| theme.repl_completion_background_spec().to_string());
-    let completion_highlight_style = config
-        .get_string("color.prompt.completion.highlight")
-        .map(ToOwned::to_owned)
+    let completion_highlight_style = config_style("color.prompt.completion.highlight")
         .unwrap_or_else(|| theme.repl_completion_highlight_spec().to_string());
-    let command_highlight_style = config
-        .get_string("color.prompt.command")
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| theme.palette.success.to_string());
+    let command_highlight_style =
+        config_style("color.prompt.command").unwrap_or_else(|| theme.palette.success.to_string());
 
     ReplAppearance {
         completion_text_style: Some(completion_text_style),
@@ -380,30 +527,31 @@ fn build_repl_prompt(state: &AppState) -> ReplPrompt {
     let user = config.get_string("user.name").unwrap_or("anonymous");
     let domain = config.get_string("domain").unwrap_or("local");
     let indicator = build_shell_indicator(state);
+    let prompt_style = config.get_string("color.prompt.text");
 
     let user_text = style_prompt_fragment(
-        config.get_string("color.prompt.text"),
+        prompt_style,
         user,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let domain_text = style_prompt_fragment(
-        config.get_string("color.prompt.text"),
+        prompt_style,
         domain,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let profile_text = style_prompt_fragment(
-        config.get_string("color.prompt.command"),
+        prompt_style,
         profile,
-        StyleToken::PromptCommand,
+        StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let indicator_text = style_prompt_fragment(
-        config.get_string("color.prompt.text"),
+        prompt_style,
         &indicator,
         StyleToken::PromptText,
         resolved.color,
@@ -411,17 +559,27 @@ fn build_repl_prompt(state: &AppState) -> ReplPrompt {
     );
 
     let prompt = if simple {
-        format!("{profile_text}> ")
+        let suffix = style_prompt_fragment(
+            prompt_style,
+            "> ",
+            StyleToken::PromptText,
+            resolved.color,
+            theme,
+        );
+        format!("{profile_text}{suffix}")
     } else {
         let template = config
             .get_string("repl.prompt")
             .unwrap_or(DEFAULT_REPL_PROMPT);
-        render_prompt_template(
+        render_prompt_template_styled(
             template,
             &user_text,
             &domain_text,
             &profile_text,
             &indicator_text,
+            prompt_style,
+            resolved.color,
+            theme,
         )
     };
 
@@ -446,6 +604,7 @@ fn build_shell_indicator(state: &AppState) -> String {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn render_prompt_template(
     template: &str,
     user: &str,
@@ -471,6 +630,80 @@ pub(crate) fn render_prompt_template(
     out
 }
 
+fn render_prompt_template_styled(
+    template: &str,
+    user: &str,
+    domain: &str,
+    profile: &str,
+    indicator: &str,
+    literal_style: Option<&str>,
+    color: bool,
+    theme: &osp_ui::theme::ThemeDefinition,
+) -> String {
+    let mut out = String::new();
+    let mut cursor = 0;
+
+    let style_literal = |text: &str| {
+        style_prompt_fragment(literal_style, text, StyleToken::PromptText, color, theme)
+    };
+
+    while cursor < template.len() {
+        let remainder = &template[cursor..];
+        let Some(open) = remainder.find('{') else {
+            out.push_str(&style_literal(remainder));
+            break;
+        };
+        let open = cursor + open;
+        if open > cursor {
+            out.push_str(&style_literal(&template[cursor..open]));
+        }
+        let tail = &template[open..];
+        if let Some((replacement, consumed)) =
+            prompt_placeholder_replacement(tail, user, domain, profile, indicator)
+        {
+            out.push_str(replacement);
+            cursor = open + consumed;
+            continue;
+        }
+        out.push_str(&style_literal("{"));
+        cursor = open + 1;
+    }
+
+    if !template.contains("{indicator}") && !indicator.trim().is_empty() {
+        if !out.ends_with(' ') {
+            out.push_str(&style_literal(" "));
+        }
+        out.push_str(indicator);
+    }
+
+    out
+}
+
+fn prompt_placeholder_replacement<'a>(
+    tail: &'a str,
+    user: &'a str,
+    domain: &'a str,
+    profile: &'a str,
+    indicator: &'a str,
+) -> Option<(&'a str, usize)> {
+    if tail.starts_with("{user}") {
+        return Some((user, "{user}".len()));
+    }
+    if tail.starts_with("{domain}") {
+        return Some((domain, "{domain}".len()));
+    }
+    if tail.starts_with("{profile}") {
+        return Some((profile, "{profile}".len()));
+    }
+    if tail.starts_with("{context}") {
+        return Some((profile, "{context}".len()));
+    }
+    if tail.starts_with("{indicator}") {
+        return Some((indicator, "{indicator}".len()));
+    }
+    None
+}
+
 fn style_prompt_fragment(
     config_style: Option<&str>,
     value: &str,
@@ -488,14 +721,14 @@ pub(crate) fn execute_repl_plugin_line(
     state: &mut AppState,
     history: &SharedHistory,
     line: &str,
-) -> Result<String> {
+) -> Result<ReplLineResult> {
     let parsed = parse_command_text_with_aliases(line, state.config.resolved())?;
     if parsed.tokens.is_empty() {
-        return Ok(String::new());
+        return Ok(ReplLineResult::Continue(String::new()));
     }
     if let Some(help) = completion::maybe_render_dsl_help(state, &parsed.stages) {
         state.sync_history_shell_context();
-        return Ok(help);
+        return Ok(ReplLineResult::Continue(help));
     }
 
     let tokens = parsed.tokens;
@@ -504,7 +737,10 @@ pub(crate) fn execute_repl_plugin_line(
         debug_verbosity: state.ui.debug_verbosity,
     };
     if tokens.len() == 1 && (tokens[0] == "--help" || tokens[0] == "-h") {
-        return repl_help_for_scope(state, base_overrides);
+        return Ok(ReplLineResult::Continue(repl_help_for_scope(
+            state,
+            base_overrides,
+        )?));
     }
 
     let help_rewritten = rewrite_repl_help_tokens(&tokens);
@@ -512,11 +748,16 @@ pub(crate) fn execute_repl_plugin_line(
 
     if tokens_for_parse.len() == 1 {
         match tokens_for_parse[0].as_str() {
-            CMD_HELP => return repl_help_for_scope(state, base_overrides),
+            CMD_HELP => {
+                return Ok(ReplLineResult::Continue(repl_help_for_scope(
+                    state,
+                    base_overrides,
+                )?));
+            }
             "exit" | "quit" => {
                 if let Some(message) = leave_repl_shell(state) {
                     state.sync_history_shell_context();
-                    return Ok(message);
+                    return Ok(ReplLineResult::Continue(message));
                 }
             }
             _ => {}
@@ -526,7 +767,7 @@ pub(crate) fn execute_repl_plugin_line(
     if parsed.stages.is_empty() && should_enter_repl_shell(state, &tokens_for_parse) {
         let entered = enter_repl_shell(state, &tokens_for_parse[0], base_overrides)?;
         state.sync_history_shell_context();
-        return Ok(entered);
+        return Ok(ReplLineResult::Continue(entered));
     }
 
     let prefixed_tokens = apply_repl_shell_prefix(&state.session.shell_stack, &tokens_for_parse);
@@ -537,7 +778,7 @@ pub(crate) fn execute_repl_plugin_line(
                 || err.kind() == clap::error::ErrorKind::DisplayVersion
             {
                 let rendered = help::render_repl_help_with_chrome(state, &err.to_string());
-                return Ok(rendered);
+                return Ok(ReplLineResult::Continue(rendered));
             }
             return Err(miette!(err.to_string()));
         }
@@ -557,7 +798,16 @@ pub(crate) fn execute_repl_plugin_line(
     let command = parsed_command
         .command
         .ok_or_else(|| miette!("missing command"))?;
+    let restart_repl = matches!(
+        &command,
+        Commands::Theme(ThemeArgs {
+            command: ThemeCommands::Use(_)
+        }) | Commands::Config(ConfigArgs {
+            command: ConfigCommands::Set(_)
+        })
+    );
     let spec = repl_command_spec(&command);
+    let show_intro_on_reload = theme_or_palette_change_requires_intro(&command);
     if !spec.supports_dsl && !parsed.stages.is_empty() {
         return Err(miette!(
             "`{}` does not support DSL pipeline stages",
@@ -568,7 +818,7 @@ pub(crate) fn execute_repl_plugin_line(
         completion::validate_dsl_stages(&parsed.stages)?;
     }
 
-    let result = match run_repl_command(state, command, overrides, history)? {
+    let rendered = match run_repl_command(state, command, overrides, history)? {
         ReplCommandOutput::Output {
             mut output,
             format_hint,
@@ -591,12 +841,42 @@ pub(crate) fn execute_repl_plugin_line(
             let rendered = render_output(&output, &render_settings);
             state.record_repl_rows(line, output_to_rows(&output));
             app::maybe_copy_output(state, &output);
-            Ok(rendered)
+            rendered
         }
-        ReplCommandOutput::Text(text) => Ok(text),
+        ReplCommandOutput::Text(text) => text,
     };
     state.sync_history_shell_context();
-    result
+    if restart_repl {
+        Ok(ReplLineResult::Restart {
+            output: rendered,
+            reload: if show_intro_on_reload {
+                ReplReloadKind::WithIntro
+            } else {
+                ReplReloadKind::Default
+            },
+        })
+    } else {
+        Ok(ReplLineResult::Continue(rendered))
+    }
+}
+
+fn theme_or_palette_change_requires_intro(command: &Commands) -> bool {
+    match command {
+        Commands::Theme(ThemeArgs {
+            command: ThemeCommands::Use(_),
+        }) => true,
+        Commands::Config(args) => match &args.command {
+            ConfigCommands::Set(set) => {
+                let key = set.key.trim().to_ascii_lowercase();
+                key == "theme.name"
+                    || key.starts_with("theme.")
+                    || key.starts_with("color.")
+                    || key.starts_with("palette.")
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 pub(crate) fn rewrite_repl_help_tokens(tokens: &[String]) -> Option<Vec<String>> {
@@ -728,6 +1008,7 @@ fn run_repl_command(
                 history_cmd::run_history_repl_command(state, args, history)
             })
         }
+        Commands::Repl(_) => Err(miette!("`repl` debug commands are not available in REPL")),
         Commands::External(tokens) => run_repl_external_command(state, tokens, overrides),
     }
 }
@@ -850,6 +1131,10 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
         Commands::History(args) => ReplCommandSpec {
             name: Cow::Borrowed(CMD_HISTORY),
             supports_dsl: matches!(args.command, HistoryCommands::List),
+        },
+        Commands::Repl(_) => ReplCommandSpec {
+            name: Cow::Borrowed("repl"),
+            supports_dsl: false,
         },
     }
 }

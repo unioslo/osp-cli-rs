@@ -60,6 +60,7 @@ pub struct JsonBlock {
 
 #[derive(Debug, Clone)]
 pub struct TableBlock {
+    pub block_id: u64,
     pub style: TableStyle,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<Value>>,
@@ -90,6 +91,7 @@ pub struct ValueBlock {
 
 #[derive(Debug, Clone)]
 pub struct MregBlock {
+    pub block_id: u64,
     pub rows: Vec<MregRow>,
 }
 

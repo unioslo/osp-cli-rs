@@ -9,6 +9,7 @@ pub fn build_table_block(
     rows: &[Row],
     style: TableStyle,
     preferred_key_order: Option<&[String]>,
+    block_id: u64,
 ) -> TableBlock {
     let headers = collect_headers(rows, preferred_key_order);
     let rendered_rows = rows
@@ -26,6 +27,7 @@ pub fn build_table_block(
         .collect::<Vec<Vec<Value>>>();
 
     TableBlock {
+        block_id,
         style,
         headers,
         rows: rendered_rows,
@@ -71,7 +73,7 @@ mod tests {
         row.insert("uid".to_string(), json!("alice"));
         row.insert("group".to_string(), json!("ops"));
         let preferred = vec!["group".to_string(), "uid".to_string()];
-        let table = build_table_block(&[row], TableStyle::Grid, Some(&preferred));
+        let table = build_table_block(&[row], TableStyle::Grid, Some(&preferred), 1);
         assert_eq!(table.headers, preferred);
     }
 
@@ -82,7 +84,7 @@ mod tests {
         row.insert("group".to_string(), json!("ops"));
         row.insert("role".to_string(), json!("admin"));
         let preferred = vec!["group".to_string()];
-        let table = build_table_block(&[row], TableStyle::Grid, Some(&preferred));
+        let table = build_table_block(&[row], TableStyle::Grid, Some(&preferred), 1);
         assert_eq!(table.headers[0], "group");
         assert_eq!(
             table.headers[1..].to_vec(),
@@ -99,7 +101,7 @@ mod tests {
         row2.insert("host".to_string(), json!("login2.uio.no"));
 
         let preferred = vec!["host".to_string(), "vlan".to_string()];
-        let table = build_table_block(&[row1, row2], TableStyle::Grid, Some(&preferred));
+        let table = build_table_block(&[row1, row2], TableStyle::Grid, Some(&preferred), 1);
         assert_eq!(table.rows[1][1], json!(""));
     }
 }

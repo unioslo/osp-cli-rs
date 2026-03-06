@@ -4,10 +4,10 @@ use crate::app::{
 use crate::cli::{ThemeArgs, ThemeCommands, ThemeShowArgs, ThemeUseArgs};
 use crate::rows::output::rows_to_output_result;
 use crate::state::AppState;
+use crate::theme_loader::ThemeSource;
 use miette::Result;
 use osp_core::row::Row;
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
-use crate::theme_loader::ThemeSource;
 
 pub(crate) fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result<CliCommandResult> {
     match args.command {
@@ -24,11 +24,10 @@ pub(crate) fn run_theme_command(state: &mut AppState, args: ThemeArgs) -> Result
         }
         ThemeCommands::Use(ThemeUseArgs { name }) => {
             let selected = resolve_known_theme_name(&name, &state.themes)?;
-            state.ui.render_settings.theme_name = selected.clone();
-            state.ui.render_settings.theme = state
-                .themes
-                .resolve(&selected)
-                .map(|entry| entry.theme.clone());
+            state
+                .session
+                .config_overrides
+                .set("theme.name", selected.clone());
 
             let mut messages = osp_ui::messages::MessageBuffer::default();
             messages.success(format!("active theme set to: {selected}"));
@@ -47,7 +46,10 @@ pub(crate) fn run_theme_repl_command(
 ) -> Result<ReplCommandOutput> {
     match args.command {
         ThemeCommands::List => Ok(ReplCommandOutput::Output {
-            output: rows_to_output_result(theme_list_rows(state, &state.ui.render_settings.theme_name)),
+            output: rows_to_output_result(theme_list_rows(
+                state,
+                &state.ui.render_settings.theme_name,
+            )),
             format_hint: None,
         }),
         ThemeCommands::Show(ThemeShowArgs { name }) => {
@@ -59,11 +61,10 @@ pub(crate) fn run_theme_repl_command(
         }
         ThemeCommands::Use(ThemeUseArgs { name }) => {
             let selected = resolve_known_theme_name(&name, &state.themes)?;
-            state.ui.render_settings.theme_name = selected.clone();
-            state.ui.render_settings.theme = state
-                .themes
-                .resolve(&selected)
-                .map(|entry| entry.theme.clone());
+            state
+                .session
+                .config_overrides
+                .set("theme.name", selected.clone());
             Ok(ReplCommandOutput::Text(format!(
                 "active theme set to: {selected}\n"
             )))

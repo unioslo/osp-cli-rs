@@ -20,12 +20,10 @@ pub fn parts_from_inline(text: &str) -> Vec<LinePart> {
 
     while i < chars.len() {
         let ch = chars[i];
-        if ch == '\\' {
-            if i + 1 < chars.len() {
-                buf.push(chars[i + 1]);
-                i += 2;
-                continue;
-            }
+        if ch == '\\' && i + 1 < chars.len() {
+            buf.push(chars[i + 1]);
+            i += 2;
+            continue;
         }
 
         if ch == '`' {
@@ -117,11 +115,7 @@ pub fn render_inline(
     for part in parts_from_inline(text) {
         if let Some(token) = part.token {
             out.push_str(&apply_style_with_theme_overrides(
-                &part.text,
-                token,
-                color,
-                theme,
-                overrides,
+                &part.text, token, color, theme, overrides,
             ));
         } else {
             out.push_str(&part.text);

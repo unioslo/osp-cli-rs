@@ -95,10 +95,10 @@ pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
     format!("{prefix}{text}\x1b[0m")
 }
 
-fn style_spec_for_token<'a>(
+fn style_spec_for_token(
     token: StyleToken,
     theme: &ThemeDefinition,
-    overrides: &'a StyleOverrides,
+    overrides: &StyleOverrides,
 ) -> String {
     if let Some(value) = override_for_token(token, overrides) {
         return value.to_string();
@@ -131,7 +131,7 @@ fn style_spec_for_token<'a>(
     }
 }
 
-fn override_for_token<'a>(token: StyleToken, overrides: &'a StyleOverrides) -> Option<&'a str> {
+fn override_for_token(token: StyleToken, overrides: &StyleOverrides) -> Option<&str> {
     match token {
         StyleToken::Key => overrides.key.as_deref(),
         StyleToken::Muted => overrides.muted.as_deref(),

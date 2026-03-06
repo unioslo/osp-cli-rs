@@ -252,6 +252,8 @@ impl Default for ConfigSchema {
         schema.insert("theme.name", SchemaEntry::string());
         schema.insert("theme.path", SchemaEntry::string_list());
         schema.insert("user.name", SchemaEntry::string());
+        schema.insert("user.display_name", SchemaEntry::string());
+        schema.insert("user.full_name", SchemaEntry::string());
         schema.insert("domain", SchemaEntry::string());
 
         schema.insert(
@@ -277,6 +279,12 @@ impl Default for ConfigSchema {
         schema.insert(
             "ui.messages.format",
             SchemaEntry::string().with_allowed_values(["rules", "groups", "boxes"]),
+        );
+        schema.insert(
+            "ui.table.overflow",
+            SchemaEntry::string().with_allowed_values([
+                "clip", "hidden", "crop", "ellipsis", "truncate", "wrap", "none", "visible",
+            ]),
         );
         schema.insert("ui.short_list_max", SchemaEntry::integer());
         schema.insert("ui.medium_list_max", SchemaEntry::integer());

@@ -58,10 +58,19 @@ Lowest to highest priority, later sources override earlier ones:
 2. Config file
 3. Secrets store
 4. Environment variables
-5. CLI flags
-6. Session overrides (REPL-only, in-memory)
+5. Session overrides (in-memory)
 
 This order is the public contract. Changing it is a breaking change.
+
+Notes:
+
+- Launch-time flags that map cleanly to config keys are seeded into the
+  in-memory session layer.
+  - examples: `--json`, `--mode`, `--color`, `--ascii`, `--theme`, `-u`,
+    `-v/-q`, `-d`
+- REPL `config set --session ...` writes into that same layer.
+- This means some launch flags may appear as `source=session` in
+  `config get --sources`, which is intentional.
 
 ## Loader Abstraction
 
@@ -69,7 +78,7 @@ This order is the public contract. Changing it is a breaking change.
 without custom code in `osp-cli`:
 
 - `ConfigLoader` trait (`load() -> ConfigLayer`)
-- `StaticLayerLoader` for in-memory defaults/CLI/session layers
+- `StaticLayerLoader` for in-memory defaults/session layers
 - `TomlFileLoader` for file-backed layers (optional or required)
 - `EnvVarLoader` for `OSP__...` environment overrides
 - `SecretsTomlLoader` for file-backed secrets with strict permissions checks
@@ -200,7 +209,7 @@ Minimum contract tests:
 
 1. Profile scoping beats unscoped values.
 2. Terminal scoping beats unscoped values.
-3. CLI overrides environment and config.
+3. Session overrides beat environment and config.
 4. Placeholder cycles raise errors.
 5. Unknown keys are rejected unless under `extensions.*`.
 

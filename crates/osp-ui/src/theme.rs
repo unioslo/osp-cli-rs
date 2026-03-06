@@ -259,7 +259,7 @@ pub fn normalize_theme_name(value: &str) -> String {
 pub fn display_name_from_id(value: &str) -> String {
     let trimmed = value.trim_matches('-');
     let mut out = String::new();
-    for segment in trimmed.split(|ch| ch == '-' || ch == '_') {
+    for segment in trimmed.split(['-', '_']) {
         if segment.is_empty() {
             continue;
         }
@@ -312,14 +312,13 @@ pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
 }
 
 pub fn resolve_theme(name: &str) -> ThemeDefinition {
-    find_theme(name)
-        .unwrap_or_else(|| {
-            builtin_theme_defs()
-                .iter()
-                .find(|theme| theme.id == DEFAULT_THEME_NAME)
-                .expect("default theme must exist")
-                .clone()
-        })
+    find_theme(name).unwrap_or_else(|| {
+        builtin_theme_defs()
+            .iter()
+            .find(|theme| theme.id == DEFAULT_THEME_NAME)
+            .expect("default theme must exist")
+            .clone()
+    })
 }
 
 pub fn is_known_theme(name: &str) -> bool {
@@ -340,7 +339,10 @@ mod tests {
     fn repl_completion_defaults_follow_python_late_defaults() {
         let theme = resolve_theme("rose-pine-moon");
         assert_eq!(theme.repl_completion_text_spec(), "#000000");
-        assert_eq!(theme.repl_completion_background_spec(), theme.palette.accent);
+        assert_eq!(
+            theme.repl_completion_background_spec(),
+            theme.palette.accent
+        );
         assert_eq!(theme.repl_completion_highlight_spec(), theme.palette.border);
     }
 

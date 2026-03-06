@@ -36,9 +36,8 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
         default_cli.seed_render_settings_from_config(&mut settings, config);
         settings.width = Some(resolve_default_render_width(config));
         let selected = default_cli.selected_theme_name(config);
-        settings.theme_name =
-            resolve_known_theme_name(selected.as_str(), &loaded)
-                .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
+        settings.theme_name = resolve_known_theme_name(selected.as_str(), &loaded)
+            .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
         settings.theme = loaded
             .resolve(&settings.theme_name)
             .map(|entry| entry.theme.clone());

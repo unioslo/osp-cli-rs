@@ -47,6 +47,27 @@ impl CompletionEngine {
         (stub, suggestions)
     }
 
+    pub fn subcommands_for(&self, line: &str, cursor: usize, value: &str) -> Option<Vec<String>> {
+        let safe_cursor = clamp_to_char_boundary(line, cursor.min(line.len()));
+        let before_cursor = &line[..safe_cursor];
+        let tokens = self.parser.tokenize(before_cursor);
+        let cmd = self.parser.parse(&tokens);
+        let stub = self.parser.compute_stub(before_cursor, &tokens);
+
+        let matched_path = self.resolve_context_state(&cmd, &stub);
+        let (node, matched) = self.resolve_context(&matched_path);
+        if matched.len() != matched_path.len() {
+            return None;
+        }
+
+        let child = node.children.get(value)?;
+        if child.children.is_empty() {
+            return None;
+        }
+
+        Some(child.children.keys().cloned().collect())
+    }
+
     fn merge_context_flags(
         &self,
         cursor_cmd: &mut CommandLine,

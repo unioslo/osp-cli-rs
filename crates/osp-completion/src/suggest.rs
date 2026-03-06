@@ -38,12 +38,10 @@ impl SuggestionEngine {
         }
 
         let (needs_value, last_flag) = self.last_flag_needs_value(flag_scope, cmd, stub);
-        if needs_value {
-            if let Some(flag) = last_flag {
-                let mut out = self.flag_value_suggestions(flag_scope, &flag, stub, cmd);
-                sort_suggestion_outputs(&mut out);
-                return out;
-            }
+        if needs_value && let Some(flag) = last_flag {
+            let mut out = self.flag_value_suggestions(flag_scope, &flag, stub, cmd);
+            sort_suggestion_outputs(&mut out);
+            return out;
         }
 
         let mut out: Vec<SuggestionOutput> = Vec::new();
@@ -231,18 +229,17 @@ impl SuggestionEngine {
             }
         }
 
-        if !flag_node.suggestions_by_provider.is_empty() {
-            if let Some(provider) = selected_provider(cmd) {
-                if let Some(provider_values) = flag_node.suggestions_by_provider.get(&provider) {
-                    return provider_values
-                        .iter()
-                        .filter_map(|entry| {
-                            let score = self.match_score(stub, &entry.value)?;
-                            Some(SuggestionOutput::Item(entry_to_suggestion(entry, score)))
-                        })
-                        .collect();
-                }
-            }
+        if !flag_node.suggestions_by_provider.is_empty()
+            && let Some(provider) = selected_provider(cmd)
+            && let Some(provider_values) = flag_node.suggestions_by_provider.get(&provider)
+        {
+            return provider_values
+                .iter()
+                .filter_map(|entry| {
+                    let score = self.match_score(stub, &entry.value)?;
+                    Some(SuggestionOutput::Item(entry_to_suggestion(entry, score)))
+                })
+                .collect();
         }
 
         flag_node

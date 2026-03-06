@@ -680,7 +680,10 @@ impl PluginManager {
                 if !root.path.is_dir() {
                     return false;
                 }
-                let canonical = root.path.canonicalize().unwrap_or_else(|_| root.path.clone());
+                let canonical = root
+                    .path
+                    .canonicalize()
+                    .unwrap_or_else(|_| root.path.clone());
                 deduped_paths.insert(canonical)
             })
             .collect()

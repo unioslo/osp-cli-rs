@@ -1,7 +1,8 @@
 pub mod clipboard;
+mod display;
 pub mod document;
-pub mod inline;
 pub mod format;
+pub mod inline;
 mod layout;
 pub mod messages;
 mod renderer;
@@ -13,6 +14,7 @@ use std::io::IsTerminal;
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_core::output_model::{OutputItems, OutputResult};
 use osp_core::row::Row;
+use terminal_size::terminal_size;
 
 pub use document::{
     CodeBlock, Document, JsonBlock, LineBlock, LinePart, MregBlock, MregEntry, MregRow, MregValue,
@@ -36,6 +38,7 @@ pub struct RenderSettings {
     pub grid_padding: usize,
     pub grid_columns: Option<usize>,
     pub column_weight: usize,
+    pub table_overflow: TableOverflow,
     pub mreg_stack_min_col_width: usize,
     pub mreg_stack_overflow_ratio: usize,
     pub theme_name: String,
@@ -47,6 +50,26 @@ pub struct RenderSettings {
 pub enum RenderBackend {
     Plain,
     Rich,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableOverflow {
+    None,
+    Clip,
+    Ellipsis,
+    Wrap,
+}
+
+impl TableOverflow {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" | "visible" => Some(Self::None),
+            "clip" | "hidden" | "crop" => Some(Self::Clip),
+            "ellipsis" | "truncate" => Some(Self::Ellipsis),
+            "wrap" | "wrapped" => Some(Self::Wrap),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +85,7 @@ pub struct ResolvedRenderSettings {
     pub grid_padding: usize,
     pub grid_columns: Option<usize>,
     pub column_weight: usize,
+    pub table_overflow: TableOverflow,
     pub theme_name: String,
     pub theme: ThemeDefinition,
     pub style_overrides: StyleOverrides,
@@ -84,8 +108,18 @@ impl RenderSettings {
             UnicodeMode::Always => true,
             UnicodeMode::Never => false,
             UnicodeMode::Auto => {
+                if !std::io::stdout().is_terminal() {
+                    return false;
+                }
                 let term = std::env::var("TERM").unwrap_or_default();
-                term != "dumb"
+                if term == "dumb" {
+                    return false;
+                }
+                match locale_utf8_hint() {
+                    Some(true) => true,
+                    Some(false) => false,
+                    None => true,
+                }
             }
         }
     }
@@ -124,6 +158,7 @@ impl RenderSettings {
                 grid_padding: self.grid_padding.max(1),
                 grid_columns: self.grid_columns.filter(|value| *value > 0),
                 column_weight: self.column_weight.max(1),
+                table_overflow: self.table_overflow,
                 theme_name,
                 theme: theme.clone(),
                 style_overrides: self.style_overrides.clone(),
@@ -140,6 +175,7 @@ impl RenderSettings {
                 grid_padding: self.grid_padding.max(1),
                 grid_columns: self.grid_columns.filter(|value| *value > 0),
                 column_weight: self.column_weight.max(1),
+                table_overflow: self.table_overflow,
                 theme_name,
                 theme,
                 style_overrides: self.style_overrides.clone(),
@@ -156,7 +192,28 @@ impl RenderSettings {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|width| *width > 0)
+            .or_else(|| {
+                if !std::io::stdout().is_terminal() {
+                    return None;
+                }
+                terminal_size()
+                    .map(|(w, _)| w.0 as usize)
+                    .filter(|w| *w > 0)
+            })
     }
+}
+
+fn locale_utf8_hint() -> Option<bool> {
+    for key in ["LC_ALL", "LC_CTYPE", "LANG"] {
+        if let Ok(value) = std::env::var(key) {
+            let lower = value.to_ascii_lowercase();
+            if lower.contains("utf-8") || lower.contains("utf8") {
+                return Some(true);
+            }
+            return Some(false);
+        }
+    }
+    None
 }
 
 pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
@@ -199,6 +256,7 @@ pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) 
         grid_padding: settings.grid_padding,
         grid_columns: settings.grid_columns,
         column_weight: settings.column_weight,
+        table_overflow: settings.table_overflow,
         mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
         mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
@@ -223,6 +281,7 @@ pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) 
         grid_padding: settings.grid_padding,
         grid_columns: settings.grid_columns,
         column_weight: settings.column_weight,
+        table_overflow: settings.table_overflow,
         mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
         mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
@@ -266,6 +325,7 @@ pub fn copy_output_to_clipboard(
         grid_padding: settings.grid_padding,
         grid_columns: settings.grid_columns,
         column_weight: settings.column_weight,
+        table_overflow: settings.table_overflow,
         mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
         mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
         theme_name: settings.theme_name.clone(),
@@ -298,6 +358,7 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: crate::TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
@@ -407,6 +468,7 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: crate::TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
@@ -435,6 +497,7 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: crate::TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
@@ -473,6 +536,7 @@ mod tests {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: crate::TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),

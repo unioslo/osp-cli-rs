@@ -1,6 +1,5 @@
 use osp_ui::ResolvedRenderSettings;
-use osp_ui::messages::render_section_divider_with_overrides;
-use osp_ui::style::StyleToken;
+use osp_ui::style::{StyleToken, apply_style_with_theme_overrides};
 
 use crate::state::AppState;
 
@@ -36,25 +35,42 @@ pub(crate) fn render_help_with_chrome(
             if !out.is_empty() && !out.ends_with("\n\n") {
                 out.push('\n');
             }
-            out.push_str(&render_section_divider_with_overrides(
-                section,
-                resolved.unicode,
-                resolved.width,
-                resolved.color,
-                theme,
-                StyleToken::MessageInfo,
-                &resolved.style_overrides,
-            ));
-            out.push('\n');
             rendered_sections = true;
 
             if section == "Usage" {
                 let usage = line.trim_start_matches("Usage:").trim();
+                let label = if resolved.color {
+                    apply_style_with_theme_overrides(
+                        "Usage:",
+                        StyleToken::MessageInfo,
+                        true,
+                        theme,
+                        &resolved.style_overrides,
+                    )
+                } else {
+                    "Usage:".to_string()
+                };
+                out.push_str("  ");
+                out.push_str(&label);
                 if !usage.is_empty() {
-                    out.push_str("  ");
+                    out.push(' ');
                     out.push_str(usage);
-                    out.push('\n');
                 }
+                out.push('\n');
+            } else {
+                let label = if resolved.color {
+                    apply_style_with_theme_overrides(
+                        &format!("{section}:"),
+                        StyleToken::PanelTitle,
+                        true,
+                        theme,
+                        &resolved.style_overrides,
+                    )
+                } else {
+                    format!("{section}:")
+                };
+                out.push_str(&label);
+                out.push('\n');
             }
             continue;
         }
@@ -75,15 +91,5 @@ pub(crate) fn render_help_with_chrome(
     if !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str(&render_section_divider_with_overrides(
-        "",
-        resolved.unicode,
-        resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::MessageInfo,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
     out
 }

@@ -6,7 +6,7 @@ use crate::{
     LoadedLayers, ResolveOptions, ResolvedConfig, ResolvedValue, Scope, normalize_identifier,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConfigResolver {
     defaults: ConfigLayer,
     file: ConfigLayer,
@@ -15,20 +15,6 @@ pub struct ConfigResolver {
     cli: ConfigLayer,
     session: ConfigLayer,
     schema: ConfigSchema,
-}
-
-impl Default for ConfigResolver {
-    fn default() -> Self {
-        Self {
-            defaults: ConfigLayer::default(),
-            file: ConfigLayer::default(),
-            secrets: ConfigLayer::default(),
-            env: ConfigLayer::default(),
-            cli: ConfigLayer::default(),
-            session: ConfigLayer::default(),
-            schema: ConfigSchema::default(),
-        }
-    }
 }
 
 impl ConfigResolver {

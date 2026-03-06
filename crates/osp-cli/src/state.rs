@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 
 use osp_config::{ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS, ResolvedConfig};
 use osp_core::row::Row;
@@ -112,6 +113,13 @@ pub struct ReplState {
     pub history_shell: Option<HistoryShellContext>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct LaunchContext {
+    pub plugin_dirs: Vec<PathBuf>,
+    pub config_root: Option<PathBuf>,
+    pub cache_root: Option<PathBuf>,
+}
+
 #[derive(Default)]
 pub struct SessionState {
     pub shell_stack: Vec<String>,
@@ -214,6 +222,7 @@ pub struct AppState {
     pub repl: ReplState,
     pub session: SessionState,
     pub clients: ClientsState,
+    pub launch: LaunchContext,
 }
 
 impl AppState {
@@ -225,6 +234,7 @@ impl AppState {
         debug_verbosity: u8,
         plugins: PluginManager,
         themes: ThemeCatalog,
+        launch: LaunchContext,
     ) -> Self {
         let config_state = ConfigState::new(config);
         let config_revision = config_state.revision();
@@ -252,6 +262,7 @@ impl AppState {
             },
             session: SessionState::with_cache_limit(session_cache_max_results),
             clients: ClientsState::new(plugins, config_revision),
+            launch,
         }
     }
 
@@ -291,9 +302,7 @@ impl AppState {
 }
 
 fn parse_allowlist(raw: Option<&str>) -> Option<HashSet<String>> {
-    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
-        return None;
-    };
+    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
 
     if raw == "*" {
         return None;

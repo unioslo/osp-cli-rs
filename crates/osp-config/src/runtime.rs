@@ -24,6 +24,7 @@ pub const DEFAULT_UI_GRID_PADDING: i64 = 4;
 pub const DEFAULT_UI_COLUMN_WEIGHT: i64 = 3;
 pub const DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH: i64 = 10;
 pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
+pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "clip";
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
@@ -107,6 +108,7 @@ pub struct RuntimeDefaults {
     pub ui_margin: i64,
     pub ui_indent: i64,
     pub ui_messages_format: String,
+    pub ui_table_overflow: String,
     pub ui_short_list_max: i64,
     pub ui_medium_list_max: i64,
     pub ui_grid_padding: i64,
@@ -161,6 +163,7 @@ impl RuntimeDefaults {
             ui_margin: DEFAULT_UI_MARGIN,
             ui_indent: DEFAULT_UI_INDENT,
             ui_messages_format: DEFAULT_UI_MESSAGES_FORMAT.to_string(),
+            ui_table_overflow: DEFAULT_UI_TABLE_OVERFLOW.to_string(),
             ui_short_list_max: DEFAULT_UI_SHORT_LIST_MAX,
             ui_medium_list_max: DEFAULT_UI_MEDIUM_LIST_MAX,
             ui_grid_padding: DEFAULT_UI_GRID_PADDING,
@@ -220,6 +223,7 @@ impl RuntimeDefaults {
         layer.set("ui.margin", self.ui_margin);
         layer.set("ui.indent", self.ui_indent);
         layer.set("ui.messages.format", self.ui_messages_format.clone());
+        layer.set("ui.table.overflow", self.ui_table_overflow.clone());
         layer.set("ui.short_list_max", self.ui_short_list_max);
         layer.set("ui.medium_list_max", self.ui_medium_list_max);
         layer.set("ui.grid_padding", self.ui_grid_padding);

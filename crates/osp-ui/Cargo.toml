@@ -7,4 +7,5 @@ edition.workspace = true
 comfy-table.workspace = true
 serde_json.workspace = true
 unicode-width.workspace = true
+terminal_size.workspace = true
 osp-core = { path = "../osp-core" }

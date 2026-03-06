@@ -27,12 +27,15 @@ pub fn build_document(rows: &[Row], settings: &RenderSettings) -> Document {
 
 pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettings) -> Document {
     let format = resolve_output_format(output, settings.format);
+    let mut next_block_id = 1u64;
     match format {
         OutputFormat::Json => Document {
             blocks: vec![Block::Json(build_json_block_from_output(output))],
         },
-        OutputFormat::Table => build_table_document(output, TableStyle::Grid),
-        OutputFormat::Markdown => build_table_document(output, TableStyle::Markdown),
+        OutputFormat::Table => build_table_document(output, TableStyle::Grid, &mut next_block_id),
+        OutputFormat::Markdown => {
+            build_table_document(output, TableStyle::Markdown, &mut next_block_id)
+        }
         OutputFormat::Mreg => {
             let rows = materialize_rows(output);
             let resolved = settings.resolve_render_settings();
@@ -48,6 +51,7 @@ pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettin
                     prefer_stacked_object_lists,
                     settings.mreg_stack_min_col_width.max(1),
                     settings.mreg_stack_overflow_ratio.max(100),
+                    &mut next_block_id,
                 ),
             }
         }
@@ -93,13 +97,18 @@ pub fn resolve_output_format(output: &OutputResult, format: OutputFormat) -> Out
     }
 }
 
-fn build_table_document(output: &OutputResult, style: TableStyle) -> Document {
+fn build_table_document(
+    output: &OutputResult,
+    style: TableStyle,
+    next_block_id: &mut u64,
+) -> Document {
     match &output.items {
         OutputItems::Rows(rows) => Document {
             blocks: vec![Block::Table(table::build_table_block(
                 rows,
                 style,
                 Some(&output.meta.key_index),
+                allocate_block_id(next_block_id),
             ))],
         },
         OutputItems::Groups(groups) => Document {
@@ -110,14 +119,24 @@ fn build_table_document(output: &OutputResult, style: TableStyle) -> Document {
                     if rows.is_empty() {
                         rows.push(merge_group_header(group));
                     }
-                    let mut block =
-                        table::build_table_block(&rows, style, Some(&output.meta.key_index));
+                    let mut block = table::build_table_block(
+                        &rows,
+                        style,
+                        Some(&output.meta.key_index),
+                        allocate_block_id(next_block_id),
+                    );
                     block.header_pairs = group_header_pairs(group, Some(&output.meta.key_index));
                     Block::Table(block)
                 })
                 .collect(),
         },
     }
+}
+
+fn allocate_block_id(next_block_id: &mut u64) -> u64 {
+    let id = *next_block_id;
+    *next_block_id = next_block_id.saturating_add(1);
+    id
 }
 
 fn build_json_block_from_output(output: &OutputResult) -> JsonBlock {
@@ -262,6 +281,7 @@ mod tests {
             grid_padding: 2,
             grid_columns: None,
             column_weight: 3,
+            table_overflow: crate::TableOverflow::Clip,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: "plain".to_string(),

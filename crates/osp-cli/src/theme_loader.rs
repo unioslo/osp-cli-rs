@@ -77,13 +77,13 @@ pub(crate) fn load_theme_catalog(config: &ResolvedConfig) -> ThemeCatalog {
     let mut issues = custom.issues;
     for theme in custom.themes {
         let origin = custom.origins.get(&theme.id).cloned();
-        if let Some(path) = origin.clone() {
-            if entries.contains_key(&theme.id) {
-                issues.push(ThemeLoadIssue {
-                    path,
-                    message: format!("custom theme overrides builtin: {}", theme.id),
-                });
-            }
+        if let Some(path) = origin.clone()
+            && entries.contains_key(&theme.id)
+        {
+            issues.push(ThemeLoadIssue {
+                path,
+                message: format!("custom theme overrides builtin: {}", theme.id),
+            });
         }
         entries.insert(
             theme.id.clone(),
@@ -159,10 +159,7 @@ fn load_custom_themes(config: &ResolvedConfig) -> CustomThemeLoad {
                     catalog.insert(theme.id.clone(), theme);
                 }
                 Err(err) => {
-                    issues.push(ThemeLoadIssue {
-                        path,
-                        message: err,
-                    });
+                    issues.push(ThemeLoadIssue { path, message: err });
                 }
             }
         }
@@ -216,16 +213,16 @@ fn expand_theme_path(raw: &str) -> Option<PathBuf> {
         return None;
     }
 
-    if trimmed == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return Some(PathBuf::from(home));
-        }
+    if trimmed == "~"
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return Some(PathBuf::from(home));
     }
 
-    if let Some(stripped) = trimmed.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return Some(PathBuf::from(home).join(stripped));
-        }
+    if let Some(stripped) = trimmed.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return Some(PathBuf::from(home).join(stripped));
     }
 
     Some(PathBuf::from(trimmed))
@@ -277,8 +274,8 @@ struct ThemeOverridesFile {
 }
 
 fn parse_theme_file(path: &Path) -> Result<ThemeDefinition, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read theme file: {err}"))?;
+    let raw =
+        fs::read_to_string(path).map_err(|err| format!("failed to read theme file: {err}"))?;
     let parsed: ThemeFile =
         toml::from_str(&raw).map_err(|err| format!("failed to parse toml: {err}"))?;
 

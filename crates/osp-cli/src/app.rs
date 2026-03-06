@@ -1,8 +1,8 @@
 use clap::Parser;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
-    ConfigLayer, ConfigValue, DEFAULT_UI_WIDTH, ResolveOptions, ResolvedConfig,
-    RuntimeConfigPaths, RuntimeDefaults, build_runtime_pipeline,
+    ConfigLayer, ConfigValue, DEFAULT_UI_WIDTH, ResolveOptions, ResolvedConfig, RuntimeConfigPaths,
+    RuntimeDefaults, build_runtime_pipeline,
 };
 use osp_core::output::OutputFormat;
 use osp_core::output_model::OutputResult;
@@ -11,7 +11,7 @@ use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use osp_dsl::apply_pipeline;
 
 use osp_ui::clipboard::ClipboardService;
-use osp_ui::messages::{MessageBuffer, MessageLevel, MessageRenderFormat, adjust_verbosity};
+use osp_ui::messages::{MessageBuffer, MessageLevel, MessageRenderFormat};
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 use osp_ui::{RenderSettings, copy_output_to_clipboard, render_output};
 use std::borrow::Cow;
@@ -26,7 +26,7 @@ use crate::cli::commands::{
     theme as theme_cmd,
 };
 use crate::cli::{
-    Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, PluginsArgs, ThemeArgs,
+    Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, PluginsArgs, ReplArgs, ThemeArgs,
     parse_inline_command_tokens,
 };
 use crate::logging::{
@@ -37,23 +37,24 @@ use crate::plugin_manager::{
     CommandCatalogEntry, PluginDispatchContext, PluginDispatchError, PluginManager,
 };
 use crate::rows::output::{output_to_rows, plugin_data_to_output_result, rows_to_output_result};
-use crate::state::{AppState, RuntimeContext, TerminalKind};
+use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
 
 use crate::repl;
 
 mod config_explain;
 mod help;
 
+use crate::repl::completion;
+use crate::repl::help as repl_help;
+use crate::theme_loader;
 pub(crate) use config_explain::{
     config_explain_json, config_explain_output, config_value_to_json, explain_runtime_config,
     format_scope, is_sensitive_key, render_config_explain_text,
 };
-use crate::repl::completion;
-use crate::repl::help as repl_help;
-use crate::theme_loader;
 
 enum RunAction {
     Repl,
+    ReplCommand(ReplArgs),
     Plugins(PluginsArgs),
     Doctor(DoctorArgs),
     Theme(ThemeArgs),
@@ -165,14 +166,12 @@ fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
 fn run(mut cli: Cli) -> Result<i32> {
     let normalized_profile = normalize_profile_override(cli.profile.clone());
     cli.profile = normalized_profile.clone();
-    let session_layer = build_cli_session_layer(&cli);
-    let initial_config =
-        resolve_runtime_config(normalized_profile, Some("cli"), session_layer.clone())?;
+    let initial_config = resolve_runtime_config(normalized_profile.clone(), Some("cli"), None)?;
     let known_profiles = initial_config.known_profiles().clone();
     let dispatch = build_dispatch_plan(&mut cli, &known_profiles)?;
 
     let terminal_kind = match dispatch.action {
-        RunAction::Repl => TerminalKind::Repl,
+        RunAction::Repl | RunAction::ReplCommand(_) => TerminalKind::Repl,
         RunAction::Plugins(_)
         | RunAction::Doctor(_)
         | RunAction::Theme(_)
@@ -185,6 +184,16 @@ fn run(mut cli: Cli) -> Result<i32> {
         terminal_kind,
         std::env::var("TERM").ok(),
     );
+    let session_layer = build_cli_session_layer(
+        &cli,
+        runtime_context.profile_override().map(ToOwned::to_owned),
+        runtime_context.terminal_kind(),
+    )?;
+    let launch_context = LaunchContext {
+        plugin_dirs: cli.plugin_dirs.clone(),
+        config_root: None,
+        cache_root: None,
+    };
 
     let config = resolve_runtime_config(
         runtime_context.profile_override().map(ToOwned::to_owned),
@@ -193,14 +202,14 @@ fn run(mut cli: Cli) -> Result<i32> {
     )?;
     let theme_catalog = theme_loader::load_theme_catalog(&config);
     let mut render_settings = cli.render_settings();
-    cli.seed_render_settings_from_config(&mut render_settings, &config);
+    crate::cli::apply_render_settings_from_config(&mut render_settings, &config);
     render_settings.width = Some(resolve_default_render_width(&config));
     render_settings.theme_name = resolve_theme_name(&cli, &config, &theme_catalog)?;
     render_settings.theme = theme_catalog
         .resolve(&render_settings.theme_name)
         .map(|entry| entry.theme.clone());
-    let message_verbosity = effective_message_verbosity(&cli, &config);
-    let debug_verbosity = effective_debug_verbosity(&cli, &config);
+    let message_verbosity = effective_message_verbosity(&config);
+    let debug_verbosity = effective_debug_verbosity(&config);
     init_developer_logging(build_logging_config(&config, debug_verbosity));
     theme_loader::log_theme_issues(&theme_catalog.issues);
     tracing::debug!(
@@ -216,6 +225,7 @@ fn run(mut cli: Cli) -> Result<i32> {
         debug_verbosity,
         PluginManager::new(cli.plugin_dirs.clone()),
         theme_catalog.clone(),
+        launch_context,
     );
     if let Some(layer) = session_layer {
         state.session.config_overrides = layer;
@@ -230,6 +240,10 @@ fn run(mut cli: Cli) -> Result<i32> {
 
     match dispatch.action {
         RunAction::Repl => repl::run_plugin_repl(&mut state),
+        RunAction::ReplCommand(args) => {
+            let result = repl::run_repl_debug_command(&state, args)?;
+            run_cli_command(&state, result)
+        }
         RunAction::Plugins(args) => {
             let result = plugins_cmd::run_plugins_command(&state, args)?;
             run_cli_command(&state, result)
@@ -254,24 +268,97 @@ fn run(mut cli: Cli) -> Result<i32> {
     }
 }
 
-fn build_cli_session_layer(cli: &Cli) -> Option<ConfigLayer> {
+fn build_cli_session_layer(
+    cli: &Cli,
+    profile_override: Option<String>,
+    terminal_kind: TerminalKind,
+) -> Result<Option<ConfigLayer>> {
     let mut layer = ConfigLayer::default();
-    if let Some(user) = cli
-        .user
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        layer.set("user.name", user);
-    }
-    if cli.incognito {
-        layer.set("repl.history.enabled", false);
-    }
-    if layer.entries().is_empty() {
+    cli.append_static_session_overrides(&mut layer);
+    let bootstrap_layer = if layer.entries().is_empty() {
+        None
+    } else {
+        Some(layer.clone())
+    };
+    let config = resolve_runtime_config(
+        profile_override,
+        Some(terminal_kind.as_config_terminal()),
+        bootstrap_layer,
+    )?;
+    cli.append_derived_session_overrides(&mut layer, &config);
+    Ok(if layer.entries().is_empty() {
         None
     } else {
         Some(layer)
-    }
+    })
+}
+
+pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
+    let context = current.context.clone();
+    let shell_stack = current.session.shell_stack.clone();
+    let history_shell = current.repl.history_shell.clone();
+    let result_cache = current.session.result_cache.clone();
+    let cache_order = current.session.cache_order.clone();
+    let last_rows = current.session.last_rows.clone();
+    let session_overrides = current.session.config_overrides.clone();
+    let launch = current.launch.clone();
+
+    let config = resolve_runtime_config(
+        context.profile_override().map(ToOwned::to_owned),
+        Some(context.terminal_kind().as_config_terminal()),
+        if session_overrides.entries().is_empty() {
+            None
+        } else {
+            Some(session_overrides.clone())
+        },
+    )?;
+    let theme_catalog = theme_loader::load_theme_catalog(&config);
+    let mut render_settings = crate::cli::default_render_settings();
+    crate::cli::apply_render_settings_from_config(&mut render_settings, &config);
+    render_settings.width = Some(resolve_default_render_width(&config));
+    render_settings.theme_name = resolve_known_theme_name(
+        config
+            .get_string("theme.name")
+            .unwrap_or(DEFAULT_THEME_NAME),
+        &theme_catalog,
+    )?;
+    render_settings.theme = theme_catalog
+        .resolve(&render_settings.theme_name)
+        .map(|entry| entry.theme.clone());
+
+    let message_verbosity = config
+        .get_string("ui.verbosity.level")
+        .and_then(parse_message_level)
+        .unwrap_or(MessageLevel::Success);
+    let debug_verbosity = match config.get("debug.level").map(ConfigValue::reveal) {
+        Some(ConfigValue::Integer(value)) => (*value).clamp(0, 3) as u8,
+        Some(ConfigValue::String(raw)) => raw.trim().parse::<u8>().map_or(0, |level| level.min(3)),
+        _ => 0,
+    };
+
+    init_developer_logging(build_logging_config(&config, debug_verbosity));
+    theme_loader::log_theme_issues(&theme_catalog.issues);
+
+    let plugin_manager = PluginManager::new(launch.plugin_dirs.clone())
+        .with_roots(launch.config_root.clone(), launch.cache_root.clone());
+    let mut next = AppState::new(
+        context,
+        config,
+        render_settings,
+        message_verbosity,
+        debug_verbosity,
+        plugin_manager,
+        theme_catalog,
+        launch,
+    );
+    next.session.config_overrides = session_overrides;
+    next.session.shell_stack = shell_stack;
+    next.session.last_rows = last_rows;
+    next.session.result_cache = result_cache;
+    next.session.cache_order = cache_order;
+    next.repl.history_shell = history_shell;
+    next.sync_history_shell_context();
+    Ok(next)
 }
 
 fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Result<DispatchPlan> {
@@ -308,6 +395,10 @@ fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Resu
             action: RunAction::History(args),
             profile_override: explicit_profile,
         }),
+        Some(Commands::Repl(args)) => Ok(DispatchPlan {
+            action: RunAction::ReplCommand(args),
+            profile_override: explicit_profile,
+        }),
         Some(Commands::External(tokens)) => {
             let Some(first) = tokens.first() else {
                 return Ok(DispatchPlan {
@@ -334,6 +425,7 @@ fn build_dispatch_plan(cli: &mut Cli, known_profiles: &BTreeSet<String>) -> Resu
                         Some(Commands::Theme(args)) => RunAction::Theme(args),
                         Some(Commands::Config(args)) => RunAction::Config(args),
                         Some(Commands::History(args)) => RunAction::History(args),
+                        Some(Commands::Repl(args)) => RunAction::ReplCommand(args),
                         Some(Commands::External(external)) => RunAction::External(external),
                         None => RunAction::Repl,
                     };
@@ -360,6 +452,7 @@ fn ensure_dispatch_visibility(state: &AppState, action: &RunAction) -> Result<()
         RunAction::Theme(_) => ensure_builtin_visible(state, CMD_THEME),
         RunAction::Config(_) => ensure_builtin_visible(state, CMD_CONFIG),
         RunAction::History(_) => ensure_builtin_visible(state, CMD_HISTORY),
+        RunAction::ReplCommand(_) => Ok(()),
         RunAction::External(tokens) => {
             if let Some(command) = tokens.first() {
                 ensure_plugin_visible(state, command)?;
@@ -488,6 +581,13 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
                 let result = history_cmd::run_history_command(state, args)?;
                 return run_cli_command(state, result);
             }
+            Commands::Repl(args) => {
+                if !stages.is_empty() {
+                    return Err(miette!("`repl` does not support DSL pipeline stages"));
+                }
+                let result = repl::run_repl_debug_command(state, args)?;
+                return run_cli_command(state, result);
+            }
             Commands::External(_) => {}
         }
     }
@@ -516,7 +616,10 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
             .map_err(enrich_dispatch_error)?;
         if !raw.stdout.is_empty() {
             let resolved = settings.resolve_render_settings();
-            print!("{}", repl_help::render_help_with_chrome(&raw.stdout, &resolved));
+            print!(
+                "{}",
+                repl_help::render_help_with_chrome(&raw.stdout, &resolved)
+            );
         }
         if !raw.stderr.is_empty() {
             eprint!("{}", raw.stderr);
@@ -708,22 +811,17 @@ fn build_logging_config(config: &ResolvedConfig, debug_verbosity: u8) -> Develop
     }
 }
 
-fn effective_message_verbosity(cli: &Cli, config: &ResolvedConfig) -> MessageLevel {
-    let base = config
+fn effective_message_verbosity(config: &ResolvedConfig) -> MessageLevel {
+    config
         .get_string("ui.verbosity.level")
         .and_then(parse_message_level)
-        .unwrap_or(MessageLevel::Success);
-    adjust_verbosity(base, cli.verbose, cli.quiet)
+        .unwrap_or(MessageLevel::Success)
 }
 
-fn effective_debug_verbosity(cli: &Cli, config: &ResolvedConfig) -> u8 {
-    if cli.debug > 0 {
-        return cli.debug.min(3);
-    }
-
+fn effective_debug_verbosity(config: &ResolvedConfig) -> u8 {
     match config.get("debug.level").map(ConfigValue::reveal) {
         Some(ConfigValue::Integer(level)) => (*level).clamp(0, 3) as u8,
-        Some(ConfigValue::String(raw)) => raw.trim().parse::<u8>().unwrap_or(0).min(3),
+        Some(ConfigValue::String(raw)) => raw.trim().parse::<u8>().map_or(0, |level| level.min(3)),
         _ => 0,
     }
 }
@@ -903,18 +1001,18 @@ fn normalize_profile_override(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        RunAction, build_dispatch_plan, parse_output_format_hint,
-        resolve_effective_render_settings, is_sensitive_key,
-    };
     use super::help::parse_help_render_overrides;
+    use super::{
+        RunAction, build_cli_session_layer, build_dispatch_plan, is_sensitive_key,
+        parse_output_format_hint, resolve_effective_render_settings,
+    };
     use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
     use crate::repl;
     use crate::repl::{completion, help as repl_help};
-    use crate::state::{AppState, RuntimeContext, TerminalKind};
+    use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
     use clap::Parser;
-    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_repl::{HistoryConfig, HistoryShellContext, SharedHistory};
     use osp_ui::RenderSettings;
@@ -968,6 +1066,7 @@ mod tests {
             0,
             PluginManager::new(Vec::new()),
             crate::theme_loader::ThemeCatalog::default(),
+            LaunchContext::default(),
         )
     }
 
@@ -1002,6 +1101,56 @@ mod tests {
             Some(OutputFormat::Markdown)
         );
         assert_eq!(parse_output_format_hint(Some("unknown")), None);
+    }
+
+    fn layer_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {
+        layer
+            .entries()
+            .iter()
+            .find(|entry| entry.key == key)
+            .map(|entry| &entry.value)
+    }
+
+    #[test]
+    fn cli_launch_render_flags_seed_session_layer_unit() {
+        let cli = Cli::parse_from([
+            "osp", "--json", "--mode", "plain", "--color", "never", "--ascii",
+        ]);
+
+        let layer = build_cli_session_layer(&cli, None, TerminalKind::Repl)
+            .expect("session layer should build")
+            .expect("launch flags should create session overrides");
+
+        assert_eq!(
+            layer_value(&layer, "ui.format"),
+            Some(&ConfigValue::from("json"))
+        );
+        assert_eq!(
+            layer_value(&layer, "ui.mode"),
+            Some(&ConfigValue::from("plain"))
+        );
+        assert_eq!(
+            layer_value(&layer, "ui.color.mode"),
+            Some(&ConfigValue::from("never"))
+        );
+        assert_eq!(
+            layer_value(&layer, "ui.unicode.mode"),
+            Some(&ConfigValue::from("never"))
+        );
+    }
+
+    #[test]
+    fn cli_launch_quiet_adjusts_session_base_verbosity_unit() {
+        let cli = Cli::parse_from(["osp", "-q"]);
+
+        let layer = build_cli_session_layer(&cli, None, TerminalKind::Repl)
+            .expect("session layer should build")
+            .expect("quiet flag should create session overrides");
+
+        assert_eq!(
+            layer_value(&layer, "ui.verbosity.level"),
+            Some(&ConfigValue::from("warning"))
+        );
     }
 
     #[test]
@@ -1126,8 +1275,8 @@ mod tests {
     #[test]
     fn explicit_profile_is_normalized_unit() {
         let mut cli = Cli::parse_from(["osp", "--profile", "TSD"]);
-        let plan = build_dispatch_plan(&mut cli, &profiles(&["tsd"]))
-            .expect("dispatch plan should parse");
+        let plan =
+            build_dispatch_plan(&mut cli, &profiles(&["tsd"])).expect("dispatch plan should parse");
         assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
     }
 
@@ -1330,12 +1479,9 @@ mod tests {
         let raw =
             "Usage: config <COMMAND>\n\nCommands:\n  show\n\nOptions:\n  -h, --help  Print help\n";
         let rendered = repl_help::render_repl_help_with_chrome(&state, raw);
-        assert!(rendered.contains("- Usage "));
-        assert!(rendered.contains("  config <COMMAND>"));
-        assert!(rendered.contains("- Commands "));
-        assert!(rendered.contains("- Options "));
-        assert!(!rendered.contains("\nCommands:\n"));
-        assert!(!rendered.contains("\nOptions:\n"));
+        assert!(rendered.contains("  Usage: config <COMMAND>"));
+        assert!(rendered.contains("Commands:"));
+        assert!(rendered.contains("Options:"));
     }
 
     #[test]
@@ -1391,9 +1537,9 @@ mod tests {
             "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
             &resolved,
         );
-        assert!(rendered.contains("─ Usage "));
-        assert!(rendered.contains("─ Commands "));
-        assert!(rendered.contains("─ Options "));
+        assert!(rendered.contains("Usage: osp [OPTIONS]"));
+        assert!(rendered.contains("Commands:"));
+        assert!(rendered.contains("Options:"));
     }
 
     #[test]
@@ -1538,11 +1684,17 @@ JSON
         let history = make_test_history(&mut state);
         let first = repl::execute_repl_plugin_line(&mut state, &history, "cache first")
             .expect("first command should succeed");
-        assert!(first.contains("ok"));
+        match first {
+            osp_repl::ReplLineResult::Continue(text) => assert!(text.contains("ok")),
+            other => panic!("unexpected repl result: {other:?}"),
+        }
 
         let second = repl::execute_repl_plugin_line(&mut state, &history, "cache second")
             .expect("second command should succeed");
-        assert!(second.contains("ok"));
+        match second {
+            osp_repl::ReplLineResult::Continue(text) => assert!(text.contains("ok")),
+            other => panic!("unexpected repl result: {other:?}"),
+        }
 
         assert_eq!(state.repl_cache_size(), 1);
         assert!(state.cached_repl_rows("cache first").is_none());
@@ -1550,6 +1702,96 @@ JSON
         assert!(!state.last_repl_rows().is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rebuild_repl_state_preserves_session_defaults_and_shell_context_unit() {
+        let mut state = make_test_state(Vec::new());
+        state
+            .session
+            .config_overrides
+            .set("user.name", "launch-user");
+        state
+            .session
+            .config_overrides
+            .set("ui.verbosity.level", "trace");
+        state.session.config_overrides.set("debug.level", 2i64);
+        state.session.config_overrides.set("ui.format", "json");
+        state.session.config_overrides.set("theme.name", "dracula");
+        state.session.shell_stack = vec!["orch".to_string()];
+
+        let history_shell = HistoryShellContext::new(String::new());
+        state.repl.history_shell = Some(history_shell);
+        state.sync_history_shell_context();
+
+        let next = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+
+        assert_eq!(
+            next.config.resolved().get_string("user.name"),
+            Some("launch-user")
+        );
+        assert_eq!(next.ui.message_verbosity, MessageLevel::Trace);
+        assert_eq!(next.ui.debug_verbosity, 2);
+        assert_eq!(next.ui.render_settings.format, OutputFormat::Json);
+        assert_eq!(next.ui.render_settings.theme_name, "dracula");
+        assert_eq!(next.session.shell_stack, vec!["orch".to_string()]);
+        assert!(next.repl.history_shell.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rebuild_repl_state_preserves_session_render_defaults_unit() {
+        let mut state = make_test_state(Vec::new());
+        state.session.config_overrides.set("ui.format", "table");
+
+        let next = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+
+        assert_eq!(next.ui.render_settings.format, OutputFormat::Table);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repl_reload_intent_matches_command_scope_unit() {
+        let mut state = make_test_state(Vec::new());
+        state.themes = crate::theme_loader::load_theme_catalog(state.config.resolved());
+        let history = make_test_history(&mut state);
+
+        let theme_result =
+            repl::execute_repl_plugin_line(&mut state, &history, "theme use dracula")
+                .expect("theme use should succeed");
+        assert!(matches!(
+            theme_result,
+            osp_repl::ReplLineResult::Restart {
+                reload: osp_repl::ReplReloadKind::WithIntro,
+                ..
+            }
+        ));
+
+        let format_result =
+            repl::execute_repl_plugin_line(&mut state, &history, "config set ui.format json")
+                .expect("config set should succeed");
+        assert!(matches!(
+            format_result,
+            osp_repl::ReplLineResult::Restart {
+                reload: osp_repl::ReplReloadKind::Default,
+                ..
+            }
+        ));
+
+        let color_result = repl::execute_repl_plugin_line(
+            &mut state,
+            &history,
+            "config set color.prompt.text '#ffffff'",
+        )
+        .expect("color config set should succeed");
+        assert!(matches!(
+            color_result,
+            osp_repl::ReplLineResult::Restart {
+                reload: osp_repl::ReplReloadKind::WithIntro,
+                ..
+            }
+        ));
     }
 
     #[cfg(unix)]
@@ -1618,6 +1860,11 @@ JSON
 
         let config_root = make_temp_dir("osp-cli-test-config");
         let cache_root = make_temp_dir("osp-cli-test-cache");
+        let launch = LaunchContext {
+            plugin_dirs: plugin_dirs.clone(),
+            config_root: Some(config_root.clone()),
+            cache_root: Some(cache_root.clone()),
+        };
 
         AppState::new(
             RuntimeContext::new(None, TerminalKind::Repl, None),
@@ -1627,6 +1874,7 @@ JSON
             0,
             PluginManager::new(plugin_dirs).with_roots(Some(config_root), Some(cache_root)),
             crate::theme_loader::ThemeCatalog::default(),
+            launch,
         )
     }
 
