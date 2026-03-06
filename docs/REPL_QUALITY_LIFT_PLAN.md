@@ -24,7 +24,7 @@ The target is a clearer split:
 - [ ] Move host policy out of `osp-repl::run_repl()` and keep `osp-repl` focused on terminal mechanics
 - [x] Replace stringly `shell_stack` prefixing with a typed scope/frame model
 - [ ] Unify completion, highlighting, and execution around one parsed REPL input shape
-- [ ] Unify rich and basic fallback loops around one submit pipeline
+- [x] Unify rich and basic fallback loops around one submit pipeline
 - [ ] Keep history store boring and move scope/recording policy to the host
 - [ ] Consolidate intro/help/prompt rendering into one presentation policy
 

@@ -490,6 +490,106 @@ impl EditMode for AutoCompleteEmacs {
     }
 }
 
+enum SubmissionResult {
+    Noop,
+    Print(String),
+    Exit,
+    Restart {
+        output: String,
+        reload: ReplReloadKind,
+    },
+}
+
+struct SubmissionContext<'a, F> {
+    help_text: &'a str,
+    command_history: &'a mut Vec<String>,
+    history_limit: usize,
+    history_exclude_patterns: &'a [String],
+    shell_context: Option<&'a HistoryShellContext>,
+    history_store: &'a SharedHistory,
+    execute: &'a mut F,
+}
+
+impl<'a, F> SubmissionContext<'a, F>
+where
+    F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
+{
+    fn history_enabled(&self) -> bool {
+        self.history_limit > 0
+    }
+
+    fn shell_prefix(&self) -> Option<String> {
+        self.shell_context
+            .as_ref()
+            .and_then(|ctx| ctx.normalized_prefix())
+    }
+
+    fn record_history(&mut self, command_line: &str, shell_prefix: Option<&str>) {
+        if !self.history_enabled()
+            || !history::should_record_command(command_line, self.history_exclude_patterns)
+        {
+            return;
+        }
+
+        let full_command = history::apply_shell_prefix(command_line, shell_prefix);
+        if full_command.is_empty() {
+            return;
+        }
+
+        self.command_history.push(full_command);
+        if self.history_limit > 0 && self.command_history.len() > self.history_limit {
+            let overflow = self.command_history.len() - self.history_limit;
+            self.command_history.drain(0..overflow);
+        }
+    }
+
+    fn refresh_history_view_if_needed(&mut self, command_line: &str) {
+        if self.history_enabled() && command_line.trim().starts_with("history") {
+            *self.command_history = self.history_store.recent_commands();
+        }
+    }
+}
+
+fn process_submission<F>(raw: &str, ctx: &mut SubmissionContext<'_, F>) -> Result<SubmissionResult>
+where
+    F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
+{
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(SubmissionResult::Noop);
+    }
+    if raw.starts_with('!') && !ctx.history_enabled() {
+        return Ok(SubmissionResult::Noop);
+    }
+
+    let shell_prefix = ctx.shell_prefix();
+    let expanded = expand_history(raw, ctx.command_history, shell_prefix.as_deref(), true);
+    let Some(command_line) = expanded else {
+        eprintln!("No history match for: {raw}");
+        return Ok(SubmissionResult::Noop);
+    };
+
+    let in_shell = shell_prefix.is_some();
+    let result = match command_line.as_str() {
+        "exit" | "quit" if !in_shell => SubmissionResult::Exit,
+        "help" | "--help" | "-h" if !in_shell => SubmissionResult::Print(ctx.help_text.to_string()),
+        _ => match (ctx.execute)(&command_line, ctx.history_store) {
+            Ok(ReplLineResult::Continue(output)) => SubmissionResult::Print(output),
+            Ok(ReplLineResult::Restart { output, reload }) => {
+                SubmissionResult::Restart { output, reload }
+            }
+            Err(err) => {
+                eprintln!("{err}");
+                SubmissionResult::Noop
+            }
+        },
+    };
+
+    ctx.record_history(&command_line, shell_prefix.as_deref());
+    ctx.refresh_history_view_if_needed(&command_line);
+    Ok(result)
+}
+
 pub fn run_repl<F>(
     prompt: ReplPrompt,
     mut completion_words: Vec<String>,
@@ -548,8 +648,7 @@ where
     if let Some(highlighter) = highlighter {
         editor = editor.with_highlighter(Box::new(highlighter));
     }
-    let history_enabled = history_config.enabled && history_config.max_entries > 0;
-    let history_limit = if history_enabled {
+    let history_limit = if history_config.enabled && history_config.max_entries > 0 {
         history_config.max_entries
     } else {
         0
@@ -559,20 +658,20 @@ where
     let history_store = SharedHistory::new(history_config)?;
     let mut command_history = history_store.recent_commands();
     editor = editor.with_history(Box::new(history_store.clone()));
+    let mut submission = SubmissionContext {
+        help_text: &help_text,
+        command_history: &mut command_history,
+        history_limit,
+        history_exclude_patterns: &history_exclude_patterns,
+        shell_context: shell_context.as_ref(),
+        history_store: &history_store,
+        execute: &mut execute,
+    };
 
     let prompt = OspPrompt::new(prompt.left, prompt.indicator);
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         eprintln!("Warning: Input is not a terminal (fd=0).");
-        run_repl_basic(
-            &prompt,
-            &help_text,
-            &mut command_history,
-            history_limit,
-            &history_exclude_patterns,
-            shell_context.as_ref(),
-            &history_store,
-            &mut execute,
-        )?;
+        run_repl_basic(&prompt, &mut submission)?;
         return Ok(ReplRunResult::Exit(0));
     }
 
@@ -585,16 +684,7 @@ where
                         "WARNING: terminal does not support cursor position requests; \
 falling back to basic input mode."
                     );
-                    run_repl_basic(
-                        &prompt,
-                        &help_text,
-                        &mut command_history,
-                        history_limit,
-                        &history_exclude_patterns,
-                        shell_context.as_ref(),
-                        &history_store,
-                        &mut execute,
-                    )?;
+                    run_repl_basic(&prompt, &mut submission)?;
                     return Ok(ReplRunResult::Exit(0));
                 }
                 return Err(err.into());
@@ -602,58 +692,14 @@ falling back to basic input mode."
         };
 
         match signal {
-            Signal::Success(line) => {
-                let raw = line.trim();
-                if raw.is_empty() {
-                    continue;
+            Signal::Success(line) => match process_submission(&line, &mut submission)? {
+                SubmissionResult::Noop => continue,
+                SubmissionResult::Print(output) => print!("{output}"),
+                SubmissionResult::Exit => return Ok(ReplRunResult::Exit(0)),
+                SubmissionResult::Restart { output, reload } => {
+                    return Ok(ReplRunResult::Restart { output, reload });
                 }
-
-                if raw.starts_with('!') && !history_enabled {
-                    continue;
-                }
-
-                let shell_prefix = shell_context
-                    .as_ref()
-                    .and_then(|ctx| ctx.normalized_prefix());
-                let expanded = expand_history(raw, &command_history, shell_prefix.as_deref(), true);
-                let Some(command_line) = expanded else {
-                    eprintln!("No history match for: {raw}");
-                    continue;
-                };
-
-                let in_shell = shell_prefix.is_some();
-                match command_line.as_str() {
-                    "exit" | "quit" if !in_shell => return Ok(ReplRunResult::Exit(0)),
-                    "help" | "--help" | "-h" if !in_shell => {
-                        print!("{help_text}");
-                    }
-                    _ => match execute(&command_line, &history_store) {
-                        Ok(ReplLineResult::Continue(output)) => print!("{output}"),
-                        Ok(ReplLineResult::Restart { output, reload }) => {
-                            return Ok(ReplRunResult::Restart { output, reload });
-                        }
-                        Err(err) => eprintln!("{err}"),
-                    },
-                }
-
-                if history_enabled
-                    && history::should_record_command(&command_line, &history_exclude_patterns)
-                {
-                    let full_command =
-                        history::apply_shell_prefix(&command_line, shell_prefix.as_deref());
-                    if full_command.is_empty() {
-                        continue;
-                    }
-                    command_history.push(full_command);
-                    if history_limit > 0 && command_history.len() > history_limit {
-                        let overflow = command_history.len() - history_limit;
-                        command_history.drain(0..overflow);
-                    }
-                }
-                if history_enabled && command_line.trim().starts_with("history") {
-                    command_history = history_store.recent_commands();
-                }
-            }
+            },
             Signal::CtrlD => return Ok(ReplRunResult::Exit(0)),
             Signal::CtrlC => continue,
         }
@@ -670,21 +716,11 @@ fn is_cursor_position_error(err: &io::Error) -> bool {
         || message.contains("inappropriate ioctl")
 }
 
-fn run_repl_basic<F>(
-    prompt: &OspPrompt,
-    help_text: &str,
-    command_history: &mut Vec<String>,
-    history_limit: usize,
-    history_exclude_patterns: &[String],
-    shell_context: Option<&HistoryShellContext>,
-    history_store: &SharedHistory,
-    execute: &mut F,
-) -> Result<()>
+fn run_repl_basic<F>(prompt: &OspPrompt, submission: &mut SubmissionContext<'_, F>) -> Result<()>
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
     let stdin = io::stdin();
-    let history_enabled = history_limit > 0;
     loop {
         print!("{}{}", prompt.left, prompt.indicator);
         io::stdout().flush()?;
@@ -695,54 +731,14 @@ where
             break;
         }
 
-        let raw = line.trim();
-        if raw.is_empty() {
-            continue;
-        }
-        if raw.starts_with('!') && !history_enabled {
-            continue;
-        }
-
-        let shell_prefix = shell_context
-            .as_ref()
-            .and_then(|ctx| ctx.normalized_prefix());
-        let expanded = expand_history(raw, command_history, shell_prefix.as_deref(), true);
-        let Some(command_line) = expanded else {
-            eprintln!("No history match for: {raw}");
-            continue;
-        };
-
-        let in_shell = shell_prefix.is_some();
-        match command_line.as_str() {
-            "exit" | "quit" if !in_shell => break,
-            "help" | "--help" | "-h" if !in_shell => {
-                print!("{help_text}");
+        match process_submission(&line, submission)? {
+            SubmissionResult::Noop => continue,
+            SubmissionResult::Print(output) => print!("{output}"),
+            SubmissionResult::Exit => break,
+            SubmissionResult::Restart { output, .. } => {
+                print!("{output}");
+                break;
             }
-            _ => match execute(&command_line, history_store) {
-                Ok(ReplLineResult::Continue(output)) => print!("{output}"),
-                Ok(ReplLineResult::Restart { output, .. }) => {
-                    print!("{output}");
-                    break;
-                }
-                Err(err) => eprintln!("{err}"),
-            },
-        }
-
-        if history_enabled
-            && history::should_record_command(&command_line, history_exclude_patterns)
-        {
-            let full_command = history::apply_shell_prefix(&command_line, shell_prefix.as_deref());
-            if full_command.is_empty() {
-                continue;
-            }
-            command_history.push(full_command);
-            if history_limit > 0 && command_history.len() > history_limit {
-                let overflow = command_history.len() - history_limit;
-                command_history.drain(0..overflow);
-            }
-        }
-        if history_enabled && command_line.trim().starts_with("history") {
-            *command_history = history_store.recent_commands();
         }
     }
     Ok(())
