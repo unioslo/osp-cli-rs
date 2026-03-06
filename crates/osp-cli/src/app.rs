@@ -1849,6 +1849,28 @@ JSON
     }
 
     #[cfg(unix)]
+    #[test]
+    fn repl_exit_is_host_owned_at_root_but_leaves_shell_in_scope_unit() {
+        let mut state = make_test_state(Vec::new());
+        let history = make_test_history(&mut state);
+
+        let root_exit = repl::execute_repl_plugin_line(&mut state, &history, "exit")
+            .expect("root exit should be handled by host dispatch");
+        assert_eq!(root_exit, osp_repl::ReplLineResult::Exit(0));
+
+        state.session.scope.enter("orch");
+        let shell_exit = repl::execute_repl_plugin_line(&mut state, &history, "exit")
+            .expect("shell exit should leave the current shell");
+        match shell_exit {
+            osp_repl::ReplLineResult::Continue(text) => {
+                assert!(text.contains("Leaving orch shell"));
+            }
+            other => panic!("unexpected repl result: {other:?}"),
+        }
+        assert!(state.session.scope.is_root());
+    }
+
+    #[cfg(unix)]
     fn make_test_history(state: &mut AppState) -> SharedHistory {
         let history_dir = make_temp_dir("osp-cli-test-history");
         let history_path = history_dir.join("history.jsonl");

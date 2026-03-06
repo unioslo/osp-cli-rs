@@ -43,6 +43,7 @@ pub enum ReplReloadKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplLineResult {
     Continue(String),
+    Exit(i32),
     Restart {
         output: String,
         reload: ReplReloadKind,
@@ -493,7 +494,7 @@ impl EditMode for AutoCompleteEmacs {
 enum SubmissionResult {
     Noop,
     Print(String),
-    Exit,
+    Exit(i32),
     Restart {
         output: String,
         reload: ReplReloadKind,
@@ -501,7 +502,6 @@ enum SubmissionResult {
 }
 
 struct SubmissionContext<'a, F> {
-    help_text: &'a str,
     command_history: &'a mut Vec<String>,
     history_limit: usize,
     history_exclude_patterns: &'a [String],
@@ -569,20 +569,16 @@ where
         return Ok(SubmissionResult::Noop);
     };
 
-    let in_shell = shell_prefix.is_some();
-    let result = match command_line.as_str() {
-        "exit" | "quit" if !in_shell => SubmissionResult::Exit,
-        "help" | "--help" | "-h" if !in_shell => SubmissionResult::Print(ctx.help_text.to_string()),
-        _ => match (ctx.execute)(&command_line, ctx.history_store) {
-            Ok(ReplLineResult::Continue(output)) => SubmissionResult::Print(output),
-            Ok(ReplLineResult::Restart { output, reload }) => {
-                SubmissionResult::Restart { output, reload }
-            }
-            Err(err) => {
-                eprintln!("{err}");
-                SubmissionResult::Noop
-            }
-        },
+    let result = match (ctx.execute)(&command_line, ctx.history_store) {
+        Ok(ReplLineResult::Continue(output)) => SubmissionResult::Print(output),
+        Ok(ReplLineResult::Exit(code)) => SubmissionResult::Exit(code),
+        Ok(ReplLineResult::Restart { output, reload }) => {
+            SubmissionResult::Restart { output, reload }
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            SubmissionResult::Noop
+        }
     };
 
     ctx.record_history(&command_line, shell_prefix.as_deref());
@@ -592,24 +588,15 @@ where
 
 pub fn run_repl<F>(
     prompt: ReplPrompt,
-    mut completion_words: Vec<String>,
+    completion_words: Vec<String>,
     completion_tree: Option<CompletionTree>,
     appearance: ReplAppearance,
-    help_text: String,
     history_config: HistoryConfig,
     mut execute: F,
 ) -> Result<ReplRunResult>
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
-    completion_words.extend(
-        ["help", "exit", "quit", "P", "F", "V", "|"]
-            .iter()
-            .map(|s| s.to_string()),
-    );
-    completion_words.sort();
-    completion_words.dedup();
-
     let tree = completion_tree.unwrap_or_else(|| build_repl_tree(&completion_words));
     let completer = Box::new(ReplCompleter::new(completion_words, Some(tree.clone())));
     let completion_menu = Box::new(build_completion_menu(&appearance));
@@ -659,7 +646,6 @@ where
     let mut command_history = history_store.recent_commands();
     editor = editor.with_history(Box::new(history_store.clone()));
     let mut submission = SubmissionContext {
-        help_text: &help_text,
         command_history: &mut command_history,
         history_limit,
         history_exclude_patterns: &history_exclude_patterns,
@@ -695,7 +681,7 @@ falling back to basic input mode."
             Signal::Success(line) => match process_submission(&line, &mut submission)? {
                 SubmissionResult::Noop => continue,
                 SubmissionResult::Print(output) => print!("{output}"),
-                SubmissionResult::Exit => return Ok(ReplRunResult::Exit(0)),
+                SubmissionResult::Exit(code) => return Ok(ReplRunResult::Exit(code)),
                 SubmissionResult::Restart { output, reload } => {
                     return Ok(ReplRunResult::Restart { output, reload });
                 }
@@ -734,7 +720,7 @@ where
         match process_submission(&line, submission)? {
             SubmissionResult::Noop => continue,
             SubmissionResult::Print(output) => print!("{output}"),
-            SubmissionResult::Exit => break,
+            SubmissionResult::Exit(_) => break,
             SubmissionResult::Restart { output, .. } => {
                 print!("{output}");
                 break;
@@ -1631,8 +1617,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        RankedSuggestion, ReplCompleter, ReplHighlighter, color_from_style_spec,
-        dedupe_ranked_suggestions, default_pipe_verbs, expand_history, sort_ranked_suggestions,
+        HistoryConfig, RankedSuggestion, ReplCompleter, ReplHighlighter, ReplLineResult,
+        SharedHistory, SubmissionContext, SubmissionResult, color_from_style_spec,
+        dedupe_ranked_suggestions, default_pipe_verbs, expand_history, process_submission,
+        sort_ranked_suggestions,
     };
 
     fn token_styles(styled: &StyledText) -> Vec<(String, Option<Color>)> {
@@ -1671,6 +1659,21 @@ mod tests {
         }
     }
 
+    fn disabled_history() -> SharedHistory {
+        SharedHistory::new(HistoryConfig::new(
+            None,
+            0,
+            false,
+            false,
+            false,
+            Vec::new(),
+            None,
+            None,
+            None,
+        ))
+        .expect("history config should build")
+    }
+
     #[test]
     fn expands_double_bang() {
         let history = vec!["ldap user oistes".to_string()];
@@ -1702,6 +1705,36 @@ mod tests {
             expand_history("!ldap user", &history, None, false),
             Some("ldap user oistes".to_string())
         );
+    }
+
+    #[test]
+    fn submission_delegates_help_and_exit_to_host() {
+        let history = disabled_history();
+        let mut command_history = Vec::new();
+        let mut seen = Vec::new();
+        let mut execute = |line: &str, _: &SharedHistory| {
+            seen.push(line.to_string());
+            Ok(match line {
+                "help" => ReplLineResult::Continue("host help".to_string()),
+                "exit" => ReplLineResult::Exit(7),
+                other => ReplLineResult::Continue(other.to_string()),
+            })
+        };
+        let mut submission = SubmissionContext {
+            command_history: &mut command_history,
+            history_limit: 0,
+            history_exclude_patterns: &[],
+            shell_context: None,
+            history_store: &history,
+            execute: &mut execute,
+        };
+
+        let help = process_submission("help", &mut submission).expect("help should succeed");
+        let exit = process_submission("exit", &mut submission).expect("exit should succeed");
+
+        assert!(matches!(help, SubmissionResult::Print(text) if text == "host help"));
+        assert!(matches!(exit, SubmissionResult::Exit(7)));
+        assert_eq!(seen, vec!["help".to_string(), "exit".to_string()]);
     }
 
     #[test]

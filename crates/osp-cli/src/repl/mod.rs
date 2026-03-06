@@ -109,7 +109,6 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             surface.root_words.clone(),
             Some(completion_tree),
             appearance,
-            help_text,
             history_config,
             |line, history| {
                 dispatch::execute_repl_plugin_line(state, history, line)

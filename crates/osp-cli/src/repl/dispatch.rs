@@ -61,6 +61,10 @@ pub(crate) fn execute_repl_plugin_line(
                 )?));
             }
             "exit" | "quit" => {
+                if state.session.scope.is_root() {
+                    state.sync_history_shell_context();
+                    return Ok(ReplLineResult::Exit(0));
+                }
                 if let Some(message) = leave_repl_shell(state) {
                     state.sync_history_shell_context();
                     return Ok(ReplLineResult::Continue(message));
