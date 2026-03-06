@@ -558,10 +558,8 @@ impl MenuCore {
     fn move_left(&mut self) {
         self.col_pos = if let Some(col) = self.col_pos.checked_sub(1) {
             col
-        } else if self.index() + 1 == self.values.len() {
-            0
         } else {
-            self.get_cols().saturating_sub(1)
+            self.rightmost_valid_col_for_row(self.row_pos)
         }
     }
 
@@ -652,6 +650,20 @@ impl MenuCore {
                 self.end_of_line(column, index, last_index),
                 empty = empty_space,
             )
+        }
+    }
+
+    fn rightmost_valid_col_for_row(&self, row: u16) -> u16 {
+        let cols = self.get_cols().max(1);
+        let row_start = row.saturating_mul(cols) as usize;
+        let row_end = row_start
+            .saturating_add(cols as usize)
+            .min(self.values.len());
+        let row_len = row_end.saturating_sub(row_start);
+        if row_len == 0 {
+            0
+        } else {
+            row_len.saturating_sub(1) as u16
         }
     }
 
@@ -787,5 +799,49 @@ fn menu_styles_debug(colors: &MenuTextStyle) -> MenuStyleDebug {
         description: style_to_debug(colors.description_style),
         match_text: style_to_debug(colors.match_style),
         selected_match: style_to_debug(colors.selected_match_style),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use reedline::{MenuEvent, Span, Suggestion};
+
+    use super::{MenuAction, MenuCore};
+
+    fn suggestion(value: &str) -> Suggestion {
+        Suggestion {
+            value: value.to_string(),
+            span: Span { start: 0, end: 0 },
+            ..Suggestion::default()
+        }
+    }
+
+    #[test]
+    fn move_left_wraps_to_rightmost_valid_col_on_short_last_row() {
+        let mut core = MenuCore::default();
+        core.set_columns(4);
+        core.set_values(
+            (0..6)
+                .map(|idx| suggestion(&format!("item{idx}")))
+                .collect::<Vec<_>>(),
+        );
+        core.update_layout(80, 0);
+
+        assert_eq!(
+            core.handle_event(MenuEvent::MoveDown),
+            MenuAction::ApplySelection
+        );
+        assert_eq!(core.selected_row(), 1);
+        assert_eq!(core.selected_col(), 0);
+        assert_eq!(core.selected_index(), Some(4));
+
+        assert_eq!(
+            core.handle_event(MenuEvent::MoveLeft),
+            MenuAction::ApplySelection
+        );
+        assert_eq!(core.selected_row(), 1);
+        assert_eq!(core.selected_col(), 1);
+        assert_eq!(core.selected_index(), Some(5));
+        assert!(core.selected_value().is_some());
     }
 }

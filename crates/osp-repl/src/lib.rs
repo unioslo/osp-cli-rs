@@ -944,7 +944,7 @@ impl Highlighter for ReplHighlighter {
                 continue;
             }
             let Some(rel_idx) = line[pos..].find(token) else {
-                styled.push((Style::new(), line.to_string()));
+                styled.push((Style::new(), line[pos..].to_string()));
                 return styled;
             };
             let idx = pos + rel_idx;
@@ -1498,7 +1498,11 @@ fn split_path_stub(stub: &str) -> (PathBuf, String, String) {
     };
 
     if let Some(parent) = lookup.parent() {
-        lookup = parent.to_path_buf();
+        if parent.as_os_str().is_empty() {
+            lookup = PathBuf::from(".");
+        } else {
+            lookup = parent.to_path_buf();
+        }
     } else {
         lookup = PathBuf::from(".");
     }
@@ -1574,6 +1578,7 @@ mod tests {
     use nu_ansi_term::Color;
     use osp_completion::{CompletionNode, CompletionTree};
     use reedline::{Completer, Highlighter, StyledText};
+    use std::path::PathBuf;
 
     use super::{
         RankedSuggestion, ReplCompleter, ReplHighlighter, color_from_style_spec,
@@ -1591,6 +1596,14 @@ mod tests {
                     Some((text.clone(), style.foreground))
                 }
             })
+            .collect()
+    }
+
+    fn styled_text_to_plain(styled: &StyledText) -> String {
+        styled
+            .buffer
+            .iter()
+            .map(|(_, text)| text.as_str())
             .collect()
     }
 
@@ -1830,5 +1843,24 @@ mod tests {
                 ("--flag".to_string(), None),
             ]
         );
+    }
+
+    #[test]
+    fn highlighter_fallback_keeps_remaining_text_once() {
+        let tree = completion_tree_with_config_show();
+        let highlighter = ReplHighlighter::new(tree, Color::Green);
+        let line = r#"config "say \"hi\"""#;
+
+        let styled = highlighter.highlight(line, 0);
+        assert_eq!(styled_text_to_plain(&styled), line);
+    }
+
+    #[test]
+    fn split_path_stub_without_slash_uses_current_directory_lookup() {
+        let (lookup, insert_prefix, typed_prefix) = super::split_path_stub("do");
+
+        assert_eq!(lookup, PathBuf::from("."));
+        assert_eq!(insert_prefix, "");
+        assert_eq!(typed_prefix, "do");
     }
 }
