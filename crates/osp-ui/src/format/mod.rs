@@ -44,14 +44,16 @@ pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettin
             Document {
                 blocks: mreg::build_mreg_blocks(
                     &rows,
-                    Some(&output.meta.key_index),
-                    settings.short_list_max,
-                    settings.medium_list_max,
-                    width_hint,
-                    settings.indent_size.max(1),
-                    prefer_stacked_object_lists,
-                    settings.mreg_stack_min_col_width.max(1),
-                    settings.mreg_stack_overflow_ratio.max(100),
+                    mreg::MregBuildOptions {
+                        key_order: Some(&output.meta.key_index),
+                        short_list_max: settings.short_list_max,
+                        medium_list_max: settings.medium_list_max,
+                        width_hint,
+                        indent_size: settings.indent_size.max(1),
+                        prefer_stacked_object_lists,
+                        stack_min_col_width: settings.mreg_stack_min_col_width.max(1),
+                        stack_overflow_ratio: settings.mreg_stack_overflow_ratio.max(100),
+                    },
                     &mut next_block_id,
                 ),
             }

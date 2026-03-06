@@ -1056,20 +1056,23 @@ struct CompletionTracePayload<'a> {
     menu_indent: Option<u16>,
 }
 
-pub(crate) fn trace_completion(
-    event: &str,
-    line: &str,
-    cursor: usize,
-    stub: &str,
-    matches: Vec<String>,
-    replace_range: Option<[usize; 2]>,
-    menu: Option<CompletionTraceMenuState>,
-    buffer_before: Option<&str>,
-    buffer_after: Option<&str>,
-    cursor_before: Option<usize>,
-    cursor_after: Option<usize>,
-    accepted_value: Option<&str>,
-) {
+#[derive(Debug, Clone)]
+pub(crate) struct CompletionTraceEvent<'a> {
+    pub event: &'a str,
+    pub line: &'a str,
+    pub cursor: usize,
+    pub stub: &'a str,
+    pub matches: Vec<String>,
+    pub replace_range: Option<[usize; 2]>,
+    pub menu: Option<CompletionTraceMenuState>,
+    pub buffer_before: Option<&'a str>,
+    pub buffer_after: Option<&'a str>,
+    pub cursor_before: Option<usize>,
+    pub cursor_after: Option<usize>,
+    pub accepted_value: Option<&'a str>,
+}
+
+pub(crate) fn trace_completion(trace: CompletionTraceEvent<'_>) {
     if !trace_completion_enabled() {
         return;
     }
@@ -1084,7 +1087,7 @@ pub(crate) fn trace_completion(
         visible_rows,
         rows,
         menu_indent,
-    ) = if let Some(menu) = menu {
+    ) = if let Some(menu) = trace.menu {
         (
             Some(menu.selected_index),
             Some(menu.selected_row),
@@ -1101,17 +1104,17 @@ pub(crate) fn trace_completion(
     };
 
     let payload = CompletionTracePayload {
-        event,
-        line,
-        cursor,
-        stub,
-        matches,
-        buffer_before,
-        buffer_after,
-        cursor_before,
-        cursor_after,
-        accepted_value,
-        replace_range,
+        event: trace.event,
+        line: trace.line,
+        cursor: trace.cursor,
+        stub: trace.stub,
+        matches: trace.matches,
+        buffer_before: trace.buffer_before,
+        buffer_after: trace.buffer_after,
+        cursor_before: trace.cursor_before,
+        cursor_after: trace.cursor_after,
+        accepted_value: trace.accepted_value,
+        replace_range: trace.replace_range,
         selected_index,
         selected_row,
         selected_col,
@@ -1327,17 +1330,20 @@ mod tests {
     }
 
     fn disabled_history() -> SharedHistory {
-        SharedHistory::new(HistoryConfig::new(
-            None,
-            0,
-            false,
-            false,
-            false,
-            Vec::new(),
-            None,
-            None,
-            HistoryShellContext::default(),
-        ))
+        SharedHistory::new(
+            HistoryConfig {
+                path: None,
+                max_entries: 0,
+                enabled: false,
+                dedupe: false,
+                profile_scoped: false,
+                exclude_patterns: Vec::new(),
+                profile: None,
+                terminal: None,
+                shell_context: HistoryShellContext::default(),
+            }
+            .normalized(),
+        )
         .expect("history config should build")
     }
 
@@ -1483,8 +1489,10 @@ mod tests {
 
     #[test]
     fn completer_uses_engine_metadata_for_subcommands() {
-        let mut ldap = CompletionNode::default();
-        ldap.tooltip = Some("Directory lookup".to_string());
+        let mut ldap = CompletionNode {
+            tooltip: Some("Directory lookup".to_string()),
+            ..CompletionNode::default()
+        };
         ldap.children
             .insert("user".to_string(), CompletionNode::default());
         ldap.children

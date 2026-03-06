@@ -25,28 +25,12 @@ pub struct HistoryConfig {
 }
 
 impl HistoryConfig {
-    pub fn new(
-        path: Option<PathBuf>,
-        max_entries: usize,
-        enabled: bool,
-        dedupe: bool,
-        profile_scoped: bool,
-        exclude_patterns: Vec<String>,
-        profile: Option<String>,
-        terminal: Option<String>,
-        shell_context: HistoryShellContext,
-    ) -> Self {
-        Self {
-            path,
-            max_entries,
-            enabled,
-            dedupe,
-            profile_scoped,
-            exclude_patterns: normalize_exclude_patterns(exclude_patterns),
-            profile: normalize_identifier(profile),
-            terminal: normalize_identifier(terminal),
-            shell_context,
-        }
+    pub fn normalized(mut self) -> Self {
+        self.exclude_patterns =
+            normalize_exclude_patterns(std::mem::take(&mut self.exclude_patterns));
+        self.profile = normalize_identifier(self.profile.take());
+        self.terminal = normalize_identifier(self.terminal.take());
+        self
     }
 
     fn persist_enabled(&self) -> bool {
@@ -1089,17 +1073,18 @@ mod tests {
     #[test]
     fn list_entries_filters_shell_and_excludes() {
         let shell = HistoryShellContext::new("ldap");
-        let config = HistoryConfig::new(
-            None,
-            10,
-            true,
-            false,
-            false,
-            vec!["user *".to_string()],
-            None,
-            None,
-            shell,
-        );
+        let config = HistoryConfig {
+            path: None,
+            max_entries: 10,
+            enabled: true,
+            dedupe: false,
+            profile_scoped: false,
+            exclude_patterns: vec!["user *".to_string()],
+            profile: None,
+            terminal: None,
+            shell_context: shell,
+        }
+        .normalized();
         let mut store = OspHistoryStore::new(config).expect("history store should init");
         let _ = History::save(
             &mut store,
@@ -1123,17 +1108,18 @@ mod tests {
     #[test]
     fn list_entries_tracks_live_shell_context_updates() {
         let shell = HistoryShellContext::default();
-        let config = HistoryConfig::new(
-            None,
-            10,
-            true,
-            false,
-            false,
-            Vec::new(),
-            None,
-            None,
-            shell.clone(),
-        );
+        let config = HistoryConfig {
+            path: None,
+            max_entries: 10,
+            enabled: true,
+            dedupe: false,
+            profile_scoped: false,
+            exclude_patterns: Vec::new(),
+            profile: None,
+            terminal: None,
+            shell_context: shell.clone(),
+        }
+        .normalized();
         let mut store = OspHistoryStore::new(config).expect("history store should init");
         let _ = History::save(
             &mut store,
@@ -1161,17 +1147,18 @@ mod tests {
     #[test]
     fn explicit_scope_queries_override_live_shell_context() {
         let shell = HistoryShellContext::default();
-        let config = HistoryConfig::new(
-            None,
-            10,
-            true,
-            false,
-            false,
-            Vec::new(),
-            None,
-            None,
-            shell.clone(),
-        );
+        let config = HistoryConfig {
+            path: None,
+            max_entries: 10,
+            enabled: true,
+            dedupe: false,
+            profile_scoped: false,
+            exclude_patterns: Vec::new(),
+            profile: None,
+            terminal: None,
+            shell_context: shell.clone(),
+        }
+        .normalized();
         let mut store = OspHistoryStore::new(config).expect("history store should init");
         let _ = History::save(
             &mut store,

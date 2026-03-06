@@ -53,23 +53,24 @@ pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
     let history_shell = state.repl.history_shell.clone();
     state.sync_history_shell_context();
 
-    HistoryConfig::new(
-        Some(history_path),
-        history_max_entries,
-        history_enabled,
-        history_dedupe,
-        history_profile_scoped,
-        history_exclude,
-        Some(config.active_profile().to_string()),
-        Some(
+    HistoryConfig {
+        path: Some(history_path),
+        max_entries: history_max_entries,
+        enabled: history_enabled,
+        dedupe: history_dedupe,
+        profile_scoped: history_profile_scoped,
+        exclude_patterns: history_exclude,
+        profile: Some(config.active_profile().to_string()),
+        terminal: Some(
             state
                 .context
                 .terminal_kind()
                 .as_config_terminal()
                 .to_string(),
         ),
-        history_shell,
-    )
+        shell_context: history_shell,
+    }
+    .normalized()
 }
 
 pub(crate) fn repl_history_enabled(config: &ResolvedConfig) -> bool {

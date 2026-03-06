@@ -350,18 +350,20 @@ pub struct AppState {
     pub launch: LaunchContext,
 }
 
+pub(crate) struct AppStateInit {
+    pub context: RuntimeContext,
+    pub config: ResolvedConfig,
+    pub render_settings: RenderSettings,
+    pub message_verbosity: MessageLevel,
+    pub debug_verbosity: u8,
+    pub plugins: PluginManager,
+    pub themes: ThemeCatalog,
+    pub launch: LaunchContext,
+}
+
 impl AppState {
-    pub(crate) fn new(
-        context: RuntimeContext,
-        config: ResolvedConfig,
-        render_settings: RenderSettings,
-        message_verbosity: MessageLevel,
-        debug_verbosity: u8,
-        plugins: PluginManager,
-        themes: ThemeCatalog,
-        launch: LaunchContext,
-    ) -> Self {
-        let config_state = ConfigState::new(config);
+    pub(crate) fn new(init: AppStateInit) -> Self {
+        let config_state = ConfigState::new(init.config);
         let config_revision = config_state.revision();
         let auth_state = AuthState::from_resolved(config_state.resolved());
         let session_cache_max_results = configured_usize(
@@ -371,23 +373,23 @@ impl AppState {
         );
 
         Self {
-            context,
+            context: init.context,
             config: config_state,
             ui: UiState {
-                render_settings,
-                message_verbosity,
-                debug_verbosity,
+                render_settings: init.render_settings,
+                message_verbosity: init.message_verbosity,
+                debug_verbosity: init.debug_verbosity,
             },
             auth: auth_state,
-            themes,
+            themes: init.themes,
             repl: ReplState {
                 prompt_prefix: "osp".to_string(),
                 history_enabled: true,
                 history_shell: HistoryShellContext::default(),
             },
             session: SessionState::with_cache_limit(session_cache_max_results),
-            clients: ClientsState::new(plugins, config_revision),
-            launch,
+            clients: ClientsState::new(init.plugins, config_revision),
+            launch: init.launch,
         }
     }
 

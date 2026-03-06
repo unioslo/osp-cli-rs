@@ -7,31 +7,27 @@ use unicode_width::UnicodeWidthStr;
 use crate::display::value_to_display;
 use crate::document::{Block, MregBlock, MregEntry, MregRow, MregValue, TableBlock, TableStyle};
 
+#[derive(Debug, Clone, Copy)]
+pub struct MregBuildOptions<'a> {
+    pub key_order: Option<&'a [String]>,
+    pub short_list_max: usize,
+    pub medium_list_max: usize,
+    pub width_hint: usize,
+    pub indent_size: usize,
+    pub prefer_stacked_object_lists: bool,
+    pub stack_min_col_width: usize,
+    pub stack_overflow_ratio: usize,
+}
+
 pub fn build_mreg_blocks(
     rows: &[Row],
-    key_order: Option<&[String]>,
-    short_list_max: usize,
-    medium_list_max: usize,
-    width_hint: usize,
-    indent_size: usize,
-    prefer_stacked_object_lists: bool,
-    stack_min_col_width: usize,
-    stack_overflow_ratio: usize,
+    options: MregBuildOptions<'_>,
     next_block_id: &mut u64,
 ) -> Vec<Block> {
     let mut blocks = Vec::new();
     for row in rows {
-        let mut builder = MregBuilder::new(
-            short_list_max.max(1),
-            medium_list_max.max(short_list_max.max(1) + 1),
-            width_hint.max(24),
-            indent_size.max(1),
-            prefer_stacked_object_lists,
-            stack_min_col_width.max(1),
-            stack_overflow_ratio.max(100),
-            next_block_id,
-        );
-        builder.visit_object(row, 0, key_order);
+        let mut builder = MregBuilder::new(options, next_block_id);
+        builder.visit_object(row, 0, options.key_order);
         builder.flush_entries();
         blocks.extend(builder.blocks);
     }
@@ -52,26 +48,19 @@ struct MregBuilder<'a> {
 }
 
 impl<'a> MregBuilder<'a> {
-    fn new(
-        short_list_max: usize,
-        medium_list_max: usize,
-        width_hint: usize,
-        indent_size: usize,
-        prefer_stacked_object_lists: bool,
-        stack_min_col_width: usize,
-        stack_overflow_ratio: usize,
-        next_block_id: &'a mut u64,
-    ) -> Self {
+    fn new(options: MregBuildOptions<'_>, next_block_id: &'a mut u64) -> Self {
         Self {
             blocks: Vec::new(),
             entries: Vec::new(),
-            short_list_max,
-            medium_list_max,
-            width_hint,
-            indent_size,
-            prefer_stacked_object_lists,
-            stack_min_col_width,
-            stack_overflow_ratio,
+            short_list_max: options.short_list_max.max(1),
+            medium_list_max: options
+                .medium_list_max
+                .max(options.short_list_max.max(1) + 1),
+            width_hint: options.width_hint.max(24),
+            indent_size: options.indent_size.max(1),
+            prefer_stacked_object_lists: options.prefer_stacked_object_lists,
+            stack_min_col_width: options.stack_min_col_width.max(1),
+            stack_overflow_ratio: options.stack_overflow_ratio.max(100),
             next_block_id,
         }
     }
@@ -424,7 +413,7 @@ fn display_width(value: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::build_mreg_blocks;
+    use super::{MregBuildOptions, build_mreg_blocks};
     use crate::document::{Block, MregValue};
     use serde_json::{Map, Value, json};
 
@@ -525,14 +514,16 @@ mod tests {
 
         let blocks = build_mreg_blocks(
             &[row],
-            None,
-            1,
-            2,
-            80,
-            2,
-            false,
-            10,
-            200,
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 2,
+                width_hint: 80,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
             &mut next_block_id,
         );
 
@@ -565,14 +556,16 @@ mod tests {
         let mut next_block_id = 1;
         let blocks = build_mreg_blocks(
             &[sample_row()],
-            None,
-            1,
-            5,
-            80,
-            2,
-            false,
-            10,
-            200,
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 80,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
             &mut next_block_id,
         );
         assert!(blocks.iter().any(|block| matches!(block, Block::Table(_))));
@@ -583,14 +576,16 @@ mod tests {
         let mut next_block_id = 1;
         let blocks = build_mreg_blocks(
             &[wide_flat_row()],
-            None,
-            1,
-            5,
-            40,
-            2,
-            false,
-            10,
-            200,
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 40,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
             &mut next_block_id,
         );
         assert!(!blocks.iter().any(|block| matches!(block, Block::Table(_))));
@@ -610,14 +605,16 @@ mod tests {
         let mut next_block_id = 1;
         let blocks = build_mreg_blocks(
             &[nested_object_list_row()],
-            None,
-            1,
-            5,
-            120,
-            2,
-            false,
-            10,
-            200,
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 120,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
             &mut next_block_id,
         );
 

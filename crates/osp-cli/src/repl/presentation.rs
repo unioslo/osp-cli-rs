@@ -319,9 +319,11 @@ pub(crate) fn build_repl_prompt(state: &AppState) -> ReplPrompt {
             &domain_text,
             &profile_text,
             &indicator_text,
-            prompt_style,
-            resolved.color,
-            theme,
+            PromptTemplateStyleContext {
+                literal_style: prompt_style,
+                color: resolved.color,
+                theme,
+            },
         )
     };
 
@@ -376,15 +378,19 @@ fn render_prompt_template_styled(
     domain: &str,
     profile: &str,
     indicator: &str,
-    literal_style: Option<&str>,
-    color: bool,
-    theme: &osp_ui::theme::ThemeDefinition,
+    style: PromptTemplateStyleContext<'_>,
 ) -> String {
     let mut out = String::new();
     let mut cursor = 0;
 
     let style_literal = |text: &str| {
-        style_prompt_fragment(literal_style, text, StyleToken::PromptText, color, theme)
+        style_prompt_fragment(
+            style.literal_style,
+            text,
+            StyleToken::PromptText,
+            style.color,
+            style.theme,
+        )
     };
 
     while cursor < template.len() {
@@ -417,6 +423,12 @@ fn render_prompt_template_styled(
     }
 
     out
+}
+
+struct PromptTemplateStyleContext<'a> {
+    literal_style: Option<&'a str>,
+    color: bool,
+    theme: &'a osp_ui::theme::ThemeDefinition,
 }
 
 fn prompt_placeholder_replacement<'a>(

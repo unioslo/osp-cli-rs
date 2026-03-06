@@ -95,6 +95,17 @@ pub struct MessageBuffer {
     entries: Vec<UiMessage>,
 }
 
+#[derive(Debug, Clone)]
+pub struct GroupedRenderOptions<'a> {
+    pub max_level: MessageLevel,
+    pub color: bool,
+    pub unicode: bool,
+    pub width: Option<usize>,
+    pub theme: &'a ThemeDefinition,
+    pub format: MessageRenderFormat,
+    pub style_overrides: StyleOverrides,
+}
+
 impl MessageBuffer {
     pub fn push<T: Into<String>>(&mut self, level: MessageLevel, text: T) {
         self.entries.push(UiMessage {
@@ -148,41 +159,32 @@ impl MessageBuffer {
         theme: &ThemeDefinition,
         format: MessageRenderFormat,
     ) -> String {
-        self.render_grouped_styled_with_overrides(
+        self.render_grouped_with_options(GroupedRenderOptions {
             max_level,
             color,
             unicode,
             width,
             theme,
             format,
-            &StyleOverrides::default(),
-        )
+            style_overrides: StyleOverrides::default(),
+        })
     }
 
-    pub fn render_grouped_styled_with_overrides(
-        &self,
-        max_level: MessageLevel,
-        color: bool,
-        unicode: bool,
-        width: Option<usize>,
-        theme: &ThemeDefinition,
-        format: MessageRenderFormat,
-        style_overrides: &StyleOverrides,
-    ) -> String {
-        let document = self.build_grouped_document(max_level, format);
+    pub fn render_grouped_with_options(&self, options: GroupedRenderOptions<'_>) -> String {
+        let document = self.build_grouped_document(options.max_level, options.format);
         if document.blocks.is_empty() {
             return String::new();
         }
 
         let resolved = ResolvedRenderSettings {
-            backend: if color || unicode {
+            backend: if options.color || options.unicode {
                 RenderBackend::Rich
             } else {
                 RenderBackend::Plain
             },
-            color,
-            unicode,
-            width,
+            color: options.color,
+            unicode: options.unicode,
+            width: options.width,
             margin: 0,
             indent_size: 2,
             short_list_max: 1,
@@ -191,9 +193,9 @@ impl MessageBuffer {
             grid_columns: None,
             column_weight: 3,
             table_overflow: crate::TableOverflow::Clip,
-            theme_name: theme.id.clone(),
-            theme: theme.clone(),
-            style_overrides: style_overrides.clone(),
+            theme_name: options.theme.id.clone(),
+            theme: options.theme.clone(),
+            style_overrides: options.style_overrides,
         };
         render_document(&document, resolved)
     }

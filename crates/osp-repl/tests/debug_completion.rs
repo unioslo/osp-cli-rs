@@ -83,12 +83,14 @@ fn debug_completion_steps_accepts_after_second_tab() {
 
 #[test]
 fn debug_completion_tracks_replace_range_inside_open_quotes() {
-    let mut user = CompletionNode::default();
-    user.args = vec![ArgNode {
-        name: Some("uid".to_string()),
-        suggestions: vec![SuggestionEntry::value("oistes")],
-        ..ArgNode::default()
-    }];
+    let user = CompletionNode {
+        args: vec![ArgNode {
+            name: Some("uid".to_string()),
+            suggestions: vec![SuggestionEntry::value("oistes")],
+            ..ArgNode::default()
+        }],
+        ..CompletionNode::default()
+    };
 
     let mut ldap = CompletionNode::default();
     ldap.children.insert("user".to_string(), user);

@@ -190,7 +190,7 @@ fn build_repl_completion_tree(state: &AppState, surface: &ReplSurface) -> Comple
 #[cfg(test)]
 mod tests {
     use super::build_cycle_chrome_output;
-    use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
+    use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_ui::messages::MessageLevel;
@@ -228,16 +228,16 @@ mod tests {
             runtime: RenderRuntime::default(),
         };
 
-        AppState::new(
-            RuntimeContext::new(None, TerminalKind::Repl, None),
+        AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Repl, None),
             config,
-            settings,
-            MessageLevel::Success,
-            0,
-            crate::plugin_manager::PluginManager::new(Vec::new()),
-            crate::theme_loader::ThemeCatalog::default(),
-            LaunchContext::default(),
-        )
+            render_settings: settings,
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+            plugins: crate::plugin_manager::PluginManager::new(Vec::new()),
+            themes: crate::theme_loader::ThemeCatalog::default(),
+            launch: LaunchContext::default(),
+        })
     }
 
     #[test]

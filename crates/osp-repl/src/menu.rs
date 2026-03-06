@@ -228,20 +228,20 @@ impl OspCompletionMenu {
                 ApplyMode::Cycle => "cycle",
                 ApplyMode::Accept => "accept",
             };
-            crate::trace_completion(
+            crate::trace_completion(crate::CompletionTraceEvent {
                 event,
-                &line_before,
-                cursor_before,
-                &stub,
+                line: &line_before,
+                cursor: cursor_before,
+                stub: &stub,
                 matches,
                 replace_range,
-                Some(menu_state),
-                Some(&line_before),
-                Some(&line_after),
-                Some(cursor_before),
-                Some(cursor_after),
-                Some(&suggestion.value),
-            );
+                menu: Some(menu_state),
+                buffer_before: Some(&line_before),
+                buffer_after: Some(&line_after),
+                cursor_before: Some(cursor_before),
+                cursor_after: Some(cursor_after),
+                accepted_value: Some(&suggestion.value),
+            });
         }
 
         Some((start, suggestion.value.len(), prefixed_space))
@@ -422,20 +422,20 @@ fn trace_menu_state(menu: &OspCompletionMenu, editor: &Editor, painter: &Painter
         menu_indent: menu.core.input_indent(),
     };
 
-    crate::trace_completion(
-        "complete",
-        &line,
+    crate::trace_completion(crate::CompletionTraceEvent {
+        event: "complete",
+        line: &line,
         cursor,
-        &stub,
+        stub: &stub,
         matches,
         replace_range,
-        Some(menu_state),
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
+        menu: Some(menu_state),
+        buffer_before: None,
+        buffer_after: None,
+        cursor_before: None,
+        cursor_after: None,
+        accepted_value: None,
+    });
 }
 
 fn needs_space_prefix(line: &str, start: usize, end: usize) -> bool {

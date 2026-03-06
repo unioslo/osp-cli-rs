@@ -37,7 +37,7 @@ use crate::plugin_manager::{
     CommandCatalogEntry, PluginDispatchContext, PluginDispatchError, PluginManager,
 };
 use crate::rows::output::plugin_data_to_output_result;
-use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
+use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
 
 use crate::repl;
 
@@ -256,16 +256,16 @@ fn run(mut cli: Cli) -> Result<i32> {
         "developer logging initialized"
     );
 
-    let mut state = AppState::new(
-        runtime_context,
+    let mut state = AppState::new(AppStateInit {
+        context: runtime_context,
         config,
         render_settings,
         message_verbosity,
         debug_verbosity,
-        PluginManager::new(cli.plugin_dirs.clone()),
-        theme_catalog.clone(),
-        launch_context,
-    );
+        plugins: PluginManager::new(cli.plugin_dirs.clone()),
+        themes: theme_catalog.clone(),
+        launch: launch_context,
+    });
     if let Some(layer) = session_layer {
         state.session.config_overrides = layer;
     }
@@ -385,16 +385,16 @@ pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
 
     let plugin_manager = PluginManager::new(launch.plugin_dirs.clone())
         .with_roots(launch.config_root.clone(), launch.cache_root.clone());
-    let mut next = AppState::new(
+    let mut next = AppState::new(AppStateInit {
         context,
         config,
         render_settings,
         message_verbosity,
         debug_verbosity,
-        plugin_manager,
-        theme_catalog,
+        plugins: plugin_manager,
+        themes: theme_catalog,
         launch,
-    );
+    });
     next.session.config_overrides = session_overrides;
     next.session.scope = scope;
     next.session.last_rows = last_rows;
@@ -979,15 +979,15 @@ pub(crate) fn emit_messages_with_verbosity(
         .get_string("ui.messages.format")
         .and_then(MessageRenderFormat::parse)
         .unwrap_or(MessageRenderFormat::Rules);
-    let rendered = messages.render_grouped_styled_with_overrides(
-        verbosity,
-        resolved.color,
-        resolved.unicode,
-        resolved.width,
-        &resolved.theme,
-        message_format,
-        &resolved.style_overrides,
-    );
+    let rendered = messages.render_grouped_with_options(osp_ui::messages::GroupedRenderOptions {
+        max_level: verbosity,
+        color: resolved.color,
+        unicode: resolved.unicode,
+        width: resolved.width,
+        theme: &resolved.theme,
+        format: message_format,
+        style_overrides: resolved.style_overrides.clone(),
+    });
     if !rendered.is_empty() {
         eprint!("{rendered}");
     }
@@ -1085,7 +1085,7 @@ mod tests {
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
     use crate::repl;
     use crate::repl::{completion, help as repl_help, surface};
-    use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
+    use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
     use clap::Parser;
     use osp_config::{
         ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions,
@@ -1146,16 +1146,16 @@ mod tests {
             runtime: RenderRuntime::default(),
         };
 
-        AppState::new(
-            RuntimeContext::new(None, TerminalKind::Repl, None),
+        AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Repl, None),
             config,
-            settings,
-            MessageLevel::Success,
-            0,
-            PluginManager::new(Vec::new()),
-            crate::theme_loader::ThemeCatalog::default(),
-            LaunchContext::default(),
-        )
+            render_settings: settings,
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+            plugins: PluginManager::new(Vec::new()),
+            themes: crate::theme_loader::ThemeCatalog::default(),
+            launch: LaunchContext::default(),
+        })
     }
 
     fn sample_catalog() -> Vec<CommandCatalogEntry> {
@@ -2204,23 +2204,24 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
         let history_shell = state.repl.history_shell.clone();
         state.sync_history_shell_context();
 
-        let history_config = HistoryConfig::new(
-            Some(history_path),
-            128,
-            true,
-            true,
-            true,
-            Vec::new(),
-            Some(state.config.resolved().active_profile().to_string()),
-            Some(
+        let history_config = HistoryConfig {
+            path: Some(history_path),
+            max_entries: 128,
+            enabled: true,
+            dedupe: true,
+            profile_scoped: true,
+            exclude_patterns: Vec::new(),
+            profile: Some(state.config.resolved().active_profile().to_string()),
+            terminal: Some(
                 state
                     .context
                     .terminal_kind()
                     .as_config_terminal()
                     .to_string(),
             ),
-            history_shell,
-        );
+            shell_context: history_shell,
+        }
+        .normalized();
 
         SharedHistory::new(history_config).expect("history should init")
     }
@@ -2266,16 +2267,17 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
             runtime_load: RuntimeLoadOptions::default(),
         };
 
-        AppState::new(
-            RuntimeContext::new(None, TerminalKind::Repl, None),
+        AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Repl, None),
             config,
-            settings,
-            MessageLevel::Success,
-            0,
-            PluginManager::new(plugin_dirs).with_roots(Some(config_root), Some(cache_root)),
-            crate::theme_loader::ThemeCatalog::default(),
+            render_settings: settings,
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+            plugins: PluginManager::new(plugin_dirs)
+                .with_roots(Some(config_root), Some(cache_root)),
+            themes: crate::theme_loader::ThemeCatalog::default(),
             launch,
-        )
+        })
     }
 
     #[cfg(unix)]
