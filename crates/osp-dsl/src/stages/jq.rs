@@ -42,7 +42,7 @@ fn apply_rows(rows: Vec<Row>, expr: &str) -> Result<Vec<Row>> {
     if rows.is_empty() {
         return Ok(Vec::new());
     }
-    let payload = Value::Array(rows.into_iter().map(|row| Value::Object(row)).collect());
+    let payload = Value::Array(rows.into_iter().map(Value::Object).collect());
     match run_jq(expr, &payload)? {
         None => Ok(Vec::new()),
         Some(value) => Ok(json_to_rows(value)),

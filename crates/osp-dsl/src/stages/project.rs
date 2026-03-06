@@ -113,10 +113,8 @@ fn project_single_row(row: &Row, keepers: &[Pattern], droppers: &[Pattern]) -> V
     let mut dynamic_columns: Vec<(String, Vec<Value>)> = Vec::new();
 
     for pattern in keepers {
-        if pattern.dotted {
-            if collect_dynamic_column(&nested, &mut dynamic_columns, pattern) {
-                continue;
-            }
+        if pattern.dotted && collect_dynamic_column(&nested, &mut dynamic_columns, pattern) {
+            continue;
         }
 
         for key in matched_flat_keys(&flattened, pattern) {
@@ -171,12 +169,10 @@ fn build_rows_from_dynamic(
     let mut rows = Vec::new();
     for index in 0..row_count {
         let mut flat = static_flat.clone();
-        let mut merged_object = false;
         for (label, values) in &dynamic_columns {
             if let Some(value) = values.get(index) {
                 match value {
                     Value::Object(map) => {
-                        merged_object = true;
                         for (key, nested_value) in map {
                             flat.insert(key.clone(), nested_value.clone());
                         }
@@ -190,11 +186,7 @@ fn build_rows_from_dynamic(
             }
         }
 
-        let projected = if merged_object {
-            coalesce_flat_row(&flat)
-        } else {
-            coalesce_flat_row(&flat)
-        };
+        let projected = coalesce_flat_row(&flat);
         if !projected.is_empty() {
             rows.push(projected);
         }
@@ -227,18 +219,19 @@ fn collect_dynamic_column(
 }
 
 fn matched_flat_keys(flat_row: &Row, pattern: &Pattern) -> Vec<String> {
-    if let Some(path) = &pattern.path {
-        if path.absolute && !has_selectors(path) {
-            let exact = flatten_path_without_absolute(path);
-            if exact.is_empty() {
-                return Vec::new();
-            }
-            return flat_row
-                .keys()
-                .filter(|key| *key == &exact)
-                .cloned()
-                .collect();
+    if let Some(path) = &pattern.path
+        && path.absolute
+        && !has_selectors(path)
+    {
+        let exact = flatten_path_without_absolute(path);
+        if exact.is_empty() {
+            return Vec::new();
         }
+        return flat_row
+            .keys()
+            .filter(|key| *key == &exact)
+            .cloned()
+            .collect();
     }
 
     match_row_keys(flat_row, &pattern.key_spec.token, pattern.key_spec.exact)
@@ -279,12 +272,11 @@ fn has_selectors(path: &PathExpression) -> bool {
 }
 
 fn pattern_label(pattern: &Pattern) -> String {
-    if let Some(path) = &pattern.path {
-        if let Some(segment) = path.segments.last() {
-            if let Some(name) = &segment.name {
-                return name.clone();
-            }
-        }
+    if let Some(path) = &pattern.path
+        && let Some(segment) = path.segments.last()
+        && let Some(name) = &segment.name
+    {
+        return name.clone();
     }
 
     let token = pattern.key_spec.token.as_str();

@@ -113,10 +113,9 @@ fn match_row(
         if values
             .iter()
             .any(|item| value_matches_token(item, &spec.key_spec.token, spec.key_spec.exact))
+            && seen_values.insert(key.clone())
         {
-            if seen_values.insert(key.clone()) {
-                value_hits.push(key.clone());
-            }
+            value_hits.push(key.clone());
         }
     }
 
@@ -287,20 +286,18 @@ fn transform_row(
         else {
             continue;
         };
-        if result.value_hits.contains(&key) {
-            if let Value::Array(items) = value {
-                let filtered_values = items
-                    .into_iter()
-                    .filter(|item| {
-                        value_matches_token(item, &spec.key_spec.token, spec.key_spec.exact)
-                    })
-                    .collect::<Vec<_>>();
-                if filtered_values.is_empty() {
-                    continue;
-                }
-                filtered.insert(key.clone(), Value::Array(filtered_values));
+        if result.value_hits.contains(&key)
+            && let Value::Array(items) = value
+        {
+            let filtered_values = items
+                .into_iter()
+                .filter(|item| value_matches_token(item, &spec.key_spec.token, spec.key_spec.exact))
+                .collect::<Vec<_>>();
+            if filtered_values.is_empty() {
                 continue;
             }
+            filtered.insert(key.clone(), Value::Array(filtered_values));
+            continue;
         }
         filtered.insert(key, value);
     }
@@ -322,12 +319,8 @@ fn build_synthetic_map(pairs: &[(String, Value)], flat: &Row) -> Row {
     out
 }
 
-fn prefer_exact_keys(matches: &KeyMatches, exact: ExactMode) -> Vec<String> {
-    if matches!(exact, ExactMode::CaseSensitive | ExactMode::CaseInsensitive)
-        && !matches.exact.is_empty()
-    {
-        matches.exact.clone()
-    } else if !matches.exact.is_empty() {
+fn prefer_exact_keys(matches: &KeyMatches, _exact: ExactMode) -> Vec<String> {
+    if !matches.exact.is_empty() {
         matches.exact.clone()
     } else {
         matches.partial.clone()
@@ -382,12 +375,11 @@ fn value_matches_token(value: &Value, token: &str, exact: ExactMode) -> bool {
 }
 
 fn last_segment_name(key: &str) -> Option<String> {
-    if let Ok(path) = parse_path(key) {
-        if let Some(segment) = path.segments.last() {
-            if let Some(name) = &segment.name {
-                return Some(name.clone());
-            }
-        }
+    if let Ok(path) = parse_path(key)
+        && let Some(segment) = path.segments.last()
+        && let Some(name) = &segment.name
+    {
+        return Some(name.clone());
     }
     let last = key.rsplit('.').next().unwrap_or(key);
     Some(last.split('[').next().unwrap_or(last).to_string())
@@ -407,10 +399,10 @@ fn squeeze_single_entry(row: Row) -> Row {
                 .into_iter()
                 .filter(|item| !item.is_null())
                 .collect::<Vec<_>>();
-            if cleaned.len() == 1 {
-                if let Value::Object(obj) = &cleaned[0] {
-                    return obj.clone();
-                }
+            if cleaned.len() == 1
+                && let Value::Object(obj) = &cleaned[0]
+            {
+                return obj.clone();
             }
             if cleaned.is_empty() {
                 return Row::new();

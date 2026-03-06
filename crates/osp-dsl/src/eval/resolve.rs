@@ -59,10 +59,10 @@ pub fn evaluate_path(root: &Value, path: &PathExpression) -> Vec<Value> {
         for node in current {
             let mut values = Vec::new();
             if let Some(name) = &segment.name {
-                if let Value::Object(map) = node {
-                    if let Some(value) = map.get(name) {
-                        values.push(value.clone());
-                    }
+                if let Value::Object(map) = node
+                    && let Some(value) = map.get(name)
+                {
+                    values.push(value.clone());
                 }
             } else {
                 values.push(node);
@@ -104,14 +104,14 @@ pub fn resolve_pairs(flat_row: &Row, token: &str) -> (Vec<(String, Value)>, bool
     }
 
     let expr = parse_path(trimmed).ok();
-    if let Some(expr) = expr {
-        if !expr.segments.is_empty() {
-            let materialized = requires_materialization(&expr);
-            let nested = Value::Object(coalesce_flat_row(flat_row));
-            let pairs = enumerate_path_values(&nested, &expr);
-            if materialized || !pairs.is_empty() {
-                return (pairs, materialized);
-            }
+    if let Some(expr) = expr
+        && !expr.segments.is_empty()
+    {
+        let materialized = requires_materialization(&expr);
+        let nested = Value::Object(coalesce_flat_row(flat_row));
+        let pairs = enumerate_path_values(&nested, &expr);
+        if materialized || !pairs.is_empty() {
+            return (pairs, materialized);
         }
     }
 
@@ -185,10 +185,10 @@ fn apply_selector(values: Vec<Value>, selector: &Selector) -> Vec<Value> {
                         stop_index = stop_index.clamp(0, length);
 
                         while index < stop_index {
-                            if index >= 0 {
-                                if let Some(item) = items.get(index as usize) {
-                                    out.push(item.clone());
-                                }
+                            if index >= 0
+                                && let Some(item) = items.get(index as usize)
+                            {
+                                out.push(item.clone());
                             }
                             index += step;
                         }
@@ -259,10 +259,10 @@ fn traverse_path(
     if let Some(name) = &segment.name {
         let mut next = Vec::new();
         for (value, key) in current {
-            if let Value::Object(map) = value {
-                if let Some(child) = map.get(name) {
-                    next.push((child.clone(), append_name(&key, name)));
-                }
+            if let Value::Object(map) = value
+                && let Some(child) = map.get(name)
+            {
+                next.push((child.clone(), append_name(&key, name)));
             }
         }
         current = next;
@@ -299,10 +299,10 @@ fn apply_selector_pairs(values: Vec<(Value, String)>, selector: &Selector) -> Ve
                 if idx < 0 {
                     idx += len;
                 }
-                if idx >= 0 {
-                    if let Some(item) = items.get(idx as usize) {
-                        out.push((item.clone(), append_index(&key, idx as usize)));
-                    }
+                if idx >= 0
+                    && let Some(item) = items.get(idx as usize)
+                {
+                    out.push((item.clone(), append_index(&key, idx as usize)));
                 }
             }
             Selector::Slice { start, stop, step } => {

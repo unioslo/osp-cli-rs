@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 
-use crate::parse::lexer::{Span, StageSegment, TokenKind, tokenize_stage};
+use crate::parse::lexer::{Span, StageSegment, tokenize_stage};
 
 pub fn parse_terms(spec: &str) -> Vec<String> {
     spec.split(|ch: char| ch == ',' || ch.is_whitespace())
@@ -24,12 +24,7 @@ pub fn parse_stage_words(spec: &str) -> Result<Vec<String>> {
         },
     };
     let tokens = tokenize_stage(&segment).map_err(|error| anyhow!(error.to_string()))?;
-    Ok(tokens
-        .into_iter()
-        .filter_map(|token| match token.kind {
-            TokenKind::Word | TokenKind::Op(_) => Some(token.text),
-        })
-        .collect())
+    Ok(tokens.into_iter().map(|token| token.text).collect())
 }
 
 pub fn parse_optional_alias_after_key(

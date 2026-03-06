@@ -93,13 +93,13 @@ impl PythonReferenceEnv {
         if let (Some(python_bin), Some(pythonpath)) = (
             std::env::var_os("OSPROV_PYTHON_BIN").map(PathBuf::from),
             std::env::var_os("OSPROV_PYTHONPATH").map(PathBuf::from),
-        ) {
-            if python_bin.exists() && pythonpath.exists() {
-                return Some(Self {
-                    python_bin,
-                    pythonpath,
-                });
-            }
+        ) && python_bin.exists()
+            && pythonpath.exists()
+        {
+            return Some(Self {
+                python_bin,
+                pythonpath,
+            });
         }
 
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));

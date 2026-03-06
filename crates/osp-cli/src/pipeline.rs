@@ -4,6 +4,9 @@ use osp_dsl::parse_pipeline;
 
 const ALIAS_PREFIX: &str = "alias.";
 const MAX_ALIAS_EXPANSION_DEPTH: usize = 100;
+const VALID_SINGLE_LETTER_PIPE_VERBS: [&str; 10] =
+    ["F", "P", "S", "G", "A", "L", "Z", "C", "Y", "H"];
+const QUICK_PIPE_PREFIXES: [&str; 2] = ["K", "V"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCommandLine {
@@ -39,16 +42,10 @@ pub fn parse_command_text_with_aliases(
         }
         let mut stages = alias_parsed.stages;
         stages.extend(parsed.stages);
-        return Ok(ParsedCommandLine {
-            tokens: alias_tokens,
-            stages,
-        });
+        return finalize_parsed_command(alias_tokens, stages);
     }
 
-    Ok(ParsedCommandLine {
-        tokens,
-        stages: parsed.stages,
-    })
+    finalize_parsed_command(tokens, parsed.stages)
 }
 
 pub fn parse_command_tokens_with_aliases(
@@ -87,6 +84,73 @@ fn maybe_expand_alias(
     let template = value.to_string();
     let expanded = expand_alias_template(candidate, &template, positional_args, config)?;
     Ok(Some(expanded))
+}
+
+fn finalize_parsed_command(tokens: Vec<String>, stages: Vec<String>) -> Result<ParsedCommandLine> {
+    validate_explicit_dsl_stages(&stages)?;
+    Ok(ParsedCommandLine {
+        tokens: merge_orch_os_tokens(tokens),
+        stages,
+    })
+}
+
+fn merge_orch_os_tokens(tokens: Vec<String>) -> Vec<String> {
+    if tokens.len() < 4 || tokens.first().map(String::as_str) != Some("orch") {
+        return tokens;
+    }
+    if tokens.get(1).map(String::as_str) != Some("provision") {
+        return tokens;
+    }
+
+    let mut merged = Vec::with_capacity(tokens.len());
+    let mut index = 0usize;
+    while index < tokens.len() {
+        if tokens[index] == "--os" && index + 2 < tokens.len() {
+            let family = &tokens[index + 1];
+            let version = &tokens[index + 2];
+            if !version.is_empty() && !version.starts_with('-') {
+                merged.push("--os".to_string());
+                merged.push(format!("{family}{version}"));
+                index += 3;
+                continue;
+            }
+        }
+
+        merged.push(tokens[index].clone());
+        index += 1;
+    }
+
+    merged
+}
+
+fn validate_explicit_dsl_stages(stages: &[String]) -> Result<()> {
+    for raw in stages {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let verb = trimmed.split_whitespace().next().unwrap_or_default();
+        if verb.len() != 1 || !verb.chars().all(|ch| ch.is_ascii_alphabetic()) {
+            continue;
+        }
+
+        let normalized = verb.to_ascii_uppercase();
+        if QUICK_PIPE_PREFIXES.contains(&normalized.as_str()) {
+            continue;
+        }
+        if VALID_SINGLE_LETTER_PIPE_VERBS.contains(&normalized.as_str()) {
+            continue;
+        }
+
+        return Err(miette!(
+            "Unknown DSL verb '{}' in pipe '{}'. Use `| H <verb>` for help.",
+            normalized,
+            trimmed
+        ));
+    }
+
+    Ok(())
 }
 
 fn alias_key(candidate: &str) -> String {
@@ -172,10 +236,11 @@ fn resolve_alias_placeholder(
         ));
     }
 
-    if let Ok(index) = key_part.parse::<usize>() {
-        if index > 0 && index <= positional_args.len() {
-            return Ok(positional_args[index - 1].clone());
-        }
+    if let Ok(index) = key_part.parse::<usize>()
+        && index > 0
+        && index <= positional_args.len()
+    {
+        return Ok(positional_args[index - 1].clone());
     }
 
     if key_part == "*" || key_part == "@" {
