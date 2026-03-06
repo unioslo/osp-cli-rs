@@ -2,6 +2,7 @@ pub(crate) mod completion;
 pub(crate) mod dispatch;
 pub(crate) mod help;
 pub(crate) mod history;
+pub(crate) mod input;
 pub(crate) mod presentation;
 pub(crate) mod surface;
 
@@ -16,9 +17,10 @@ use crate::app::CliCommandResult;
 use crate::cli::{DebugCompleteArgs, ReplArgs, ReplCommands};
 #[cfg(test)]
 pub(crate) use dispatch::{
-    apply_repl_shell_prefix, execute_repl_plugin_line, is_repl_shellable_command, leave_repl_shell,
-    repl_command_spec, rewrite_repl_help_tokens, should_enter_repl_shell,
+    apply_repl_shell_prefix, execute_repl_plugin_line, leave_repl_shell, repl_command_spec,
 };
+#[cfg(test)]
+pub(crate) use input::{ReplParsedLine, is_repl_shellable_command};
 use osp_completion::CompletionTree;
 #[cfg(test)]
 pub(crate) use presentation::render_prompt_template;

@@ -7,8 +7,8 @@ use std::borrow::Cow;
 
 use crate::app;
 use crate::app::{
-    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, CMD_THEME, REPL_SHELLABLE_COMMANDS,
-    ReplCommandOutput, ReplCommandSpec, ReplDispatchOverrides,
+    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, CMD_THEME, ReplCommandOutput,
+    ReplCommandSpec, ReplDispatchOverrides,
 };
 use crate::cli::commands::{
     config as config_cmd, doctor as doctor_cmd, history as history_cmd, plugins as plugins_cmd,
@@ -21,7 +21,7 @@ use crate::cli::{
 use crate::rows::output::{output_to_rows, plugin_data_to_output_result};
 use crate::state::AppState;
 
-use super::{completion, help, presentation, surface};
+use super::{completion, help, input, presentation, surface};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReplBuiltin {
@@ -67,8 +67,8 @@ fn execute_repl_plugin_line_inner(
         return Ok(result);
     }
 
-    let parsed = crate::pipeline::parse_command_text_with_aliases(line, state.config.resolved())?;
-    if parsed.tokens.is_empty() {
+    let parsed = input::ReplParsedLine::parse(line, state.config.resolved())?;
+    if parsed.is_empty() {
         return Ok(ReplLineResult::Continue(String::new()));
     }
     if let Some(help) = completion::maybe_render_dsl_help(state, &parsed.stages) {
@@ -76,23 +76,19 @@ fn execute_repl_plugin_line_inner(
         return Ok(ReplLineResult::Continue(help));
     }
 
-    let tokens = parsed.tokens;
     let base_overrides = ReplDispatchOverrides {
         message_verbosity: state.ui.message_verbosity,
         debug_verbosity: state.ui.debug_verbosity,
     };
-    if tokens.len() == 1 && (tokens[0] == "--help" || tokens[0] == "-h") {
+    if parsed.requests_repl_help() {
         return Ok(ReplLineResult::Continue(repl_help_for_scope(
             state,
             base_overrides,
         )?));
     }
 
-    let help_rewritten = rewrite_repl_help_tokens(&tokens);
-    let tokens_for_parse = help_rewritten.unwrap_or(tokens);
-
-    if tokens_for_parse.len() == 1 {
-        match tokens_for_parse[0].as_str() {
+    if parsed.dispatch_tokens.len() == 1 {
+        match parsed.dispatch_tokens[0].as_str() {
             CMD_HELP => {
                 return Ok(ReplLineResult::Continue(repl_help_for_scope(
                     state,
@@ -113,13 +109,13 @@ fn execute_repl_plugin_line_inner(
         }
     }
 
-    if parsed.stages.is_empty() && should_enter_repl_shell(state, &tokens_for_parse) {
-        let entered = enter_repl_shell(state, &tokens_for_parse[0], base_overrides)?;
+    if let Some(command) = parsed.shell_entry_command(&state.session.scope) {
+        let entered = enter_repl_shell(state, command, base_overrides)?;
         state.sync_history_shell_context();
         return Ok(ReplLineResult::Continue(entered));
     }
 
-    let prefixed_tokens = apply_repl_shell_prefix(&state.session.scope, &tokens_for_parse);
+    let prefixed_tokens = parsed.prefixed_tokens(&state.session.scope);
     let parsed_command = match parse_repl_tokens(&prefixed_tokens) {
         Ok(parsed) => parsed,
         Err(err) => {
@@ -396,36 +392,7 @@ fn theme_or_palette_change_requires_intro(command: &Commands) -> bool {
     }
 }
 
-pub(crate) fn rewrite_repl_help_tokens(tokens: &[String]) -> Option<Vec<String>> {
-    if tokens.first().map(String::as_str) != Some(CMD_HELP) {
-        return None;
-    }
-    if tokens.len() == 1 {
-        return None;
-    }
-    let mut rewritten = tokens[1..].to_vec();
-    if !rewritten.iter().any(|arg| arg == "--help" || arg == "-h") {
-        rewritten.push("--help".to_string());
-    }
-    Some(rewritten)
-}
-
-pub(crate) fn should_enter_repl_shell(state: &AppState, tokens: &[String]) -> bool {
-    if tokens.len() != 1 {
-        return false;
-    }
-    if !is_repl_shellable_command(&tokens[0]) {
-        return false;
-    }
-    !state.session.scope.contains_command(tokens[0].as_str())
-}
-
-pub(crate) fn is_repl_shellable_command(command: &str) -> bool {
-    REPL_SHELLABLE_COMMANDS
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(command.trim()))
-}
-
+#[cfg(test)]
 pub(crate) fn apply_repl_shell_prefix(
     scope: &crate::state::ReplScopeStack,
     tokens: &[String],

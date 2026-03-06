@@ -1439,32 +1439,33 @@ mod tests {
 
     #[test]
     fn repl_help_alias_rewrites_to_command_help_unit() {
-        let rewritten = repl::rewrite_repl_help_tokens(&[
-            "help".to_string(),
-            "ldap".to_string(),
-            "user".to_string(),
-        ])
-        .expect("help alias should rewrite");
+        let state = make_completion_state(None);
+        let rewritten = repl::ReplParsedLine::parse("help ldap user", state.config.resolved())
+            .expect("help alias should parse");
         assert_eq!(
-            rewritten,
+            rewritten.dispatch_tokens,
             vec!["ldap".to_string(), "user".to_string(), "--help".to_string()]
         );
     }
 
     #[test]
     fn repl_help_alias_preserves_existing_help_flag_unit() {
-        let rewritten = repl::rewrite_repl_help_tokens(&[
-            "help".to_string(),
-            "ldap".to_string(),
-            "--help".to_string(),
-        ])
-        .expect("help alias should rewrite");
-        assert_eq!(rewritten, vec!["ldap".to_string(), "--help".to_string()]);
+        let state = make_completion_state(None);
+        let rewritten = repl::ReplParsedLine::parse("help ldap --help", state.config.resolved())
+            .expect("help alias should parse");
+        assert_eq!(
+            rewritten.dispatch_tokens,
+            vec!["ldap".to_string(), "--help".to_string()]
+        );
     }
 
     #[test]
     fn repl_help_alias_skips_bare_help_unit() {
-        assert!(repl::rewrite_repl_help_tokens(&["help".to_string()]).is_none());
+        let state = make_completion_state(None);
+        let parsed = repl::ReplParsedLine::parse("help", state.config.resolved())
+            .expect("bare help should parse");
+        assert_eq!(parsed.command_tokens, vec!["help".to_string()]);
+        assert_eq!(parsed.dispatch_tokens, vec!["help".to_string()]);
     }
 
     #[test]
@@ -1507,13 +1508,61 @@ mod tests {
     #[test]
     fn repl_shell_enter_only_from_root_unit() {
         let mut state = make_completion_state(None);
-        assert!(repl::should_enter_repl_shell(&state, &["ldap".to_string()]));
+        let ldap = repl::ReplParsedLine::parse("ldap", state.config.resolved())
+            .expect("ldap should parse");
+        assert_eq!(ldap.shell_entry_command(&state.session.scope), Some("ldap"));
         state.session.scope.enter("ldap");
-        assert!(repl::should_enter_repl_shell(&state, &["mreg".to_string()]));
-        assert!(!repl::should_enter_repl_shell(
-            &state,
-            &["ldap".to_string()]
-        ));
+        let mreg = repl::ReplParsedLine::parse("mreg", state.config.resolved())
+            .expect("mreg should parse");
+        assert_eq!(mreg.shell_entry_command(&state.session.scope), Some("mreg"));
+        assert_eq!(ldap.shell_entry_command(&state.session.scope), None);
+    }
+
+    #[test]
+    fn repl_partial_root_completion_does_not_enter_shell_unit() {
+        let state = make_completion_state(None);
+        let catalog = sample_catalog();
+        let surface = surface::build_repl_surface(&state, &catalog);
+        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let engine = osp_completion::CompletionEngine::new(tree);
+
+        let (_, suggestions) = engine.suggestions_with_stub("or", 2);
+        assert!(suggestions.into_iter().any(|entry| matches!(
+            entry,
+            osp_completion::SuggestionOutput::Item(item) if item.text == "orch"
+        )));
+
+        let parsed = repl::ReplParsedLine::parse("or", state.config.resolved())
+            .expect("partial command should parse");
+        assert_eq!(parsed.shell_entry_command(&state.session.scope), None);
+    }
+
+    #[test]
+    fn repl_shell_scoped_completion_and_dispatch_prefix_align_unit() {
+        let mut state = make_completion_state(None);
+        state.session.scope.enter("orch");
+        let catalog = sample_catalog();
+        let surface = surface::build_repl_surface(&state, &catalog);
+        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let engine = osp_completion::CompletionEngine::new(tree);
+
+        let (_, suggestions) = engine.suggestions_with_stub("prov", 4);
+        assert!(suggestions.into_iter().any(|entry| matches!(
+            entry,
+            osp_completion::SuggestionOutput::Item(item) if item.text == "provision"
+        )));
+
+        let parsed = repl::ReplParsedLine::parse("provision --os alma", state.config.resolved())
+            .expect("scoped command should parse");
+        assert_eq!(
+            parsed.prefixed_tokens(&state.session.scope),
+            vec![
+                "orch".to_string(),
+                "provision".to_string(),
+                "--os".to_string(),
+                "alma".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -1704,7 +1753,7 @@ mod tests {
             r#"#!/usr/bin/env bash
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"fail","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"fail","about":"fail","subcommands":[]}]}
+{"protocol_version":1,"plugin_id":"fail","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"fail","about":"fail","subcommands":[],"args":[],"flags":{}}]}
 JSON
   exit 0
 fi
@@ -1742,7 +1791,7 @@ JSON
             r#"#!/usr/bin/env bash
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","subcommands":[]}]}
+{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","subcommands":[],"args":[],"flags":{}}]}
 JSON
   exit 0
 fi
@@ -1959,7 +2008,7 @@ JSON
             r#"#!/usr/bin/env bash
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","subcommands":[]}]}
+{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","subcommands":[],"args":[],"flags":{}}]}
 JSON
   exit 0
 fi
@@ -2007,7 +2056,7 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
             r#"#!/usr/bin/env bash
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","subcommands":[]}]}
+{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","subcommands":[],"args":[],"flags":{}}]}
 JSON
   exit 0
 fi
