@@ -18,6 +18,41 @@ impl CommandSpec {
             ..Self::default()
         }
     }
+
+    pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn arg(mut self, arg: ArgNode) -> Self {
+        self.args.push(arg);
+        self
+    }
+
+    pub fn args(mut self, args: impl IntoIterator<Item = ArgNode>) -> Self {
+        self.args.extend(args);
+        self
+    }
+
+    pub fn flag(mut self, name: impl Into<String>, flag: FlagNode) -> Self {
+        self.flags.insert(name.into(), flag);
+        self
+    }
+
+    pub fn flags(mut self, flags: impl IntoIterator<Item = (String, FlagNode)>) -> Self {
+        self.flags.extend(flags);
+        self
+    }
+
+    pub fn subcommand(mut self, subcommand: CommandSpec) -> Self {
+        self.subcommands.push(subcommand);
+        self
+    }
+
+    pub fn subcommands(mut self, subcommands: impl IntoIterator<Item = CommandSpec>) -> Self {
+        self.subcommands.extend(subcommands);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -104,6 +139,19 @@ impl ConfigKeySpec {
             ..Self::default()
         }
     }
+
+    pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn value_suggestions(
+        mut self,
+        suggestions: impl IntoIterator<Item = SuggestionEntry>,
+    ) -> Self {
+        self.value_suggestions = suggestions.into_iter().collect();
+        self
+    }
 }
 
 #[cfg(test)]
@@ -114,11 +162,7 @@ mod tests {
 
     fn build_tree() -> CompletionTree {
         CompletionTreeBuilder.build_from_specs(
-            &[CommandSpec {
-                name: "config".to_string(),
-                subcommands: vec![CommandSpec::new("set")],
-                ..CommandSpec::default()
-            }],
+            &[CommandSpec::new("config").subcommand(CommandSpec::new("set"))],
             [("F".to_string(), "Filter".to_string())],
         )
     }

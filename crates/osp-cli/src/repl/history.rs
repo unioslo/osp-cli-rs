@@ -15,28 +15,13 @@ use crate::rows::output::rows_to_output_result;
 const DEFAULT_REPL_HISTORY_EXCLUDES: [&str; 4] = ["exit", "quit", "help", "history list"];
 
 pub(crate) fn history_command_spec() -> CommandSpec {
-    CommandSpec {
-        name: CMD_HISTORY.to_string(),
-        tooltip: Some("Inspect or prune REPL history".to_string()),
-        subcommands: vec![
-            CommandSpec {
-                name: CMD_LIST.to_string(),
-                tooltip: Some("List recent history".to_string()),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "prune".to_string(),
-                tooltip: Some("Keep last N entries".to_string()),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "clear".to_string(),
-                tooltip: Some("Clear history".to_string()),
-                ..CommandSpec::default()
-            },
-        ],
-        ..CommandSpec::default()
-    }
+    CommandSpec::new(CMD_HISTORY)
+        .tooltip("Inspect or prune REPL history")
+        .subcommands([
+            CommandSpec::new(CMD_LIST).tooltip("List recent history"),
+            CommandSpec::new("prune").tooltip("Keep last N entries"),
+            CommandSpec::new("clear").tooltip("Clear history"),
+        ])
 }
 
 pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {

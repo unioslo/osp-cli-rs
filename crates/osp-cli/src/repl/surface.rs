@@ -31,21 +31,9 @@ pub(crate) fn build_repl_surface(state: &AppState, catalog: &[CommandCatalogEntr
 
     let mut root_words = catalog_completion_words(catalog);
     let mut specs = vec![
-        CommandSpec {
-            name: "help".to_string(),
-            tooltip: Some("Show REPL help".to_string()),
-            ..CommandSpec::default()
-        },
-        CommandSpec {
-            name: "exit".to_string(),
-            tooltip: Some("Exit REPL".to_string()),
-            ..CommandSpec::default()
-        },
-        CommandSpec {
-            name: "quit".to_string(),
-            tooltip: Some("Exit REPL".to_string()),
-            ..CommandSpec::default()
-        },
+        CommandSpec::new("help").tooltip("Show REPL help"),
+        CommandSpec::new("exit").tooltip("Exit REPL"),
+        CommandSpec::new("quit").tooltip("Exit REPL"),
     ];
     let mut overview_entries = vec![
         ReplOverviewEntry {
@@ -221,48 +209,19 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
         .map(SuggestionEntry::value)
         .collect::<Vec<_>>();
 
-    CommandSpec {
-        name: CMD_PLUGINS.to_string(),
-        tooltip: Some("Inspect and manage plugin providers".to_string()),
-        subcommands: vec![
-            CommandSpec {
-                name: CMD_LIST.to_string(),
-                tooltip: Some("List available plugins".to_string()),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "commands".to_string(),
-                tooltip: Some("Show plugin command catalog".to_string()),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "doctor".to_string(),
-                tooltip: Some("Run plugin diagnostics".to_string()),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "enable".to_string(),
-                tooltip: Some("Enable plugin by id".to_string()),
-                args: vec![ArgNode {
-                    name: Some("plugin_id".to_string()),
-                    suggestions: plugin_ids.clone(),
-                    ..ArgNode::default()
-                }],
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "disable".to_string(),
-                tooltip: Some("Disable plugin by id".to_string()),
-                args: vec![ArgNode {
-                    name: Some("plugin_id".to_string()),
-                    suggestions: plugin_ids,
-                    ..ArgNode::default()
-                }],
-                ..CommandSpec::default()
-            },
-        ],
-        ..CommandSpec::default()
-    }
+    CommandSpec::new(CMD_PLUGINS)
+        .tooltip("Inspect and manage plugin providers")
+        .subcommands([
+            CommandSpec::new(CMD_LIST).tooltip("List available plugins"),
+            CommandSpec::new("commands").tooltip("Show plugin command catalog"),
+            CommandSpec::new("doctor").tooltip("Run plugin diagnostics"),
+            CommandSpec::new("enable")
+                .tooltip("Enable plugin by id")
+                .arg(ArgNode::named("plugin_id").suggestions(plugin_ids.clone())),
+            CommandSpec::new("disable")
+                .tooltip("Disable plugin by id")
+                .arg(ArgNode::named("plugin_id").suggestions(plugin_ids)),
+        ])
 }
 
 fn theme_command_spec(state: &AppState) -> CommandSpec {
@@ -273,38 +232,17 @@ fn theme_command_spec(state: &AppState) -> CommandSpec {
         .map(SuggestionEntry::value)
         .collect::<Vec<_>>();
 
-    CommandSpec {
-        name: CMD_THEME.to_string(),
-        tooltip: Some("Inspect and apply themes".to_string()),
-        subcommands: vec![
-            CommandSpec {
-                name: CMD_LIST.to_string(),
-                tooltip: Some("List available themes".to_string()),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: CMD_SHOW.to_string(),
-                tooltip: Some("Show a theme definition".to_string()),
-                args: vec![ArgNode {
-                    name: Some("name".to_string()),
-                    suggestions: theme_names.clone(),
-                    ..ArgNode::default()
-                }],
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: CMD_USE.to_string(),
-                tooltip: Some("Set active theme".to_string()),
-                args: vec![ArgNode {
-                    name: Some("name".to_string()),
-                    suggestions: theme_names,
-                    ..ArgNode::default()
-                }],
-                ..CommandSpec::default()
-            },
-        ],
-        ..CommandSpec::default()
-    }
+    CommandSpec::new(CMD_THEME)
+        .tooltip("Inspect and apply themes")
+        .subcommands([
+            CommandSpec::new(CMD_LIST).tooltip("List available themes"),
+            CommandSpec::new(CMD_SHOW)
+                .tooltip("Show a theme definition")
+                .arg(ArgNode::named("name").suggestions(theme_names.clone())),
+            CommandSpec::new(CMD_USE)
+                .tooltip("Set active theme")
+                .arg(ArgNode::named("name").suggestions(theme_names)),
+        ])
 }
 
 fn config_command_spec(state: &AppState) -> CommandSpec {
@@ -317,67 +255,38 @@ fn config_command_spec(state: &AppState) -> CommandSpec {
         .map(SuggestionEntry::value)
         .collect::<Vec<_>>();
 
-    let mut show_flags = BTreeMap::new();
-    show_flags.insert(
-        "--sources".to_string(),
-        FlagNode {
-            flag_only: true,
-            tooltip: Some("Include source layers".to_string()),
-            ..FlagNode::default()
-        },
-    );
-    show_flags.insert(
-        "--raw".to_string(),
-        FlagNode {
-            flag_only: true,
-            tooltip: Some("Show raw values".to_string()),
-            ..FlagNode::default()
-        },
-    );
+    let show_flags = BTreeMap::from([
+        (
+            "--sources".to_string(),
+            FlagNode::new().flag_only().tooltip("Include source layers"),
+        ),
+        (
+            "--raw".to_string(),
+            FlagNode::new().flag_only().tooltip("Show raw values"),
+        ),
+    ]);
 
-    let mut explain_flags = BTreeMap::new();
-    explain_flags.insert(
+    let explain_flags = BTreeMap::from([(
         "--show-secrets".to_string(),
-        FlagNode {
-            flag_only: true,
-            tooltip: Some("Reveal secret values".to_string()),
-            ..FlagNode::default()
-        },
-    );
+        FlagNode::new().flag_only().tooltip("Reveal secret values"),
+    )]);
 
-    let mut set_flags = BTreeMap::new();
-    set_flags.insert(
-        "--global".to_string(),
-        FlagNode {
-            flag_only: true,
-            ..FlagNode::default()
-        },
-    );
-    set_flags.insert(
-        "--profile".to_string(),
-        FlagNode {
-            suggestions: profile_suggestions,
-            ..FlagNode::default()
-        },
-    );
-    set_flags.insert(
-        "--profile-all".to_string(),
-        FlagNode {
-            flag_only: true,
-            ..FlagNode::default()
-        },
-    );
-    set_flags.insert(
-        "--terminal".to_string(),
-        FlagNode {
-            suggestions: vec![
+    let mut set_flags = BTreeMap::from([
+        ("--global".to_string(), FlagNode::new().flag_only()),
+        (
+            "--profile".to_string(),
+            FlagNode::new().suggestions(profile_suggestions),
+        ),
+        ("--profile-all".to_string(), FlagNode::new().flag_only()),
+        (
+            "--terminal".to_string(),
+            FlagNode::new().suggestions([
                 SuggestionEntry::value(CURRENT_TERMINAL_SENTINEL),
                 SuggestionEntry::value("cli"),
                 SuggestionEntry::value("repl"),
-            ],
-            ..FlagNode::default()
-        },
-    );
+            ]),
+        ),
+    ]);
     for flag in [
         "--session",
         "--config",
@@ -387,92 +296,40 @@ fn config_command_spec(state: &AppState) -> CommandSpec {
         "--yes",
         "--explain",
     ] {
-        set_flags.insert(
-            flag.to_string(),
-            FlagNode {
-                flag_only: true,
-                ..FlagNode::default()
-            },
-        );
+        set_flags.insert(flag.to_string(), FlagNode::new().flag_only());
     }
 
-    CommandSpec {
-        name: CMD_CONFIG.to_string(),
-        tooltip: Some("Inspect and edit runtime config".to_string()),
-        subcommands: vec![
-            CommandSpec {
-                name: CMD_SHOW.to_string(),
-                tooltip: Some("Show current config".to_string()),
-                flags: show_flags.clone(),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "get".to_string(),
-                tooltip: Some("Get one config key".to_string()),
-                args: vec![ArgNode {
-                    name: Some("key".to_string()),
-                    suggestions: key_suggestions.clone(),
-                    ..ArgNode::default()
-                }],
-                flags: show_flags,
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "explain".to_string(),
-                tooltip: Some("Explain one config key".to_string()),
-                args: vec![ArgNode {
-                    name: Some("key".to_string()),
-                    suggestions: key_suggestions,
-                    ..ArgNode::default()
-                }],
-                flags: explain_flags,
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "set".to_string(),
-                tooltip: Some("Set config value".to_string()),
-                flags: set_flags,
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "doctor".to_string(),
-                tooltip: Some("Show config diagnostics".to_string()),
-                ..CommandSpec::default()
-            },
-        ],
-        ..CommandSpec::default()
-    }
+    CommandSpec::new(CMD_CONFIG)
+        .tooltip("Inspect and edit runtime config")
+        .subcommands([
+            CommandSpec::new(CMD_SHOW)
+                .tooltip("Show current config")
+                .flags(show_flags.clone()),
+            CommandSpec::new("get")
+                .tooltip("Get one config key")
+                .arg(ArgNode::named("key").suggestions(key_suggestions.clone()))
+                .flags(show_flags),
+            CommandSpec::new("explain")
+                .tooltip("Explain one config key")
+                .arg(ArgNode::named("key").suggestions(key_suggestions))
+                .flags(explain_flags),
+            CommandSpec::new("set")
+                .tooltip("Set config value")
+                .flags(set_flags),
+            CommandSpec::new("doctor").tooltip("Show config diagnostics"),
+        ])
 }
 
 fn doctor_command_spec() -> CommandSpec {
-    CommandSpec {
-        name: CMD_DOCTOR.to_string(),
-        tooltip: Some("Run diagnostics checks".to_string()),
-        subcommands: vec![
-            CommandSpec {
-                name: "all".to_string(),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: CMD_CONFIG.to_string(),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: "last".to_string(),
-                tooltip: Some("Show the last REPL failure".to_string()),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: CMD_PLUGINS.to_string(),
-                ..CommandSpec::default()
-            },
-            CommandSpec {
-                name: CMD_THEME.to_string(),
-                ..CommandSpec::default()
-            },
-        ],
-        ..CommandSpec::default()
-    }
+    CommandSpec::new(CMD_DOCTOR)
+        .tooltip("Run diagnostics checks")
+        .subcommands([
+            CommandSpec::new("all"),
+            CommandSpec::new(CMD_CONFIG),
+            CommandSpec::new("last").tooltip("Show the last REPL failure"),
+            CommandSpec::new(CMD_PLUGINS),
+            CommandSpec::new(CMD_THEME),
+        ])
 }
 
 fn config_key_suggestions() -> Vec<SuggestionEntry> {
@@ -502,11 +359,7 @@ pub(crate) fn config_set_key_specs() -> Vec<osp_completion::ConfigKeySpec> {
                 Vec::new()
             };
 
-            osp_completion::ConfigKeySpec {
-                key: key.to_string(),
-                tooltip: None,
-                value_suggestions,
-            }
+            osp_completion::ConfigKeySpec::new(key).value_suggestions(value_suggestions)
         })
         .collect()
 }

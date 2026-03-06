@@ -29,6 +29,21 @@ impl SuggestionEntry {
             sort: None,
         }
     }
+
+    pub fn meta(mut self, meta: impl Into<String>) -> Self {
+        self.meta = Some(meta.into());
+        self
+    }
+
+    pub fn display(mut self, display: impl Into<String>) -> Self {
+        self.display = Some(display.into());
+        self
+    }
+
+    pub fn sort(mut self, sort: impl Into<String>) -> Self {
+        self.sort = Some(sort.into());
+        self
+    }
 }
 
 impl From<&str> for SuggestionEntry {
@@ -75,6 +90,35 @@ pub struct ArgNode {
     pub suggestions: Vec<SuggestionEntry>,
 }
 
+impl ArgNode {
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn multi(mut self) -> Self {
+        self.multi = true;
+        self
+    }
+
+    pub fn value_type(mut self, value_type: ValueType) -> Self {
+        self.value_type = Some(value_type);
+        self
+    }
+
+    pub fn suggestions(mut self, suggestions: impl IntoIterator<Item = SuggestionEntry>) -> Self {
+        self.suggestions = suggestions.into_iter().collect();
+        self
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FlagNode {
     pub tooltip: Option<String>,
@@ -91,6 +135,43 @@ pub struct FlagNode {
     pub os_versions: Option<OsVersions>,
     pub request_hints: Option<RequestHintSet>,
     pub flag_hints: Option<FlagHints>,
+}
+
+impl FlagNode {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn flag_only(mut self) -> Self {
+        self.flag_only = true;
+        self
+    }
+
+    pub fn multi(mut self) -> Self {
+        self.multi = true;
+        self
+    }
+
+    pub fn context_only(mut self, scope: ContextScope) -> Self {
+        self.context_only = true;
+        self.context_scope = scope;
+        self
+    }
+
+    pub fn value_type(mut self, value_type: ValueType) -> Self {
+        self.value_type = Some(value_type);
+        self
+    }
+
+    pub fn suggestions(mut self, suggestions: impl IntoIterator<Item = SuggestionEntry>) -> Self {
+        self.suggestions = suggestions.into_iter().collect();
+        self
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

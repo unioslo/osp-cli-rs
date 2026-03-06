@@ -7,7 +7,7 @@ use osp_core::plugin::{
 use osp_core::runtime::RuntimeHints;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter, Write as FmtWrite};
 use std::path::{Path, PathBuf};
@@ -763,42 +763,55 @@ impl PluginManager {
 }
 
 fn to_command_spec(command: &DescribeCommandV1) -> CommandSpec {
-    CommandSpec {
-        name: command.name.clone(),
-        tooltip: if command.about.trim().is_empty() {
-            None
-        } else {
-            Some(command.about.clone())
-        },
-        args: command.args.iter().map(to_arg_node).collect(),
-        flags: command
-            .flags
-            .iter()
-            .map(|(name, flag)| (name.clone(), to_flag_node(flag)))
-            .collect::<BTreeMap<_, _>>(),
-        subcommands: command.subcommands.iter().map(to_command_spec).collect(),
+    let spec = CommandSpec::new(&command.name)
+        .args(command.args.iter().map(to_arg_node))
+        .flags(
+            command
+                .flags
+                .iter()
+                .map(|(name, flag)| (name.clone(), to_flag_node(flag))),
+        )
+        .subcommands(command.subcommands.iter().map(to_command_spec));
+
+    if command.about.trim().is_empty() {
+        spec
+    } else {
+        spec.tooltip(&command.about)
     }
 }
 
 fn to_arg_node(arg: &DescribeArgV1) -> ArgNode {
-    ArgNode {
-        name: arg.name.clone(),
-        tooltip: arg.about.clone(),
-        multi: arg.multi,
-        value_type: arg.value_type.and_then(to_value_type),
-        suggestions: arg.suggestions.iter().map(to_suggestion_entry).collect(),
+    let mut node = ArgNode::default().suggestions(arg.suggestions.iter().map(to_suggestion_entry));
+    if let Some(name) = &arg.name {
+        node.name = Some(name.clone());
     }
+    if let Some(about) = &arg.about {
+        node = node.tooltip(about);
+    }
+    if arg.multi {
+        node = node.multi();
+    }
+    if let Some(value_type) = arg.value_type.and_then(to_value_type) {
+        node = node.value_type(value_type);
+    }
+    node
 }
 
 fn to_flag_node(flag: &DescribeFlagV1) -> FlagNode {
-    FlagNode {
-        tooltip: flag.about.clone(),
-        flag_only: flag.flag_only,
-        multi: flag.multi,
-        value_type: flag.value_type.and_then(to_value_type),
-        suggestions: flag.suggestions.iter().map(to_suggestion_entry).collect(),
-        ..FlagNode::default()
+    let mut node = FlagNode::new().suggestions(flag.suggestions.iter().map(to_suggestion_entry));
+    if let Some(about) = &flag.about {
+        node = node.tooltip(about);
     }
+    if flag.flag_only {
+        node = node.flag_only();
+    }
+    if flag.multi {
+        node = node.multi();
+    }
+    if let Some(value_type) = flag.value_type.and_then(to_value_type) {
+        node = node.value_type(value_type);
+    }
+    node
 }
 
 fn to_suggestion_entry(entry: &DescribeSuggestionV1) -> SuggestionEntry {
