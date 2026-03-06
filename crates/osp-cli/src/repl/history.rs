@@ -12,6 +12,8 @@ use crate::state::AppState;
 use crate::app::{CMD_HISTORY, CMD_LIST, DEFAULT_REPL_PROMPT, ReplCommandOutput, config_usize};
 use crate::rows::output::rows_to_output_result;
 
+const DEFAULT_REPL_HISTORY_EXCLUDES: [&str; 4] = ["exit", "quit", "help", "history list"];
+
 pub(crate) fn history_command_spec() -> CommandSpec {
     CommandSpec {
         name: CMD_HISTORY.to_string(),
@@ -58,7 +60,7 @@ pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
     let history_profile_scoped = config
         .get_bool("repl.history.profile_scoped")
         .unwrap_or(true);
-    let history_exclude = config_string_list(config, "repl.history.exclude");
+    let history_exclude = repl_history_exclude_patterns(config);
     let history_shell = state
         .repl
         .history_shell
@@ -162,5 +164,63 @@ fn config_string_list(config: &ResolvedConfig, key: &str) -> Vec<String> {
             .collect(),
         Some(ConfigValue::String(value)) => vec![value.clone()],
         _ => Vec::new(),
+    }
+}
+
+fn repl_history_exclude_patterns(config: &ResolvedConfig) -> Vec<String> {
+    let mut patterns = config_string_list(config, "repl.history.exclude");
+    for default in DEFAULT_REPL_HISTORY_EXCLUDES {
+        if patterns.iter().any(|pattern| pattern == default) {
+            continue;
+        }
+        patterns.push(default.to_string());
+    }
+    patterns
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repl_history_exclude_patterns;
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+
+    #[test]
+    fn history_exclude_patterns_include_repl_defaults() {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let resolved = resolver
+            .resolve(ResolveOptions::default())
+            .expect("config should resolve");
+
+        let patterns = repl_history_exclude_patterns(&resolved);
+
+        assert!(patterns.contains(&"exit".to_string()));
+        assert!(patterns.contains(&"quit".to_string()));
+        assert!(patterns.contains(&"help".to_string()));
+        assert!(patterns.contains(&"history list".to_string()));
+    }
+
+    #[test]
+    fn history_exclude_patterns_do_not_duplicate_defaults() {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut session = ConfigLayer::default();
+        session.set("repl.history.exclude", vec!["help".to_string()]);
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        resolver.set_session(session);
+        let resolved = resolver
+            .resolve(ResolveOptions::default())
+            .expect("config should resolve");
+
+        let patterns = repl_history_exclude_patterns(&resolved);
+        assert_eq!(
+            patterns
+                .iter()
+                .filter(|pattern| pattern.as_str() == "help")
+                .count(),
+            1
+        );
     }
 }

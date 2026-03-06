@@ -11,8 +11,6 @@ use reedline::{
 };
 use serde::{Deserialize, Serialize};
 
-const EXCLUDED_PREFIXES: [&str; 4] = ["exit", "quit", "help", "history list"];
-
 pub(crate) fn should_record_command(command: &str, exclude_patterns: &[String]) -> bool {
     !is_excluded_command(command, exclude_patterns)
 }
@@ -965,12 +963,9 @@ fn is_excluded_command(command: &str, exclude_patterns: &[String]) -> bool {
     if trimmed.contains("--help") {
         return true;
     }
-    EXCLUDED_PREFIXES
+    exclude_patterns
         .iter()
-        .any(|prefix| trimmed == *prefix || trimmed.starts_with(&format!("{prefix} ")))
-        || exclude_patterns
-            .iter()
-            .any(|pattern| matches_pattern(pattern, trimmed))
+        .any(|pattern| matches_pattern(pattern, trimmed))
 }
 
 fn matches_pattern(pattern: &str, command: &str) -> bool {
@@ -1032,8 +1027,14 @@ mod tests {
 
     #[test]
     fn excluded_commands_respect_prefixes_and_patterns() {
-        assert!(is_excluded_command("help", &[]));
-        assert!(is_excluded_command("history list", &[]));
+        let excludes = vec![
+            "help".to_string(),
+            "exit".to_string(),
+            "quit".to_string(),
+            "history list".to_string(),
+        ];
+        assert!(is_excluded_command("help", &excludes));
+        assert!(is_excluded_command("history list", &excludes));
         assert!(!is_excluded_command("history prune 10", &[]));
         assert!(is_excluded_command("ldap user --help", &[]));
         assert!(is_excluded_command(
