@@ -50,8 +50,8 @@ The target is a clearer split:
 
 ### Presentation
 
-- [ ] Move intro, overview, and prompt rendering under one module
-- [ ] Keep prompt templating pure and testable
+- [x] Move intro, overview, and prompt rendering under one module
+- [x] Keep prompt templating pure and testable
 - [ ] Add sequencing tests for intro/help/prompt behavior
 
 ### Completion
