@@ -1,4 +1,4 @@
-use miette::{Result, miette};
+use miette::Result;
 use osp_completion::{
     ArgNode, CommandSpec, CompletionNode, CompletionTree, CompletionTreeBuilder, ConfigKeySpec,
     ContextScope, FlagNode, SuggestionEntry,
@@ -13,6 +13,7 @@ use crate::app::{
     CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_LIST, CMD_PLUGINS, CMD_SHOW, CMD_THEME, CMD_USE,
     CURRENT_TERMINAL_SENTINEL,
 };
+use crate::pipeline::{is_cli_help_stage, validate_cli_dsl_stages};
 use crate::plugin_manager::CommandCatalogEntry;
 use crate::state::AppState;
 
@@ -496,7 +497,7 @@ pub(crate) fn maybe_render_dsl_help(state: &AppState, stages: &[String]) -> Opti
         let Ok(parsed) = parse_stage(raw) else {
             continue;
         };
-        if parsed.verb.eq_ignore_ascii_case("H") {
+        if is_cli_help_stage(&parsed) {
             return Some(render_dsl_help(state, &parsed.spec));
         }
     }
@@ -539,25 +540,7 @@ fn render_dsl_help(state: &AppState, spec: &str) -> String {
 }
 
 pub(crate) fn validate_dsl_stages(stages: &[String]) -> Result<()> {
-    let verbs = default_pipe_verbs();
-    for raw in stages {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let verb_token = trimmed.split_whitespace().next().unwrap_or_default();
-        if verb_token.len() == 1 && verb_token.chars().all(|ch| ch.is_ascii_alphabetic()) {
-            let verb = verb_token.to_ascii_uppercase();
-            if !verbs.contains_key(&verb) {
-                return Err(miette!(
-                    "Unknown DSL verb '{}' in pipe '{}'. Use `| H <verb>` for help.",
-                    verb,
-                    trimmed
-                ));
-            }
-        }
-    }
-    Ok(())
+    validate_cli_dsl_stages(stages)
 }
 
 #[cfg(test)]

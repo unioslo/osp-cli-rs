@@ -1,12 +1,13 @@
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::ResolvedConfig;
-use osp_dsl::parse_pipeline;
+use osp_dsl::{
+    model::{ParsedStage, ParsedStageKind},
+    parse::pipeline::parse_stage,
+    parse_pipeline,
+};
 
 const ALIAS_PREFIX: &str = "alias.";
 const MAX_ALIAS_EXPANSION_DEPTH: usize = 100;
-const VALID_SINGLE_LETTER_PIPE_VERBS: [&str; 10] =
-    ["F", "P", "S", "G", "A", "L", "Z", "C", "Y", "H"];
-const QUICK_PIPE_PREFIXES: [&str; 2] = ["K", "V"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCommandLine {
@@ -91,7 +92,7 @@ fn maybe_expand_alias(
 }
 
 fn finalize_parsed_command(tokens: Vec<String>, stages: Vec<String>) -> Result<ParsedCommandLine> {
-    validate_explicit_dsl_stages(&stages)?;
+    validate_cli_dsl_stages(&stages)?;
     Ok(ParsedCommandLine {
         tokens: merge_orch_os_tokens(tokens),
         stages,
@@ -127,34 +128,34 @@ fn merge_orch_os_tokens(tokens: Vec<String>) -> Vec<String> {
     merged
 }
 
-fn validate_explicit_dsl_stages(stages: &[String]) -> Result<()> {
+pub fn validate_cli_dsl_stages(stages: &[String]) -> Result<()> {
     for raw in stages {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
+        let parsed = parse_stage(raw)
+            .into_diagnostic()
+            .wrap_err("failed to parse DSL stage")?;
+        if parsed.verb.is_empty() {
             continue;
         }
-
-        let verb = trimmed.split_whitespace().next().unwrap_or_default();
-        if verb.len() != 1 || !verb.chars().all(|ch| ch.is_ascii_alphabetic()) {
-            continue;
-        }
-
-        let normalized = verb.to_ascii_uppercase();
-        if QUICK_PIPE_PREFIXES.contains(&normalized.as_str()) {
-            continue;
-        }
-        if VALID_SINGLE_LETTER_PIPE_VERBS.contains(&normalized.as_str()) {
+        if matches!(
+            parsed.kind,
+            ParsedStageKind::Explicit | ParsedStageKind::Quick
+        ) || is_cli_help_stage(&parsed)
+        {
             continue;
         }
 
         return Err(miette!(
             "Unknown DSL verb '{}' in pipe '{}'. Use `| H <verb>` for help.",
-            normalized,
-            trimmed
+            parsed.verb,
+            raw.trim()
         ));
     }
 
     Ok(())
+}
+
+pub fn is_cli_help_stage(parsed: &ParsedStage) -> bool {
+    matches!(parsed.kind, ParsedStageKind::UnknownExplicit) && parsed.verb.eq_ignore_ascii_case("H")
 }
 
 fn alias_key(candidate: &str) -> String {

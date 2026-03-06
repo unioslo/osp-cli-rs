@@ -118,3 +118,23 @@ fn parse_rejects_unknown_explicit_stage_from_alias_pipe() {
         "alias-expanded pipes should be validated the same as user pipes"
     );
 }
+
+#[test]
+fn parse_accepts_cli_help_stage_from_text() {
+    let config = make_config(&[]);
+    let parsed =
+        parse_command_text_with_aliases("status | H F", &config).expect("help pipe should parse");
+
+    assert_eq!(parsed.tokens, vec!["status"]);
+    assert_eq!(parsed.stages, vec!["H F"]);
+}
+
+#[test]
+fn parse_accepts_cli_help_stage_from_alias_pipe() {
+    let config = make_config(&[("alias.helpme", "status | H G")]);
+    let parsed = parse_command_text_with_aliases("helpme", &config)
+        .expect("alias-expanded help pipe should parse");
+
+    assert_eq!(parsed.tokens, vec!["status"]);
+    assert_eq!(parsed.stages, vec!["H G"]);
+}
