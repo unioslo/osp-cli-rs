@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{
     ChainedLoader, ConfigLayer, EnvSecretsLoader, EnvVarLoader, LoaderPipeline, ResolvedConfig,
@@ -57,211 +57,125 @@ pub struct RuntimeConfigPaths {
 
 impl RuntimeConfigPaths {
     pub fn discover() -> Self {
-        let config_file = std::env::var("OSP_CONFIG_FILE")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| {
-                default_config_root_dir().map(|mut path| {
-                    path.push("config.toml");
-                    path
-                })
-            });
-        let secrets_file = std::env::var("OSP_SECRETS_FILE")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| {
-                default_config_root_dir().map(|mut path| {
-                    path.push("secrets.toml");
-                    path
-                })
-            });
+        Self::from_env(&RuntimeEnvironment::capture())
+    }
 
+    fn from_env(env: &RuntimeEnvironment) -> Self {
         Self {
-            config_file,
-            secrets_file,
+            config_file: env
+                .path_override("OSP_CONFIG_FILE")
+                .or_else(|| env.config_path("config.toml")),
+            secrets_file: env
+                .path_override("OSP_SECRETS_FILE")
+                .or_else(|| env.config_path("secrets.toml")),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RuntimeDefaults {
-    pub profile_default: String,
-    pub theme_name: String,
-    pub theme_path: Vec<String>,
-    pub user_name: String,
-    pub domain: String,
-    pub repl_prompt: String,
-    pub repl_simple_prompt: bool,
-    pub repl_shell_indicator: String,
-    pub repl_intro: bool,
-    pub repl_history_path: String,
-    pub repl_history_max_entries: i64,
-    pub repl_history_enabled: bool,
-    pub repl_history_dedupe: bool,
-    pub repl_history_profile_scoped: bool,
-    pub session_cache_max_results: i64,
-    pub debug_level: i64,
-    pub log_file_enabled: bool,
-    pub log_file_path: String,
-    pub log_file_level: String,
-    pub ui_width: i64,
-    pub ui_margin: i64,
-    pub ui_indent: i64,
-    pub ui_messages_format: String,
-    pub ui_table_overflow: String,
-    pub ui_short_list_max: i64,
-    pub ui_medium_list_max: i64,
-    pub ui_grid_padding: i64,
-    pub ui_grid_columns: Option<i64>,
-    pub ui_column_weight: i64,
-    pub ui_mreg_stack_min_col_width: i64,
-    pub ui_mreg_stack_overflow_ratio: i64,
-    pub color_text: String,
-    pub color_text_muted: String,
-    pub color_key: String,
-    pub color_border: String,
-    pub color_prompt_text: String,
-    pub color_prompt_command: String,
-    pub color_table_header: String,
-    pub color_mreg_key: String,
-    pub color_value: String,
-    pub color_value_number: String,
-    pub color_value_bool_true: String,
-    pub color_value_bool_false: String,
-    pub color_value_null: String,
-    pub color_value_ipv4: String,
-    pub color_value_ipv6: String,
-    pub color_panel_border: String,
-    pub color_panel_title: String,
-    pub color_code: String,
-    pub color_json_key: String,
+    layer: ConfigLayer,
 }
 
 impl RuntimeDefaults {
     pub fn from_process_env(default_theme_name: &str, default_repl_prompt: &str) -> Self {
-        Self {
-            profile_default: DEFAULT_PROFILE_NAME.to_string(),
-            theme_name: default_theme_name.to_string(),
-            theme_path: default_theme_paths(),
-            user_name: default_user_name(),
-            domain: default_domain_name(),
-            repl_prompt: default_repl_prompt.to_string(),
-            repl_simple_prompt: false,
-            repl_shell_indicator: "[{shell}]".to_string(),
-            repl_intro: true,
-            repl_history_path: default_repl_history_path(),
-            repl_history_max_entries: DEFAULT_REPL_HISTORY_MAX_ENTRIES,
-            repl_history_enabled: DEFAULT_REPL_HISTORY_ENABLED,
-            repl_history_dedupe: DEFAULT_REPL_HISTORY_DEDUPE,
-            repl_history_profile_scoped: DEFAULT_REPL_HISTORY_PROFILE_SCOPED,
-            session_cache_max_results: DEFAULT_SESSION_CACHE_MAX_RESULTS,
-            debug_level: DEFAULT_DEBUG_LEVEL,
-            log_file_enabled: DEFAULT_LOG_FILE_ENABLED,
-            log_file_path: default_log_file_path(),
-            log_file_level: DEFAULT_LOG_FILE_LEVEL.to_string(),
-            ui_width: DEFAULT_UI_WIDTH,
-            ui_margin: DEFAULT_UI_MARGIN,
-            ui_indent: DEFAULT_UI_INDENT,
-            ui_messages_format: DEFAULT_UI_MESSAGES_FORMAT.to_string(),
-            ui_table_overflow: DEFAULT_UI_TABLE_OVERFLOW.to_string(),
-            ui_short_list_max: DEFAULT_UI_SHORT_LIST_MAX,
-            ui_medium_list_max: DEFAULT_UI_MEDIUM_LIST_MAX,
-            ui_grid_padding: DEFAULT_UI_GRID_PADDING,
-            ui_grid_columns: None,
-            ui_column_weight: DEFAULT_UI_COLUMN_WEIGHT,
-            ui_mreg_stack_min_col_width: DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH,
-            ui_mreg_stack_overflow_ratio: DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO,
-            color_text: String::new(),
-            color_text_muted: String::new(),
-            color_key: String::new(),
-            color_border: String::new(),
-            color_prompt_text: String::new(),
-            color_prompt_command: String::new(),
-            color_table_header: String::new(),
-            color_mreg_key: String::new(),
-            color_value: String::new(),
-            color_value_number: String::new(),
-            color_value_bool_true: String::new(),
-            color_value_bool_false: String::new(),
-            color_value_null: String::new(),
-            color_value_ipv4: String::new(),
-            color_value_ipv6: String::new(),
-            color_panel_border: String::new(),
-            color_panel_title: String::new(),
-            color_code: String::new(),
-            color_json_key: String::new(),
+        Self::from_env(
+            &RuntimeEnvironment::capture(),
+            default_theme_name,
+            default_repl_prompt,
+        )
+    }
+
+    fn from_env(
+        env: &RuntimeEnvironment,
+        default_theme_name: &str,
+        default_repl_prompt: &str,
+    ) -> Self {
+        let mut layer = ConfigLayer::default();
+
+        macro_rules! set_defaults {
+            ($($key:literal => $value:expr),* $(,)?) => {
+                $(layer.set($key, $value);)*
+            };
         }
+
+        set_defaults! {
+            "profile.default" => DEFAULT_PROFILE_NAME.to_string(),
+            "theme.name" => default_theme_name.to_string(),
+            "user.name" => env.user_name(),
+            "domain" => env.domain_name(),
+            "repl.prompt" => default_repl_prompt.to_string(),
+            "repl.simple_prompt" => false,
+            "repl.shell_indicator" => "[{shell}]".to_string(),
+            "repl.intro" => true,
+            "repl.history.path" => env.repl_history_path(),
+            "repl.history.max_entries" => DEFAULT_REPL_HISTORY_MAX_ENTRIES,
+            "repl.history.enabled" => DEFAULT_REPL_HISTORY_ENABLED,
+            "repl.history.dedupe" => DEFAULT_REPL_HISTORY_DEDUPE,
+            "repl.history.profile_scoped" => DEFAULT_REPL_HISTORY_PROFILE_SCOPED,
+            "session.cache.max_results" => DEFAULT_SESSION_CACHE_MAX_RESULTS,
+            "debug.level" => DEFAULT_DEBUG_LEVEL,
+            "log.file.enabled" => DEFAULT_LOG_FILE_ENABLED,
+            "log.file.path" => env.log_file_path(),
+            "log.file.level" => DEFAULT_LOG_FILE_LEVEL.to_string(),
+            "ui.width" => DEFAULT_UI_WIDTH,
+            "ui.margin" => DEFAULT_UI_MARGIN,
+            "ui.indent" => DEFAULT_UI_INDENT,
+            "ui.messages.format" => DEFAULT_UI_MESSAGES_FORMAT.to_string(),
+            "ui.table.overflow" => DEFAULT_UI_TABLE_OVERFLOW.to_string(),
+            "ui.short_list_max" => DEFAULT_UI_SHORT_LIST_MAX,
+            "ui.medium_list_max" => DEFAULT_UI_MEDIUM_LIST_MAX,
+            "ui.grid_padding" => DEFAULT_UI_GRID_PADDING,
+            "ui.column_weight" => DEFAULT_UI_COLUMN_WEIGHT,
+            "ui.mreg.stack_min_col_width" => DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH,
+            "ui.mreg.stack_overflow_ratio" => DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO,
+        }
+
+        let theme_path = env.theme_paths();
+        if !theme_path.is_empty() {
+            layer.set("theme.path", theme_path);
+        }
+
+        for key in [
+            "color.text",
+            "color.text.muted",
+            "color.key",
+            "color.border",
+            "color.prompt.text",
+            "color.prompt.command",
+            "color.table.header",
+            "color.mreg.key",
+            "color.value",
+            "color.value.number",
+            "color.value.bool_true",
+            "color.value.bool_false",
+            "color.value.null",
+            "color.value.ipv4",
+            "color.value.ipv6",
+            "color.panel.border",
+            "color.panel.title",
+            "color.code",
+            "color.json.key",
+        ] {
+            layer.set(key, String::new());
+        }
+
+        Self { layer }
+    }
+
+    pub fn get_string(&self, key: &str) -> Option<&str> {
+        self.layer
+            .entries()
+            .iter()
+            .find(|entry| entry.key == key && entry.scope == crate::Scope::global())
+            .and_then(|entry| match entry.value.reveal() {
+                crate::ConfigValue::String(value) => Some(value.as_str()),
+                _ => None,
+            })
     }
 
     pub fn to_layer(&self) -> ConfigLayer {
-        let mut layer = ConfigLayer::default();
-        layer.set("profile.default", self.profile_default.clone());
-        layer.set("theme.name", self.theme_name.clone());
-        if !self.theme_path.is_empty() {
-            layer.set("theme.path", self.theme_path.clone());
-        }
-        layer.set("user.name", self.user_name.clone());
-        layer.set("domain", self.domain.clone());
-        layer.set("repl.prompt", self.repl_prompt.clone());
-        layer.set("repl.simple_prompt", self.repl_simple_prompt);
-        layer.set("repl.shell_indicator", self.repl_shell_indicator.clone());
-        layer.set("repl.intro", self.repl_intro);
-        layer.set("repl.history.path", self.repl_history_path.clone());
-        layer.set("repl.history.max_entries", self.repl_history_max_entries);
-        layer.set("repl.history.enabled", self.repl_history_enabled);
-        layer.set("repl.history.dedupe", self.repl_history_dedupe);
-        layer.set(
-            "repl.history.profile_scoped",
-            self.repl_history_profile_scoped,
-        );
-        layer.set("session.cache.max_results", self.session_cache_max_results);
-        layer.set("debug.level", self.debug_level);
-        layer.set("log.file.enabled", self.log_file_enabled);
-        layer.set("log.file.path", self.log_file_path.clone());
-        layer.set("log.file.level", self.log_file_level.clone());
-        layer.set("ui.width", self.ui_width);
-        layer.set("ui.margin", self.ui_margin);
-        layer.set("ui.indent", self.ui_indent);
-        layer.set("ui.messages.format", self.ui_messages_format.clone());
-        layer.set("ui.table.overflow", self.ui_table_overflow.clone());
-        layer.set("ui.short_list_max", self.ui_short_list_max);
-        layer.set("ui.medium_list_max", self.ui_medium_list_max);
-        layer.set("ui.grid_padding", self.ui_grid_padding);
-        if let Some(value) = self.ui_grid_columns {
-            layer.set("ui.grid_columns", value);
-        }
-        layer.set("ui.column_weight", self.ui_column_weight);
-        layer.set(
-            "ui.mreg.stack_min_col_width",
-            self.ui_mreg_stack_min_col_width,
-        );
-        layer.set(
-            "ui.mreg.stack_overflow_ratio",
-            self.ui_mreg_stack_overflow_ratio,
-        );
-        layer.set("color.text", self.color_text.clone());
-        layer.set("color.text.muted", self.color_text_muted.clone());
-        layer.set("color.key", self.color_key.clone());
-        layer.set("color.border", self.color_border.clone());
-        layer.set("color.prompt.text", self.color_prompt_text.clone());
-        layer.set("color.prompt.command", self.color_prompt_command.clone());
-        layer.set("color.table.header", self.color_table_header.clone());
-        layer.set("color.mreg.key", self.color_mreg_key.clone());
-        layer.set("color.value", self.color_value.clone());
-        layer.set("color.value.number", self.color_value_number.clone());
-        layer.set("color.value.bool_true", self.color_value_bool_true.clone());
-        layer.set(
-            "color.value.bool_false",
-            self.color_value_bool_false.clone(),
-        );
-        layer.set("color.value.null", self.color_value_null.clone());
-        layer.set("color.value.ipv4", self.color_value_ipv4.clone());
-        layer.set("color.value.ipv6", self.color_value_ipv6.clone());
-        layer.set("color.panel.border", self.color_panel_border.clone());
-        layer.set("color.panel.title", self.color_panel_title.clone());
-        layer.set("color.code", self.color_code.clone());
-        layer.set("color.json.key", self.color_json_key.clone());
-        layer
+        self.layer.clone()
     }
 }
 
@@ -297,94 +211,264 @@ pub fn build_runtime_pipeline(
 }
 
 pub fn default_config_root_dir() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("XDG_CONFIG_HOME") {
-        let mut root = PathBuf::from(path);
-        root.push("osp");
-        return Some(root);
-    }
-
-    let home = std::env::var("HOME").ok()?;
-    let mut root = PathBuf::from(home);
-    root.push(".config");
-    root.push("osp");
-    Some(root)
-}
-
-fn default_theme_paths() -> Vec<String> {
-    default_config_root_dir()
-        .map(|mut root| {
-            root.push("themes");
-            root.to_string_lossy().to_string()
-        })
-        .into_iter()
-        .collect()
-}
-
-fn default_user_name() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "anonymous".to_string())
+    RuntimeEnvironment::capture().config_root_dir()
 }
 
 pub fn default_cache_root_dir() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("XDG_CACHE_HOME") {
-        let mut root = PathBuf::from(path);
-        root.push("osp");
-        return Some(root);
-    }
-
-    let home = std::env::var("HOME").ok()?;
-    let mut root = PathBuf::from(home);
-    root.push(".cache");
-    root.push("osp");
-    Some(root)
-}
-
-fn default_domain_name() -> String {
-    let host = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "localhost".to_string());
-    host.split_once('.')
-        .map(|(_, domain)| domain.to_string())
-        .filter(|domain| !domain.trim().is_empty())
-        .unwrap_or_else(|| "local".to_string())
-}
-
-fn default_repl_history_path() -> String {
-    let mut path = default_state_root_dir().unwrap_or_else(|| {
-        let mut fallback = std::env::temp_dir();
-        fallback.push("osp");
-        fallback
-    });
-    path.push("history");
-    path.push("${user.name}@${context}.history");
-    path.display().to_string()
-}
-
-fn default_log_file_path() -> String {
-    let mut path = default_state_root_dir().unwrap_or_else(|| {
-        let mut fallback = std::env::temp_dir();
-        fallback.push("osp");
-        fallback
-    });
-    path.push("osp.log");
-    path.display().to_string()
+    RuntimeEnvironment::capture().cache_root_dir()
 }
 
 pub fn default_state_root_dir() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("XDG_STATE_HOME") {
-        let mut root = PathBuf::from(path);
-        root.push("osp");
-        return Some(root);
+    RuntimeEnvironment::capture().state_root_dir()
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuntimeEnvironment {
+    vars: BTreeMap<String, String>,
+}
+
+impl RuntimeEnvironment {
+    fn capture() -> Self {
+        Self::from_pairs(std::env::vars())
     }
 
-    let home = std::env::var("HOME").ok()?;
-    let mut root = PathBuf::from(home);
-    root.push(".local");
-    root.push("state");
-    root.push("osp");
-    Some(root)
+    fn from_pairs<I, K, V>(vars: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        Self {
+            vars: vars
+                .into_iter()
+                .map(|(key, value)| (key.as_ref().to_string(), value.as_ref().to_string()))
+                .collect(),
+        }
+    }
+
+    fn config_root_dir(&self) -> Option<PathBuf> {
+        self.xdg_root_dir("XDG_CONFIG_HOME", &[".config"])
+    }
+
+    fn cache_root_dir(&self) -> Option<PathBuf> {
+        self.xdg_root_dir("XDG_CACHE_HOME", &[".cache"])
+    }
+
+    fn state_root_dir(&self) -> Option<PathBuf> {
+        self.xdg_root_dir("XDG_STATE_HOME", &[".local", "state"])
+    }
+
+    fn config_path(&self, leaf: &str) -> Option<PathBuf> {
+        self.config_root_dir().map(|root| join_path(root, &[leaf]))
+    }
+
+    fn theme_paths(&self) -> Vec<String> {
+        self.config_root_dir()
+            .map(|root| join_path(root, &["themes"]).to_string_lossy().to_string())
+            .into_iter()
+            .collect()
+    }
+
+    fn user_name(&self) -> String {
+        self.get_nonempty("USER")
+            .or_else(|| self.get_nonempty("USERNAME"))
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "anonymous".to_string())
+    }
+
+    fn domain_name(&self) -> String {
+        self.get_nonempty("HOSTNAME")
+            .or_else(|| self.get_nonempty("COMPUTERNAME"))
+            .unwrap_or("localhost")
+            .split_once('.')
+            .map(|(_, domain)| domain.to_string())
+            .filter(|domain| !domain.trim().is_empty())
+            .unwrap_or_else(|| "local".to_string())
+    }
+
+    fn repl_history_path(&self) -> String {
+        join_path(
+            self.state_root_dir_or_temp(),
+            &["history", "${user.name}@${context}.history"],
+        )
+        .display()
+        .to_string()
+    }
+
+    fn log_file_path(&self) -> String {
+        join_path(self.state_root_dir_or_temp(), &["osp.log"])
+            .display()
+            .to_string()
+    }
+
+    fn path_override(&self, key: &str) -> Option<PathBuf> {
+        self.get_nonempty(key).map(PathBuf::from)
+    }
+
+    fn state_root_dir_or_temp(&self) -> PathBuf {
+        self.state_root_dir().unwrap_or_else(|| {
+            let mut path = std::env::temp_dir();
+            path.push("osp");
+            path
+        })
+    }
+
+    fn xdg_root_dir(&self, xdg_var: &str, home_suffix: &[&str]) -> Option<PathBuf> {
+        if let Some(path) = self.get_nonempty(xdg_var) {
+            return Some(join_path(PathBuf::from(path), &["osp"]));
+        }
+
+        let home = self.get_nonempty("HOME")?;
+        Some(join_path(PathBuf::from(home), home_suffix).join("osp"))
+    }
+
+    fn get_nonempty(&self, key: &str) -> Option<&str> {
+        self.vars
+            .get(key)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+}
+
+fn join_path(mut root: PathBuf, segments: &[&str]) -> PathBuf {
+    for segment in segments {
+        root.push(segment);
+    }
+    root
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{DEFAULT_PROFILE_NAME, RuntimeConfigPaths, RuntimeDefaults, RuntimeEnvironment};
+    use crate::{ConfigLayer, ConfigValue, Scope};
+
+    fn find_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {
+        layer
+            .entries()
+            .iter()
+            .find(|entry| entry.key == key && entry.scope == Scope::global())
+            .map(|entry| &entry.value)
+    }
+
+    #[test]
+    fn runtime_defaults_seed_expected_keys() {
+        let defaults =
+            RuntimeDefaults::from_env(&RuntimeEnvironment::default(), "nord", "osp> ").to_layer();
+
+        assert_eq!(
+            find_value(&defaults, "profile.default"),
+            Some(&ConfigValue::String(DEFAULT_PROFILE_NAME.to_string()))
+        );
+        assert_eq!(
+            find_value(&defaults, "theme.name"),
+            Some(&ConfigValue::String("nord".to_string()))
+        );
+        assert_eq!(
+            find_value(&defaults, "repl.prompt"),
+            Some(&ConfigValue::String("osp> ".to_string()))
+        );
+        assert_eq!(
+            find_value(&defaults, "repl.history.max_entries"),
+            Some(&ConfigValue::Integer(
+                super::DEFAULT_REPL_HISTORY_MAX_ENTRIES
+            ))
+        );
+        assert_eq!(
+            find_value(&defaults, "ui.width"),
+            Some(&ConfigValue::Integer(super::DEFAULT_UI_WIDTH))
+        );
+        assert_eq!(
+            find_value(&defaults, "color.prompt.text"),
+            Some(&ConfigValue::String(String::new()))
+        );
+    }
+
+    #[test]
+    fn runtime_defaults_history_path_keeps_placeholders() {
+        let defaults =
+            RuntimeDefaults::from_env(&RuntimeEnvironment::default(), "nord", "osp> ").to_layer();
+        let path = match find_value(&defaults, "repl.history.path") {
+            Some(ConfigValue::String(value)) => value.as_str(),
+            other => panic!("unexpected history path value: {other:?}"),
+        };
+
+        assert!(path.contains("${user.name}@${context}.history"));
+    }
+
+    #[test]
+    fn runtime_config_paths_prefer_explicit_file_overrides() {
+        let env = RuntimeEnvironment::from_pairs([
+            ("OSP_CONFIG_FILE", "/tmp/custom-config.toml"),
+            ("OSP_SECRETS_FILE", "/tmp/custom-secrets.toml"),
+            ("XDG_CONFIG_HOME", "/ignored"),
+        ]);
+
+        let paths = RuntimeConfigPaths::from_env(&env);
+
+        assert_eq!(
+            paths.config_file,
+            Some(PathBuf::from("/tmp/custom-config.toml"))
+        );
+        assert_eq!(
+            paths.secrets_file,
+            Some(PathBuf::from("/tmp/custom-secrets.toml"))
+        );
+    }
+
+    #[test]
+    fn runtime_config_paths_fall_back_to_xdg_root() {
+        let env = RuntimeEnvironment::from_pairs([("XDG_CONFIG_HOME", "/var/tmp/xdg-config")]);
+
+        let paths = RuntimeConfigPaths::from_env(&env);
+
+        assert_eq!(
+            paths.config_file,
+            Some(PathBuf::from("/var/tmp/xdg-config/osp/config.toml"))
+        );
+        assert_eq!(
+            paths.secrets_file,
+            Some(PathBuf::from("/var/tmp/xdg-config/osp/secrets.toml"))
+        );
+    }
+
+    #[test]
+    fn runtime_environment_uses_home_when_xdg_is_missing() {
+        let env = RuntimeEnvironment::from_pairs([("HOME", "/home/tester")]);
+
+        assert_eq!(
+            env.config_root_dir(),
+            Some(PathBuf::from("/home/tester/.config/osp"))
+        );
+        assert_eq!(
+            env.cache_root_dir(),
+            Some(PathBuf::from("/home/tester/.cache/osp"))
+        );
+        assert_eq!(
+            env.state_root_dir(),
+            Some(PathBuf::from("/home/tester/.local/state/osp"))
+        );
+    }
+
+    #[test]
+    fn runtime_environment_state_artifacts_fall_back_to_temp_root() {
+        let env = RuntimeEnvironment::default();
+        let mut expected_root = std::env::temp_dir();
+        expected_root.push("osp");
+
+        assert_eq!(
+            env.repl_history_path(),
+            expected_root
+                .join("history")
+                .join("${user.name}@${context}.history")
+                .display()
+                .to_string()
+        );
+        assert_eq!(
+            env.log_file_path(),
+            expected_root.join("osp.log").display().to_string()
+        );
+    }
 }

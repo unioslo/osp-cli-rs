@@ -54,7 +54,11 @@ pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
         .unwrap_or_else(|| {
             let defaults =
                 RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
-            PathBuf::from(defaults.repl_history_path)
+            PathBuf::from(
+                defaults
+                    .get_string("repl.history.path")
+                    .unwrap_or("${user.name}@${context}.history"),
+            )
         });
     let history_dedupe = config.get_bool("repl.history.dedupe").unwrap_or(true);
     let history_profile_scoped = config

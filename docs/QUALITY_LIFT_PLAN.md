@@ -103,7 +103,7 @@ Checklist:
 - [ ] Preserve one-pass profile selection followed by one-pass resolution.
 - [ ] Remove legacy `context` compatibility from the resolved core model when
       callers no longer depend on it.
-- [ ] Review `RuntimeDefaults` and replace hand-maintained boilerplate with a
+- [x] Review `RuntimeDefaults` and replace hand-maintained boilerplate with a
       simpler typed construction path where practical.
 - [ ] Keep secrets handling strict and explicit.
 - [ ] Keep unknown-key rejection strict except for approved extension
