@@ -1,6 +1,6 @@
 use miette::{Result, miette};
 use osp_dsl::apply_output_pipeline;
-use osp_repl::{ReplLineResult, ReplReloadKind, SharedHistory};
+use osp_repl::{ReplLineResult, ReplReloadKind, SharedHistory, expand_history};
 use osp_ui::messages::adjust_verbosity;
 use osp_ui::render_output;
 use std::borrow::Cow;
@@ -23,6 +23,22 @@ use crate::state::AppState;
 
 use super::{completion, help, presentation, surface};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReplBuiltin {
+    Help,
+    Exit,
+    Bang(BangCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BangCommand {
+    Last,
+    Relative(usize),
+    Absolute(usize),
+    Prefix(String),
+    Contains(String),
+}
+
 pub(crate) fn execute_repl_plugin_line(
     state: &mut AppState,
     history: &SharedHistory,
@@ -31,9 +47,11 @@ pub(crate) fn execute_repl_plugin_line(
     match execute_repl_plugin_line_inner(state, history, line) {
         Ok(result) => Ok(result),
         Err(err) => {
-            let summary = err.to_string();
-            let detail = format!("{err:#}");
-            state.record_repl_failure(line, summary, detail);
+            if !is_repl_bang_request(line) {
+                let summary = err.to_string();
+                let detail = format!("{err:#}");
+                state.record_repl_failure(line, summary, detail);
+            }
             Err(err)
         }
     }
@@ -44,6 +62,11 @@ fn execute_repl_plugin_line_inner(
     history: &SharedHistory,
     line: &str,
 ) -> Result<ReplLineResult> {
+    let raw = line.trim();
+    if let Some(result) = maybe_execute_repl_builtin(state, history, raw)? {
+        return Ok(result);
+    }
+
     let parsed = crate::pipeline::parse_command_text_with_aliases(line, state.config.resolved())?;
     if parsed.tokens.is_empty() {
         return Ok(ReplLineResult::Continue(String::new()));
@@ -182,6 +205,176 @@ fn execute_repl_plugin_line_inner(
     } else {
         Ok(ReplLineResult::Continue(rendered))
     }
+}
+
+fn maybe_execute_repl_builtin(
+    state: &mut AppState,
+    history: &SharedHistory,
+    raw: &str,
+) -> Result<Option<ReplLineResult>> {
+    let Some(builtin) = parse_repl_builtin(raw)? else {
+        return Ok(None);
+    };
+
+    match builtin {
+        ReplBuiltin::Help => Ok(Some(ReplLineResult::Continue(repl_help_for_scope(
+            state,
+            ReplDispatchOverrides {
+                message_verbosity: state.ui.message_verbosity,
+                debug_verbosity: state.ui.debug_verbosity,
+            },
+        )?))),
+        ReplBuiltin::Exit => {
+            if state.session.scope.is_root() {
+                state.sync_history_shell_context();
+                Ok(Some(ReplLineResult::Exit(0)))
+            } else if let Some(message) = leave_repl_shell(state) {
+                state.sync_history_shell_context();
+                Ok(Some(ReplLineResult::Continue(message)))
+            } else {
+                Ok(Some(ReplLineResult::Exit(0)))
+            }
+        }
+        ReplBuiltin::Bang(command) => execute_bang_command(state, history, raw, command).map(Some),
+    }
+}
+
+fn parse_repl_builtin(raw: &str) -> Result<Option<ReplBuiltin>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    if raw == CMD_HELP || raw == "--help" || raw == "-h" {
+        return Ok(Some(ReplBuiltin::Help));
+    }
+    if raw == "exit" || raw == "quit" {
+        return Ok(Some(ReplBuiltin::Exit));
+    }
+    if let Some(command) = parse_bang_command(raw)? {
+        return Ok(Some(ReplBuiltin::Bang(command)));
+    }
+    Ok(None)
+}
+
+fn parse_bang_command(raw: &str) -> Result<Option<BangCommand>> {
+    let raw = raw.trim();
+    if !raw.starts_with('!') {
+        return Ok(None);
+    }
+    if raw == "!" {
+        return Ok(Some(BangCommand::Prefix(String::new())));
+    }
+    if raw == "!!" {
+        return Ok(Some(BangCommand::Last));
+    }
+    if let Some(rest) = raw.strip_prefix("!?") {
+        let term = rest.trim();
+        if term.is_empty() {
+            return Err(miette!("`!?` expects search text"));
+        }
+        return Ok(Some(BangCommand::Contains(term.to_string())));
+    }
+    if let Some(rest) = raw.strip_prefix("!-") {
+        let offset = rest
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| miette!("`!-N` expects a positive integer"))?;
+        if offset == 0 {
+            return Err(miette!("`!-N` expects N >= 1"));
+        }
+        return Ok(Some(BangCommand::Relative(offset)));
+    }
+    let rest = raw.trim_start_matches('!').trim();
+    if rest.is_empty() {
+        return Ok(Some(BangCommand::Prefix(String::new())));
+    }
+    if rest.chars().all(|ch| ch.is_ascii_digit()) {
+        let id = rest
+            .parse::<usize>()
+            .map_err(|_| miette!("`!N` expects a positive integer"))?;
+        if id == 0 {
+            return Err(miette!("`!N` expects N >= 1"));
+        }
+        return Ok(Some(BangCommand::Absolute(id)));
+    }
+    Ok(Some(BangCommand::Prefix(rest.to_string())))
+}
+
+fn execute_bang_command(
+    state: &mut AppState,
+    history: &SharedHistory,
+    raw: &str,
+    command: BangCommand,
+) -> Result<ReplLineResult> {
+    let scope = current_history_scope(state);
+    let recent = history.recent_commands_for(scope.as_deref());
+
+    let expanded = match command {
+        BangCommand::Last => expand_history("!!", &recent, scope.as_deref(), true),
+        BangCommand::Relative(offset) => {
+            expand_history(&format!("!-{offset}"), &recent, scope.as_deref(), true)
+        }
+        BangCommand::Absolute(id) => {
+            expand_history(&format!("!{id}"), &recent, scope.as_deref(), true)
+        }
+        BangCommand::Prefix(prefix) => {
+            if prefix.is_empty() {
+                return Ok(ReplLineResult::Continue(render_bang_help()));
+            }
+            expand_history(&format!("!{prefix}"), &recent, scope.as_deref(), true)
+        }
+        BangCommand::Contains(term) => recent
+            .iter()
+            .rev()
+            .filter_map(|full| {
+                let visible = strip_history_scope(full, scope.as_deref());
+                visible.contains(&term).then_some(visible)
+            })
+            .next(),
+    };
+
+    let Some(expanded) = expanded else {
+        return Ok(ReplLineResult::Continue(format!(
+            "No history match for: {raw}\n"
+        )));
+    };
+
+    Ok(ReplLineResult::ReplaceInput(expanded))
+}
+
+fn current_history_scope(state: &AppState) -> Option<String> {
+    let prefix = state.session.scope.history_prefix();
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix)
+    }
+}
+
+fn strip_history_scope(command: &str, scope: Option<&str>) -> String {
+    let trimmed = command.trim();
+    match scope {
+        Some(prefix) => trimmed
+            .strip_prefix(prefix)
+            .map(|rest| rest.trim_start().to_string())
+            .unwrap_or_else(|| trimmed.to_string()),
+        None => trimmed.to_string(),
+    }
+}
+
+fn render_bang_help() -> String {
+    let mut out = String::new();
+    out.push_str("Bang history shortcuts:\n");
+    out.push_str("  !!       last visible command\n");
+    out.push_str("  !-N      Nth previous visible command\n");
+    out.push_str("  !N       visible history entry by id\n");
+    out.push_str("  !prefix  latest visible command starting with prefix\n");
+    out.push_str("  !?text   latest visible command containing text\n");
+    out
+}
+
+fn is_repl_bang_request(raw: &str) -> bool {
+    raw.trim_start().starts_with('!')
 }
 
 fn theme_or_palette_change_requires_intro(command: &Commands) -> bool {

@@ -1939,6 +1939,107 @@ JSON
     }
 
     #[cfg(unix)]
+    #[test]
+    fn repl_bang_expands_last_visible_command_unit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = make_temp_dir("osp-cli-repl-bang-plugin");
+        let plugin_path = dir.join("osp-cache");
+        std::fs::write(
+            &plugin_path,
+            r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","subcommands":[]}]}
+JSON
+  exit 0
+fi
+printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"error":null,"meta":{"format_hint":"table","columns":["message","arg"]}}\n' "$2"
+"#,
+        )
+        .expect("plugin script should be written");
+        let mut perms = std::fs::metadata(&plugin_path)
+            .expect("metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+
+        let mut state = make_test_state(vec![dir.clone()]);
+        let history = make_test_history(&mut state);
+
+        repl::execute_repl_plugin_line(&mut state, &history, "cache first")
+            .expect("seed command should succeed");
+        history
+            .save_command_line("cache first")
+            .expect("history seed should save");
+        let cache_size_before = state.repl_cache_size();
+        let expanded = repl::execute_repl_plugin_line(&mut state, &history, "!!")
+            .expect("bang expansion should succeed");
+        match expanded {
+            osp_repl::ReplLineResult::ReplaceInput(text) => {
+                assert_eq!(text, "cache first");
+            }
+            other => panic!("unexpected repl result: {other:?}"),
+        }
+        assert_eq!(state.repl_cache_size(), cache_size_before);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repl_bang_contains_search_expands_matching_command_unit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = make_temp_dir("osp-cli-repl-bang-contains-plugin");
+        let plugin_path = dir.join("osp-cache");
+        std::fs::write(
+            &plugin_path,
+            r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","subcommands":[]}]}
+JSON
+  exit 0
+fi
+printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"error":null,"meta":{"format_hint":"table","columns":["message","arg"]}}\n' "$2"
+"#,
+        )
+        .expect("plugin script should be written");
+        let mut perms = std::fs::metadata(&plugin_path)
+            .expect("metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+
+        let mut state = make_test_state(vec![dir.clone()]);
+        let history = make_test_history(&mut state);
+
+        repl::execute_repl_plugin_line(&mut state, &history, "cache alpha")
+            .expect("first seed command should succeed");
+        history
+            .save_command_line("cache alpha")
+            .expect("history seed should save");
+        repl::execute_repl_plugin_line(&mut state, &history, "cache beta")
+            .expect("second seed command should succeed");
+        history
+            .save_command_line("cache beta")
+            .expect("history seed should save");
+        let cache_size_before = state.repl_cache_size();
+        let expanded = repl::execute_repl_plugin_line(&mut state, &history, "!?alpha")
+            .expect("contains bang expansion should succeed");
+        match expanded {
+            osp_repl::ReplLineResult::ReplaceInput(text) => {
+                assert_eq!(text, "cache alpha");
+            }
+            other => panic!("unexpected repl result: {other:?}"),
+        }
+        assert_eq!(state.repl_cache_size(), cache_size_before);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
     fn make_test_history(state: &mut AppState) -> SharedHistory {
         let history_dir = make_temp_dir("osp-cli-test-history");
         let history_path = history_dir.join("history.jsonl");

@@ -43,6 +43,7 @@ pub enum ReplReloadKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplLineResult {
     Continue(String),
+    ReplaceInput(String),
     Exit(i32),
     Restart {
         output: String,
@@ -494,6 +495,7 @@ impl EditMode for AutoCompleteEmacs {
 enum SubmissionResult {
     Noop,
     Print(String),
+    ReplaceInput(String),
     Exit(i32),
     Restart {
         output: String,
@@ -502,54 +504,11 @@ enum SubmissionResult {
 }
 
 struct SubmissionContext<'a, F> {
-    command_history: &'a mut Vec<String>,
-    history_limit: usize,
-    history_exclude_patterns: &'a [String],
-    shell_context: Option<&'a HistoryShellContext>,
     history_store: &'a SharedHistory,
     execute: &'a mut F,
 }
 
-impl<'a, F> SubmissionContext<'a, F>
-where
-    F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
-{
-    fn history_enabled(&self) -> bool {
-        self.history_limit > 0
-    }
-
-    fn shell_prefix(&self) -> Option<String> {
-        self.shell_context.and_then(HistoryShellContext::prefix)
-    }
-
-    fn record_history(&mut self, command_line: &str, shell_prefix: Option<&str>) {
-        if !self.history_enabled()
-            || !history::should_record_command(command_line, self.history_exclude_patterns)
-        {
-            return;
-        }
-
-        let full_command = history::apply_shell_prefix(command_line, shell_prefix);
-        if full_command.is_empty() {
-            return;
-        }
-
-        self.command_history.push(full_command);
-        if self.history_limit > 0 && self.command_history.len() > self.history_limit {
-            let overflow = self.command_history.len() - self.history_limit;
-            self.command_history.drain(0..overflow);
-        }
-    }
-
-    fn refresh_history_view_if_needed(&mut self, command_line: &str) {
-        if self.history_enabled() && command_line.trim().starts_with("history") {
-            let shell_prefix = self.shell_prefix();
-            *self.command_history = self
-                .history_store
-                .recent_commands_for(shell_prefix.as_deref());
-        }
-    }
-}
+impl<'a, F> SubmissionContext<'a, F> where F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult> {}
 
 fn process_submission<F>(raw: &str, ctx: &mut SubmissionContext<'_, F>) -> Result<SubmissionResult>
 where
@@ -559,19 +518,9 @@ where
     if raw.is_empty() {
         return Ok(SubmissionResult::Noop);
     }
-    if raw.starts_with('!') && !ctx.history_enabled() {
-        return Ok(SubmissionResult::Noop);
-    }
-
-    let shell_prefix = ctx.shell_prefix();
-    let expanded = expand_history(raw, ctx.command_history, shell_prefix.as_deref(), true);
-    let Some(command_line) = expanded else {
-        eprintln!("No history match for: {raw}");
-        return Ok(SubmissionResult::Noop);
-    };
-
-    let result = match (ctx.execute)(&command_line, ctx.history_store) {
+    let result = match (ctx.execute)(raw, ctx.history_store) {
         Ok(ReplLineResult::Continue(output)) => SubmissionResult::Print(output),
+        Ok(ReplLineResult::ReplaceInput(buffer)) => SubmissionResult::ReplaceInput(buffer),
         Ok(ReplLineResult::Exit(code)) => SubmissionResult::Exit(code),
         Ok(ReplLineResult::Restart { output, reload }) => {
             SubmissionResult::Restart { output, reload }
@@ -581,9 +530,6 @@ where
             SubmissionResult::Noop
         }
     };
-
-    ctx.record_history(&command_line, shell_prefix.as_deref());
-    ctx.refresh_history_view_if_needed(&command_line);
     Ok(result)
 }
 
@@ -636,22 +582,9 @@ where
     if let Some(highlighter) = highlighter {
         editor = editor.with_highlighter(Box::new(highlighter));
     }
-    let history_limit = if history_config.enabled && history_config.max_entries > 0 {
-        history_config.max_entries
-    } else {
-        0
-    };
-    let history_exclude_patterns = history_config.exclude_patterns.clone();
-    let shell_context = history_config.shell_context.clone();
     let history_store = SharedHistory::new(history_config)?;
-    let shell_prefix = shell_context.prefix();
-    let mut command_history = history_store.recent_commands_for(shell_prefix.as_deref());
     editor = editor.with_history(Box::new(history_store.clone()));
     let mut submission = SubmissionContext {
-        command_history: &mut command_history,
-        history_limit,
-        history_exclude_patterns: &history_exclude_patterns,
-        shell_context: Some(&shell_context),
         history_store: &history_store,
         execute: &mut execute,
     };
@@ -683,6 +616,13 @@ falling back to basic input mode."
             Signal::Success(line) => match process_submission(&line, &mut submission)? {
                 SubmissionResult::Noop => continue,
                 SubmissionResult::Print(output) => print!("{output}"),
+                SubmissionResult::ReplaceInput(buffer) => {
+                    editor.run_edit_commands(&[
+                        EditCommand::Clear,
+                        EditCommand::InsertString(buffer),
+                    ]);
+                    continue;
+                }
                 SubmissionResult::Exit(code) => return Ok(ReplRunResult::Exit(code)),
                 SubmissionResult::Restart { output, reload } => {
                     return Ok(ReplRunResult::Restart { output, reload });
@@ -722,6 +662,10 @@ where
         match process_submission(&line, submission)? {
             SubmissionResult::Noop => continue,
             SubmissionResult::Print(output) => print!("{output}"),
+            SubmissionResult::ReplaceInput(buffer) => {
+                println!("{buffer}");
+                continue;
+            }
             SubmissionResult::Exit(_) => break,
             SubmissionResult::Restart { output, .. } => {
                 print!("{output}");
@@ -1712,31 +1656,32 @@ mod tests {
     #[test]
     fn submission_delegates_help_and_exit_to_host() {
         let history = disabled_history();
-        let mut command_history = Vec::new();
         let mut seen = Vec::new();
         let mut execute = |line: &str, _: &SharedHistory| {
             seen.push(line.to_string());
             Ok(match line {
                 "help" => ReplLineResult::Continue("host help".to_string()),
+                "!!" => ReplLineResult::ReplaceInput("ldap user oistes".to_string()),
                 "exit" => ReplLineResult::Exit(7),
                 other => ReplLineResult::Continue(other.to_string()),
             })
         };
         let mut submission = SubmissionContext {
-            command_history: &mut command_history,
-            history_limit: 0,
-            history_exclude_patterns: &[],
-            shell_context: None,
             history_store: &history,
             execute: &mut execute,
         };
 
         let help = process_submission("help", &mut submission).expect("help should succeed");
+        let bang = process_submission("!!", &mut submission).expect("bang should succeed");
         let exit = process_submission("exit", &mut submission).expect("exit should succeed");
 
         assert!(matches!(help, SubmissionResult::Print(text) if text == "host help"));
+        assert!(matches!(bang, SubmissionResult::ReplaceInput(text) if text == "ldap user oistes"));
         assert!(matches!(exit, SubmissionResult::Exit(7)));
-        assert_eq!(seen, vec!["help".to_string(), "exit".to_string()]);
+        assert_eq!(
+            seen,
+            vec!["help".to_string(), "!!".to_string(), "exit".to_string()]
+        );
     }
 
     #[test]

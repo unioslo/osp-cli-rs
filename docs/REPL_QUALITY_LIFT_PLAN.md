@@ -64,8 +64,8 @@ The target is a clearer split:
 ### History
 
 - [ ] Separate storage from recording/filter/scope policy
-- [ ] Add tests for shell-scoped history behavior and bang expansion
-- [ ] Revisit whether history expansion belongs in `osp-repl` or the host
+- [x] Add tests for shell-scoped history behavior and bang expansion
+- [x] Revisit whether history expansion belongs in `osp-repl` or the host
 
 ## Current Slice
 

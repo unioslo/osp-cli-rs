@@ -11,10 +11,6 @@ use reedline::{
 };
 use serde::{Deserialize, Serialize};
 
-pub(crate) fn should_record_command(command: &str, exclude_patterns: &[String]) -> bool {
-    !is_excluded_command(command, exclude_patterns)
-}
-
 #[derive(Debug, Clone)]
 pub struct HistoryConfig {
     pub path: Option<PathBuf>,
