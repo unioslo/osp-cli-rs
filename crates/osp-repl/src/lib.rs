@@ -825,45 +825,16 @@ fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
 }
 
 struct ReplHighlighter {
-    tree: CompletionTree,
+    engine: CompletionEngine,
     command_color: Color,
-    parser: CommandLineParser,
 }
 
 impl ReplHighlighter {
     fn new(tree: CompletionTree, command_color: Color) -> Self {
         Self {
-            tree,
+            engine: CompletionEngine::new(tree),
             command_color,
-            parser: CommandLineParser,
         }
-    }
-
-    fn matched_command_len(&self, tokens: &[String]) -> usize {
-        let mut node = &self.tree.root;
-        let mut matched = 0usize;
-
-        for token in tokens {
-            if token == "|" {
-                break;
-            }
-            if token.starts_with('-') {
-                break;
-            }
-            let Some(child) = node.children.get(token) else {
-                break;
-            };
-            if child.value_key {
-                break;
-            }
-            matched += 1;
-            if child.value_leaf {
-                break;
-            }
-            node = child;
-        }
-
-        matched
     }
 }
 
@@ -874,13 +845,13 @@ impl Highlighter for ReplHighlighter {
             return styled;
         }
 
-        let tokens = self.parser.tokenize(line);
+        let tokens = self.engine.tokenize(line);
         if tokens.is_empty() {
             styled.push((Style::new(), line.to_string()));
             return styled;
         }
 
-        let matched_len = self.matched_command_len(&tokens);
+        let matched_len = self.engine.matched_command_len_tokens(&tokens);
         let mut pos = 0usize;
 
         for (index, token) in tokens.iter().enumerate() {

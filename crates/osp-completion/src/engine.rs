@@ -1,5 +1,8 @@
 use crate::{
-    model::{CommandLine, CompletionNode, CompletionTree, ContextScope, SuggestionOutput},
+    model::{
+        CommandLine, CompletionAnalysis, CompletionNode, CompletionTree, ContextScope,
+        SuggestionOutput,
+    },
     parse::CommandLineParser,
     suggest::SuggestionEngine,
 };
@@ -29,6 +32,14 @@ impl CompletionEngine {
         line: &str,
         cursor: usize,
     ) -> (String, Vec<SuggestionOutput>) {
+        let analysis = self.analyze(line, cursor);
+        let suggestions = self
+            .suggester
+            .generate(&analysis.cursor_cmd, &analysis.stub);
+        (analysis.stub, suggestions)
+    }
+
+    pub fn analyze(&self, line: &str, cursor: usize) -> CompletionAnalysis {
         let safe_cursor = clamp_to_char_boundary(line, cursor.min(line.len()));
         let before_cursor = &line[..safe_cursor];
 
@@ -43,8 +54,45 @@ impl CompletionEngine {
             self.merge_context_flags(&mut cursor_cmd, &full_cmd, &stub);
         }
 
-        let suggestions = self.suggester.generate(&cursor_cmd, &stub);
-        (stub, suggestions)
+        let matched_path = self.resolve_context_state(&cursor_cmd, &stub);
+
+        CompletionAnalysis {
+            safe_cursor,
+            full_tokens,
+            cursor_tokens,
+            full_cmd,
+            cursor_cmd,
+            stub,
+            matched_path,
+        }
+    }
+
+    pub fn tokenize(&self, line: &str) -> Vec<String> {
+        self.parser.tokenize(line)
+    }
+
+    pub fn matched_command_len_tokens(&self, tokens: &[String]) -> usize {
+        let mut node = &self.tree.root;
+        let mut matched = 0usize;
+
+        for token in tokens {
+            if token == "|" || token.starts_with('-') {
+                break;
+            }
+            let Some(child) = node.children.get(token) else {
+                break;
+            };
+            if child.value_key {
+                break;
+            }
+            matched += 1;
+            if child.value_leaf {
+                break;
+            }
+            node = child;
+        }
+
+        matched
     }
 
     fn merge_context_flags(
@@ -346,8 +394,10 @@ mod tests {
 
     #[test]
     fn subcommand_meta_includes_tooltip_and_preview() {
-        let mut ldap = CompletionNode::default();
-        ldap.tooltip = Some("Directory lookup".to_string());
+        let mut ldap = CompletionNode {
+            tooltip: Some("Directory lookup".to_string()),
+            ..CompletionNode::default()
+        };
         ldap.children
             .insert("user".to_string(), CompletionNode::default());
         ldap.children
@@ -373,5 +423,25 @@ mod tests {
         assert!(meta.contains("subcommands:"));
         assert!(meta.contains("host"));
         assert!(meta.contains("user"));
+    }
+
+    #[test]
+    fn analyze_exposes_merged_cursor_context() {
+        let engine = CompletionEngine::new(tree());
+        let line = "orch provision --os  --provider vmware";
+        let cursor = line.find("--provider").expect("provider in test line") - 1;
+
+        let analysis = engine.analyze(line, cursor);
+
+        assert_eq!(analysis.stub, "");
+        assert_eq!(analysis.matched_path, vec!["orch", "provision"]);
+        assert_eq!(
+            analysis
+                .cursor_cmd
+                .flags
+                .get("--provider")
+                .expect("provider should merge into cursor context"),
+            &vec!["vmware".to_string()]
+        );
     }
 }

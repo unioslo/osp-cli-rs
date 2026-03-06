@@ -132,6 +132,17 @@ pub struct CommandLine {
     pub has_pipe: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompletionAnalysis {
+    pub safe_cursor: usize,
+    pub full_tokens: Vec<String>,
+    pub cursor_tokens: Vec<String>,
+    pub full_cmd: CommandLine,
+    pub cursor_cmd: CommandLine,
+    pub stub: String,
+    pub matched_path: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suggestion {
     pub text: String,
