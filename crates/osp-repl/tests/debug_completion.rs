@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use osp_completion::{CompletionNode, CompletionTree};
-use osp_repl::{DebugStep, ReplAppearance, debug_completion, debug_completion_steps};
+use osp_repl::{
+    CompletionDebugOptions, DebugStep, ReplAppearance, debug_completion, debug_completion_steps,
+};
 
 #[test]
 fn debug_completion_reports_menu_styles_and_selection() {
@@ -25,7 +27,15 @@ fn debug_completion_reports_menu_styles_and_selection() {
         command_highlight_style: None,
     };
 
-    let debug = debug_completion(&tree, "", 0, 40, 5, true, true, Some(&appearance));
+    let debug = debug_completion(
+        &tree,
+        "",
+        0,
+        CompletionDebugOptions::new(40, 5)
+            .ansi(true)
+            .unicode(true)
+            .appearance(Some(&appearance)),
+    );
 
     assert_eq!(debug.menu_styles.text.foreground.as_deref(), Some("cyan"));
     assert_eq!(
@@ -60,11 +70,7 @@ fn debug_completion_steps_accepts_after_second_tab() {
         &tree,
         "co",
         2,
-        40,
-        5,
-        false,
-        false,
-        None,
+        CompletionDebugOptions::new(40, 5),
         &[DebugStep::Tab, DebugStep::Tab, DebugStep::Accept],
     );
 

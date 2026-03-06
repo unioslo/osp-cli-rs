@@ -137,64 +137,75 @@ pub struct CompletionDebugFrame {
     pub state: CompletionDebug,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CompletionDebugOptions<'a> {
+    pub width: u16,
+    pub height: u16,
+    pub ansi: bool,
+    pub unicode: bool,
+    pub appearance: Option<&'a ReplAppearance>,
+}
+
+impl<'a> CompletionDebugOptions<'a> {
+    pub fn new(width: u16, height: u16) -> Self {
+        Self {
+            width,
+            height,
+            ansi: false,
+            unicode: false,
+            appearance: None,
+        }
+    }
+
+    pub fn ansi(mut self, ansi: bool) -> Self {
+        self.ansi = ansi;
+        self
+    }
+
+    pub fn unicode(mut self, unicode: bool) -> Self {
+        self.unicode = unicode;
+        self
+    }
+
+    pub fn appearance(mut self, appearance: Option<&'a ReplAppearance>) -> Self {
+        self.appearance = appearance;
+        self
+    }
+}
+
 pub fn debug_completion(
     tree: &CompletionTree,
     line: &str,
     cursor: usize,
-    width: u16,
-    height: u16,
-    ansi: bool,
-    unicode: bool,
-    appearance: Option<&ReplAppearance>,
+    options: CompletionDebugOptions<'_>,
 ) -> CompletionDebug {
-    let mut editor = Editor::default();
-    editor.edit_buffer(
-        |buf| {
-            buf.set_buffer(line.to_string());
-            buf.set_insertion_point(cursor.min(buf.get_buffer().len()));
-        },
-        UndoBehavior::CreateUndoPoint,
-    );
-
-    let mut completer = ReplCompleter::new(Vec::new(), Some(tree.clone()));
-    let mut menu = if let Some(appearance) = appearance {
-        build_completion_menu(appearance)
-    } else {
-        OspCompletionMenu::default()
-    };
+    let (editor, mut completer, mut menu) =
+        build_debug_completion_session(tree, line, cursor, options.appearance);
+    let mut editor = editor;
 
     menu.menu_event(MenuEvent::Activate(false));
     menu.apply_event(&mut editor, &mut completer);
 
-    snapshot_completion_debug(tree, &mut menu, &editor, width, height, ansi, unicode)
+    snapshot_completion_debug(
+        tree,
+        &mut menu,
+        &editor,
+        options.width,
+        options.height,
+        options.ansi,
+        options.unicode,
+    )
 }
 
 pub fn debug_completion_steps(
     tree: &CompletionTree,
     line: &str,
     cursor: usize,
-    width: u16,
-    height: u16,
-    ansi: bool,
-    unicode: bool,
-    appearance: Option<&ReplAppearance>,
+    options: CompletionDebugOptions<'_>,
     steps: &[DebugStep],
 ) -> Vec<CompletionDebugFrame> {
-    let mut editor = Editor::default();
-    editor.edit_buffer(
-        |buf| {
-            buf.set_buffer(line.to_string());
-            buf.set_insertion_point(cursor.min(buf.get_buffer().len()));
-        },
-        UndoBehavior::CreateUndoPoint,
-    );
-
-    let mut completer = ReplCompleter::new(Vec::new(), Some(tree.clone()));
-    let mut menu = if let Some(appearance) = appearance {
-        build_completion_menu(appearance)
-    } else {
-        OspCompletionMenu::default()
-    };
+    let (mut editor, mut completer, mut menu) =
+        build_debug_completion_session(tree, line, cursor, options.appearance);
 
     let steps = steps.to_vec();
     if steps.is_empty() {
@@ -204,8 +215,15 @@ pub fn debug_completion_steps(
     let mut frames = Vec::with_capacity(steps.len());
     for step in steps {
         apply_debug_step(step, &mut menu, &mut editor, &mut completer);
-        let state =
-            snapshot_completion_debug(tree, &mut menu, &editor, width, height, ansi, unicode);
+        let state = snapshot_completion_debug(
+            tree,
+            &mut menu,
+            &editor,
+            options.width,
+            options.height,
+            options.ansi,
+            options.unicode,
+        );
         frames.push(CompletionDebugFrame {
             step: step.as_str().to_string(),
             state,
@@ -213,6 +231,31 @@ pub fn debug_completion_steps(
     }
 
     frames
+}
+
+fn build_debug_completion_session(
+    tree: &CompletionTree,
+    line: &str,
+    cursor: usize,
+    appearance: Option<&ReplAppearance>,
+) -> (Editor, ReplCompleter, OspCompletionMenu) {
+    let mut editor = Editor::default();
+    editor.edit_buffer(
+        |buf| {
+            buf.set_buffer(line.to_string());
+            buf.set_insertion_point(cursor.min(buf.get_buffer().len()));
+        },
+        UndoBehavior::CreateUndoPoint,
+    );
+
+    let completer = ReplCompleter::new(Vec::new(), Some(tree.clone()));
+    let menu = if let Some(appearance) = appearance {
+        build_completion_menu(appearance)
+    } else {
+        OspCompletionMenu::default()
+    };
+
+    (editor, completer, menu)
 }
 
 fn apply_debug_step(

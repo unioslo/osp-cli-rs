@@ -121,11 +121,10 @@ fn run_repl_debug_complete(state: &AppState, args: DebugCompleteArgs) -> Result<
             &completion_tree,
             &args.line,
             cursor,
-            args.width,
-            args.height,
-            args.menu_ansi,
-            args.menu_unicode,
-            Some(&appearance),
+            osp_repl::CompletionDebugOptions::new(args.width, args.height)
+                .ansi(args.menu_ansi)
+                .unicode(args.menu_unicode)
+                .appearance(Some(&appearance)),
         );
         serde_json::to_string_pretty(&debug).map_err(|err| miette!("{err:#}"))?
     } else {
@@ -133,11 +132,10 @@ fn run_repl_debug_complete(state: &AppState, args: DebugCompleteArgs) -> Result<
             &completion_tree,
             &args.line,
             cursor,
-            args.width,
-            args.height,
-            args.menu_ansi,
-            args.menu_unicode,
-            Some(&appearance),
+            osp_repl::CompletionDebugOptions::new(args.width, args.height)
+                .ansi(args.menu_ansi)
+                .unicode(args.menu_unicode)
+                .appearance(Some(&appearance)),
             &steps,
         );
         serde_json::to_string_pretty(&frames).map_err(|err| miette!("{err:#}"))?
