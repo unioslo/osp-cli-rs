@@ -65,6 +65,105 @@ fn group_by_list_value_fanout() {
 }
 
 #[test]
+fn group_by_derived_scalar_path() {
+    let rows = vec![obj(json!({
+        "metadata": {"asset": {"id": 42}}
+    }))];
+
+    let output = execute_pipeline(rows, &["G asset.id".to_string()]).expect("pipeline should pass");
+    match output.items {
+        OutputItems::Groups(groups) => {
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0].groups.get("asset.id"), Some(&json!(42)));
+        }
+        OutputItems::Rows(_) => panic!("expected grouped output"),
+    }
+}
+
+#[test]
+fn group_by_existence_dimension() {
+    let rows = vec![
+        obj(json!({"host": "a", "servers": [{"role": "web"}]})),
+        obj(json!({"host": "b", "servers": []})),
+        obj(json!({"host": "c"})),
+    ];
+
+    let output = execute_pipeline(rows, &["G ?servers".to_string()]).expect("pipeline should pass");
+    match output.items {
+        OutputItems::Groups(groups) => {
+            assert_eq!(groups.len(), 2);
+            let present = groups
+                .iter()
+                .find(|group| group.groups.get("servers") == Some(&json!(true)))
+                .expect("present bucket should exist");
+            assert_eq!(present.rows.len(), 1);
+
+            let missing = groups
+                .iter()
+                .find(|group| group.groups.get("servers") == Some(&json!(false)))
+                .expect("missing bucket should exist");
+            assert_eq!(missing.rows.len(), 2);
+        }
+        OutputItems::Rows(_) => panic!("expected grouped output"),
+    }
+}
+
+#[test]
+fn group_selector_path_fans_out_nested_scalar_values() {
+    let rows = vec![
+        obj(json!({"servers": [{"role": "web"}, {"role": "db"}]})),
+        obj(json!({"servers": [{"role": "web"}]})),
+    ];
+
+    let output =
+        execute_pipeline(rows, &["G servers[].role".to_string()]).expect("pipeline should pass");
+    match output.items {
+        OutputItems::Groups(groups) => {
+            let roles = groups
+                .iter()
+                .map(|group| {
+                    group
+                        .groups
+                        .get("servers.role")
+                        .cloned()
+                        .unwrap_or(json!(null))
+                })
+                .collect::<Vec<_>>();
+            assert!(roles.contains(&json!("web")));
+            assert!(roles.contains(&json!("db")));
+        }
+        OutputItems::Rows(_) => panic!("expected grouped output"),
+    }
+}
+
+#[test]
+fn group_slice_selector_uses_requested_projection() {
+    let rows = vec![
+        obj(json!({"interfaces": [{"mac": "aa:bb"}, {"mac": "cc:dd"}]})),
+        obj(json!({"interfaces": [{"mac": "ee:ff"}]})),
+    ];
+
+    let output = execute_pipeline(rows, &["G interfaces[:1].mac".to_string()])
+        .expect("pipeline should pass");
+    match output.items {
+        OutputItems::Groups(groups) => {
+            let observed = groups
+                .iter()
+                .map(|group| {
+                    group
+                        .groups
+                        .get("interfaces[:1].mac")
+                        .cloned()
+                        .unwrap_or(json!(null))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(observed, vec![json!("aa:bb"), json!("ee:ff")]);
+        }
+        OutputItems::Rows(_) => panic!("expected grouped output"),
+    }
+}
+
+#[test]
 fn aggregate_global_count_and_sum() {
     let rows = vec![
         obj(json!({"numbers": ["1", "10"]})),
