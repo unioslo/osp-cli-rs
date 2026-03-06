@@ -239,16 +239,6 @@ impl ConfigResolver {
                 origin: None,
             },
         );
-        values.insert(
-            "context".to_string(),
-            ResolvedValue {
-                raw_value: ConfigValue::String(active_profile.to_string()),
-                value: ConfigValue::String(active_profile.to_string()),
-                source: ConfigSource::Derived,
-                scope: Scope::global(),
-                origin: None,
-            },
-        );
 
         values
     }

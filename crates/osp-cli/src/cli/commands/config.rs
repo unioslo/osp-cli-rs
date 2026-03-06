@@ -3,13 +3,16 @@ use crate::app::{
     config_explain_output, config_value_to_json, emit_messages, explain_runtime_config,
     format_scope, is_sensitive_key, render_config_explain_text,
 };
-use crate::cli::{ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs};
+use crate::cli::{
+    ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs, ConfigUnsetArgs,
+};
 use crate::rows::RowBuilder;
 use crate::rows::output::rows_to_output_result;
 use crate::state::{AppState, TerminalKind};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
     ConfigSchema, ResolvedValue, RuntimeConfigPaths, Scope, set_scoped_value_in_toml,
+    unset_scoped_value_in_toml,
 };
 use osp_core::output::OutputFormat;
 use osp_core::row::Row;
@@ -35,6 +38,10 @@ pub(crate) fn run_config_command(
         ConfigCommands::Set(set) => Ok(CliCommandResult {
             exit_code: 0,
             output: Some(run_config_set(state, set)?),
+        }),
+        ConfigCommands::Unset(unset) => Ok(CliCommandResult {
+            exit_code: 0,
+            output: Some(run_config_unset(state, unset)?),
         }),
         ConfigCommands::Doctor => Ok(CliCommandResult::output(
             rows_to_output_result(config_diagnostics_rows(state)),
@@ -152,8 +159,9 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
         .parse_input_value(&key, &args.value)
         .into_diagnostic()
         .wrap_err("invalid value for key")?;
-    let store = resolve_config_store(state, &args);
-    let scopes = resolve_config_scopes(state, &args)?;
+    let target = ConfigWriteTarget::from_set_args(&args);
+    let store = resolve_config_store(state, &target);
+    let scopes = resolve_config_scopes(state, &target)?;
 
     let mut rows = Vec::new();
     let mut messages = MessageBuffer::default();
@@ -268,6 +276,112 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
     Ok(output)
 }
 
+fn run_config_unset(state: &mut AppState, args: ConfigUnsetArgs) -> Result<ReplCommandOutput> {
+    let key = args.key.trim().to_ascii_lowercase();
+    let target = ConfigWriteTarget::from_unset_args(&args);
+    let store = resolve_config_store(state, &target);
+    let scopes = resolve_config_scopes(state, &target)?;
+
+    let mut rows = Vec::new();
+    let mut messages = MessageBuffer::default();
+    let paths = RuntimeConfigPaths::discover();
+
+    for scope in &scopes {
+        let mut row = RowBuilder::new();
+        row.insert("key", key.clone());
+        row.insert("scope", format_scope(scope));
+        row.insert("store", config_store_name(store));
+        row.insert("dry_run", args.dry_run);
+
+        match store {
+            ConfigStore::Session => {
+                let previous = state.session.config_overrides.remove_scoped(&key, scope);
+                row.insert("path", serde_json::Value::Null);
+                row.insert("changed", previous.is_some());
+                row.insert(
+                    "previous",
+                    previous
+                        .map(|value| config_value_to_json(&value))
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+            ConfigStore::Config | ConfigStore::Secrets => {
+                let target_path = match store {
+                    ConfigStore::Config => paths.config_file.as_deref(),
+                    ConfigStore::Secrets => paths.secrets_file.as_deref(),
+                    ConfigStore::Session => None,
+                }
+                .ok_or_else(|| {
+                    miette!(
+                        "unable to resolve config path for {}",
+                        config_store_name(store)
+                    )
+                })?;
+
+                let edit_result = unset_scoped_value_in_toml(
+                    target_path,
+                    &key,
+                    scope,
+                    args.dry_run,
+                    matches!(store, ConfigStore::Secrets),
+                )
+                .into_diagnostic()
+                .wrap_err("failed to persist config change")?;
+
+                row.insert("path", target_path.display().to_string());
+                row.insert("changed", edit_result.previous.is_some());
+                row.insert(
+                    "previous",
+                    edit_result
+                        .previous
+                        .as_ref()
+                        .map(|previous| {
+                            let previous = if matches!(store, ConfigStore::Secrets) {
+                                previous.clone().into_secret()
+                            } else {
+                                previous.clone()
+                            };
+                            config_value_to_json(&previous)
+                        })
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+        }
+
+        rows.push(row.build());
+    }
+
+    let changed = rows
+        .iter()
+        .any(|row| row.get("changed").and_then(|value| value.as_bool()) == Some(true));
+    if changed {
+        messages.success(format!(
+            "{} value for {} at {} scope",
+            if args.dry_run { "would unset" } else { "unset" },
+            key,
+            scopes
+                .first()
+                .map(format_scope)
+                .unwrap_or_else(|| "global".to_string())
+        ));
+    } else {
+        messages.warning(format!(
+            "no matching value for {} at {} scope",
+            key,
+            scopes
+                .first()
+                .map(format_scope)
+                .unwrap_or_else(|| "global".to_string())
+        ));
+    }
+
+    emit_messages(state, &messages);
+    Ok(ReplCommandOutput::Output {
+        output: rows_to_output_result(rows),
+        format_hint: None,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConfigStore {
     Session,
@@ -275,7 +389,47 @@ enum ConfigStore {
     Secrets,
 }
 
-fn resolve_config_store(state: &AppState, args: &ConfigSetArgs) -> ConfigStore {
+#[derive(Debug, Clone)]
+struct ConfigWriteTarget {
+    global: bool,
+    profile: Option<String>,
+    profile_all: bool,
+    terminal: Option<String>,
+    session: bool,
+    config_store: bool,
+    secrets: bool,
+    save: bool,
+}
+
+impl ConfigWriteTarget {
+    fn from_set_args(args: &ConfigSetArgs) -> Self {
+        Self {
+            global: args.global,
+            profile: args.profile.clone(),
+            profile_all: args.profile_all,
+            terminal: args.terminal.clone(),
+            session: args.session,
+            config_store: args.config_store,
+            secrets: args.secrets,
+            save: args.save,
+        }
+    }
+
+    fn from_unset_args(args: &ConfigUnsetArgs) -> Self {
+        Self {
+            global: args.global,
+            profile: args.profile.clone(),
+            profile_all: args.profile_all,
+            terminal: args.terminal.clone(),
+            session: args.session,
+            config_store: args.config_store,
+            secrets: args.secrets,
+            save: args.save,
+        }
+    }
+}
+
+fn resolve_config_store(state: &AppState, args: &ConfigWriteTarget) -> ConfigStore {
     if args.session {
         return ConfigStore::Session;
     }
@@ -303,7 +457,7 @@ fn config_store_name(store: ConfigStore) -> &'static str {
     }
 }
 
-fn resolve_config_scopes(state: &AppState, args: &ConfigSetArgs) -> Result<Vec<Scope>> {
+fn resolve_config_scopes(state: &AppState, args: &ConfigWriteTarget) -> Result<Vec<Scope>> {
     let terminal = resolve_terminal_selector(state, args.terminal.as_deref());
 
     if args.profile_all {
@@ -389,6 +543,7 @@ pub(crate) fn run_config_repl_command(
             None => Ok(ReplCommandOutput::Text(String::new())),
         },
         ConfigCommands::Set(set) => run_config_set(state, set),
+        ConfigCommands::Unset(unset) => run_config_unset(state, unset),
         ConfigCommands::Doctor => Ok(ReplCommandOutput::Output {
             output: rows_to_output_result(config_diagnostics_rows(state)),
             format_hint: None,

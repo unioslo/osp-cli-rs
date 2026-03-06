@@ -57,7 +57,7 @@ pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
             PathBuf::from(
                 defaults
                     .get_string("repl.history.path")
-                    .unwrap_or("${user.name}@${context}.history"),
+                    .unwrap_or("${user.name}@${profile.active}.history"),
             )
         });
     let history_dedupe = config.get_bool("repl.history.dedupe").unwrap_or(true);

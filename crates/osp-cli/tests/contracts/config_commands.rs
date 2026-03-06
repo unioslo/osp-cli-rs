@@ -45,6 +45,8 @@ fn config_get_with_sources_contract() {
         r#"
 [default]
 profile.default = "uio"
+
+[profile.uio]
 ui.mode = "plain"
 "#,
     );
@@ -61,6 +63,45 @@ ui.mode = "plain"
         .success()
         .stdout(predicate::str::contains("\"source\": \"file\""))
         .stdout(predicate::str::contains("\"value\": \"plain\""));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_unset_persistent_contract() {
+    let home = make_temp_dir("osp-cli-config-unset");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+
+[profile.uio]
+ui.mode = "plain"
+"#,
+    );
+
+    let mut unset = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    unset
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "unset", "ui.mode"]);
+    unset
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"changed\": true"))
+        .stdout(predicate::str::contains("\"previous\": \"plain\""));
+
+    let mut get = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    get.env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "get", "ui.mode"]);
+    get.assert().failure();
+
+    let payload = std::fs::read_to_string(home.join(".config").join("osp").join("config.toml"))
+        .expect("config should be readable");
+    assert!(!payload.contains("ui.mode"));
 
     let _ = std::fs::remove_dir_all(&home);
 }

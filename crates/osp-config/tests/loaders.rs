@@ -1,7 +1,7 @@
 use osp_config::{
     ChainedLoader, ConfigError, ConfigLayer, ConfigLoader, ConfigSource, EnvSecretsLoader,
-    EnvVarLoader, LoaderPipeline, ResolveOptions, SecretsTomlLoader, StaticLayerLoader,
-    TomlFileLoader,
+    EnvVarLoader, LoaderPipeline, ResolveOptions, Scope, SecretsTomlLoader, StaticLayerLoader,
+    TomlFileLoader, unset_scoped_value_in_toml,
 };
 
 #[test]
@@ -219,6 +219,37 @@ fn env_loader_supports_collect_from_pairs() {
         .expect("env loader should parse collected pairs");
     assert_eq!(layer.entries().len(), 1);
     assert_eq!(layer.entries()[0].key, "ui.format");
+}
+
+#[test]
+fn unset_scoped_value_removes_only_target_scope_and_prunes_empty_tables() {
+    let dir = make_temp_dir("osp-config-unset");
+    let path = dir.join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[default]
+profile.default = "uio"
+
+[profile.uio]
+ui.format = "json"
+
+[profile.tsd]
+ui.format = "table"
+"#,
+    )
+    .expect("config file should be written");
+
+    let result =
+        unset_scoped_value_in_toml(&path, "ui.format", &Scope::profile("uio"), false, false)
+            .expect("unset should succeed");
+
+    assert_eq!(result.previous, Some("json".into()));
+
+    let payload = std::fs::read_to_string(&path).expect("config should be readable");
+    assert!(!payload.contains("[profile.uio]"));
+    assert!(payload.contains("tsd"));
+    assert!(payload.contains("table"));
 }
 
 fn make_temp_dir(prefix: &str) -> std::path::PathBuf {

@@ -295,6 +295,7 @@ pub enum ConfigCommands {
     Get(ConfigGetArgs),
     Explain(ConfigExplainArgs),
     Set(ConfigSetArgs),
+    Unset(ConfigUnsetArgs),
     #[command(alias = "diagnostics")]
     Doctor,
 }
@@ -368,6 +369,42 @@ pub struct ConfigSetArgs {
 
     #[arg(long = "explain")]
     pub explain: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ConfigUnsetArgs {
+    pub key: String,
+
+    #[arg(long = "global", conflicts_with_all = ["profile", "profile_all"])]
+    pub global: bool,
+
+    #[arg(long = "profile", conflicts_with = "profile_all")]
+    pub profile: Option<String>,
+
+    #[arg(long = "profile-all", conflicts_with = "profile")]
+    pub profile_all: bool,
+
+    #[arg(
+        long = "terminal",
+        num_args = 0..=1,
+        default_missing_value = "__current__"
+    )]
+    pub terminal: Option<String>,
+
+    #[arg(long = "session", conflicts_with_all = ["config_store", "secrets", "save"])]
+    pub session: bool,
+
+    #[arg(long = "config", conflicts_with_all = ["session", "secrets"])]
+    pub config_store: bool,
+
+    #[arg(long = "secrets", conflicts_with_all = ["session", "config_store"])]
+    pub secrets: bool,
+
+    #[arg(long = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
+    pub save: bool,
+
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
 }
 
 impl Cli {

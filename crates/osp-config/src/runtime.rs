@@ -289,7 +289,7 @@ impl RuntimeEnvironment {
     fn repl_history_path(&self) -> String {
         join_path(
             self.state_root_dir_or_temp(),
-            &["history", "${user.name}@${context}.history"],
+            &["history", "${user.name}@${profile.active}.history"],
         )
         .display()
         .to_string()
@@ -395,7 +395,7 @@ mod tests {
             other => panic!("unexpected history path value: {other:?}"),
         };
 
-        assert!(path.contains("${user.name}@${context}.history"));
+        assert!(path.contains("${user.name}@${profile.active}.history"));
     }
 
     #[test]
@@ -462,7 +462,7 @@ mod tests {
             env.repl_history_path(),
             expected_root
                 .join("history")
-                .join("${user.name}@${context}.history")
+                .join("${user.name}@${profile.active}.history")
                 .display()
                 .to_string()
         );

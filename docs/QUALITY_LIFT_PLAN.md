@@ -101,7 +101,7 @@ Own loading, precedence, validation, interpolation, explain, and persistence.
 Checklist:
 
 - [ ] Preserve one-pass profile selection followed by one-pass resolution.
-- [ ] Remove legacy `context` compatibility from the resolved core model when
+- [x] Remove legacy `context` compatibility from the resolved core model when
       callers no longer depend on it.
 - [x] Review `RuntimeDefaults` and replace hand-maintained boilerplate with a
       simpler typed construction path where practical.

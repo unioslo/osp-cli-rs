@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 use crate::ConfigError;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TomlSetResult {
+pub struct TomlEditResult {
     pub previous: Option<ConfigValue>,
 }
 
@@ -248,7 +248,6 @@ impl Default for ConfigSchema {
 
         schema.insert("profile.default", SchemaEntry::string().required());
         schema.insert("profile.active", SchemaEntry::string().required());
-        schema.insert("context", SchemaEntry::string());
         schema.insert("theme.name", SchemaEntry::string());
         schema.insert("theme.path", SchemaEntry::string_list());
         schema.insert("user.name", SchemaEntry::string());
@@ -650,6 +649,15 @@ impl ConfigLayer {
                 entry.value = entry.value.clone().into_secret();
             }
         }
+    }
+
+    pub fn remove_scoped(&mut self, key: &str, scope: &Scope) -> Option<ConfigValue> {
+        let normalized_scope = normalize_scope(scope.clone());
+        let index = self
+            .entries
+            .iter()
+            .rposition(|entry| entry.key == key && entry.scope == normalized_scope)?;
+        Some(self.entries.remove(index).value)
     }
 
     pub fn from_toml_str(raw: &str) -> Result<Self, ConfigError> {
