@@ -1,6 +1,7 @@
 pub(crate) mod completion;
 pub(crate) mod help;
 pub(crate) mod history;
+pub(crate) mod surface;
 
 use anyhow::anyhow;
 use miette::{Result, miette};
@@ -26,17 +27,17 @@ use crate::cli::{
     PluginsCommands, ReplArgs, ReplCommands, ThemeArgs, ThemeCommands, parse_repl_tokens,
 };
 use crate::pipeline::parse_command_text_with_aliases;
-use crate::plugin_manager::CommandCatalogEntry;
 use crate::rows::output::{output_to_rows, plugin_data_to_output_result};
 use crate::state::AppState;
 
 use crate::app;
 use crate::app::{
-    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_LIST, CMD_PLUGINS, CMD_SHOW, CMD_THEME,
-    CMD_USE, CliCommandResult, DEFAULT_REPL_PROMPT, REPL_SHELLABLE_COMMANDS, ReplCommandOutput,
-    ReplCommandSpec, ReplDispatchOverrides,
+    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, CMD_THEME, CliCommandResult,
+    DEFAULT_REPL_PROMPT, REPL_SHELLABLE_COMMANDS, ReplCommandOutput, ReplCommandSpec,
+    ReplDispatchOverrides,
 };
 use osp_completion::CompletionTree;
+use surface::ReplSurface;
 
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     let mut force_intro = state
@@ -53,8 +54,9 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             *state = next;
         }
         let catalog = app::authorized_command_catalog(state)?;
-        let (words, completion_tree) = build_repl_completion_inputs(state, &catalog);
-        let help_text = render_repl_command_overview(state, &catalog);
+        let surface = surface::build_repl_surface(state, &catalog);
+        let completion_tree = build_repl_completion_tree(state, &surface);
+        let help_text = render_repl_command_overview(state, &surface);
 
         if force_intro {
             print!("\x1b[2J\x1b[H");
@@ -73,7 +75,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
 
         match run_repl(
             prompt,
-            words,
+            surface.root_words.clone(),
             Some(completion_tree),
             appearance,
             help_text,
@@ -106,7 +108,8 @@ pub(crate) fn run_repl_debug_command(state: &AppState, args: ReplArgs) -> Result
 
 fn run_repl_debug_complete(state: &AppState, args: DebugCompleteArgs) -> Result<CliCommandResult> {
     let catalog = app::authorized_command_catalog(state)?;
-    let (_words, completion_tree) = build_repl_completion_inputs(state, &catalog);
+    let surface = surface::build_repl_surface(state, &catalog);
+    let completion_tree = build_repl_completion_tree(state, &surface);
     let appearance = build_repl_appearance(state);
     let cursor = args.cursor.unwrap_or(args.line.len());
 
@@ -143,53 +146,8 @@ fn run_repl_debug_complete(state: &AppState, args: DebugCompleteArgs) -> Result<
     Ok(CliCommandResult::text(format!("{payload}\n")))
 }
 
-fn build_repl_completion_inputs(
-    state: &AppState,
-    catalog: &[CommandCatalogEntry],
-) -> (Vec<String>, CompletionTree) {
-    let history_enabled = history::repl_history_enabled(state.config.resolved());
-    let mut words = completion::catalog_completion_words(catalog);
-    if state.auth.is_builtin_visible(CMD_PLUGINS) {
-        words.extend([CMD_PLUGINS.to_string(), CMD_LIST.to_string()]);
-    }
-    if state.auth.is_builtin_visible(CMD_DOCTOR) {
-        words.push(CMD_DOCTOR.to_string());
-    }
-    if state.auth.is_builtin_visible(CMD_THEME) {
-        words.extend([
-            CMD_THEME.to_string(),
-            CMD_LIST.to_string(),
-            CMD_SHOW.to_string(),
-            CMD_USE.to_string(),
-        ]);
-    }
-    if state.auth.is_builtin_visible(CMD_CONFIG) {
-        words.extend([
-            CMD_CONFIG.to_string(),
-            "get".to_string(),
-            "show".to_string(),
-            "explain".to_string(),
-            "set".to_string(),
-            "doctor".to_string(),
-        ]);
-    }
-    if history_enabled && state.auth.is_builtin_visible(CMD_HISTORY) {
-        words.extend([
-            CMD_HISTORY.to_string(),
-            CMD_LIST.to_string(),
-            "prune".to_string(),
-            "clear".to_string(),
-        ]);
-    }
-    for (alias_name, _) in completion::collect_alias_entries(state.config.resolved()) {
-        words.push(alias_name);
-    }
-    words.extend(state.themes.ids());
-    words.sort();
-    words.dedup();
-
-    let tree = completion::build_repl_completion_tree(state, catalog, &words);
-    (words, tree)
+fn build_repl_completion_tree(state: &AppState, surface: &ReplSurface) -> CompletionTree {
+    completion::build_repl_completion_tree(state, surface)
 }
 
 fn render_repl_intro(state: &AppState) -> String {
@@ -318,7 +276,7 @@ fn render_repl_intro(state: &AppState) -> String {
     out
 }
 
-fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry]) -> String {
+fn render_repl_command_overview(state: &AppState, surface: &ReplSurface) -> String {
     let resolved = state.ui.render_settings.resolve_render_settings();
     let theme = &resolved.theme;
     let mut out = String::new();
@@ -349,85 +307,12 @@ fn render_repl_command_overview(state: &AppState, catalog: &[CommandCatalogEntry
     ));
     out.push('\n');
 
-    let exit_name = if resolved.color {
-        apply_style_with_theme_overrides(
-            "exit         ",
-            StyleToken::Key,
-            true,
-            theme,
-            &resolved.style_overrides,
-        )
-    } else {
-        "exit         ".to_string()
-    };
-    out.push_str("  ");
-    out.push_str(&exit_name);
-    out.push_str("Exit application.\n");
-
-    let help_name = if resolved.color {
-        apply_style_with_theme_overrides(
-            "help         ",
-            StyleToken::Key,
-            true,
-            theme,
-            &resolved.style_overrides,
-        )
-    } else {
-        "help         ".to_string()
-    };
-    out.push_str("  ");
-    out.push_str(&help_name);
-    out.push_str("Show this command overview.\n");
-
-    if state.auth.is_builtin_visible(CMD_PLUGINS) {
+    for entry in &surface.overview_entries {
+        let name = format!("{:<12}", entry.name);
         out.push_str("  ");
-        out.push_str(&style_command_name(&resolved, theme, "plugins      "));
-        out.push_str("subcommands: list, commands, enable, disable, doctor\n");
-    }
-    if state.auth.is_builtin_visible(CMD_DOCTOR) {
-        out.push_str("  ");
-        out.push_str(&style_command_name(&resolved, theme, "doctor       "));
-        out.push_str("subcommands: all, config, plugins, theme\n");
-    }
-    if state.auth.is_builtin_visible(CMD_CONFIG) {
-        out.push_str("  ");
-        out.push_str(&style_command_name(&resolved, theme, "config       "));
-        out.push_str("subcommands: show, get, explain, set, doctor\n");
-    }
-    if state.auth.is_builtin_visible(CMD_THEME) {
-        out.push_str("  ");
-        out.push_str(&style_command_name(&resolved, theme, "theme        "));
-        out.push_str("subcommands: list, show, use\n");
-    }
-    if history::repl_history_enabled(state.config.resolved())
-        && state.auth.is_builtin_visible(CMD_HISTORY)
-    {
-        out.push_str("  ");
-        out.push_str(&style_command_name(&resolved, theme, "history      "));
-        out.push_str("subcommands: list, prune, clear\n");
-    }
-
-    for entry in catalog {
-        let about = if entry.about.trim().is_empty() {
-            "Plugin command".to_string()
-        } else {
-            entry.about.clone()
-        };
-        if entry.subcommands.is_empty() {
-            let name = format!("{:<12}", entry.name);
-            out.push_str("  ");
-            out.push_str(&style_command_name(&resolved, theme, &name));
-            out.push_str(&format!("{about}\n"));
-        } else {
-            let name = format!("{:<12}", entry.name);
-            out.push_str("  ");
-            out.push_str(&style_command_name(&resolved, theme, &name));
-            out.push_str(&format!(
-                "{} (subcommands: {})\n",
-                about,
-                entry.subcommands.join(", ")
-            ));
-        }
+        out.push_str(&style_command_name(&resolved, theme, &name));
+        out.push_str(&entry.summary);
+        out.push('\n');
     }
 
     out.push_str(&render_section_divider_with_overrides(
@@ -949,7 +834,8 @@ fn enter_repl_shell(
 fn repl_help_for_scope(state: &AppState, overrides: ReplDispatchOverrides) -> Result<String> {
     if state.session.shell_stack.is_empty() {
         let catalog = app::authorized_command_catalog(state)?;
-        return Ok(render_repl_command_overview(state, &catalog));
+        let surface = surface::build_repl_surface(state, &catalog);
+        return Ok(render_repl_command_overview(state, &surface));
     }
 
     let mut tokens = state.session.shell_stack.clone();

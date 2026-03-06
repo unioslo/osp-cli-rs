@@ -1038,7 +1038,7 @@ mod tests {
     use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
     use crate::repl;
-    use crate::repl::{completion, help as repl_help};
+    use crate::repl::{completion, help as repl_help, surface};
     use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
     use clap::Parser;
     use osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
@@ -1588,9 +1588,9 @@ mod tests {
     fn repl_completion_tree_contains_builtin_and_plugin_commands_unit() {
         let state = make_completion_state(None);
         let catalog = sample_catalog();
-        let words = completion::catalog_completion_words(&catalog);
+        let surface = surface::build_repl_surface(&state, &catalog);
 
-        let tree = completion::build_repl_completion_tree(&state, &catalog, &words);
+        let tree = completion::build_repl_completion_tree(&state, &surface);
         assert!(tree.root.children.contains_key("help"));
         assert!(tree.root.children.contains_key("exit"));
         assert!(tree.root.children.contains_key("quit"));
@@ -1615,9 +1615,9 @@ mod tests {
     fn repl_completion_tree_injects_config_set_schema_keys_unit() {
         let state = make_completion_state(None);
         let catalog = sample_catalog();
-        let words = completion::catalog_completion_words(&catalog);
+        let surface = surface::build_repl_surface(&state, &catalog);
 
-        let tree = completion::build_repl_completion_tree(&state, &catalog, &words);
+        let tree = completion::build_repl_completion_tree(&state, &surface);
         let set_node = &tree.root.children["config"].children["set"];
         let ui_mode = &set_node.children["ui.mode"];
         assert!(ui_mode.value_key);
@@ -1634,13 +1634,35 @@ mod tests {
     fn repl_completion_tree_respects_builtin_visibility_unit() {
         let state = make_completion_state(Some("theme"));
         let catalog = sample_catalog();
-        let words = completion::catalog_completion_words(&catalog);
+        let surface = surface::build_repl_surface(&state, &catalog);
 
-        let tree = completion::build_repl_completion_tree(&state, &catalog, &words);
+        let tree = completion::build_repl_completion_tree(&state, &surface);
         assert!(tree.root.children.contains_key("theme"));
         assert!(!tree.root.children.contains_key("config"));
         assert!(!tree.root.children.contains_key("plugins"));
         assert!(!tree.root.children.contains_key("history"));
+    }
+
+    #[test]
+    fn repl_surface_drives_overview_and_completion_visibility_unit() {
+        let state = make_completion_state(Some("theme config"));
+        let catalog = sample_catalog();
+        let surface = surface::build_repl_surface(&state, &catalog);
+
+        let names = surface
+            .overview_entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names[..2], ["exit", "help"]);
+        assert!(names.contains(&"theme"));
+        assert!(names.contains(&"config"));
+        assert!(names.contains(&"orch"));
+        assert!(!names.contains(&"plugins"));
+        assert!(!names.contains(&"history"));
+        assert!(surface.root_words.contains(&"theme".to_string()));
+        assert!(surface.root_words.contains(&"config".to_string()));
+        assert!(surface.root_words.contains(&"orch".to_string()));
     }
 
     #[cfg(unix)]
