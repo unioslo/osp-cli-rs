@@ -519,9 +519,7 @@ where
     }
 
     fn shell_prefix(&self) -> Option<String> {
-        self.shell_context
-            .as_ref()
-            .and_then(|ctx| ctx.normalized_prefix())
+        self.shell_context.and_then(HistoryShellContext::prefix)
     }
 
     fn record_history(&mut self, command_line: &str, shell_prefix: Option<&str>) {
@@ -649,7 +647,7 @@ where
         command_history: &mut command_history,
         history_limit,
         history_exclude_patterns: &history_exclude_patterns,
-        shell_context: shell_context.as_ref(),
+        shell_context: Some(&shell_context),
         history_store: &history_store,
         execute: &mut execute,
     };
@@ -1617,8 +1615,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        HistoryConfig, RankedSuggestion, ReplCompleter, ReplHighlighter, ReplLineResult,
-        SharedHistory, SubmissionContext, SubmissionResult, color_from_style_spec,
+        HistoryConfig, HistoryShellContext, RankedSuggestion, ReplCompleter, ReplHighlighter,
+        ReplLineResult, SharedHistory, SubmissionContext, SubmissionResult, color_from_style_spec,
         dedupe_ranked_suggestions, default_pipe_verbs, expand_history, process_submission,
         sort_ranked_suggestions,
     };
@@ -1669,7 +1667,7 @@ mod tests {
             Vec::new(),
             None,
             None,
-            None,
+            HistoryShellContext::default(),
         ))
         .expect("history config should build")
     }

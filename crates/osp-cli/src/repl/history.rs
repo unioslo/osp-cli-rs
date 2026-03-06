@@ -2,7 +2,7 @@ use miette::{Result, miette};
 use osp_completion::CommandSpec;
 use osp_config::{ConfigValue, DEFAULT_REPL_HISTORY_MAX_ENTRIES, ResolvedConfig, RuntimeDefaults};
 use osp_core::row::Row;
-use osp_repl::{HistoryConfig, HistoryEntry, HistoryShellContext, SharedHistory};
+use osp_repl::{HistoryConfig, HistoryEntry, SharedHistory};
 use osp_ui::theme::DEFAULT_THEME_NAME;
 use std::path::PathBuf;
 
@@ -61,12 +61,7 @@ pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
         .get_bool("repl.history.profile_scoped")
         .unwrap_or(true);
     let history_exclude = repl_history_exclude_patterns(config);
-    let history_shell = state
-        .repl
-        .history_shell
-        .clone()
-        .unwrap_or_else(|| HistoryShellContext::new(String::new()));
-    state.repl.history_shell = Some(history_shell.clone());
+    let history_shell = state.repl.history_shell.clone();
     state.sync_history_shell_context();
 
     HistoryConfig::new(
@@ -84,7 +79,7 @@ pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
                 .as_config_terminal()
                 .to_string(),
         ),
-        Some(history_shell),
+        history_shell,
     )
 }
 

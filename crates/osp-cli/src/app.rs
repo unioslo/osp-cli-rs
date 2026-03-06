@@ -1792,8 +1792,7 @@ JSON
         state.session.config_overrides.set("theme.name", "dracula");
         state.session.scope.enter("orch");
 
-        let history_shell = HistoryShellContext::new(String::new());
-        state.repl.history_shell = Some(history_shell);
+        state.repl.history_shell = HistoryShellContext::default();
         state.sync_history_shell_context();
 
         let next = super::rebuild_repl_state(&state).expect("rebuild should succeed");
@@ -1807,7 +1806,7 @@ JSON
         assert_eq!(next.ui.render_settings.format, OutputFormat::Json);
         assert_eq!(next.ui.render_settings.theme_name, "dracula");
         assert_eq!(next.session.scope.commands(), vec!["orch".to_string()]);
-        assert!(next.repl.history_shell.is_some());
+        assert_eq!(next.repl.history_shell.prefix(), Some("orch ".to_string()));
     }
 
     #[cfg(unix)]
@@ -1943,12 +1942,7 @@ JSON
     fn make_test_history(state: &mut AppState) -> SharedHistory {
         let history_dir = make_temp_dir("osp-cli-test-history");
         let history_path = history_dir.join("history.jsonl");
-        let history_shell = state
-            .repl
-            .history_shell
-            .clone()
-            .unwrap_or_else(|| HistoryShellContext::new(String::new()));
-        state.repl.history_shell = Some(history_shell.clone());
+        let history_shell = state.repl.history_shell.clone();
         state.sync_history_shell_context();
 
         let history_config = HistoryConfig::new(
@@ -1966,7 +1960,7 @@ JSON
                     .as_config_terminal()
                     .to_string(),
             ),
-            Some(history_shell),
+            history_shell,
         );
 
         SharedHistory::new(history_config).expect("history should init")

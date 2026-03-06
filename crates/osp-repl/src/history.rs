@@ -25,7 +25,7 @@ pub struct HistoryConfig {
     pub exclude_patterns: Vec<String>,
     pub profile: Option<String>,
     pub terminal: Option<String>,
-    pub shell_context: Option<HistoryShellContext>,
+    pub shell_context: HistoryShellContext,
 }
 
 impl HistoryConfig {
@@ -38,7 +38,7 @@ impl HistoryConfig {
         exclude_patterns: Vec<String>,
         profile: Option<String>,
         terminal: Option<String>,
-        shell_context: Option<HistoryShellContext>,
+        shell_context: HistoryShellContext,
     ) -> Self {
         Self {
             path,
@@ -60,31 +60,30 @@ impl HistoryConfig {
 
 #[derive(Clone, Default, Debug)]
 pub struct HistoryShellContext {
-    inner: Arc<RwLock<String>>,
+    inner: Arc<RwLock<Option<String>>>,
 }
 
 impl HistoryShellContext {
     pub fn new(prefix: impl Into<String>) -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(prefix.into())),
-        }
+        let context = Self::default();
+        context.set_prefix(prefix);
+        context
     }
 
     pub fn set_prefix(&self, prefix: impl Into<String>) {
         if let Ok(mut guard) = self.inner.write() {
-            *guard = prefix.into();
+            *guard = normalize_shell_prefix(prefix.into());
         }
     }
 
-    pub fn prefix(&self) -> String {
-        self.inner
-            .read()
-            .map(|value| value.clone())
-            .unwrap_or_default()
+    pub fn clear(&self) {
+        if let Ok(mut guard) = self.inner.write() {
+            *guard = None;
+        }
     }
 
-    pub(crate) fn normalized_prefix(&self) -> Option<String> {
-        normalize_shell_prefix(self.prefix())
+    pub fn prefix(&self) -> Option<String> {
+        self.inner.read().map(|value| value.clone()).unwrap_or(None)
     }
 }
 
@@ -276,10 +275,7 @@ impl OspHistoryStore {
     }
 
     fn shell_prefix(&self) -> Option<String> {
-        self.config
-            .shell_context
-            .as_ref()
-            .and_then(HistoryShellContext::normalized_prefix)
+        self.config.shell_context.prefix()
     }
 
     fn shell_allows(&self, record: &HistoryRecord, shell_prefix: Option<&str>) -> bool {
@@ -1055,7 +1051,7 @@ mod tests {
             vec!["user *".to_string()],
             None,
             None,
-            Some(shell),
+            shell,
         );
         let mut store = OspHistoryStore::new(config).expect("history store should init");
         let _ = History::save(
@@ -1075,5 +1071,43 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].command, "netgroup ucore");
         assert_eq!(entries[1].command, "mreg host a");
+    }
+
+    #[test]
+    fn list_entries_tracks_live_shell_context_updates() {
+        let shell = HistoryShellContext::default();
+        let config = HistoryConfig::new(
+            None,
+            10,
+            true,
+            false,
+            false,
+            Vec::new(),
+            None,
+            None,
+            shell.clone(),
+        );
+        let mut store = OspHistoryStore::new(config).expect("history store should init");
+        let _ = History::save(
+            &mut store,
+            HistoryItem::from_command_line("ldap user alice"),
+        )
+        .expect("save should succeed");
+        let _ = History::save(&mut store, HistoryItem::from_command_line("mreg host a"))
+            .expect("save should succeed");
+
+        shell.set_prefix("ldap");
+        let ldap_entries = store.list_entries();
+        assert_eq!(ldap_entries.len(), 1);
+        assert_eq!(ldap_entries[0].command, "user alice");
+
+        shell.set_prefix("mreg");
+        let mreg_entries = store.list_entries();
+        assert_eq!(mreg_entries.len(), 1);
+        assert_eq!(mreg_entries[0].command, "host a");
+
+        shell.clear();
+        let root_entries = store.list_entries();
+        assert_eq!(root_entries.len(), 2);
     }
 }

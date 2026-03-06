@@ -110,7 +110,7 @@ pub struct UiState {
 pub struct ReplState {
     pub prompt_prefix: String,
     pub history_enabled: bool,
-    pub history_shell: Option<HistoryShellContext>,
+    pub history_shell: HistoryShellContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -380,7 +380,7 @@ impl AppState {
             repl: ReplState {
                 prompt_prefix: "osp".to_string(),
                 history_enabled: true,
-                history_shell: None,
+                history_shell: HistoryShellContext::default(),
             },
             session: SessionState::with_cache_limit(session_cache_max_results),
             clients: ClientsState::new(plugins, config_revision),
@@ -393,10 +393,9 @@ impl AppState {
     }
 
     pub fn sync_history_shell_context(&self) {
-        let Some(context) = &self.repl.history_shell else {
-            return;
-        };
-        context.set_prefix(self.session.scope.history_prefix());
+        self.repl
+            .history_shell
+            .set_prefix(self.session.scope.history_prefix());
     }
 
     pub fn record_repl_rows(&mut self, command_line: &str, rows: Vec<Row>) {
