@@ -109,6 +109,21 @@ fn parse_accepts_quick_pipe_segments_from_cli_tokens() {
 }
 
 #[test]
+fn parse_cli_tokens_preserves_single_stage_argument_with_spaces() {
+    let config = make_config(&[]);
+    let tokens = ["status", "|", "K", "foo bar"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    let parsed = parse_command_tokens_with_aliases(&tokens, &config)
+        .expect("quoted-like token stage should parse");
+
+    assert_eq!(parsed.tokens, vec!["status"]);
+    assert_eq!(parsed.stages, vec!["K 'foo bar'"]);
+}
+
+#[test]
 fn parse_rejects_unknown_explicit_stage_from_alias_pipe() {
     let config = make_config(&[("alias.bad", "status | X foo")]);
     let result = parse_command_text_with_aliases("bad", &config);

@@ -64,16 +64,35 @@ pub fn parse_command_tokens_with_aliases(
         });
     }
 
-    let mut rendered = Vec::with_capacity(tokens.len());
-    for token in tokens {
-        if token == "|" {
-            rendered.push("|".to_string());
-        } else {
-            rendered.push(quote_token(token));
-        }
+    let split = split_command_tokens(tokens);
+    if split.command_tokens.is_empty() {
+        return Ok(ParsedCommandLine {
+            tokens: Vec::new(),
+            stages: Vec::new(),
+        });
     }
-    let line = rendered.join(" ");
-    parse_command_text_with_aliases(&line, config)
+
+    if let Some(expanded) =
+        maybe_expand_alias(&split.command_tokens[0], &split.command_tokens[1..], config)?
+    {
+        let alias_parsed = parse_pipeline(&expanded)
+            .into_diagnostic()
+            .wrap_err("failed to parse alias pipeline")?;
+        let alias_tokens = shell_words::split(&alias_parsed.command)
+            .into_diagnostic()
+            .wrap_err("failed to parse alias command")?;
+        if alias_tokens.is_empty() {
+            return Ok(ParsedCommandLine {
+                tokens: Vec::new(),
+                stages: Vec::new(),
+            });
+        }
+        let mut stages = alias_parsed.stages;
+        stages.extend(split.stages);
+        return finalize_parsed_command(alias_tokens, stages);
+    }
+
+    finalize_parsed_command(split.command_tokens, split.stages)
 }
 
 fn maybe_expand_alias(
@@ -156,6 +175,48 @@ pub fn validate_cli_dsl_stages(stages: &[String]) -> Result<()> {
 
 pub fn is_cli_help_stage(parsed: &ParsedStage) -> bool {
     matches!(parsed.kind, ParsedStageKind::UnknownExplicit) && parsed.verb.eq_ignore_ascii_case("H")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SplitCommandTokens {
+    command_tokens: Vec<String>,
+    stages: Vec<String>,
+}
+
+fn split_command_tokens(tokens: &[String]) -> SplitCommandTokens {
+    let mut segments = Vec::new();
+    let mut current = Vec::new();
+
+    for token in tokens {
+        if token == "|" {
+            if !current.is_empty() {
+                segments.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        current.push(token.clone());
+    }
+
+    if !current.is_empty() {
+        segments.push(current);
+    }
+
+    let mut iter = segments.into_iter();
+    let command_tokens = iter.next().unwrap_or_default();
+    let stages = iter
+        .map(|segment| {
+            segment
+                .into_iter()
+                .map(|token| quote_token(&token))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
+
+    SplitCommandTokens {
+        command_tokens,
+        stages,
+    }
 }
 
 fn alias_key(candidate: &str) -> String {
