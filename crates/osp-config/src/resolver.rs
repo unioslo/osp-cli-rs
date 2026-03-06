@@ -25,6 +25,219 @@ struct ResolvedMaps {
     final_values: BTreeMap<String, ResolvedValue>,
 }
 
+struct Interpolator {
+    raw: HashMap<String, ConfigValue>,
+    cache: HashMap<String, ConfigValue>,
+}
+
+impl Interpolator {
+    fn from_resolved_values(values: &BTreeMap<String, ResolvedValue>) -> Self {
+        Self {
+            raw: values
+                .iter()
+                .map(|(key, value)| (key.clone(), value.raw_value.clone()))
+                .collect(),
+            cache: HashMap::new(),
+        }
+    }
+
+    fn apply_all(
+        &mut self,
+        values: &mut BTreeMap<String, ResolvedValue>,
+    ) -> Result<(), ConfigError> {
+        let keys = values.keys().cloned().collect::<Vec<String>>();
+        for key in keys {
+            let value = self.resolve_value(&key, &mut Vec::new())?;
+            if let Some(entry) = values.get_mut(&key) {
+                entry.value = value;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn explain(
+        &self,
+        key: &str,
+        final_values: &BTreeMap<String, ResolvedValue>,
+    ) -> Result<Option<ExplainInterpolation>, ConfigError> {
+        let Some(template) = self.template_for(key)? else {
+            return Ok(None);
+        };
+
+        let mut steps = Vec::new();
+        let mut seen = BTreeSet::new();
+        self.collect_steps_recursive(key, final_values, &mut steps, &mut seen, &mut Vec::new())?;
+
+        Ok(Some(ExplainInterpolation { template, steps }))
+    }
+
+    fn resolve_value(
+        &mut self,
+        key: &str,
+        stack: &mut Vec<String>,
+    ) -> Result<ConfigValue, ConfigError> {
+        if let Some(value) = self.cache.get(key) {
+            return Ok(value.clone());
+        }
+
+        if let Some(index) = stack.iter().position(|item| item == key) {
+            let mut cycle = stack[index..].to_vec();
+            cycle.push(key.to_string());
+            return Err(ConfigError::PlaceholderCycle { cycle });
+        }
+
+        let value =
+            self.raw
+                .get(key)
+                .cloned()
+                .ok_or_else(|| ConfigError::UnresolvedPlaceholder {
+                    key: key.to_string(),
+                    placeholder: key.to_string(),
+                })?;
+
+        if key.starts_with("alias.") {
+            self.cache.insert(key.to_string(), value.clone());
+            return Ok(value);
+        }
+
+        stack.push(key.to_string());
+
+        let resolved = match value {
+            ConfigValue::Secret(secret) => match secret.into_inner() {
+                ConfigValue::String(template) => {
+                    let (interpolated, _contains_secret) =
+                        self.interpolate_template(key, &template, stack)?;
+                    ConfigValue::String(interpolated).into_secret()
+                }
+                other => other.into_secret(),
+            },
+            ConfigValue::String(template) => {
+                let (interpolated, contains_secret) =
+                    self.interpolate_template(key, &template, stack)?;
+                let value = ConfigValue::String(interpolated);
+                if contains_secret {
+                    value.into_secret()
+                } else {
+                    value
+                }
+            }
+            other => other,
+        };
+
+        stack.pop();
+        self.cache.insert(key.to_string(), resolved.clone());
+
+        Ok(resolved)
+    }
+
+    fn interpolate_template(
+        &mut self,
+        key: &str,
+        template: &str,
+        stack: &mut Vec<String>,
+    ) -> Result<(String, bool), ConfigError> {
+        let placeholders = extract_placeholders(key, template)?;
+        if placeholders.is_empty() {
+            return Ok((template.to_string(), false));
+        }
+
+        let mut out = String::new();
+        let mut cursor = 0usize;
+        let mut contains_secret = false;
+
+        while let Some(rel_start) = template[cursor..].find("${") {
+            let start = cursor + rel_start;
+            out.push_str(&template[cursor..start]);
+
+            let after_open = start + 2;
+            let rel_end = template[after_open..]
+                .find('}')
+                .expect("extract_placeholders should validate closing brace");
+            let end = after_open + rel_end;
+            let placeholder = template[after_open..end].trim();
+
+            if !self.raw.contains_key(placeholder) {
+                return Err(ConfigError::UnresolvedPlaceholder {
+                    key: key.to_string(),
+                    placeholder: placeholder.to_string(),
+                });
+            }
+
+            let resolved = self.resolve_value(placeholder, stack)?;
+            if resolved.is_secret() {
+                contains_secret = true;
+            }
+            out.push_str(&resolved.as_interpolation_string(key, placeholder)?);
+            cursor = end + 1;
+        }
+
+        out.push_str(&template[cursor..]);
+        Ok((out, contains_secret))
+    }
+
+    fn template_for(&self, key: &str) -> Result<Option<String>, ConfigError> {
+        if key.starts_with("alias.") {
+            return Ok(None);
+        }
+
+        let Some(ConfigValue::String(template)) = self.raw.get(key).map(ConfigValue::reveal) else {
+            return Ok(None);
+        };
+        if !template.contains("${") {
+            return Ok(None);
+        }
+
+        Ok(Some(template.clone()))
+    }
+
+    fn collect_steps_recursive(
+        &self,
+        key: &str,
+        final_values: &BTreeMap<String, ResolvedValue>,
+        steps: &mut Vec<ExplainInterpolationStep>,
+        seen: &mut BTreeSet<String>,
+        stack: &mut Vec<String>,
+    ) -> Result<(), ConfigError> {
+        let Some(template) = self.template_for(key)? else {
+            return Ok(());
+        };
+
+        if let Some(index) = stack.iter().position(|item| item == key) {
+            let mut cycle = stack[index..].to_vec();
+            cycle.push(key.to_string());
+            return Err(ConfigError::PlaceholderCycle { cycle });
+        }
+
+        stack.push(key.to_string());
+        for placeholder in extract_placeholders(key, &template)? {
+            if !self.raw.contains_key(&placeholder) {
+                return Err(ConfigError::UnresolvedPlaceholder {
+                    key: key.to_string(),
+                    placeholder,
+                });
+            }
+
+            if seen.insert(placeholder.clone())
+                && let Some(value_entry) = final_values.get(&placeholder)
+            {
+                steps.push(ExplainInterpolationStep {
+                    placeholder: placeholder.clone(),
+                    value: value_entry.value.clone(),
+                    source: value_entry.source,
+                    scope: value_entry.scope.clone(),
+                    origin: value_entry.origin.clone(),
+                });
+            }
+
+            self.collect_steps_recursive(&placeholder, final_values, steps, seen, stack)?;
+        }
+        stack.pop();
+
+        Ok(())
+    }
+}
+
 impl ConfigResolver {
     pub fn from_loaded_layers(layers: LoadedLayers) -> Self {
         Self {
@@ -418,135 +631,7 @@ fn global_rank(scope: &Scope, terminal: Option<&str>) -> Option<u8> {
 }
 
 fn interpolate_all(values: &mut BTreeMap<String, ResolvedValue>) -> Result<(), ConfigError> {
-    let raw = values
-        .iter()
-        .map(|(key, value)| (key.clone(), value.value.clone()))
-        .collect::<HashMap<String, ConfigValue>>();
-
-    let keys = values.keys().cloned().collect::<Vec<String>>();
-    let mut cache: HashMap<String, ConfigValue> = HashMap::new();
-    let mut stack: Vec<String> = Vec::new();
-
-    for key in keys {
-        let value = resolve_interpolated_value(&key, &raw, &mut cache, &mut stack)?;
-        if let Some(entry) = values.get_mut(&key) {
-            entry.value = value;
-        }
-    }
-
-    Ok(())
-}
-
-fn resolve_interpolated_value(
-    key: &str,
-    raw: &HashMap<String, ConfigValue>,
-    cache: &mut HashMap<String, ConfigValue>,
-    stack: &mut Vec<String>,
-) -> Result<ConfigValue, ConfigError> {
-    if let Some(value) = cache.get(key) {
-        return Ok(value.clone());
-    }
-
-    if let Some(index) = stack.iter().position(|item| item == key) {
-        let mut cycle = stack[index..].to_vec();
-        cycle.push(key.to_string());
-        return Err(ConfigError::PlaceholderCycle { cycle });
-    }
-
-    let value = raw
-        .get(key)
-        .cloned()
-        .ok_or_else(|| ConfigError::UnresolvedPlaceholder {
-            key: key.to_string(),
-            placeholder: key.to_string(),
-        })?;
-
-    if key.starts_with("alias.") {
-        cache.insert(key.to_string(), value.clone());
-        return Ok(value);
-    }
-
-    stack.push(key.to_string());
-
-    let resolved = match value {
-        ConfigValue::Secret(secret) => match secret.into_inner() {
-            ConfigValue::String(template) => {
-                let (interpolated, _contains_secret) =
-                    interpolate_string(key, &template, raw, cache, stack)?;
-                ConfigValue::String(interpolated).into_secret()
-            }
-            other => other.into_secret(),
-        },
-        ConfigValue::String(template) => {
-            let (interpolated, contains_secret) =
-                interpolate_string(key, &template, raw, cache, stack)?;
-            let value = ConfigValue::String(interpolated);
-            if contains_secret {
-                value.into_secret()
-            } else {
-                value
-            }
-        }
-        other => other,
-    };
-
-    stack.pop();
-    cache.insert(key.to_string(), resolved.clone());
-
-    Ok(resolved)
-}
-
-fn interpolate_string(
-    key: &str,
-    template: &str,
-    raw: &HashMap<String, ConfigValue>,
-    cache: &mut HashMap<String, ConfigValue>,
-    stack: &mut Vec<String>,
-) -> Result<(String, bool), ConfigError> {
-    let mut out = String::new();
-    let mut cursor = 0usize;
-    let mut contains_secret = false;
-
-    while let Some(rel_start) = template[cursor..].find("${") {
-        let start = cursor + rel_start;
-        out.push_str(&template[cursor..start]);
-
-        let after_open = start + 2;
-        let Some(rel_end) = template[after_open..].find('}') else {
-            return Err(ConfigError::InvalidPlaceholderSyntax {
-                key: key.to_string(),
-                template: template.to_string(),
-            });
-        };
-
-        let end = after_open + rel_end;
-        let placeholder = template[after_open..end].trim();
-        if placeholder.is_empty() {
-            return Err(ConfigError::InvalidPlaceholderSyntax {
-                key: key.to_string(),
-                template: template.to_string(),
-            });
-        }
-
-        if !raw.contains_key(placeholder) {
-            return Err(ConfigError::UnresolvedPlaceholder {
-                key: key.to_string(),
-                placeholder: placeholder.to_string(),
-            });
-        }
-
-        let resolved = resolve_interpolated_value(placeholder, raw, cache, stack)?;
-        if resolved.is_secret() {
-            contains_secret = true;
-        }
-        let interpolated = resolved.as_interpolation_string(key, placeholder)?;
-        out.push_str(&interpolated);
-
-        cursor = end + 1;
-    }
-
-    out.push_str(&template[cursor..]);
-    Ok((out, contains_secret))
+    Interpolator::from_resolved_values(values).apply_all(values)
 }
 
 fn explain_interpolation(
@@ -554,93 +639,7 @@ fn explain_interpolation(
     pre_interpolated: &BTreeMap<String, ResolvedValue>,
     final_values: &BTreeMap<String, ResolvedValue>,
 ) -> Result<Option<ExplainInterpolation>, ConfigError> {
-    if key.starts_with("alias.") {
-        return Ok(None);
-    }
-    let Some(entry) = pre_interpolated.get(key) else {
-        return Ok(None);
-    };
-    let ConfigValue::String(template) = entry.raw_value.reveal() else {
-        return Ok(None);
-    };
-    if !template.contains("${") {
-        return Ok(None);
-    }
-
-    let raw = pre_interpolated
-        .iter()
-        .map(|(entry_key, value)| (entry_key.clone(), value.raw_value.clone()))
-        .collect::<HashMap<String, ConfigValue>>();
-    let mut steps = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut stack = Vec::new();
-    collect_interpolation_steps_recursive(
-        key,
-        &raw,
-        final_values,
-        &mut steps,
-        &mut seen,
-        &mut stack,
-    )?;
-
-    Ok(Some(ExplainInterpolation {
-        template: template.clone(),
-        steps,
-    }))
-}
-
-fn collect_interpolation_steps_recursive(
-    key: &str,
-    raw: &HashMap<String, ConfigValue>,
-    final_values: &BTreeMap<String, ResolvedValue>,
-    steps: &mut Vec<ExplainInterpolationStep>,
-    seen: &mut BTreeSet<String>,
-    stack: &mut Vec<String>,
-) -> Result<(), ConfigError> {
-    if key.starts_with("alias.") {
-        return Ok(());
-    }
-    if let Some(index) = stack.iter().position(|item| item == key) {
-        let mut cycle = stack[index..].to_vec();
-        cycle.push(key.to_string());
-        return Err(ConfigError::PlaceholderCycle { cycle });
-    }
-
-    let Some(ConfigValue::String(template)) = raw.get(key).map(ConfigValue::reveal) else {
-        return Ok(());
-    };
-    if !template.contains("${") {
-        return Ok(());
-    }
-
-    stack.push(key.to_string());
-    let placeholders = extract_placeholders(key, template)?;
-
-    for placeholder in placeholders {
-        if !raw.contains_key(&placeholder) {
-            return Err(ConfigError::UnresolvedPlaceholder {
-                key: key.to_string(),
-                placeholder,
-            });
-        }
-
-        if seen.insert(placeholder.clone())
-            && let Some(value_entry) = final_values.get(&placeholder)
-        {
-            steps.push(ExplainInterpolationStep {
-                placeholder: placeholder.clone(),
-                value: value_entry.value.clone(),
-                source: value_entry.source,
-                scope: value_entry.scope.clone(),
-                origin: value_entry.origin.clone(),
-            });
-        }
-
-        collect_interpolation_steps_recursive(&placeholder, raw, final_values, steps, seen, stack)?;
-    }
-
-    stack.pop();
-    Ok(())
+    Interpolator::from_resolved_values(pre_interpolated).explain(key, final_values)
 }
 
 fn extract_placeholders(key: &str, template: &str) -> Result<Vec<String>, ConfigError> {
