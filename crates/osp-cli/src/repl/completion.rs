@@ -5,6 +5,7 @@ use osp_completion::{
 };
 use osp_config::{ConfigSchema, SchemaValueType};
 use osp_dsl::parse::pipeline::parse_stage;
+use osp_repl::default_pipe_verbs;
 use osp_ui::messages::render_section_divider_with_overrides;
 use osp_ui::style::StyleToken;
 use std::collections::{BTreeMap, BTreeSet};
@@ -468,28 +469,6 @@ fn config_key_suggestions() -> Vec<SuggestionEntry> {
         .entries()
         .map(|(key, _)| SuggestionEntry::value(key.to_string()))
         .collect()
-}
-
-fn default_pipe_verbs() -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("F".to_string(), "Filter rows".to_string()),
-        ("P".to_string(), "Project columns".to_string()),
-        ("S".to_string(), "Sort rows".to_string()),
-        ("G".to_string(), "Group rows".to_string()),
-        ("A".to_string(), "Aggregate rows/groups".to_string()),
-        ("L".to_string(), "Limit rows".to_string()),
-        ("Z".to_string(), "Collapse grouped output".to_string()),
-        ("C".to_string(), "Count rows".to_string()),
-        ("Y".to_string(), "Mark output for copy".to_string()),
-        ("H".to_string(), "Show DSL help".to_string()),
-        ("V".to_string(), "Value-only quick search".to_string()),
-        ("K".to_string(), "Key-only quick search".to_string()),
-        ("?".to_string(), "Clean rows / exists filter".to_string()),
-        ("U".to_string(), "Unroll list field".to_string()),
-        ("JQ".to_string(), "Run jq expression".to_string()),
-        ("VAL".to_string(), "Extract values".to_string()),
-        ("VALUE".to_string(), "Extract values".to_string()),
-    ])
 }
 
 pub(crate) fn maybe_render_dsl_help(state: &AppState, stages: &[String]) -> Option<String> {

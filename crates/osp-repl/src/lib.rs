@@ -840,6 +840,28 @@ struct RankedSuggestion {
     is_exact: bool,
 }
 
+pub fn default_pipe_verbs() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("F".to_string(), "Filter rows".to_string()),
+        ("P".to_string(), "Project columns".to_string()),
+        ("S".to_string(), "Sort rows".to_string()),
+        ("G".to_string(), "Group rows".to_string()),
+        ("A".to_string(), "Aggregate rows/groups".to_string()),
+        ("L".to_string(), "Limit rows".to_string()),
+        ("Z".to_string(), "Collapse grouped output".to_string()),
+        ("C".to_string(), "Count rows".to_string()),
+        ("Y".to_string(), "Mark output for copy".to_string()),
+        ("H".to_string(), "Show DSL help".to_string()),
+        ("V".to_string(), "Value-only quick search".to_string()),
+        ("K".to_string(), "Key-only quick search".to_string()),
+        ("?".to_string(), "Clean rows / exists filter".to_string()),
+        ("U".to_string(), "Unroll list field".to_string()),
+        ("JQ".to_string(), "Run jq expression".to_string()),
+        ("VAL".to_string(), "Extract values".to_string()),
+        ("VALUE".to_string(), "Extract values".to_string()),
+    ])
+}
+
 fn build_repl_tree(words: &[String]) -> CompletionTree {
     let suggestions = words
         .iter()
@@ -857,18 +879,7 @@ fn build_repl_tree(words: &[String]) -> CompletionTree {
             args,
             ..CompletionNode::default()
         },
-        pipe_verbs: BTreeMap::from([
-            ("F".to_string(), "Filter rows".to_string()),
-            ("P".to_string(), "Project columns".to_string()),
-            ("S".to_string(), "Sort rows".to_string()),
-            ("G".to_string(), "Group rows".to_string()),
-            ("A".to_string(), "Aggregate groups".to_string()),
-            ("L".to_string(), "Limit rows".to_string()),
-            ("C".to_string(), "Count rows".to_string()),
-            ("Y".to_string(), "Copy output".to_string()),
-            ("H".to_string(), "DSL help".to_string()),
-            ("V".to_string(), "Value-only quick filter".to_string()),
-        ]),
+        pipe_verbs: default_pipe_verbs(),
     }
 }
 
@@ -1625,7 +1636,7 @@ mod tests {
 
     use super::{
         RankedSuggestion, ReplCompleter, ReplHighlighter, color_from_style_spec,
-        dedupe_ranked_suggestions, expand_history, sort_ranked_suggestions,
+        dedupe_ranked_suggestions, default_pipe_verbs, expand_history, sort_ranked_suggestions,
     };
 
     fn token_styles(styled: &StyledText) -> Vec<(String, Option<Color>)> {
@@ -1744,6 +1755,18 @@ mod tests {
             .map(|suggestion| suggestion.value)
             .collect::<Vec<_>>();
         assert!(values.contains(&"F".to_string()));
+    }
+
+    #[test]
+    fn default_pipe_verbs_include_extended_dsl_surface() {
+        let verbs = default_pipe_verbs();
+
+        assert_eq!(
+            verbs.get("?"),
+            Some(&"Clean rows / exists filter".to_string())
+        );
+        assert_eq!(verbs.get("JQ"), Some(&"Run jq expression".to_string()));
+        assert_eq!(verbs.get("VALUE"), Some(&"Extract values".to_string()));
     }
 
     #[test]
