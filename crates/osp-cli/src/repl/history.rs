@@ -93,7 +93,7 @@ pub(crate) fn repl_history_enabled(config: &ResolvedConfig) -> bool {
 }
 
 pub(crate) fn run_history_repl_command(
-    _state: &mut AppState,
+    state: &mut AppState,
     args: HistoryArgs,
     history: &SharedHistory,
 ) -> Result<ReplCommandOutput> {
@@ -103,9 +103,10 @@ pub(crate) fn run_history_repl_command(
         ));
     }
 
+    let scope = repl_history_scope(state);
     match args.command {
         HistoryCommands::List => {
-            let rows = history_entries_rows(history.list_entries());
+            let rows = history_entries_rows(history.list_entries_for(scope.as_deref()));
             Ok(ReplCommandOutput::Output {
                 output: rows_to_output_result(rows),
                 format_hint: None,
@@ -113,7 +114,7 @@ pub(crate) fn run_history_repl_command(
         }
         HistoryCommands::Prune(HistoryPruneArgs { keep }) => {
             let removed = history
-                .prune(keep)
+                .prune_for(keep, scope.as_deref())
                 .map_err(|err| miette!(err.to_string()))?;
             Ok(ReplCommandOutput::Text(format!(
                 "Removed {removed} entr{}.\n",
@@ -122,7 +123,7 @@ pub(crate) fn run_history_repl_command(
         }
         HistoryCommands::Clear => {
             history
-                .clear_scoped()
+                .clear_for(scope.as_deref())
                 .map_err(|err| miette!(err.to_string()))?;
             Ok(ReplCommandOutput::Text("History cleared.\n".to_string()))
         }
@@ -171,6 +172,15 @@ fn repl_history_exclude_patterns(config: &ResolvedConfig) -> Vec<String> {
         patterns.push(default.to_string());
     }
     patterns
+}
+
+fn repl_history_scope(state: &AppState) -> Option<String> {
+    let prefix = state.session.scope.history_prefix();
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix)
+    }
 }
 
 #[cfg(test)]

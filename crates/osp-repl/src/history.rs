@@ -142,10 +142,24 @@ impl SharedHistory {
             .unwrap_or_default()
     }
 
+    pub fn recent_commands_for(&self, shell_prefix: Option<&str>) -> Vec<String> {
+        self.inner
+            .lock()
+            .map(|store| store.recent_commands_for(shell_prefix))
+            .unwrap_or_default()
+    }
+
     pub fn list_entries(&self) -> Vec<HistoryEntry> {
         self.inner
             .lock()
             .map(|store| store.list_entries())
+            .unwrap_or_default()
+    }
+
+    pub fn list_entries_for(&self, shell_prefix: Option<&str>) -> Vec<HistoryEntry> {
+        self.inner
+            .lock()
+            .map(|store| store.list_entries_for(shell_prefix))
             .unwrap_or_default()
     }
 
@@ -157,12 +171,28 @@ impl SharedHistory {
         guard.prune(keep)
     }
 
+    pub fn prune_for(&self, keep: usize, shell_prefix: Option<&str>) -> Result<usize> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("history lock poisoned"))?;
+        guard.prune_for(keep, shell_prefix)
+    }
+
     pub fn clear_scoped(&self) -> Result<usize> {
         let mut guard = self
             .inner
             .lock()
             .map_err(|_| anyhow::anyhow!("history lock poisoned"))?;
         guard.clear_scoped()
+    }
+
+    pub fn clear_for(&self, shell_prefix: Option<&str>) -> Result<usize> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("history lock poisoned"))?;
+        guard.clear_for(shell_prefix)
     }
 
     pub fn save_command_line(&self, command_line: &str) -> Result<()> {
@@ -199,7 +229,11 @@ impl OspHistoryStore {
     }
 
     pub fn recent_commands(&self) -> Vec<String> {
-        let shell_prefix = self.shell_prefix();
+        self.recent_commands_for(self.shell_prefix().as_deref())
+    }
+
+    pub fn recent_commands_for(&self, shell_prefix: Option<&str>) -> Vec<String> {
+        let shell_prefix = normalize_scope_prefix(shell_prefix);
         self.records
             .iter()
             .filter_map(|record| {
@@ -210,10 +244,14 @@ impl OspHistoryStore {
     }
 
     pub fn list_entries(&self) -> Vec<HistoryEntry> {
+        self.list_entries_for(self.shell_prefix().as_deref())
+    }
+
+    pub fn list_entries_for(&self, shell_prefix: Option<&str>) -> Vec<HistoryEntry> {
         if !self.history_enabled() {
             return Vec::new();
         }
-        let shell_prefix = self.shell_prefix();
+        let shell_prefix = normalize_scope_prefix(shell_prefix);
         let mut out = Vec::new();
         let mut id = 0i64;
         for record in &self.records {
@@ -232,10 +270,15 @@ impl OspHistoryStore {
     }
 
     pub fn prune(&mut self, keep: usize) -> Result<usize> {
+        let shell_prefix = self.shell_prefix();
+        self.prune_for(keep, shell_prefix.as_deref())
+    }
+
+    pub fn prune_for(&mut self, keep: usize, shell_prefix: Option<&str>) -> Result<usize> {
         if !self.history_enabled() {
             return Ok(0);
         }
-        let shell_prefix = self.shell_prefix();
+        let shell_prefix = normalize_scope_prefix(shell_prefix);
         let mut eligible = Vec::new();
         for (idx, record) in self.records.iter().enumerate() {
             if self
@@ -261,6 +304,10 @@ impl OspHistoryStore {
 
     pub fn clear_scoped(&mut self) -> Result<usize> {
         self.prune(0)
+    }
+
+    pub fn clear_for(&mut self, shell_prefix: Option<&str>) -> Result<usize> {
+        self.prune_for(0, shell_prefix)
     }
 
     fn profile_allows(&self, record: &HistoryRecord) -> bool {
@@ -837,6 +884,10 @@ fn normalize_shell_prefix(value: String) -> Option<String> {
     Some(out)
 }
 
+fn normalize_scope_prefix(shell_prefix: Option<&str>) -> Option<String> {
+    shell_prefix.and_then(|value| normalize_shell_prefix(value.to_string()))
+}
+
 fn command_matches_shell_prefix(command: &str, shell_prefix: Option<&str>) -> bool {
     match shell_prefix {
         Some(prefix) => command.starts_with(prefix),
@@ -1109,5 +1160,43 @@ mod tests {
         shell.clear();
         let root_entries = store.list_entries();
         assert_eq!(root_entries.len(), 2);
+    }
+
+    #[test]
+    fn explicit_scope_queries_override_live_shell_context() {
+        let shell = HistoryShellContext::default();
+        let config = HistoryConfig::new(
+            None,
+            10,
+            true,
+            false,
+            false,
+            Vec::new(),
+            None,
+            None,
+            shell.clone(),
+        );
+        let mut store = OspHistoryStore::new(config).expect("history store should init");
+        let _ = History::save(
+            &mut store,
+            HistoryItem::from_command_line("ldap user alice"),
+        )
+        .expect("save should succeed");
+        let _ = History::save(&mut store, HistoryItem::from_command_line("mreg host a"))
+            .expect("save should succeed");
+
+        shell.set_prefix("ldap");
+        let mreg_entries = store.list_entries_for(Some("mreg"));
+        assert_eq!(mreg_entries.len(), 1);
+        assert_eq!(mreg_entries[0].command, "host a");
+
+        let removed = store
+            .prune_for(0, Some("mreg"))
+            .expect("prune should succeed");
+        assert_eq!(removed, 1);
+
+        let root_entries = store.list_entries_for(None);
+        assert_eq!(root_entries.len(), 1);
+        assert_eq!(root_entries[0].command, "ldap user alice");
     }
 }

@@ -543,7 +543,10 @@ where
 
     fn refresh_history_view_if_needed(&mut self, command_line: &str) {
         if self.history_enabled() && command_line.trim().starts_with("history") {
-            *self.command_history = self.history_store.recent_commands();
+            let shell_prefix = self.shell_prefix();
+            *self.command_history = self
+                .history_store
+                .recent_commands_for(shell_prefix.as_deref());
         }
     }
 }
@@ -641,7 +644,8 @@ where
     let history_exclude_patterns = history_config.exclude_patterns.clone();
     let shell_context = history_config.shell_context.clone();
     let history_store = SharedHistory::new(history_config)?;
-    let mut command_history = history_store.recent_commands();
+    let shell_prefix = shell_context.prefix();
+    let mut command_history = history_store.recent_commands_for(shell_prefix.as_deref());
     editor = editor.with_history(Box::new(history_store.clone()));
     let mut submission = SubmissionContext {
         command_history: &mut command_history,
