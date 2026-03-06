@@ -9,546 +9,720 @@ use crate::document::{
     Block, Document, MregBlock, MregValue, PanelRules, TableAlign, TableBlock, TableStyle,
 };
 use crate::layout::{LayoutContext, MregMetrics, prepare_layout_context};
-use crate::style::{
-    StyleOverrides, StyleToken, apply_style_spec, apply_style_with_theme_overrides,
-};
-use crate::theme::ThemeDefinition;
+use crate::style::{StyleToken, apply_style_spec, apply_style_with_theme_overrides};
 use crate::{RenderBackend, ResolvedRenderSettings, TableOverflow};
 
-const DEFAULT_SHORT_LIST_MAX: usize = 1;
-const DEFAULT_MEDIUM_LIST_MAX: usize = 5;
-const DEFAULT_GRID_PADDING: usize = 4;
-const DEFAULT_COLUMN_WEIGHT: usize = 3;
-
 pub fn render_document(document: &Document, settings: ResolvedRenderSettings) -> String {
-    let layout = prepare_layout_context(document, &settings);
-    let mut out = String::new();
-    for block in &document.blocks {
-        out.push_str(&render_block(block, &settings, &layout));
-    }
-    out
+    DocumentRenderer::new(document, &settings).render(document)
 }
 
-fn render_block(
-    block: &Block,
-    settings: &ResolvedRenderSettings,
-    layout: &LayoutContext,
-) -> String {
-    match settings.backend {
-        RenderBackend::Plain => render_block_plain(block, settings, layout),
-        RenderBackend::Rich => render_block_rich(block, settings, layout),
-    }
+struct DocumentRenderer<'a> {
+    settings: &'a ResolvedRenderSettings,
+    layout: LayoutContext,
 }
 
-fn render_block_plain(
-    block: &Block,
-    settings: &ResolvedRenderSettings,
-    layout: &LayoutContext,
-) -> String {
-    match block {
-        Block::Line(line) => render_line_block(
-            line,
-            false,
-            &settings.theme,
-            settings.margin,
-            &settings.style_overrides,
-        ),
-        Block::Panel(panel) => render_panel_block(panel, settings),
-        Block::Code(code) => render_code_block(
-            code,
-            settings.margin,
-            false,
-            &settings.theme,
-            &settings.style_overrides,
-        ),
-        Block::Json(json) => indent_lines(
-            &serde_json::to_string_pretty(&json.payload).unwrap_or_else(|_| "[]".to_string()),
-            settings.margin,
-        ),
-        Block::Value(values) => render_value_block(&values.values, settings.margin),
-        Block::Mreg(mreg) => render_mreg_block(
-            mreg,
-            false,
-            false,
-            settings.width,
-            settings.margin,
-            settings.indent_size,
-            settings.short_list_max.max(DEFAULT_SHORT_LIST_MAX),
-            settings.medium_list_max.max(DEFAULT_MEDIUM_LIST_MAX),
-            settings.grid_padding.max(DEFAULT_GRID_PADDING),
-            settings.grid_columns,
-            settings.column_weight.max(DEFAULT_COLUMN_WEIGHT),
-            &settings.theme,
-            &settings.style_overrides,
-            layout.mreg_metrics.get(&mreg.block_id).copied(),
-        ),
-        Block::Table(table) => render_table_block(
-            table,
-            false,
-            false,
-            settings.width,
-            &settings.theme,
-            settings.margin,
-            settings.indent_size,
-            false,
-            layout
-                .table_column_widths
-                .get(&table.block_id)
-                .map(Vec::as_slice),
-            &settings.style_overrides,
-            settings.table_overflow,
-        ),
+impl<'a> DocumentRenderer<'a> {
+    fn new(document: &Document, settings: &'a ResolvedRenderSettings) -> Self {
+        Self {
+            settings,
+            layout: prepare_layout_context(document, settings),
+        }
     }
-}
 
-fn render_block_rich(
-    block: &Block,
-    settings: &ResolvedRenderSettings,
-    layout: &LayoutContext,
-) -> String {
-    match block {
-        Block::Line(line) => render_line_block(
-            line,
-            settings.color,
-            &settings.theme,
-            settings.margin,
-            &settings.style_overrides,
-        ),
-        Block::Panel(panel) => render_panel_block(panel, settings),
-        Block::Code(code) => render_code_block(
-            code,
-            settings.margin,
-            settings.color,
-            &settings.theme,
-            &settings.style_overrides,
-        ),
-        Block::Json(json) => render_json_block(
-            &json.payload,
-            settings.margin,
-            settings.color,
-            &settings.theme,
-            &settings.style_overrides,
-        ),
-        Block::Value(values) => render_value_block(&values.values, settings.margin),
-        Block::Mreg(mreg) => render_mreg_block(
-            mreg,
-            settings.color,
-            settings.unicode,
-            settings.width,
-            settings.margin,
-            settings.indent_size,
-            settings.short_list_max.max(DEFAULT_SHORT_LIST_MAX),
-            settings.medium_list_max.max(DEFAULT_MEDIUM_LIST_MAX),
-            settings.grid_padding.max(DEFAULT_GRID_PADDING),
-            settings.grid_columns,
-            settings.column_weight.max(DEFAULT_COLUMN_WEIGHT),
-            &settings.theme,
-            &settings.style_overrides,
-            layout.mreg_metrics.get(&mreg.block_id).copied(),
-        ),
-        Block::Table(table) => render_table_block(
-            table,
-            settings.unicode,
-            settings.color,
-            settings.width,
-            &settings.theme,
-            settings.margin,
-            settings.indent_size,
-            true,
-            layout
-                .table_column_widths
-                .get(&table.block_id)
-                .map(Vec::as_slice),
-            &settings.style_overrides,
-            settings.table_overflow,
-        ),
+    fn render(&self, document: &Document) -> String {
+        let mut out = String::new();
+        for block in &document.blocks {
+            out.push_str(&self.render_block(block));
+        }
+        out
     }
-}
 
-fn render_value_block(values: &[String], margin: usize) -> String {
-    if values.is_empty() {
-        String::new()
-    } else {
+    fn render_block(&self, block: &Block) -> String {
+        match block {
+            Block::Line(line) => self.render_line_block(line),
+            Block::Panel(panel) => self.render_panel_block(panel),
+            Block::Code(code) => self.render_code_block(code),
+            Block::Json(json) => {
+                if matches!(self.settings.backend, RenderBackend::Plain) {
+                    indent_lines(
+                        &serde_json::to_string_pretty(&json.payload)
+                            .unwrap_or_else(|_| "[]".to_string()),
+                        self.settings.margin,
+                    )
+                } else {
+                    self.render_json_block(&json.payload)
+                }
+            }
+            Block::Value(values) => self.render_value_block(&values.values),
+            Block::Mreg(mreg) => {
+                self.render_mreg_block(mreg, self.layout.mreg_metrics.get(&mreg.block_id).copied())
+            }
+            Block::Table(table) => self.render_table_block(
+                table,
+                self.layout
+                    .table_column_widths
+                    .get(&table.block_id)
+                    .map(Vec::as_slice),
+                matches!(self.settings.backend, RenderBackend::Rich),
+            ),
+        }
+    }
+
+    fn render_value_block(&self, values: &[String]) -> String {
+        if values.is_empty() {
+            return String::new();
+        }
+
         values
             .iter()
-            .map(|value| format!("{}{}\n", " ".repeat(margin), value))
-            .collect::<String>()
+            .map(|value| format!("{}{}\n", " ".repeat(self.settings.margin), value))
+            .collect()
     }
-}
 
-fn render_line_block(
-    block: &crate::document::LineBlock,
-    color: bool,
-    theme: &ThemeDefinition,
-    margin: usize,
-    style_overrides: &StyleOverrides,
-) -> String {
-    let mut out = String::new();
-    out.push_str(&" ".repeat(margin));
-    for part in &block.parts {
-        if let Some(token) = part.token {
-            out.push_str(&apply_style_with_theme_overrides(
-                &part.text,
-                token,
-                color,
-                theme,
-                style_overrides,
-            ));
-        } else {
-            out.push_str(&part.text);
-        }
-    }
-    out.push('\n');
-    out
-}
-
-fn render_code_block(
-    block: &crate::document::CodeBlock,
-    margin: usize,
-    color: bool,
-    theme: &ThemeDefinition,
-    style_overrides: &StyleOverrides,
-) -> String {
-    let code = if block.code.ends_with('\n') {
-        block.code.clone()
-    } else {
-        format!("{}\n", block.code)
-    };
-    let mut out = String::new();
-    for line in code.trim_end_matches('\n').lines() {
-        let line =
-            apply_style_with_theme_overrides(line, StyleToken::Code, color, theme, style_overrides);
-        out.push_str(&" ".repeat(margin));
-        out.push_str(&line);
-        out.push('\n');
-    }
-    out
-}
-
-fn render_json_block(
-    payload: &Value,
-    margin: usize,
-    color: bool,
-    theme: &ThemeDefinition,
-    style_overrides: &StyleOverrides,
-) -> String {
-    let rendered = render_json_value(payload, 0, color, theme, style_overrides);
-    indent_lines(&rendered, margin)
-}
-
-fn render_json_value(
-    value: &Value,
-    depth: usize,
-    color: bool,
-    theme: &ThemeDefinition,
-    style_overrides: &StyleOverrides,
-) -> String {
-    let indent = "  ".repeat(depth);
-    let next_indent = "  ".repeat(depth + 1);
-
-    match value {
-        Value::Object(map) => {
-            if map.is_empty() {
-                return "{}".to_string();
-            }
-            let mut out = String::new();
-            out.push_str("{\n");
-            for (index, (key, item)) in map.iter().enumerate() {
-                let comma = if index + 1 < map.len() { "," } else { "" };
-                let key_json = serde_json::to_string(key).unwrap_or_else(|_| format!("\"{key}\""));
-                let key_text = apply_style_with_theme_overrides(
-                    &key_json,
-                    StyleToken::JsonKey,
-                    color,
-                    theme,
-                    style_overrides,
-                );
-                let value_text = render_json_value(item, depth + 1, color, theme, style_overrides);
-                out.push_str(&next_indent);
-                out.push_str(&key_text);
-                out.push_str(": ");
-                out.push_str(&value_text);
-                out.push_str(comma);
-                out.push('\n');
-            }
-            out.push_str(&indent);
-            out.push('}');
-            out
-        }
-        Value::Array(values) => {
-            if values.is_empty() {
-                return "[]".to_string();
-            }
-            let mut out = String::new();
-            out.push_str("[\n");
-            for (index, item) in values.iter().enumerate() {
-                let comma = if index + 1 < values.len() { "," } else { "" };
-                out.push_str(&next_indent);
-                out.push_str(&render_json_value(
-                    item,
-                    depth + 1,
-                    color,
-                    theme,
-                    style_overrides,
+    fn render_line_block(&self, block: &crate::document::LineBlock) -> String {
+        let mut out = String::new();
+        out.push_str(&" ".repeat(self.settings.margin));
+        for part in &block.parts {
+            if let Some(token) = part.token {
+                out.push_str(&apply_style_with_theme_overrides(
+                    &part.text,
+                    token,
+                    self.settings.color,
+                    &self.settings.theme,
+                    &self.settings.style_overrides,
                 ));
-                out.push_str(comma);
-                out.push('\n');
-            }
-            out.push_str(&indent);
-            out.push(']');
-            out
-        }
-        Value::String(raw) => {
-            let quoted = serde_json::to_string(raw).unwrap_or_else(|_| format!("\"{raw}\""));
-            apply_style_with_theme_overrides(
-                &quoted,
-                StyleToken::Value,
-                color,
-                theme,
-                style_overrides,
-            )
-        }
-        Value::Number(number) => apply_style_with_theme_overrides(
-            &number.to_string(),
-            StyleToken::Number,
-            color,
-            theme,
-            style_overrides,
-        ),
-        Value::Bool(boolean) => apply_style_with_theme_overrides(
-            if *boolean { "true" } else { "false" },
-            if *boolean {
-                StyleToken::BoolTrue
             } else {
-                StyleToken::BoolFalse
-            },
-            color,
-            theme,
-            style_overrides,
-        ),
-        Value::Null => apply_style_with_theme_overrides(
-            "null",
-            StyleToken::Null,
-            color,
-            theme,
-            style_overrides,
-        ),
-    }
-}
-
-fn render_panel_block(
-    block: &crate::document::PanelBlock,
-    settings: &ResolvedRenderSettings,
-) -> String {
-    let fallback = section_style_token(block.kind.as_deref()).unwrap_or(StyleToken::PanelBorder);
-    let token = block.border_token.unwrap_or(fallback);
-    let color = settings.color;
-    let unicode = settings.unicode;
-    let width = settings.width;
-    let theme = &settings.theme;
-    let title_token = block.title_token.unwrap_or(StyleToken::PanelTitle);
-    let divider = section_divider(
-        block.title.as_deref().unwrap_or(""),
-        token,
-        title_token,
-        unicode,
-        width,
-        color,
-        theme,
-        &settings.style_overrides,
-    );
-    let mut child_settings = settings.clone();
-    child_settings.margin = settings.margin + settings.indent_size;
-    let inner = render_document(&block.body, child_settings);
-    match block.rules {
-        PanelRules::None => inner,
-        PanelRules::Top => format!("{}{}\n{}", " ".repeat(settings.margin), divider, inner),
-        PanelRules::Bottom => format!("{inner}{}{}\n", " ".repeat(settings.margin), divider),
-        PanelRules::Both => format!(
-            "{}{}\n{inner}{}{}\n",
-            " ".repeat(settings.margin),
-            divider,
-            " ".repeat(settings.margin),
-            divider
-        ),
-    }
-}
-
-fn render_mreg_block(
-    block: &MregBlock,
-    color: bool,
-    unicode: bool,
-    width: Option<usize>,
-    margin: usize,
-    indent_size: usize,
-    short_list_max: usize,
-    medium_list_max: usize,
-    grid_padding: usize,
-    grid_columns: Option<usize>,
-    column_weight: usize,
-    theme: &ThemeDefinition,
-    style_overrides: &StyleOverrides,
-    metrics: Option<MregMetrics>,
-) -> String {
-    if block.rows.is_empty() {
-        return String::new();
-    }
-
-    let key_width = metrics
-        .map(|value| value.key_width)
-        .unwrap_or_else(|| compute_mreg_key_width(block, indent_size).max(3));
-    let value_column = key_width + 2;
-    let mut out = String::new();
-    for (row_index, row) in block.rows.iter().enumerate() {
-        for entry in &row.entries {
-            let key_indent = " ".repeat(entry.depth * indent_size);
-            let margin_indent = " ".repeat(margin);
-            let key_text = apply_style_with_theme_overrides(
-                &entry.key,
-                StyleToken::MregKey,
-                color,
-                theme,
-                style_overrides,
-            );
-            let key_len = display_width(&entry.key);
-            let base_key_len = mreg_alignment_key_width(&entry.key);
-            let base_len = entry.depth * indent_size + base_key_len + 1;
-            let full_len = entry.depth * indent_size + key_len + 1;
-            let scalar_gap_width = value_column.saturating_sub(base_len).max(1);
-            let scalar_gap = " ".repeat(scalar_gap_width);
-
-            match &entry.value {
-                MregValue::Group => {
-                    out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
-                }
-                MregValue::Separator => {
-                    out.push_str(&format!("{margin_indent}{key_indent}---\n"));
-                }
-                MregValue::Scalar(value) => {
-                    if value.is_null() {
-                        out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
-                        continue;
-                    }
-                    let raw = value_to_display(value);
-                    let value_text = style_value_cell(value, &raw, color, theme, style_overrides);
-                    out.push_str(&format!(
-                        "{margin_indent}{key_indent}{key_text}:{scalar_gap}{value_text}\n"
-                    ));
-                }
-                MregValue::List(values) => {
-                    let list_available_width = width
-                        .unwrap_or(100)
-                        .saturating_sub(margin + (entry.depth + 1) * indent_size)
-                        .max(16);
-                    let rendered = render_mreg_list(
-                        values,
-                        list_available_width,
-                        unicode,
-                        short_list_max,
-                        medium_list_max,
-                        grid_padding,
-                        grid_columns,
-                        column_weight,
-                    );
-                    match rendered {
-                        MregListRender::Inline(line) => {
-                            out.push_str(&format!(
-                                "{margin_indent}{key_indent}{key_text}:{scalar_gap}{line}\n"
-                            ));
-                        }
-                        MregListRender::Vertical(lines) => {
-                            if let Some((first, rest)) = lines.split_first() {
-                                let first_value_col = value_column.max(full_len + 1);
-                                let first_gap_width = first_value_col.saturating_sub(full_len);
-                                out.push_str(&format!(
-                                    "{margin_indent}{key_indent}{key_text}:{}{first}\n",
-                                    " ".repeat(first_gap_width)
-                                ));
-                                let hanging = " ".repeat(margin + first_value_col);
-                                for line in rest {
-                                    out.push_str(&format!("{hanging}{line}\n"));
-                                }
-                            } else {
-                                out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
-                            }
-                        }
-                        MregListRender::Grid(lines) => {
-                            out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
-                            for line in lines {
-                                out.push_str(&" ".repeat(margin + (entry.depth + 1) * indent_size));
-                                let joined = line.join(&" ".repeat(grid_padding));
-                                out.push_str(joined.trim_end());
-                                out.push('\n');
-                            }
-                        }
-                    }
-                }
+                out.push_str(&part.text);
             }
         }
+        out.push('\n');
+        out
+    }
 
-        if block.rows.len() > 1 && row_index < block.rows.len() - 1 {
+    fn render_code_block(&self, block: &crate::document::CodeBlock) -> String {
+        let code = if block.code.ends_with('\n') {
+            block.code.clone()
+        } else {
+            format!("{}\n", block.code)
+        };
+        let mut out = String::new();
+        for line in code.trim_end_matches('\n').lines() {
+            let line = apply_style_with_theme_overrides(
+                line,
+                StyleToken::Code,
+                self.settings.color,
+                &self.settings.theme,
+                &self.settings.style_overrides,
+            );
+            out.push_str(&" ".repeat(self.settings.margin));
+            out.push_str(&line);
             out.push('\n');
         }
+        out
     }
 
-    out
-}
+    fn render_json_block(&self, payload: &Value) -> String {
+        let rendered = self.render_json_value(payload, 0);
+        indent_lines(&rendered, self.settings.margin)
+    }
 
-fn section_divider(
-    title: &str,
-    border_token: StyleToken,
-    title_token: StyleToken,
-    unicode: bool,
-    width: Option<usize>,
-    color: bool,
-    theme: &ThemeDefinition,
-    style_overrides: &StyleOverrides,
-) -> String {
-    let fill_char = if unicode { '─' } else { '-' };
-    let target_width = width.unwrap_or(24).max(12);
-    let title = title.trim();
+    fn render_json_value(&self, value: &Value, depth: usize) -> String {
+        let indent = "  ".repeat(depth);
+        let next_indent = "  ".repeat(depth + 1);
 
-    if title.is_empty() {
-        let raw = fill_char.to_string().repeat(target_width);
-        if color {
-            return apply_style_with_theme_overrides(
-                &raw,
-                StyleToken::PanelBorder,
-                true,
-                theme,
-                style_overrides,
-            );
+        match value {
+            Value::Object(map) => {
+                if map.is_empty() {
+                    return "{}".to_string();
+                }
+                let mut out = String::new();
+                out.push_str("{\n");
+                for (index, (key, item)) in map.iter().enumerate() {
+                    let comma = if index + 1 < map.len() { "," } else { "" };
+                    let key_json =
+                        serde_json::to_string(key).unwrap_or_else(|_| format!("\"{key}\""));
+                    let key_text = apply_style_with_theme_overrides(
+                        &key_json,
+                        StyleToken::JsonKey,
+                        self.settings.color,
+                        &self.settings.theme,
+                        &self.settings.style_overrides,
+                    );
+                    let value_text = self.render_json_value(item, depth + 1);
+                    out.push_str(&next_indent);
+                    out.push_str(&key_text);
+                    out.push_str(": ");
+                    out.push_str(&value_text);
+                    out.push_str(comma);
+                    out.push('\n');
+                }
+                out.push_str(&indent);
+                out.push('}');
+                out
+            }
+            Value::Array(values) => {
+                if values.is_empty() {
+                    return "[]".to_string();
+                }
+                let mut out = String::new();
+                out.push_str("[\n");
+                for (index, item) in values.iter().enumerate() {
+                    let comma = if index + 1 < values.len() { "," } else { "" };
+                    out.push_str(&next_indent);
+                    out.push_str(&self.render_json_value(item, depth + 1));
+                    out.push_str(comma);
+                    out.push('\n');
+                }
+                out.push_str(&indent);
+                out.push(']');
+                out
+            }
+            Value::String(raw) => {
+                let quoted = serde_json::to_string(raw).unwrap_or_else(|_| format!("\"{raw}\""));
+                apply_style_with_theme_overrides(
+                    &quoted,
+                    StyleToken::Value,
+                    self.settings.color,
+                    &self.settings.theme,
+                    &self.settings.style_overrides,
+                )
+            }
+            Value::Number(number) => apply_style_with_theme_overrides(
+                &number.to_string(),
+                StyleToken::Number,
+                self.settings.color,
+                &self.settings.theme,
+                &self.settings.style_overrides,
+            ),
+            Value::Bool(boolean) => apply_style_with_theme_overrides(
+                if *boolean { "true" } else { "false" },
+                if *boolean {
+                    StyleToken::BoolTrue
+                } else {
+                    StyleToken::BoolFalse
+                },
+                self.settings.color,
+                &self.settings.theme,
+                &self.settings.style_overrides,
+            ),
+            Value::Null => apply_style_with_theme_overrides(
+                "null",
+                StyleToken::Null,
+                self.settings.color,
+                &self.settings.theme,
+                &self.settings.style_overrides,
+            ),
         }
-        return raw;
     }
 
-    let left = if unicode { "─ " } else { "- " };
-    let prefix_width = left.chars().count() + title.chars().count() + 1;
-    let suffix = if prefix_width >= target_width {
-        String::new()
-    } else {
-        fill_char.to_string().repeat(target_width - prefix_width)
-    };
-    let raw = format!("{left}{title} {suffix}");
+    fn render_panel_block(&self, block: &crate::document::PanelBlock) -> String {
+        let fallback =
+            section_style_token(block.kind.as_deref()).unwrap_or(StyleToken::PanelBorder);
+        let border_token = block.border_token.unwrap_or(fallback);
+        let title_token = block.title_token.unwrap_or(StyleToken::PanelTitle);
+        let titled_divider = self.section_divider(
+            block.title.as_deref().unwrap_or(""),
+            border_token,
+            title_token,
+        );
+        let trailing_divider = self.section_divider("", border_token, title_token);
+        let inner = DocumentRenderer::new(&block.body, self.settings).render(&block.body);
 
-    if !color {
-        return raw;
+        match block.rules {
+            PanelRules::None => inner,
+            PanelRules::Top => {
+                format!(
+                    "{}{}\n{}",
+                    " ".repeat(self.settings.margin),
+                    titled_divider,
+                    inner
+                )
+            }
+            PanelRules::Bottom => {
+                format!(
+                    "{inner}{}{}\n",
+                    " ".repeat(self.settings.margin),
+                    trailing_divider
+                )
+            }
+            PanelRules::Both => format!(
+                "{}{}\n{inner}{}{}\n",
+                " ".repeat(self.settings.margin),
+                titled_divider,
+                " ".repeat(self.settings.margin),
+                trailing_divider
+            ),
+        }
     }
 
-    if title_token == border_token {
-        return apply_style_with_theme_overrides(&raw, border_token, true, theme, style_overrides);
+    fn render_mreg_block(&self, block: &MregBlock, metrics: Option<MregMetrics>) -> String {
+        if block.rows.is_empty() {
+            return String::new();
+        }
+
+        let key_width = metrics
+            .map(|value| value.key_width)
+            .unwrap_or_else(|| compute_mreg_key_width(block, self.settings.indent_size).max(3));
+        let value_column = key_width + 2;
+        let mut out = String::new();
+
+        for (row_index, row) in block.rows.iter().enumerate() {
+            for entry in &row.entries {
+                let key_indent = " ".repeat(entry.depth * self.settings.indent_size);
+                let margin_indent = " ".repeat(self.settings.margin);
+                let key_text = self.style_token(&entry.key, StyleToken::MregKey);
+                let key_len = display_width(&entry.key);
+                let base_key_len = mreg_alignment_key_width(&entry.key);
+                let base_len = entry.depth * self.settings.indent_size + base_key_len + 1;
+                let full_len = entry.depth * self.settings.indent_size + key_len + 1;
+                let scalar_gap_width = value_column.saturating_sub(base_len).max(1);
+                let scalar_gap = " ".repeat(scalar_gap_width);
+
+                match &entry.value {
+                    MregValue::Group => {
+                        out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
+                    }
+                    MregValue::Separator => {
+                        out.push_str(&format!("{margin_indent}{key_indent}---\n"));
+                    }
+                    MregValue::Scalar(value) => {
+                        if value.is_null() {
+                            out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
+                            continue;
+                        }
+                        let raw = value_to_display(value);
+                        let value_text = self.style_value_cell(value, &raw);
+                        out.push_str(&format!(
+                            "{margin_indent}{key_indent}{key_text}:{scalar_gap}{value_text}\n"
+                        ));
+                    }
+                    MregValue::List(values) => {
+                        let rendered = self.render_mreg_list(
+                            values,
+                            metrics.map(|value| value.content_width),
+                            entry.depth,
+                        );
+                        match rendered {
+                            MregListRender::Inline(line) => {
+                                out.push_str(&format!(
+                                    "{margin_indent}{key_indent}{key_text}:{scalar_gap}{line}\n"
+                                ));
+                            }
+                            MregListRender::Vertical(lines) => {
+                                if let Some((first, rest)) = lines.split_first() {
+                                    let first_value_col = value_column.max(full_len + 1);
+                                    let first_gap_width = first_value_col.saturating_sub(full_len);
+                                    out.push_str(&format!(
+                                        "{margin_indent}{key_indent}{key_text}:{}{first}\n",
+                                        " ".repeat(first_gap_width)
+                                    ));
+                                    let hanging =
+                                        " ".repeat(self.settings.margin + first_value_col);
+                                    for line in rest {
+                                        out.push_str(&format!("{hanging}{line}\n"));
+                                    }
+                                } else {
+                                    out.push_str(&format!(
+                                        "{margin_indent}{key_indent}{key_text}:\n"
+                                    ));
+                                }
+                            }
+                            MregListRender::Grid(lines) => {
+                                out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
+                                for line in lines {
+                                    out.push_str(&" ".repeat(
+                                        self.settings.margin
+                                            + (entry.depth + 1) * self.settings.indent_size,
+                                    ));
+                                    let joined = line.join(&" ".repeat(self.settings.grid_padding));
+                                    out.push_str(joined.trim_end());
+                                    out.push('\n');
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if block.rows.len() > 1 && row_index < block.rows.len() - 1 {
+                out.push('\n');
+            }
+        }
+
+        out
     }
 
-    let border = apply_style_with_theme_overrides(left, border_token, true, theme, style_overrides);
-    let title = apply_style_with_theme_overrides(title, title_token, true, theme, style_overrides);
-    let trailing = apply_style_with_theme_overrides(
-        &format!(" {suffix}"),
-        border_token,
-        true,
-        theme,
-        style_overrides,
-    );
-    format!("{border}{title}{trailing}")
+    fn render_table_block(
+        &self,
+        block: &TableBlock,
+        column_widths: Option<&[usize]>,
+        respect_depth: bool,
+    ) -> String {
+        if block.rows.is_empty() && block.header_pairs.is_empty() {
+            return String::new();
+        }
+
+        let mut out = String::new();
+        let header_pairs = self.render_table_header_pairs(block, respect_depth);
+        if !header_pairs.is_empty() {
+            out.push_str(&header_pairs);
+        }
+
+        let effective_margin = self.settings.margin
+            + if respect_depth {
+                block.depth * self.settings.indent_size
+            } else {
+                0
+            };
+
+        let table_body = match block.style {
+            TableStyle::Grid => self.render_grid_table(block, effective_margin, column_widths),
+            TableStyle::Markdown => {
+                self.render_markdown_table(block, effective_margin, column_widths)
+            }
+        };
+
+        out.push_str(&table_body);
+        out
+    }
+
+    fn render_table_header_pairs(&self, block: &TableBlock, respect_depth: bool) -> String {
+        if block.header_pairs.is_empty() {
+            return String::new();
+        }
+
+        let mut out = String::new();
+        let prefix = " ".repeat(
+            self.settings.margin
+                + if respect_depth {
+                    block.depth * self.settings.indent_size
+                } else {
+                    0
+                },
+        );
+        let sep = if self.settings.unicode {
+            "  ·  "
+        } else {
+            "  |  "
+        };
+        let sep = if self.settings.color {
+            self.style_token(sep, StyleToken::Muted)
+        } else {
+            sep.to_string()
+        };
+
+        out.push_str(&prefix);
+        for (idx, (key, value)) in block.header_pairs.iter().enumerate() {
+            if idx > 0 {
+                out.push_str(&sep);
+            }
+            let key_text = self.style_token(key, StyleToken::MregKey);
+            let raw = value_to_display(value);
+            let value_text = self.style_value_cell(value, &raw);
+            out.push_str(&key_text);
+            out.push_str(": ");
+            out.push_str(&value_text);
+        }
+        out.push_str(&sep);
+        out.push_str(&format!("count: {}", block.rows.len()));
+        out.push('\n');
+        out
+    }
+
+    fn render_grid_table(
+        &self,
+        block: &TableBlock,
+        margin: usize,
+        column_widths: Option<&[usize]>,
+    ) -> String {
+        if block.rows.is_empty() {
+            return String::new();
+        }
+
+        let table_data = truncate_table_to_widths(
+            &block.headers,
+            &block.rows,
+            column_widths,
+            self.settings.unicode,
+            self.settings.table_overflow,
+        );
+        let aligns = resolve_table_alignments(table_data.headers.len(), block.align.as_deref());
+
+        let mut table = Table::new();
+        table.set_content_arrangement(ContentArrangement::Disabled);
+        if self.settings.unicode {
+            table.load_preset(presets::UTF8_FULL_CONDENSED);
+        } else {
+            table.load_preset(presets::ASCII_FULL_CONDENSED);
+        }
+
+        let header_cells = table_data
+            .headers
+            .iter()
+            .map(|header| Cell::new(self.style_token(header, StyleToken::TableHeader)))
+            .collect::<Vec<Cell>>();
+        table.set_header(header_cells);
+
+        for row in &table_data.rows {
+            let styled_row = row
+                .iter()
+                .map(|cell| self.style_value_cell(&cell.value, &cell.text))
+                .map(Cell::new)
+                .collect::<Vec<Cell>>();
+            table.add_row(styled_row);
+        }
+
+        for (index, width) in table_data.widths.iter().enumerate() {
+            if let Some(column) = table.column_mut(index) {
+                let align = aligns.get(index).copied().unwrap_or(TableAlign::Default);
+                column.set_cell_alignment(table_align_to_cell_alignment(align));
+                let total_width = width.saturating_add(column.padding_width() as usize);
+                let absolute = Width::Fixed(total_width.min(u16::MAX as usize) as u16);
+                column.set_constraint(ColumnConstraint::Absolute(absolute));
+            }
+        }
+
+        let rendered = format!("{table}");
+        let rendered = if self.settings.unicode {
+            normalize_rich_table_chrome(&rendered)
+        } else {
+            normalize_ascii_table_chrome(&rendered)
+        };
+        indent_lines(&rendered, margin)
+    }
+
+    fn render_markdown_table(
+        &self,
+        block: &TableBlock,
+        margin: usize,
+        column_widths: Option<&[usize]>,
+    ) -> String {
+        let table_data = truncate_table_to_widths(
+            &block.headers,
+            &block.rows,
+            column_widths,
+            self.settings.unicode,
+            self.settings.table_overflow,
+        );
+        if table_data.headers.is_empty() {
+            return String::new();
+        }
+
+        let aligns = resolve_table_alignments(table_data.headers.len(), block.align.as_deref());
+        let widths = table_data.rows.iter().fold(
+            table_data
+                .headers
+                .iter()
+                .map(|header| display_width(header).max(3))
+                .collect::<Vec<usize>>(),
+            |mut acc, row| {
+                for (index, cell) in row.iter().enumerate() {
+                    if let Some(width) = acc.get_mut(index) {
+                        *width = (*width).max(display_width(&cell.text).max(3));
+                    }
+                }
+                acc
+            },
+        );
+
+        let mut out = String::new();
+        out.push('|');
+        for (index, header) in table_data.headers.iter().enumerate() {
+            out.push(' ');
+            out.push_str(&pad_markdown_cell(
+                &escape_markdown_cell(header),
+                widths[index],
+                aligns[index],
+            ));
+            out.push(' ');
+            out.push('|');
+        }
+        out.push('\n');
+
+        out.push('|');
+        for (index, width) in widths.iter().enumerate() {
+            out.push(' ');
+            out.push_str(&markdown_separator(*width, aligns[index]));
+            out.push(' ');
+            out.push('|');
+        }
+        out.push('\n');
+
+        for row in &table_data.rows {
+            out.push('|');
+            for (index, cell) in row.iter().enumerate() {
+                out.push(' ');
+                out.push_str(&pad_markdown_cell(
+                    &escape_markdown_cell(&cell.text),
+                    widths[index],
+                    aligns[index],
+                ));
+                out.push(' ');
+                out.push('|');
+            }
+            out.push('\n');
+        }
+
+        indent_lines(&out, margin)
+    }
+
+    fn render_mreg_list(
+        &self,
+        values: &[Value],
+        content_width: Option<usize>,
+        entry_depth: usize,
+    ) -> MregListRender {
+        if values.is_empty() {
+            return MregListRender::Inline(String::new());
+        }
+
+        let mut values = values.iter().map(value_to_display).collect::<Vec<String>>();
+        let available_width = content_width.unwrap_or_else(|| {
+            self.settings
+                .width
+                .unwrap_or(100)
+                .saturating_sub(
+                    self.settings.margin + (entry_depth + 1) * self.settings.indent_size,
+                )
+                .max(16)
+        });
+
+        let inline = values.join(", ");
+        if values.len() <= self.settings.short_list_max && display_width(&inline) <= available_width
+        {
+            return MregListRender::Inline(inline);
+        }
+
+        if values.len() <= self.settings.medium_list_max {
+            return MregListRender::Vertical(values.to_vec());
+        }
+
+        values.sort_by_key(|value| value.to_ascii_lowercase());
+
+        let columns = choose_grid_columns(
+            &values,
+            available_width.max(1),
+            self.settings.grid_padding.max(1),
+            self.settings.grid_columns,
+            self.settings.column_weight.max(1),
+        );
+
+        if columns < 2 {
+            return MregListRender::Vertical(values.to_vec());
+        }
+
+        let rows_count = values.len().div_ceil(columns);
+        let mut matrix = vec![vec![String::new(); columns]; rows_count];
+        let mut column_widths = vec![0usize; columns];
+
+        for (index, value) in values.iter().enumerate() {
+            let row_index = index % rows_count;
+            let column_index = index / rows_count;
+            if column_index >= columns {
+                continue;
+            }
+            let truncated =
+                truncate_display_width(value, available_width.max(4), self.settings.unicode);
+            column_widths[column_index] =
+                column_widths[column_index].max(display_width(&truncated));
+            matrix[row_index][column_index] = truncated;
+        }
+
+        let rows = matrix
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        if index == columns - 1 {
+                            value
+                        } else {
+                            pad_display_width(&value, column_widths[index])
+                        }
+                    })
+                    .collect::<Vec<String>>()
+            })
+            .filter(|row| row.iter().any(|cell| !cell.trim_end().is_empty()))
+            .collect::<Vec<Vec<String>>>();
+
+        MregListRender::Grid(rows)
+    }
+
+    fn style_value_cell(&self, value: &Value, text: &str) -> String {
+        let trimmed = text.trim();
+        if !self.settings.color || self.settings.theme.id.eq_ignore_ascii_case("plain") {
+            return text.to_string();
+        }
+
+        if is_hex_color(trimmed) {
+            return apply_style_spec(text, trimmed, true);
+        }
+
+        match value {
+            Value::Bool(true) => self.style_token(text, StyleToken::BoolTrue),
+            Value::Bool(false) => self.style_token(text, StyleToken::BoolFalse),
+            Value::Null => self.style_token(text, StyleToken::Null),
+            Value::Number(_) => self.style_token(text, StyleToken::Number),
+            Value::String(raw) => {
+                if let Some(token) = value_style_token_for_string(raw) {
+                    return self.style_token(text, token);
+                }
+                text.to_string()
+            }
+            _ => text.to_string(),
+        }
+    }
+
+    fn section_divider(
+        &self,
+        title: &str,
+        border_token: StyleToken,
+        title_token: StyleToken,
+    ) -> String {
+        let fill_char = if self.settings.unicode { '─' } else { '-' };
+        let target_width = self.settings.width.unwrap_or(24).max(12);
+        let title = title.trim();
+
+        if title.is_empty() {
+            let raw = fill_char.to_string().repeat(target_width);
+            if self.settings.color {
+                return self.style_token(&raw, StyleToken::PanelBorder);
+            }
+            return raw;
+        }
+
+        let left = if self.settings.unicode { "─ " } else { "- " };
+        let prefix_width = left.chars().count() + title.chars().count() + 1;
+        let suffix = if prefix_width >= target_width {
+            String::new()
+        } else {
+            fill_char.to_string().repeat(target_width - prefix_width)
+        };
+        let raw = format!("{left}{title} {suffix}");
+
+        if !self.settings.color {
+            return raw;
+        }
+
+        if title_token == border_token {
+            return self.style_token(&raw, border_token);
+        }
+
+        let border = self.style_token(left, border_token);
+        let title = self.style_token(title, title_token);
+        let trailing = self.style_token(&format!(" {suffix}"), border_token);
+        format!("{border}{title}{trailing}")
+    }
+
+    fn style_token(&self, text: &str, token: StyleToken) -> String {
+        apply_style_with_theme_overrides(
+            text,
+            token,
+            self.settings.color,
+            &self.settings.theme,
+            &self.settings.style_overrides,
+        )
+    }
 }
 
 fn section_style_token(kind: Option<&str>) -> Option<StyleToken> {
@@ -566,280 +740,6 @@ enum MregListRender {
     Inline(String),
     Vertical(Vec<String>),
     Grid(Vec<Vec<String>>),
-}
-
-fn render_mreg_list(
-    values: &[Value],
-    available_width: usize,
-    unicode: bool,
-    short_list_max: usize,
-    medium_list_max: usize,
-    grid_padding: usize,
-    grid_columns: Option<usize>,
-    column_weight: usize,
-) -> MregListRender {
-    if values.is_empty() {
-        return MregListRender::Inline(String::new());
-    }
-    let mut values = values.iter().map(value_to_display).collect::<Vec<String>>();
-
-    let inline = values.join(", ");
-    if values.len() <= short_list_max && display_width(&inline) <= available_width {
-        return MregListRender::Inline(inline);
-    }
-
-    if values.len() <= medium_list_max {
-        return MregListRender::Vertical(values.to_vec());
-    }
-
-    values.sort_by_key(|value| value.to_ascii_lowercase());
-
-    let columns = choose_grid_columns(
-        &values,
-        available_width.max(1),
-        grid_padding.max(1),
-        grid_columns,
-        column_weight.max(1),
-    );
-
-    if columns < 2 {
-        return MregListRender::Vertical(values.to_vec());
-    }
-
-    let rows_count = values.len().div_ceil(columns);
-    let mut matrix = vec![vec![String::new(); columns]; rows_count];
-    let mut column_widths = vec![0usize; columns];
-
-    // Fill by columns first, like the Python renderer, for stable balancing.
-    for (index, value) in values.iter().enumerate() {
-        let row_index = index % rows_count;
-        let column_index = index / rows_count;
-        if column_index >= columns {
-            continue;
-        }
-        let truncated = truncate_display_width(value, available_width.max(4), unicode);
-        column_widths[column_index] = column_widths[column_index].max(display_width(&truncated));
-        matrix[row_index][column_index] = truncated;
-    }
-
-    let rows = matrix
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .enumerate()
-                .map(|(index, value)| {
-                    if index == columns - 1 {
-                        value
-                    } else {
-                        pad_display_width(&value, column_widths[index])
-                    }
-                })
-                .collect::<Vec<String>>()
-        })
-        .filter(|row| row.iter().any(|cell| !cell.trim_end().is_empty()))
-        .collect::<Vec<Vec<String>>>();
-
-    MregListRender::Grid(rows)
-}
-
-fn render_table_block(
-    block: &TableBlock,
-    unicode: bool,
-    color: bool,
-    width: Option<usize>,
-    theme: &ThemeDefinition,
-    margin: usize,
-    indent_size: usize,
-    respect_depth: bool,
-    column_widths: Option<&[usize]>,
-    style_overrides: &StyleOverrides,
-    overflow: TableOverflow,
-) -> String {
-    if block.rows.is_empty() && block.header_pairs.is_empty() {
-        return String::new();
-    }
-
-    let mut out = String::new();
-    let header_pairs = render_table_header_pairs(
-        block,
-        unicode,
-        color,
-        theme,
-        margin,
-        indent_size,
-        respect_depth,
-        style_overrides,
-    );
-    if !header_pairs.is_empty() {
-        out.push_str(&header_pairs);
-    }
-
-    let effective_margin = margin
-        + if respect_depth {
-            block.depth * indent_size
-        } else {
-            0
-        };
-
-    let table_body = match block.style {
-        TableStyle::Grid => render_grid_table(
-            block,
-            unicode,
-            color,
-            width,
-            theme,
-            effective_margin,
-            indent_size,
-            column_widths,
-            style_overrides,
-            overflow,
-        ),
-        TableStyle::Markdown => render_markdown_table(
-            block,
-            unicode,
-            effective_margin,
-            indent_size,
-            column_widths,
-            overflow,
-        ),
-    };
-
-    out.push_str(&table_body);
-    out
-}
-
-fn render_table_header_pairs(
-    block: &TableBlock,
-    unicode: bool,
-    color: bool,
-    theme: &ThemeDefinition,
-    margin: usize,
-    indent_size: usize,
-    respect_depth: bool,
-    style_overrides: &StyleOverrides,
-) -> String {
-    if block.header_pairs.is_empty() {
-        return String::new();
-    }
-
-    let mut out = String::new();
-    let prefix = " ".repeat(
-        margin
-            + if respect_depth {
-                block.depth * indent_size
-            } else {
-                0
-            },
-    );
-    let sep = if unicode { "  ·  " } else { "  |  " };
-    let sep = if color {
-        apply_style_with_theme_overrides(sep, StyleToken::Muted, true, theme, style_overrides)
-    } else {
-        sep.to_string()
-    };
-
-    out.push_str(&prefix);
-    for (idx, (key, value)) in block.header_pairs.iter().enumerate() {
-        if idx > 0 {
-            out.push_str(&sep);
-        }
-        let key_text = apply_style_with_theme_overrides(
-            key,
-            StyleToken::MregKey,
-            color,
-            theme,
-            style_overrides,
-        );
-        let raw = value_to_display(value);
-        let value_text = style_value_cell(value, &raw, color, theme, style_overrides);
-        out.push_str(&key_text);
-        out.push_str(": ");
-        out.push_str(&value_text);
-    }
-    out.push_str(&sep);
-    out.push_str(&format!("count: {}", block.rows.len()));
-    out.push('\n');
-    out
-}
-
-fn render_grid_table(
-    block: &TableBlock,
-    unicode: bool,
-    color: bool,
-    _width: Option<usize>,
-    theme: &ThemeDefinition,
-    margin: usize,
-    _indent_size: usize,
-    column_widths: Option<&[usize]>,
-    style_overrides: &StyleOverrides,
-    overflow: TableOverflow,
-) -> String {
-    if block.rows.is_empty() {
-        return String::new();
-    }
-    let (headers, rows, widths) = truncate_table_to_widths(
-        &block.headers,
-        &block.rows,
-        column_widths,
-        unicode,
-        overflow,
-    );
-
-    let aligns = resolve_table_alignments(headers.len(), block.align.as_deref());
-
-    let mut table = Table::new();
-    table.set_content_arrangement(ContentArrangement::Disabled);
-    if unicode {
-        table.load_preset(presets::UTF8_FULL_CONDENSED);
-    } else {
-        table.load_preset(presets::ASCII_FULL_CONDENSED);
-    }
-
-    let header_cells = headers
-        .iter()
-        .map(|header| {
-            let styled = if color {
-                apply_style_with_theme_overrides(
-                    header,
-                    StyleToken::TableHeader,
-                    true,
-                    theme,
-                    style_overrides,
-                )
-            } else {
-                header.clone()
-            };
-            Cell::new(styled)
-        })
-        .collect::<Vec<Cell>>();
-    table.set_header(header_cells);
-
-    for row in &rows {
-        let styled_row = row
-            .iter()
-            .map(|(value, text)| style_value_cell(value, text, color, theme, style_overrides))
-            .map(Cell::new)
-            .collect::<Vec<Cell>>();
-        table.add_row(styled_row);
-    }
-
-    for (index, width) in widths.iter().enumerate() {
-        if let Some(column) = table.column_mut(index) {
-            let align = aligns.get(index).copied().unwrap_or(TableAlign::Default);
-            column.set_cell_alignment(table_align_to_cell_alignment(align));
-            let total_width = width.saturating_add(column.padding_width() as usize);
-            let absolute = Width::Fixed(total_width.min(u16::MAX as usize) as u16);
-            column.set_constraint(ColumnConstraint::Absolute(absolute));
-        }
-    }
-
-    let rendered = format!("{table}");
-    let rendered = if unicode {
-        normalize_rich_table_chrome(&rendered)
-    } else {
-        normalize_ascii_table_chrome(&rendered)
-    };
-    indent_lines(&rendered, margin)
 }
 
 fn normalize_rich_table_chrome(rendered: &str) -> String {
@@ -898,80 +798,17 @@ fn normalize_ascii_table_chrome(rendered: &str) -> String {
     out
 }
 
-fn render_markdown_table(
-    block: &TableBlock,
-    unicode: bool,
-    margin: usize,
-    _indent_size: usize,
-    column_widths: Option<&[usize]>,
-    overflow: TableOverflow,
-) -> String {
-    let (headers, rows, _widths) = truncate_table_to_widths(
-        &block.headers,
-        &block.rows,
-        column_widths,
-        unicode,
-        overflow,
-    );
-    if headers.is_empty() {
-        return String::new();
-    }
+#[derive(Debug, Clone)]
+struct RenderedCell {
+    value: Value,
+    text: String,
+}
 
-    let aligns = resolve_table_alignments(headers.len(), block.align.as_deref());
-    let widths = rows.iter().fold(
-        headers
-            .iter()
-            .map(|header| display_width(header).max(3))
-            .collect::<Vec<usize>>(),
-        |mut acc, row| {
-            for (index, (_, cell)) in row.iter().enumerate() {
-                if let Some(width) = acc.get_mut(index) {
-                    *width = (*width).max(display_width(cell).max(3));
-                }
-            }
-            acc
-        },
-    );
-
-    let mut out = String::new();
-    out.push('|');
-    for (index, header) in headers.iter().enumerate() {
-        out.push(' ');
-        out.push_str(&pad_markdown_cell(
-            &escape_markdown_cell(header),
-            widths[index],
-            aligns[index],
-        ));
-        out.push(' ');
-        out.push('|');
-    }
-    out.push('\n');
-
-    out.push('|');
-    for (index, width) in widths.iter().enumerate() {
-        out.push(' ');
-        out.push_str(&markdown_separator(*width, aligns[index]));
-        out.push(' ');
-        out.push('|');
-    }
-    out.push('\n');
-
-    for row in &rows {
-        out.push('|');
-        for (index, (_value, cell)) in row.iter().enumerate() {
-            out.push(' ');
-            out.push_str(&pad_markdown_cell(
-                &escape_markdown_cell(cell),
-                widths[index],
-                aligns[index],
-            ));
-            out.push(' ');
-            out.push('|');
-        }
-        out.push('\n');
-    }
-
-    indent_lines(&out, margin)
+#[derive(Debug, Clone)]
+struct TruncatedTable {
+    headers: Vec<String>,
+    rows: Vec<Vec<RenderedCell>>,
+    widths: Vec<usize>,
 }
 
 fn truncate_table_to_widths(
@@ -980,7 +817,7 @@ fn truncate_table_to_widths(
     column_widths: Option<&[usize]>,
     unicode: bool,
     overflow: TableOverflow,
-) -> (Vec<String>, Vec<Vec<(Value, String)>>, Vec<usize>) {
+) -> TruncatedTable {
     let fallback_widths = compute_fallback_widths(headers, rows, if unicode { 4 } else { 6 });
     let widths = match column_widths {
         Some(widths) if widths.len() == headers.len() => widths.to_vec(),
@@ -1010,13 +847,20 @@ fn truncate_table_to_widths(
                         TableOverflow::Wrap => raw.clone(),
                         TableOverflow::None => raw.clone(),
                     };
-                    (cell.clone(), rendered)
+                    RenderedCell {
+                        value: cell.clone(),
+                        text: rendered,
+                    }
                 })
-                .collect::<Vec<(Value, String)>>()
+                .collect::<Vec<RenderedCell>>()
         })
-        .collect::<Vec<Vec<(Value, String)>>>();
+        .collect::<Vec<Vec<RenderedCell>>>();
 
-    (headers, rows, widths)
+    TruncatedTable {
+        headers,
+        rows,
+        widths,
+    }
 }
 
 fn compute_fallback_widths(
@@ -1039,53 +883,6 @@ fn compute_fallback_widths(
     }
 
     widths
-}
-
-fn style_value_cell(
-    value: &Value,
-    text: &str,
-    color: bool,
-    theme: &ThemeDefinition,
-    style_overrides: &StyleOverrides,
-) -> String {
-    let trimmed = text.trim();
-    if !color || theme.id.eq_ignore_ascii_case("plain") {
-        return text.to_string();
-    }
-
-    if is_hex_color(trimmed) {
-        return apply_style_spec(text, trimmed, true);
-    }
-
-    match value {
-        Value::Bool(true) => apply_style_with_theme_overrides(
-            text,
-            StyleToken::BoolTrue,
-            true,
-            theme,
-            style_overrides,
-        ),
-        Value::Bool(false) => apply_style_with_theme_overrides(
-            text,
-            StyleToken::BoolFalse,
-            true,
-            theme,
-            style_overrides,
-        ),
-        Value::Null => {
-            apply_style_with_theme_overrides(text, StyleToken::Null, true, theme, style_overrides)
-        }
-        Value::Number(_) => {
-            apply_style_with_theme_overrides(text, StyleToken::Number, true, theme, style_overrides)
-        }
-        Value::String(raw) => {
-            if let Some(token) = value_style_token_for_string(raw) {
-                return apply_style_with_theme_overrides(text, token, true, theme, style_overrides);
-            }
-            text.to_string()
-        }
-        _ => text.to_string(),
-    }
 }
 
 fn is_hex_color(value: &str) -> bool {
@@ -1326,8 +1123,8 @@ mod tests {
     use super::render_document;
     use crate::RenderBackend;
     use crate::document::{
-        Block, Document, JsonBlock, MregBlock, MregEntry, MregRow, MregValue, TableBlock,
-        TableStyle, ValueBlock,
+        Block, Document, JsonBlock, MregBlock, MregEntry, MregRow, MregValue, PanelBlock,
+        TableBlock, TableStyle, ValueBlock,
     };
     use crate::{ResolvedRenderSettings, TableOverflow};
     use serde_json::{Value, json};
@@ -1352,6 +1149,12 @@ mod tests {
         }
     }
 
+    fn plain_settings_with_width(width: usize) -> ResolvedRenderSettings {
+        let mut settings = settings(RenderBackend::Plain, false, false);
+        settings.width = Some(width);
+        settings
+    }
+
     #[test]
     fn render_value_block_appends_trailing_newline() {
         let document = Document {
@@ -1362,6 +1165,34 @@ mod tests {
         assert_eq!(
             render_document(&document, settings(RenderBackend::Plain, false, false)),
             "one\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn panel_rules_match_python_plain_layout() {
+        let document = Document {
+            blocks: vec![Block::Panel(PanelBlock {
+                title: Some("Info".to_string()),
+                body: Document {
+                    blocks: vec![Block::Value(ValueBlock {
+                        values: vec!["alpha".to_string(), "beta".to_string()],
+                    })],
+                },
+                rules: crate::document::PanelRules::Both,
+                kind: Some("info".to_string()),
+                border_token: None,
+                title_token: None,
+            })],
+        };
+
+        assert_eq!(
+            render_document(&document, plain_settings_with_width(80)),
+            concat!(
+                "- Info -------------------------------------------------------------------------\n",
+                "alpha\n",
+                "beta\n",
+                "--------------------------------------------------------------------------------\n"
+            )
         );
     }
 
@@ -1544,9 +1375,56 @@ mod tests {
             })],
         };
 
-        let rendered = render_document(&document, settings(RenderBackend::Plain, false, false));
-        assert!(rendered.starts_with("group: ops  |  count: 1\n"));
-        assert!(rendered.contains("| uid"));
+        assert_eq!(
+            render_document(&document, settings(RenderBackend::Plain, false, false)),
+            concat!(
+                "group: ops  |  count: 1\n",
+                "+--------+\n",
+                "| uid    |\n",
+                "+--------+\n",
+                "| oistes |\n",
+                "+--------+\n"
+            )
+        );
+    }
+
+    #[test]
+    fn mreg_vertical_list_matches_python_plain_layout() {
+        let document = Document {
+            blocks: vec![Block::Mreg(MregBlock {
+                block_id: 1,
+                rows: vec![MregRow {
+                    entries: vec![MregEntry {
+                        key: "members".to_string(),
+                        depth: 0,
+                        value: MregValue::List(vec![json!("alice"), json!("bob"), json!("carol")]),
+                    }],
+                }],
+            })],
+        };
+
+        let mut settings = settings(RenderBackend::Plain, false, false);
+        settings.short_list_max = 1;
+        settings.medium_list_max = 5;
+
+        assert_eq!(
+            render_document(&document, settings),
+            "members: alice\n         bob\n         carol\n"
+        );
+    }
+
+    #[test]
+    fn json_block_matches_python_plain_layout() {
+        let document = Document {
+            blocks: vec![Block::Json(JsonBlock {
+                payload: json!({"uid":"oistes"}),
+            })],
+        };
+
+        assert_eq!(
+            render_document(&document, settings(RenderBackend::Plain, false, false)),
+            "{\n  \"uid\": \"oistes\"\n}\n"
+        );
     }
 
     #[test]

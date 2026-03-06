@@ -33,7 +33,7 @@ The rewrite should not carry over the bad parts:
       `ResolvedRenderSettings`.
 - [ ] Keep `osp-ui` free of command semantics, plugin identity, auth state, and
       dispatch policy.
-- [ ] Add tests that prove the same input document renders the same way without
+- [x] Add tests that prove the same input document renders the same way without
       reading process-global state.
 
 Definition of done:
@@ -180,7 +180,7 @@ Checklist:
 - [ ] Keep auto-format selection pure and payload-based.
 - [ ] Keep JSON/table/mreg/value rendering free of command-specific branches.
 - [ ] Audit clipboard and message formatting paths for hidden runtime policy.
-- [ ] Add contract tests for deterministic rendering under explicit settings.
+- [x] Add contract tests for deterministic rendering under explicit settings.
 
 ## `osp-completion`
 
