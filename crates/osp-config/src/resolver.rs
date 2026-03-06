@@ -25,6 +25,18 @@ struct ResolvedMaps {
     final_values: BTreeMap<String, ResolvedValue>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LayerRef<'a> {
+    source: ConfigSource,
+    layer: &'a ConfigLayer,
+}
+
+#[derive(Debug, Clone)]
+struct SelectedLayerEntry<'a> {
+    source: ConfigSource,
+    entry: &'a LayerEntry,
+}
+
 struct Interpolator {
     raw: HashMap<String, ConfigValue>,
     cache: HashMap<String, ConfigValue>,
@@ -320,47 +332,7 @@ impl ConfigResolver {
         options: ResolveOptions,
     ) -> Result<ConfigExplain, ConfigError> {
         let frame = self.prepare_resolution(options)?;
-
-        let mut layers = Vec::new();
-        for (source, layer) in self.layers() {
-            let selected_entry =
-                select_scoped_entry(layer, key, &frame.active_profile, frame.terminal.as_deref());
-            let selected_entry_index = selected_entry.and_then(|entry| {
-                layer
-                    .entries
-                    .iter()
-                    .position(|candidate| std::ptr::eq(candidate, entry))
-            });
-
-            let mut candidates = Vec::new();
-            for (entry_index, entry) in layer.entries.iter().enumerate() {
-                if entry.key != key {
-                    continue;
-                }
-
-                let rank = scope_rank(
-                    &entry.scope,
-                    &frame.active_profile,
-                    frame.terminal.as_deref(),
-                );
-                candidates.push(ExplainCandidate {
-                    entry_index,
-                    value: entry.value.clone(),
-                    scope: entry.scope.clone(),
-                    origin: entry.origin.clone(),
-                    rank,
-                    selected_in_layer: selected_entry_index == Some(entry_index),
-                });
-            }
-
-            if !candidates.is_empty() {
-                layers.push(ExplainLayer {
-                    source,
-                    selected_entry_index,
-                    candidates,
-                });
-            }
-        }
+        let layers = self.explain_layers_for_key(key, &frame);
 
         let resolved = self.resolve_maps(&frame)?;
         let final_entry = resolved.final_values.get(key).cloned();
@@ -427,16 +399,15 @@ impl ConfigResolver {
 
         let mut values = BTreeMap::new();
         for key in keys {
-            if let Some((source, entry)) = self.select_across_layers(&key, active_profile, terminal)
-            {
+            if let Some(selected) = self.select_across_layers(&key, active_profile, terminal) {
                 values.insert(
                     key,
                     ResolvedValue {
-                        raw_value: entry.value.clone(),
-                        value: entry.value.clone(),
-                        source,
-                        scope: entry.scope.clone(),
-                        origin: entry.origin.clone(),
+                        raw_value: selected.entry.value.clone(),
+                        value: selected.entry.value.clone(),
+                        source: selected.source,
+                        scope: selected.entry.scope.clone(),
+                        origin: selected.entry.origin.clone(),
                     },
                 );
             }
@@ -459,8 +430,8 @@ impl ConfigResolver {
     fn collect_known_profiles(&self) -> BTreeSet<String> {
         let mut known = BTreeSet::new();
 
-        for (_, layer) in self.layers() {
-            for entry in &layer.entries {
+        for layer in self.layers() {
+            for entry in &layer.layer.entries {
                 if let Some(profile) = entry.scope.profile.as_deref() {
                     known.insert(profile.to_string());
                 }
@@ -499,9 +470,9 @@ impl ConfigResolver {
     fn resolve_default_profile(&self, terminal: Option<&str>) -> Result<String, ConfigError> {
         let mut picked: Option<ConfigValue> = None;
 
-        for (_, layer) in self.layers() {
-            if let Some(entry) = select_global_entry(layer, "profile.default", terminal) {
-                picked = Some(entry.value.clone());
+        for layer in self.layers() {
+            if let Some(selected) = select_global_entry(layer, "profile.default", terminal) {
+                picked = Some(selected.entry.value.clone());
             }
         }
 
@@ -519,8 +490,8 @@ impl ConfigResolver {
     fn collect_keys(&self) -> BTreeSet<String> {
         let mut keys = BTreeSet::new();
 
-        for (_, layer) in self.layers() {
-            for entry in &layer.entries {
+        for layer in self.layers() {
+            for entry in &layer.layer.entries {
                 keys.insert(entry.key.clone());
             }
         }
@@ -533,54 +504,118 @@ impl ConfigResolver {
         key: &str,
         profile: &str,
         terminal: Option<&str>,
-    ) -> Option<(ConfigSource, &'a LayerEntry)> {
-        let mut selected: Option<(ConfigSource, &'a LayerEntry)> = None;
+    ) -> Option<SelectedLayerEntry<'a>> {
+        let mut selected: Option<SelectedLayerEntry<'a>> = None;
 
-        for (source, layer) in self.layers() {
+        for layer in self.layers() {
             if let Some(entry) = select_scoped_entry(layer, key, profile, terminal) {
-                selected = Some((source, entry));
+                selected = Some(entry);
             }
         }
 
         selected
     }
 
-    fn layers(&self) -> [(ConfigSource, &ConfigLayer); 6] {
+    fn explain_layers_for_key(&self, key: &str, frame: &ResolutionFrame) -> Vec<ExplainLayer> {
+        let mut layers = Vec::new();
+
+        for layer in self.layers() {
+            let selected =
+                select_scoped_entry(layer, key, &frame.active_profile, frame.terminal.as_deref());
+            let selected_entry_index = selected.and_then(|selected| {
+                layer
+                    .layer
+                    .entries
+                    .iter()
+                    .position(|candidate| std::ptr::eq(candidate, selected.entry))
+            });
+
+            let candidates = layer
+                .layer
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.key == key)
+                .map(|(entry_index, entry)| ExplainCandidate {
+                    entry_index,
+                    value: entry.value.clone(),
+                    scope: entry.scope.clone(),
+                    origin: entry.origin.clone(),
+                    rank: scope_rank(
+                        &entry.scope,
+                        &frame.active_profile,
+                        frame.terminal.as_deref(),
+                    ),
+                    selected_in_layer: selected_entry_index == Some(entry_index),
+                })
+                .collect::<Vec<ExplainCandidate>>();
+
+            if !candidates.is_empty() {
+                layers.push(ExplainLayer {
+                    source: layer.source,
+                    selected_entry_index,
+                    candidates,
+                });
+            }
+        }
+
+        layers
+    }
+
+    fn layers(&self) -> [LayerRef<'_>; 6] {
         [
-            (ConfigSource::BuiltinDefaults, &self.layers.defaults),
-            (ConfigSource::ConfigFile, &self.layers.file),
-            (ConfigSource::Secrets, &self.layers.secrets),
-            (ConfigSource::Environment, &self.layers.env),
-            (ConfigSource::Cli, &self.layers.cli),
-            (ConfigSource::Session, &self.layers.session),
+            LayerRef {
+                source: ConfigSource::BuiltinDefaults,
+                layer: &self.layers.defaults,
+            },
+            LayerRef {
+                source: ConfigSource::ConfigFile,
+                layer: &self.layers.file,
+            },
+            LayerRef {
+                source: ConfigSource::Secrets,
+                layer: &self.layers.secrets,
+            },
+            LayerRef {
+                source: ConfigSource::Environment,
+                layer: &self.layers.env,
+            },
+            LayerRef {
+                source: ConfigSource::Cli,
+                layer: &self.layers.cli,
+            },
+            LayerRef {
+                source: ConfigSource::Session,
+                layer: &self.layers.session,
+            },
         ]
     }
 }
 
 fn select_scoped_entry<'a>(
-    layer: &'a ConfigLayer,
+    layer: LayerRef<'a>,
     key: &str,
     profile: &str,
     terminal: Option<&str>,
-) -> Option<&'a LayerEntry> {
+) -> Option<SelectedLayerEntry<'a>> {
     select_entry(layer, key, |scope| scope_rank(scope, profile, terminal))
 }
 
 fn select_global_entry<'a>(
-    layer: &'a ConfigLayer,
+    layer: LayerRef<'a>,
     key: &str,
     terminal: Option<&str>,
-) -> Option<&'a LayerEntry> {
+) -> Option<SelectedLayerEntry<'a>> {
     select_entry(layer, key, |scope| global_rank(scope, terminal))
 }
 
-fn select_entry<'a, F>(layer: &'a ConfigLayer, key: &str, ranker: F) -> Option<&'a LayerEntry>
+fn select_entry<'a, F>(layer: LayerRef<'a>, key: &str, ranker: F) -> Option<SelectedLayerEntry<'a>>
 where
     F: Fn(&Scope) -> Option<u8>,
 {
     let mut best: Option<(usize, u8, &'a LayerEntry)> = None;
 
-    for (index, entry) in layer.entries.iter().enumerate() {
+    for (index, entry) in layer.layer.entries.iter().enumerate() {
         if entry.key != key {
             continue;
         }
@@ -601,7 +636,10 @@ where
         }
     }
 
-    best.map(|(_, _, entry)| entry)
+    best.map(|(_, _, entry)| SelectedLayerEntry {
+        source: layer.source,
+        entry,
+    })
 }
 
 fn scope_rank(scope: &Scope, profile: &str, terminal: Option<&str>) -> Option<u8> {
