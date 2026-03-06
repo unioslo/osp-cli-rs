@@ -220,10 +220,18 @@ pub struct LaunchContext {
 pub struct SessionState {
     pub scope: ReplScopeStack,
     pub last_rows: Vec<Row>,
+    pub last_failure: Option<LastFailure>,
     pub result_cache: HashMap<String, Vec<Row>>,
     pub cache_order: VecDeque<String>,
     pub max_cached_results: usize,
     pub config_overrides: ConfigLayer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastFailure {
+    pub command_line: String,
+    pub summary: String,
+    pub detail: String,
 }
 
 impl SessionState {
@@ -232,6 +240,7 @@ impl SessionState {
         Self {
             scope: ReplScopeStack::default(),
             last_rows: Vec::new(),
+            last_failure: None,
             result_cache: HashMap::new(),
             cache_order: VecDeque::new(),
             max_cached_results: bounded,
@@ -256,6 +265,23 @@ impl SessionState {
         self.cache_order.retain(|item| item != &key);
         self.cache_order.push_back(key.clone());
         self.result_cache.insert(key, rows);
+    }
+
+    pub fn record_failure(
+        &mut self,
+        command_line: &str,
+        summary: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        let command_line = command_line.trim().to_string();
+        if command_line.is_empty() {
+            return;
+        }
+        self.last_failure = Some(LastFailure {
+            command_line,
+            summary: summary.into(),
+            detail: detail.into(),
+        });
     }
 
     pub fn cached_rows(&self, command_line: &str) -> Option<&[Row]> {
@@ -377,8 +403,21 @@ impl AppState {
         self.session.record_result(command_line, rows);
     }
 
+    pub fn record_repl_failure(
+        &mut self,
+        command_line: &str,
+        summary: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        self.session.record_failure(command_line, summary, detail);
+    }
+
     pub fn last_repl_rows(&self) -> Vec<Row> {
         self.session.last_rows.clone()
+    }
+
+    pub fn last_repl_failure(&self) -> Option<LastFailure> {
+        self.session.last_failure.clone()
     }
 
     pub fn cached_repl_rows(&self, command_line: &str) -> Option<Vec<Row>> {

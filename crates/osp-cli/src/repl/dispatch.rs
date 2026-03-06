@@ -28,6 +28,22 @@ pub(crate) fn execute_repl_plugin_line(
     history: &SharedHistory,
     line: &str,
 ) -> Result<ReplLineResult> {
+    match execute_repl_plugin_line_inner(state, history, line) {
+        Ok(result) => Ok(result),
+        Err(err) => {
+            let summary = err.to_string();
+            let detail = format!("{err:#}");
+            state.record_repl_failure(line, summary, detail);
+            Err(err)
+        }
+    }
+}
+
+fn execute_repl_plugin_line_inner(
+    state: &mut AppState,
+    history: &SharedHistory,
+    line: &str,
+) -> Result<ReplLineResult> {
     let parsed = crate::pipeline::parse_command_text_with_aliases(line, state.config.resolved())?;
     if parsed.tokens.is_empty() {
         return Ok(ReplLineResult::Continue(String::new()));

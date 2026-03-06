@@ -79,7 +79,7 @@ pub(crate) fn build_repl_surface(state: &AppState, catalog: &[CommandCatalogEntr
         specs.push(doctor_command_spec());
         overview_entries.push(ReplOverviewEntry {
             name: CMD_DOCTOR.to_string(),
-            summary: "subcommands: all, config, plugins, theme".to_string(),
+            summary: "subcommands: all, config, last, plugins, theme".to_string(),
         });
     }
     if state.auth.is_builtin_visible(CMD_THEME) {
@@ -456,6 +456,11 @@ fn doctor_command_spec() -> CommandSpec {
             },
             CommandSpec {
                 name: CMD_CONFIG.to_string(),
+                ..CommandSpec::default()
+            },
+            CommandSpec {
+                name: "last".to_string(),
+                tooltip: Some("Show the last REPL failure".to_string()),
                 ..CommandSpec::default()
             },
             CommandSpec {

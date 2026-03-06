@@ -38,6 +38,7 @@ pub(crate) fn run_doctor_command(
                 },
             )
         }
+        DoctorCommands::Last => Ok(CliCommandResult::text(render_last_failure(state))),
         DoctorCommands::Theme => {
             ensure_builtin_visible(state, CMD_THEME)?;
             Ok(CliCommandResult::output(
@@ -73,6 +74,7 @@ pub(crate) fn run_doctor_repl_command(
                 verbosity,
             )
         }
+        DoctorCommands::Last => Ok(ReplCommandOutput::Text(render_last_failure(state))),
         DoctorCommands::Theme => {
             ensure_builtin_visible(state, CMD_THEME)?;
             Ok(ReplCommandOutput::Output {
@@ -157,4 +159,38 @@ fn theme_doctor_rows(state: &AppState) -> Vec<Row> {
             }
         })
         .collect()
+}
+
+fn render_last_failure(state: &AppState) -> String {
+    let Some(last) = state.last_repl_failure() else {
+        return "No recorded REPL failure in this session.\n".to_string();
+    };
+
+    if matches!(state.ui.render_settings.format, OutputFormat::Json) {
+        let payload = serde_json::json!({
+            "status": "error",
+            "command": last.command_line,
+            "summary": last.summary,
+            "detail": last.detail,
+        });
+        return format!(
+            "{}\n",
+            serde_json::to_string_pretty(&payload).expect("last failure json should serialize")
+        );
+    }
+
+    let mut out = String::new();
+    out.push_str("Last REPL failure:\n");
+    out.push_str(&format!("  Command: {}\n", last.command_line));
+    out.push_str(&format!("  Error:   {}\n", last.summary));
+    if state.ui.debug_verbosity > 0 && last.detail != last.summary {
+        out.push('\n');
+        out.push_str("Detail:\n");
+        for line in last.detail.lines() {
+            out.push_str("  ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }

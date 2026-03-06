@@ -223,6 +223,7 @@ pub struct DoctorArgs {
 pub enum DoctorCommands {
     All,
     Config,
+    Last,
     Plugins,
     Theme,
 }

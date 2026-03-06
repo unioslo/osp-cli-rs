@@ -301,6 +301,7 @@ pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
     let result_cache = current.session.result_cache.clone();
     let cache_order = current.session.cache_order.clone();
     let last_rows = current.session.last_rows.clone();
+    let last_failure = current.session.last_failure.clone();
     let session_overrides = current.session.config_overrides.clone();
     let launch = current.launch.clone();
 
@@ -355,6 +356,7 @@ pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
     next.session.config_overrides = session_overrides;
     next.session.scope = scope;
     next.session.last_rows = last_rows;
+    next.session.last_failure = last_failure;
     next.session.result_cache = result_cache;
     next.session.cache_order = cache_order;
     next.repl.history_shell = history_shell;
@@ -1032,8 +1034,8 @@ fn normalize_profile_override(value: Option<String>) -> Option<String> {
 mod tests {
     use super::help::parse_help_render_overrides;
     use super::{
-        RunAction, build_cli_session_layer, build_dispatch_plan, is_sensitive_key,
-        parse_output_format_hint, resolve_effective_render_settings,
+        ReplCommandOutput, RunAction, build_cli_session_layer, build_dispatch_plan, doctor_cmd,
+        is_sensitive_key, parse_output_format_hint, resolve_effective_render_settings,
     };
     use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
@@ -1883,6 +1885,58 @@ JSON
             other => panic!("unexpected repl result: {other:?}"),
         }
         assert!(state.session.scope.is_root());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repl_failure_is_cached_for_doctor_last_unit() {
+        let mut state = make_test_state(Vec::new());
+        let history = make_test_history(&mut state);
+
+        let err = repl::execute_repl_plugin_line(&mut state, &history, "missing")
+            .expect_err("unknown command should fail");
+        assert!(
+            err.to_string()
+                .contains("no plugin provides command: missing")
+        );
+
+        let last = state
+            .last_repl_failure()
+            .expect("last failure should be recorded");
+        assert_eq!(last.command_line, "missing");
+        assert!(last.summary.contains("no plugin provides command: missing"));
+
+        let rendered = doctor_cmd::run_doctor_repl_command(
+            &mut state,
+            crate::cli::DoctorArgs {
+                command: Some(crate::cli::DoctorCommands::Last),
+            },
+            MessageLevel::Success,
+        )
+        .expect("doctor last should render");
+        match rendered {
+            ReplCommandOutput::Text(text) => {
+                assert!(text.contains("\"status\": \"error\""));
+                assert!(text.contains("\"command\": \"missing\""));
+            }
+            ReplCommandOutput::Output { .. } => panic!("unexpected doctor output variant"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rebuild_repl_state_preserves_last_failure_unit() {
+        let mut state = make_test_state(Vec::new());
+        state.record_repl_failure("ldap user nope", "boom", "boom detail");
+
+        let next = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        let last = next
+            .last_repl_failure()
+            .expect("last failure should survive rebuild");
+
+        assert_eq!(last.command_line, "ldap user nope");
+        assert_eq!(last.summary, "boom");
+        assert_eq!(last.detail, "boom detail");
     }
 
     #[cfg(unix)]
