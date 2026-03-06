@@ -39,41 +39,82 @@ use crate::app::{
 use osp_completion::CompletionTree;
 use surface::ReplSurface;
 
-pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
-    let mut force_intro = state
-        .config
-        .resolved()
-        .get_bool("repl.intro")
-        .unwrap_or(true);
-    let mut pending_reload = false;
-    let mut pending_output = String::new();
+struct ReplLoopState {
+    show_intro: bool,
+    pending_reload: bool,
+    pending_output: String,
+}
 
-    loop {
-        if std::mem::take(&mut pending_reload) {
+impl ReplLoopState {
+    fn new(show_intro: bool) -> Self {
+        Self {
+            show_intro,
+            pending_reload: false,
+            pending_output: String::new(),
+        }
+    }
+
+    fn prepare_cycle(&mut self, state: &mut AppState) -> Result<()> {
+        if std::mem::take(&mut self.pending_reload) {
             let next = app::rebuild_repl_state(state)?;
             *state = next;
         }
+        Ok(())
+    }
+
+    fn render_cycle_chrome(&mut self, state: &AppState, help_text: &str) {
+        if self.show_intro {
+            print!("\x1b[2J\x1b[H");
+            print!("{}", render_repl_intro(state));
+            print!("{help_text}");
+        }
+        if !self.pending_output.is_empty() {
+            print!("{}", self.pending_output);
+            self.pending_output.clear();
+        }
+    }
+
+    fn apply_run_result(&mut self, result: ReplRunResult) -> Option<i32> {
+        match result {
+            ReplRunResult::Exit(code) => Some(code),
+            ReplRunResult::Restart { output, reload } => {
+                self.pending_reload = true;
+                self.show_intro = matches!(reload, ReplReloadKind::WithIntro);
+                if self.show_intro {
+                    self.pending_output = output;
+                } else if !output.is_empty() {
+                    print!("{output}");
+                }
+                None
+            }
+        }
+    }
+}
+
+pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
+    let mut loop_state = ReplLoopState::new(
+        state
+            .config
+            .resolved()
+            .get_bool("repl.intro")
+            .unwrap_or(true),
+    );
+
+    loop {
+        loop_state.prepare_cycle(state)?;
         let catalog = app::authorized_command_catalog(state)?;
         let surface = surface::build_repl_surface(state, &catalog);
         let completion_tree = build_repl_completion_tree(state, &surface);
         let help_text = render_repl_command_overview(state, &surface);
 
-        if force_intro {
-            print!("\x1b[2J\x1b[H");
-            print!("{}", render_repl_intro(state));
-            print!("{help_text}");
-        }
-        if !pending_output.is_empty() {
-            print!("{pending_output}");
-            pending_output.clear();
-        }
+        loop_state.render_cycle_chrome(state, &help_text);
 
         let prompt = build_repl_prompt(state);
         let appearance = build_repl_appearance(state);
         let history_config = history::build_history_config(state);
         print!("Preparing prompt...\r");
 
-        match run_repl(
+        let result = run_repl(
             prompt,
             surface.root_words.clone(),
             Some(completion_tree),
@@ -84,18 +125,9 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
                 execute_repl_plugin_line(state, history, line).map_err(|err| anyhow!("{err:#}"))
             },
         )
-        .map_err(|err| miette!("{err:#}"))?
-        {
-            ReplRunResult::Exit(code) => return Ok(code),
-            ReplRunResult::Restart { output, reload } => {
-                pending_reload = true;
-                force_intro = matches!(reload, ReplReloadKind::WithIntro);
-                if force_intro {
-                    pending_output = output;
-                } else if !output.is_empty() {
-                    print!("{output}");
-                }
-            }
+        .map_err(|err| miette!("{err:#}"))?;
+        if let Some(code) = loop_state.apply_run_result(result) {
+            return Ok(code);
         }
     }
 }

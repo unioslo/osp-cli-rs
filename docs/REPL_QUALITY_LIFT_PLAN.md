@@ -39,7 +39,7 @@ The target is a clearer split:
 ### Session
 
 - [ ] Isolate session orchestration from line dispatch
-- [ ] Make restart/reload behavior explicit instead of open-coded in the loop
+- [x] Make restart/reload behavior explicit instead of open-coded in the loop
 - [ ] Reduce `run_repl()` host-specific behavior
 
 ### Scope
