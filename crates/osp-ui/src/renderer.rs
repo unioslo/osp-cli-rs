@@ -1211,7 +1211,12 @@ mod tests {
     }
 
     fn trim_line_endings(value: &str) -> String {
-        value.lines().map(str::trim_end).collect::<Vec<_>>().join("\n") + "\n"
+        value
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
     }
 
     #[test]
@@ -1615,6 +1620,88 @@ mod tests {
                 "                       vortex-opptak\n"
             ))
         );
+    }
+
+    #[test]
+    fn nested_object_lists_stack_when_table_would_hide_content() {
+        let Value::Object(row) = json!({
+            "id": 55753,
+            "ipaddresses": [
+                {
+                    "id": 57171,
+                    "macaddress": "10:62:e5:19:74:4a",
+                    "created_at": "2019-12-02T21:50:27.600379+01:00",
+                    "updated_at": "2022-06-20T09:51:40.448942+02:00",
+                    "ipaddress": "129.240.130.83",
+                    "host": 55753
+                },
+                {
+                    "id": 57172,
+                    "macaddress": "",
+                    "created_at": "2019-12-02T21:50:28.054904+01:00",
+                    "updated_at": "2023-01-20T16:06:24.373064+01:00",
+                    "ipaddress": "2001:700:100:4003::83",
+                    "host": 55753
+                }
+            ],
+            "networks": [
+                {
+                    "policy": null,
+                    "communities": [
+                        {
+                            "id": 3,
+                            "name": "laptops",
+                            "description": "Laptops",
+                            "network": 1733,
+                            "global_name": "community02"
+                        },
+                        {
+                            "id": 2,
+                            "name": "workstations",
+                            "description": "Workstations",
+                            "network": 1733,
+                            "global_name": "community01"
+                        }
+                    ],
+                    "network": "129.240.130.0/24",
+                    "description": "knh-klientnett-2 (statisk DHCP)",
+                    "vlan": 200,
+                    "dns_delegated": false,
+                    "category": "kn",
+                    "location": "usit",
+                    "frozen": false,
+                    "reserved": 3,
+                    "max_communities": null
+                },
+                {
+                    "policy": null,
+                    "network": "2001:700:100:4003::/64",
+                    "description": "usit-knh",
+                    "vlan": 200,
+                    "dns_delegated": false,
+                    "category": "",
+                    "location": "",
+                    "frozen": false,
+                    "reserved": 3,
+                    "max_communities": null
+                }
+            ]
+        }) else {
+            panic!("expected object");
+        };
+
+        let rows = vec![row];
+        let settings = mreg_render_settings(100);
+        let document = format::build_document(&rows, &settings);
+        let rendered = render_document(&document, settings.resolve_render_settings());
+
+        assert!(rendered.contains("ipaddresses (2):"));
+        assert!(rendered.contains("| id"));
+        assert!(rendered.contains("networks (2):"));
+        assert!(rendered.contains("communities (2):"));
+        assert!(rendered.contains("community02"));
+        assert!(rendered.contains("| global_name"));
+        assert!(!rendered.contains("{'id': 3"));
     }
 
     #[test]

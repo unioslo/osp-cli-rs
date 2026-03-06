@@ -157,15 +157,24 @@ impl<'a> MregBuilder<'a> {
                 if items.iter().any(Value::is_object)
                     && let Some(mut table) = table_block_from_object_list(items, depth + 1)
                 {
-                    if self.prefer_stacked_object_lists
-                        && should_stack_object_list_table(
+                    let stack_due_to_nested_shape = object_list_contains_nested_structures(items);
+                    let stack_due_to_width = should_stack_object_list_table(
+                        &table,
+                        self.width_hint,
+                        self.indent_size,
+                        depth + 1,
+                        self.stack_min_col_width,
+                        self.stack_overflow_ratio,
+                    );
+                    let stack_due_to_backend_bias = self.prefer_stacked_object_lists
+                        && width_constrained_object_table(
                             &table,
                             self.width_hint,
                             self.indent_size,
                             depth + 1,
-                            self.stack_min_col_width,
-                            self.stack_overflow_ratio,
-                        )
+                        );
+
+                    if stack_due_to_nested_shape || stack_due_to_width || stack_due_to_backend_bias
                     {
                         self.push_group_entry(key_with_count, depth);
                         self.visit_object_list(items, depth + 1);
@@ -287,6 +296,23 @@ fn table_block_from_object_list(items: &[Value], depth: usize) -> Option<TableBl
     })
 }
 
+fn object_list_contains_nested_structures(items: &[Value]) -> bool {
+    items.iter().any(|item| match item {
+        Value::Object(map) => map.values().any(value_is_nested_structure),
+        _ => false,
+    })
+}
+
+fn value_is_nested_structure(value: &Value) -> bool {
+    match value {
+        Value::Object(_) => true,
+        Value::Array(items) => items
+            .iter()
+            .any(|item| matches!(item, Value::Object(_) | Value::Array(_))),
+        _ => false,
+    }
+}
+
 fn should_stack_object_list_table(
     table: &TableBlock,
     width_hint: usize,
@@ -304,18 +330,74 @@ fn should_stack_object_list_table(
         return false;
     }
 
+    if table.headers.len() >= 6 {
+        return true;
+    }
+
     let columns = table.headers.len().max(1);
     let border = columns * 3 + 1;
     let content_budget = available_width.saturating_sub(border);
     let avg_column_budget = content_budget / columns;
+    let shrunken_widths = shrink_column_widths_to_fit(table, available_width);
+    let unreadable_columns = shrunken_widths
+        .iter()
+        .filter(|width| **width < stack_min_col_width.max(4))
+        .count();
 
     // If we're forced into aggressively tiny columns, stacked output is easier to scan.
     let min_col_budget = stack_min_col_width.max(4);
     let overflow_ratio = stack_overflow_ratio.max(100);
     let ratio_trigger =
         estimated_width.saturating_mul(100) > available_width.saturating_mul(overflow_ratio);
+    let unreadable_ratio_trigger = unreadable_columns * 3 >= columns.max(1);
 
-    avg_column_budget < min_col_budget || ratio_trigger
+    avg_column_budget < min_col_budget || ratio_trigger || unreadable_ratio_trigger
+}
+
+fn width_constrained_object_table(
+    table: &TableBlock,
+    width_hint: usize,
+    indent_size: usize,
+    depth: usize,
+) -> bool {
+    let available_width = width_hint
+        .saturating_sub(depth.saturating_mul(indent_size))
+        .max(24);
+    estimate_table_width(table) > available_width
+}
+
+fn shrink_column_widths_to_fit(table: &TableBlock, available_width: usize) -> Vec<usize> {
+    let min_width = 4usize;
+    let mut widths = table
+        .headers
+        .iter()
+        .map(|header| display_width(header).max(min_width))
+        .collect::<Vec<_>>();
+
+    for row in &table.rows {
+        for (index, cell) in row.iter().enumerate() {
+            if let Some(width) = widths.get_mut(index) {
+                *width = (*width).max(display_width(&value_to_display(cell)).max(min_width));
+            }
+        }
+    }
+
+    while widths.iter().sum::<usize>() + widths.len() * 3 + 1 > available_width {
+        let Some((index, width)) = widths
+            .iter_mut()
+            .enumerate()
+            .max_by_key(|(_, width)| **width)
+        else {
+            break;
+        };
+        if *width <= min_width {
+            break;
+        }
+        let _ = index;
+        *width -= 1;
+    }
+
+    widths
 }
 
 fn estimate_table_width(table: &TableBlock) -> usize {
@@ -362,6 +444,71 @@ mod tests {
                     "network": "2001:700:100:4003::/64",
                     "description": "usit-knh",
                     "vlan": 200
+                }),
+            ]),
+        );
+        row
+    }
+
+    fn wide_flat_row() -> Map<String, Value> {
+        let mut row = Map::new();
+        row.insert(
+            "records".to_string(),
+            Value::Array(vec![
+                json!({
+                    "id": 1,
+                    "name": "alpha.example.org",
+                    "owner": "ops",
+                    "status": "active",
+                    "created_at": "2026-01-01T00:00:00+01:00",
+                    "updated_at": "2026-01-02T00:00:00+01:00",
+                    "region": "eu-west-1",
+                    "environment": "production"
+                }),
+                json!({
+                    "id": 2,
+                    "name": "beta.example.org",
+                    "owner": "ops",
+                    "status": "active",
+                    "created_at": "2026-01-03T00:00:00+01:00",
+                    "updated_at": "2026-01-04T00:00:00+01:00",
+                    "region": "eu-west-1",
+                    "environment": "production"
+                }),
+            ]),
+        );
+        row
+    }
+
+    fn nested_object_list_row() -> Map<String, Value> {
+        let mut row = Map::new();
+        row.insert(
+            "networks".to_string(),
+            Value::Array(vec![
+                json!({
+                    "policy": Value::Null,
+                    "communities": [
+                        {
+                            "id": 3,
+                            "name": "laptops",
+                            "description": "Laptops",
+                        },
+                        {
+                            "id": 2,
+                            "name": "workstations",
+                            "description": "Workstations",
+                        }
+                    ],
+                    "network": "129.240.130.0/24",
+                    "description": "knh-klientnett-2 (statisk DHCP)",
+                    "vlan": 200,
+                }),
+                json!({
+                    "policy": Value::Null,
+                    "communities": [],
+                    "network": "2001:700:100:4003::/64",
+                    "description": "usit-knh",
+                    "vlan": 200,
                 }),
             ]),
         );
@@ -432,16 +579,16 @@ mod tests {
     }
 
     #[test]
-    fn stacks_object_lists_when_rich_width_is_tight() {
+    fn stacks_wide_flat_object_lists_when_width_is_tight() {
         let mut next_block_id = 1;
         let blocks = build_mreg_blocks(
-            &[sample_row()],
+            &[wide_flat_row()],
             None,
             1,
             5,
             40,
             2,
-            true,
+            false,
             10,
             200,
             &mut next_block_id,
@@ -456,5 +603,42 @@ mod tests {
             _ => false,
         });
         assert!(has_separator);
+    }
+
+    #[test]
+    fn stacks_nested_object_lists_even_when_width_is_wide() {
+        let mut next_block_id = 1;
+        let blocks = build_mreg_blocks(
+            &[nested_object_list_row()],
+            None,
+            1,
+            5,
+            120,
+            2,
+            false,
+            10,
+            200,
+            &mut next_block_id,
+        );
+
+        assert!(matches!(blocks.first(), Some(Block::Mreg(_))));
+        let has_separator = blocks.iter().any(|block| match block {
+            Block::Mreg(mreg) => mreg.rows.iter().any(|row| {
+                row.entries
+                    .iter()
+                    .any(|entry| matches!(entry.value, MregValue::Separator))
+            }),
+            _ => false,
+        });
+        assert!(has_separator);
+        let has_communities_group = blocks.iter().any(|block| match block {
+            Block::Mreg(mreg) => mreg.rows.iter().any(|row| {
+                row.entries
+                    .iter()
+                    .any(|entry| entry.key.starts_with("communities"))
+            }),
+            _ => false,
+        });
+        assert!(has_communities_group);
     }
 }
