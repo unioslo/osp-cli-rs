@@ -3,6 +3,7 @@ mod display;
 pub mod document;
 pub mod format;
 pub mod inline;
+pub mod interactive;
 mod layout;
 pub mod messages;
 mod renderer;
@@ -18,6 +19,7 @@ pub use document::{
     PanelBlock, PanelRules, TableAlign, TableBlock, TableStyle, ValueBlock,
 };
 pub use inline::{line_from_inline, parts_from_inline, render_inline};
+pub use interactive::{Interactive, InteractiveResult, InteractiveRuntime, Spinner};
 pub use style::StyleOverrides;
 use theme::ThemeDefinition;
 
