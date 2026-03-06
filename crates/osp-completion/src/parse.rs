@@ -1,4 +1,5 @@
 use crate::model::CommandLine;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LexState {
@@ -9,10 +10,119 @@ enum LexState {
     EscapeDouble,
 }
 
+/// Parsed line assembly after tokenization.
+///
+/// The parser keeps the command head separate until it sees the first option-like
+/// token. After that point the rest of the line is interpreted as flags, args,
+/// or pipes. That mirrors how the completer reasons about scope: command path
+/// first, then option/value mode.
+#[derive(Debug, Default)]
+struct ParseState {
+    head: Vec<String>,
+    args: Vec<String>,
+    flags: BTreeMap<String, Vec<String>>,
+    flag_order: Vec<String>,
+    pipes: Vec<String>,
+    has_pipe: bool,
+}
+
+impl ParseState {
+    fn finish(self) -> CommandLine {
+        CommandLine {
+            head: self.head,
+            args: self.args,
+            flags: self.flags,
+            flag_order: self.flag_order,
+            pipes: self.pipes,
+            has_pipe: self.has_pipe,
+        }
+    }
+
+    fn start_pipe<'a>(&mut self, iter: &mut std::iter::Peekable<std::slice::Iter<'a, String>>) {
+        self.has_pipe = true;
+        self.pipes.extend(iter.cloned());
+    }
+
+    fn collect_positional_tail<'a>(
+        &mut self,
+        iter: &mut std::iter::Peekable<std::slice::Iter<'a, String>>,
+    ) {
+        while let Some(next) = iter.next() {
+            if next == "|" {
+                self.start_pipe(iter);
+                break;
+            }
+            self.args.push(next.clone());
+        }
+    }
+
+    fn parse_flag_tail<'a>(
+        &mut self,
+        first_token: String,
+        iter: &mut std::iter::Peekable<std::slice::Iter<'a, String>>,
+    ) {
+        let mut token = Some(first_token);
+
+        while let Some(current) = token.take() {
+            if current == "|" {
+                self.start_pipe(iter);
+                return;
+            }
+
+            if current == "--" {
+                self.collect_positional_tail(iter);
+                return;
+            }
+
+            if let Some((flag, value)) = split_inline_flag_value(&current) {
+                if !value.is_empty() {
+                    self.flags.entry(flag.clone()).or_default().push(value);
+                } else {
+                    self.flags.entry(flag.clone()).or_default();
+                }
+                self.flag_order.push(flag);
+                token = iter.next().cloned();
+                continue;
+            }
+
+            let flag = current;
+            let values = self.consume_flag_values(iter);
+            self.flags.entry(flag.clone()).or_default().extend(values);
+            self.flag_order.push(flag);
+            token = iter.next().cloned();
+        }
+    }
+
+    fn consume_flag_values<'a>(
+        &mut self,
+        iter: &mut std::iter::Peekable<std::slice::Iter<'a, String>>,
+    ) -> Vec<String> {
+        let mut values = Vec::new();
+
+        while let Some(next) = iter.peek() {
+            if *next == "|" || *next == "--" {
+                break;
+            }
+            if next.starts_with('-') && *next != "-" && !CommandLineParser::is_number(next) {
+                break;
+            }
+
+            values.push((*next).clone());
+            iter.next();
+        }
+
+        values
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CommandLineParser;
 
 impl CommandLineParser {
+    /// Tokenization is intentionally permissive for interactive use.
+    ///
+    /// If the user is mid-quote while pressing tab, we retry with a synthetic
+    /// closing quote before finally falling back to whitespace splitting.
     pub fn tokenize(&self, line: &str) -> Vec<String> {
         self.tokenize_inner(line)
             .or_else(|| self.tokenize_inner(&format!("{line}\"")))
@@ -76,77 +186,26 @@ impl CommandLineParser {
     }
 
     pub fn parse(&self, tokens: &[String]) -> CommandLine {
-        let mut head = Vec::new();
-        let mut args = Vec::new();
-        let mut flags = std::collections::BTreeMap::new();
-        let mut flag_order = Vec::new();
-        let mut pipes = Vec::new();
-        let mut has_pipe = false;
-
+        let mut state = ParseState::default();
         let mut iter = tokens.iter().peekable();
 
         while let Some(token) = iter.next() {
             if token == "|" {
-                has_pipe = true;
-                pipes.extend(iter.cloned());
-                return CommandLine {
-                    head,
-                    args,
-                    flags,
-                    flag_order,
-                    pipes,
-                    has_pipe,
-                };
+                state.start_pipe(&mut iter);
+                return state.finish();
             }
             if token == "--" {
-                while let Some(next) = iter.next() {
-                    if next == "|" {
-                        has_pipe = true;
-                        pipes.extend(iter.cloned());
-                        break;
-                    }
-                    args.push(next.clone());
-                }
-                return CommandLine {
-                    head,
-                    args,
-                    flags,
-                    flag_order,
-                    pipes,
-                    has_pipe,
-                };
+                state.collect_positional_tail(&mut iter);
+                return state.finish();
             }
             if token.starts_with('-') {
-                // parse flags section from this token onward
-                parse_flags(
-                    token,
-                    &mut iter,
-                    &mut flags,
-                    &mut flag_order,
-                    &mut args,
-                    &mut pipes,
-                    &mut has_pipe,
-                );
-                return CommandLine {
-                    head,
-                    args,
-                    flags,
-                    flag_order,
-                    pipes,
-                    has_pipe,
-                };
+                state.parse_flag_tail(token.clone(), &mut iter);
+                return state.finish();
             }
-            head.push(token.clone());
+            state.head.push(token.clone());
         }
 
-        CommandLine {
-            head,
-            args,
-            flags,
-            flag_order,
-            pipes,
-            has_pipe,
-        }
+        state.finish()
     }
 
     pub fn compute_stub(&self, text_before_cursor: &str, tokens: &[String]) -> String {
@@ -169,72 +228,15 @@ impl CommandLineParser {
     }
 }
 
-fn parse_flags<'a>(
-    first_flag_or_token: &str,
-    iter: &mut std::iter::Peekable<std::slice::Iter<'a, String>>,
-    flags: &mut std::collections::BTreeMap<String, Vec<String>>,
-    flag_order: &mut Vec<String>,
-    args: &mut Vec<String>,
-    pipes: &mut Vec<String>,
-    has_pipe: &mut bool,
-) {
-    let mut token = Some(first_flag_or_token.to_string());
-
-    while let Some(current) = token.take() {
-        if current == "|" {
-            *has_pipe = true;
-            pipes.extend(iter.cloned());
-            return;
-        }
-
-        if current == "--" {
-            while let Some(next) = iter.next() {
-                if next == "|" {
-                    *has_pipe = true;
-                    pipes.extend(iter.cloned());
-                    break;
-                }
-                args.push(next.clone());
-            }
-            return;
-        }
-
-        if current.starts_with("--") && current.contains('=') {
-            let mut split = current.splitn(2, '=');
-            let flag = split.next().unwrap_or_default().to_string();
-            let value = split.next().unwrap_or_default().to_string();
-            let values = flags.entry(flag.clone()).or_default();
-            if !value.is_empty() {
-                values.push(value);
-            }
-            flag_order.push(flag);
-            token = iter.next().cloned();
-            continue;
-        }
-
-        let flag = current;
-        let mut values = Vec::new();
-
-        while let Some(next) = iter.peek() {
-            if *next == "|" {
-                break;
-            }
-            if *next == "--" {
-                break;
-            }
-            if next.starts_with('-') && *next != "-" && !CommandLineParser::is_number(next) {
-                break;
-            }
-
-            values.push((*next).clone());
-            iter.next();
-        }
-
-        flags.entry(flag.clone()).or_default().extend(values);
-        flag_order.push(flag);
-
-        token = iter.next().cloned();
+fn split_inline_flag_value(token: &str) -> Option<(String, String)> {
+    if !token.starts_with("--") || !token.contains('=') {
+        return None;
     }
+
+    let mut split = token.splitn(2, '=');
+    let flag = split.next().unwrap_or_default().to_string();
+    let value = split.next().unwrap_or_default().to_string();
+    Some((flag, value))
 }
 
 fn push_current(out: &mut Vec<String>, current: &mut String) {
