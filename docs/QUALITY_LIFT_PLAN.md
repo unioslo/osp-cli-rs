@@ -46,7 +46,7 @@ Definition of done:
 - [x] Malformed quotes and malformed pipelines error by default.
 - [ ] Put any Python-compat fallbacks behind explicit compatibility flags or
       isolated translation layers.
-- [ ] Make ambiguous key resolution explicit and testable.
+- [x] Make ambiguous key resolution explicit and testable.
 
 Definition of done:
 the DSL stops "helping" by guessing when input is invalid.
@@ -123,6 +123,8 @@ Checklist:
 - [ ] Keep compatibility shims isolated and opt-in if they are still needed.
 - [x] Make `OutputResult` the primary execution result surface.
 - [x] Remove or redesign lossy helpers that return `Vec<Row>` only.
+- [x] Make grouping/refinement semantics explicit: flat bucket model, preserved
+      regroup aggregates, and clear errors for ambiguous or structured keys.
 - [ ] Document stage classes clearly: row-preserving, grouping, aggregating,
       external-process, copy/meta-affecting.
 

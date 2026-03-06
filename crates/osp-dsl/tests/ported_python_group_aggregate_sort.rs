@@ -131,6 +131,61 @@ fn aggregate_avg_and_grouped_sum_then_collapse() {
 }
 
 #[test]
+fn regroup_refines_dimensions_without_losing_aggregates() {
+    let rows = vec![
+        obj(json!({"dept": "sales", "team": "ops", "amount": 100})),
+        obj(json!({"dept": "sales", "team": "infra", "amount": 200})),
+        obj(json!({"dept": "eng", "team": "ops", "amount": 50})),
+    ];
+
+    let output = execute_pipeline(
+        rows,
+        &[
+            "G dept".to_string(),
+            "A sum(amount) total".to_string(),
+            "G team".to_string(),
+        ],
+    )
+    .expect("pipeline should pass");
+
+    match output.items {
+        OutputItems::Groups(groups) => {
+            assert_eq!(groups.len(), 3);
+
+            let sales_ops = groups
+                .iter()
+                .find(|group| {
+                    group.groups.get("dept") == Some(&json!("sales"))
+                        && group.groups.get("team") == Some(&json!("ops"))
+                })
+                .expect("sales/ops group should exist");
+            assert_eq!(sales_ops.aggregates.get("total"), Some(&json!(300.0)));
+
+            let sales_infra = groups
+                .iter()
+                .find(|group| {
+                    group.groups.get("dept") == Some(&json!("sales"))
+                        && group.groups.get("team") == Some(&json!("infra"))
+                })
+                .expect("sales/infra group should exist");
+            assert_eq!(sales_infra.aggregates.get("total"), Some(&json!(300.0)));
+        }
+        OutputItems::Rows(_) => panic!("expected grouped output"),
+    }
+}
+
+#[test]
+fn grouping_structured_container_points_user_to_leaf_or_selector() {
+    let rows = vec![obj(json!({
+        "servers": [{"role": "web"}, {"role": "db"}]
+    }))];
+
+    let error = execute_pipeline(rows, &["G servers".to_string()])
+        .expect_err("group should reject structured token");
+    assert!(error.to_string().contains("structured content"));
+}
+
+#[test]
 fn count_macro_matches_python_contract() {
     let rows = vec![
         obj(json!({"id": 1})),
