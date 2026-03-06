@@ -34,7 +34,7 @@ fn toml_file_loader_required_missing_returns_error() {
 
 #[test]
 fn env_loader_parses_overrides_contract() {
-    let loader = EnvVarLoader::from_iter([
+    let loader = EnvVarLoader::from_pairs([
         ("UNRELATED", "x"),
         ("OSP__PROFILE__TSD__UI__FORMAT", "json"),
     ]);
@@ -91,7 +91,7 @@ fn loader_pipeline_resolves_source_precedence_contract() {
 
     let pipeline = LoaderPipeline::new(StaticLayerLoader::new(defaults))
         .with_file(StaticLayerLoader::new(file))
-        .with_env(EnvVarLoader::from_iter([("OSP__UI__FORMAT", "mreg")]))
+        .with_env(EnvVarLoader::from_pairs([("OSP__UI__FORMAT", "mreg")]))
         .with_cli(StaticLayerLoader::new(cli));
 
     let resolved = pipeline
@@ -149,7 +149,7 @@ extensions.uio.ldap.bind_password = "file-secret"
     let secrets_loader = ChainedLoader::new(
         SecretsTomlLoader::new(secrets_path.clone()).required(),
     )
-    .with(EnvSecretsLoader::from_iter([(
+    .with(EnvSecretsLoader::from_pairs([(
         "OSP_SECRET__EXTENSIONS__UIO__LDAP__BIND_PASSWORD",
         "env-secret",
     )]));
@@ -206,6 +206,19 @@ extensions.uio.ldap.bind_password = "file-secret"
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn env_loader_supports_collect_from_pairs() {
+    let loader: EnvVarLoader = [("UNRELATED", "x"), ("OSP__UI__FORMAT", "json")]
+        .into_iter()
+        .collect();
+
+    let layer = loader
+        .load()
+        .expect("env loader should parse collected pairs");
+    assert_eq!(layer.entries().len(), 1);
+    assert_eq!(layer.entries()[0].key, "ui.format");
 }
 
 fn make_temp_dir(prefix: &str) -> std::path::PathBuf {

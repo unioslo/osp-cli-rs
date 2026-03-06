@@ -9,6 +9,17 @@ pub trait ConfigLoader: Send + Sync {
     fn load(&self) -> Result<ConfigLayer, ConfigError>;
 }
 
+fn collect_string_pairs<I, K, V>(vars: I) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    vars.into_iter()
+        .map(|(key, value)| (key.as_ref().to_string(), value.as_ref().to_string()))
+        .collect()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StaticLayerLoader {
     layer: ConfigLayer,
@@ -90,17 +101,26 @@ impl EnvVarLoader {
         }
     }
 
-    pub fn from_iter<I, K, V>(vars: I) -> Self
+    pub fn from_pairs<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
         V: AsRef<str>,
     {
         Self {
-            vars: vars
-                .into_iter()
-                .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
-                .collect(),
+            vars: collect_string_pairs(vars),
+        }
+    }
+}
+
+impl<K, V> std::iter::FromIterator<(K, V)> for EnvVarLoader
+where
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        Self {
+            vars: collect_string_pairs(iter),
         }
     }
 }
@@ -185,17 +205,26 @@ impl EnvSecretsLoader {
         }
     }
 
-    pub fn from_iter<I, K, V>(vars: I) -> Self
+    pub fn from_pairs<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
         V: AsRef<str>,
     {
         Self {
-            vars: vars
-                .into_iter()
-                .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
-                .collect(),
+            vars: collect_string_pairs(vars),
+        }
+    }
+}
+
+impl<K, V> std::iter::FromIterator<(K, V)> for EnvSecretsLoader
+where
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        Self {
+            vars: collect_string_pairs(iter),
         }
     }
 }
