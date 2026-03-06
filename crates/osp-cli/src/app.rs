@@ -296,7 +296,7 @@ fn build_cli_session_layer(
 
 pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
     let context = current.context.clone();
-    let shell_stack = current.session.shell_stack.clone();
+    let scope = current.session.scope.clone();
     let history_shell = current.repl.history_shell.clone();
     let result_cache = current.session.result_cache.clone();
     let cache_order = current.session.cache_order.clone();
@@ -353,7 +353,7 @@ pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
         launch,
     );
     next.session.config_overrides = session_overrides;
-    next.session.shell_stack = shell_stack;
+    next.session.scope = scope;
     next.session.last_rows = last_rows;
     next.session.result_cache = result_cache;
     next.session.cache_order = cache_order;
@@ -1465,7 +1465,8 @@ mod tests {
 
     #[test]
     fn repl_shell_prefix_applies_once_unit() {
-        let stack = vec!["ldap".to_string()];
+        let mut stack = crate::state::ReplScopeStack::default();
+        stack.enter("ldap");
         let bare =
             repl::apply_repl_shell_prefix(&stack, &["user".to_string(), "oistes".to_string()]);
         assert_eq!(
@@ -1486,17 +1487,17 @@ mod tests {
     #[test]
     fn repl_shell_leave_message_unit() {
         let mut state = make_completion_state(None);
-        state.session.shell_stack.push("ldap".to_string());
+        state.session.scope.enter("ldap");
         let message = repl::leave_repl_shell(&mut state).expect("shell should leave");
         assert_eq!(message, "Leaving ldap shell. Back at root.\n");
-        assert!(state.session.shell_stack.is_empty());
+        assert!(state.session.scope.is_root());
     }
 
     #[test]
     fn repl_shell_enter_only_from_root_unit() {
         let mut state = make_completion_state(None);
         assert!(repl::should_enter_repl_shell(&state, &["ldap".to_string()]));
-        state.session.shell_stack.push("ldap".to_string());
+        state.session.scope.enter("ldap");
         assert!(repl::should_enter_repl_shell(&state, &["mreg".to_string()]));
         assert!(!repl::should_enter_repl_shell(
             &state,
@@ -1772,7 +1773,7 @@ JSON
         state.session.config_overrides.set("debug.level", 2i64);
         state.session.config_overrides.set("ui.format", "json");
         state.session.config_overrides.set("theme.name", "dracula");
-        state.session.shell_stack = vec!["orch".to_string()];
+        state.session.scope.enter("orch");
 
         let history_shell = HistoryShellContext::new(String::new());
         state.repl.history_shell = Some(history_shell);
@@ -1788,7 +1789,7 @@ JSON
         assert_eq!(next.ui.debug_verbosity, 2);
         assert_eq!(next.ui.render_settings.format, OutputFormat::Json);
         assert_eq!(next.ui.render_settings.theme_name, "dracula");
-        assert_eq!(next.session.shell_stack, vec!["orch".to_string()]);
+        assert_eq!(next.session.scope.commands(), vec!["orch".to_string()]);
         assert!(next.repl.history_shell.is_some());
     }
 

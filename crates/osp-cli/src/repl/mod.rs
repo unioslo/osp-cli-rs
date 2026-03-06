@@ -470,11 +470,9 @@ fn build_repl_prompt(state: &AppState) -> ReplPrompt {
 }
 
 fn build_shell_indicator(state: &AppState) -> String {
-    if state.session.shell_stack.is_empty() {
+    let Some(stack) = state.session.scope.display_label() else {
         return String::new();
-    }
-
-    let stack = state.session.shell_stack.join(" / ");
+    };
     let template = state
         .config
         .resolved()
@@ -653,7 +651,7 @@ pub(crate) fn execute_repl_plugin_line(
         return Ok(ReplLineResult::Continue(entered));
     }
 
-    let prefixed_tokens = apply_repl_shell_prefix(&state.session.shell_stack, &tokens_for_parse);
+    let prefixed_tokens = apply_repl_shell_prefix(&state.session.scope, &tokens_for_parse);
     let parsed_command = match parse_repl_tokens(&prefixed_tokens) {
         Ok(parsed) => parsed,
         Err(err) => {
@@ -781,11 +779,7 @@ pub(crate) fn should_enter_repl_shell(state: &AppState, tokens: &[String]) -> bo
     if !is_repl_shellable_command(&tokens[0]) {
         return false;
     }
-    !state
-        .session
-        .shell_stack
-        .iter()
-        .any(|existing| existing.eq_ignore_ascii_case(tokens[0].as_str()))
+    !state.session.scope.contains_command(tokens[0].as_str())
 }
 
 pub(crate) fn is_repl_shellable_command(command: &str) -> bool {
@@ -794,21 +788,19 @@ pub(crate) fn is_repl_shellable_command(command: &str) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(command.trim()))
 }
 
-pub(crate) fn apply_repl_shell_prefix(shell_stack: &[String], tokens: &[String]) -> Vec<String> {
-    if shell_stack.is_empty() || tokens.starts_with(shell_stack) {
-        return tokens.to_vec();
-    }
-    let mut full = shell_stack.to_vec();
-    full.extend_from_slice(tokens);
-    full
+pub(crate) fn apply_repl_shell_prefix(
+    scope: &crate::state::ReplScopeStack,
+    tokens: &[String],
+) -> Vec<String> {
+    scope.prefixed_tokens(tokens)
 }
 
 pub(crate) fn leave_repl_shell(state: &mut AppState) -> Option<String> {
-    let command = state.session.shell_stack.pop()?;
-    Some(if state.session.shell_stack.is_empty() {
-        format!("Leaving {command} shell. Back at root.\n")
+    let frame = state.session.scope.leave()?;
+    Some(if state.session.scope.is_root() {
+        format!("Leaving {} shell. Back at root.\n", frame.command())
     } else {
-        format!("Leaving {command} shell.\n")
+        format!("Leaving {} shell.\n", frame.command())
     })
 }
 
@@ -823,7 +815,7 @@ fn enter_repl_shell(
         return Err(miette!("no plugin provides command: {command}"));
     }
 
-    state.session.shell_stack.push(command.to_string());
+    state.session.scope.enter(command.to_string());
     let mut out = format!("Entering {command} shell. Type `exit` to leave.\n");
     if let Ok(help) = repl_help_for_scope(state, overrides) {
         out.push_str(&help);
@@ -832,14 +824,13 @@ fn enter_repl_shell(
 }
 
 fn repl_help_for_scope(state: &AppState, overrides: ReplDispatchOverrides) -> Result<String> {
-    if state.session.shell_stack.is_empty() {
+    if state.session.scope.is_root() {
         let catalog = app::authorized_command_catalog(state)?;
         let surface = surface::build_repl_surface(state, &catalog);
         return Ok(render_repl_command_overview(state, &surface));
     }
 
-    let mut tokens = state.session.shell_stack.clone();
-    tokens.push("--help".to_string());
+    let tokens = state.session.scope.help_tokens();
     match run_repl_external_command(state, tokens, overrides)? {
         ReplCommandOutput::Text(text) => Ok(text),
         ReplCommandOutput::Output {

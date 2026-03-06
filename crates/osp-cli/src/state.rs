@@ -113,6 +113,102 @@ pub struct ReplState {
     pub history_shell: Option<HistoryShellContext>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplScopeFrame {
+    command: String,
+}
+
+impl ReplScopeFrame {
+    pub fn new(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+        }
+    }
+
+    pub fn command(&self) -> &str {
+        self.command.as_str()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReplScopeStack {
+    frames: Vec<ReplScopeFrame>,
+}
+
+impl ReplScopeStack {
+    pub fn is_root(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    pub fn enter(&mut self, command: impl Into<String>) {
+        self.frames.push(ReplScopeFrame::new(command));
+    }
+
+    pub fn leave(&mut self) -> Option<ReplScopeFrame> {
+        self.frames.pop()
+    }
+
+    pub fn commands(&self) -> Vec<String> {
+        self.frames
+            .iter()
+            .map(|frame| frame.command.clone())
+            .collect()
+    }
+
+    pub fn contains_command(&self, command: &str) -> bool {
+        self.frames
+            .iter()
+            .any(|frame| frame.command.eq_ignore_ascii_case(command))
+    }
+
+    pub fn display_label(&self) -> Option<String> {
+        if self.is_root() {
+            None
+        } else {
+            Some(
+                self.frames
+                    .iter()
+                    .map(|frame| frame.command.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" / "),
+            )
+        }
+    }
+
+    pub fn history_prefix(&self) -> String {
+        if self.is_root() {
+            String::new()
+        } else {
+            format!(
+                "{} ",
+                self.frames
+                    .iter()
+                    .map(|frame| frame.command.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        }
+    }
+
+    pub fn prefixed_tokens(&self, tokens: &[String]) -> Vec<String> {
+        let prefix = self.commands();
+        if prefix.is_empty() || tokens.starts_with(&prefix) {
+            return tokens.to_vec();
+        }
+        let mut full = prefix;
+        full.extend_from_slice(tokens);
+        full
+    }
+
+    pub fn help_tokens(&self) -> Vec<String> {
+        let mut tokens = self.commands();
+        if !tokens.is_empty() {
+            tokens.push("--help".to_string());
+        }
+        tokens
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LaunchContext {
     pub plugin_dirs: Vec<PathBuf>,
@@ -122,7 +218,7 @@ pub struct LaunchContext {
 
 #[derive(Default)]
 pub struct SessionState {
-    pub shell_stack: Vec<String>,
+    pub scope: ReplScopeStack,
     pub last_rows: Vec<Row>,
     pub result_cache: HashMap<String, Vec<Row>>,
     pub cache_order: VecDeque<String>,
@@ -134,7 +230,7 @@ impl SessionState {
     pub fn with_cache_limit(max_cached_results: usize) -> Self {
         let bounded = max_cached_results.max(1);
         Self {
-            shell_stack: Vec::new(),
+            scope: ReplScopeStack::default(),
             last_rows: Vec::new(),
             result_cache: HashMap::new(),
             cache_order: VecDeque::new(),
@@ -274,12 +370,7 @@ impl AppState {
         let Some(context) = &self.repl.history_shell else {
             return;
         };
-        let prefix = if self.session.shell_stack.is_empty() {
-            String::new()
-        } else {
-            format!("{} ", self.session.shell_stack.join(" "))
-        };
-        context.set_prefix(prefix);
+        context.set_prefix(self.session.scope.history_prefix());
     }
 
     pub fn record_repl_rows(&mut self, command_line: &str, rows: Vec<Row>) {
@@ -338,5 +429,41 @@ fn configured_usize(config: &ResolvedConfig, key: &str, fallback: usize) -> usiz
             .filter(|value| *value > 0)
             .unwrap_or(fallback),
         _ => fallback,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReplScopeStack;
+
+    #[test]
+    fn repl_scope_stack_formats_display_and_history_prefix() {
+        let mut scope = ReplScopeStack::default();
+        assert!(scope.is_root());
+        assert_eq!(scope.display_label(), None);
+        assert_eq!(scope.history_prefix(), "");
+
+        scope.enter("ldap");
+        scope.enter("user");
+
+        assert_eq!(scope.display_label().as_deref(), Some("ldap / user"));
+        assert_eq!(scope.history_prefix(), "ldap user ");
+        assert!(scope.contains_command("LDAP"));
+        assert_eq!(scope.help_tokens(), vec!["ldap", "user", "--help"]);
+    }
+
+    #[test]
+    fn repl_scope_stack_prefixes_tokens_once() {
+        let mut scope = ReplScopeStack::default();
+        scope.enter("ldap");
+
+        let tokens = vec!["user".to_string(), "oistes".to_string()];
+        assert_eq!(
+            scope.prefixed_tokens(&tokens),
+            vec!["ldap".to_string(), "user".to_string(), "oistes".to_string()]
+        );
+
+        let already_prefixed = vec!["ldap".to_string(), "user".to_string(), "oistes".to_string()];
+        assert_eq!(scope.prefixed_tokens(&already_prefixed), already_prefixed);
     }
 }

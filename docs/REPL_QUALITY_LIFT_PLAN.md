@@ -22,7 +22,7 @@ The target is a clearer split:
 - [ ] Add a typed `ReplSurface` model for visible commands, aliases, help rows, and completion inputs
 - [ ] Split `repl/mod.rs` into product seams: surface, scope, presentation, dispatch, session
 - [ ] Move host policy out of `osp-repl::run_repl()` and keep `osp-repl` focused on terminal mechanics
-- [ ] Replace stringly `shell_stack` prefixing with a typed scope/frame model
+- [x] Replace stringly `shell_stack` prefixing with a typed scope/frame model
 - [ ] Unify completion, highlighting, and execution around one parsed REPL input shape
 - [ ] Unify rich and basic fallback loops around one submit pipeline
 - [ ] Keep history store boring and move scope/recording policy to the host
@@ -44,9 +44,9 @@ The target is a clearer split:
 
 ### Scope
 
-- [ ] Model root vs subshell scope explicitly
-- [ ] Derive prompt indicator, history scope, and prefixing from scope frames
-- [ ] Keep repeated shell entry/exit behavior in one place
+- [x] Model root vs subshell scope explicitly
+- [x] Derive prompt indicator, history scope, and prefixing from scope frames
+- [x] Keep repeated shell entry/exit behavior in one place
 
 ### Presentation
 
