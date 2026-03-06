@@ -45,6 +45,19 @@ struct SelectedLayerEntry<'a> {
     entry: &'a LayerEntry,
 }
 
+#[derive(Debug, Clone)]
+struct ParsedTemplate {
+    raw: String,
+    placeholders: Vec<PlaceholderSpan>,
+}
+
+#[derive(Debug, Clone)]
+struct PlaceholderSpan {
+    start: usize,
+    end: usize,
+    name: String,
+}
+
 /// Placeholder expansion is intentionally isolated from scope/source selection.
 ///
 /// By the time interpolation runs, the resolver has already chosen one raw value
@@ -195,7 +208,7 @@ impl Interpolator {
         key: &str,
         final_values: &BTreeMap<String, ResolvedValue>,
     ) -> Result<Option<ExplainInterpolation>, ConfigError> {
-        let Some(template) = self.template_for(key)? else {
+        let Some(template) = self.parsed_template(key)? else {
             return Ok(None);
         };
 
@@ -203,7 +216,10 @@ impl Interpolator {
         let mut seen = BTreeSet::new();
         self.collect_steps_recursive(key, final_values, &mut steps, &mut seen, &mut Vec::new())?;
 
-        Ok(Some(ExplainInterpolation { template, steps }))
+        Ok(Some(ExplainInterpolation {
+            template: template.raw,
+            steps,
+        }))
     }
 
     fn resolve_value(
@@ -241,14 +257,14 @@ impl Interpolator {
             ConfigValue::Secret(secret) => match secret.into_inner() {
                 ConfigValue::String(template) => {
                     let (interpolated, _contains_secret) =
-                        self.interpolate_template(key, &template, stack)?;
+                        self.interpolate_template(key, parse_template(key, &template)?, stack)?;
                     ConfigValue::String(interpolated).into_secret()
                 }
                 other => other.into_secret(),
             },
             ConfigValue::String(template) => {
                 let (interpolated, contains_secret) =
-                    self.interpolate_template(key, &template, stack)?;
+                    self.interpolate_template(key, parse_template(key, &template)?, stack)?;
                 let value = ConfigValue::String(interpolated);
                 if contains_secret {
                     value.into_secret()
@@ -268,49 +284,32 @@ impl Interpolator {
     fn interpolate_template(
         &mut self,
         key: &str,
-        template: &str,
+        template: ParsedTemplate,
         stack: &mut Vec<String>,
     ) -> Result<(String, bool), ConfigError> {
-        let placeholders = extract_placeholders(key, template)?;
-        if placeholders.is_empty() {
-            return Ok((template.to_string(), false));
+        if template.placeholders.is_empty() {
+            return Ok((template.raw, false));
         }
 
         let mut out = String::new();
         let mut cursor = 0usize;
         let mut contains_secret = false;
 
-        while let Some(rel_start) = template[cursor..].find("${") {
-            let start = cursor + rel_start;
-            out.push_str(&template[cursor..start]);
-
-            let after_open = start + 2;
-            let rel_end = template[after_open..]
-                .find('}')
-                .expect("extract_placeholders should validate closing brace");
-            let end = after_open + rel_end;
-            let placeholder = template[after_open..end].trim();
-
-            if !self.raw.contains_key(placeholder) {
-                return Err(ConfigError::UnresolvedPlaceholder {
-                    key: key.to_string(),
-                    placeholder: placeholder.to_string(),
-                });
-            }
-
-            let resolved = self.resolve_value(placeholder, stack)?;
+        for placeholder in &template.placeholders {
+            out.push_str(&template.raw[cursor..placeholder.start]);
+            let resolved = self.resolve_placeholder(key, &placeholder.name, stack)?;
             if resolved.is_secret() {
                 contains_secret = true;
             }
-            out.push_str(&resolved.as_interpolation_string(key, placeholder)?);
-            cursor = end + 1;
+            out.push_str(&resolved.as_interpolation_string(key, &placeholder.name)?);
+            cursor = placeholder.end;
         }
 
-        out.push_str(&template[cursor..]);
+        out.push_str(&template.raw[cursor..]);
         Ok((out, contains_secret))
     }
 
-    fn template_for(&self, key: &str) -> Result<Option<String>, ConfigError> {
+    fn parsed_template(&self, key: &str) -> Result<Option<ParsedTemplate>, ConfigError> {
         if key.starts_with("alias.") {
             return Ok(None);
         }
@@ -318,11 +317,24 @@ impl Interpolator {
         let Some(ConfigValue::String(template)) = self.raw.get(key).map(ConfigValue::reveal) else {
             return Ok(None);
         };
-        if !template.contains("${") {
-            return Ok(None);
+        let parsed = parse_template(key, template)?;
+        Ok((!parsed.placeholders.is_empty()).then_some(parsed))
+    }
+
+    fn resolve_placeholder(
+        &mut self,
+        key: &str,
+        placeholder: &str,
+        stack: &mut Vec<String>,
+    ) -> Result<ConfigValue, ConfigError> {
+        if !self.raw.contains_key(placeholder) {
+            return Err(ConfigError::UnresolvedPlaceholder {
+                key: key.to_string(),
+                placeholder: placeholder.to_string(),
+            });
         }
 
-        Ok(Some(template.clone()))
+        self.resolve_value(placeholder, stack)
     }
 
     fn collect_steps_recursive(
@@ -333,7 +345,7 @@ impl Interpolator {
         seen: &mut BTreeSet<String>,
         stack: &mut Vec<String>,
     ) -> Result<(), ConfigError> {
-        let Some(template) = self.template_for(key)? else {
+        let Some(template) = self.parsed_template(key)? else {
             return Ok(());
         };
 
@@ -344,19 +356,19 @@ impl Interpolator {
         }
 
         stack.push(key.to_string());
-        for placeholder in extract_placeholders(key, &template)? {
-            if !self.raw.contains_key(&placeholder) {
+        for placeholder in &template.placeholders {
+            if !self.raw.contains_key(&placeholder.name) {
                 return Err(ConfigError::UnresolvedPlaceholder {
                     key: key.to_string(),
-                    placeholder,
+                    placeholder: placeholder.name.clone(),
                 });
             }
 
-            if seen.insert(placeholder.clone())
-                && let Some(value_entry) = final_values.get(&placeholder)
+            if seen.insert(placeholder.name.clone())
+                && let Some(value_entry) = final_values.get(&placeholder.name)
             {
                 steps.push(ExplainInterpolationStep {
-                    placeholder: placeholder.clone(),
+                    placeholder: placeholder.name.clone(),
                     value: value_entry.value.clone(),
                     source: value_entry.source,
                     scope: value_entry.scope.clone(),
@@ -364,7 +376,7 @@ impl Interpolator {
                 });
             }
 
-            self.collect_steps_recursive(&placeholder, final_values, steps, seen, stack)?;
+            self.collect_steps_recursive(&placeholder.name, final_values, steps, seen, stack)?;
         }
         stack.pop();
 
@@ -689,7 +701,9 @@ fn explain_interpolation(
     Interpolator::from_resolved_values(pre_interpolated).explain(key, final_values)
 }
 
-fn extract_placeholders(key: &str, template: &str) -> Result<Vec<String>, ConfigError> {
+/// Parse `${key}` segments once so interpolation and explain tracing can share
+/// the same validated template shape.
+fn parse_template(key: &str, template: &str) -> Result<ParsedTemplate, ConfigError> {
     let mut placeholders = Vec::new();
     let mut cursor = 0usize;
 
@@ -712,9 +726,16 @@ fn extract_placeholders(key: &str, template: &str) -> Result<Vec<String>, Config
             });
         }
 
-        placeholders.push(placeholder.to_string());
+        placeholders.push(PlaceholderSpan {
+            start,
+            end: end + 1,
+            name: placeholder.to_string(),
+        });
         cursor = end + 1;
     }
 
-    Ok(placeholders)
+    Ok(ParsedTemplate {
+        raw: template.to_string(),
+        placeholders,
+    })
 }
