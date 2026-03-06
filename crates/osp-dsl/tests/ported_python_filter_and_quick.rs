@@ -167,3 +167,87 @@ fn quick_stage_key_scope() {
     assert_eq!(output_rows(&output).len(), 1);
     assert!(output_rows(&output)[0].contains_key("uid"));
 }
+
+#[test]
+fn quick_path_scoping_matches_python_contract() {
+    let rows = vec![obj(json!({
+        "id": 55753,
+        "txts": {"id": 27994},
+        "metadata": {"asset": {"id": 42}}
+    }))];
+
+    let output =
+        apply_pipeline(rows.clone(), &["asset.id".to_string()]).expect("quick should work");
+    assert_eq!(
+        output_rows(&output),
+        vec![obj(json!({"metadata": {"asset": {"id": 42}}}))].as_slice()
+    );
+
+    let output =
+        apply_pipeline(rows.clone(), &[".asset.id".to_string()]).expect("quick should work");
+    assert!(output_rows(&output).is_empty());
+
+    let output = apply_pipeline(rows.clone(), &["txts.id".to_string()]).expect("quick should work");
+    assert_eq!(
+        output_rows(&output),
+        vec![obj(json!({"txts": {"id": 27994}}))].as_slice()
+    );
+
+    let output = apply_pipeline(rows, &["txt.id".to_string()]).expect("quick should work");
+    assert!(output_rows(&output).is_empty());
+}
+
+#[test]
+fn quick_collects_all_exact_matches() {
+    let rows = vec![obj(json!({
+        "id": 55753,
+        "txts": {"id": 27994},
+        "ipaddresses": [{"id": 57171}, {"id": 57172}]
+    }))];
+
+    let output = apply_pipeline(rows, &["id".to_string()]).expect("quick should work");
+    assert_eq!(output_rows(&output).len(), 1);
+    let row = &output_rows(&output)[0];
+    assert_eq!(row.get("id"), Some(&json!(55753)));
+    assert_eq!(row.get("txts"), Some(&json!({"id": 27994})));
+    assert_eq!(
+        row.get("ipaddresses"),
+        Some(&json!([{"id": 57171}, {"id": 57172}]))
+    );
+}
+
+#[test]
+fn quick_list_selector_fanout_projects_nested_rows() {
+    let rows = vec![obj(json!({
+        "networks": [
+            {"network": "129.240.130.0/24"},
+            {"network": "2001:700:100:4003::/64"}
+        ]
+    }))];
+
+    let output = apply_pipeline(rows, &["networks[]".to_string()]).expect("quick should work");
+    let expected = vec![
+        obj(json!({"network": "129.240.130.0/24"})),
+        obj(json!({"network": "2001:700:100:4003::/64"})),
+    ];
+    assert_eq!(output_rows(&output), expected.as_slice());
+}
+
+#[test]
+fn quick_existence_and_negated_existence_match_python_contract() {
+    let rows = vec![
+        obj(json!({"value": "alpha", "interfaces": [{"mac": "aa:bb"}]})),
+        obj(json!({"value": "beta", "interfaces": [{"mac": "ee:ff"}]})),
+        obj(json!({"value": "standalone"})),
+    ];
+
+    let output =
+        apply_pipeline(rows.clone(), &["?interfaces".to_string()]).expect("quick should work");
+    assert_eq!(output_rows(&output).len(), 2);
+
+    let output = apply_pipeline(rows, &["!?interfaces".to_string()]).expect("quick should work");
+    assert_eq!(
+        output_rows(&output),
+        vec![obj(json!({"value": "standalone"}))].as_slice()
+    );
+}
