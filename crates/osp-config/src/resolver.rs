@@ -8,24 +8,27 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct ConfigResolver {
-    defaults: ConfigLayer,
-    file: ConfigLayer,
-    secrets: ConfigLayer,
-    env: ConfigLayer,
-    cli: ConfigLayer,
-    session: ConfigLayer,
+    layers: LoadedLayers,
     schema: ConfigSchema,
+}
+
+#[derive(Debug, Clone)]
+struct ResolutionFrame {
+    active_profile: String,
+    terminal: Option<String>,
+    known_profiles: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedMaps {
+    pre_interpolated: BTreeMap<String, ResolvedValue>,
+    final_values: BTreeMap<String, ResolvedValue>,
 }
 
 impl ConfigResolver {
     pub fn from_loaded_layers(layers: LoadedLayers) -> Self {
         Self {
-            defaults: layers.defaults,
-            file: layers.file,
-            secrets: layers.secrets,
-            env: layers.env,
-            cli: layers.cli,
-            session: layers.session,
+            layers,
             schema: ConfigSchema::default(),
         }
     }
@@ -39,73 +42,61 @@ impl ConfigResolver {
     }
 
     pub fn defaults_mut(&mut self) -> &mut ConfigLayer {
-        &mut self.defaults
+        &mut self.layers.defaults
     }
 
     pub fn file_mut(&mut self) -> &mut ConfigLayer {
-        &mut self.file
+        &mut self.layers.file
     }
 
     pub fn secrets_mut(&mut self) -> &mut ConfigLayer {
-        &mut self.secrets
+        &mut self.layers.secrets
     }
 
     pub fn env_mut(&mut self) -> &mut ConfigLayer {
-        &mut self.env
+        &mut self.layers.env
     }
 
     pub fn cli_mut(&mut self) -> &mut ConfigLayer {
-        &mut self.cli
+        &mut self.layers.cli
     }
 
     pub fn session_mut(&mut self) -> &mut ConfigLayer {
-        &mut self.session
+        &mut self.layers.session
     }
 
     pub fn set_defaults(&mut self, layer: ConfigLayer) {
-        self.defaults = layer;
+        self.layers.defaults = layer;
     }
 
     pub fn set_file(&mut self, layer: ConfigLayer) {
-        self.file = layer;
+        self.layers.file = layer;
     }
 
     pub fn set_secrets(&mut self, layer: ConfigLayer) {
-        self.secrets = layer;
+        self.layers.secrets = layer;
     }
 
     pub fn set_env(&mut self, layer: ConfigLayer) {
-        self.env = layer;
+        self.layers.env = layer;
     }
 
     pub fn set_cli(&mut self, layer: ConfigLayer) {
-        self.cli = layer;
+        self.layers.cli = layer;
     }
 
     pub fn set_session(&mut self, layer: ConfigLayer) {
-        self.session = layer;
+        self.layers.session = layer;
     }
 
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
-        let terminal = options.terminal.map(|value| normalize_identifier(&value));
-        let profile_override = options
-            .profile_override
-            .map(|value| normalize_identifier(&value));
-        let known_profiles = self.collect_known_profiles();
-        let active_profile = self.resolve_active_profile(
-            profile_override.as_deref(),
-            terminal.as_deref(),
-            &known_profiles,
-        )?;
-        let mut values = self.collect_selected_values(&active_profile, terminal.as_deref());
-
-        interpolate_all(&mut values)?;
-        self.schema.validate_and_adapt(&mut values)?;
+        let frame = self.prepare_resolution(options)?;
+        let values = self.resolve_values(&frame)?;
 
         Ok(ResolvedConfig {
-            active_profile,
-            terminal,
-            known_profiles,
+            active_profile: frame.active_profile,
+            terminal: frame.terminal,
+            known_profiles: frame.known_profiles,
             values,
         })
     }
@@ -115,21 +106,12 @@ impl ConfigResolver {
         key: &str,
         options: ResolveOptions,
     ) -> Result<ConfigExplain, ConfigError> {
-        let terminal = options.terminal.map(|value| normalize_identifier(&value));
-        let profile_override = options
-            .profile_override
-            .map(|value| normalize_identifier(&value));
-        let known_profiles = self.collect_known_profiles();
-        let active_profile = self.resolve_active_profile(
-            profile_override.as_deref(),
-            terminal.as_deref(),
-            &known_profiles,
-        )?;
+        let frame = self.prepare_resolution(options)?;
 
         let mut layers = Vec::new();
         for (source, layer) in self.layers() {
             let selected_entry =
-                select_scoped_entry(layer, key, &active_profile, terminal.as_deref());
+                select_scoped_entry(layer, key, &frame.active_profile, frame.terminal.as_deref());
             let selected_entry_index = selected_entry.and_then(|entry| {
                 layer
                     .entries
@@ -143,7 +125,11 @@ impl ConfigResolver {
                     continue;
                 }
 
-                let rank = scope_rank(&entry.scope, &active_profile, terminal.as_deref());
+                let rank = scope_rank(
+                    &entry.scope,
+                    &frame.active_profile,
+                    frame.terminal.as_deref(),
+                );
                 candidates.push(ExplainCandidate {
                     entry_index,
                     value: entry.value.clone(),
@@ -163,21 +149,58 @@ impl ConfigResolver {
             }
         }
 
-        let pre_interpolated = self.collect_selected_values(&active_profile, terminal.as_deref());
-        let mut final_values = pre_interpolated.clone();
-        interpolate_all(&mut final_values)?;
-        self.schema.validate_and_adapt(&mut final_values)?;
-        let final_entry = final_values.get(key).cloned();
-        let interpolation = explain_interpolation(key, &pre_interpolated, &final_values)?;
+        let resolved = self.resolve_maps(&frame)?;
+        let final_entry = resolved.final_values.get(key).cloned();
+        let interpolation =
+            explain_interpolation(key, &resolved.pre_interpolated, &resolved.final_values)?;
 
         Ok(ConfigExplain {
             key: key.to_string(),
-            active_profile,
-            terminal,
-            known_profiles,
+            active_profile: frame.active_profile,
+            terminal: frame.terminal,
+            known_profiles: frame.known_profiles,
             layers,
             final_entry,
             interpolation,
+        })
+    }
+
+    fn prepare_resolution(&self, options: ResolveOptions) -> Result<ResolutionFrame, ConfigError> {
+        let terminal = options.terminal.map(|value| normalize_identifier(&value));
+        let profile_override = options
+            .profile_override
+            .map(|value| normalize_identifier(&value));
+        let known_profiles = self.collect_known_profiles();
+        let active_profile = self.resolve_active_profile(
+            profile_override.as_deref(),
+            terminal.as_deref(),
+            &known_profiles,
+        )?;
+
+        Ok(ResolutionFrame {
+            active_profile,
+            terminal,
+            known_profiles,
+        })
+    }
+
+    fn resolve_values(
+        &self,
+        frame: &ResolutionFrame,
+    ) -> Result<BTreeMap<String, ResolvedValue>, ConfigError> {
+        Ok(self.resolve_maps(frame)?.final_values)
+    }
+
+    fn resolve_maps(&self, frame: &ResolutionFrame) -> Result<ResolvedMaps, ConfigError> {
+        let pre_interpolated =
+            self.collect_selected_values(&frame.active_profile, frame.terminal.as_deref());
+        let mut final_values = pre_interpolated.clone();
+        interpolate_all(&mut final_values)?;
+        self.schema.validate_and_adapt(&mut final_values)?;
+
+        Ok(ResolvedMaps {
+            pre_interpolated,
+            final_values,
         })
     }
 
@@ -321,12 +344,12 @@ impl ConfigResolver {
 
     fn layers(&self) -> [(ConfigSource, &ConfigLayer); 6] {
         [
-            (ConfigSource::BuiltinDefaults, &self.defaults),
-            (ConfigSource::ConfigFile, &self.file),
-            (ConfigSource::Secrets, &self.secrets),
-            (ConfigSource::Environment, &self.env),
-            (ConfigSource::Cli, &self.cli),
-            (ConfigSource::Session, &self.session),
+            (ConfigSource::BuiltinDefaults, &self.layers.defaults),
+            (ConfigSource::ConfigFile, &self.layers.file),
+            (ConfigSource::Secrets, &self.layers.secrets),
+            (ConfigSource::Environment, &self.layers.env),
+            (ConfigSource::Cli, &self.layers.cli),
+            (ConfigSource::Session, &self.layers.session),
         ]
     }
 }
