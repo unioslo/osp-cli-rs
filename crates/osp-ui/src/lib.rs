@@ -193,6 +193,30 @@ impl RenderSettings {
         }
         self.runtime.width.filter(|width| *width > 0)
     }
+
+    fn plain_copy_settings(&self) -> Self {
+        Self {
+            format: self.format,
+            mode: RenderMode::Plain,
+            color: ColorMode::Never,
+            unicode: UnicodeMode::Never,
+            width: self.width,
+            margin: self.margin,
+            indent_size: self.indent_size,
+            short_list_max: self.short_list_max,
+            medium_list_max: self.medium_list_max,
+            grid_padding: self.grid_padding,
+            grid_columns: self.grid_columns,
+            column_weight: self.column_weight,
+            table_overflow: self.table_overflow,
+            mreg_stack_min_col_width: self.mreg_stack_min_col_width,
+            mreg_stack_overflow_ratio: self.mreg_stack_overflow_ratio,
+            theme_name: self.theme_name.clone(),
+            theme: self.theme.clone(),
+            style_overrides: self.style_overrides.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
 }
 
 pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
@@ -222,53 +246,13 @@ pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {
 }
 
 pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) -> String {
-    let copy_settings = RenderSettings {
-        format: settings.format,
-        mode: RenderMode::Plain,
-        color: ColorMode::Never,
-        unicode: UnicodeMode::Never,
-        width: settings.width,
-        margin: settings.margin,
-        indent_size: settings.indent_size,
-        short_list_max: settings.short_list_max,
-        medium_list_max: settings.medium_list_max,
-        grid_padding: settings.grid_padding,
-        grid_columns: settings.grid_columns,
-        column_weight: settings.column_weight,
-        table_overflow: settings.table_overflow,
-        mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
-        mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
-        theme_name: settings.theme_name.clone(),
-        theme: settings.theme.clone(),
-        style_overrides: settings.style_overrides.clone(),
-        runtime: settings.runtime.clone(),
-    };
+    let copy_settings = settings.plain_copy_settings();
     let document = format::build_document_from_output(output, &copy_settings);
     render_document_for_copy(&document, &copy_settings)
 }
 
 pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) -> String {
-    let copy_settings = RenderSettings {
-        format: settings.format,
-        mode: RenderMode::Plain,
-        color: ColorMode::Never,
-        unicode: UnicodeMode::Never,
-        width: settings.width,
-        margin: settings.margin,
-        indent_size: settings.indent_size,
-        short_list_max: settings.short_list_max,
-        medium_list_max: settings.medium_list_max,
-        grid_padding: settings.grid_padding,
-        grid_columns: settings.grid_columns,
-        column_weight: settings.column_weight,
-        table_overflow: settings.table_overflow,
-        mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
-        mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
-        theme_name: settings.theme_name.clone(),
-        theme: settings.theme.clone(),
-        style_overrides: settings.style_overrides.clone(),
-        runtime: settings.runtime.clone(),
-    };
+    let copy_settings = settings.plain_copy_settings();
     let resolved = copy_settings.resolve_render_settings();
     renderer::render_document(document, resolved)
 }
@@ -293,27 +277,7 @@ pub fn copy_output_to_clipboard(
     settings: &RenderSettings,
     clipboard: &clipboard::ClipboardService,
 ) -> Result<(), clipboard::ClipboardError> {
-    let copy_settings = RenderSettings {
-        format: settings.format,
-        mode: RenderMode::Plain,
-        color: ColorMode::Never,
-        unicode: UnicodeMode::Never,
-        width: settings.width,
-        margin: settings.margin,
-        indent_size: settings.indent_size,
-        short_list_max: settings.short_list_max,
-        medium_list_max: settings.medium_list_max,
-        grid_padding: settings.grid_padding,
-        grid_columns: settings.grid_columns,
-        column_weight: settings.column_weight,
-        table_overflow: settings.table_overflow,
-        mreg_stack_min_col_width: settings.mreg_stack_min_col_width,
-        mreg_stack_overflow_ratio: settings.mreg_stack_overflow_ratio,
-        theme_name: settings.theme_name.clone(),
-        theme: settings.theme.clone(),
-        style_overrides: settings.style_overrides.clone(),
-        runtime: settings.runtime.clone(),
-    };
+    let copy_settings = settings.plain_copy_settings();
     let document = format::build_document_from_output(output, &copy_settings);
     clipboard.copy_document(&document, &copy_settings)
 }

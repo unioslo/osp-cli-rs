@@ -176,7 +176,8 @@ fn dsl_pipeline_grouped_output_renders_without_flattening() {
             .expect("row fixture"),
     ];
 
-    let transformed = apply_pipeline(rows, &["G dept".to_string()]).expect("pipeline should succeed");
+    let transformed =
+        apply_pipeline(rows, &["G dept".to_string()]).expect("pipeline should succeed");
 
     let settings = RenderSettings {
         format: OutputFormat::Table,

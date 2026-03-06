@@ -505,15 +505,7 @@ fn section_divider(
     style_overrides: &StyleOverrides,
 ) -> String {
     let fill_char = if unicode { '─' } else { '-' };
-    let target_width = width
-        .or_else(|| {
-            std::env::var("COLUMNS")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .filter(|value| *value > 0)
-        })
-        .unwrap_or(24)
-        .max(12);
+    let target_width = width.unwrap_or(24).max(12);
     let title = title.trim();
 
     if title.is_empty() {
@@ -1281,7 +1273,7 @@ fn resolve_table_alignments(width: usize, align: Option<&[TableAlign]>) -> Vec<T
         .map(|value| value.to_vec())
         .unwrap_or_else(|| vec![TableAlign::Default; width]);
     if out.len() < width {
-        out.extend(std::iter::repeat(TableAlign::Default).take(width - out.len()));
+        out.extend(std::iter::repeat_n(TableAlign::Default, width - out.len()));
     }
     out.truncate(width);
     out

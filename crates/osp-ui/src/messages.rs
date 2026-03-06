@@ -298,15 +298,7 @@ pub fn render_section_divider_with_overrides(
     style_overrides: &StyleOverrides,
 ) -> String {
     let fill_char = if unicode { '─' } else { '-' };
-    let target_width = width
-        .or_else(|| {
-            std::env::var("COLUMNS")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .filter(|value| *value > 0)
-        })
-        .unwrap_or(12)
-        .max(12);
+    let target_width = width.unwrap_or(12).max(12);
     let title = title.trim();
 
     let raw = if title.is_empty() {
@@ -379,7 +371,15 @@ pub fn adjust_verbosity(base: MessageLevel, verbose: u8, quiet: u8) -> MessageLe
 
 #[cfg(test)]
 mod tests {
-    use super::{MessageBuffer, MessageLevel, MessageRenderFormat, adjust_verbosity};
+    use super::{
+        MessageBuffer, MessageLevel, MessageRenderFormat, adjust_verbosity, render_section_divider,
+    };
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn default_success_hides_info_and_debug() {
@@ -459,5 +459,30 @@ mod tests {
             adjust_verbosity(MessageLevel::Success, 0, 9),
             MessageLevel::Error
         );
+    }
+
+    #[test]
+    fn section_divider_ignores_columns_env_without_explicit_width() {
+        let _guard = env_lock().lock().expect("lock should not be poisoned");
+        let original = std::env::var("COLUMNS").ok();
+        unsafe {
+            std::env::set_var("COLUMNS", "99");
+        }
+
+        let divider = render_section_divider(
+            "",
+            false,
+            None,
+            false,
+            &crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
+            crate::style::StyleToken::PanelBorder,
+        );
+
+        match original {
+            Some(value) => unsafe { std::env::set_var("COLUMNS", value) },
+            None => unsafe { std::env::remove_var("COLUMNS") },
+        }
+
+        assert_eq!(divider.len(), 12);
     }
 }
