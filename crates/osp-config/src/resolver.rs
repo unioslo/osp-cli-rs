@@ -12,6 +12,10 @@ pub struct ConfigResolver {
     schema: ConfigSchema,
 }
 
+/// One resolution request always runs against a single active profile/terminal pair.
+///
+/// The resolver computes this frame once up front so value selection, explain output,
+/// and interpolation all describe the same view of the world.
 #[derive(Debug, Clone)]
 struct ResolutionFrame {
     active_profile: String,
@@ -19,6 +23,9 @@ struct ResolutionFrame {
     known_profiles: BTreeSet<String>,
 }
 
+/// Resolution happens in two steps:
+/// 1. pick the winning raw value for each key using source + scope precedence
+/// 2. interpolate placeholders and then run schema adaptation on those winners
 #[derive(Debug, Clone)]
 struct ResolvedMaps {
     pre_interpolated: BTreeMap<String, ResolvedValue>,
@@ -34,12 +41,127 @@ struct LayerRef<'a> {
 #[derive(Debug, Clone)]
 struct SelectedLayerEntry<'a> {
     source: ConfigSource,
+    entry_index: usize,
     entry: &'a LayerEntry,
 }
 
+/// Placeholder expansion is intentionally isolated from scope/source selection.
+///
+/// By the time interpolation runs, the resolver has already chosen one raw value
+/// per key. That keeps interpolation deterministic and lets `config explain`
+/// report the same placeholder chain the normal resolution path used.
 struct Interpolator {
     raw: HashMap<String, ConfigValue>,
     cache: HashMap<String, ConfigValue>,
+}
+
+/// Scope precedence is small but subtle:
+/// profile+terminal > profile > terminal > global.
+///
+/// Keeping that policy in one selector object makes `resolve()`, default-profile
+/// lookup, and `explain_key()` share the same matching rules instead of each
+/// rebuilding them slightly differently.
+#[derive(Debug, Clone, Copy)]
+struct ScopeSelector<'a> {
+    profile: Option<&'a str>,
+    terminal: Option<&'a str>,
+}
+
+impl<'a> ScopeSelector<'a> {
+    fn scoped(profile: &'a str, terminal: Option<&'a str>) -> Self {
+        Self {
+            profile: Some(profile),
+            terminal,
+        }
+    }
+
+    fn global(terminal: Option<&'a str>) -> Self {
+        Self {
+            profile: None,
+            terminal,
+        }
+    }
+
+    fn rank(self, scope: &Scope) -> Option<u8> {
+        match (
+            self.profile,
+            scope.profile.as_deref(),
+            scope.terminal.as_deref(),
+            self.terminal,
+        ) {
+            (Some(active_profile), Some(profile), Some(term), Some(active_term))
+                if profile == active_profile && term == active_term =>
+            {
+                Some(0)
+            }
+            (Some(active_profile), Some(profile), None, _) if profile == active_profile => Some(1),
+            (_, None, Some(term), Some(active_term)) if term == active_term => Some(2),
+            (_, None, None, _) => Some(3),
+            _ => None,
+        }
+    }
+
+    fn select(self, layer: LayerRef<'a>, key: &str) -> Option<SelectedLayerEntry<'a>> {
+        let mut best: Option<(usize, u8, &'a LayerEntry)> = None;
+
+        for (entry_index, entry) in layer.layer.entries.iter().enumerate() {
+            if entry.key != key {
+                continue;
+            }
+
+            let Some(rank) = self.rank(&entry.scope) else {
+                continue;
+            };
+
+            let replace = match best {
+                None => true,
+                Some((best_index, best_rank, _)) => {
+                    rank < best_rank || (rank == best_rank && entry_index > best_index)
+                }
+            };
+
+            if replace {
+                best = Some((entry_index, rank, entry));
+            }
+        }
+
+        best.map(|(entry_index, _, entry)| SelectedLayerEntry {
+            source: layer.source,
+            entry_index,
+            entry,
+        })
+    }
+
+    fn explain_layer(self, layer: LayerRef<'a>, key: &str) -> Option<ExplainLayer> {
+        let selected = self.select(layer, key);
+        let selected_entry_index = selected.as_ref().map(|entry| entry.entry_index);
+
+        let candidates = layer
+            .layer
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.key == key)
+            .map(|(entry_index, entry)| ExplainCandidate {
+                entry_index,
+                value: entry.value.clone(),
+                scope: entry.scope.clone(),
+                origin: entry.origin.clone(),
+                rank: self.rank(&entry.scope),
+                selected_in_layer: selected_entry_index == Some(entry_index),
+            })
+            .collect::<Vec<ExplainCandidate>>();
+
+        if candidates.is_empty() {
+            None
+        } else {
+            Some(ExplainLayer {
+                source: layer.source,
+                selected_entry_index,
+                candidates,
+            })
+        }
+    }
 }
 
 impl Interpolator {
@@ -394,12 +516,13 @@ impl ConfigResolver {
         active_profile: &str,
         terminal: Option<&str>,
     ) -> BTreeMap<String, ResolvedValue> {
+        let selector = ScopeSelector::scoped(active_profile, terminal);
         let mut keys = self.collect_keys();
         keys.insert("profile.default".to_string());
 
         let mut values = BTreeMap::new();
         for key in keys {
-            if let Some(selected) = self.select_across_layers(&key, active_profile, terminal) {
+            if let Some(selected) = self.select_across_layers(&key, selector) {
                 values.insert(
                     key,
                     ResolvedValue {
@@ -469,9 +592,10 @@ impl ConfigResolver {
 
     fn resolve_default_profile(&self, terminal: Option<&str>) -> Result<String, ConfigError> {
         let mut picked: Option<ConfigValue> = None;
+        let selector = ScopeSelector::global(terminal);
 
         for layer in self.layers() {
-            if let Some(selected) = select_global_entry(layer, "profile.default", terminal) {
+            if let Some(selected) = selector.select(layer, "profile.default") {
                 picked = Some(selected.entry.value.clone());
             }
         }
@@ -502,13 +626,12 @@ impl ConfigResolver {
     fn select_across_layers<'a>(
         &'a self,
         key: &str,
-        profile: &str,
-        terminal: Option<&str>,
+        selector: ScopeSelector<'a>,
     ) -> Option<SelectedLayerEntry<'a>> {
         let mut selected: Option<SelectedLayerEntry<'a>> = None;
 
         for layer in self.layers() {
-            if let Some(entry) = select_scoped_entry(layer, key, profile, terminal) {
+            if let Some(entry) = selector.select(layer, key) {
                 selected = Some(entry);
             }
         }
@@ -517,49 +640,11 @@ impl ConfigResolver {
     }
 
     fn explain_layers_for_key(&self, key: &str, frame: &ResolutionFrame) -> Vec<ExplainLayer> {
-        let mut layers = Vec::new();
-
-        for layer in self.layers() {
-            let selected =
-                select_scoped_entry(layer, key, &frame.active_profile, frame.terminal.as_deref());
-            let selected_entry_index = selected.and_then(|selected| {
-                layer
-                    .layer
-                    .entries
-                    .iter()
-                    .position(|candidate| std::ptr::eq(candidate, selected.entry))
-            });
-
-            let candidates = layer
-                .layer
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| entry.key == key)
-                .map(|(entry_index, entry)| ExplainCandidate {
-                    entry_index,
-                    value: entry.value.clone(),
-                    scope: entry.scope.clone(),
-                    origin: entry.origin.clone(),
-                    rank: scope_rank(
-                        &entry.scope,
-                        &frame.active_profile,
-                        frame.terminal.as_deref(),
-                    ),
-                    selected_in_layer: selected_entry_index == Some(entry_index),
-                })
-                .collect::<Vec<ExplainCandidate>>();
-
-            if !candidates.is_empty() {
-                layers.push(ExplainLayer {
-                    source: layer.source,
-                    selected_entry_index,
-                    candidates,
-                });
-            }
-        }
-
-        layers
+        let selector = ScopeSelector::scoped(&frame.active_profile, frame.terminal.as_deref());
+        self.layers()
+            .into_iter()
+            .filter_map(|layer| selector.explain_layer(layer, key))
+            .collect()
     }
 
     fn layers(&self) -> [LayerRef<'_>; 6] {
@@ -589,82 +674,6 @@ impl ConfigResolver {
                 layer: &self.layers.session,
             },
         ]
-    }
-}
-
-fn select_scoped_entry<'a>(
-    layer: LayerRef<'a>,
-    key: &str,
-    profile: &str,
-    terminal: Option<&str>,
-) -> Option<SelectedLayerEntry<'a>> {
-    select_entry(layer, key, |scope| scope_rank(scope, profile, terminal))
-}
-
-fn select_global_entry<'a>(
-    layer: LayerRef<'a>,
-    key: &str,
-    terminal: Option<&str>,
-) -> Option<SelectedLayerEntry<'a>> {
-    select_entry(layer, key, |scope| global_rank(scope, terminal))
-}
-
-fn select_entry<'a, F>(layer: LayerRef<'a>, key: &str, ranker: F) -> Option<SelectedLayerEntry<'a>>
-where
-    F: Fn(&Scope) -> Option<u8>,
-{
-    let mut best: Option<(usize, u8, &'a LayerEntry)> = None;
-
-    for (index, entry) in layer.layer.entries.iter().enumerate() {
-        if entry.key != key {
-            continue;
-        }
-
-        let Some(rank) = ranker(&entry.scope) else {
-            continue;
-        };
-
-        let replace = match best {
-            None => true,
-            Some((best_index, best_rank, _)) => {
-                rank < best_rank || (rank == best_rank && index > best_index)
-            }
-        };
-
-        if replace {
-            best = Some((index, rank, entry));
-        }
-    }
-
-    best.map(|(_, _, entry)| SelectedLayerEntry {
-        source: layer.source,
-        entry,
-    })
-}
-
-fn scope_rank(scope: &Scope, profile: &str, terminal: Option<&str>) -> Option<u8> {
-    match (
-        scope.profile.as_deref(),
-        scope.terminal.as_deref(),
-        terminal,
-    ) {
-        (Some(p), Some(t), Some(active_t)) if p == profile && t == active_t => Some(0),
-        (Some(p), None, _) if p == profile => Some(1),
-        (None, Some(t), Some(active_t)) if t == active_t => Some(2),
-        (None, None, _) => Some(3),
-        _ => None,
-    }
-}
-
-fn global_rank(scope: &Scope, terminal: Option<&str>) -> Option<u8> {
-    match (
-        scope.profile.as_deref(),
-        scope.terminal.as_deref(),
-        terminal,
-    ) {
-        (None, Some(t), Some(active_t)) if t == active_t => Some(0),
-        (None, None, _) => Some(1),
-        _ => None,
     }
 }
 

@@ -453,3 +453,47 @@ fn explain_reports_interpolation_trace_contract() {
     assert!(placeholders.contains(&"extensions.uio.ldap.url".to_string()));
     assert!(placeholders.contains(&"base.dir".to_string()));
 }
+
+#[test]
+fn explain_marks_same_layer_winner_consistently_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "uio");
+
+    let mut file = ConfigLayer::default();
+    file.set("ui.format", "table");
+    file.set_for_profile("uio", "ui.format", "json");
+    file.set_for_terminal("repl", "ui.format", "mreg");
+    file.insert_with_origin(
+        "ui.format",
+        "value",
+        osp_config::Scope::profile_terminal("uio", "repl"),
+        Some("/tmp/config.toml"),
+    );
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_file(file);
+
+    let resolved = resolver
+        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .expect("config should resolve");
+    assert_eq!(resolved.get_string("ui.format"), Some("value"));
+
+    let explain = resolver
+        .explain_key("ui.format", ResolveOptions::default().with_terminal("repl"))
+        .expect("explain should succeed");
+    let file_layer = explain
+        .layers
+        .iter()
+        .find(|layer| layer.source == ConfigSource::ConfigFile)
+        .expect("file layer should be present");
+
+    assert_eq!(file_layer.selected_entry_index, Some(3));
+    assert!(
+        file_layer
+            .candidates
+            .iter()
+            .any(|candidate| candidate.selected_in_layer
+                && candidate.value == ConfigValue::String("value".to_string()))
+    );
+}
