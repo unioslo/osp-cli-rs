@@ -1,6 +1,7 @@
 use crate::app::CMD_CONFIG;
 use crate::pipeline::{is_cli_help_stage, validate_cli_dsl_stages};
 use crate::state::AppState;
+use crate::state::ReplScopeStack;
 use miette::Result;
 use osp_completion::{
     ArgNode, CompletionNode, CompletionTree, CompletionTreeBuilder, ContextScope, SuggestionEntry,
@@ -45,7 +46,67 @@ pub(crate) fn build_repl_completion_tree(
         ..ArgNode::default()
     }];
 
-    tree
+    scope_completion_tree(&tree, &state.session.scope)
+}
+
+fn scope_completion_tree(tree: &CompletionTree, scope: &ReplScopeStack) -> CompletionTree {
+    if scope.is_root() {
+        return tree.clone();
+    }
+
+    let mut rooted = CompletionTree {
+        root: scoped_completion_root(&tree.root, &scope.commands()),
+        ..tree.clone()
+    };
+    apply_shell_root_controls(&mut rooted.root);
+    rooted
+}
+
+fn scoped_completion_root(root: &CompletionNode, path: &[String]) -> CompletionNode {
+    let mut node = root;
+    for segment in path {
+        let Some(child) = node.children.get(segment) else {
+            return root.clone();
+        };
+        node = child;
+    }
+    node.clone()
+}
+
+fn apply_shell_root_controls(root: &mut CompletionNode) {
+    root.children
+        .entry("help".to_string())
+        .or_insert_with(|| CompletionNode {
+            tooltip: Some("Show help for the current shell".to_string()),
+            ..CompletionNode::default()
+        });
+    root.children
+        .entry("exit".to_string())
+        .or_insert_with(|| CompletionNode {
+            tooltip: Some("Leave the current shell".to_string()),
+            ..CompletionNode::default()
+        });
+    root.children
+        .entry("quit".to_string())
+        .or_insert_with(|| CompletionNode {
+            tooltip: Some("Alias for exit".to_string()),
+            ..CompletionNode::default()
+        });
+
+    let mut suggestions = root
+        .children
+        .keys()
+        .cloned()
+        .map(SuggestionEntry::value)
+        .collect::<Vec<_>>();
+    suggestions.sort_by(|left, right| left.value.cmp(&right.value));
+    suggestions.dedup_by(|left, right| left.value == right.value);
+
+    root.args = vec![ArgNode {
+        name: Some("command".to_string()),
+        suggestions,
+        ..ArgNode::default()
+    }];
 }
 
 fn mark_context_only_flags(node: &mut CompletionNode) {
@@ -123,8 +184,9 @@ pub(crate) fn validate_dsl_stages(stages: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::mark_context_only_flags;
-    use osp_completion::{CompletionNode, ContextScope, FlagNode};
+    use super::{mark_context_only_flags, scope_completion_tree};
+    use crate::state::ReplScopeStack;
+    use osp_completion::{CompletionNode, CompletionTree, ContextScope, FlagNode};
 
     #[test]
     fn marks_context_only_flags_recursively() {
@@ -153,5 +215,50 @@ mod tests {
             root.children["orch"].flags["--windows"].context_scope,
             ContextScope::Subtree
         );
+    }
+
+    #[test]
+    fn scope_completion_tree_roots_to_current_shell() {
+        let mut ldap = CompletionNode::default();
+        ldap.children
+            .insert("user".to_string(), CompletionNode::default());
+
+        let tree = CompletionTree {
+            root: CompletionNode::default().with_child("ldap", ldap),
+            ..CompletionTree::default()
+        };
+        let mut scope = ReplScopeStack::default();
+        scope.enter("ldap");
+
+        let rooted = scope_completion_tree(&tree, &scope);
+
+        assert!(rooted.root.children.contains_key("user"));
+        assert!(rooted.root.children.contains_key("help"));
+        assert!(rooted.root.children.contains_key("exit"));
+        assert!(rooted.root.children.contains_key("quit"));
+        assert!(!rooted.root.children.contains_key("ldap"));
+        let suggestions = rooted.root.args[0]
+            .suggestions
+            .iter()
+            .map(|entry| entry.value.as_str())
+            .collect::<Vec<_>>();
+        assert!(suggestions.contains(&"user"));
+        assert!(suggestions.contains(&"help"));
+        assert!(suggestions.contains(&"exit"));
+    }
+
+    #[test]
+    fn scope_completion_tree_falls_back_to_root_for_unknown_scope() {
+        let tree = CompletionTree {
+            root: CompletionNode::default().with_child("ldap", CompletionNode::default()),
+            ..CompletionTree::default()
+        };
+        let mut scope = ReplScopeStack::default();
+        scope.enter("missing");
+
+        let rooted = scope_completion_tree(&tree, &scope);
+
+        assert!(rooted.root.children.contains_key("ldap"));
+        assert!(rooted.root.children.contains_key("exit"));
     }
 }

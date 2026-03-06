@@ -57,6 +57,7 @@ The target is a clearer split:
 ### Completion
 
 - [ ] Keep one source of truth for REPL-visible commands and DSL help surface
+- [x] Root completion/highlighting to the active shell scope
 - [ ] Move toward one parsed input model shared by completer, highlighter, and dispatch
 - [ ] Add tests for completion/highlight/dispatch agreement on partial lines
 

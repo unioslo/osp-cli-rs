@@ -1645,6 +1645,21 @@ mod tests {
     }
 
     #[test]
+    fn repl_completion_tree_roots_to_active_shell_scope_unit() {
+        let mut state = make_completion_state(None);
+        state.session.scope.enter("orch");
+        let catalog = sample_catalog();
+        let surface = surface::build_repl_surface(&state, &catalog);
+
+        let tree = completion::build_repl_completion_tree(&state, &surface);
+        assert!(!tree.root.children.contains_key("orch"));
+        assert!(tree.root.children.contains_key("provision"));
+        assert!(tree.root.children.contains_key("help"));
+        assert!(tree.root.children.contains_key("exit"));
+        assert!(tree.root.children.contains_key("quit"));
+    }
+
+    #[test]
     fn repl_surface_drives_overview_and_completion_visibility_unit() {
         let state = make_completion_state(Some("theme config"));
         let catalog = sample_catalog();
