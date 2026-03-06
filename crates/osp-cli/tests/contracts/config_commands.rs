@@ -235,6 +235,64 @@ ui.mode = "plain"
 
 #[cfg(unix)]
 #[test]
+fn no_env_ignores_environment_overrides_contract() {
+    let home = make_temp_dir("osp-cli-config-no-env");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+ui.mode = "rich"
+
+[profile.uio]
+ui.mode = "plain"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("OSP__UI__MODE", "auto")
+        .args(["--json", "--no-env", "config", "explain", "ui.mode"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\": \"plain\""))
+        .stdout(predicate::str::contains("\"source\": \"file\""))
+        .stdout(predicate::str::contains("OSP__UI__MODE").not());
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn no_config_file_ignores_file_values_contract() {
+    let home = make_temp_dir("osp-cli-config-no-config-file");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+
+[profile.uio]
+ui.mode = "plain"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "--no-config-file",
+        "config",
+        "get",
+        "ui.mode",
+    ]);
+    cmd.assert().failure();
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn config_explain_reports_interpolation_trace_contract() {
     let home = make_temp_dir("osp-cli-config-explain-interpolation");
     write_config(

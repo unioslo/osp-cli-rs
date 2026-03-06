@@ -1,7 +1,7 @@
 pub(crate) mod commands;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use osp_config::{ConfigLayer, ConfigValue, ResolvedConfig};
+use osp_config::{ConfigLayer, ConfigValue, ResolvedConfig, RuntimeLoadOptions};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_ui::messages::{MessageLevel, adjust_verbosity};
 use osp_ui::theme::DEFAULT_THEME_NAME;
@@ -98,6 +98,12 @@ pub struct Cli {
     #[arg(long = "profile", global = true)]
     pub profile: Option<String>,
 
+    #[arg(long = "no-env", global = true)]
+    pub no_env: bool,
+
+    #[arg(long = "no-config-file", alias = "no-config", global = true)]
+    pub no_config_file: bool,
+
     #[arg(long = "format", default_value = "auto", global = true)]
     format: OutputFormatArg,
 
@@ -133,6 +139,15 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+impl Cli {
+    pub fn runtime_load_options(&self) -> RuntimeLoadOptions {
+        RuntimeLoadOptions {
+            include_env: !self.no_env,
+            include_config_file: !self.no_config_file,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

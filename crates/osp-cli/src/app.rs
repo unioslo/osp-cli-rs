@@ -2,7 +2,7 @@ use clap::Parser;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
     ConfigLayer, ConfigValue, DEFAULT_UI_WIDTH, ResolveOptions, ResolvedConfig, RuntimeConfigPaths,
-    RuntimeDefaults, build_runtime_pipeline,
+    RuntimeDefaults, RuntimeLoadOptions, build_runtime_pipeline,
 };
 use osp_core::output::OutputFormat;
 use osp_core::output_model::OutputResult;
@@ -132,6 +132,35 @@ struct DispatchPlan {
     profile_override: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeConfigRequest {
+    pub(crate) profile_override: Option<String>,
+    pub(crate) terminal: Option<String>,
+    pub(crate) runtime_load: RuntimeLoadOptions,
+    pub(crate) session_layer: Option<ConfigLayer>,
+}
+
+impl RuntimeConfigRequest {
+    pub(crate) fn new(profile_override: Option<String>, terminal: Option<&str>) -> Self {
+        Self {
+            profile_override,
+            terminal: terminal.map(ToOwned::to_owned),
+            runtime_load: RuntimeLoadOptions::default(),
+            session_layer: None,
+        }
+    }
+
+    pub(crate) fn with_runtime_load(mut self, runtime_load: RuntimeLoadOptions) -> Self {
+        self.runtime_load = runtime_load;
+        self
+    }
+
+    pub(crate) fn with_session_layer(mut self, session_layer: Option<ConfigLayer>) -> Self {
+        self.session_layer = session_layer;
+        self
+    }
+}
+
 pub fn run_from<I, T>(args: I) -> Result<i32>
 where
     I: IntoIterator<Item = T>,
@@ -166,7 +195,11 @@ fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
 fn run(mut cli: Cli) -> Result<i32> {
     let normalized_profile = normalize_profile_override(cli.profile.clone());
     cli.profile = normalized_profile.clone();
-    let initial_config = resolve_runtime_config(normalized_profile.clone(), Some("cli"), None)?;
+    let runtime_load = cli.runtime_load_options();
+    let initial_config = resolve_runtime_config(
+        RuntimeConfigRequest::new(normalized_profile.clone(), Some("cli"))
+            .with_runtime_load(runtime_load),
+    )?;
     let known_profiles = initial_config.known_profiles().clone();
     let dispatch = build_dispatch_plan(&mut cli, &known_profiles)?;
 
@@ -188,17 +221,22 @@ fn run(mut cli: Cli) -> Result<i32> {
         &cli,
         runtime_context.profile_override().map(ToOwned::to_owned),
         runtime_context.terminal_kind(),
+        runtime_load,
     )?;
     let launch_context = LaunchContext {
         plugin_dirs: cli.plugin_dirs.clone(),
         config_root: None,
         cache_root: None,
+        runtime_load,
     };
 
     let config = resolve_runtime_config(
-        runtime_context.profile_override().map(ToOwned::to_owned),
-        Some(runtime_context.terminal_kind().as_config_terminal()),
-        session_layer.clone(),
+        RuntimeConfigRequest::new(
+            runtime_context.profile_override().map(ToOwned::to_owned),
+            Some(runtime_context.terminal_kind().as_config_terminal()),
+        )
+        .with_runtime_load(launch_context.runtime_load)
+        .with_session_layer(session_layer.clone()),
     )?;
     let theme_catalog = theme_loader::load_theme_catalog(&config);
     let mut render_settings = cli.render_settings();
@@ -273,6 +311,7 @@ fn build_cli_session_layer(
     cli: &Cli,
     profile_override: Option<String>,
     terminal_kind: TerminalKind,
+    runtime_load: RuntimeLoadOptions,
 ) -> Result<Option<ConfigLayer>> {
     let mut layer = ConfigLayer::default();
     cli.append_static_session_overrides(&mut layer);
@@ -282,9 +321,9 @@ fn build_cli_session_layer(
         Some(layer.clone())
     };
     let config = resolve_runtime_config(
-        profile_override,
-        Some(terminal_kind.as_config_terminal()),
-        bootstrap_layer,
+        RuntimeConfigRequest::new(profile_override, Some(terminal_kind.as_config_terminal()))
+            .with_runtime_load(runtime_load)
+            .with_session_layer(bootstrap_layer),
     )?;
     cli.append_derived_session_overrides(&mut layer, &config);
     Ok(if layer.entries().is_empty() {
@@ -306,13 +345,16 @@ pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
     let launch = current.launch.clone();
 
     let config = resolve_runtime_config(
-        context.profile_override().map(ToOwned::to_owned),
-        Some(context.terminal_kind().as_config_terminal()),
-        if session_overrides.entries().is_empty() {
+        RuntimeConfigRequest::new(
+            context.profile_override().map(ToOwned::to_owned),
+            Some(context.terminal_kind().as_config_terminal()),
+        )
+        .with_runtime_load(launch.runtime_load)
+        .with_session_layer(if session_overrides.entries().is_empty() {
             None
         } else {
             Some(session_overrides.clone())
-        },
+        }),
     )?;
     let theme_catalog = theme_loader::load_theme_catalog(&config);
     let mut render_settings = crate::cli::default_render_settings();
@@ -990,23 +1032,25 @@ pub(crate) fn resolve_effective_render_settings(
     settings.clone()
 }
 
-pub(crate) fn resolve_runtime_config(
-    profile_override: Option<String>,
-    terminal: Option<&str>,
-    session_layer: Option<ConfigLayer>,
-) -> Result<ResolvedConfig> {
+pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<ResolvedConfig> {
     tracing::debug!(
-        profile_override = ?profile_override,
-        terminal = ?terminal,
+        profile_override = ?request.profile_override,
+        terminal = ?request.terminal,
         "resolving runtime config"
     );
     let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
     let paths = RuntimeConfigPaths::discover();
-    let pipeline = build_runtime_pipeline(defaults.to_layer(), &paths, None, session_layer);
+    let pipeline = build_runtime_pipeline(
+        defaults.to_layer(),
+        &paths,
+        request.runtime_load,
+        None,
+        request.session_layer,
+    );
 
     let options = ResolveOptions {
-        profile_override,
-        terminal: terminal.map(|value| value.to_string()),
+        profile_override: request.profile_override,
+        terminal: request.terminal,
     };
 
     pipeline
@@ -1043,7 +1087,9 @@ mod tests {
     use crate::repl::{completion, help as repl_help, surface};
     use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
     use clap::Parser;
-    use osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
+    use osp_config::{
+        ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions,
+    };
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_repl::{HistoryConfig, HistoryShellContext, SharedHistory};
     use osp_ui::messages::MessageLevel;
@@ -1168,9 +1214,14 @@ mod tests {
             "osp", "--json", "--mode", "plain", "--color", "never", "--ascii",
         ]);
 
-        let layer = build_cli_session_layer(&cli, None, TerminalKind::Repl)
-            .expect("session layer should build")
-            .expect("launch flags should create session overrides");
+        let layer = build_cli_session_layer(
+            &cli,
+            None,
+            TerminalKind::Repl,
+            RuntimeLoadOptions::default(),
+        )
+        .expect("session layer should build")
+        .expect("launch flags should create session overrides");
 
         assert_eq!(
             layer_value(&layer, "ui.format"),
@@ -1194,14 +1245,27 @@ mod tests {
     fn cli_launch_quiet_adjusts_session_base_verbosity_unit() {
         let cli = Cli::parse_from(["osp", "-q"]);
 
-        let layer = build_cli_session_layer(&cli, None, TerminalKind::Repl)
-            .expect("session layer should build")
-            .expect("quiet flag should create session overrides");
+        let layer = build_cli_session_layer(
+            &cli,
+            None,
+            TerminalKind::Repl,
+            RuntimeLoadOptions::default(),
+        )
+        .expect("session layer should build")
+        .expect("quiet flag should create session overrides");
 
         assert_eq!(
             layer_value(&layer, "ui.verbosity.level"),
             Some(&ConfigValue::from("warning"))
         );
+    }
+
+    #[test]
+    fn cli_runtime_load_options_follow_disable_flags_unit() {
+        let cli = Cli::parse_from(["osp", "--no-env", "--no-config"]);
+        let options = cli.runtime_load_options();
+        assert!(!options.include_env);
+        assert!(!options.include_config_file);
     }
 
     #[test]
@@ -1627,6 +1691,8 @@ mod tests {
             OsString::from("--color=always"),
             OsString::from("--unicode"),
             OsString::from("never"),
+            OsString::from("--no-env"),
+            OsString::from("--no-config-file"),
             OsString::from("--ascii"),
         ];
 
@@ -1636,6 +1702,8 @@ mod tests {
         assert_eq!(parsed.mode, Some(osp_core::output::RenderMode::Plain));
         assert_eq!(parsed.color, Some(osp_core::output::ColorMode::Always));
         assert_eq!(parsed.unicode, Some(osp_core::output::UnicodeMode::Never));
+        assert!(parsed.no_env);
+        assert!(parsed.no_config_file);
         assert!(parsed.ascii_legacy);
     }
 
@@ -2195,6 +2263,7 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
             plugin_dirs: plugin_dirs.clone(),
             config_root: Some(config_root.clone()),
             cache_root: Some(cache_root.clone()),
+            runtime_load: RuntimeLoadOptions::default(),
         };
 
         AppState::new(

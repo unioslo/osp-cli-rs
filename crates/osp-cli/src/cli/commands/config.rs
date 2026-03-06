@@ -1,7 +1,7 @@
 use crate::app::{
-    CURRENT_TERMINAL_SENTINEL, CliCommandResult, ReplCommandOutput, config_explain_json,
-    config_explain_output, config_value_to_json, emit_messages, explain_runtime_config,
-    format_scope, is_sensitive_key, render_config_explain_text,
+    CURRENT_TERMINAL_SENTINEL, CliCommandResult, ReplCommandOutput, RuntimeConfigRequest,
+    config_explain_json, config_explain_output, config_value_to_json, emit_messages,
+    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
 };
 use crate::cli::{
     ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs, ConfigUnsetArgs,
@@ -244,10 +244,13 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
 
     let output = if args.explain {
         let explain = explain_runtime_config(
-            Some(state.config.resolved().active_profile().to_string()),
-            state.config.resolved().terminal(),
+            RuntimeConfigRequest::new(
+                Some(state.config.resolved().active_profile().to_string()),
+                state.config.resolved().terminal(),
+            )
+            .with_runtime_load(state.launch.runtime_load)
+            .with_session_layer(Some(state.session.config_overrides.clone())),
             &key,
-            Some(state.session.config_overrides.clone()),
         )?;
         if matches!(state.ui.render_settings.format, OutputFormat::Json) {
             let payload = config_explain_json(&explain, false);

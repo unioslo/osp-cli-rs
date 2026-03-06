@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 
 use clap::Parser;
+use osp_config::RuntimeLoadOptions;
 use osp_core::output::{ColorMode, RenderMode, UnicodeMode};
 use osp_ui::RenderSettings;
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
@@ -9,8 +10,8 @@ use crate::cli::Cli;
 use crate::theme_loader;
 
 use super::{
-    build_render_runtime, normalize_profile_override, resolve_default_render_width,
-    resolve_known_theme_name, resolve_runtime_config,
+    RuntimeConfigRequest, build_render_runtime, normalize_profile_override,
+    resolve_default_render_width, resolve_known_theme_name, resolve_runtime_config,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -21,12 +22,27 @@ pub(crate) struct HelpRenderOverrides {
     pub(crate) color: Option<ColorMode>,
     pub(crate) unicode: Option<UnicodeMode>,
     pub(crate) ascii_legacy: bool,
+    pub(crate) no_env: bool,
+    pub(crate) no_config_file: bool,
+}
+
+impl HelpRenderOverrides {
+    fn runtime_load_options(&self) -> RuntimeLoadOptions {
+        RuntimeLoadOptions {
+            include_env: !self.no_env,
+            include_config_file: !self.no_config_file,
+        }
+    }
 }
 
 pub(crate) fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
     let overrides = parse_help_render_overrides(args);
     let profile_override = normalize_profile_override(overrides.profile.clone());
-    let config = resolve_runtime_config(profile_override, Some("cli"), None).ok();
+    let config = resolve_runtime_config(
+        RuntimeConfigRequest::new(profile_override, Some("cli"))
+            .with_runtime_load(overrides.runtime_load_options()),
+    )
+    .ok();
     let mut catalog: Option<theme_loader::ThemeCatalog> = None;
 
     let default_cli = Cli::try_parse_from(["osp"]).expect("default cli parse should succeed");
@@ -154,6 +170,8 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
                     iter.next();
                 }
             }
+            "--no-env" => out.no_env = true,
+            "--no-config" | "--no-config-file" => out.no_config_file = true,
             "--ascii" => out.ascii_legacy = true,
             _ => {}
         }

@@ -26,6 +26,21 @@ pub const DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH: i64 = 10;
 pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
 pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "clip";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeLoadOptions {
+    pub include_env: bool,
+    pub include_config_file: bool,
+}
+
+impl Default for RuntimeLoadOptions {
+    fn default() -> Self {
+        Self {
+            include_env: true,
+            include_config_file: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub default_profile: String,
@@ -182,21 +197,29 @@ impl RuntimeDefaults {
 pub fn build_runtime_pipeline(
     defaults: ConfigLayer,
     paths: &RuntimeConfigPaths,
+    load: RuntimeLoadOptions,
     cli: Option<ConfigLayer>,
     session: Option<ConfigLayer>,
 ) -> LoaderPipeline {
-    let mut pipeline = LoaderPipeline::new(StaticLayerLoader::new(defaults))
-        .with_env(EnvVarLoader::from_process_env());
+    let mut pipeline = LoaderPipeline::new(StaticLayerLoader::new(defaults));
 
-    if let Some(path) = &paths.config_file {
+    if load.include_env {
+        pipeline = pipeline.with_env(EnvVarLoader::from_process_env());
+    }
+
+    if load.include_config_file
+        && let Some(path) = &paths.config_file
+    {
         pipeline = pipeline.with_file(TomlFileLoader::new(path.clone()).optional());
     }
 
     if let Some(path) = &paths.secrets_file {
-        let secret_chain = ChainedLoader::new(SecretsTomlLoader::new(path.clone()).optional())
-            .with(EnvSecretsLoader::from_process_env());
+        let mut secret_chain = ChainedLoader::new(SecretsTomlLoader::new(path.clone()).optional());
+        if load.include_env {
+            secret_chain = secret_chain.with(EnvSecretsLoader::from_process_env());
+        }
         pipeline = pipeline.with_secrets(secret_chain);
-    } else {
+    } else if load.include_env {
         pipeline = pipeline.with_secrets(ChainedLoader::new(EnvSecretsLoader::from_process_env()));
     }
 

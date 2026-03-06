@@ -1,7 +1,7 @@
 use miette::{IntoDiagnostic, Result, WrapErr};
 use osp_config::{
-    ConfigExplain, ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, ResolvedConfig,
-    RuntimeConfigPaths, RuntimeDefaults, build_runtime_pipeline,
+    ConfigExplain, ConfigResolver, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths,
+    RuntimeDefaults, build_runtime_pipeline,
 };
 use osp_core::output::OutputFormat;
 use osp_ui::messages::MessageBuffer;
@@ -10,17 +10,20 @@ use osp_ui::theme::DEFAULT_THEME_NAME;
 use crate::cli::ConfigExplainArgs;
 use crate::state::AppState;
 
-use super::{DEFAULT_REPL_PROMPT, emit_messages};
+use super::{DEFAULT_REPL_PROMPT, RuntimeConfigRequest, emit_messages};
 
 pub(crate) fn config_explain_output(
     state: &AppState,
     args: ConfigExplainArgs,
 ) -> Result<Option<String>> {
     let explain = explain_runtime_config(
-        Some(state.config.resolved().active_profile().to_string()),
-        state.config.resolved().terminal(),
+        RuntimeConfigRequest::new(
+            Some(state.config.resolved().active_profile().to_string()),
+            state.config.resolved().terminal(),
+        )
+        .with_runtime_load(state.launch.runtime_load)
+        .with_session_layer(Some(state.session.config_overrides.clone())),
         &args.key,
-        Some(state.session.config_overrides.clone()),
     )?;
 
     if explain.final_entry.is_none() && explain.layers.is_empty() {
@@ -69,14 +72,18 @@ fn config_value_to_json_exposed(value: &ConfigValue) -> serde_json::Value {
 }
 
 pub(crate) fn explain_runtime_config(
-    profile_override: Option<String>,
-    terminal: Option<&str>,
+    request: RuntimeConfigRequest,
     key: &str,
-    session_layer: Option<ConfigLayer>,
 ) -> Result<ConfigExplain> {
     let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
     let paths = RuntimeConfigPaths::discover();
-    let pipeline = build_runtime_pipeline(defaults.to_layer(), &paths, None, session_layer);
+    let pipeline = build_runtime_pipeline(
+        defaults.to_layer(),
+        &paths,
+        request.runtime_load,
+        None,
+        request.session_layer,
+    );
 
     let layers = pipeline
         .load_layers()
@@ -87,8 +94,8 @@ pub(crate) fn explain_runtime_config(
         .explain_key(
             key,
             ResolveOptions {
-                profile_override,
-                terminal: terminal.map(|value| value.to_string()),
+                profile_override: request.profile_override,
+                terminal: request.terminal,
             },
         )
         .into_diagnostic()

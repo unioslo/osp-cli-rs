@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
-use osp_config::{ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS, ResolvedConfig};
+use osp_config::{
+    ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS, ResolvedConfig, RuntimeLoadOptions,
+};
 use osp_core::row::Row;
 use osp_repl::HistoryShellContext;
 use osp_ui::RenderSettings;
@@ -214,6 +216,7 @@ pub struct LaunchContext {
     pub plugin_dirs: Vec<PathBuf>,
     pub config_root: Option<PathBuf>,
     pub cache_root: Option<PathBuf>,
+    pub runtime_load: RuntimeLoadOptions,
 }
 
 #[derive(Default)]
