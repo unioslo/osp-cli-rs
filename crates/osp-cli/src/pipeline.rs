@@ -22,35 +22,10 @@ pub fn parse_command_text_with_aliases(
     let parsed = parse_pipeline(text)
         .into_diagnostic()
         .wrap_err("failed to parse pipeline")?;
-    let tokens = shell_words::split(&parsed.command)
+    let command_tokens = shell_words::split(&parsed.command)
         .into_diagnostic()
         .wrap_err("failed to parse command")?;
-    if tokens.is_empty() {
-        return Ok(ParsedCommandLine {
-            tokens: Vec::new(),
-            stages: Vec::new(),
-        });
-    }
-
-    if let Some(expanded) = maybe_expand_alias(&tokens[0], &tokens[1..], config)? {
-        let alias_parsed = parse_pipeline(&expanded)
-            .into_diagnostic()
-            .wrap_err("failed to parse alias pipeline")?;
-        let alias_tokens = shell_words::split(&alias_parsed.command)
-            .into_diagnostic()
-            .wrap_err("failed to parse alias command")?;
-        if alias_tokens.is_empty() {
-            return Ok(ParsedCommandLine {
-                tokens: Vec::new(),
-                stages: Vec::new(),
-            });
-        }
-        let mut stages = alias_parsed.stages;
-        stages.extend(parsed.stages);
-        return finalize_parsed_command(alias_tokens, stages);
-    }
-
-    finalize_parsed_command(tokens, parsed.stages)
+    finalize_command_with_aliases(command_tokens, parsed.stages, config)
 }
 
 pub fn parse_command_tokens_with_aliases(
@@ -65,34 +40,7 @@ pub fn parse_command_tokens_with_aliases(
     }
 
     let split = split_command_tokens(tokens);
-    if split.command_tokens.is_empty() {
-        return Ok(ParsedCommandLine {
-            tokens: Vec::new(),
-            stages: Vec::new(),
-        });
-    }
-
-    if let Some(expanded) =
-        maybe_expand_alias(&split.command_tokens[0], &split.command_tokens[1..], config)?
-    {
-        let alias_parsed = parse_pipeline(&expanded)
-            .into_diagnostic()
-            .wrap_err("failed to parse alias pipeline")?;
-        let alias_tokens = shell_words::split(&alias_parsed.command)
-            .into_diagnostic()
-            .wrap_err("failed to parse alias command")?;
-        if alias_tokens.is_empty() {
-            return Ok(ParsedCommandLine {
-                tokens: Vec::new(),
-                stages: Vec::new(),
-            });
-        }
-        let mut stages = alias_parsed.stages;
-        stages.extend(split.stages);
-        return finalize_parsed_command(alias_tokens, stages);
-    }
-
-    finalize_parsed_command(split.command_tokens, split.stages)
+    finalize_command_with_aliases(split.command_tokens, split.stages, config)
 }
 
 fn maybe_expand_alias(
@@ -108,6 +56,40 @@ fn maybe_expand_alias(
     let template = value.to_string();
     let expanded = expand_alias_template(candidate, &template, positional_args, config)?;
     Ok(Some(expanded))
+}
+
+fn finalize_command_with_aliases(
+    command_tokens: Vec<String>,
+    stages: Vec<String>,
+    config: &ResolvedConfig,
+) -> Result<ParsedCommandLine> {
+    if command_tokens.is_empty() {
+        return Ok(ParsedCommandLine {
+            tokens: Vec::new(),
+            stages: Vec::new(),
+        });
+    }
+
+    if let Some(expanded) = maybe_expand_alias(&command_tokens[0], &command_tokens[1..], config)? {
+        let alias_parsed = parse_pipeline(&expanded)
+            .into_diagnostic()
+            .wrap_err("failed to parse alias pipeline")?;
+        let alias_tokens = shell_words::split(&alias_parsed.command)
+            .into_diagnostic()
+            .wrap_err("failed to parse alias command")?;
+        if alias_tokens.is_empty() {
+            return Ok(ParsedCommandLine {
+                tokens: Vec::new(),
+                stages: Vec::new(),
+            });
+        }
+
+        let mut merged_stages = alias_parsed.stages;
+        merged_stages.extend(stages);
+        return finalize_parsed_command(alias_tokens, merged_stages);
+    }
+
+    finalize_parsed_command(command_tokens, stages)
 }
 
 fn finalize_parsed_command(tokens: Vec<String>, stages: Vec<String>) -> Result<ParsedCommandLine> {
