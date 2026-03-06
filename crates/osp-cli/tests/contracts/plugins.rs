@@ -407,7 +407,7 @@ fn write_hello_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     let plugin_script = r#"#!/usr/bin/env bash
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"hello","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hello","about":"hello plugin","subcommands":[]}]}
+{"protocol_version":1,"plugin_id":"hello","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hello","about":"hello plugin","args":[],"flags":{},"subcommands":[]}]}
 JSON
   exit 0
 fi
@@ -439,7 +439,7 @@ fn write_hints_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     let plugin_script = r#"#!/usr/bin/env bash
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"hints","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hints","about":"runtime hints plugin","subcommands":[]}]}
+{"protocol_version":1,"plugin_id":"hints","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hints","about":"runtime hints plugin","args":[],"flags":{},"subcommands":[]}]}
 JSON
   exit 0
 fi
@@ -477,7 +477,7 @@ fn write_counter_plugin(dir: &std::path::Path) -> std::path::PathBuf {
         r#"#!/usr/bin/env bash
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"counter","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"counter","about":"counter plugin","subcommands":[]}}]}}
+{{"protocol_version":1,"plugin_id":"counter","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"counter","about":"counter plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
 JSON
   exit 0
 fi

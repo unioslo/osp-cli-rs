@@ -1107,6 +1107,15 @@ mod tests {
             name: "orch".to_string(),
             about: "Provision orchestrator resources".to_string(),
             subcommands: vec!["provision".to_string(), "status".to_string()],
+            completion: osp_completion::CommandSpec {
+                name: "orch".to_string(),
+                tooltip: Some("Provision orchestrator resources".to_string()),
+                subcommands: vec![
+                    osp_completion::CommandSpec::new("provision"),
+                    osp_completion::CommandSpec::new("status"),
+                ],
+                ..osp_completion::CommandSpec::default()
+            },
             provider: "mock-provider".to_string(),
             source: PluginSource::Explicit,
         }]

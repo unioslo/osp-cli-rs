@@ -1,10 +1,13 @@
 use anyhow::{Context, Result, anyhow};
+use osp_completion::{ArgNode, CommandSpec, FlagNode, SuggestionEntry, ValueType};
 use osp_config::{default_cache_root_dir, default_config_root_dir};
-use osp_core::plugin::{DescribeCommandV1, DescribeV1, ResponseV1};
+use osp_core::plugin::{
+    DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1, DescribeV1, ResponseV1,
+};
 use osp_core::runtime::RuntimeHints;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter, Write as FmtWrite};
 use std::path::{Path, PathBuf};
@@ -44,20 +47,13 @@ struct SearchRoot {
 }
 
 #[derive(Debug, Clone)]
-pub struct PluginCommandSpec {
-    pub name: String,
-    pub about: String,
-    pub subcommands: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
 pub struct DiscoveredPlugin {
     pub plugin_id: String,
     pub plugin_version: Option<String>,
     pub executable: PathBuf,
     pub source: PluginSource,
     pub commands: Vec<String>,
-    pub command_specs: Vec<PluginCommandSpec>,
+    pub command_specs: Vec<CommandSpec>,
     pub issue: Option<String>,
     pub default_enabled: bool,
 }
@@ -91,6 +87,7 @@ pub struct CommandCatalogEntry {
     pub name: String,
     pub about: String,
     pub subcommands: Vec<String>,
+    pub completion: CommandSpec,
     pub provider: String,
     pub source: PluginSource,
 }
@@ -290,9 +287,10 @@ impl PluginManager {
                     continue;
                 }
                 out.push(CommandCatalogEntry {
-                    name: spec.name,
-                    about: spec.about,
-                    subcommands: spec.subcommands,
+                    name: spec.name.clone(),
+                    about: spec.tooltip.clone().unwrap_or_default(),
+                    subcommands: direct_subcommand_names(&spec),
+                    completion: spec,
                     provider: plugin.plugin_id.clone(),
                     source: plugin.source,
                 });
@@ -317,7 +315,7 @@ impl PluginManager {
 
         for command in catalog {
             words.push(command.name);
-            words.extend(command.subcommands);
+            words.extend(collect_completion_words(&command.completion));
         }
 
         words.sort();
@@ -547,12 +545,8 @@ impl PluginManager {
                     .unwrap_or_default();
                 let mut command_specs = commands
                     .iter()
-                    .map(|name| PluginCommandSpec {
-                        name: name.clone(),
-                        about: String::new(),
-                        subcommands: Vec::new(),
-                    })
-                    .collect::<Vec<PluginCommandSpec>>();
+                    .map(|name| CommandSpec::new(name.clone()))
+                    .collect::<Vec<CommandSpec>>();
                 let mut default_enabled = manifest_entry
                     .as_ref()
                     .map(|entry| entry.enabled_by_default)
@@ -591,7 +585,7 @@ impl PluginManager {
                             .commands
                             .iter()
                             .map(to_command_spec)
-                            .collect::<Vec<PluginCommandSpec>>();
+                            .collect::<Vec<CommandSpec>>();
 
                         if let Some(entry) = &manifest_entry {
                             default_enabled = entry.enabled_by_default;
@@ -768,12 +762,76 @@ impl PluginManager {
     }
 }
 
-fn to_command_spec(command: &DescribeCommandV1) -> PluginCommandSpec {
-    PluginCommandSpec {
+fn to_command_spec(command: &DescribeCommandV1) -> CommandSpec {
+    CommandSpec {
         name: command.name.clone(),
-        about: command.about.clone(),
-        subcommands: command.subcommands.clone(),
+        tooltip: if command.about.trim().is_empty() {
+            None
+        } else {
+            Some(command.about.clone())
+        },
+        args: command.args.iter().map(to_arg_node).collect(),
+        flags: command
+            .flags
+            .iter()
+            .map(|(name, flag)| (name.clone(), to_flag_node(flag)))
+            .collect::<BTreeMap<_, _>>(),
+        subcommands: command.subcommands.iter().map(to_command_spec).collect(),
     }
+}
+
+fn to_arg_node(arg: &DescribeArgV1) -> ArgNode {
+    ArgNode {
+        name: arg.name.clone(),
+        tooltip: arg.about.clone(),
+        multi: arg.multi,
+        value_type: arg.value_type.and_then(to_value_type),
+        suggestions: arg.suggestions.iter().map(to_suggestion_entry).collect(),
+    }
+}
+
+fn to_flag_node(flag: &DescribeFlagV1) -> FlagNode {
+    FlagNode {
+        tooltip: flag.about.clone(),
+        flag_only: flag.flag_only,
+        multi: flag.multi,
+        value_type: flag.value_type.and_then(to_value_type),
+        suggestions: flag.suggestions.iter().map(to_suggestion_entry).collect(),
+        ..FlagNode::default()
+    }
+}
+
+fn to_suggestion_entry(entry: &DescribeSuggestionV1) -> SuggestionEntry {
+    SuggestionEntry {
+        value: entry.value.clone(),
+        meta: entry.meta.clone(),
+        display: entry.display.clone(),
+        sort: entry.sort.clone(),
+    }
+}
+
+fn to_value_type(value_type: osp_core::plugin::DescribeValueTypeV1) -> Option<ValueType> {
+    match value_type {
+        osp_core::plugin::DescribeValueTypeV1::Path => Some(ValueType::Path),
+    }
+}
+
+fn direct_subcommand_names(spec: &CommandSpec) -> Vec<String> {
+    spec.subcommands
+        .iter()
+        .map(|subcommand| subcommand.name.clone())
+        .collect()
+}
+
+fn collect_completion_words(spec: &CommandSpec) -> Vec<String> {
+    let mut words = vec![spec.name.clone()];
+    for flag in spec.flags.keys() {
+        words.push(flag.clone());
+    }
+    for subcommand in &spec.subcommands {
+        words.extend(collect_completion_words(subcommand));
+    }
+    words
 }
 
 fn load_manifest_state(root: &SearchRoot) -> ManifestState {

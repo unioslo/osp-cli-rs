@@ -65,6 +65,34 @@ fn ldap_netgroup_json_contract() {
 }
 
 #[cfg(unix)]
+#[test]
+fn ldap_plugin_completes_subcommands_and_flags_contract() {
+    let fixture = LdapPluginFixture::new();
+
+    let mut subcommands = fixture.osp();
+    subcommands.args(["repl", "debug-complete", "--line", "ldap "]);
+    subcommands
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"label\": \"user\""))
+        .stdout(predicate::str::contains("\"label\": \"netgroup\""));
+
+    let mut long_flags = fixture.osp();
+    long_flags.args(["repl", "debug-complete", "--line", "ldap user --a"]);
+    long_flags
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"label\": \"--attributes\""));
+
+    let mut short_flags = fixture.osp();
+    short_flags.args(["repl", "debug-complete", "--line", "ldap user -"]);
+    short_flags
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"label\": \"-a\""));
+}
+
+#[cfg(unix)]
 struct LdapPluginFixture {
     plugin_dir: std::path::PathBuf,
     home_dir: std::path::PathBuf,
@@ -127,7 +155,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"ldap","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"ldap","about":"LDAP plugin","subcommands":["user","netgroup"]}]}
+{"protocol_version":1,"plugin_id":"ldap","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"ldap","about":"LDAP plugin","args":[],"flags":{},"subcommands":[{"name":"user","about":"Lookup LDAP users","args":[{"name":"uid","about":"User id","multi":false,"value_type":null,"suggestions":[]}],"flags":{"--filter":{"about":"LDAP filter","flag_only":false,"multi":false,"value_type":null,"suggestions":[]},"--attributes":{"about":"Comma-separated attributes","flag_only":false,"multi":false,"value_type":null,"suggestions":[{"value":"uid","meta":"User id","display":null,"sort":null},{"value":"cn","meta":"Common name","display":null,"sort":null}]},"-a":{"about":"Comma-separated attributes","flag_only":false,"multi":false,"value_type":null,"suggestions":[{"value":"uid","meta":"User id","display":null,"sort":null},{"value":"cn","meta":"Common name","display":null,"sort":null}]}},"subcommands":[]},{"name":"netgroup","about":"Lookup LDAP netgroups","args":[{"name":"name","about":"Netgroup name","multi":false,"value_type":null,"suggestions":[]}],"flags":{},"subcommands":[]}]}]}
 JSON
   exit 0
 fi

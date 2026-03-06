@@ -148,8 +148,7 @@ pub(crate) fn catalog_completion_words(catalog: &[CommandCatalogEntry]) -> Vec<S
         "|".to_string(),
     ];
     for entry in catalog {
-        words.push(entry.name.clone());
-        words.extend(entry.subcommands.clone());
+        words.extend(spec_completion_words(&entry.completion));
     }
     words.sort();
     words.dedup();
@@ -180,18 +179,7 @@ fn command_spec_from_catalog(entry: &CommandCatalogEntry) -> Option<CommandSpec>
         return None;
     }
 
-    let mut spec = CommandSpec::new(entry.name.clone());
-    if !entry.about.trim().is_empty() {
-        spec.tooltip = Some(entry.about.clone());
-    }
-
-    spec.subcommands = entry
-        .subcommands
-        .iter()
-        .map(|subcommand| CommandSpec::new(subcommand.clone()))
-        .collect();
-
-    Some(spec)
+    Some(entry.completion.clone())
 }
 
 fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
@@ -211,6 +199,17 @@ fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
         name: entry.name.clone(),
         summary,
     }
+}
+
+fn spec_completion_words(spec: &CommandSpec) -> Vec<String> {
+    let mut words = vec![spec.name.clone()];
+    for flag in spec.flags.keys() {
+        words.push(flag.clone());
+    }
+    for subcommand in &spec.subcommands {
+        words.extend(spec_completion_words(subcommand));
+    }
+    words
 }
 
 fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
