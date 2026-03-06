@@ -8,7 +8,7 @@ use crate::display::value_to_display;
 use crate::document::{
     Block, Document, MregBlock, MregValue, PanelRules, TableAlign, TableBlock, TableStyle,
 };
-use crate::layout::{LayoutContext, MregMetrics, prepare_layout_context};
+use crate::layout::{LayoutContext, MregEntryMetrics, MregMetrics, prepare_layout_context};
 use crate::style::{StyleToken, apply_style_spec, apply_style_with_theme_overrides};
 use crate::{RenderBackend, ResolvedRenderSettings, TableOverflow};
 
@@ -55,7 +55,7 @@ impl<'a> DocumentRenderer<'a> {
             }
             Block::Value(values) => self.render_value_block(&values.values),
             Block::Mreg(mreg) => {
-                self.render_mreg_block(mreg, self.layout.mreg_metrics.get(&mreg.block_id).copied())
+                self.render_mreg_block(mreg, self.layout.mreg_metrics.get(&mreg.block_id).cloned())
             }
             Block::Table(table) => self.render_table_block(
                 table,
@@ -260,23 +260,21 @@ impl<'a> DocumentRenderer<'a> {
             return String::new();
         }
 
-        let key_width = metrics
-            .map(|value| value.key_width)
-            .unwrap_or_else(|| compute_mreg_key_width(block, self.settings.indent_size).max(3));
-        let value_column = key_width + 2;
+        let metrics =
+            metrics.unwrap_or_else(|| fallback_mreg_metrics(block, self.settings.indent_size));
         let mut out = String::new();
+        let mut metric_index = 0usize;
 
         for (row_index, row) in block.rows.iter().enumerate() {
             for entry in &row.entries {
                 let key_indent = " ".repeat(entry.depth * self.settings.indent_size);
                 let margin_indent = " ".repeat(self.settings.margin);
                 let key_text = self.style_token(&entry.key, StyleToken::MregKey);
-                let key_len = display_width(&entry.key);
-                let base_key_len = mreg_alignment_key_width(&entry.key);
-                let base_len = entry.depth * self.settings.indent_size + base_key_len + 1;
-                let full_len = entry.depth * self.settings.indent_size + key_len + 1;
-                let scalar_gap_width = value_column.saturating_sub(base_len).max(1);
-                let scalar_gap = " ".repeat(scalar_gap_width);
+                let entry_metrics = metrics
+                    .entry_metrics
+                    .get(metric_index)
+                    .and_then(|value| *value);
+                metric_index += 1;
 
                 match &entry.value {
                     MregValue::Group => {
@@ -290,55 +288,32 @@ impl<'a> DocumentRenderer<'a> {
                             out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
                             continue;
                         }
+                        let scalar_gap =
+                            " ".repeat(entry_metrics.map(|value| value.gap).unwrap_or(1));
                         let raw = value_to_display(value);
                         let value_text = self.style_value_cell(value, &raw);
                         out.push_str(&format!(
                             "{margin_indent}{key_indent}{key_text}:{scalar_gap}{value_text}\n"
                         ));
                     }
-                    MregValue::List(values) => {
-                        let rendered = self.render_mreg_list(
+                    MregValue::VerticalList(values) => {
+                        out.push_str(&self.render_mreg_vertical_list(
+                            &margin_indent,
+                            &key_indent,
+                            &key_text,
                             values,
-                            metrics.map(|value| value.content_width),
-                            entry.depth,
-                        );
-                        match rendered {
-                            MregListRender::Inline(line) => {
-                                out.push_str(&format!(
-                                    "{margin_indent}{key_indent}{key_text}:{scalar_gap}{line}\n"
-                                ));
-                            }
-                            MregListRender::Vertical(lines) => {
-                                if let Some((first, rest)) = lines.split_first() {
-                                    let first_value_col = value_column.max(full_len + 1);
-                                    let first_gap_width = first_value_col.saturating_sub(full_len);
-                                    out.push_str(&format!(
-                                        "{margin_indent}{key_indent}{key_text}:{}{first}\n",
-                                        " ".repeat(first_gap_width)
-                                    ));
-                                    let hanging =
-                                        " ".repeat(self.settings.margin + first_value_col);
-                                    for line in rest {
-                                        out.push_str(&format!("{hanging}{line}\n"));
-                                    }
-                                } else {
-                                    out.push_str(&format!(
-                                        "{margin_indent}{key_indent}{key_text}:\n"
-                                    ));
-                                }
-                            }
-                            MregListRender::Grid(lines) => {
-                                out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
-                                for line in lines {
-                                    out.push_str(&" ".repeat(
-                                        self.settings.margin
-                                            + (entry.depth + 1) * self.settings.indent_size,
-                                    ));
-                                    let joined = line.join(&" ".repeat(self.settings.grid_padding));
-                                    out.push_str(joined.trim_end());
-                                    out.push('\n');
-                                }
-                            }
+                            entry_metrics,
+                        ));
+                    }
+                    MregValue::Grid(values) => {
+                        out.push_str(&format!("{margin_indent}{key_indent}{key_text}:\n"));
+                        for line in self.render_grid_lines(values, entry.depth) {
+                            out.push_str(&" ".repeat(
+                                self.settings.margin
+                                    + (entry.depth + 1) * self.settings.indent_size,
+                            ));
+                            out.push_str(line.trim_end());
+                            out.push('\n');
                         }
                     }
                 }
@@ -566,86 +541,71 @@ impl<'a> DocumentRenderer<'a> {
         indent_lines(&out, margin)
     }
 
-    fn render_mreg_list(
+    fn render_mreg_vertical_list(
         &self,
+        margin_indent: &str,
+        key_indent: &str,
+        key_text: &str,
         values: &[Value],
-        content_width: Option<usize>,
-        entry_depth: usize,
-    ) -> MregListRender {
+        metrics: Option<MregEntryMetrics>,
+    ) -> String {
+        let Some((first, rest)) = values.split_first() else {
+            return format!("{margin_indent}{key_indent}{key_text}:\n");
+        };
+
+        let first_gap = " ".repeat(metrics.map(|value| value.first_gap).unwrap_or(1));
+        let hanging =
+            " ".repeat(self.settings.margin + metrics.map(|value| value.first_pad).unwrap_or(0));
+        let mut out = String::new();
+        out.push_str(&format!(
+            "{margin_indent}{key_indent}{key_text}:{first_gap}{}\n",
+            value_to_display(first)
+        ));
+        for value in rest {
+            out.push_str(&format!("{hanging}{}\n", value_to_display(value)));
+        }
+        out
+    }
+
+    fn render_grid_lines(&self, values: &[Value], depth: usize) -> Vec<String> {
         if values.is_empty() {
-            return MregListRender::Inline(String::new());
+            return Vec::new();
         }
 
-        let mut values = values.iter().map(value_to_display).collect::<Vec<String>>();
-        let available_width = content_width.unwrap_or_else(|| {
-            self.settings
-                .width
-                .unwrap_or(100)
-                .saturating_sub(
-                    self.settings.margin + (entry_depth + 1) * self.settings.indent_size,
-                )
-                .max(16)
-        });
+        let mut items = values.iter().map(value_to_display).collect::<Vec<String>>();
+        items.sort_by_key(|value| value.to_ascii_lowercase());
 
-        let inline = values.join(", ");
-        if values.len() <= self.settings.short_list_max && display_width(&inline) <= available_width
-        {
-            return MregListRender::Inline(inline);
-        }
+        let available_width = self
+            .settings
+            .width
+            .unwrap_or(100)
+            .saturating_sub(self.settings.margin + (depth + 1) * self.settings.indent_size)
+            .max(1);
 
-        if values.len() <= self.settings.medium_list_max {
-            return MregListRender::Vertical(values.to_vec());
-        }
-
-        values.sort_by_key(|value| value.to_ascii_lowercase());
-
-        let columns = choose_grid_columns(
-            &values,
-            available_width.max(1),
+        let (matrix, column_widths) = arrange_in_grid(
+            &items,
+            available_width,
             self.settings.grid_padding.max(1),
             self.settings.grid_columns,
             self.settings.column_weight.max(1),
         );
 
-        if columns < 2 {
-            return MregListRender::Vertical(values.to_vec());
-        }
-
-        let rows_count = values.len().div_ceil(columns);
-        let mut matrix = vec![vec![String::new(); columns]; rows_count];
-        let mut column_widths = vec![0usize; columns];
-
-        for (index, value) in values.iter().enumerate() {
-            let row_index = index % rows_count;
-            let column_index = index / rows_count;
-            if column_index >= columns {
-                continue;
-            }
-            let truncated =
-                truncate_display_width(value, available_width.max(4), self.settings.unicode);
-            column_widths[column_index] =
-                column_widths[column_index].max(display_width(&truncated));
-            matrix[row_index][column_index] = truncated;
-        }
-
-        let rows = matrix
+        matrix
             .into_iter()
             .map(|row| {
                 row.into_iter()
                     .enumerate()
                     .map(|(index, value)| {
-                        if index == columns - 1 {
+                        if index + 1 == column_widths.len() {
                             value
                         } else {
                             pad_display_width(&value, column_widths[index])
                         }
                     })
                     .collect::<Vec<String>>()
+                    .join(&" ".repeat(self.settings.grid_padding))
             })
-            .filter(|row| row.iter().any(|cell| !cell.trim_end().is_empty()))
-            .collect::<Vec<Vec<String>>>();
-
-        MregListRender::Grid(rows)
+            .collect()
     }
 
     fn style_value_cell(&self, value: &Value, text: &str) -> String {
@@ -734,12 +694,6 @@ fn section_style_token(kind: Option<&str>) -> Option<StyleToken> {
         Some("trace") => Some(StyleToken::MessageTrace),
         _ => None,
     }
-}
-
-enum MregListRender {
-    Inline(String),
-    Vertical(Vec<String>),
-    Grid(Vec<Vec<String>>),
 }
 
 fn normalize_rich_table_chrome(rendered: &str) -> String {
@@ -896,16 +850,6 @@ fn is_hex_color(value: &str) -> bool {
         .all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn compute_mreg_key_width(block: &MregBlock, indent_size: usize) -> usize {
-    block
-        .rows
-        .iter()
-        .flat_map(|row| row.entries.iter())
-        .map(|entry| entry.depth * indent_size + mreg_alignment_key_width(&entry.key))
-        .max()
-        .unwrap_or(0)
-}
-
 fn mreg_alignment_key_width(key: &str) -> usize {
     display_width(strip_count_suffix(key))
 }
@@ -1021,36 +965,31 @@ fn value_style_token_for_string(value: &str) -> Option<StyleToken> {
     None
 }
 
-fn choose_grid_columns(
+fn arrange_in_grid(
     values: &[String],
     available_width: usize,
     grid_padding: usize,
     grid_columns: Option<usize>,
     column_weight: usize,
-) -> usize {
+) -> (Vec<Vec<String>>, Vec<usize>) {
     let n = values.len();
     if n <= 1 {
-        return 1;
+        return (
+            vec![values.to_vec()],
+            vec![values.first().map_or(0, |value| display_width(value))],
+        );
     }
 
     if let Some(forced) = grid_columns {
-        return forced.max(1).min(n);
+        return build_grid_matrix(values, forced.max(1).min(n), grid_padding, available_width);
     }
 
     let mut best_cols = 1usize;
     let mut best_score = usize::MAX;
+    let mut best_widths = vec![display_width(&values[0])];
     for cols in 1..=n {
         let rows = n.div_ceil(cols);
-        let mut col_widths = vec![0usize; cols];
-
-        for (idx, value) in values.iter().enumerate() {
-            let col = idx / rows;
-            if col >= cols {
-                continue;
-            }
-            col_widths[col] = col_widths[col].max(display_width(value));
-        }
-
+        let col_widths = compute_grid_column_widths(values, cols, rows, available_width);
         let total_width = col_widths.iter().sum::<usize>() + grid_padding * cols.saturating_sub(1);
         if total_width > available_width {
             break;
@@ -1060,9 +999,98 @@ fn choose_grid_columns(
         if score <= best_score {
             best_score = score;
             best_cols = cols;
+            best_widths = col_widths;
         }
     }
-    best_cols.max(1).min(n)
+
+    let rows = n.div_ceil(best_cols);
+    let matrix = build_grid_rows(values, best_cols, rows, available_width);
+    (matrix, best_widths)
+}
+
+fn build_grid_matrix(
+    values: &[String],
+    columns: usize,
+    _grid_padding: usize,
+    available_width: usize,
+) -> (Vec<Vec<String>>, Vec<usize>) {
+    let rows = values.len().div_ceil(columns);
+    let widths = compute_grid_column_widths(values, columns, rows, available_width);
+    let matrix = build_grid_rows(values, columns, rows, available_width);
+    (matrix, widths)
+}
+
+fn compute_grid_column_widths(
+    values: &[String],
+    columns: usize,
+    rows: usize,
+    available_width: usize,
+) -> Vec<usize> {
+    let mut column_widths = vec![0usize; columns];
+    for (index, value) in values.iter().enumerate() {
+        let column_index = index / rows;
+        if column_index >= columns {
+            continue;
+        }
+        let truncated = truncate_display_width_crop(value, available_width.max(4));
+        column_widths[column_index] = column_widths[column_index].max(display_width(&truncated));
+    }
+    column_widths
+}
+
+fn build_grid_rows(
+    values: &[String],
+    columns: usize,
+    rows: usize,
+    available_width: usize,
+) -> Vec<Vec<String>> {
+    let mut matrix = vec![vec![String::new(); columns]; rows];
+    for (index, value) in values.iter().enumerate() {
+        let row_index = index % rows;
+        let column_index = index / rows;
+        if column_index >= columns {
+            continue;
+        }
+        matrix[row_index][column_index] =
+            truncate_display_width_crop(value, available_width.max(4));
+    }
+
+    matrix
+        .into_iter()
+        .filter(|row| row.iter().any(|cell| !cell.is_empty()))
+        .collect()
+}
+
+fn fallback_mreg_metrics(block: &MregBlock, indent_size: usize) -> MregMetrics {
+    let key_width = block
+        .rows
+        .iter()
+        .flat_map(|row| row.entries.iter())
+        .filter(|entry| !matches!(entry.value, MregValue::Group | MregValue::Separator))
+        .map(|entry| entry.depth * indent_size + mreg_alignment_key_width(&entry.key))
+        .max()
+        .unwrap_or(0);
+    let value_column = key_width + 2;
+    let entry_metrics = block
+        .rows
+        .iter()
+        .flat_map(|row| row.entries.iter())
+        .map(|entry| match entry.value {
+            MregValue::Group | MregValue::Separator => None,
+            _ => {
+                let base_len = entry.depth * indent_size + mreg_alignment_key_width(&entry.key) + 1;
+                let full_len = entry.depth * indent_size + display_width(&entry.key) + 1;
+                let render_col = value_column.max(full_len + 1);
+                Some(MregEntryMetrics {
+                    gap: value_column.saturating_sub(base_len).max(1),
+                    render_col,
+                    first_gap: render_col.saturating_sub(full_len),
+                    first_pad: render_col,
+                })
+            }
+        })
+        .collect();
+    MregMetrics { entry_metrics }
 }
 
 fn resolve_table_alignments(width: usize, align: Option<&[TableAlign]>) -> Vec<TableAlign> {
@@ -1126,7 +1154,10 @@ mod tests {
         Block, Document, JsonBlock, MregBlock, MregEntry, MregRow, MregValue, PanelBlock,
         TableBlock, TableStyle, ValueBlock,
     };
+    use crate::format;
+    use crate::{RenderRuntime, RenderSettings};
     use crate::{ResolvedRenderSettings, TableOverflow};
+    use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use serde_json::{Value, json};
 
     fn settings(backend: RenderBackend, color: bool, unicode: bool) -> ResolvedRenderSettings {
@@ -1153,6 +1184,34 @@ mod tests {
         let mut settings = settings(RenderBackend::Plain, false, false);
         settings.width = Some(width);
         settings
+    }
+
+    fn mreg_render_settings(width: usize) -> RenderSettings {
+        RenderSettings {
+            format: OutputFormat::Mreg,
+            mode: RenderMode::Plain,
+            color: ColorMode::Never,
+            unicode: UnicodeMode::Never,
+            width: Some(width),
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            table_overflow: TableOverflow::Clip,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
+            theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: None,
+            style_overrides: crate::style::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
+        }
+    }
+
+    fn trim_line_endings(value: &str) -> String {
+        value.lines().map(str::trim_end).collect::<Vec<_>>().join("\n") + "\n"
     }
 
     #[test]
@@ -1227,7 +1286,7 @@ mod tests {
     }
 
     #[test]
-    fn mreg_short_lists_render_inline() {
+    fn mreg_scalar_entries_render_inline() {
         let document = Document {
             blocks: vec![Block::Mreg(MregBlock {
                 block_id: 1,
@@ -1235,7 +1294,7 @@ mod tests {
                     entries: vec![MregEntry {
                         key: "members".to_string(),
                         depth: 0,
-                        value: MregValue::List(vec![json!("alice"), json!("bob"), json!("carol")]),
+                        value: MregValue::Scalar(json!("alice")),
                     }],
                 }],
             })],
@@ -1261,7 +1320,7 @@ mod tests {
                 style_overrides: crate::style::StyleOverrides::default(),
             },
         );
-        assert!(rendered.contains("members: alice, bob, carol"));
+        assert_eq!(rendered, "members: alice\n");
     }
 
     #[test]
@@ -1276,7 +1335,7 @@ mod tests {
                     entries: vec![MregEntry {
                         key: "members".to_string(),
                         depth: 0,
-                        value: MregValue::List(values),
+                        value: MregValue::Grid(values),
                     }],
                 }],
             })],
@@ -1397,7 +1456,11 @@ mod tests {
                     entries: vec![MregEntry {
                         key: "members".to_string(),
                         depth: 0,
-                        value: MregValue::List(vec![json!("alice"), json!("bob"), json!("carol")]),
+                        value: MregValue::VerticalList(vec![
+                            json!("alice"),
+                            json!("bob"),
+                            json!("carol"),
+                        ]),
                     }],
                 }],
             })],
@@ -1424,6 +1487,133 @@ mod tests {
         assert_eq!(
             render_document(&document, settings(RenderBackend::Plain, false, false)),
             "{\n  \"uid\": \"oistes\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn ldap_user_sample_renders_as_python_style_mreg() {
+        let Value::Object(row) = json!({
+            "cn": "_istein S_vik",
+            "eduPersonAffiliation": ["employee", "member", "staff"],
+            "gecos": "\\istein S|vik",
+            "gidNumber": "346297",
+            "homeDirectory": "/uio/kant/usit-gsd-u1/oistes",
+            "loginShell": "/local/gnu/bin/bash",
+            "objectClass": [
+                "uioMembership",
+                "top",
+                "account",
+                "posixAccount",
+                "uioAccountObject",
+                "sambaSamAccount"
+            ],
+            "uid": "oistes",
+            "uidNumber": "361000",
+            "uioAffiliation": "ANSATT@373034",
+            "uioPrimaryAffiliation": "ANSATT@373034",
+            "netgroups": [
+                "ansatt-373034",
+                "ansatt-tekadm-373034",
+                "dia-drs-vaktsjefer",
+                "it-uio-azure-users",
+                "it-uio-ms365-ansatt",
+                "it-uio-ms365-ansatt-publisert",
+                "it-uio-ms365-eapp-acos-akademiet",
+                "los-alle",
+                "mattermost-uio",
+                "mattermost-uio-it",
+                "mattermost-usit",
+                "meta-ansatt-360000",
+                "meta-ansatt-370000",
+                "meta-ansatt-373000",
+                "meta-ansatt-373034",
+                "meta-ansatt-900000",
+                "meta-ansatt-tekadm-360000",
+                "meta-ansatt-tekadm-370000",
+                "meta-ansatt-tekadm-373000",
+                "meta-ansatt-tekadm-373034",
+                "meta-ansatt-tekadm-900000",
+                "postmaster-eo-migrerte",
+                "rt-it-uu-kontakt",
+                "rt-saksbehandler",
+                "rt-usit-intark-drift",
+                "rt-usit-lifeportal-utv-kunder",
+                "rt-usit-ops",
+                "rt-usit-respons",
+                "ucore",
+                "uio-ans",
+                "uio-tils",
+                "usit",
+                "vcs-cfengine",
+                "vcs-dhcp",
+                "vcs-it-org",
+                "vcs-it-osprov",
+                "vcs-iti",
+                "vcs-ops",
+                "vcs-radius",
+                "vcs-ssd",
+                "vcs-usit",
+                "vcs-virtprov-admins",
+                "vortex-opptak",
+                "zabbix-iti-ops"
+            ],
+            "filegroups": ["oistes", "ucore", "usit", "vortex-opptak"]
+        }) else {
+            panic!("expected ldap user object");
+        };
+
+        let rows = vec![row];
+        let settings = mreg_render_settings(80);
+        let document = format::build_document(&rows, &settings);
+        let rendered = render_document(&document, settings.resolve_render_settings());
+
+        assert_eq!(
+            trim_line_endings(&rendered),
+            trim_line_endings(concat!(
+                "cn:                    _istein S_vik\n",
+                "eduPersonAffiliation (3): employee\n",
+                "                          member\n",
+                "                          staff\n",
+                "gecos:                 \\istein S|vik\n",
+                "gidNumber:             346297\n",
+                "homeDirectory:         /uio/kant/usit-gsd-u1/oistes\n",
+                "loginShell:            /local/gnu/bin/bash\n",
+                "objectClass (6):\n",
+                "  account            top             \n",
+                "  posixAccount       uioAccountObject\n",
+                "  sambaSamAccount    uioMembership   \n",
+                "uid:                   oistes\n",
+                "uidNumber:             361000\n",
+                "uioAffiliation:        ANSATT@373034\n",
+                "uioPrimaryAffiliation: ANSATT@373034\n",
+                "netgroups (44):\n",
+                "  ansatt-373034                       rt-it-uu-kontakt             \n",
+                "  ansatt-tekadm-373034                rt-saksbehandler             \n",
+                "  dia-drs-vaktsjefer                  rt-usit-intark-drift         \n",
+                "  it-uio-azure-users                  rt-usit-lifeportal-utv-kunder\n",
+                "  it-uio-ms365-ansatt                 rt-usit-ops                  \n",
+                "  it-uio-ms365-ansatt-publisert       rt-usit-respons              \n",
+                "  it-uio-ms365-eapp-acos-akademiet    ucore                        \n",
+                "  los-alle                            uio-ans                      \n",
+                "  mattermost-uio                      uio-tils                     \n",
+                "  mattermost-uio-it                   usit                         \n",
+                "  mattermost-usit                     vcs-cfengine                 \n",
+                "  meta-ansatt-360000                  vcs-dhcp                     \n",
+                "  meta-ansatt-370000                  vcs-it-org                   \n",
+                "  meta-ansatt-373000                  vcs-it-osprov                \n",
+                "  meta-ansatt-373034                  vcs-iti                      \n",
+                "  meta-ansatt-900000                  vcs-ops                      \n",
+                "  meta-ansatt-tekadm-360000           vcs-radius                   \n",
+                "  meta-ansatt-tekadm-370000           vcs-ssd                      \n",
+                "  meta-ansatt-tekadm-373000           vcs-usit                     \n",
+                "  meta-ansatt-tekadm-373034           vcs-virtprov-admins          \n",
+                "  meta-ansatt-tekadm-900000           vortex-opptak                \n",
+                "  postmaster-eo-migrerte              zabbix-iti-ops               \n",
+                "filegroups (4):        oistes\n",
+                "                       ucore\n",
+                "                       usit\n",
+                "                       vortex-opptak\n"
+            ))
         );
     }
 

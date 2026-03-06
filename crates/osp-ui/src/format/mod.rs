@@ -46,6 +46,7 @@ pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettin
                     &rows,
                     Some(&output.meta.key_index),
                     settings.short_list_max,
+                    settings.medium_list_max,
                     width_hint,
                     settings.indent_size.max(1),
                     prefer_stacked_object_lists,

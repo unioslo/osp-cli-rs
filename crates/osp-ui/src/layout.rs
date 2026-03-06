@@ -4,7 +4,7 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use crate::display::value_to_display;
-use crate::document::{Block, Document, MregBlock, TableBlock};
+use crate::document::{Block, Document, MregBlock, MregValue, TableBlock};
 use crate::{RenderBackend, ResolvedRenderSettings, TableOverflow};
 
 #[derive(Debug, Clone)]
@@ -22,9 +22,16 @@ pub struct LayoutContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MregEntryMetrics {
+    pub gap: usize,
+    pub render_col: usize,
+    pub first_gap: usize,
+    pub first_pad: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MregMetrics {
-    pub key_width: usize,
-    pub content_width: usize,
+    pub entry_metrics: Vec<Option<MregEntryMetrics>>,
 }
 
 pub fn prepare_layout_context(
@@ -45,12 +52,7 @@ pub fn prepare_layout_context(
             settings.unicode,
             allow_shrink,
         ),
-        mreg_metrics: prepare_mreg_metrics(
-            document,
-            settings.width,
-            settings.indent_size,
-            settings.margin,
-        ),
+        mreg_metrics: prepare_mreg_metrics(document, settings.indent_size),
     }
 }
 
@@ -199,12 +201,7 @@ fn table_width(table: &TableDescriptor, widths: &HashMap<String, usize>) -> usiz
     content_width + border_overhead
 }
 
-fn prepare_mreg_metrics(
-    document: &Document,
-    width_limit: Option<usize>,
-    indent_size: usize,
-    margin: usize,
-) -> HashMap<u64, MregMetrics> {
+fn prepare_mreg_metrics(document: &Document, indent_size: usize) -> HashMap<u64, MregMetrics> {
     let mut metrics = HashMap::new();
 
     for block in &document.blocks {
@@ -213,18 +210,31 @@ fn prepare_mreg_metrics(
         };
         let block_id = mreg.block_id;
 
-        let key_width = compute_mreg_key_width(mreg, indent_size).max(3);
-        let available_width = width_limit.unwrap_or(100);
-        let reserved = margin + indent_size + key_width + 4;
-        let content_width = available_width.saturating_sub(reserved).max(16);
+        let key_width = compute_mreg_key_width(mreg, indent_size);
+        let value_column = key_width + 2;
+        let entry_metrics = mreg
+            .rows
+            .iter()
+            .flat_map(|row| row.entries.iter())
+            .map(|entry| match entry.value {
+                MregValue::Group | MregValue::Separator => None,
+                _ => {
+                    let base_len =
+                        entry.depth * indent_size + mreg_alignment_key_width(&entry.key) + 1;
+                    let full_len = entry.depth * indent_size + display_width(&entry.key) + 1;
+                    let gap = value_column.saturating_sub(base_len).max(1);
+                    let render_col = value_column.max(full_len + 1);
+                    Some(MregEntryMetrics {
+                        gap,
+                        render_col,
+                        first_gap: render_col.saturating_sub(full_len),
+                        first_pad: render_col,
+                    })
+                }
+            })
+            .collect();
 
-        metrics.insert(
-            block_id,
-            MregMetrics {
-                key_width,
-                content_width,
-            },
-        );
+        metrics.insert(block_id, MregMetrics { entry_metrics });
     }
 
     metrics
@@ -235,6 +245,7 @@ fn compute_mreg_key_width(block: &MregBlock, indent_size: usize) -> usize {
         .rows
         .iter()
         .flat_map(|row| row.entries.iter())
+        .filter(|entry| !matches!(entry.value, MregValue::Group | MregValue::Separator))
         .map(|entry| entry.depth * indent_size + mreg_alignment_key_width(&entry.key))
         .max()
         .unwrap_or(0)
@@ -436,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn computes_mreg_key_and_content_metrics() {
+    fn computes_per_entry_mreg_alignment_metrics() {
         let document = Document {
             blocks: vec![Block::Mreg(MregBlock {
                 block_id: 1,
@@ -450,7 +461,7 @@ mod tests {
                         MregEntry {
                             key: "very_long_key".to_string(),
                             depth: 0,
-                            value: MregValue::List(vec![json!("a"), json!("b")]),
+                            value: MregValue::VerticalList(vec![json!("a"), json!("b")]),
                         },
                     ],
                 }],
@@ -467,8 +478,40 @@ mod tests {
             .get(&mreg_id)
             .expect("mreg metrics should exist");
 
-        assert!(metrics.key_width >= "very_long_key".len());
-        assert!(metrics.content_width < 60);
-        assert!(metrics.content_width >= 16);
+        assert_eq!(metrics.entry_metrics.len(), 2);
+        let uid = metrics.entry_metrics[0].expect("scalar metrics");
+        let list = metrics.entry_metrics[1].expect("vertical list metrics");
+        assert!(uid.gap > 1);
+        assert_eq!(list.gap, 1);
+        assert!(list.first_pad >= list.render_col);
+    }
+
+    #[test]
+    fn skips_alignment_metrics_for_group_entries() {
+        let document = Document {
+            blocks: vec![Block::Mreg(MregBlock {
+                block_id: 1,
+                rows: vec![MregRow {
+                    entries: vec![
+                        MregEntry {
+                            key: "group".to_string(),
+                            depth: 0,
+                            value: MregValue::Group,
+                        },
+                        MregEntry {
+                            key: "uid".to_string(),
+                            depth: 1,
+                            value: MregValue::Scalar(json!("oistes")),
+                        },
+                    ],
+                }],
+            })],
+        };
+
+        let context = prepare_layout_context(&document, &rich_settings(Some(60)));
+        let metrics = context.mreg_metrics.get(&1).expect("metrics");
+        assert_eq!(metrics.entry_metrics.len(), 2);
+        assert!(metrics.entry_metrics[0].is_none());
+        assert!(metrics.entry_metrics[1].is_some());
     }
 }

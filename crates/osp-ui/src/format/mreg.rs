@@ -11,6 +11,7 @@ pub fn build_mreg_blocks(
     rows: &[Row],
     key_order: Option<&[String]>,
     short_list_max: usize,
+    medium_list_max: usize,
     width_hint: usize,
     indent_size: usize,
     prefer_stacked_object_lists: bool,
@@ -22,6 +23,7 @@ pub fn build_mreg_blocks(
     for row in rows {
         let mut builder = MregBuilder::new(
             short_list_max.max(1),
+            medium_list_max.max(short_list_max.max(1) + 1),
             width_hint.max(24),
             indent_size.max(1),
             prefer_stacked_object_lists,
@@ -40,6 +42,7 @@ struct MregBuilder<'a> {
     blocks: Vec<Block>,
     entries: Vec<MregEntry>,
     short_list_max: usize,
+    medium_list_max: usize,
     width_hint: usize,
     indent_size: usize,
     prefer_stacked_object_lists: bool,
@@ -51,6 +54,7 @@ struct MregBuilder<'a> {
 impl<'a> MregBuilder<'a> {
     fn new(
         short_list_max: usize,
+        medium_list_max: usize,
         width_hint: usize,
         indent_size: usize,
         prefer_stacked_object_lists: bool,
@@ -62,6 +66,7 @@ impl<'a> MregBuilder<'a> {
             blocks: Vec::new(),
             entries: Vec::new(),
             short_list_max,
+            medium_list_max,
             width_hint,
             indent_size,
             prefer_stacked_object_lists,
@@ -107,11 +112,19 @@ impl<'a> MregBuilder<'a> {
         });
     }
 
-    fn push_list_entry(&mut self, key: String, depth: usize, values: Vec<Value>) {
+    fn push_vertical_list_entry(&mut self, key: String, depth: usize, values: Vec<Value>) {
         self.entries.push(MregEntry {
             key,
             depth,
-            value: MregValue::List(values),
+            value: MregValue::VerticalList(values),
+        });
+    }
+
+    fn push_grid_entry(&mut self, key: String, depth: usize, values: Vec<Value>) {
+        self.entries.push(MregEntry {
+            key,
+            depth,
+            value: MregValue::Grid(values),
         });
     }
 
@@ -172,7 +185,11 @@ impl<'a> MregBuilder<'a> {
                     return;
                 }
 
-                self.push_list_entry(key_with_count, depth, items.clone());
+                if items.len() <= self.medium_list_max {
+                    self.push_vertical_list_entry(key_with_count, depth, items.clone());
+                } else {
+                    self.push_grid_entry(key_with_count, depth, items.clone());
+                }
             }
             _ => self.push_scalar_entry(key.to_string(), depth, value.clone()),
         }
@@ -352,12 +369,58 @@ mod tests {
     }
 
     #[test]
+    fn models_list_thresholds_as_scalar_vertical_and_grid() {
+        let mut next_block_id = 1;
+        let mut row = Map::new();
+        row.insert("single".to_string(), json!(["a"]));
+        row.insert("pair".to_string(), json!(["a", "b"]));
+        row.insert("many".to_string(), json!(["a", "b", "c"]));
+
+        let blocks = build_mreg_blocks(
+            &[row],
+            None,
+            1,
+            2,
+            80,
+            2,
+            false,
+            10,
+            200,
+            &mut next_block_id,
+        );
+
+        let Block::Mreg(mreg) = &blocks[0] else {
+            panic!("expected mreg block");
+        };
+
+        assert!(
+            mreg.rows[0]
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.value, MregValue::Scalar(_)))
+        );
+        assert!(
+            mreg.rows[0]
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.value, MregValue::VerticalList(_)))
+        );
+        assert!(
+            mreg.rows[0]
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.value, MregValue::Grid(_)))
+        );
+    }
+
+    #[test]
     fn keeps_object_lists_as_tables_in_plain_mode() {
         let mut next_block_id = 1;
         let blocks = build_mreg_blocks(
             &[sample_row()],
             None,
             1,
+            5,
             80,
             2,
             false,
@@ -375,6 +438,7 @@ mod tests {
             &[sample_row()],
             None,
             1,
+            5,
             40,
             2,
             true,

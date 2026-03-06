@@ -358,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn mreg_block_models_scalar_and_list_values() {
+    fn mreg_block_models_scalar_and_vertical_list_values() {
         let rows = vec![{
             let mut row = Row::new();
             row.insert("uid".to_string(), json!("oistes"));
@@ -381,7 +381,7 @@ mod tests {
             block.rows[0]
                 .entries
                 .iter()
-                .any(|entry| matches!(entry.value, MregValue::List(_)))
+                .any(|entry| matches!(entry.value, MregValue::VerticalList(_)))
         );
     }
 

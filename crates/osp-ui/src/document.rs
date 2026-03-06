@@ -112,5 +112,6 @@ pub enum MregValue {
     Group,
     Separator,
     Scalar(Value),
-    List(Vec<Value>),
+    VerticalList(Vec<Value>),
+    Grid(Vec<Value>),
 }
