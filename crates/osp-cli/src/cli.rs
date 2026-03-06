@@ -5,7 +5,7 @@ use osp_config::{ConfigLayer, ConfigValue, ResolvedConfig};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_ui::messages::{MessageLevel, adjust_verbosity};
 use osp_ui::theme::DEFAULT_THEME_NAME;
-use osp_ui::{RenderSettings, StyleOverrides, TableOverflow};
+use osp_ui::{RenderRuntime, RenderSettings, StyleOverrides, TableOverflow};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -476,6 +476,7 @@ pub(crate) fn default_render_settings() -> RenderSettings {
         theme_name: DEFAULT_THEME_NAME.to_string(),
         theme: None,
         style_overrides: StyleOverrides::default(),
+        runtime: RenderRuntime::default(),
     }
 }
 

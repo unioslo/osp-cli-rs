@@ -5,7 +5,7 @@ use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_dsl::apply_pipeline;
 use osp_ports::LdapDirectory;
 use osp_ui::theme::DEFAULT_THEME_NAME;
-use osp_ui::{RenderSettings, StyleOverrides, render_rows};
+use osp_ui::{RenderRuntime, RenderSettings, StyleOverrides, render_output};
 
 fn make_config(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
     let mut defaults = ConfigLayer::default();
@@ -55,8 +55,9 @@ fn alias_expands_internal_and_user_pipes() {
         theme_name: DEFAULT_THEME_NAME.to_string(),
         theme: None,
         style_overrides: StyleOverrides::default(),
+        runtime: RenderRuntime::default(),
     };
-    let output = render_rows(&transformed, &settings);
+    let output = render_output(&transformed, &settings);
     assert!(output.contains("oistes"));
 }
 

@@ -3,7 +3,8 @@ use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_dsl::{apply_pipeline, parse_pipeline};
 use osp_ports::LdapDirectory;
 use osp_ui::theme::DEFAULT_THEME_NAME;
-use osp_ui::{RenderSettings, StyleOverrides, render_rows};
+use osp_ui::{RenderRuntime, RenderSettings, StyleOverrides, render_output};
+use serde_json::json;
 
 #[test]
 fn dsl_pipeline_project_works_on_ldap_user_data() {
@@ -12,7 +13,7 @@ fn dsl_pipeline_project_works_on_ldap_user_data() {
         .user("oistes", None, None)
         .expect("query should succeed");
 
-    let parsed = parse_pipeline("ldap user oistes | P uid,cn");
+    let parsed = parse_pipeline("ldap user oistes | P uid,cn").expect("valid pipeline");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
 
     let settings = RenderSettings {
@@ -34,8 +35,9 @@ fn dsl_pipeline_project_works_on_ldap_user_data() {
         theme_name: DEFAULT_THEME_NAME.to_string(),
         theme: None,
         style_overrides: StyleOverrides::default(),
+        runtime: RenderRuntime::default(),
     };
-    let output = render_rows(&transformed, &settings);
+    let output = render_output(&transformed, &settings);
 
     assert!(output.contains("uid"));
     assert!(output.contains("cn"));
@@ -49,7 +51,8 @@ fn dsl_pipeline_values_works_on_netgroup_members() {
         .netgroup("ucore", None, None)
         .expect("query should succeed");
 
-    let parsed = parse_pipeline("ldap netgroup ucore | P members | VAL members");
+    let parsed =
+        parse_pipeline("ldap netgroup ucore | P members | VAL members").expect("valid pipeline");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
 
     let settings = RenderSettings {
@@ -71,8 +74,9 @@ fn dsl_pipeline_values_works_on_netgroup_members() {
         theme_name: DEFAULT_THEME_NAME.to_string(),
         theme: None,
         style_overrides: StyleOverrides::default(),
+        runtime: RenderRuntime::default(),
     };
-    let output = render_rows(&transformed, &settings);
+    let output = render_output(&transformed, &settings);
 
     assert!(output.contains("oistes"));
     assert!(!output.contains("description"));
@@ -85,7 +89,7 @@ fn dsl_pipeline_filter_works() {
         .netgroup("ucore", None, None)
         .expect("query should succeed");
 
-    let parsed = parse_pipeline("ldap netgroup ucore | F cn=ucore | P cn");
+    let parsed = parse_pipeline("ldap netgroup ucore | F cn=ucore | P cn").expect("valid pipeline");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
 
     let settings = RenderSettings {
@@ -107,8 +111,9 @@ fn dsl_pipeline_filter_works() {
         theme_name: DEFAULT_THEME_NAME.to_string(),
         theme: None,
         style_overrides: StyleOverrides::default(),
+        runtime: RenderRuntime::default(),
     };
-    let output = render_rows(&transformed, &settings);
+    let output = render_output(&transformed, &settings);
 
     assert!(output.contains("ucore"));
 }
@@ -120,7 +125,7 @@ fn dsl_pipeline_markdown_table_format_works() {
         .user("oistes", None, None)
         .expect("query should succeed");
 
-    let parsed = parse_pipeline("ldap user oistes | P uid,cn");
+    let parsed = parse_pipeline("ldap user oistes | P uid,cn").expect("valid pipeline");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
 
     let settings = RenderSettings {
@@ -142,8 +147,9 @@ fn dsl_pipeline_markdown_table_format_works() {
         theme_name: DEFAULT_THEME_NAME.to_string(),
         theme: None,
         style_overrides: StyleOverrides::default(),
+        runtime: RenderRuntime::default(),
     };
-    let output = render_rows(&transformed, &settings);
+    let output = render_output(&transformed, &settings);
 
     let mut lines = output.lines();
     let header = lines.next().unwrap_or_default();
@@ -151,4 +157,53 @@ fn dsl_pipeline_markdown_table_format_works() {
     assert!(header.contains("uid") && header.contains("cn"));
     assert!(separator.contains("---"));
     assert!(output.contains("oistes"));
+}
+
+#[test]
+fn dsl_pipeline_grouped_output_renders_without_flattening() {
+    let rows = vec![
+        json!({"dept": "sales", "host": "alpha"})
+            .as_object()
+            .cloned()
+            .expect("row fixture"),
+        json!({"dept": "sales", "host": "beta"})
+            .as_object()
+            .cloned()
+            .expect("row fixture"),
+        json!({"dept": "eng", "host": "gamma"})
+            .as_object()
+            .cloned()
+            .expect("row fixture"),
+    ];
+
+    let transformed = apply_pipeline(rows, &["G dept".to_string()]).expect("pipeline should succeed");
+
+    let settings = RenderSettings {
+        format: OutputFormat::Table,
+        mode: RenderMode::Plain,
+        color: ColorMode::Never,
+        unicode: UnicodeMode::Never,
+        width: None,
+        margin: 0,
+        indent_size: 2,
+        short_list_max: 1,
+        medium_list_max: 5,
+        grid_padding: 4,
+        grid_columns: None,
+        column_weight: 3,
+        table_overflow: osp_ui::TableOverflow::Clip,
+        mreg_stack_min_col_width: 10,
+        mreg_stack_overflow_ratio: 200,
+        theme_name: DEFAULT_THEME_NAME.to_string(),
+        theme: None,
+        style_overrides: StyleOverrides::default(),
+        runtime: RenderRuntime::default(),
+    };
+    let output = render_output(&transformed, &settings);
+
+    assert!(output.contains("dept"));
+    assert!(output.contains("sales"));
+    assert!(output.contains("eng"));
+    assert!(output.contains("alpha"));
+    assert!(output.contains("gamma"));
 }

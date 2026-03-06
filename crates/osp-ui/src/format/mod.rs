@@ -260,8 +260,8 @@ fn group_header_pairs(
 #[cfg(test)]
 mod tests {
     use super::{build_document_from_output, resolve_output_format};
-    use crate::RenderSettings;
     use crate::document::{Block, TableStyle};
+    use crate::{RenderRuntime, RenderSettings};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_core::output_model::{Group, OutputItems, OutputMeta, OutputResult};
     use osp_core::row::Row;
@@ -287,6 +287,7 @@ mod tests {
             theme_name: "plain".to_string(),
             theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
         }
     }
 

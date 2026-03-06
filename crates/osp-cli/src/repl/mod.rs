@@ -4,7 +4,7 @@ pub(crate) mod history;
 
 use anyhow::anyhow;
 use miette::{Result, miette};
-use osp_dsl::apply_pipeline;
+use osp_dsl::apply_output_pipeline;
 use osp_repl::{
     DebugStep, ReplAppearance, ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunResult,
     SharedHistory, run_repl,
@@ -27,7 +27,7 @@ use crate::cli::{
 };
 use crate::pipeline::parse_command_text_with_aliases;
 use crate::plugin_manager::CommandCatalogEntry;
-use crate::rows::output::{output_to_rows, plugin_data_to_output_result, rows_to_output_result};
+use crate::rows::output::{output_to_rows, plugin_data_to_output_result};
 use crate::state::AppState;
 
 use crate::app;
@@ -824,10 +824,8 @@ pub(crate) fn execute_repl_plugin_line(
             format_hint,
         } => {
             if !parsed.stages.is_empty() {
-                let rows = output_to_rows(&output);
-                let rows =
-                    apply_pipeline(rows, &parsed.stages).map_err(|err| miette!("{err:#}"))?;
-                output = rows_to_output_result(rows);
+                output = apply_output_pipeline(output, &parsed.stages)
+                    .map_err(|err| miette!("{err:#}"))?;
             }
 
             let render_settings = app::resolve_effective_render_settings(

@@ -1,3 +1,4 @@
+use osp_core::output_model::OutputResult;
 use osp_dsl::apply_pipeline;
 use serde_json::json;
 
@@ -5,12 +6,16 @@ fn obj(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     value.as_object().cloned().expect("fixture must be object")
 }
 
+fn output_rows(output: &OutputResult) -> &[serde_json::Map<String, serde_json::Value>] {
+    output.as_rows().expect("expected row output")
+}
+
 #[test]
 fn filter_no_matches() {
     let rows = vec![obj(json!({"name": "a"})), obj(json!({"name": "b"}))];
     let output =
         apply_pipeline(rows, &["F name=nonexistent".to_string()]).expect("pipeline should pass");
-    assert!(output.is_empty());
+    assert!(output_rows(&output).is_empty());
 }
 
 #[test]
@@ -23,8 +28,8 @@ fn filter_contains_match() {
     let output =
         apply_pipeline(rows, &["F status active".to_string()]).expect("pipeline should pass");
 
-    assert_eq!(output.len(), 2);
-    let statuses = output
+    assert_eq!(output_rows(&output).len(), 2);
+    let statuses = output_rows(&output)
         .iter()
         .filter_map(|row| row.get("status").and_then(|value| value.as_str()))
         .collect::<Vec<_>>();
@@ -37,9 +42,11 @@ fn filter_case_sensitive_strict() {
     let output =
         apply_pipeline(rows, &["F name == ==alpha".to_string()]).expect("pipeline should pass");
 
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
     assert_eq!(
-        output[0].get("name").and_then(|value| value.as_str()),
+        output_rows(&output)[0]
+            .get("name")
+            .and_then(|value| value.as_str()),
         Some("alpha")
     );
 }
@@ -52,9 +59,11 @@ fn filter_missing_key_negated_matches() {
     ];
 
     let output = apply_pipeline(rows, &["F !val=1".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
     assert_eq!(
-        output[0].get("name").and_then(|value| value.as_str()),
+        output_rows(&output)[0]
+            .get("name")
+            .and_then(|value| value.as_str()),
         Some("b")
     );
 }
@@ -69,7 +78,7 @@ fn filter_not_equals_operator() {
 
     let output =
         apply_pipeline(rows, &["F status != active".to_string()]).expect("pipeline should pass");
-    let statuses = output
+    let statuses = output_rows(&output)
         .iter()
         .filter_map(|row| row.get("status").and_then(|value| value.as_str()))
         .collect::<Vec<_>>();
@@ -82,9 +91,11 @@ fn filter_boolean_values() {
     let rows = vec![obj(json!({"active": true})), obj(json!({"active": false}))];
     let output =
         apply_pipeline(rows, &["F active=true".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
     assert_eq!(
-        output[0].get("active").and_then(|value| value.as_bool()),
+        output_rows(&output)[0]
+            .get("active")
+            .and_then(|value| value.as_bool()),
         Some(true)
     );
 }
@@ -98,12 +109,12 @@ fn filter_list_contains_and_negated_contains() {
 
     let output =
         apply_pipeline(rows.clone(), &["F tags=b".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
 
     let output = apply_pipeline(rows, &["F !tags=b".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
     assert_eq!(
-        output[0]
+        output_rows(&output)[0]
             .get("tags")
             .and_then(|value| value.as_array())
             .map(|arr| arr.len()),
@@ -121,14 +132,14 @@ fn filter_inline_numeric_tokens() {
 
     let output =
         apply_pipeline(rows.clone(), &["F vlan>75".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 2);
+    assert_eq!(output_rows(&output).len(), 2);
 
     let output =
         apply_pipeline(rows.clone(), &["F vlan>=303".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
 
     let output = apply_pipeline(rows, &["F vlan==303".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
 }
 
 #[test]
@@ -139,9 +150,11 @@ fn quick_stage_matches_default_scope() {
     ];
 
     let output = apply_pipeline(rows, &["oist".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
     assert_eq!(
-        output[0].get("uid").and_then(|value| value.as_str()),
+        output_rows(&output)[0]
+            .get("uid")
+            .and_then(|value| value.as_str()),
         Some("oistes")
     );
 }
@@ -151,6 +164,6 @@ fn quick_stage_key_scope() {
     let rows = vec![obj(json!({"uid": "oistes"})), obj(json!({"cn": "Andreas"}))];
 
     let output = apply_pipeline(rows, &["K uid".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
-    assert!(output[0].contains_key("uid"));
+    assert_eq!(output_rows(&output).len(), 1);
+    assert!(output_rows(&output)[0].contains_key("uid"));
 }

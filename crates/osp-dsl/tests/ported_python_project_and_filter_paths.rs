@@ -1,9 +1,13 @@
-use osp_core::output_model::OutputItems;
+use osp_core::output_model::{OutputItems, OutputResult};
 use osp_dsl::{apply_pipeline, execute_pipeline};
 use serde_json::{Map, Value, json};
 
 fn obj(value: Value) -> Map<String, Value> {
     value.as_object().cloned().expect("fixture must be object")
+}
+
+fn output_rows(output: &OutputResult) -> &[Map<String, Value>] {
+    output.as_rows().expect("expected row output")
 }
 
 fn flat_rows() -> Vec<Map<String, Value>> {
@@ -52,14 +56,12 @@ fn project_dotted_path_and_absolute_scope_match_python_behavior() {
 
     let output =
         apply_pipeline(nested.clone(), &["P asset.id".to_string()]).expect("pipeline should pass");
-    assert_eq!(
-        output,
-        vec![obj(json!({"metadata": {"asset": {"id": 42}}}))]
-    );
+    let expected = vec![obj(json!({"metadata": {"asset": {"id": 42}}}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 
     let output =
         apply_pipeline(nested, &["P .asset.id".to_string()]).expect("pipeline should pass");
-    assert!(output.is_empty());
+    assert!(output_rows(&output).is_empty());
 }
 
 #[test]
@@ -68,35 +70,33 @@ fn project_selector_forms_match_python_contract() {
 
     let output =
         apply_pipeline(rows.clone(), &["P interfaces[].mac".to_string()]).expect("project");
-    assert_eq!(
-        output,
-        vec![
-            obj(json!({"mac": "aa:bb"})),
-            obj(json!({"mac": "cc:dd"})),
-            obj(json!({"mac": "ee:ff"})),
-        ]
-    );
+    let expected = vec![
+        obj(json!({"mac": "aa:bb"})),
+        obj(json!({"mac": "cc:dd"})),
+        obj(json!({"mac": "ee:ff"})),
+    ];
+    assert_eq!(output_rows(&output), expected.as_slice());
 
     let output = apply_pipeline(rows.clone(), &["P netgroups[0]".to_string()]).expect("project");
-    assert_eq!(
-        output,
-        vec![
-            obj(json!({"netgroups": "ansatt-373034"})),
-            obj(json!({"netgroups": "ansatt-373034"})),
-        ]
-    );
+    let expected = vec![
+        obj(json!({"netgroups": "ansatt-373034"})),
+        obj(json!({"netgroups": "ansatt-373034"})),
+    ];
+    assert_eq!(output_rows(&output), expected.as_slice());
 
     let output = apply_pipeline(rows.clone(), &["P netgroups[2]".to_string()]).expect("project");
-    assert_eq!(output, vec![obj(json!({"netgroups": "usit"}))]);
+    let expected = vec![obj(json!({"netgroups": "usit"}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 
     let output = apply_pipeline(rows.clone(), &["P netgroups[::-1]".to_string()]).expect("project");
-    assert_eq!(output[0].get("netgroups"), Some(&json!("usit")));
+    assert_eq!(
+        output_rows(&output)[0].get("netgroups"),
+        Some(&json!("usit"))
+    );
 
     let output = apply_pipeline(rows, &["P interfaces[1:]".to_string()]).expect("project");
-    assert_eq!(
-        output,
-        vec![obj(json!({"mac": "cc:dd", "ip": "2001:700:100::1"}))]
-    );
+    let expected = vec![obj(json!({"mac": "cc:dd", "ip": "2001:700:100::1"}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]
@@ -104,8 +104,8 @@ fn filter_handles_dotted_paths_and_group_streams() {
     let rows = flat_rows();
     let output =
         apply_pipeline(rows.clone(), &["F interfaces[].mac=aa:bb".to_string()]).expect("filter");
-    assert_eq!(output.len(), 1);
-    assert_eq!(output[0].get("value"), Some(&json!("host-a")));
+    assert_eq!(output_rows(&output).len(), 1);
+    assert_eq!(output_rows(&output)[0].get("value"), Some(&json!("host-a")));
 
     let grouped = execute_pipeline(
         vec![

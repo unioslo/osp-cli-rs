@@ -18,7 +18,9 @@ pub fn parse_command_text_with_aliases(
     text: &str,
     config: &ResolvedConfig,
 ) -> Result<ParsedCommandLine> {
-    let parsed = parse_pipeline(text);
+    let parsed = parse_pipeline(text)
+        .into_diagnostic()
+        .wrap_err("failed to parse pipeline")?;
     let tokens = shell_words::split(&parsed.command)
         .into_diagnostic()
         .wrap_err("failed to parse command")?;
@@ -30,7 +32,9 @@ pub fn parse_command_text_with_aliases(
     }
 
     if let Some(expanded) = maybe_expand_alias(&tokens[0], &tokens[1..], config)? {
-        let alias_parsed = parse_pipeline(&expanded);
+        let alias_parsed = parse_pipeline(&expanded)
+            .into_diagnostic()
+            .wrap_err("failed to parse alias pipeline")?;
         let alias_tokens = shell_words::split(&alias_parsed.command)
             .into_diagnostic()
             .wrap_err("failed to parse alias command")?;

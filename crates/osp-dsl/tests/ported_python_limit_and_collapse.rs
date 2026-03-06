@@ -1,8 +1,13 @@
+use osp_core::output_model::OutputResult;
 use osp_dsl::apply_pipeline;
 use serde_json::json;
 
 fn obj(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     value.as_object().cloned().expect("fixture must be object")
+}
+
+fn output_rows(output: &OutputResult) -> &[serde_json::Map<String, serde_json::Value>] {
+    output.as_rows().expect("expected row output")
 }
 
 #[test]
@@ -14,9 +19,9 @@ fn limit_positive() {
     ];
 
     let output = apply_pipeline(rows, &["L 1".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
     assert_eq!(
-        output[0].get("host").and_then(|v| v.as_str()),
+        output_rows(&output)[0].get("host").and_then(|v| v.as_str()),
         Some("alpha")
     );
 }
@@ -25,7 +30,7 @@ fn limit_positive() {
 fn limit_zero() {
     let rows = vec![obj(json!({"host": "alpha"})), obj(json!({"host": "beta"}))];
     let output = apply_pipeline(rows, &["L 0".to_string()]).expect("pipeline should pass");
-    assert!(output.is_empty());
+    assert!(output_rows(&output).is_empty());
 }
 
 #[test]
@@ -39,7 +44,7 @@ fn limit_negative_count_takes_tail() {
     ];
 
     let output = apply_pipeline(rows, &["L -2".to_string()]).expect("pipeline should pass");
-    let values = output
+    let values = output_rows(&output)
         .iter()
         .filter_map(|row| row.get("value").and_then(|v| v.as_i64()))
         .collect::<Vec<_>>();
@@ -55,8 +60,11 @@ fn limit_with_offset() {
     ];
 
     let output = apply_pipeline(rows, &["L 2 1".to_string()]).expect("pipeline should pass");
-    assert_eq!(output.len(), 2);
-    assert_eq!(output[0].get("host").and_then(|v| v.as_str()), Some("beta"));
+    assert_eq!(output_rows(&output).len(), 2);
+    assert_eq!(
+        output_rows(&output)[0].get("host").and_then(|v| v.as_str()),
+        Some("beta")
+    );
 }
 
 #[test]
@@ -66,5 +74,5 @@ fn collapse_passes_through_ungrouped_rows() {
         obj(json!({"uid": "andreasd"})),
     ];
     let output = apply_pipeline(rows.clone(), &["Z".to_string()]).expect("pipeline should pass");
-    assert_eq!(output, rows);
+    assert_eq!(output_rows(&output), rows.as_slice());
 }

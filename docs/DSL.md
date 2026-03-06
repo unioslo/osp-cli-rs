@@ -50,13 +50,18 @@ crates/osp-dsl/src/
 ### Runtime Behavior (Current)
 
 - `parse_pipeline(...)` still returns `{ command, stages }` for compatibility
-  with `osp-cli`/`osp-services`.
+  with `osp-cli`/`osp-services`, but malformed quoted pipelines now fail
+  instead of being naively re-split.
 - `apply_pipeline(...)` supports existing working verbs: `P`, `F`, `G`, `A`,
   `S`, `C`, `L`, `Z`, quick search (`term`, `K term`, `V term`), plus
   explicit `VAL`/`VALUE` extraction.
+- `apply_pipeline(...)` now returns `OutputResult`, and
+  `apply_output_pipeline(...)` applies stages to existing row or grouped output
+  without flattening it first.
 - `Y` copy-hint stage is wired in the engine metadata path.
-- Unknown verbs currently fall back to quick-search stage behavior, so the
-  parser/execution boundary is ready for no-verb quick mode expansion.
+- Unknown verb-shaped stages now error by default. Bare quick-search stages
+  still work, but mistyped DSL verbs such as `| R foo` no longer silently turn
+  into quick search.
 
 ### Parity Verification (Current)
 
@@ -73,8 +78,9 @@ crates/osp-dsl/src/
 ### Pipeline model
 
 - The DSL is a pipe-based language: `cmd ... | F ... | S ... | L ...`
-- Parsing is tolerant of partial quotes.
-- Unrecognized verbs fall back to “quick search” behavior.
+- Parsing now rejects malformed quoted pipelines.
+- Bare quick-search stages remain available, but unrecognized verb-shaped
+  stages no longer fall back to quick search.
 
 ### Data model
 

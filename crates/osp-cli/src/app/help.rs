@@ -9,8 +9,8 @@ use crate::cli::Cli;
 use crate::theme_loader;
 
 use super::{
-    normalize_profile_override, resolve_default_render_width, resolve_known_theme_name,
-    resolve_runtime_config,
+    build_render_runtime, normalize_profile_override, resolve_default_render_width,
+    resolve_known_theme_name, resolve_runtime_config,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -31,6 +31,7 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
 
     let default_cli = Cli::try_parse_from(["osp"]).expect("default cli parse should succeed");
     let mut settings = default_cli.render_settings();
+    settings.runtime = build_render_runtime(std::env::var("TERM").ok().as_deref());
     if let Some(config) = config.as_ref() {
         let loaded = theme_loader::load_theme_catalog(config);
         default_cli.seed_render_settings_from_config(&mut settings, config);

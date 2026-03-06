@@ -8,12 +8,12 @@ use osp_core::output::OutputFormat;
 use osp_core::output_model::OutputResult;
 use osp_core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
-use osp_dsl::apply_pipeline;
+use osp_dsl::apply_output_pipeline;
 
 use osp_ui::clipboard::ClipboardService;
 use osp_ui::messages::{MessageBuffer, MessageLevel, MessageRenderFormat};
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
-use osp_ui::{RenderSettings, copy_output_to_clipboard, render_output};
+use osp_ui::{RenderRuntime, RenderSettings, copy_output_to_clipboard, render_output};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -36,7 +36,7 @@ use crate::pipeline::parse_command_tokens_with_aliases;
 use crate::plugin_manager::{
     CommandCatalogEntry, PluginDispatchContext, PluginDispatchError, PluginManager,
 };
-use crate::rows::output::{output_to_rows, plugin_data_to_output_result, rows_to_output_result};
+use crate::rows::output::plugin_data_to_output_result;
 use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
 
 use crate::repl;
@@ -202,6 +202,7 @@ fn run(mut cli: Cli) -> Result<i32> {
     )?;
     let theme_catalog = theme_loader::load_theme_catalog(&config);
     let mut render_settings = cli.render_settings();
+    render_settings.runtime = build_render_runtime(runtime_context.terminal_env());
     crate::cli::apply_render_settings_from_config(&mut render_settings, &config);
     render_settings.width = Some(resolve_default_render_width(&config));
     render_settings.theme_name = resolve_theme_name(&cli, &config, &theme_catalog)?;
@@ -648,9 +649,7 @@ fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> 
 
     let mut output = plugin_data_to_output_result(response.data, Some(&response.meta));
     if !stages.is_empty() {
-        let rows = output_to_rows(&output);
-        let rows = apply_pipeline(rows, &stages).map_err(|err| miette!("{err:#}"))?;
-        output = rows_to_output_result(rows);
+        output = apply_output_pipeline(output, &stages).map_err(|err| miette!("{err:#}"))?;
     }
     let effective = resolve_effective_render_settings(
         settings,
@@ -786,6 +785,36 @@ fn detect_terminal_width() -> Option<usize> {
     terminal_size()
         .map(|(Width(columns), _)| columns as usize)
         .filter(|value| *value > 0)
+}
+
+fn detect_columns_env() -> Option<usize> {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+}
+
+fn locale_utf8_hint_from_env() -> Option<bool> {
+    for key in ["LC_ALL", "LC_CTYPE", "LANG"] {
+        if let Ok(value) = std::env::var(key) {
+            let lower = value.to_ascii_lowercase();
+            if lower.contains("utf-8") || lower.contains("utf8") {
+                return Some(true);
+            }
+            return Some(false);
+        }
+    }
+    None
+}
+
+pub(crate) fn build_render_runtime(terminal_env: Option<&str>) -> RenderRuntime {
+    RenderRuntime {
+        stdout_is_tty: std::io::stdout().is_terminal(),
+        terminal: terminal_env.map(ToOwned::to_owned),
+        no_color: std::env::var("NO_COLOR").is_ok(),
+        width: detect_terminal_width().or_else(detect_columns_env),
+        locale_utf8: locale_utf8_hint_from_env(),
+    }
 }
 
 fn build_logging_config(config: &ResolvedConfig, debug_verbosity: u8) -> DeveloperLoggingConfig {
@@ -1015,9 +1044,9 @@ mod tests {
     use osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_repl::{HistoryConfig, HistoryShellContext, SharedHistory};
-    use osp_ui::RenderSettings;
     use osp_ui::messages::MessageLevel;
     use osp_ui::theme::DEFAULT_THEME_NAME;
+    use osp_ui::{RenderRuntime, RenderSettings};
     use std::collections::BTreeSet;
     use std::ffi::OsString;
 
@@ -1056,6 +1085,7 @@ mod tests {
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: osp_ui::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
         };
 
         AppState::new(
@@ -1174,6 +1204,7 @@ mod tests {
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: osp_ui::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
         };
         let hinted = resolve_effective_render_settings(&base, Some(OutputFormat::Table));
         assert_eq!(hinted.format, OutputFormat::Table);
@@ -1856,6 +1887,7 @@ JSON
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: osp_ui::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
         };
 
         let config_root = make_temp_dir("osp-cli-test-config");

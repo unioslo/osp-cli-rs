@@ -4,11 +4,16 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use osp_core::output_model::OutputResult;
 use osp_dsl::apply_pipeline;
 use serde_json::{Map, Value, json};
 
 fn obj(value: Value) -> Map<String, Value> {
     value.as_object().cloned().expect("fixture must be object")
+}
+
+fn output_rows(output: &OutputResult) -> &[Map<String, Value>] {
+    output.as_rows().expect("expected row output")
 }
 
 fn flat_rows() -> Vec<Map<String, Value>> {
@@ -83,7 +88,7 @@ fn jq_identity_matches_python_contract() {
 
     let rows = flat_rows();
     let output = apply_pipeline(rows.clone(), &["JQ .".to_string()]).expect("jq should succeed");
-    assert_eq!(output, rows);
+    assert_eq!(output_rows(&output), rows.as_slice());
 }
 
 #[test]
@@ -96,10 +101,8 @@ fn jq_select_first_network_matches_python_contract() {
 
     let output = apply_pipeline(flat_rows(), &["JQ .[0].networks[0]".to_string()])
         .expect("jq should succeed");
-    assert_eq!(
-        output,
-        vec![obj(json!({"network": "129.240.130.0/24", "vlan": 200}))]
-    );
+    let expected = vec![obj(json!({"network": "129.240.130.0/24", "vlan": 200}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]
@@ -112,13 +115,11 @@ fn jq_map_hosts_matches_python_contract() {
 
     let output = apply_pipeline(flat_rows(), &[r#"JQ "[.[0].host, .[1].host]""#.to_string()])
         .expect("jq should succeed");
-    assert_eq!(
-        output,
-        vec![
-            obj(json!({"value": "alpha"})),
-            obj(json!({"value": "beta"}))
-        ]
-    );
+    let expected = vec![
+        obj(json!({"value": "alpha"})),
+        obj(json!({"value": "beta"})),
+    ];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]
@@ -131,7 +132,8 @@ fn jq_leading_pipe_matches_python_contract() {
 
     let output = apply_pipeline(flat_rows(), &[r#"JQ "| .[0].host""#.to_string()])
         .expect("jq should succeed");
-    assert_eq!(output, vec![obj(json!({"value": "alpha"}))]);
+    let expected = vec![obj(json!({"value": "alpha"}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]
@@ -144,7 +146,8 @@ fn jq_length_matches_python_contract() {
 
     let output = apply_pipeline(flat_rows(), &[r#"JQ ". | length""#.to_string()])
         .expect("jq should succeed");
-    assert_eq!(output, vec![obj(json!({"value": 3}))]);
+    let expected = vec![obj(json!({"value": 3}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]

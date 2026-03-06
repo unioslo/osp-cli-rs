@@ -9,12 +9,9 @@ mod renderer;
 pub mod style;
 pub mod theme;
 
-use std::io::IsTerminal;
-
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_core::output_model::{OutputItems, OutputResult};
 use osp_core::row::Row;
-use terminal_size::terminal_size;
 
 pub use document::{
     CodeBlock, Document, JsonBlock, LineBlock, LinePart, MregBlock, MregEntry, MregRow, MregValue,
@@ -23,6 +20,15 @@ pub use document::{
 pub use inline::{line_from_inline, parts_from_inline, render_inline};
 pub use style::StyleOverrides;
 use theme::ThemeDefinition;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RenderRuntime {
+    pub stdout_is_tty: bool,
+    pub terminal: Option<String>,
+    pub no_color: bool,
+    pub width: Option<usize>,
+    pub locale_utf8: Option<bool>,
+}
 
 #[derive(Debug, Clone)]
 pub struct RenderSettings {
@@ -44,6 +50,7 @@ pub struct RenderSettings {
     pub theme_name: String,
     pub theme: Option<ThemeDefinition>,
     pub style_overrides: StyleOverrides,
+    pub runtime: RenderRuntime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,10 +103,7 @@ impl RenderSettings {
         match self.color {
             ColorMode::Always => true,
             ColorMode::Never => false,
-            ColorMode::Auto => {
-                let no_color = std::env::var("NO_COLOR").is_ok();
-                !no_color && std::io::stdout().is_terminal()
-            }
+            ColorMode::Auto => !self.runtime.no_color && self.runtime.stdout_is_tty,
         }
     }
 
@@ -108,14 +112,13 @@ impl RenderSettings {
             UnicodeMode::Always => true,
             UnicodeMode::Never => false,
             UnicodeMode::Auto => {
-                if !std::io::stdout().is_terminal() {
+                if !self.runtime.stdout_is_tty {
                     return false;
                 }
-                let term = std::env::var("TERM").unwrap_or_default();
-                if term == "dumb" {
+                if matches!(self.runtime.terminal.as_deref(), Some("dumb")) {
                     return false;
                 }
-                match locale_utf8_hint() {
+                match self.runtime.locale_utf8 {
                     Some(true) => true,
                     Some(false) => false,
                     None => true,
@@ -129,8 +132,9 @@ impl RenderSettings {
             RenderMode::Plain => RenderBackend::Plain,
             RenderMode::Rich => RenderBackend::Rich,
             RenderMode::Auto => {
-                let term = std::env::var("TERM").unwrap_or_default();
-                if term == "dumb" {
+                if !self.runtime.stdout_is_tty
+                    || matches!(self.runtime.terminal.as_deref(), Some("dumb"))
+                {
                     RenderBackend::Plain
                 } else {
                     RenderBackend::Rich
@@ -187,33 +191,8 @@ impl RenderSettings {
         if let Some(width) = self.width {
             return (width > 0).then_some(width);
         }
-
-        std::env::var("COLUMNS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|width| *width > 0)
-            .or_else(|| {
-                if !std::io::stdout().is_terminal() {
-                    return None;
-                }
-                terminal_size()
-                    .map(|(w, _)| w.0 as usize)
-                    .filter(|w| *w > 0)
-            })
+        self.runtime.width.filter(|width| *width > 0)
     }
-}
-
-fn locale_utf8_hint() -> Option<bool> {
-    for key in ["LC_ALL", "LC_CTYPE", "LANG"] {
-        if let Ok(value) = std::env::var(key) {
-            let lower = value.to_ascii_lowercase();
-            if lower.contains("utf-8") || lower.contains("utf8") {
-                return Some(true);
-            }
-            return Some(false);
-        }
-    }
-    None
 }
 
 pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
@@ -262,6 +241,7 @@ pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) 
         theme_name: settings.theme_name.clone(),
         theme: settings.theme.clone(),
         style_overrides: settings.style_overrides.clone(),
+        runtime: settings.runtime.clone(),
     };
     let document = format::build_document_from_output(output, &copy_settings);
     render_document_for_copy(&document, &copy_settings)
@@ -287,6 +267,7 @@ pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) 
         theme_name: settings.theme_name.clone(),
         theme: settings.theme.clone(),
         style_overrides: settings.style_overrides.clone(),
+        runtime: settings.runtime.clone(),
     };
     let resolved = copy_settings.resolve_render_settings();
     renderer::render_document(document, resolved)
@@ -331,6 +312,7 @@ pub fn copy_output_to_clipboard(
         theme_name: settings.theme_name.clone(),
         theme: settings.theme.clone(),
         style_overrides: settings.style_overrides.clone(),
+        runtime: settings.runtime.clone(),
     };
     let document = format::build_document_from_output(output, &copy_settings);
     clipboard.copy_document(&document, &copy_settings)
@@ -338,7 +320,7 @@ pub fn copy_output_to_clipboard(
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderBackend, RenderSettings, format, render_rows_for_copy};
+    use super::{RenderBackend, RenderRuntime, RenderSettings, format, render_rows_for_copy};
     use crate::document::{Block, MregValue, TableStyle};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_core::row::Row;
@@ -364,6 +346,7 @@ mod tests {
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
         }
     }
 
@@ -474,6 +457,7 @@ mod tests {
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
         };
 
         let resolved = settings.resolve_render_settings();
@@ -503,6 +487,7 @@ mod tests {
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
         };
 
         let resolved = settings.resolve_render_settings();
@@ -542,6 +527,7 @@ mod tests {
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
         };
 
         let rendered = render_rows_for_copy(&rows, &settings);

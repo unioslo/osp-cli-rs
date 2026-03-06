@@ -1,9 +1,13 @@
-use osp_core::output_model::OutputItems;
+use osp_core::output_model::{OutputItems, OutputResult};
 use osp_dsl::{apply_pipeline, execute_pipeline};
 use serde_json::json;
 
 fn obj(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     value.as_object().cloned().expect("fixture must be object")
+}
+
+fn output_rows(output: &OutputResult) -> &[serde_json::Map<String, serde_json::Value>] {
+    output.as_rows().expect("expected row output")
 }
 
 #[test]
@@ -70,12 +74,13 @@ fn aggregate_global_count_and_sum() {
 
     let output = apply_pipeline(rows.clone(), &["A count total_hosts".to_string()])
         .expect("pipeline should pass");
-    assert_eq!(output, vec![obj(json!({"total_hosts": 3}))]);
+    let expected = vec![obj(json!({"total_hosts": 3}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 
     let output = apply_pipeline(rows, &["A sum(numbers[]) total_numbers".to_string()])
         .expect("pipeline should pass");
     assert_eq!(
-        output[0]
+        output_rows(&output)[0]
             .get("total_numbers")
             .and_then(|value| value.as_f64()),
         Some(33.0)
@@ -93,7 +98,9 @@ fn aggregate_avg_and_grouped_sum_then_collapse() {
     let output = apply_pipeline(rows.clone(), &["A avg(amount) avg_amount".to_string()])
         .expect("pipeline should pass");
     assert_eq!(
-        output[0].get("avg_amount").and_then(|value| value.as_f64()),
+        output_rows(&output)[0]
+            .get("avg_amount")
+            .and_then(|value| value.as_f64()),
         Some(350.0 / 3.0)
     );
 
@@ -108,13 +115,17 @@ fn aggregate_avg_and_grouped_sum_then_collapse() {
     )
     .expect("pipeline should pass");
 
-    assert_eq!(output.len(), 2);
+    assert_eq!(output_rows(&output).len(), 2);
     assert_eq!(
-        output[0].get("dept").and_then(|value| value.as_str()),
+        output_rows(&output)[0]
+            .get("dept")
+            .and_then(|value| value.as_str()),
         Some("eng")
     );
     assert_eq!(
-        output[1].get("dept").and_then(|value| value.as_str()),
+        output_rows(&output)[1]
+            .get("dept")
+            .and_then(|value| value.as_str()),
         Some("sales")
     );
 }
@@ -128,7 +139,8 @@ fn count_macro_matches_python_contract() {
     ];
 
     let output = apply_pipeline(rows, &["C".to_string()]).expect("pipeline should pass");
-    assert_eq!(output, vec![obj(json!({"count": 3}))]);
+    let expected = vec![obj(json!({"count": 3}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]
@@ -140,14 +152,14 @@ fn sort_numeric_and_descending() {
     ];
 
     let asc = apply_pipeline(rows.clone(), &["S vlan".to_string()]).expect("pipeline should pass");
-    let asc_values = asc
+    let asc_values = output_rows(&asc)
         .iter()
         .filter_map(|row| row.get("vlan").and_then(|value| value.as_str()))
         .collect::<Vec<_>>();
     assert_eq!(asc_values, vec!["75", "100", "300"]);
 
     let desc = apply_pipeline(rows, &["S !vlan".to_string()]).expect("pipeline should pass");
-    let desc_values = desc
+    let desc_values = output_rows(&desc)
         .iter()
         .filter_map(|row| row.get("vlan").and_then(|value| value.as_str()))
         .collect::<Vec<_>>();

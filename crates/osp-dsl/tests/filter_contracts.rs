@@ -1,9 +1,13 @@
-use osp_core::output_model::OutputItems;
+use osp_core::output_model::{OutputItems, OutputResult};
 use osp_dsl::{apply_pipeline, execute_pipeline};
 use serde_json::{Map, Value, json};
 
 fn obj(value: Value) -> Map<String, Value> {
     value.as_object().cloned().expect("fixture must be object")
+}
+
+fn output_rows(output: &OutputResult) -> &[Map<String, Value>] {
+    output.as_rows().expect("expected row output")
 }
 
 #[test]
@@ -33,11 +37,13 @@ fn filter_list_contains_and_negated_contains_follow_python_contract() {
 
     let output =
         apply_pipeline(rows.clone(), &["F tags=b".to_string()]).expect("list filter should work");
-    assert_eq!(output, vec![obj(json!({"name": "a", "tags": ["a", "b"]}))]);
+    let expected = vec![obj(json!({"name": "a", "tags": ["a", "b"]}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 
     let output =
         apply_pipeline(rows, &["F !tags=b".to_string()]).expect("negated list filter should work");
-    assert_eq!(output, vec![obj(json!({"name": "b", "tags": ["c", "d"]}))]);
+    let expected = vec![obj(json!({"name": "b", "tags": ["c", "d"]}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]
@@ -50,21 +56,17 @@ fn filter_existence_treats_null_empty_string_and_empty_list_as_falsy() {
 
     let output =
         apply_pipeline(rows.clone(), &["F ?val".to_string()]).expect("value existence should work");
-    assert_eq!(
-        output,
-        vec![obj(
-            json!({"name": "present", "val": "x", "tags": ["prod"]})
-        )]
-    );
+    let expected = vec![obj(
+        json!({"name": "present", "val": "x", "tags": ["prod"]}),
+    )];
+    assert_eq!(output_rows(&output), expected.as_slice());
 
     let output =
         apply_pipeline(rows, &["F ?tags".to_string()]).expect("list existence should work");
-    assert_eq!(
-        output,
-        vec![obj(
-            json!({"name": "present", "val": "x", "tags": ["prod"]})
-        )]
-    );
+    let expected = vec![obj(
+        json!({"name": "present", "val": "x", "tags": ["prod"]}),
+    )];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]
@@ -77,9 +79,9 @@ fn filter_datetime_comparison_handles_mixed_tz_naive_and_aware_values() {
     let output = apply_pipeline(rows, &["F ts>2026-02-13 00:00:00".to_string()])
         .expect("datetime filter should parse");
 
-    assert_eq!(output.len(), 1);
+    assert_eq!(output_rows(&output).len(), 1);
     assert_eq!(
-        output[0].get("ts"),
+        output_rows(&output)[0].get("ts"),
         Some(&json!("2026-02-13T20:00:00+00:00"))
     );
 }
@@ -94,7 +96,8 @@ fn filter_boolean_string_matches_boolean_value() {
     let output =
         apply_pipeline(rows, &["F active=true".to_string()]).expect("boolean filter should work");
 
-    assert_eq!(output, vec![obj(json!({"name": "on", "active": true}))]);
+    let expected = vec![obj(json!({"name": "on", "active": true}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }
 
 #[test]
@@ -108,11 +111,9 @@ fn filter_numeric_equality_matches_numbers_and_numeric_strings() {
     let output =
         apply_pipeline(rows, &["F id=1".to_string()]).expect("numeric equality should work");
 
-    assert_eq!(
-        output,
-        vec![
-            obj(json!({"id": 1, "name": "int"})),
-            obj(json!({"id": "1", "name": "string"})),
-        ]
-    );
+    let expected = vec![
+        obj(json!({"id": 1, "name": "int"})),
+        obj(json!({"id": "1", "name": "string"})),
+    ];
+    assert_eq!(output_rows(&output), expected.as_slice());
 }

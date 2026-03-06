@@ -12,18 +12,25 @@ use crate::{
     },
 };
 
-pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<Vec<Row>> {
-    let output = execute_pipeline(rows, stages)?;
-    match output.items {
-        OutputItems::Rows(rows) => Ok(rows),
-        OutputItems::Groups(_) => Ok(Vec::new()),
-    }
+pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
+    apply_output_pipeline(OutputResult::from_rows(rows), stages)
+}
+
+pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<OutputResult> {
+    execute_pipeline_items(output.items, output.meta.wants_copy, stages)
 }
 
 pub fn execute_pipeline(mut rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
+    execute_pipeline_items(OutputItems::Rows(std::mem::take(&mut rows)), false, stages)
+}
+
+fn execute_pipeline_items(
+    mut items: OutputItems,
+    initial_wants_copy: bool,
+    stages: &[String],
+) -> Result<OutputResult> {
     let parsed = parse_stage_list(stages);
-    let mut wants_copy = false;
-    let mut items = OutputItems::Rows(std::mem::take(&mut rows));
+    let mut wants_copy = initial_wants_copy;
 
     for stage in parsed.stages {
         if stage.verb.is_empty() {
@@ -44,6 +51,14 @@ pub fn execute_pipeline(mut rows: Vec<Row>, stages: &[String]) -> Result<OutputR
                     "V".to_string()
                 } else {
                     format!("V {}", stage.spec)
+                };
+                quick::apply(rows, &quick_spec)
+            })?,
+            "K" => map_rows(items, |rows| {
+                let quick_spec = if stage.spec.is_empty() {
+                    "K".to_string()
+                } else {
+                    format!("K {}", stage.spec)
                 };
                 quick::apply(rows, &quick_spec)
             })?,
@@ -93,7 +108,10 @@ pub fn execute_pipeline(mut rows: Vec<Row>, stages: &[String]) -> Result<OutputR
             }
             "?" => question::apply(items, &stage.spec)?,
             "JQ" => jq::apply(items, &stage.spec)?,
-            _ => map_rows(items, |rows| quick::apply(rows, &stage.raw))?,
+            _ if is_quick_candidate(&stage) => {
+                map_rows(items, |rows| quick::apply(rows, &stage.raw))?
+            }
+            _ => return Err(anyhow!("unknown DSL verb: {}", stage.verb)),
         };
     }
 
@@ -124,6 +142,21 @@ pub fn execute_pipeline(mut rows: Vec<Row>, stages: &[String]) -> Result<OutputR
     })
 }
 
+fn is_quick_candidate(stage: &crate::model::ParsedStage) -> bool {
+    let verb = stage.verb.trim();
+    if verb.is_empty() {
+        return false;
+    }
+
+    // A single-letter alphabetic token looks like an explicit DSL verb.
+    // Treating it as quick search hides typos such as `| R foo`.
+    if verb.len() == 1 && verb.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return false;
+    }
+
+    true
+}
+
 fn map_rows(
     items: OutputItems,
     map_fn: impl FnOnce(Vec<Row>) -> Result<Vec<Row>>,
@@ -136,10 +169,14 @@ fn map_rows(
 
 #[cfg(test)]
 mod tests {
-    use osp_core::output_model::OutputItems;
+    use osp_core::output_model::{OutputItems, OutputResult};
     use serde_json::json;
 
-    use super::{apply_pipeline, execute_pipeline};
+    use super::{apply_output_pipeline, apply_pipeline, execute_pipeline};
+
+    fn output_rows(output: &OutputResult) -> &[osp_core::row::Row] {
+        output.as_rows().expect("expected row output")
+    }
 
     #[test]
     fn project_then_filter_pipeline_works() {
@@ -157,15 +194,17 @@ mod tests {
         let stages = vec!["P uid,cn".to_string(), "F uid=oistes".to_string()];
         let output = apply_pipeline(rows, &stages).expect("pipeline should pass");
 
-        assert_eq!(output.len(), 1);
+        assert_eq!(output_rows(&output).len(), 1);
         assert_eq!(
-            output[0].get("uid").and_then(|value| value.as_str()),
+            output_rows(&output)[0]
+                .get("uid")
+                .and_then(|value| value.as_str()),
             Some("oistes")
         );
     }
 
     #[test]
-    fn unknown_verb_falls_back_to_quick_stage() {
+    fn bare_quick_stage_without_verb_still_works() {
         let rows = vec![
             json!({"uid": "oistes"})
                 .as_object()
@@ -179,7 +218,21 @@ mod tests {
 
         let stages = vec!["oist".to_string()];
         let output = apply_pipeline(rows, &stages).expect("pipeline should pass");
-        assert_eq!(output.len(), 1);
+        assert_eq!(output_rows(&output).len(), 1);
+    }
+
+    #[test]
+    fn unknown_single_letter_verb_errors() {
+        let rows = vec![
+            json!({"uid": "oistes"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let err =
+            apply_pipeline(rows, &["R oist".to_string()]).expect_err("unknown verb should fail");
+        assert!(err.to_string().contains("unknown DSL verb"));
     }
 
     #[test]
@@ -212,9 +265,11 @@ mod tests {
 
         let stages = vec!["V oist".to_string()];
         let output = apply_pipeline(rows, &stages).expect("pipeline should pass");
-        assert_eq!(output.len(), 1);
+        assert_eq!(output_rows(&output).len(), 1);
         assert_eq!(
-            output[0].get("uid").and_then(|value| value.as_str()),
+            output_rows(&output)[0]
+                .get("uid")
+                .and_then(|value| value.as_str()),
             Some("oistes")
         );
     }
@@ -233,12 +288,12 @@ mod tests {
         ];
 
         let output = apply_pipeline(rows, &["?".to_string()]).expect("pipeline should pass");
-        assert_eq!(output.len(), 2);
-        assert!(output[0].contains_key("uid"));
-        assert!(!output[0].contains_key("note"));
-        assert!(!output[0].contains_key("tags"));
-        assert!(output[1].contains_key("note"));
-        assert!(!output[1].contains_key("extra"));
+        assert_eq!(output_rows(&output).len(), 2);
+        assert!(output_rows(&output)[0].contains_key("uid"));
+        assert!(!output_rows(&output)[0].contains_key("note"));
+        assert!(!output_rows(&output)[0].contains_key("tags"));
+        assert!(output_rows(&output)[1].contains_key("note"));
+        assert!(!output_rows(&output)[1].contains_key("extra"));
     }
 
     #[test]
@@ -255,8 +310,8 @@ mod tests {
         ];
 
         let output = apply_pipeline(rows, &["? uid".to_string()]).expect("pipeline should pass");
-        assert_eq!(output.len(), 1);
-        assert!(output[0].contains_key("uid"));
+        assert_eq!(output_rows(&output).len(), 1);
+        assert!(output_rows(&output)[0].contains_key("uid"));
     }
 
     #[test]
@@ -270,8 +325,8 @@ mod tests {
 
         let output =
             apply_pipeline(rows, &["U members".to_string()]).expect("pipeline should pass");
-        assert_eq!(output.len(), 2);
-        let values = output
+        assert_eq!(output_rows(&output).len(), 2);
+        let values = output_rows(&output)
             .iter()
             .filter_map(|row| row.get("members").and_then(|v| v.as_str()))
             .collect::<Vec<_>>();
@@ -290,9 +345,11 @@ mod tests {
 
         let stages = vec!["VAL members".to_string()];
         let output = apply_pipeline(rows, &stages).expect("pipeline should pass");
-        assert_eq!(output.len(), 2);
+        assert_eq!(output_rows(&output).len(), 2);
         assert_eq!(
-            output[0].get("value").and_then(|value| value.as_str()),
+            output_rows(&output)[0]
+                .get("value")
+                .and_then(|value| value.as_str()),
             Some("oistes")
         );
     }
@@ -306,9 +363,11 @@ mod tests {
         ];
 
         let output = apply_pipeline(rows, &["L 2".to_string()]).expect("pipeline should pass");
-        assert_eq!(output.len(), 2);
+        assert_eq!(output_rows(&output).len(), 2);
         assert_eq!(
-            output[0].get("uid").and_then(|value| value.as_str()),
+            output_rows(&output)[0]
+                .get("uid")
+                .and_then(|value| value.as_str()),
             Some("a")
         );
     }
@@ -323,7 +382,7 @@ mod tests {
         ];
         let output =
             apply_pipeline(rows.clone(), &["Z".to_string()]).expect("pipeline should pass");
-        assert_eq!(output, rows);
+        assert_eq!(output_rows(&output), rows.as_slice());
     }
 
     #[test]
@@ -367,5 +426,26 @@ mod tests {
             }
             OutputItems::Groups(_) => panic!("expected rows"),
         }
+    }
+
+    #[test]
+    fn grouped_output_survives_apply_output_pipeline() {
+        let grouped = execute_pipeline(
+            vec![
+                json!({"dept": "sales", "host": "alpha"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+                json!({"dept": "sales", "host": "beta"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ],
+            &["G dept".to_string()],
+        )
+        .expect("grouping should pass");
+
+        let output = apply_output_pipeline(grouped, &[]).expect("pipeline should preserve groups");
+        assert!(matches!(output.items, OutputItems::Groups(_)));
     }
 }

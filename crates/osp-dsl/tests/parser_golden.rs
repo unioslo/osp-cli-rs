@@ -4,7 +4,7 @@ use osp_dsl::parse::{
 };
 
 fn render_segments(input: &str) -> Vec<String> {
-    let parsed = parse_pipeline(input);
+    let parsed = parse_pipeline(input).expect("golden pipeline should parse");
     let mut segments = Vec::with_capacity(parsed.stages.len() + 1);
     if !parsed.command.is_empty() {
         segments.push(parsed.command);
@@ -40,7 +40,6 @@ fn parser_stage_split_matches_checked_in_golden_cases() {
             "ldap user oistes |  | P uid",
             vec!["ldap user oistes", "P uid"],
         ),
-        ("ldap user 'oops | P uid", vec!["ldap user 'oops", "P uid"]),
     ];
 
     for (input, expected) in cases {

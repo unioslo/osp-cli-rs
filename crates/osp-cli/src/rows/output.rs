@@ -4,14 +4,7 @@ use osp_core::row::Row;
 use std::collections::HashSet;
 
 pub(crate) fn rows_to_output_result(rows: Vec<Row>) -> OutputResult {
-    OutputResult {
-        meta: OutputMeta {
-            key_index: compute_key_index(&rows),
-            wants_copy: false,
-            grouped: false,
-        },
-        items: OutputItems::Rows(rows),
-    }
+    OutputResult::from_rows(rows)
 }
 
 pub(crate) fn output_to_rows(output: &OutputResult) -> Vec<Row> {

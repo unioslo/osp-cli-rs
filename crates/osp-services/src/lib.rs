@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use osp_config::RuntimeConfig;
+use osp_core::output_model::OutputResult;
 use osp_core::row::Row;
 use osp_dsl::{apply_pipeline, parse_pipeline};
 use osp_ports::{LdapDirectory, parse_attributes};
@@ -30,18 +31,16 @@ pub enum ParsedCommand {
     },
 }
 
-pub fn execute_line<L: LdapDirectory>(ctx: &ServiceContext<L>, line: &str) -> Result<Vec<Row>> {
-    let parsed_pipeline = parse_pipeline(line);
+pub fn execute_line<L: LdapDirectory>(ctx: &ServiceContext<L>, line: &str) -> Result<OutputResult> {
+    let parsed_pipeline = parse_pipeline(line)?;
     if parsed_pipeline.command.is_empty() {
-        return Ok(Vec::new());
+        return Ok(OutputResult::from_rows(Vec::new()));
     }
 
     let tokens = shell_words::split(&parsed_pipeline.command)
         .map_err(|err| anyhow!("failed to parse command: {err}"))?;
     let command = parse_repl_command(&tokens)?;
-    let rows = execute_command(ctx, &command)?;
-
-    apply_pipeline(rows, &parsed_pipeline.stages)
+    apply_pipeline(execute_command(ctx, &command)?, &parsed_pipeline.stages)
 }
 
 pub fn parse_repl_command(tokens: &[String]) -> Result<ParsedCommand> {
@@ -180,8 +179,13 @@ pub fn execute_command<L: LdapDirectory>(
 #[cfg(test)]
 mod tests {
     use osp_api::MockLdapClient;
+    use osp_core::output_model::OutputResult;
 
     use super::{ParsedCommand, ServiceContext, execute_command, execute_line, parse_repl_command};
+
+    fn output_rows(output: &OutputResult) -> &[osp_core::row::Row] {
+        output.as_rows().expect("expected row output")
+    }
 
     fn test_ctx() -> ServiceContext<MockLdapClient> {
         ServiceContext::new(
@@ -236,8 +240,8 @@ mod tests {
         let ctx = test_ctx();
         let rows = execute_line(&ctx, "ldap user oistes | P uid,cn")
             .expect("pipeline command should execute");
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].contains_key("uid"));
-        assert!(rows[0].contains_key("cn"));
+        assert_eq!(output_rows(&rows).len(), 1);
+        assert!(output_rows(&rows)[0].contains_key("uid"));
+        assert!(output_rows(&rows)[0].contains_key("cn"));
     }
 }

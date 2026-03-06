@@ -1,6 +1,6 @@
 use crate::model::{ParsedPipeline, ParsedStage};
 
-use super::lexer::{StageSegment, split_pipeline, tokenize_stage};
+use super::lexer::{LexerError, StageSegment, split_pipeline, tokenize_stage};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pipeline {
@@ -8,21 +8,8 @@ pub struct Pipeline {
     pub stages: Vec<String>,
 }
 
-pub fn parse_pipeline(line: &str) -> Pipeline {
-    let segments = match split_pipeline(line) {
-        Ok(segments) => segments,
-        // Keep compatibility with osprov-cli: when quotes are malformed, fall
-        // back to a naive split on pipes instead of failing hard.
-        Err(_) => line
-            .split('|')
-            .map(str::trim)
-            .filter(|segment| !segment.is_empty())
-            .map(|raw| StageSegment {
-                raw: raw.to_string(),
-                span: super::lexer::Span { start: 0, end: 0 },
-            })
-            .collect(),
-    };
+pub fn parse_pipeline(line: &str) -> Result<Pipeline, LexerError> {
+    let segments = split_pipeline(line)?;
 
     let command = segments
         .first()
@@ -38,7 +25,7 @@ pub fn parse_pipeline(line: &str) -> Pipeline {
         Vec::new()
     };
 
-    Pipeline { command, stages }
+    Ok(Pipeline { command, stages })
 }
 
 pub fn parse_stage(raw_stage: &str) -> ParsedStage {
@@ -87,27 +74,29 @@ pub fn parse_stage_list(stages: &[String]) -> ParsedPipeline {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_pipeline, parse_stage};
+    use super::{LexerError, parse_pipeline, parse_stage};
 
     #[test]
     fn parse_pipeline_extracts_command_and_stages() {
-        let parsed = parse_pipeline("ldap user oistes | P uid,cn | F uid=oistes");
+        let parsed =
+            parse_pipeline("ldap user oistes | P uid,cn | F uid=oistes").expect("valid pipeline");
         assert_eq!(parsed.command, "ldap user oistes");
         assert_eq!(parsed.stages, vec!["P uid,cn", "F uid=oistes"]);
     }
 
     #[test]
     fn parse_pipeline_ignores_empty_segments_like_python() {
-        let parsed = parse_pipeline("ldap user oistes || P uid |  | F uid=oistes");
+        let parsed =
+            parse_pipeline("ldap user oistes || P uid |  | F uid=oistes").expect("valid pipeline");
         assert_eq!(parsed.command, "ldap user oistes");
         assert_eq!(parsed.stages, vec!["P uid", "F uid=oistes"]);
     }
 
     #[test]
-    fn parse_pipeline_is_tolerant_for_invalid_quotes() {
-        let parsed = parse_pipeline("ldap user 'oops | P uid");
-        assert_eq!(parsed.command, "ldap user 'oops");
-        assert_eq!(parsed.stages, vec!["P uid"]);
+    fn parse_pipeline_rejects_invalid_quotes() {
+        let err =
+            parse_pipeline("ldap user 'oops | P uid").expect_err("invalid quotes should fail");
+        assert!(matches!(err, LexerError::UnterminatedSingleQuote { .. }));
     }
 
     #[test]

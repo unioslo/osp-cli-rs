@@ -22,12 +22,11 @@ fn parser_stage_split_parity_with_python_reference() {
         "ldap user \"foo|bar\" | P uid",
         "ldap user oistes || P uid",
         "ldap user oistes |  | P uid",
-        "ldap user 'oops | P uid",
     ];
 
     for case in cases {
         let python_segments = env.python_parse_pipeline_segments(case);
-        let parsed = parse_pipeline(case);
+        let parsed = parse_pipeline(case).expect("valid parser parity case should parse");
         let rust_segments = {
             let mut segments = Vec::with_capacity(parsed.stages.len() + 1);
             if !parsed.command.is_empty() {
