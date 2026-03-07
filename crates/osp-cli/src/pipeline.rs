@@ -6,6 +6,8 @@ use osp_dsl::{
     parse_pipeline,
 };
 
+use crate::app::is_sensitive_key;
+
 const MAX_ALIAS_EXPANSION_DEPTH: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +291,12 @@ fn resolve_alias_placeholder(
         return Ok(joined);
     }
 
+    if is_sensitive_key(key_part) {
+        return Err(miette!(
+            "Alias '{alias_name}' cannot expand sensitive config placeholder '{key_part}'"
+        ));
+    }
+
     if let Some(value) = config.get(key_part) {
         return Ok(value.to_string());
     }
@@ -349,4 +357,44 @@ fn quote_token(token: &str) -> String {
     }
     out.push('\'');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expand_alias_template, parse_command_tokens_with_aliases};
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+
+    fn test_config(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        for (key, value) in entries {
+            defaults.set(*key, *value);
+        }
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        resolver
+            .resolve(ResolveOptions::default())
+            .expect("test config should resolve")
+    }
+
+    #[test]
+    fn alias_can_expand_non_sensitive_config_values() {
+        let config = test_config(&[("alias.demo", "echo ${ui.format}"), ("ui.format", "json")]);
+
+        let parsed = parse_command_tokens_with_aliases(&["demo".to_string()], &config)
+            .expect("alias should expand");
+        assert_eq!(parsed.tokens, vec!["echo".to_string(), "json".to_string()]);
+    }
+
+    #[test]
+    fn alias_rejects_sensitive_config_placeholders() {
+        let config = test_config(&[]);
+
+        let err = expand_alias_template("danger", "echo ${auth.api_key}", &[], &config)
+            .expect_err("sensitive placeholder should be rejected");
+        assert!(
+            err.to_string()
+                .contains("cannot expand sensitive config placeholder")
+        );
+    }
 }
