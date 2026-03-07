@@ -66,6 +66,9 @@ fn scoped_completion_root(root: &CompletionNode, path: &[String]) -> CompletionN
     let mut node = root;
     for segment in path {
         let Some(child) = node.children.get(segment) else {
+            // Unknown shell scopes can happen for plugin-owned shells that do
+            // not contribute a completion subtree. Fall back to the root tree
+            // so completion remains usable instead of going empty.
             return root.clone();
         };
         node = child;
@@ -102,6 +105,8 @@ fn apply_shell_root_controls(root: &mut CompletionNode) {
     suggestions.sort_by(|left, right| left.value.cmp(&right.value));
     suggestions.dedup_by(|left, right| left.value == right.value);
 
+    // Keep root args in sync with current child commands so "no stub yet"
+    // completion can suggest shell commands from this scoped root.
     root.args = vec![ArgNode {
         name: Some("command".to_string()),
         suggestions,
@@ -110,6 +115,9 @@ fn apply_shell_root_controls(root: &mut CompletionNode) {
 }
 
 fn mark_context_only_flags(node: &mut CompletionNode) {
+    // These flags influence suggestion context even when they appear later in
+    // the line than the cursor. The suggestion engine still has a small amount
+    // of matching logic keyed on these same names in `osp-completion`.
     const CONTEXT_ONLY_FLAGS: [&str; 6] = [
         "--provider",
         "--vmware",

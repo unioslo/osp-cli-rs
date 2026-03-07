@@ -14,6 +14,8 @@ const MATCH_SCORE_PREFIX_BASE: u32 = 100;
 const MATCH_SCORE_BOUNDARY_PREFIX_BASE: u32 = 200;
 const MATCH_SCORE_FUZZY_BASE: u32 = 10_000;
 const MATCH_SCORE_FUZZY_NORMALIZED_MAX: u32 = 100_000;
+// Lower scores win:
+// exact < prefix < boundary-prefix < fuzzy fallback.
 
 struct PositionalRequest<'a> {
     context_node: &'a CompletionNode,

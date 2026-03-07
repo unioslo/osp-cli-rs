@@ -491,7 +491,10 @@ fn bootstrap_explain_has_explicit_type_contract() {
     resolver.set_file(file);
 
     let explain = resolver
-        .explain_bootstrap_key("profile.default", ResolveOptions::default().with_terminal("repl"))
+        .explain_bootstrap_key(
+            "profile.default",
+            ResolveOptions::default().with_terminal("repl"),
+        )
         .expect("bootstrap explain should succeed");
 
     assert_eq!(explain.key, "profile.default");

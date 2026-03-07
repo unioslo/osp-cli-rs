@@ -180,9 +180,7 @@ pub struct BootstrapKeySpec {
 impl BootstrapKeySpec {
     fn allows_scope(self, scope: &Scope) -> bool {
         match self.scope_rule {
-            BootstrapScopeRule::GlobalOnly => {
-                scope.profile.is_none() && scope.terminal.is_none()
-            }
+            BootstrapScopeRule::GlobalOnly => scope.profile.is_none() && scope.terminal.is_none(),
             BootstrapScopeRule::GlobalOrTerminal => scope.profile.is_none(),
         }
     }
