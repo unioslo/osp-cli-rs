@@ -1,18 +1,19 @@
 use miette::{Result, miette};
 use osp_repl::{ReplLineResult, ReplReloadKind, SharedHistory, expand_history};
-use osp_ui::messages::adjust_verbosity;
-use osp_ui::render_output;
+use osp_ui::{render_document, render_output};
 use std::borrow::Cow;
+use std::time::Instant;
 
 use crate::app;
 use crate::app::{
     BuiltinCommandTransport, CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, CMD_THEME,
-    ReplCommandSpec, ReplDispatchOverrides,
+    EffectiveInvocation, ReplCommandSpec, resolve_effective_invocation,
 };
 use crate::cli::{
     Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands,
-    ThemeArgs, ThemeCommands, parse_repl_tokens,
+    ThemeArgs, ThemeCommands, parse_inline_command_tokens,
 };
+use crate::invocation::{append_invocation_help, scan_command_tokens};
 use crate::rows::output::output_to_rows;
 use crate::state::{AppClients, AppRuntime, AppSession};
 
@@ -41,9 +42,19 @@ pub(crate) fn execute_repl_plugin_line(
     history: &SharedHistory,
     line: &str,
 ) -> Result<ReplLineResult> {
+    let started = Instant::now();
     match execute_repl_plugin_line_inner(runtime, session, clients, history, line) {
         Ok(result) => Ok(result),
         Err(err) => {
+            if runtime.ui.debug_verbosity > 0 {
+                session.record_prompt_timing(
+                    runtime.ui.debug_verbosity,
+                    started.elapsed(),
+                    None,
+                    None,
+                    None,
+                );
+            }
             if !is_repl_bang_request(line) {
                 let summary = err.to_string();
                 let detail = format!("{err:#}");
@@ -61,8 +72,16 @@ fn execute_repl_plugin_line_inner(
     history: &SharedHistory,
     line: &str,
 ) -> Result<ReplLineResult> {
+    let started = Instant::now();
     let raw = line.trim();
     if let Some(result) = maybe_execute_repl_builtin(runtime, session, clients, history, raw)? {
+        session.record_prompt_timing(
+            runtime.ui.debug_verbosity,
+            started.elapsed(),
+            None,
+            None,
+            None,
+        );
         return Ok(result);
     }
 
@@ -75,13 +94,27 @@ fn execute_repl_plugin_line_inner(
         &parsed.stages,
     ) {
         session.sync_history_shell_context();
+        session.record_prompt_timing(
+            runtime.ui.debug_verbosity,
+            started.elapsed(),
+            None,
+            None,
+            None,
+        );
         return Ok(ReplLineResult::Continue(help));
     }
 
-    let base_overrides = base_repl_overrides(runtime);
+    let base_invocation = base_repl_invocation(runtime);
     if let Some(result) =
-        maybe_handle_repl_shortcuts(runtime, session, clients, &parsed, base_overrides)?
+        maybe_handle_repl_shortcuts(runtime, session, clients, &parsed, &base_invocation)?
     {
+        session.record_prompt_timing(
+            runtime.ui.debug_verbosity,
+            started.elapsed(),
+            None,
+            None,
+            None,
+        );
         return Ok(result);
     }
 
@@ -89,22 +122,33 @@ fn execute_repl_plugin_line_inner(
         ParsedReplDispatch::Help(rendered) => return Ok(ReplLineResult::Continue(rendered)),
         ParsedReplDispatch::Invocation(invocation) => invocation,
     };
+    let parse_finished = Instant::now();
     let output = run_repl_command(
         runtime,
         session,
         clients,
         invocation.command,
-        invocation.overrides,
+        &invocation.effective,
         history,
+        invocation.cache_key.as_deref(),
     )?;
+    let execute_finished = Instant::now();
     let rendered = render_repl_command_output(
         runtime,
         session,
         line,
         &invocation.stages,
         output,
-        invocation.overrides.message_verbosity,
+        &invocation.effective,
     )?;
+    let finished = Instant::now();
+    session.record_prompt_timing(
+        invocation.effective.ui.debug_verbosity,
+        finished.saturating_duration_since(started),
+        Some(parse_finished.saturating_duration_since(started)),
+        Some(execute_finished.saturating_duration_since(parse_finished)),
+        Some(finished.saturating_duration_since(execute_finished)),
+    );
     Ok(finalize_repl_command(
         session,
         rendered,
@@ -113,11 +157,34 @@ fn execute_repl_plugin_line_inner(
     ))
 }
 
-fn base_repl_overrides(runtime: &AppRuntime) -> ReplDispatchOverrides {
-    ReplDispatchOverrides {
-        message_verbosity: runtime.ui.message_verbosity,
-        debug_verbosity: runtime.ui.debug_verbosity,
+fn base_repl_invocation(runtime: &AppRuntime) -> EffectiveInvocation {
+    resolve_effective_invocation(&runtime.ui, &Default::default())
+}
+
+fn repl_cache_key_for_command(
+    runtime: &AppRuntime,
+    command: &Commands,
+    invocation: &crate::invocation::InvocationOptions,
+) -> Option<String> {
+    if !invocation.cache {
+        return None;
     }
+
+    let Commands::External(tokens) = command else {
+        return None;
+    };
+
+    let provider = invocation.plugin_provider.as_deref().unwrap_or_default();
+    let encoded_tokens =
+        serde_json::to_string(tokens).expect("external command tokens should serialize");
+
+    Some(format!(
+        "rev:{}|profile:{}|provider:{}|tokens:{}",
+        runtime.config.revision(),
+        runtime.config.resolved().active_profile(),
+        provider,
+        encoded_tokens
+    ))
 }
 
 fn maybe_handle_repl_shortcuts(
@@ -125,20 +192,20 @@ fn maybe_handle_repl_shortcuts(
     session: &mut AppSession,
     clients: &AppClients,
     parsed: &input::ReplParsedLine,
-    base_overrides: ReplDispatchOverrides,
+    base_invocation: &EffectiveInvocation,
 ) -> Result<Option<ReplLineResult>> {
     if parsed.requests_repl_help() {
-        return repl_help_result(runtime, session, clients, base_overrides).map(Some);
+        return repl_help_result(runtime, session, clients, base_invocation).map(Some);
     }
 
     if let Some(result) =
-        maybe_handle_single_token_shortcut(runtime, session, clients, parsed, base_overrides)?
+        maybe_handle_single_token_shortcut(runtime, session, clients, parsed, base_invocation)?
     {
         return Ok(Some(result));
     }
 
     if let Some(command) = parsed.shell_entry_command(&session.scope) {
-        let entered = enter_repl_shell(runtime, session, clients, command, base_overrides)?;
+        let entered = enter_repl_shell(runtime, session, clients, command, base_invocation)?;
         session.sync_history_shell_context();
         return Ok(Some(ReplLineResult::Continue(entered)));
     }
@@ -151,27 +218,27 @@ fn maybe_handle_single_token_shortcut(
     session: &mut AppSession,
     clients: &AppClients,
     parsed: &input::ReplParsedLine,
-    base_overrides: ReplDispatchOverrides,
+    base_invocation: &EffectiveInvocation,
 ) -> Result<Option<ReplLineResult>> {
     if parsed.dispatch_tokens.len() != 1 {
         return Ok(None);
     }
 
     match parsed.dispatch_tokens[0].as_str() {
-        CMD_HELP => repl_help_result(runtime, session, clients, base_overrides).map(Some),
+        CMD_HELP => repl_help_result(runtime, session, clients, base_invocation).map(Some),
         "exit" | "quit" => Ok(handle_repl_exit_request(session)),
         _ => Ok(None),
     }
 }
 
 fn repl_help_result(
-    runtime: &AppRuntime,
-    session: &AppSession,
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
     clients: &AppClients,
-    overrides: ReplDispatchOverrides,
+    invocation: &EffectiveInvocation,
 ) -> Result<ReplLineResult> {
     Ok(ReplLineResult::Continue(repl_help_for_scope(
-        runtime, session, clients, overrides,
+        runtime, session, clients, invocation,
     )?))
 }
 
@@ -188,8 +255,9 @@ fn handle_repl_exit_request(session: &mut AppSession) -> Option<ReplLineResult> 
 
 struct ParsedReplInvocation {
     command: Commands,
-    overrides: ReplDispatchOverrides,
+    effective: EffectiveInvocation,
     stages: Vec<String>,
+    cache_key: Option<String>,
     restart_repl: bool,
     show_intro_on_reload: bool,
 }
@@ -205,13 +273,16 @@ fn parse_repl_invocation(
     parsed: &input::ReplParsedLine,
 ) -> Result<ParsedReplDispatch> {
     let prefixed_tokens = parsed.prefixed_tokens(&session.scope);
-    let parsed_command = match parse_repl_tokens(&prefixed_tokens) {
-        Ok(parsed) => parsed,
+    let scanned = scan_command_tokens(&prefixed_tokens)?;
+    let scoped_tokens =
+        input::rewrite_help_alias_tokens_at(&scanned.tokens, session.scope.commands().len())
+            .unwrap_or_else(|| scanned.tokens.clone());
+    let command = match parse_inline_command_tokens(&scoped_tokens) {
+        Ok(Some(command)) => command,
+        Ok(None) => return Err(miette!("missing command")),
         Err(err) => {
-            if err.kind() == clap::error::ErrorKind::DisplayHelp
-                || err.kind() == clap::error::ErrorKind::DisplayVersion
-            {
-                let rendered = help::render_repl_help_with_chrome(
+            if renders_repl_inline_help(err.kind()) {
+                let rendered = render_repl_parse_help(
                     ReplViewContext::from_parts(runtime, session),
                     &err.to_string(),
                 );
@@ -220,9 +291,6 @@ fn parse_repl_invocation(
             return Err(miette!(err.to_string()));
         }
     };
-    let command = parsed_command
-        .command
-        .ok_or_else(|| miette!("missing command"))?;
     let spec = repl_command_spec(&command);
     app::ensure_command_supports_dsl(&spec, &parsed.stages)?;
     if !parsed.stages.is_empty() {
@@ -230,23 +298,58 @@ fn parse_repl_invocation(
     }
 
     Ok(ParsedReplDispatch::Invocation(ParsedReplInvocation {
-        overrides: ReplDispatchOverrides {
-            message_verbosity: adjust_verbosity(
-                runtime.ui.message_verbosity,
-                parsed_command.verbose,
-                parsed_command.quiet,
-            ),
-            debug_verbosity: if parsed_command.debug > 0 {
-                parsed_command.debug.min(3)
-            } else {
-                runtime.ui.debug_verbosity
-            },
-        },
+        cache_key: repl_cache_key_for_command(runtime, &command, &scanned.invocation),
+        effective: resolve_effective_invocation(&runtime.ui, &scanned.invocation),
         restart_repl: command_restarts_repl(&command),
         show_intro_on_reload: theme_or_palette_change_requires_intro(&command),
         command,
         stages: parsed.stages.clone(),
     }))
+}
+
+fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {
+    matches!(
+        kind,
+        clap::error::ErrorKind::DisplayHelp
+            | clap::error::ErrorKind::DisplayVersion
+            | clap::error::ErrorKind::InvalidSubcommand
+            | clap::error::ErrorKind::UnknownArgument
+            | clap::error::ErrorKind::MissingRequiredArgument
+    )
+}
+
+fn render_repl_parse_help(view: ReplViewContext<'_>, error_text: &str) -> String {
+    let mut out = String::new();
+    if let Some(summary) = summarize_clap_error(error_text) {
+        out.push_str(summary);
+        out.push_str("\n\n");
+    }
+    let help_body = strip_clap_error_preamble_and_epilogue(error_text);
+    out.push_str(&help::render_repl_help_with_chrome(
+        view,
+        &append_invocation_help(&help_body),
+    ));
+    out
+}
+
+fn summarize_clap_error(error_text: &str) -> Option<&str> {
+    error_text
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("error:").map(str::trim))
+}
+
+fn strip_clap_error_preamble_and_epilogue(error_text: &str) -> String {
+    error_text
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.starts_with("error:")
+                && !trimmed.starts_with("tip:")
+                && !trimmed.starts_with("For more information")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn command_restarts_repl(command: &Commands) -> bool {
@@ -274,18 +377,33 @@ fn render_repl_command_output(
     line: &str,
     stages: &[String],
     result: crate::app::CliCommandResult,
-    verbosity: osp_ui::messages::MessageLevel,
+    invocation: &EffectiveInvocation,
 ) -> Result<String> {
-    if !result.messages.is_empty() {
+    let crate::app::CliCommandResult {
+        exit_code,
+        messages,
+        output,
+        stderr_text,
+        failure_report,
+        ..
+    } = result;
+
+    if exit_code != 0
+        && let Some(report) = failure_report
+    {
+        return Err(miette!("{report}"));
+    }
+
+    if !messages.is_empty() {
         app::emit_messages_for_ui(
             runtime.config.resolved(),
-            &runtime.ui,
-            &result.messages,
-            verbosity,
+            &invocation.ui,
+            &messages,
+            invocation.ui.message_verbosity,
         );
     }
 
-    match result.output {
+    let mut rendered = match output {
         Some(crate::app::ReplCommandOutput::Output {
             output,
             format_hint,
@@ -294,18 +412,29 @@ fn render_repl_command_output(
                 .map_err(|err| miette!("{err:#}"))?;
 
             let render_settings =
-                app::resolve_effective_render_settings(&runtime.ui.render_settings, format_hint);
+                app::resolve_effective_render_settings(&invocation.ui.render_settings, format_hint);
             let rendered = render_output(&output, &render_settings);
             session.record_result(line, output_to_rows(&output));
             app::maybe_copy_output_with_runtime(
-                &app::CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui),
+                &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
                 &output,
             );
-            Ok(rendered)
+            rendered
         }
-        Some(crate::app::ReplCommandOutput::Text(text)) => Ok(text),
-        None => Ok(String::new()),
+        Some(crate::app::ReplCommandOutput::Document(document)) => {
+            render_document(&document, &invocation.ui.render_settings)
+        }
+        Some(crate::app::ReplCommandOutput::Text(text)) => text,
+        None => String::new(),
+    };
+
+    if let Some(stderr_text) = stderr_text
+        && !stderr_text.is_empty()
+    {
+        rendered.push_str(&stderr_text);
     }
+
+    Ok(rendered)
 }
 
 fn finalize_repl_command(
@@ -345,10 +474,7 @@ fn maybe_execute_repl_builtin(
             runtime,
             session,
             clients,
-            ReplDispatchOverrides {
-                message_verbosity: runtime.ui.message_verbosity,
-                debug_verbosity: runtime.ui.debug_verbosity,
-            },
+            &base_repl_invocation(runtime),
         )?))),
         ReplBuiltin::Exit => {
             if session.scope.is_root() {
@@ -550,11 +676,11 @@ pub(crate) fn leave_repl_shell(session: &mut AppSession) -> Option<String> {
 }
 
 fn enter_repl_shell(
-    runtime: &AppRuntime,
+    runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
     command: &str,
-    overrides: ReplDispatchOverrides,
+    invocation: &EffectiveInvocation,
 ) -> Result<String> {
     app::ensure_plugin_visible_for(&runtime.auth, command)?;
     let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
@@ -564,17 +690,17 @@ fn enter_repl_shell(
 
     session.scope.enter(command.to_string());
     let mut out = format!("Entering {command} shell. Type `exit` to leave.\n");
-    if let Ok(help) = repl_help_for_scope(runtime, session, clients, overrides) {
+    if let Ok(help) = repl_help_for_scope(runtime, session, clients, invocation) {
         out.push_str(&help);
     }
     Ok(out)
 }
 
 fn repl_help_for_scope(
-    runtime: &AppRuntime,
-    session: &AppSession,
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
     clients: &AppClients,
-    overrides: ReplDispatchOverrides,
+    invocation: &EffectiveInvocation,
 ) -> Result<String> {
     if session.scope.is_root() {
         let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
@@ -584,14 +710,17 @@ fn repl_help_for_scope(
     }
 
     let tokens = session.scope.help_tokens();
-    match run_repl_external_command(runtime, clients, session, tokens, overrides)?.output {
+    match run_repl_external_command(runtime, clients, session, tokens, invocation)?.output {
         Some(crate::app::ReplCommandOutput::Text(text)) => Ok(text),
+        Some(crate::app::ReplCommandOutput::Document(document)) => {
+            Ok(render_document(&document, &invocation.ui.render_settings))
+        }
         Some(crate::app::ReplCommandOutput::Output {
             output,
             format_hint,
         }) => {
             let render_settings =
-                app::resolve_effective_render_settings(&runtime.ui.render_settings, format_hint);
+                app::resolve_effective_render_settings(&invocation.ui.render_settings, format_hint);
             Ok(render_output(&output, &render_settings))
         }
         None => Ok(String::new()),
@@ -603,100 +732,61 @@ fn run_repl_command(
     session: &mut AppSession,
     clients: &AppClients,
     command: Commands,
-    overrides: ReplDispatchOverrides,
+    invocation: &EffectiveInvocation,
     history: &SharedHistory,
+    cache_key: Option<&str>,
 ) -> Result<crate::app::CliCommandResult> {
-    match command {
+    if let Some(cache_key) = cache_key
+        && let Some(cached) = session.cached_command(cache_key)
+    {
+        return Ok(cached);
+    }
+
+    let result = match command {
         Commands::External(tokens) => {
-            run_repl_external_command(runtime, clients, session, tokens, overrides)
+            run_repl_external_command(runtime, clients, session, tokens, invocation)
         }
         builtin => app::dispatch_builtin_command_parts(
             runtime,
             session,
             clients,
             BuiltinCommandTransport::Repl { history },
-            Some(overrides),
+            Some(invocation),
             builtin,
         )
         .and_then(|result| result.ok_or_else(|| miette!("expected builtin command"))),
+    }?;
+
+    if let Some(cache_key) = cache_key
+        && result.exit_code == 0
+        && matches!(
+            &result.output,
+            Some(crate::app::ReplCommandOutput::Output { .. })
+        )
+    {
+        session.record_cached_command(cache_key, &result);
     }
+
+    Ok(result)
 }
 
 fn run_repl_external_command(
-    runtime: &AppRuntime,
+    runtime: &mut AppRuntime,
     clients: &AppClients,
-    session: &AppSession,
+    session: &mut AppSession,
     tokens: Vec<String>,
-    overrides: ReplDispatchOverrides,
+    invocation: &EffectiveInvocation,
 ) -> Result<crate::app::CliCommandResult> {
-    let (command, args) = tokens
-        .split_first()
-        .ok_or_else(|| miette!("missing command"))?;
-    app::ensure_plugin_visible_for(&runtime.auth, command)?;
-    emit_repl_command_conflict_warning(runtime, clients, command, overrides);
-    if app::is_help_passthrough(args) {
-        let dispatch_context =
-            app::plugin_dispatch_context_for_runtime(runtime, clients, Some(overrides));
-        let raw = clients
-            .plugins
-            .dispatch_passthrough(command, args, &dispatch_context)
-            .map_err(app::enrich_dispatch_error)?;
-        if raw.status_code != 0 {
-            return Err(miette!(
-                "plugin help command exited with status {}",
-                raw.status_code
-            ));
-        }
-        let mut out = String::new();
-        if !raw.stdout.is_empty() {
-            out.push_str(&help::render_repl_help_with_chrome(
-                ReplViewContext::from_parts(runtime, session),
-                &raw.stdout,
-            ));
-        }
-        if !raw.stderr.is_empty() {
-            out.push_str(&raw.stderr);
-        }
-        return Ok(crate::app::CliCommandResult::text(out));
-    }
-
-    let dispatch_context =
-        app::plugin_dispatch_context_for_runtime(runtime, clients, Some(overrides));
-    let response = clients
-        .plugins
-        .dispatch(command, args, &dispatch_context)
-        .map_err(app::enrich_dispatch_error)?;
-    match app::prepare_plugin_response(response, &[]) {
-        Ok(app::PreparedPluginResponse::Failure(failure)) => Err(miette!(failure.report)),
-        Ok(app::PreparedPluginResponse::Output(prepared)) => Ok(crate::app::CliCommandResult {
-            exit_code: 0,
-            messages: prepared.messages,
-            output: Some(crate::app::ReplCommandOutput::Output {
-                output: prepared.output,
-                format_hint: prepared.format_hint,
-            }),
-        }),
-        Err(err) => Err(miette!("{err:#}")),
-    }
-}
-
-fn emit_repl_command_conflict_warning(
-    runtime: &AppRuntime,
-    clients: &AppClients,
-    command: &str,
-    overrides: ReplDispatchOverrides,
-) {
-    let Some(message) = clients.plugins.conflict_warning(command) else {
-        return;
-    };
-    let mut messages = osp_ui::messages::MessageBuffer::default();
-    messages.warning(message);
-    app::emit_messages_for_ui(
-        runtime.config.resolved(),
-        &runtime.ui,
-        &messages,
-        overrides.message_verbosity,
-    );
+    let resolved = invocation.ui.render_settings.resolve_render_settings();
+    let layout = crate::ui_presentation::effective_help_layout(runtime.config.resolved());
+    app::run_external_command_with_help_renderer(
+        runtime,
+        session,
+        clients,
+        &tokens,
+        invocation,
+        |stdout| help::render_help_with_chrome(stdout, &resolved, layout),
+    )
 }
 
 pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {

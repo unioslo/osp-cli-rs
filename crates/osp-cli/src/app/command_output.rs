@@ -5,26 +5,32 @@ use osp_core::output_model::OutputResult;
 use osp_core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use osp_dsl::apply_output_pipeline;
 use osp_ui::clipboard::ClipboardService;
+use osp_ui::document::{Block, Document, JsonBlock, LineBlock, LinePart};
 use osp_ui::messages::{MessageBuffer, MessageLevel};
-use osp_ui::{copy_output_to_clipboard, render_output};
+use osp_ui::{copy_output_to_clipboard, render_document, render_output};
 
 use crate::app::resolve_effective_render_settings;
 use crate::rows::output::plugin_data_to_output_result;
 use crate::state::UiState;
-use crate::ui_presentation::effective_message_render_format;
+use crate::ui_presentation::effective_message_layout;
 
+#[derive(Debug, Clone)]
 pub(crate) enum ReplCommandOutput {
     Output {
         output: OutputResult,
         format_hint: Option<OutputFormat>,
     },
+    Document(Document),
     Text(String),
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct CliCommandResult {
     pub(crate) exit_code: i32,
     pub(crate) messages: MessageBuffer,
     pub(crate) output: Option<ReplCommandOutput>,
+    pub(crate) stderr_text: Option<String>,
+    pub(crate) failure_report: Option<String>,
 }
 
 pub(crate) struct PreparedPluginOutput {
@@ -35,6 +41,7 @@ pub(crate) struct PreparedPluginOutput {
 
 pub(crate) struct FailedPluginOutput {
     pub(crate) messages: MessageBuffer,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) report: String,
 }
 
@@ -49,6 +56,8 @@ impl CliCommandResult {
             exit_code,
             messages: MessageBuffer::default(),
             output: None,
+            stderr_text: None,
+            failure_report: None,
         }
     }
 
@@ -60,6 +69,8 @@ impl CliCommandResult {
                 output,
                 format_hint,
             }),
+            stderr_text: None,
+            failure_report: None,
         }
     }
 
@@ -68,6 +79,18 @@ impl CliCommandResult {
             exit_code: 0,
             messages: MessageBuffer::default(),
             output: Some(ReplCommandOutput::Text(text.into())),
+            stderr_text: None,
+            failure_report: None,
+        }
+    }
+
+    pub(crate) fn document(document: Document) -> Self {
+        Self {
+            exit_code: 0,
+            messages: MessageBuffer::default(),
+            output: Some(ReplCommandOutput::Document(document)),
+            stderr_text: None,
+            failure_report: None,
         }
     }
 }
@@ -102,6 +125,11 @@ pub(crate) fn run_cli_command(
     if let Some(output) = result.output {
         render_cli_output(runtime, output);
     }
+    if let Some(stderr_text) = result.stderr_text
+        && !stderr_text.is_empty()
+    {
+        eprint!("{stderr_text}");
+    }
     Ok(result.exit_code)
 }
 
@@ -112,14 +140,15 @@ pub(crate) fn emit_messages_for_ui(
     verbosity: MessageLevel,
 ) {
     let resolved = ui.render_settings.resolve_render_settings();
-    let message_format = effective_message_render_format(config);
+    let message_layout = effective_message_layout(config);
     let rendered = messages.render_grouped_with_options(osp_ui::messages::GroupedRenderOptions {
         max_level: verbosity,
         color: resolved.color,
         unicode: resolved.unicode,
         width: resolved.width,
         theme: &resolved.theme,
-        format: message_format,
+        layout: message_layout,
+        chrome_frame: resolved.chrome_frame,
         style_overrides: resolved.style_overrides.clone(),
     });
     if !rendered.is_empty() {
@@ -225,6 +254,33 @@ pub(crate) fn parse_output_format_hint(value: Option<&str>) -> Option<OutputForm
     }
 }
 
+pub(crate) fn document_from_text(text: &str) -> Document {
+    let normalized = text.trim_end_matches('\n');
+    if normalized.is_empty() {
+        return Document::default();
+    }
+
+    Document {
+        blocks: normalized
+            .split('\n')
+            .map(|line| {
+                Block::Line(LineBlock {
+                    parts: vec![LinePart {
+                        text: line.to_string(),
+                        token: None,
+                    }],
+                })
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn document_from_json(payload: serde_json::Value) -> Document {
+    Document {
+        blocks: vec![Block::Json(JsonBlock { payload })],
+    }
+}
+
 fn render_cli_output(runtime: &CommandRenderRuntime<'_>, output: ReplCommandOutput) {
     match output {
         ReplCommandOutput::Output {
@@ -235,6 +291,12 @@ fn render_cli_output(runtime: &CommandRenderRuntime<'_>, output: ReplCommandOutp
                 resolve_effective_render_settings(&runtime.ui().render_settings, format_hint);
             print!("{}", render_output(&output, &effective));
             maybe_copy_output_with_runtime(runtime, &output);
+        }
+        ReplCommandOutput::Document(document) => {
+            print!(
+                "{}",
+                render_document(&document, &runtime.ui().render_settings)
+            );
         }
         ReplCommandOutput::Text(text) => {
             print!("{text}");

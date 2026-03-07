@@ -16,8 +16,11 @@ struct ReplSessionSnapshot {
     context: crate::state::RuntimeContext,
     scope: crate::state::ReplScopeStack,
     history_shell: osp_repl::HistoryShellContext,
+    prompt_timing: crate::state::DebugTimingState,
     result_cache: std::collections::HashMap<String, Vec<osp_core::row::Row>>,
     cache_order: std::collections::VecDeque<String>,
+    command_cache: std::collections::HashMap<String, crate::app::CliCommandResult>,
+    command_cache_order: std::collections::VecDeque<String>,
     last_rows: Vec<osp_core::row::Row>,
     last_failure: Option<crate::state::LastFailure>,
     session_overrides: osp_config::ConfigLayer,
@@ -30,8 +33,11 @@ impl ReplSessionSnapshot {
             context: runtime.context.clone(),
             scope: session.scope.clone(),
             history_shell: session.history_shell.clone(),
+            prompt_timing: session.prompt_timing.clone(),
             result_cache: session.result_cache.clone(),
             cache_order: session.cache_order.clone(),
+            command_cache: session.command_cache.clone(),
+            command_cache_order: session.command_cache_order.clone(),
             last_rows: session.last_rows.clone(),
             last_failure: session.last_failure.clone(),
             session_overrides: session.config_overrides.clone(),
@@ -46,10 +52,13 @@ impl ReplSessionSnapshot {
     fn apply_to(self, next: &mut AppSession) {
         next.config_overrides = self.session_overrides;
         next.scope = self.scope;
+        next.prompt_timing = self.prompt_timing;
         next.last_rows = self.last_rows;
         next.last_failure = self.last_failure;
         next.result_cache = self.result_cache;
         next.cache_order = self.cache_order;
+        next.command_cache = self.command_cache;
+        next.command_cache_order = self.command_cache_order;
         next.history_shell = self.history_shell;
         next.sync_history_shell_context();
     }

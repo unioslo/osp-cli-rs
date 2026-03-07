@@ -7,6 +7,7 @@ use crate::app::{
     CURRENT_TERMINAL_SENTINEL,
 };
 use crate::plugin_manager::CommandCatalogEntry;
+use crate::ui_presentation::{UiPresentation, resolve_ui_presentation};
 
 use super::ReplViewContext;
 use super::history;
@@ -18,10 +19,17 @@ pub(crate) struct ReplOverviewEntry {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct ReplAliasEntry {
+    pub(crate) name: String,
+    pub(crate) template: String,
+    pub(crate) tooltip: String,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ReplSurface {
     pub(crate) root_words: Vec<String>,
     pub(crate) specs: Vec<CommandSpec>,
-    pub(crate) aliases: Vec<(String, String)>,
+    pub(crate) aliases: Vec<ReplAliasEntry>,
     pub(crate) overview_entries: Vec<ReplOverviewEntry>,
 }
 
@@ -31,12 +39,19 @@ pub(crate) fn build_repl_surface(
 ) -> ReplSurface {
     let history_enabled = history::repl_history_enabled(view.config);
     let aliases = collect_alias_entries(view.config);
+    let presentation = resolve_ui_presentation(view.config);
 
     let mut root_words = catalog_completion_words(catalog);
     let mut specs = vec![
-        CommandSpec::new("help").tooltip("Show REPL help"),
-        CommandSpec::new("exit").tooltip("Exit REPL"),
-        CommandSpec::new("quit").tooltip("Exit REPL"),
+        CommandSpec::new("help")
+            .tooltip("Show REPL help")
+            .sort(command_sort_key("help", presentation)),
+        CommandSpec::new("exit")
+            .tooltip("Exit REPL")
+            .sort(command_sort_key("exit", presentation)),
+        CommandSpec::new("quit")
+            .tooltip("Exit REPL")
+            .sort(command_sort_key("quit", presentation)),
     ];
     let mut overview_entries = vec![
         ReplOverviewEntry {
@@ -48,6 +63,12 @@ pub(crate) fn build_repl_surface(
             summary: "Show this command overview.".to_string(),
         },
     ];
+    if shows_invocation_options_overview(presentation) {
+        overview_entries.push(ReplOverviewEntry {
+            name: "options".to_string(),
+            summary: "per invocation: --format/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --cache, --plugin-provider".to_string(),
+        });
+    }
 
     specs.extend(
         catalog
@@ -55,11 +76,10 @@ pub(crate) fn build_repl_surface(
             .filter_map(command_spec_from_catalog)
             .collect::<Vec<_>>(),
     );
-    overview_entries.extend(catalog.iter().map(plugin_overview_entry));
 
     if view.auth.is_builtin_visible(CMD_PLUGINS) {
         root_words.extend([CMD_PLUGINS.to_string(), CMD_LIST.to_string()]);
-        specs.push(plugins_command_spec(catalog));
+        specs.push(plugins_command_spec(catalog, presentation));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_PLUGINS.to_string(),
             summary: "subcommands: list, commands, enable, disable, doctor".to_string(),
@@ -67,7 +87,7 @@ pub(crate) fn build_repl_surface(
     }
     if view.auth.is_builtin_visible(CMD_DOCTOR) {
         root_words.push(CMD_DOCTOR.to_string());
-        specs.push(doctor_command_spec());
+        specs.push(doctor_command_spec(presentation));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_DOCTOR.to_string(),
             summary: "subcommands: all, config, last, plugins, theme".to_string(),
@@ -108,23 +128,101 @@ pub(crate) fn build_repl_surface(
             "prune".to_string(),
             "clear".to_string(),
         ]);
-        specs.push(history::history_command_spec());
+        specs.push(
+            history::history_command_spec().sort(command_sort_key(CMD_HISTORY, presentation)),
+        );
         overview_entries.push(ReplOverviewEntry {
             name: CMD_HISTORY.to_string(),
             summary: "subcommands: list, prune, clear".to_string(),
         });
     }
 
+    overview_entries.extend(catalog.iter().map(plugin_overview_entry));
+
     root_words.extend(view.themes.ids());
-    root_words.extend(aliases.iter().map(|(name, _)| name.clone()));
-    root_words.sort();
-    root_words.dedup();
+    root_words.extend(aliases.iter().map(|entry| entry.name.clone()));
+    normalize_root_words(&mut root_words);
+    order_root_words(&mut root_words, presentation);
 
     ReplSurface {
         root_words,
         specs,
         aliases,
         overview_entries,
+    }
+}
+
+fn shows_invocation_options_overview(presentation: UiPresentation) -> bool {
+    matches!(presentation, UiPresentation::Expressive)
+}
+
+fn normalize_root_words(root_words: &mut Vec<String>) {
+    root_words.sort();
+    root_words.dedup();
+}
+
+fn order_root_words(root_words: &mut [String], presentation: UiPresentation) {
+    if matches!(presentation, UiPresentation::Expressive) {
+        return;
+    }
+
+    root_words.sort_by(|left, right| {
+        root_word_priority(left)
+            .cmp(&root_word_priority(right))
+            .then_with(|| left.cmp(right))
+    });
+}
+
+fn root_word_priority(word: &str) -> (u8, u8) {
+    match word {
+        "help" => (0, 0),
+        "exit" => (0, 1),
+        "quit" => (0, 2),
+        CMD_CONFIG => (1, 0),
+        CMD_THEME => (1, 1),
+        CMD_PLUGINS => (1, 2),
+        CMD_DOCTOR => (1, 3),
+        CMD_HISTORY => (1, 4),
+        "|" | "F" | "P" | "V" => (4, 0),
+        _ => {
+            if word.starts_with('-') {
+                (5, 0)
+            } else {
+                (2, 0)
+            }
+        }
+    }
+}
+
+fn command_sort_key(name: &str, presentation: UiPresentation) -> String {
+    let (tier, order) = if matches!(presentation, UiPresentation::Expressive) {
+        expressive_command_priority(name)
+    } else {
+        compact_command_priority(name)
+    };
+    format!("{}{:02}", tier, order)
+}
+
+fn expressive_command_priority(name: &str) -> (u8, u8) {
+    match name {
+        "help" => (0, 0),
+        "exit" => (0, 1),
+        "quit" => (0, 2),
+        _ => (9, 0),
+    }
+}
+
+fn compact_command_priority(name: &str) -> (u8, u8) {
+    match name {
+        "help" => (0, 0),
+        "exit" => (0, 1),
+        "quit" => (0, 2),
+        CMD_CONFIG => (1, 0),
+        CMD_THEME => (1, 1),
+        CMD_PLUGINS => (1, 2),
+        CMD_DOCTOR => (1, 3),
+        CMD_HISTORY => (1, 4),
+        _ => (9, 0),
     }
 }
 
@@ -146,7 +244,7 @@ pub(crate) fn catalog_completion_words(catalog: &[CommandCatalogEntry]) -> Vec<S
     words
 }
 
-pub(crate) fn collect_alias_entries(config: &osp_config::ResolvedConfig) -> Vec<(String, String)> {
+pub(crate) fn collect_alias_entries(config: &osp_config::ResolvedConfig) -> Vec<ReplAliasEntry> {
     let mut out = Vec::new();
     for (key, entry) in config.aliases() {
         let Some(name) = key.strip_prefix("alias.") else {
@@ -157,7 +255,11 @@ pub(crate) fn collect_alias_entries(config: &osp_config::ResolvedConfig) -> Vec<
             continue;
         }
         let template = entry.raw_value.to_string();
-        out.push((name.to_string(), format!("alias: {template}")));
+        out.push(ReplAliasEntry {
+            name: name.to_string(),
+            tooltip: format!("alias: {template}"),
+            template,
+        });
     }
     out
 }
@@ -170,15 +272,20 @@ fn command_spec_from_catalog(entry: &CommandCatalogEntry) -> Option<CommandSpec>
         return None;
     }
 
-    Some(entry.completion.clone())
+    let mut spec = entry.completion.clone();
+    if entry.conflicted || entry.requires_selection {
+        spec.tooltip = Some(provider_selection_summary(entry, spec.tooltip.as_deref()));
+    }
+
+    Some(spec)
 }
 
 fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
     let summary = if entry.about.trim().is_empty() {
         "Plugin command".to_string()
     } else if entry.subcommands.is_empty() {
-        if entry.conflicted {
-            format!("{} (multiple providers)", entry.about)
+        if entry.conflicted || entry.requires_selection {
+            provider_selection_summary(entry, Some(&entry.about))
         } else {
             entry.about.clone()
         }
@@ -188,8 +295,8 @@ fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
             entry.about,
             entry.subcommands.join(", ")
         );
-        if entry.conflicted {
-            format!("{base}; multiple providers")
+        if entry.conflicted || entry.requires_selection {
+            provider_selection_summary(entry, Some(&base))
         } else {
             base
         }
@@ -198,6 +305,45 @@ fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
     ReplOverviewEntry {
         name: entry.name.clone(),
         summary,
+    }
+}
+
+fn provider_selection_summary(entry: &CommandCatalogEntry, base: Option<&str>) -> String {
+    let base = base
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Plugin command");
+    if entry.requires_selection {
+        return format!(
+            "{base} (provider selection required; available: {}; use --plugin-provider <plugin-id> or `plugins select-provider {} <plugin-id>`)",
+            entry.providers.join(", "),
+            entry.name,
+        );
+    }
+
+    let selected_label = match (&entry.provider, entry.source) {
+        (Some(provider), Some(source)) => format!("{provider} ({source})"),
+        _ => return base.to_string(),
+    };
+    let alternatives = entry
+        .providers
+        .iter()
+        .filter(|label| label.as_str() != selected_label.as_str())
+        .cloned()
+        .collect::<Vec<_>>();
+    let selection_reason = if entry.selected_explicitly {
+        "selected explicitly"
+    } else {
+        "resolved uniquely"
+    };
+
+    if alternatives.is_empty() {
+        format!("{base} (using {selected_label}; {selection_reason})")
+    } else {
+        format!(
+            "{base} (using {selected_label}; {selection_reason}; alternatives: {})",
+            alternatives.join(", ")
+        )
     }
 }
 
@@ -212,17 +358,22 @@ fn spec_completion_words(spec: &CommandSpec) -> Vec<String> {
     words
 }
 
-fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
+fn plugins_command_spec(
+    catalog: &[CommandCatalogEntry],
+    presentation: UiPresentation,
+) -> CommandSpec {
     let plugin_ids = catalog
         .iter()
         .flat_map(|entry| {
-            std::iter::once(entry.provider.clone()).chain(entry.providers.iter().filter_map(
-                |label| {
+            entry
+                .provider
+                .iter()
+                .cloned()
+                .chain(entry.providers.iter().filter_map(|label| {
                     label
                         .split_once(" (")
                         .map(|(plugin_id, _)| plugin_id.to_string())
-                },
-            ))
+                }))
         })
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -235,22 +386,40 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
 
     CommandSpec::new(CMD_PLUGINS)
         .tooltip("Inspect and manage plugin providers")
+        .sort(command_sort_key(CMD_PLUGINS, presentation))
         .subcommands([
-            CommandSpec::new(CMD_LIST).tooltip("List available plugins"),
-            CommandSpec::new("commands").tooltip("Show plugin command catalog"),
-            CommandSpec::new("doctor").tooltip("Run plugin diagnostics"),
+            CommandSpec::new(CMD_LIST)
+                .tooltip("List available plugins")
+                .sort("10"),
+            CommandSpec::new("commands")
+                .tooltip("Show plugin command catalog")
+                .sort("11"),
+            CommandSpec::new("config")
+                .tooltip("Show projected plugin config")
+                .sort("12")
+                .arg(ArgNode::named("plugin_id").suggestions(plugin_ids.clone())),
+            CommandSpec::new("refresh")
+                .tooltip("Refresh plugin discovery cache")
+                .sort("13"),
+            CommandSpec::new("doctor")
+                .tooltip("Run plugin diagnostics")
+                .sort("14"),
             CommandSpec::new("enable")
                 .tooltip("Enable plugin by id")
+                .sort("15")
                 .arg(ArgNode::named("plugin_id").suggestions(plugin_ids.clone())),
             CommandSpec::new("disable")
                 .tooltip("Disable plugin by id")
+                .sort("16")
                 .arg(ArgNode::named("plugin_id").suggestions(plugin_ids.clone())),
             CommandSpec::new("select-provider")
                 .tooltip("Select provider for one command")
+                .sort("17")
                 .arg(ArgNode::named("command").suggestions(command_names.clone()))
                 .arg(ArgNode::named("plugin_id").suggestions(plugin_ids)),
             CommandSpec::new("clear-provider")
                 .tooltip("Clear selected provider for one command")
+                .sort("18")
                 .arg(ArgNode::named("command").suggestions(command_names)),
         ])
 }
@@ -265,13 +434,21 @@ fn theme_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
 
     CommandSpec::new(CMD_THEME)
         .tooltip("Inspect and apply themes")
+        .sort(command_sort_key(
+            CMD_THEME,
+            resolve_ui_presentation(view.config),
+        ))
         .subcommands([
-            CommandSpec::new(CMD_LIST).tooltip("List available themes"),
+            CommandSpec::new(CMD_LIST)
+                .tooltip("List available themes")
+                .sort("10"),
             CommandSpec::new(CMD_SHOW)
                 .tooltip("Show a theme definition")
+                .sort("11")
                 .arg(ArgNode::named("name").suggestions(theme_names.clone())),
             CommandSpec::new(CMD_USE)
                 .tooltip("Set active theme")
+                .sort("12")
                 .arg(ArgNode::named("name").suggestions(theme_names)),
         ])
 }
@@ -331,34 +508,47 @@ fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
 
     CommandSpec::new(CMD_CONFIG)
         .tooltip("Inspect and edit runtime config")
+        .sort(command_sort_key(
+            CMD_CONFIG,
+            resolve_ui_presentation(view.config),
+        ))
         .subcommands([
             CommandSpec::new(CMD_SHOW)
                 .tooltip("Show current config")
+                .sort("10")
                 .flags(show_flags.clone()),
             CommandSpec::new("get")
                 .tooltip("Get one config key")
+                .sort("11")
                 .arg(ArgNode::named("key").suggestions(key_suggestions.clone()))
                 .flags(show_flags),
             CommandSpec::new("explain")
                 .tooltip("Explain one config key")
+                .sort("12")
                 .arg(ArgNode::named("key").suggestions(key_suggestions))
                 .flags(explain_flags),
             CommandSpec::new("set")
                 .tooltip("Set config value")
+                .sort("13")
                 .flags(set_flags),
-            CommandSpec::new("doctor").tooltip("Show config diagnostics"),
+            CommandSpec::new("doctor")
+                .tooltip("Show config diagnostics")
+                .sort("14"),
         ])
 }
 
-fn doctor_command_spec() -> CommandSpec {
+fn doctor_command_spec(presentation: UiPresentation) -> CommandSpec {
     CommandSpec::new(CMD_DOCTOR)
         .tooltip("Run diagnostics checks")
+        .sort(command_sort_key(CMD_DOCTOR, presentation))
         .subcommands([
-            CommandSpec::new("all"),
-            CommandSpec::new(CMD_CONFIG),
-            CommandSpec::new("last").tooltip("Show the last REPL failure"),
-            CommandSpec::new(CMD_PLUGINS),
-            CommandSpec::new(CMD_THEME),
+            CommandSpec::new("all").sort("10"),
+            CommandSpec::new(CMD_CONFIG).sort("11"),
+            CommandSpec::new("last")
+                .tooltip("Show the last REPL failure")
+                .sort("12"),
+            CommandSpec::new(CMD_PLUGINS).sort("13"),
+            CommandSpec::new(CMD_THEME).sort("14"),
         ])
 }
 

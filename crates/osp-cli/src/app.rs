@@ -11,6 +11,7 @@ use osp_ui::{RenderRuntime, RenderSettings};
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::time::Instant;
 use terminal_size::{Width, terminal_size};
 
 use crate::cli::commands::{
@@ -18,6 +19,7 @@ use crate::cli::commands::{
     theme as theme_cmd,
 };
 use crate::cli::{Cli, Commands};
+use crate::invocation::{InvocationOptions, append_invocation_help, scan_cli_argv};
 use crate::logging::{bootstrap_logging_config, init_developer_logging};
 use crate::plugin_manager::{
     CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
@@ -36,6 +38,7 @@ mod dispatch;
 mod external;
 mod help;
 mod repl_lifecycle;
+mod timing;
 
 pub(crate) use crate::plugin_config::{
     PluginConfigEntry, PluginConfigScope, effective_plugin_config_entries,
@@ -53,8 +56,8 @@ pub(crate) use bootstrap::{
 };
 pub(crate) use command_output::{
     CliCommandResult, CommandRenderRuntime, PreparedPluginResponse, ReplCommandOutput,
-    apply_output_stages, emit_messages_for_ui, maybe_copy_output_with_runtime,
-    prepare_plugin_response, run_cli_command,
+    apply_output_stages, document_from_json, document_from_text, emit_messages_for_ui,
+    maybe_copy_output_with_runtime, prepare_plugin_response, run_cli_command,
 };
 pub(crate) use config_explain::{
     ConfigExplainContext, config_explain_json, config_explain_result, config_value_to_json,
@@ -64,11 +67,12 @@ pub(crate) use dispatch::{
     RunAction, build_dispatch_plan, ensure_builtin_visible_for, ensure_dispatch_visibility,
     ensure_plugin_visible_for, normalize_cli_profile, normalize_profile_override,
 };
-pub(crate) use external::is_help_passthrough;
+pub(crate) use external::run_external_command_with_help_renderer;
 use external::{ExternalCommandRuntime, run_external_command};
 pub(crate) use repl_lifecycle::rebuild_repl_parts;
 #[cfg(test)]
 pub(crate) use repl_lifecycle::rebuild_repl_state;
+pub(crate) use timing::{TimingSummary, format_timing_badge, right_align_timing_line};
 
 pub(crate) const CMD_PLUGINS: &str = "plugins";
 pub(crate) const CMD_DOCTOR: &str = "doctor";
@@ -93,10 +97,10 @@ pub(crate) struct ReplCommandSpec {
     pub(crate) supports_dsl: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ReplDispatchOverrides {
-    pub(crate) message_verbosity: MessageLevel,
-    pub(crate) debug_verbosity: u8,
+#[derive(Debug, Clone)]
+pub(crate) struct EffectiveInvocation {
+    pub(crate) ui: UiState,
+    pub(crate) plugin_provider: Option<String>,
 }
 
 pub(crate) enum BuiltinCommandTransport<'a> {
@@ -135,8 +139,9 @@ where
 {
     let argv = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
     init_developer_logging(bootstrap_logging_config(&argv));
-    match Cli::try_parse_from(argv.iter().cloned()) {
-        Ok(cli) => run(cli),
+    let scanned = scan_cli_argv(&argv)?;
+    match Cli::try_parse_from(scanned.argv.iter().cloned()) {
+        Ok(cli) => run(cli, scanned.invocation),
         Err(err) => handle_clap_parse_error(&argv, err),
     }
 }
@@ -144,10 +149,11 @@ where
 fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
     match err.kind() {
         clap::error::ErrorKind::DisplayHelp => {
-            let settings = help::render_settings_for_help(args);
+            let help_context = help::render_settings_for_help(args);
             let rendered = repl_help::render_help_with_chrome(
-                &err.to_string(),
-                &settings.resolve_render_settings(),
+                &append_invocation_help(&err.to_string()),
+                &help_context.settings.resolve_render_settings(),
+                help_context.layout,
             );
             print!("{rendered}");
             Ok(0)
@@ -165,7 +171,14 @@ fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
 
 // Keep the top-level CLI entrypoint readable as a table of contents:
 // normalize input -> bootstrap runtime state -> hand off to the selected mode.
-fn run(mut cli: Cli) -> Result<i32> {
+fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
+    let run_started = Instant::now();
+    if invocation.cache {
+        return Err(miette!(
+            "`--cache` is only available inside the interactive REPL"
+        ));
+    }
+
     let normalized_profile = normalize_cli_profile(&mut cli);
     let runtime_load = cli.runtime_load_options();
     // Startup resolves config in three phases:
@@ -219,12 +232,6 @@ fn run(mut cli: Cli) -> Result<i32> {
         .map(|entry| entry.theme.clone());
     let message_verbosity = effective_message_verbosity(&config);
     let debug_verbosity = effective_debug_verbosity(&config);
-    init_developer_logging(build_logging_config(&config, debug_verbosity));
-    theme_loader::log_theme_issues(&theme_catalog.issues);
-    tracing::debug!(
-        debug_count = debug_verbosity,
-        "developer logging initialized"
-    );
 
     let plugin_manager = PluginManager::new(cli.plugin_dirs.clone())
         .with_process_timeout(plugin_process_timeout(&config));
@@ -243,6 +250,16 @@ fn run(mut cli: Cli) -> Result<i32> {
         state.session.config_overrides = layer;
     }
     ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
+    let effective_invocation = resolve_effective_invocation(&state.runtime.ui, &invocation);
+    init_developer_logging(build_logging_config(
+        state.runtime.config.resolved(),
+        effective_invocation.ui.debug_verbosity,
+    ));
+    theme_loader::log_theme_issues(&theme_catalog.issues);
+    tracing::debug!(
+        debug_count = effective_invocation.ui.debug_verbosity,
+        "developer logging initialized"
+    );
 
     tracing::info!(
         profile = %state.runtime.config.resolved().active_profile(),
@@ -252,57 +269,105 @@ fn run(mut cli: Cli) -> Result<i32> {
         "osp session initialized"
     );
 
-    match dispatch.action {
-        RunAction::Repl => repl::run_plugin_repl(&mut state),
+    let action_started = Instant::now();
+    let is_repl = matches!(dispatch.action, RunAction::Repl);
+    let action = dispatch.action;
+    let result = match action {
+        RunAction::Repl => {
+            state.runtime.ui = effective_invocation.ui.clone();
+            repl::run_plugin_repl(&mut state)
+        }
         RunAction::ReplCommand(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
+            &effective_invocation,
             Commands::Repl(args),
         ),
         RunAction::Plugins(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
+            &effective_invocation,
             Commands::Plugins(args),
         ),
         RunAction::Doctor(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
+            &effective_invocation,
             Commands::Doctor(args),
         ),
         RunAction::Theme(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
+            &effective_invocation,
             Commands::Theme(args),
         ),
         RunAction::Config(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
+            &effective_invocation,
             Commands::Config(args),
         ),
         RunAction::History(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
+            &effective_invocation,
             Commands::History(args),
         ),
-        RunAction::External(tokens) => run_external_command(
+        RunAction::External(ref tokens) => run_external_command(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
-            &tokens,
+            tokens,
+            &effective_invocation,
         )
         .and_then(|result| {
             run_cli_command(
-                &CommandRenderRuntime::new(state.runtime.config.resolved(), &state.runtime.ui),
+                &CommandRenderRuntime::new(
+                    state.runtime.config.resolved(),
+                    &effective_invocation.ui,
+                ),
                 result,
             )
         }),
+    };
+
+    if !is_repl && effective_invocation.ui.debug_verbosity > 0 {
+        let total = run_started.elapsed();
+        let startup = action_started.saturating_duration_since(run_started);
+        let command = total.saturating_sub(startup);
+        let footer = right_align_timing_line(
+            TimingSummary {
+                total,
+                parse: if effective_invocation.ui.debug_verbosity >= 3 {
+                    Some(startup)
+                } else {
+                    None
+                },
+                execute: if effective_invocation.ui.debug_verbosity >= 3 {
+                    Some(command)
+                } else {
+                    None
+                },
+                render: None,
+            },
+            effective_invocation.ui.debug_verbosity,
+            &effective_invocation
+                .ui
+                .render_settings
+                .resolve_render_settings(),
+        );
+        if !footer.is_empty() {
+            eprint!("{footer}");
+        }
     }
+
+    result
 }
 
 pub(crate) fn authorized_command_catalog_for(
@@ -322,6 +387,7 @@ fn run_builtin_cli_command_parts(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
+    invocation: &EffectiveInvocation,
     command: Commands,
 ) -> Result<i32> {
     let result = dispatch_builtin_command_parts(
@@ -329,12 +395,12 @@ fn run_builtin_cli_command_parts(
         session,
         clients,
         BuiltinCommandTransport::Cli,
-        None,
+        Some(invocation),
         command,
     )?
     .ok_or_else(|| miette!("expected builtin command"))?;
     run_cli_command(
-        &CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui),
+        &CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
         result,
     )
 }
@@ -343,6 +409,7 @@ fn run_inline_builtin_command(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
+    invocation: Option<&EffectiveInvocation>,
     command: Commands,
     stages: &[String],
 ) -> Result<Option<CliCommandResult>> {
@@ -357,7 +424,7 @@ fn run_inline_builtin_command(
         session,
         clients,
         BuiltinCommandTransport::Cli,
-        None,
+        invocation,
         command,
     )
 }
@@ -367,10 +434,10 @@ pub(crate) fn dispatch_builtin_command_parts(
     session: &mut AppSession,
     clients: &AppClients,
     transport: BuiltinCommandTransport<'_>,
-    overrides: Option<ReplDispatchOverrides>,
+    invocation: Option<&EffectiveInvocation>,
     command: Commands,
 ) -> Result<Option<CliCommandResult>> {
-    let effective_ui = effective_ui_state(&runtime.ui, overrides);
+    let effective_ui = effective_ui_state(&runtime.ui, invocation);
     match command {
         Commands::Plugins(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_PLUGINS)?;
@@ -466,18 +533,50 @@ pub(crate) fn dispatch_builtin_command_parts(
     }
 }
 
-fn effective_ui_state(ui: &UiState, overrides: Option<ReplDispatchOverrides>) -> UiState {
-    let Some(overrides) = overrides else {
+fn effective_ui_state(ui: &UiState, invocation: Option<&EffectiveInvocation>) -> UiState {
+    let Some(invocation) = invocation else {
         return UiState {
             render_settings: ui.render_settings.clone(),
             message_verbosity: ui.message_verbosity,
             debug_verbosity: ui.debug_verbosity,
         };
     };
-    UiState {
-        render_settings: ui.render_settings.clone(),
-        message_verbosity: overrides.message_verbosity,
-        debug_verbosity: overrides.debug_verbosity,
+    invocation.ui.clone()
+}
+
+pub(crate) fn resolve_effective_invocation(
+    ui: &UiState,
+    invocation: &InvocationOptions,
+) -> EffectiveInvocation {
+    let mut render_settings = ui.render_settings.clone();
+    if let Some(format) = invocation.format {
+        render_settings.format = format;
+    }
+    if let Some(mode) = invocation.mode {
+        render_settings.mode = mode;
+    }
+    if let Some(color) = invocation.color {
+        render_settings.color = color;
+    }
+    if let Some(unicode) = invocation.unicode {
+        render_settings.unicode = unicode;
+    }
+
+    EffectiveInvocation {
+        ui: UiState {
+            render_settings,
+            message_verbosity: osp_ui::messages::adjust_verbosity(
+                ui.message_verbosity,
+                invocation.verbose,
+                invocation.quiet,
+            ),
+            debug_verbosity: if invocation.debug > 0 {
+                invocation.debug.min(3)
+            } else {
+                ui.debug_verbosity
+            },
+        },
+        plugin_provider: invocation.plugin_provider.clone(),
     }
 }
 
@@ -586,6 +685,12 @@ fn known_error_hint(err: &miette::Report) -> Option<&'static str> {
         return Some(match plugin_err {
             PluginDispatchError::CommandNotFound { .. } => {
                 "run `osp plugins list` and set --plugin-dir or OSP_PLUGIN_PATH"
+            }
+            PluginDispatchError::CommandAmbiguous { .. } => {
+                "rerun with --plugin-provider <plugin-id> or persist a default with `osp plugins select-provider <command> <plugin-id>`"
+            }
+            PluginDispatchError::ProviderNotFound { .. } => {
+                "pick one of the available providers from `osp plugins commands` or `osp plugins doctor`"
             }
             PluginDispatchError::ExecuteFailed { .. } => {
                 "verify the plugin executable exists and is executable"
@@ -729,30 +834,29 @@ fn to_ui_verbosity(level: MessageLevel) -> UiVerbosity {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn plugin_dispatch_context_for_runtime(
     runtime: &crate::state::AppRuntime,
     clients: &AppClients,
-    overrides: Option<ReplDispatchOverrides>,
+    invocation: Option<&EffectiveInvocation>,
 ) -> PluginDispatchContext {
     build_plugin_dispatch_context(
         &runtime.context,
         &runtime.config,
         clients,
-        &runtime.ui,
-        overrides,
+        invocation.map(|value| &value.ui).unwrap_or(&runtime.ui),
     )
 }
 
 fn plugin_dispatch_context_for(
     runtime: &ExternalCommandRuntime<'_>,
-    overrides: Option<ReplDispatchOverrides>,
+    invocation: Option<&EffectiveInvocation>,
 ) -> PluginDispatchContext {
     build_plugin_dispatch_context(
         runtime.context,
         runtime.config_state,
         runtime.clients,
-        runtime.ui,
-        overrides,
+        invocation.map(|value| &value.ui).unwrap_or(runtime.ui),
     )
 }
 
@@ -761,23 +865,16 @@ fn build_plugin_dispatch_context(
     config: &crate::state::ConfigState,
     clients: &AppClients,
     ui: &crate::state::UiState,
-    overrides: Option<ReplDispatchOverrides>,
 ) -> PluginDispatchContext {
     let config_env = clients.plugin_config_env(config);
-    let ui_verbosity = overrides
-        .map(|value| value.message_verbosity)
-        .unwrap_or(ui.message_verbosity);
-    let debug_verbosity = overrides
-        .map(|value| value.debug_verbosity)
-        .unwrap_or(ui.debug_verbosity);
     let terminal_kind = match context.terminal_kind() {
         TerminalKind::Cli => RuntimeTerminalKind::Cli,
         TerminalKind::Repl => RuntimeTerminalKind::Repl,
     };
     PluginDispatchContext {
         runtime_hints: RuntimeHints {
-            ui_verbosity: to_ui_verbosity(ui_verbosity),
-            debug_level: debug_verbosity.min(3),
+            ui_verbosity: to_ui_verbosity(ui.message_verbosity),
+            debug_level: ui.debug_verbosity.min(3),
             format: ui.render_settings.format,
             color: ui.render_settings.color,
             unicode: ui.render_settings.unicode,
@@ -803,6 +900,7 @@ fn build_plugin_dispatch_context(
                 )
             })
             .collect(),
+        provider_override: None,
     }
 }
 

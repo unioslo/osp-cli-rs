@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use osp_config::{
     ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS, ResolvedConfig, RuntimeLoadOptions,
@@ -9,6 +11,8 @@ use osp_repl::HistoryShellContext;
 use osp_ui::RenderSettings;
 use osp_ui::messages::MessageLevel;
 
+use crate::app::CliCommandResult;
+use crate::app::TimingSummary;
 use crate::plugin_config::{PluginConfigEntry, PluginConfigEnv, PluginConfigEnvCache};
 use crate::plugin_manager::PluginManager;
 use crate::theme_loader::ThemeCatalog;
@@ -104,10 +108,40 @@ impl ConfigState {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct UiState {
     pub render_settings: RenderSettings,
     pub message_verbosity: MessageLevel,
     pub debug_verbosity: u8,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DebugTimingBadge {
+    pub level: u8,
+    pub(crate) summary: TimingSummary,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct DebugTimingState {
+    inner: Arc<RwLock<Option<DebugTimingBadge>>>,
+}
+
+impl DebugTimingState {
+    pub fn set(&self, badge: DebugTimingBadge) {
+        if let Ok(mut guard) = self.inner.write() {
+            *guard = Some(badge);
+        }
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut guard) = self.inner.write() {
+            *guard = None;
+        }
+    }
+
+    pub fn badge(&self) -> Option<DebugTimingBadge> {
+        self.inner.read().map(|value| *value).unwrap_or(None)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,11 +252,14 @@ pub struct AppSession {
     pub prompt_prefix: String,
     pub history_enabled: bool,
     pub history_shell: HistoryShellContext,
+    pub prompt_timing: DebugTimingState,
     pub scope: ReplScopeStack,
     pub last_rows: Vec<Row>,
     pub last_failure: Option<LastFailure>,
     pub result_cache: HashMap<String, Vec<Row>>,
     pub cache_order: VecDeque<String>,
+    pub(crate) command_cache: HashMap<String, CliCommandResult>,
+    pub(crate) command_cache_order: VecDeque<String>,
     pub max_cached_results: usize,
     pub config_overrides: ConfigLayer,
 }
@@ -241,11 +278,14 @@ impl AppSession {
             prompt_prefix: "osp".to_string(),
             history_enabled: true,
             history_shell: HistoryShellContext::default(),
+            prompt_timing: DebugTimingState::default(),
             scope: ReplScopeStack::default(),
             last_rows: Vec::new(),
             last_failure: None,
             result_cache: HashMap::new(),
             cache_order: VecDeque::new(),
+            command_cache: HashMap::new(),
+            command_cache_order: VecDeque::new(),
             max_cached_results: bounded,
             config_overrides: ConfigLayer::default(),
         }
@@ -291,6 +331,52 @@ impl AppSession {
         self.result_cache
             .get(command_line.trim())
             .map(|rows| rows.as_slice())
+    }
+
+    pub(crate) fn record_cached_command(&mut self, cache_key: &str, result: &CliCommandResult) {
+        let cache_key = cache_key.trim().to_string();
+        if cache_key.is_empty() {
+            return;
+        }
+
+        if !self.command_cache.contains_key(&cache_key)
+            && self.command_cache.len() >= self.max_cached_results
+            && let Some(evict_key) = self.command_cache_order.pop_front()
+        {
+            self.command_cache.remove(&evict_key);
+        }
+
+        self.command_cache_order.retain(|item| item != &cache_key);
+        self.command_cache_order.push_back(cache_key.clone());
+        self.command_cache.insert(cache_key, result.clone());
+    }
+
+    pub(crate) fn cached_command(&self, cache_key: &str) -> Option<CliCommandResult> {
+        self.command_cache.get(cache_key.trim()).cloned()
+    }
+
+    pub fn record_prompt_timing(
+        &self,
+        level: u8,
+        total: Duration,
+        parse: Option<Duration>,
+        execute: Option<Duration>,
+        render: Option<Duration>,
+    ) {
+        if level == 0 {
+            self.prompt_timing.clear();
+            return;
+        }
+
+        self.prompt_timing.set(DebugTimingBadge {
+            level,
+            summary: TimingSummary {
+                total,
+                parse,
+                execute,
+                render,
+            },
+        });
     }
 
     pub fn sync_history_shell_context(&self) {

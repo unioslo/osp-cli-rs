@@ -11,14 +11,16 @@ use anyhow::anyhow;
 use miette::{Result, miette};
 use osp_config::ResolvedConfig;
 use osp_repl::{DebugStep, run_repl};
+use std::sync::Arc;
 
 use crate::state::{AppRuntime, AppSession, AppState};
 use crate::state::{AuthState, ReplScopeStack, UiState};
 use crate::theme_loader::ThemeCatalog;
 
 use crate::app;
-use crate::app::CliCommandResult;
+use crate::app::{CliCommandResult, document_from_json};
 use crate::cli::{DebugCompleteArgs, ReplArgs, ReplCommands};
+use crate::ui_presentation::{ReplInputMode, effective_repl_input_mode, effective_repl_intro};
 #[cfg(test)]
 pub(crate) use dispatch::apply_repl_shell_prefix;
 pub(crate) use dispatch::repl_command_spec;
@@ -27,11 +29,13 @@ pub(crate) use input::{ReplParsedLine, is_repl_shellable_command};
 #[cfg(test)]
 pub(crate) use lifecycle::build_cycle_chrome_output;
 use osp_completion::CompletionTree;
-use presentation::build_repl_appearance;
 #[cfg(test)]
 pub(crate) use presentation::render_prompt_template;
 #[cfg(test)]
+pub(crate) use presentation::render_repl_prompt_right_for_test;
+#[cfg(test)]
 pub(crate) use presentation::theme_display_name;
+use presentation::{build_repl_appearance, build_repl_prompt_right_renderer};
 use surface::ReplSurface;
 
 #[derive(Clone, Copy)]
@@ -58,14 +62,8 @@ impl<'a> ReplViewContext<'a> {
 // The REPL loop is intentionally boring at this level:
 // prepare one cycle, render the shell chrome, run the line editor, apply the result.
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
-    let mut loop_state = lifecycle::ReplLoopState::new(
-        state
-            .runtime
-            .config
-            .resolved()
-            .get_bool("repl.intro")
-            .unwrap_or(true),
-    );
+    let mut loop_state =
+        lifecycle::ReplLoopState::new(effective_repl_intro(state.runtime.config.resolved()));
 
     loop {
         let cycle =
@@ -74,7 +72,6 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             ReplViewContext::from_parts(&state.runtime, &state.session),
             &cycle.help_text,
         );
-        print!("Preparing prompt...\r");
 
         let result = run_repl(
             cycle.prompt,
@@ -82,6 +79,14 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             Some(cycle.completion_tree),
             cycle.appearance,
             cycle.history_config,
+            map_repl_input_mode(effective_repl_input_mode(state.runtime.config.resolved())),
+            Some(build_repl_prompt_right_renderer(
+                ReplViewContext::from_parts(&state.runtime, &state.session),
+                state.session.prompt_timing.clone(),
+            )),
+            Some(build_repl_ui_line_projector(
+                state.runtime.config.resolved(),
+            )),
             |line, history| {
                 dispatch::execute_repl_plugin_line(
                     &mut state.runtime,
@@ -90,13 +95,26 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
                     history,
                     line,
                 )
-                .map_err(|err| anyhow!("{err:#}"))
+                .map_err(|err| {
+                    anyhow!(
+                        "{}",
+                        crate::app::render_report_message(&err, state.runtime.ui.message_verbosity)
+                    )
+                })
             },
         )
         .map_err(|err| miette!("{err:#}"))?;
         if let Some(code) = loop_state.apply_run_result(result) {
             return Ok(code);
         }
+    }
+}
+
+fn map_repl_input_mode(mode: ReplInputMode) -> osp_repl::ReplInputMode {
+    match mode {
+        ReplInputMode::Auto => osp_repl::ReplInputMode::Auto,
+        ReplInputMode::Interactive => osp_repl::ReplInputMode::Interactive,
+        ReplInputMode::Basic => osp_repl::ReplInputMode::Basic,
     }
 }
 
@@ -133,9 +151,10 @@ fn run_repl_debug_complete(
         .collect::<Result<Vec<_>>>()?;
 
     let payload = if steps.is_empty() {
+        let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
         let debug = osp_repl::debug_completion(
             &completion_tree,
-            &args.line,
+            &projected_line,
             cursor,
             osp_repl::CompletionDebugOptions::new(args.width, args.height)
                 .ansi(args.menu_ansi)
@@ -144,9 +163,10 @@ fn run_repl_debug_complete(
         );
         serde_json::to_string_pretty(&debug).map_err(|err| miette!("{err:#}"))?
     } else {
+        let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
         let frames = osp_repl::debug_completion_steps(
             &completion_tree,
-            &args.line,
+            &projected_line,
             cursor,
             osp_repl::CompletionDebugOptions::new(args.width, args.height)
                 .ansi(args.menu_ansi)
@@ -156,11 +176,21 @@ fn run_repl_debug_complete(
         );
         serde_json::to_string_pretty(&frames).map_err(|err| miette!("{err:#}"))?
     };
-    Ok(CliCommandResult::text(format!("{payload}\n")))
+    let payload = serde_json::from_str(&payload).map_err(|err| miette!("{err:#}"))?;
+    Ok(CliCommandResult::document(document_from_json(payload)))
 }
 
 fn build_repl_completion_tree(view: ReplViewContext<'_>, surface: &ReplSurface) -> CompletionTree {
     completion::build_repl_completion_tree(view, surface)
+}
+
+fn build_repl_ui_line_projector(
+    config: &ResolvedConfig,
+) -> Arc<dyn Fn(&str) -> String + Send + Sync> {
+    let config = config.clone();
+    Arc::new(move |line| {
+        input::project_repl_ui_line(line, &config).unwrap_or_else(|_| line.to_string())
+    })
 }
 
 #[cfg(test)]

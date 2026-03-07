@@ -5,10 +5,11 @@ use super::{
     ReplCommandOutput, RunAction, RuntimeConfigRequest, build_cli_session_layer,
     build_dispatch_plan, classify_exit_code, collect_plugin_config_env, config_value_to_plugin_env,
     doctor_cmd, enrich_dispatch_error, is_sensitive_key, plugin_config_env_name,
-    plugin_process_timeout, render_report_message, resolve_effective_render_settings,
-    run_inline_builtin_command,
+    plugin_process_timeout, render_report_message, resolve_effective_invocation,
+    resolve_effective_render_settings, run_inline_builtin_command,
 };
 use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
+use crate::invocation::{InvocationOptions, scan_cli_argv};
 use crate::plugin_manager::{
     CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchError, PluginManager,
     PluginSource,
@@ -18,11 +19,12 @@ use crate::repl::{completion, dispatch as repl_dispatch, help as repl_help, surf
 use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
 use clap::Parser;
 use osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions};
-use osp_core::output::OutputFormat;
+use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_repl::{HistoryConfig, HistoryShellContext, SharedHistory};
-use osp_ui::messages::MessageLevel;
+use osp_ui::document::Block;
+use osp_ui::messages::{MessageBuffer, MessageLevel};
 use osp_ui::{RenderSettings, render_output};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 
 fn profiles(names: &[&str]) -> BTreeSet<String> {
@@ -84,6 +86,65 @@ fn test_config(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
     resolver
         .resolve(ResolveOptions::default().with_terminal("cli"))
         .expect("test config should resolve")
+}
+
+fn synced_render_settings(config: &osp_config::ResolvedConfig) -> RenderSettings {
+    let mut settings = RenderSettings::test_plain(OutputFormat::Table);
+    crate::cli::apply_render_settings_from_config(&mut settings, config);
+    settings.width = Some(18);
+    settings
+}
+
+fn render_help_snapshot(entries: &[(&str, &str)]) -> String {
+    let config = test_config(entries);
+    let settings = synced_render_settings(&config);
+    repl_help::render_help_with_chrome(
+        "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
+        &settings.resolve_render_settings(),
+        crate::ui_presentation::effective_help_layout(&config),
+    )
+}
+
+fn render_message_snapshot(entries: &[(&str, &str)]) -> String {
+    let config = test_config(entries);
+    let settings = synced_render_settings(&config);
+    let resolved = settings.resolve_render_settings();
+    let mut messages = MessageBuffer::default();
+    messages.error("bad");
+    messages.warning("careful");
+    messages.render_grouped_with_options(osp_ui::messages::GroupedRenderOptions {
+        max_level: MessageLevel::Warning,
+        color: resolved.color,
+        unicode: resolved.unicode,
+        width: resolved.width,
+        theme: &resolved.theme,
+        layout: crate::ui_presentation::effective_message_layout(&config),
+        chrome_frame: resolved.chrome_frame,
+        style_overrides: resolved.style_overrides.clone(),
+    })
+}
+
+fn render_prompt_snapshot(entries: &[(&str, &str)]) -> String {
+    let state = make_completion_state_with_entries(None, entries);
+    crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session)).left
+}
+
+fn render_table_snapshot(entries: &[(&str, &str)]) -> String {
+    let config = test_config(entries);
+    let mut settings = crate::cli::default_render_settings();
+    settings.runtime.stdout_is_tty = true;
+    settings.runtime.terminal = Some("xterm-256color".to_string());
+    settings.runtime.locale_utf8 = Some(true);
+    settings.color = ColorMode::Never;
+    crate::cli::apply_render_settings_from_config(&mut settings, &config);
+    settings.format = OutputFormat::Table;
+    settings.width = Some(24);
+
+    let rows = vec![
+        crate::row! { "uid" => "alice", "count" => 2 },
+        crate::row! { "uid" => "bob", "count" => 15 },
+    ];
+    render_output(&crate::rows::output::rows_to_output_result(rows), &settings)
 }
 
 #[test]
@@ -149,11 +210,96 @@ fn sample_catalog() -> Vec<CommandCatalogEntry> {
             ],
             ..osp_completion::CommandSpec::default()
         },
-        provider: "mock-provider".to_string(),
+        provider: Some("mock-provider".to_string()),
         providers: vec!["mock-provider (explicit)".to_string()],
         conflicted: false,
+        requires_selection: false,
         selected_explicitly: false,
-        source: PluginSource::Explicit,
+        source: Some(PluginSource::Explicit),
+    }]
+}
+
+fn sample_catalog_with_provision_context() -> Vec<CommandCatalogEntry> {
+    vec![CommandCatalogEntry {
+        name: "orch".to_string(),
+        about: "Provision orchestrator resources".to_string(),
+        subcommands: vec!["provision".to_string(), "status".to_string()],
+        completion: osp_completion::CommandSpec {
+            name: "orch".to_string(),
+            tooltip: Some("Provision orchestrator resources".to_string()),
+            subcommands: vec![
+                osp_completion::CommandSpec::new("provision")
+                    .arg(
+                        osp_completion::ArgNode::named("guest")
+                            .tooltip("Guest name for the provision request"),
+                    )
+                    .arg(
+                        osp_completion::ArgNode::named("image")
+                            .tooltip("Base image to provision")
+                            .suggestions([
+                                osp_completion::SuggestionEntry::from("ubuntu"),
+                                osp_completion::SuggestionEntry::from("alma"),
+                            ]),
+                    )
+                    .flag(
+                        "--provider",
+                        osp_completion::FlagNode::new().suggestions([
+                            osp_completion::SuggestionEntry::from("vmware"),
+                            osp_completion::SuggestionEntry::from("nrec"),
+                        ]),
+                    )
+                    .flag(
+                        "--os",
+                        osp_completion::FlagNode {
+                            suggestions: vec![
+                                osp_completion::SuggestionEntry::from("rhel"),
+                                osp_completion::SuggestionEntry::from("alma"),
+                            ],
+                            suggestions_by_provider: BTreeMap::from([
+                                (
+                                    "vmware".to_string(),
+                                    vec![osp_completion::SuggestionEntry::from("rhel")],
+                                ),
+                                (
+                                    "nrec".to_string(),
+                                    vec![osp_completion::SuggestionEntry::from("alma")],
+                                ),
+                            ]),
+                            ..osp_completion::FlagNode::default()
+                        },
+                    ),
+                osp_completion::CommandSpec::new("status"),
+            ],
+            ..osp_completion::CommandSpec::default()
+        },
+        provider: Some("mock-provider".to_string()),
+        providers: vec!["mock-provider (explicit)".to_string()],
+        conflicted: false,
+        requires_selection: false,
+        selected_explicitly: false,
+        source: Some(PluginSource::Explicit),
+    }]
+}
+
+fn sample_conflicted_catalog() -> Vec<CommandCatalogEntry> {
+    vec![CommandCatalogEntry {
+        name: "hello".to_string(),
+        about: "hello plugin".to_string(),
+        subcommands: Vec::new(),
+        completion: osp_completion::CommandSpec {
+            name: "hello".to_string(),
+            tooltip: Some("hello plugin".to_string()),
+            ..osp_completion::CommandSpec::default()
+        },
+        provider: None,
+        providers: vec![
+            "alpha-provider (env)".to_string(),
+            "beta-provider (user)".to_string(),
+        ],
+        conflicted: true,
+        requires_selection: true,
+        selected_explicitly: false,
+        source: None,
     }]
 }
 
@@ -161,6 +307,40 @@ fn sample_catalog() -> Vec<CommandCatalogEntry> {
 fn theme_slug_is_rendered_as_title_case_display_name_unit() {
     assert_eq!(repl::theme_display_name("rose-pine-moon"), "Rose Pine Moon");
     assert_eq!(repl::theme_display_name("dracula"), "Dracula");
+}
+
+#[test]
+fn repl_prompt_right_shows_ascii_incognito_marker_unit() {
+    let settings = RenderSettings::test_plain(OutputFormat::Table);
+    let resolved = settings.resolve_render_settings();
+    let timing = crate::state::DebugTimingState::default();
+
+    let rendered = repl::render_repl_prompt_right_for_test(&resolved, false, &timing);
+
+    assert!(rendered.contains("incognito"));
+}
+
+#[test]
+fn repl_prompt_right_includes_timing_breakdown_at_debug_three_unit() {
+    let settings = RenderSettings::test_plain(OutputFormat::Table);
+    let resolved = settings.resolve_render_settings();
+    let timing = crate::state::DebugTimingState::default();
+    timing.set(crate::state::DebugTimingBadge {
+        level: 3,
+        summary: crate::app::TimingSummary {
+            total: std::time::Duration::from_millis(321),
+            parse: Some(std::time::Duration::from_millis(4)),
+            execute: Some(std::time::Duration::from_millis(300)),
+            render: Some(std::time::Duration::from_millis(17)),
+        },
+    });
+
+    let rendered = repl::render_repl_prompt_right_for_test(&resolved, true, &timing);
+
+    assert!(rendered.contains("321.0ms"));
+    assert!(rendered.contains("p4.0ms"));
+    assert!(rendered.contains("e300.0ms"));
+    assert!(rendered.contains("r17.0ms"));
 }
 
 #[test]
@@ -325,54 +505,74 @@ fn layer_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue>
 }
 
 #[test]
-fn cli_launch_render_flags_seed_session_layer_unit() {
-    let cli = Cli::parse_from([
-        "osp", "--json", "--mode", "plain", "--color", "never", "--ascii",
-    ]);
+fn cli_scan_extracts_invocation_flags_without_polluting_clap_unit() {
+    let argv = [
+        OsString::from("osp"),
+        OsString::from("--json"),
+        OsString::from("--mode"),
+        OsString::from("plain"),
+        OsString::from("--color=never"),
+        OsString::from("--ascii"),
+        OsString::from("-q"),
+        OsString::from("config"),
+        OsString::from("show"),
+    ];
 
-    let layer = build_cli_session_layer(
-        &cli,
-        None,
-        TerminalKind::Repl,
-        RuntimeLoadOptions::default(),
-    )
-    .expect("session layer should build")
-    .expect("launch flags should create session overrides");
+    let scanned = scan_cli_argv(&argv).expect("argv scan should succeed");
 
     assert_eq!(
-        layer_value(&layer, "ui.format"),
-        Some(&ConfigValue::from("json"))
+        scanned.argv,
+        vec![
+            OsString::from("osp"),
+            OsString::from("config"),
+            OsString::from("show"),
+        ]
     );
-    assert_eq!(
-        layer_value(&layer, "ui.mode"),
-        Some(&ConfigValue::from("plain"))
-    );
-    assert_eq!(
-        layer_value(&layer, "ui.color.mode"),
-        Some(&ConfigValue::from("never"))
-    );
-    assert_eq!(
-        layer_value(&layer, "ui.unicode.mode"),
-        Some(&ConfigValue::from("never"))
-    );
+    assert_eq!(scanned.invocation.format, Some(OutputFormat::Json));
+    assert_eq!(scanned.invocation.mode, Some(RenderMode::Plain));
+    assert_eq!(scanned.invocation.color, Some(ColorMode::Never));
+    assert_eq!(scanned.invocation.unicode, Some(UnicodeMode::Never));
+    assert_eq!(scanned.invocation.quiet, 1);
 }
 
 #[test]
-fn cli_launch_quiet_adjusts_session_base_verbosity_unit() {
-    let cli = Cli::parse_from(["osp", "-q"]);
+fn effective_invocation_overlays_runtime_defaults_per_command_unit() {
+    let ui = crate::state::UiState {
+        render_settings: RenderSettings::test_plain(OutputFormat::Table),
+        message_verbosity: MessageLevel::Success,
+        debug_verbosity: 1,
+    };
+    let invocation = InvocationOptions {
+        format: Some(OutputFormat::Json),
+        mode: Some(RenderMode::Rich),
+        color: Some(ColorMode::Always),
+        unicode: Some(UnicodeMode::Never),
+        verbose: 2,
+        quiet: 1,
+        debug: 3,
+        cache: false,
+        plugin_provider: Some("beta".to_string()),
+    };
 
-    let layer = build_cli_session_layer(
-        &cli,
-        None,
-        TerminalKind::Repl,
-        RuntimeLoadOptions::default(),
-    )
-    .expect("session layer should build")
-    .expect("quiet flag should create session overrides");
+    let effective = resolve_effective_invocation(&ui, &invocation);
 
-    assert_eq!(
-        layer_value(&layer, "ui.verbosity.level"),
-        Some(&ConfigValue::from("warning"))
+    assert_eq!(effective.ui.render_settings.format, OutputFormat::Json);
+    assert_eq!(effective.ui.render_settings.mode, RenderMode::Rich);
+    assert_eq!(effective.ui.render_settings.color, ColorMode::Always);
+    assert_eq!(effective.ui.render_settings.unicode, UnicodeMode::Never);
+    assert_eq!(effective.ui.message_verbosity, MessageLevel::Info);
+    assert_eq!(effective.ui.debug_verbosity, 3);
+    assert_eq!(effective.plugin_provider.as_deref(), Some("beta"));
+}
+
+#[test]
+fn cli_cache_flag_is_rejected_outside_repl_unit() {
+    let err = super::run_from(["osp", "--cache", "config", "show"])
+        .expect_err("cache should be rejected outside repl");
+
+    assert!(
+        err.to_string()
+            .contains("`--cache` is only available inside the interactive REPL")
     );
 }
 
@@ -688,6 +888,7 @@ fn external_inline_builtin_reuses_repl_dsl_policy_unit() {
         &mut state.runtime,
         &mut state.session,
         &state.clients,
+        None,
         command,
         &["uid".to_string()],
     ) {
@@ -749,6 +950,28 @@ fn repl_help_alias_skips_bare_help_unit() {
         .expect("bare help should parse");
     assert_eq!(parsed.command_tokens, vec!["help".to_string()]);
     assert_eq!(parsed.dispatch_tokens, vec!["help".to_string()]);
+}
+
+#[test]
+fn repl_ui_projection_supports_flag_prefixed_help_and_completion_unit() {
+    let state = make_completion_state(None);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let projected = crate::repl::input::project_repl_ui_line(
+        "--json help orch prov",
+        state.runtime.config.resolved(),
+    )
+    .expect("projection should succeed");
+
+    let (_, suggestions) = engine.complete(&projected, projected.len());
+    assert!(suggestions.into_iter().any(|entry| matches!(
+        entry,
+        osp_completion::SuggestionOutput::Item(item) if item.text == "provision"
+    )));
 }
 
 #[test]
@@ -874,6 +1097,99 @@ fn repl_alias_partial_completion_does_not_trigger_shell_entry_unit() {
 }
 
 #[test]
+fn repl_structural_alias_exposes_underlying_subcommands_unit() {
+    let state = make_completion_state_with_entries(None, &[("alias.ops", "orch")]);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let (_, suggestions) = engine.complete("ops prov", "ops prov".len());
+    assert!(suggestions.into_iter().any(|entry| matches!(
+        entry,
+        osp_completion::SuggestionOutput::Item(item) if item.text == "provision"
+    )));
+}
+
+#[test]
+fn repl_alias_with_prefilled_positional_args_inherits_target_flags_unit() {
+    let state = make_completion_state_with_entries(None, &[("alias.me", "orch provision guest")]);
+    let catalog = sample_catalog_with_provision_context();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree.clone());
+
+    let alias_node = tree
+        .root
+        .children
+        .get("me")
+        .expect("alias node should exist");
+    assert_eq!(alias_node.prefilled_positionals, vec!["guest".to_string()]);
+
+    let (_, suggestions) = engine.complete("me --", "me --".len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item) => Some(item.text),
+            osp_completion::SuggestionOutput::PathSentinel => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(values.contains(&"--provider".to_string()));
+    assert!(values.contains(&"--os".to_string()));
+}
+
+#[test]
+fn repl_alias_prefilled_context_filters_provider_scoped_values_unit() {
+    let state = make_completion_state_with_entries(
+        None,
+        &[("alias.me", "orch provision guest --provider vmware")],
+    );
+    let catalog = sample_catalog_with_provision_context();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let (_, suggestions) = engine.complete("me --os ", "me --os ".len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item) => Some(item.text),
+            osp_completion::SuggestionOutput::PathSentinel => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(values.contains(&"rhel".to_string()));
+    assert!(!values.contains(&"alma".to_string()));
+}
+
+#[test]
+fn repl_alias_placeholder_keeps_following_arg_slot_open_unit() {
+    let state =
+        make_completion_state_with_entries(None, &[("alias.me", "orch provision guest ${1}")]);
+    let catalog = sample_catalog_with_provision_context();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let (_, suggestions) = engine.complete("me ", "me ".len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item) => Some(item.text),
+            osp_completion::SuggestionOutput::PathSentinel => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(values.contains(&"ubuntu".to_string()));
+    assert!(values.contains(&"alma".to_string()));
+}
+
+#[test]
 fn repl_help_chrome_replaces_clap_headings_unit() {
     let state = make_completion_state(None);
     let raw =
@@ -893,6 +1209,100 @@ fn repl_help_chrome_passthrough_without_known_sections_unit() {
     assert_eq!(
         repl_help::render_repl_help_with_chrome(repl_view(&state.runtime, &state.session), raw,),
         raw
+    );
+}
+
+#[test]
+fn austere_repl_intro_is_minimal_single_line_unit() {
+    let state = make_completion_state_with_entries(None, &[("ui.presentation", "austere")]);
+    let rendered =
+        crate::repl::presentation::render_repl_intro(repl_view(&state.runtime, &state.session));
+
+    assert_eq!(
+        rendered,
+        format!(
+            "\nWelcome anonymous. v{}. Commands: help, config, theme, plugins. See help for more.\n\n",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+}
+
+#[test]
+fn compact_repl_intro_is_minimal_single_line_unit() {
+    let state = make_completion_state_with_entries(None, &[("ui.presentation", "compact")]);
+    let rendered =
+        crate::repl::presentation::render_repl_intro(repl_view(&state.runtime, &state.session));
+
+    assert_eq!(
+        rendered,
+        format!(
+            "\nWelcome anonymous. v{}. Commands: help, config, theme, plugins. See help for more.\n\n",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+}
+
+#[test]
+fn presentation_profiles_shape_help_output_snapshot_unit() {
+    assert_eq!(
+        render_help_snapshot(&[("ui.presentation", "expressive")]),
+        "- Usage ----------\n  osp [OPTIONS]\n------------------\n\n- Commands -------\n  help\n------------------\n\n- Options --------\n  -h, --help\n------------------\n"
+    );
+    assert_eq!(
+        render_help_snapshot(&[("ui.presentation", "compact")]),
+        "- Usage ----------\n  osp [OPTIONS]\n\n- Commands -------\n  help\n\n- Options --------\n  -h, --help\n"
+    );
+    assert_eq!(
+        render_help_snapshot(&[("ui.presentation", "austere")]),
+        "Usage:\n  osp [OPTIONS]\nCommands:\n  help\nOptions:\n  -h, --help\n"
+    );
+}
+
+#[test]
+fn presentation_profiles_shape_message_output_snapshot_unit() {
+    assert_eq!(
+        render_message_snapshot(&[("ui.presentation", "expressive")]),
+        "- Errors ---------\n- bad\n------------------\n\n- Warnings -------\n- careful\n------------------\n"
+    );
+    assert_eq!(
+        render_message_snapshot(&[("ui.presentation", "compact")]),
+        "- Errors ---------\n- bad\n\n- Warnings -------\n- careful\n"
+    );
+    assert_eq!(
+        render_message_snapshot(&[("ui.presentation", "austere")]),
+        "error: bad\nwarning: careful\n"
+    );
+}
+
+#[test]
+fn presentation_profiles_shape_prompt_output_snapshot_unit() {
+    assert_eq!(
+        render_prompt_snapshot(&[("ui.presentation", "expressive")]),
+        "╭─anonymous@local \n╰─default> "
+    );
+    assert_eq!(
+        render_prompt_snapshot(&[("ui.presentation", "compact")]),
+        "default> "
+    );
+    assert_eq!(
+        render_prompt_snapshot(&[("ui.presentation", "austere")]),
+        "default> "
+    );
+}
+
+#[test]
+fn presentation_profiles_shape_table_output_snapshot_unit() {
+    assert_eq!(
+        render_table_snapshot(&[("ui.presentation", "expressive")]),
+        "╭━━━━━━━┳━━━━━━━╮\n┃ uid   ┃ count ┃\n┡━━━━━━━╇━━━━━━━┩\n│ alice │ 2     │\n│ bob   │ 15    │\n╰───────┴───────╯\n"
+    );
+    assert_eq!(
+        render_table_snapshot(&[("ui.presentation", "compact")]),
+        "+--------+--------+\n| uid    | count  |\n+--------+--------+\n| alice  | 2      |\n| bob    | 15     |\n+--------+--------+\n"
+    );
+    assert_eq!(
+        render_table_snapshot(&[("ui.presentation", "austere")]),
+        "+--------+--------+\n| uid    | count  |\n+--------+--------+\n| alice  | 2      |\n| bob    | 15     |\n+--------+--------+\n"
     );
 }
 
@@ -959,11 +1369,24 @@ fn help_chrome_uses_unicode_dividers_when_enabled_unit() {
     let rendered = repl_help::render_help_with_chrome(
         "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
         &resolved,
+        crate::ui_presentation::HelpLayout::Full,
     );
     assert!(rendered.contains("Usage"));
     assert!(rendered.contains("osp [OPTIONS]"));
     assert!(rendered.contains("Commands"));
     assert!(rendered.contains("Options"));
+}
+
+#[test]
+fn austere_help_layout_collapses_footer_spacing_unit() {
+    let state = make_completion_state_with_entries(None, &[("ui.presentation", "austere")]);
+    let raw = "Usage: osp [OPTIONS]\n\nOptions:\n  -h, --help\n\nUse `osp plugins commands` to list plugin-provided commands.\n";
+    let rendered =
+        repl_help::render_repl_help_with_chrome(repl_view(&state.runtime, &state.session), raw);
+
+    assert!(rendered.contains("Options"));
+    assert!(rendered.contains("Use `osp plugins commands`"));
+    assert!(!rendered.contains("\n\nUse `osp plugins commands`"));
 }
 
 #[test]
@@ -1075,6 +1498,83 @@ fn repl_surface_drives_overview_and_completion_visibility_unit() {
     assert!(surface.root_words.contains(&"theme".to_string()));
     assert!(surface.root_words.contains(&"config".to_string()));
     assert!(surface.root_words.contains(&"orch".to_string()));
+}
+
+#[test]
+fn compact_repl_surface_omits_options_overview_and_prioritizes_builtins_unit() {
+    let state =
+        make_completion_state_with_entries(Some("theme config"), &[("ui.presentation", "compact")]);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+
+    let names = surface
+        .overview_entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names[..4], ["exit", "help", "theme", "config"]);
+    assert!(!names.contains(&"options"));
+    let orch_index = names
+        .iter()
+        .position(|name| *name == "orch")
+        .expect("orch should be present");
+    let config_index = names
+        .iter()
+        .position(|name| *name == "config")
+        .expect("config should be present");
+    assert!(config_index < orch_index);
+}
+
+#[test]
+fn compact_root_completion_suggestions_prioritize_core_commands_unit() {
+    let state = make_completion_state_with_entries(None, &[("ui.presentation", "compact")]);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let (_, suggestions) = engine.complete("", 0);
+    let labels = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item) => Some(item.text),
+            _ => None,
+        })
+        .take(6)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        labels[..6],
+        ["help", "exit", "quit", "config", "theme", "plugins"]
+    );
+}
+
+#[test]
+fn repl_surface_exposes_selected_provider_for_conflicts_unit() {
+    let state = make_completion_state(None);
+    let surface = surface::build_repl_surface(
+        repl_view(&state.runtime, &state.session),
+        &sample_conflicted_catalog(),
+    );
+
+    let overview = surface
+        .overview_entries
+        .iter()
+        .find(|entry| entry.name == "hello")
+        .expect("hello overview should exist");
+    assert!(overview.summary.contains("provider selection required"));
+    assert!(overview.summary.contains("--plugin-provider"));
+    assert!(overview.summary.contains("beta-provider (user)"));
+
+    let spec = surface
+        .specs
+        .iter()
+        .find(|entry| entry.name == "hello")
+        .expect("hello command spec should exist");
+    let tooltip = spec.tooltip.as_deref().expect("tooltip should exist");
+    assert!(tooltip.contains("provider selection required"));
+    assert!(tooltip.contains("beta-provider (user)"));
 }
 
 #[cfg(unix)]
@@ -1189,6 +1689,74 @@ JSON
 
 #[cfg(unix)]
 #[test]
+fn repl_cache_reuses_external_result_across_pipelines_unit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = make_temp_dir("osp-cli-repl-cache-plugin");
+    let log_path = dir.join("invocations.log");
+    let plugin_path = dir.join("osp-slowcache");
+    let script = format!(
+        r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"slowcache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"slowcache","about":"cache plugin","subcommands":[],"args":[],"flags":{{}}}}]}}
+JSON
+  exit 0
+fi
+
+printf 'run\n' >> "{log_path}"
+count=$(wc -l < "{log_path}" | tr -d ' ')
+cat <<JSON
+{{"protocol_version":1,"ok":true,"data":{{"message":"cached","counter":$count}},"error":null,"meta":{{"format_hint":"table","columns":["message","counter"]}}}}
+JSON
+"#,
+        log_path = log_path.display(),
+    );
+
+    std::fs::write(&plugin_path, script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+
+    let mut state = make_test_state(vec![dir.clone()]);
+    let history = make_test_history(&mut state);
+
+    let first = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "slowcache --cache | counter",
+    )
+    .expect("first cached command should succeed");
+    match first {
+        osp_repl::ReplLineResult::Continue(text) => assert!(text.contains('1')),
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+
+    let second = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "slowcache --cache | message",
+    )
+    .expect("second cached command should succeed");
+    match second {
+        osp_repl::ReplLineResult::Continue(text) => assert!(text.contains("cached")),
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+
+    let log = std::fs::read_to_string(&log_path).expect("invocation log should exist");
+    assert_eq!(log.lines().count(), 1);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
     let dir = make_temp_dir("osp-cli-plugin-pipeline-parity");
     let _plugin_path = write_pipeline_test_plugin(&dir);
@@ -1231,6 +1799,44 @@ fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
         osp_repl::ReplLineResult::Continue(text) => {
             assert_eq!(text.trim(), cli_rendered.trim());
             assert!(text.contains("hello-from-plugin"));
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_plugin_provider_override_dispatches_selected_provider_unit() {
+    let dir = make_temp_dir("osp-cli-repl-provider-override");
+    let _alpha = write_provider_test_plugin(&dir, "alpha-provider", "hello", "alpha");
+    let _beta = write_provider_test_plugin(&dir, "beta-provider", "hello", "beta");
+    let mut state = make_test_state(vec![dir.clone()]);
+    let history = make_test_history(&mut state);
+
+    let err = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "hello",
+    )
+    .expect_err("ambiguous plugin command should fail");
+    assert!(format!("{err:#}").contains("provided by multiple plugins"));
+
+    let repl_rendered = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "--plugin-provider beta-provider hello",
+    )
+    .expect("repl command should honor one-shot provider override");
+    match repl_rendered {
+        osp_repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("beta-from-plugin"));
+            assert!(!text.contains("alpha-from-plugin"));
         }
         other => panic!("unexpected repl result: {other:?}"),
     }
@@ -1454,6 +2060,81 @@ fn repl_config_unset_dry_run_preserves_session_state_unit() {
 
 #[cfg(unix)]
 #[test]
+fn repl_config_prompt_color_change_rebuilds_deterministically_unit() {
+    let mut state = make_test_state(Vec::new());
+    state
+        .session
+        .config_overrides
+        .set("ui.color.mode", "always");
+    state.session.config_overrides.set("ui.mode", "rich");
+    state
+        .session
+        .config_overrides
+        .set("repl.simple_prompt", true);
+    state = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    assert!(
+        state
+            .runtime
+            .ui
+            .render_settings
+            .resolve_render_settings()
+            .color
+    );
+
+    let default_prompt =
+        crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
+            .left;
+    assert!(default_prompt.contains("\x1b["));
+
+    let history = make_test_history(&mut state);
+    let result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config set color.prompt.text white",
+    )
+    .expect("prompt color config set should succeed");
+    assert!(matches!(
+        result,
+        osp_repl::ReplLineResult::Restart {
+            reload: osp_repl::ReplReloadKind::WithIntro,
+            ..
+        }
+    ));
+
+    state = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    let white_prompt =
+        crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
+            .left;
+    assert!(white_prompt.contains("\x1b[37mdefault"));
+
+    let history = make_test_history(&mut state);
+    let result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config unset color.prompt.text",
+    )
+    .expect("prompt color config unset should succeed");
+    assert!(matches!(
+        result,
+        osp_repl::ReplLineResult::Restart {
+            reload: osp_repl::ReplReloadKind::WithIntro,
+            ..
+        }
+    ));
+
+    state = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    let restored_prompt =
+        crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
+            .left;
+    assert_eq!(restored_prompt, default_prompt);
+}
+
+#[cfg(unix)]
+#[test]
 fn repl_builtin_overrides_do_not_mutate_runtime_ui_state_unit() {
     let mut state = make_test_state(Vec::new());
     let history = make_test_history(&mut state);
@@ -1568,11 +2249,15 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
     )
     .expect("doctor last should render");
     match rendered.output {
-        Some(ReplCommandOutput::Text(text)) => {
-            assert!(text.contains("\"status\": \"error\""));
-            assert!(text.contains("\"command\": \"missing\""));
+        Some(ReplCommandOutput::Document(document)) => {
+            let Some(Block::Json(json)) = document.blocks.first() else {
+                panic!("expected doctor last json document");
+            };
+            assert_eq!(json.payload["status"], "error");
+            assert_eq!(json.payload["command"], "missing");
         }
         Some(ReplCommandOutput::Output { .. }) => panic!("unexpected doctor output variant"),
+        Some(ReplCommandOutput::Text(_)) => panic!("unexpected doctor output variant"),
         None => panic!("expected doctor output"),
     }
 }
@@ -1725,6 +2410,100 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
 }
 
 #[cfg(unix)]
+#[test]
+fn repl_bang_contains_search_respects_shell_scope_unit() {
+    let mut state = make_test_state(Vec::new());
+    let history = make_test_history(&mut state);
+
+    history
+        .save_command_line("config show")
+        .expect("root history seed should save");
+
+    state.session.scope.enter("orch");
+    state.sync_history_shell_context();
+    history
+        .save_command_line("status")
+        .expect("scoped history seed should save");
+
+    let scoped_hit = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "!?status",
+    )
+    .expect("scoped bang search should succeed");
+    match scoped_hit {
+        osp_repl::ReplLineResult::ReplaceInput(text) => assert_eq!(text, "status"),
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+
+    let scoped_miss = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "!?config",
+    )
+    .expect("cross-shell bang miss should render feedback");
+    match scoped_miss {
+        osp_repl::ReplLineResult::Continue(text) => {
+            assert_eq!(text, "No history match for: !?config\n");
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_invalid_subcommand_renders_inline_help_unit() {
+    let mut state = make_test_state(Vec::new());
+    let history = make_test_history(&mut state);
+
+    let rendered = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config sho",
+    )
+    .expect("invalid subcommand should stay inside repl help flow");
+
+    match rendered {
+        osp_repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("unrecognized subcommand"));
+            assert!(text.contains("config <COMMAND>"));
+            assert!(!text.contains("For more information, try '--help'."));
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_flag_prefixed_help_alias_dispatches_to_command_help_unit() {
+    let mut state = make_test_state(Vec::new());
+    let history = make_test_history(&mut state);
+
+    let rendered = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "-q help config",
+    )
+    .expect("flag-prefixed help alias should stay in help flow");
+
+    match rendered {
+        osp_repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("config <COMMAND>"));
+            assert!(text.contains("Common Invocation Options"));
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
 fn make_test_history(state: &mut AppState) -> SharedHistory {
     let history_dir = make_temp_dir("osp-cli-test-history");
     let history_path = history_dir.join("history.jsonl");
@@ -1808,6 +2587,42 @@ JSON
 "#,
         )
         .expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_provider_test_plugin(
+    dir: &std::path::Path,
+    plugin_id: &str,
+    command_name: &str,
+    message: &str,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join(format!("osp-{plugin_id}"));
+    let script = format!(
+        r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"{message}-from-plugin"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+        plugin_id = plugin_id,
+        command_name = command_name,
+        message = message,
+    );
+    std::fs::write(&plugin_path, script).expect("plugin script should be written");
     let mut perms = std::fs::metadata(&plugin_path)
         .expect("metadata should be readable")
         .permissions();

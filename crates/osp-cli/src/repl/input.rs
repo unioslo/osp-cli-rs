@@ -1,7 +1,9 @@
 use miette::Result;
+use osp_completion::CommandLineParser;
 use osp_config::ResolvedConfig;
 
 use crate::app::{CMD_HELP, REPL_SHELLABLE_COMMANDS};
+use crate::invocation::scan_command_tokens_with_trace;
 use crate::pipeline::{ParsedCommandLine, parse_command_text_with_aliases};
 use crate::state::ReplScopeStack;
 
@@ -60,15 +62,64 @@ impl ReplParsedLine {
 }
 
 pub(crate) fn rewrite_help_alias_tokens(tokens: &[String]) -> Option<Vec<String>> {
-    if tokens.first().map(String::as_str) != Some(CMD_HELP) || tokens.len() == 1 {
+    rewrite_help_alias_tokens_at(tokens, 0)
+}
+
+pub(crate) fn rewrite_help_alias_tokens_at(
+    tokens: &[String],
+    command_index: usize,
+) -> Option<Vec<String>> {
+    if tokens.get(command_index).map(String::as_str) != Some(CMD_HELP)
+        || tokens.len() <= command_index + 1
+    {
         return None;
     }
 
-    let mut rewritten = tokens[1..].to_vec();
+    let mut rewritten = tokens[..command_index].to_vec();
+    rewritten.extend_from_slice(&tokens[command_index + 1..]);
     if !rewritten.iter().any(|arg| arg == "--help" || arg == "-h") {
         rewritten.push("--help".to_string());
     }
     Some(rewritten)
+}
+
+pub(crate) fn project_repl_ui_line(line: &str, config: &ResolvedConfig) -> Result<String> {
+    let _ = config;
+    let parser = CommandLineParser;
+    let spans = parser.tokenize_with_spans(line);
+    if spans.is_empty() {
+        return Ok(line.to_string());
+    }
+
+    let tokens = spans
+        .iter()
+        .map(|span| span.value.clone())
+        .collect::<Vec<_>>();
+    let scanned = scan_command_tokens_with_trace(&tokens)?;
+    let mut projected = line.as_bytes().to_vec();
+
+    for (index, span) in spans.iter().enumerate() {
+        if scanned.kept_indices.contains(&index) {
+            continue;
+        }
+        blank_bytes(&mut projected, span.start, span.end);
+    }
+
+    if scanned.tokens.first().map(String::as_str) == Some(CMD_HELP)
+        && scanned.tokens.len() > 1
+        && let Some(help_index) = scanned.kept_indices.first().copied()
+        && let Some(span) = spans.get(help_index)
+    {
+        blank_bytes(&mut projected, span.start, span.end);
+    }
+
+    Ok(String::from_utf8(projected).unwrap_or_else(|_| line.to_string()))
+}
+
+fn blank_bytes(buffer: &mut [u8], start: usize, end: usize) {
+    for byte in buffer.get_mut(start..end).into_iter().flatten() {
+        *byte = b' ';
+    }
 }
 
 pub(crate) fn is_repl_shellable_command(command: &str) -> bool {
@@ -79,7 +130,7 @@ pub(crate) fn is_repl_shellable_command(command: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::ReplParsedLine;
+    use super::{ReplParsedLine, project_repl_ui_line, rewrite_help_alias_tokens_at};
     use crate::state::ReplScopeStack;
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
 
@@ -118,5 +169,27 @@ mod tests {
         let help_alias =
             ReplParsedLine::parse("help ldap", &config).expect("help alias should parse");
         assert_eq!(help_alias.shell_entry_command(&scope), None);
+    }
+
+    #[test]
+    fn rewrites_help_alias_after_scope_prefix_unit() {
+        let rewritten = rewrite_help_alias_tokens_at(
+            &["orch".to_string(), "help".to_string(), "status".to_string()],
+            1,
+        )
+        .expect("help alias should rewrite");
+
+        assert_eq!(rewritten, vec!["orch", "status", "--help"]);
+    }
+
+    #[test]
+    fn projects_repl_ui_line_hides_invocation_flags_and_help_keyword_unit() {
+        let projected = project_repl_ui_line("--json help ldap user", &make_config())
+            .expect("projection should succeed");
+
+        assert!(projected.contains("ldap user"));
+        assert!(!projected.contains("--json"));
+        assert!(!projected.contains("help"));
+        assert_eq!(projected.len(), "--json help ldap user".len());
     }
 }

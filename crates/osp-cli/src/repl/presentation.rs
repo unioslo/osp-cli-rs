@@ -1,18 +1,24 @@
 use crate::app::DEFAULT_REPL_PROMPT;
+use crate::app::format_timing_badge;
+use crate::state::DebugTimingState;
 use osp_repl::{ReplAppearance, ReplPrompt};
-use osp_ui::messages::render_section_divider_with_overrides;
+use osp_ui::messages::render_section_block_with_overrides;
 use osp_ui::render_inline;
 use osp_ui::style::{
     StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
 };
+use std::sync::Arc;
 
 use super::ReplViewContext;
+use super::history;
 use super::surface::ReplSurface;
+use crate::ui_presentation::{
+    ReplIntroStyle, effective_repl_intro_style, effective_repl_simple_prompt,
+};
 
 pub(crate) fn render_repl_intro(view: ReplViewContext<'_>) -> String {
     let resolved = view.ui.render_settings.resolve_render_settings();
     let config = view.config;
-    let theme = &resolved.theme;
 
     let user = config.get_string("user.name").unwrap_or("anonymous");
     let display_name = config
@@ -22,114 +28,60 @@ pub(crate) fn render_repl_intro(view: ReplViewContext<'_>) -> String {
     let theme_id = view.ui.render_settings.theme_name.clone();
     let version = env!("CARGO_PKG_VERSION");
     let theme_display = theme_display_name(&theme_id);
+    let intro_style = effective_repl_intro_style(config);
+
+    if matches!(intro_style, ReplIntroStyle::None) {
+        return String::new();
+    }
+
+    if matches!(intro_style, ReplIntroStyle::Minimal) {
+        let summary = format!(
+            "Welcome `{display_name}`. v{version}. Commands: `help`, `config`, `theme`, `plugins`. See `help` for more."
+        );
+        let mut out = String::new();
+        out.push('\n');
+        out.push_str(&render_inline(
+            &summary,
+            resolved.color,
+            &resolved.theme,
+            &resolved.style_overrides,
+        ));
+        out.push_str("\n\n");
+        return out;
+    }
 
     let mut out = String::new();
     out.push('\n');
-    out.push_str(&render_section_divider_with_overrides(
+    out.push_str(&render_chrome_section(
+        &resolved,
         "OSP",
-        resolved.unicode,
-        resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::PanelBorder,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        &format!("  Welcome `{display_name}`!"),
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        &format!("  Logged in as: `{user}`"),
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        &format!("  Theme: `{theme_display}`"),
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        &format!("  Version: `{version}`"),
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
+        &[
+            format!("  Welcome `{display_name}`!"),
+            format!("  Logged in as: `{user}`"),
+            format!("  Theme: `{theme_display}`"),
+            format!("  Version: `{version}`"),
+        ],
     ));
     out.push_str("\n\n");
-    out.push_str(&render_section_divider_with_overrides(
+    out.push_str(&render_chrome_section(
+        &resolved,
         "Keybindings",
-        resolved.unicode,
-        resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::PanelBorder,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        "  `Ctrl-D`    **exit**",
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        "  `Ctrl-L`    **clear screen**",
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        "  `Ctrl-R`    **reverse search history**",
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
+        &[
+            "  `Ctrl-D`    **exit**".to_string(),
+            "  `Ctrl-L`    **clear screen**".to_string(),
+            "  `Ctrl-R`    **reverse search history**".to_string(),
+        ],
     ));
     out.push_str("\n\n");
-    out.push_str(&render_section_divider_with_overrides(
+    out.push_str(&render_chrome_section(
+        &resolved,
         "Pipes",
-        resolved.unicode,
-        resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::PanelBorder,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        "  `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2",
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        "  *|* `A` metric() *|* `L` limit offset *|* `C` count",
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        "  `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*",
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-    out.push_str(&render_inline(
-        "  *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`",
-        resolved.color,
-        theme,
-        &resolved.style_overrides,
+        &[
+            "  `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2".to_string(),
+            "  *|* `A` metric() *|* `L` limit offset *|* `C` count".to_string(),
+            "  `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*".to_string(),
+            "  *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`".to_string(),
+        ],
     ));
     out.push_str("\n\n");
     out
@@ -156,38 +108,49 @@ pub(crate) fn render_repl_command_overview(
     };
     out.push(' ');
     out.push_str(&usage_label);
-    out.push_str("  [OPTIONS] COMMAND [ARGS]...\n\n");
+    out.push_str("  [INVOCATION_OPTIONS] COMMAND [ARGS]...\n\n");
 
-    out.push_str(&render_section_divider_with_overrides(
-        "Commands",
-        resolved.unicode,
-        resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::PanelBorder,
-        &resolved.style_overrides,
-    ));
-    out.push('\n');
-
-    for entry in &surface.overview_entries {
-        let name = format!("{:<12}", entry.name);
-        out.push_str("  ");
-        out.push_str(&style_command_name(&resolved, theme, &name));
-        out.push_str(&entry.summary);
-        out.push('\n');
-    }
-
-    out.push_str(&render_section_divider_with_overrides(
-        "",
-        resolved.unicode,
-        resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::PanelBorder,
-        &resolved.style_overrides,
-    ));
+    let body = surface
+        .overview_entries
+        .iter()
+        .map(|entry| {
+            let name = format!("{:<12}", entry.name);
+            format!(
+                "  {}{}",
+                style_command_name(&resolved, theme, &name),
+                entry.summary
+            )
+        })
+        .collect::<Vec<_>>();
+    out.push_str(&render_chrome_section(&resolved, "Commands", &body));
     out.push('\n');
     out
+}
+
+fn render_chrome_section(
+    resolved: &osp_ui::ResolvedRenderSettings,
+    title: &str,
+    lines: &[String],
+) -> String {
+    let theme = &resolved.theme;
+    let body = lines
+        .iter()
+        .map(|line| render_inline(line, resolved.color, theme, &resolved.style_overrides))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    render_section_block_with_overrides(
+        title,
+        &body,
+        resolved.chrome_frame,
+        resolved.unicode,
+        resolved.width,
+        resolved.color,
+        theme,
+        StyleToken::PanelBorder,
+        StyleToken::PanelTitle,
+        &resolved.style_overrides,
+    )
 }
 
 fn style_command_name(
@@ -267,7 +230,7 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
     let resolved = view.ui.render_settings.resolve_render_settings();
     let config = view.config;
     let theme = &resolved.theme;
-    let simple = config.get_bool("repl.simple_prompt").unwrap_or(false);
+    let simple = effective_repl_simple_prompt(config);
     let profile = config.active_profile();
     let user = config.get_string("user.name").unwrap_or("anonymous");
     let domain = config.get_string("domain").unwrap_or("local");
@@ -331,6 +294,56 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
     };
 
     ReplPrompt::simple(prompt)
+}
+
+pub(crate) fn build_repl_prompt_right_renderer(
+    view: ReplViewContext<'_>,
+    timing: DebugTimingState,
+) -> osp_repl::PromptRightRenderer {
+    let resolved = view.ui.render_settings.resolve_render_settings();
+    let history_enabled = history::repl_history_enabled(view.config);
+    Arc::new(move || render_repl_prompt_right(&resolved, history_enabled, &timing))
+}
+
+#[cfg(test)]
+pub(crate) fn render_repl_prompt_right_for_test(
+    resolved: &osp_ui::ResolvedRenderSettings,
+    history_enabled: bool,
+    timing: &DebugTimingState,
+) -> String {
+    render_repl_prompt_right(resolved, history_enabled, timing)
+}
+
+fn render_repl_prompt_right(
+    resolved: &osp_ui::ResolvedRenderSettings,
+    history_enabled: bool,
+    timing: &DebugTimingState,
+) -> String {
+    let mut parts = Vec::new();
+
+    if !history_enabled {
+        let incognito = if resolved.unicode {
+            "(⌐■_■)"
+        } else {
+            "incognito"
+        };
+        parts.push(apply_style_with_theme_overrides(
+            incognito,
+            StyleToken::Muted,
+            resolved.color,
+            &resolved.theme,
+            &resolved.style_overrides,
+        ));
+    }
+
+    if let Some(badge) = timing.badge() {
+        let rendered = format_timing_badge(badge.summary, badge.level, resolved);
+        if !rendered.is_empty() {
+            parts.push(rendered);
+        }
+    }
+
+    parts.join("  ")
 }
 
 fn build_shell_indicator(view: ReplViewContext<'_>) -> String {

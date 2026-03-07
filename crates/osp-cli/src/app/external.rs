@@ -10,17 +10,14 @@ use crate::state::{AppClients, AppRuntime, AppSession};
 use crate::state::{AuthState, RuntimeContext, UiState};
 
 use super::{
-    CMD_HELP, CommandRenderRuntime, PreparedPluginResponse, emit_messages_with_runtime,
-    enrich_dispatch_error, ensure_plugin_visible_for, maybe_copy_output_with_runtime,
-    plugin_dispatch_context_for, prepare_plugin_response, resolve_effective_render_settings,
-    run_cli_command, run_inline_builtin_command,
+    CMD_HELP, CliCommandResult, CommandRenderRuntime, PreparedPluginResponse, ReplCommandOutput,
+    command_output::emit_messages_with_runtime, enrich_dispatch_error, ensure_plugin_visible_for,
+    plugin_dispatch_context_for, prepare_plugin_response, run_inline_builtin_command,
 };
-use super::{ResolvedConfig, render_output};
 
 pub(super) struct ExternalCommandRuntime<'a> {
     pub(super) context: &'a RuntimeContext,
     pub(super) config_state: &'a crate::state::ConfigState,
-    pub(super) config: &'a ResolvedConfig,
     pub(super) ui: &'a UiState,
     pub(super) auth: &'a AuthState,
     pub(super) clients: &'a AppClients,
@@ -32,7 +29,6 @@ impl<'a> ExternalCommandRuntime<'a> {
         Self {
             context: &runtime.context,
             config_state: &runtime.config,
-            config: runtime.config.resolved(),
             ui: &runtime.ui,
             auth: &runtime.auth,
             clients,
@@ -48,7 +44,7 @@ struct ParsedExternalInvocation {
 }
 
 enum ExternalParse {
-    Handled(i32),
+    Handled(CliCommandResult),
     Invocation(ParsedExternalInvocation),
 }
 
@@ -57,9 +53,9 @@ pub(super) fn run_external_command(
     session: &mut AppSession,
     clients: &AppClients,
     tokens: &[String],
-) -> Result<i32> {
+) -> Result<CliCommandResult> {
     let invocation = match parse_external_invocation(runtime, session, tokens)? {
-        ExternalParse::Handled(code) => return Ok(code),
+        ExternalParse::Handled(result) => return Ok(result),
         ExternalParse::Invocation(invocation) => invocation,
     };
 
@@ -67,10 +63,7 @@ pub(super) fn run_external_command(
         && let Some(result) =
             run_inline_builtin_command(runtime, session, clients, command, &invocation.stages)?
     {
-        return run_cli_command(
-            &CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui),
-            result,
-        );
+        return Ok(result);
     }
     if !invocation.stages.is_empty() {
         completion::validate_dsl_stages(&invocation.stages)?;
@@ -97,8 +90,7 @@ fn parse_external_invocation(
         ReplViewContext::from_parts(runtime, session),
         &parsed.stages,
     ) {
-        print!("{help}");
-        return Ok(ExternalParse::Handled(0));
+        return Ok(ExternalParse::Handled(CliCommandResult::text(help)));
     }
 
     let inline_command = match parse_inline_command_tokens(&parsed.tokens) {
@@ -108,11 +100,9 @@ fn parse_external_invocation(
                 || err.kind() == clap::error::ErrorKind::DisplayVersion
             {
                 let resolved = runtime.ui.render_settings.resolve_render_settings();
-                print!(
-                    "{}",
-                    repl_help::render_help_with_chrome(&err.to_string(), &resolved)
-                );
-                return Ok(ExternalParse::Handled(0));
+                return Ok(ExternalParse::Handled(CliCommandResult::text(
+                    repl_help::render_help_with_chrome(&err.to_string(), &resolved),
+                )));
             }
             return Err(miette!(err.to_string()));
         }
@@ -135,7 +125,7 @@ fn emit_command_conflict_warning_for(
     };
     let mut messages = osp_ui::messages::MessageBuffer::default();
     messages.warning(message);
-    let render_runtime = CommandRenderRuntime::new(runtime.config, runtime.ui);
+    let render_runtime = CommandRenderRuntime::new(runtime.config_state.resolved(), runtime.ui);
     emit_messages_with_runtime(&render_runtime, &messages, runtime.ui.message_verbosity);
 }
 
@@ -144,7 +134,7 @@ fn run_external_plugin_command(
     command: &str,
     args: &[String],
     stages: &[String],
-) -> Result<i32> {
+) -> Result<CliCommandResult> {
     ensure_plugin_visible_for(runtime.auth, command)?;
     emit_command_conflict_warning_for(runtime, command, runtime.plugins);
 
@@ -160,17 +150,17 @@ fn run_external_plugin_command(
             .plugins
             .dispatch_passthrough(command, args, &dispatch_context)
             .map_err(enrich_dispatch_error)?;
-        if !raw.stdout.is_empty() {
+        let mut result = if !raw.stdout.is_empty() {
             let resolved = runtime.ui.render_settings.resolve_render_settings();
-            print!(
-                "{}",
-                repl_help::render_help_with_chrome(&raw.stdout, &resolved)
-            );
-        }
+            CliCommandResult::text(repl_help::render_help_with_chrome(&raw.stdout, &resolved))
+        } else {
+            CliCommandResult::exit(raw.status_code)
+        };
         if !raw.stderr.is_empty() {
-            eprint!("{}", raw.stderr);
+            result.stderr_text = Some(raw.stderr);
         }
-        return Ok(raw.status_code);
+        result.exit_code = raw.status_code;
+        return Ok(result);
     }
 
     let dispatch_context = plugin_dispatch_context_for(runtime, None);
@@ -179,40 +169,29 @@ fn run_external_plugin_command(
         .dispatch(command, args, &dispatch_context)
         .map_err(enrich_dispatch_error)?;
 
-    render_external_plugin_response(runtime, response, stages)
+    render_external_plugin_response(response, stages)
 }
 
 fn render_external_plugin_response(
-    runtime: &ExternalCommandRuntime<'_>,
     response: osp_core::plugin::ResponseV1,
     stages: &[String],
-) -> Result<i32> {
-    let render_runtime = CommandRenderRuntime::new(runtime.config, runtime.ui);
+) -> Result<CliCommandResult> {
     match prepare_plugin_response(response, stages).map_err(|err| miette!("{err:#}"))? {
-        PreparedPluginResponse::Failure(failure) => {
-            emit_messages_with_runtime(
-                &render_runtime,
-                &failure.messages,
-                runtime.ui.message_verbosity,
-            );
-            Ok(1)
-        }
-        PreparedPluginResponse::Output(prepared) => {
-            if !prepared.messages.is_empty() {
-                emit_messages_with_runtime(
-                    &render_runtime,
-                    &prepared.messages,
-                    runtime.ui.message_verbosity,
-                );
-            }
-            let effective = resolve_effective_render_settings(
-                &runtime.ui.render_settings,
-                prepared.format_hint,
-            );
-            print!("{}", render_output(&prepared.output, &effective));
-            maybe_copy_output_with_runtime(&render_runtime, &prepared.output);
-            Ok(0)
-        }
+        PreparedPluginResponse::Failure(failure) => Ok(CliCommandResult {
+            exit_code: 1,
+            messages: failure.messages,
+            output: None,
+            stderr_text: None,
+        }),
+        PreparedPluginResponse::Output(prepared) => Ok(CliCommandResult {
+            exit_code: 0,
+            messages: prepared.messages,
+            output: Some(ReplCommandOutput::Output {
+                output: prepared.output,
+                format_hint: prepared.format_hint,
+            }),
+            stderr_text: None,
+        }),
     }
 }
 
@@ -230,13 +209,15 @@ pub(crate) fn is_help_passthrough(args: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExternalParse, parse_external_invocation};
+    use super::{ExternalParse, parse_external_invocation, render_external_plugin_response};
+    use crate::app::{CliCommandResult, ReplCommandOutput};
     use crate::plugin_manager::PluginManager;
     use crate::state::{
         AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
     };
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use osp_core::output::OutputFormat;
+    use osp_core::plugin::{ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1};
     use osp_ui::RenderSettings;
     use osp_ui::messages::MessageLevel;
 
@@ -272,6 +253,35 @@ mod tests {
 
         let parsed =
             parse_external_invocation(&runtime, &session, &tokens).expect("help should parse");
-        assert!(matches!(parsed, ExternalParse::Handled(0)));
+        assert!(matches!(
+            parsed,
+            ExternalParse::Handled(CliCommandResult {
+                exit_code: 0,
+                output: Some(ReplCommandOutput::Text(_)),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn external_plugin_response_preserves_messages_unit() {
+        let response = ResponseV1 {
+            protocol_version: 1,
+            ok: true,
+            data: serde_json::json!({ "message": "hello" }),
+            error: None,
+            messages: vec![ResponseMessageV1 {
+                level: ResponseMessageLevelV1::Warning,
+                text: "warning from plugin".to_string(),
+            }],
+            meta: ResponseMetaV1 {
+                format_hint: Some("json".to_string()),
+                columns: None,
+            },
+        };
+
+        let result =
+            render_external_plugin_response(response, &[]).expect("response should prepare");
+        assert!(!result.messages.is_empty());
     }
 }

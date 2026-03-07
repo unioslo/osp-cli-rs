@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
 mod history;
@@ -28,6 +29,15 @@ use serde::Serialize;
 pub struct ReplPrompt {
     pub left: String,
     pub indicator: String,
+}
+
+pub type PromptRightRenderer = Arc<dyn Fn() -> String + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplInputMode {
+    Auto,
+    Interactive,
+    Basic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,7 +256,7 @@ fn build_debug_completion_session(
         UndoBehavior::CreateUndoPoint,
     );
 
-    let completer = ReplCompleter::new(Vec::new(), Some(tree.clone()));
+    let completer = ReplCompleter::new(Vec::new(), Some(tree.clone()), None);
     let menu = if let Some(appearance) = appearance {
         build_completion_menu(appearance)
     } else {
@@ -537,15 +547,40 @@ pub fn run_repl<F>(
     completion_tree: Option<CompletionTree>,
     appearance: ReplAppearance,
     history_config: HistoryConfig,
+    input_mode: ReplInputMode,
+    prompt_right: Option<PromptRightRenderer>,
+    line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
     mut execute: F,
 ) -> Result<ReplRunResult>
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
+    let history_store = SharedHistory::new(history_config)?;
+    let mut submission = SubmissionContext {
+        history_store: &history_store,
+        execute: &mut execute,
+    };
+    let prompt = OspPrompt::new(prompt.left, prompt.indicator, prompt_right);
+
+    if matches!(input_mode, ReplInputMode::Basic)
+        || !io::stdin().is_terminal()
+        || !io::stdout().is_terminal()
+    {
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            eprintln!("Warning: Input is not a terminal (fd=0).");
+        }
+        run_repl_basic(&prompt, &mut submission)?;
+        return Ok(ReplRunResult::Exit(0));
+    }
+
     let tree = completion_tree.unwrap_or_else(|| build_repl_tree(&completion_words));
-    let completer = Box::new(ReplCompleter::new(completion_words, Some(tree.clone())));
+    let completer = Box::new(ReplCompleter::new(
+        completion_words,
+        Some(tree.clone()),
+        line_projector.clone(),
+    ));
     let completion_menu = Box::new(build_completion_menu(&appearance));
-    let highlighter = build_repl_highlighter(&tree, &appearance);
+    let highlighter = build_repl_highlighter(&tree, &appearance, line_projector);
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
         KeyModifiers::NONE,
@@ -580,19 +615,7 @@ where
     if let Some(highlighter) = highlighter {
         editor = editor.with_highlighter(Box::new(highlighter));
     }
-    let history_store = SharedHistory::new(history_config)?;
     editor = editor.with_history(Box::new(history_store.clone()));
-    let mut submission = SubmissionContext {
-        history_store: &history_store,
-        execute: &mut execute,
-    };
-
-    let prompt = OspPrompt::new(prompt.left, prompt.indicator);
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        eprintln!("Warning: Input is not a terminal (fd=0).");
-        run_repl_basic(&prompt, &mut submission)?;
-        return Ok(ReplRunResult::Exit(0));
-    }
 
     loop {
         let signal = match editor.read_line(&prompt) {
@@ -676,15 +699,21 @@ where
 
 struct ReplCompleter {
     engine: CompletionEngine,
+    line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
 }
 
 impl ReplCompleter {
-    fn new(mut words: Vec<String>, completion_tree: Option<CompletionTree>) -> Self {
+    fn new(
+        mut words: Vec<String>,
+        completion_tree: Option<CompletionTree>,
+        line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
+    ) -> Self {
         words.sort();
         words.dedup();
         let tree = completion_tree.unwrap_or_else(|| build_repl_tree(&words));
         Self {
             engine: CompletionEngine::new(tree),
+            line_projector,
         }
     }
 }
@@ -696,7 +725,12 @@ impl Completer for ReplCompleter {
             "completer received pos {pos} beyond line length {}",
             line.len()
         );
-        let (cursor_state, outputs) = self.engine.complete(line, pos);
+        let projected = self
+            .line_projector
+            .as_ref()
+            .map(|project| project(line))
+            .unwrap_or_else(|| line.to_string());
+        let (cursor_state, outputs) = self.engine.complete(&projected, pos);
         let span = Span {
             start: cursor_state.replace_range.start,
             end: cursor_state.replace_range.end,
@@ -806,12 +840,17 @@ fn build_completion_menu(appearance: &ReplAppearance) -> OspCompletionMenu {
 fn build_repl_highlighter(
     tree: &CompletionTree,
     appearance: &ReplAppearance,
+    line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
 ) -> Option<ReplHighlighter> {
     let command_color = appearance
         .command_highlight_style
         .as_deref()
         .and_then(color_from_style_spec);
-    Some(ReplHighlighter::new(tree.clone(), command_color?))
+    Some(ReplHighlighter::new(
+        tree.clone(),
+        command_color?,
+        line_projector,
+    ))
 }
 
 fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
@@ -828,13 +867,19 @@ fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
 struct ReplHighlighter {
     engine: CompletionEngine,
     command_color: Color,
+    line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
 }
 
 impl ReplHighlighter {
-    fn new(tree: CompletionTree, command_color: Color) -> Self {
+    fn new(
+        tree: CompletionTree,
+        command_color: Color,
+        line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
+    ) -> Self {
         Self {
             engine: CompletionEngine::new(tree),
             command_color,
+            line_projector,
         }
     }
 }
@@ -846,7 +891,12 @@ impl Highlighter for ReplHighlighter {
             return styled;
         }
 
-        let tokens = self.engine.tokenize(line);
+        let projected = self
+            .line_projector
+            .as_ref()
+            .map(|project| project(line))
+            .unwrap_or_else(|| line.to_string());
+        let tokens = self.engine.tokenize(&projected);
         if tokens.is_empty() {
             styled.push((Style::new(), line.to_string()));
             return styled;
@@ -1237,11 +1287,16 @@ fn expand_home(path: &str) -> String {
 struct OspPrompt {
     left: String,
     indicator: String,
+    right: Option<PromptRightRenderer>,
 }
 
 impl OspPrompt {
-    fn new(left: String, indicator: String) -> Self {
-        Self { left, indicator }
+    fn new(left: String, indicator: String, right: Option<PromptRightRenderer>) -> Self {
+        Self {
+            left,
+            indicator,
+            right,
+        }
     }
 }
 
@@ -1251,7 +1306,10 @@ impl Prompt for OspPrompt {
     }
 
     fn render_prompt_right(&self) -> Cow<'_, str> {
-        Cow::Borrowed("")
+        match &self.right {
+            Some(render) => Cow::Owned(render()),
+            None => Cow::Borrowed(""),
+        }
     }
 
     fn render_prompt_indicator(&self, _prompt_mode: PromptEditMode) -> Cow<'_, str> {
@@ -1291,6 +1349,7 @@ mod tests {
     use osp_completion::{CompletionNode, CompletionTree};
     use reedline::{Completer, Highlighter, StyledText};
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use super::{
         HistoryConfig, HistoryShellContext, ReplCompleter, ReplHighlighter, ReplLineResult,
@@ -1425,6 +1484,7 @@ mod tests {
                 "theme".to_string(),
             ],
             None,
+            None,
         );
 
         let completions = completer.complete("ld", 2);
@@ -1444,6 +1504,7 @@ mod tests {
                 "theme".to_string(),
             ],
             None,
+            None,
         );
 
         let completions = completer.complete("lap", 3);
@@ -1456,7 +1517,7 @@ mod tests {
 
     #[test]
     fn completer_suggests_pipe_verbs_after_pipe() {
-        let mut completer = ReplCompleter::new(vec!["ldap".to_string()], None);
+        let mut completer = ReplCompleter::new(vec!["ldap".to_string()], None, None);
         let completions = completer.complete("ldap user | F", "ldap user | F".len());
         let values = completions
             .into_iter()
@@ -1487,9 +1548,24 @@ mod tests {
             ..CompletionTree::default()
         };
 
-        let mut completer = ReplCompleter::new(vec!["ldap".to_string()], Some(tree));
+        let mut completer = ReplCompleter::new(vec!["ldap".to_string()], Some(tree), None);
         let completions = completer.complete("zzz", 3);
         assert!(completions.is_empty());
+    }
+
+    #[test]
+    fn completer_can_use_projected_line_for_host_flags_unit() {
+        let tree = completion_tree_with_config_show();
+        let projector = Arc::new(|line: &str| line.replacen("--json", "      ", 1));
+        let mut completer = ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
+
+        let completions = completer.complete("--json config sh", "--json config sh".len());
+        let values = completions
+            .into_iter()
+            .map(|suggestion| suggestion.value)
+            .collect::<Vec<_>>();
+
+        assert!(values.contains(&"show".to_string()));
     }
 
     #[test]
@@ -1508,7 +1584,7 @@ mod tests {
             ..CompletionTree::default()
         };
 
-        let mut completer = ReplCompleter::new(Vec::new(), Some(tree));
+        let mut completer = ReplCompleter::new(Vec::new(), Some(tree), None);
         let completion = completer
             .complete("ld", 2)
             .into_iter()
@@ -1544,7 +1620,7 @@ mod tests {
     #[test]
     fn highlighter_colors_full_command_chain_only() {
         let tree = completion_tree_with_config_show();
-        let highlighter = ReplHighlighter::new(tree, Color::Green);
+        let highlighter = ReplHighlighter::new(tree, Color::Green, None);
 
         let styled = highlighter.highlight("config show", 0);
         let tokens = token_styles(&styled);
@@ -1560,7 +1636,7 @@ mod tests {
     #[test]
     fn highlighter_skips_partial_subcommand_and_flags() {
         let tree = completion_tree_with_config_show();
-        let highlighter = ReplHighlighter::new(tree, Color::Green);
+        let highlighter = ReplHighlighter::new(tree, Color::Green, None);
 
         let styled = highlighter.highlight("config sho", 0);
         let tokens = token_styles(&styled);
@@ -1584,9 +1660,33 @@ mod tests {
     }
 
     #[test]
+    fn highlighter_can_use_projected_line_for_help_alias_unit() {
+        let mut ldap = CompletionNode::default();
+        ldap.children
+            .insert("user".to_string(), CompletionNode::default());
+        let tree = CompletionTree {
+            root: CompletionNode::default().with_child("ldap", ldap),
+            ..CompletionTree::default()
+        };
+        let projector = Arc::new(|line: &str| line.replacen("help", "    ", 1));
+        let highlighter = ReplHighlighter::new(tree, Color::Green, Some(projector));
+
+        let styled = highlighter.highlight("help ldap user", 0);
+        let tokens = token_styles(&styled);
+        assert_eq!(
+            tokens,
+            vec![
+                ("help ".to_string(), None),
+                ("ldap".to_string(), Some(Color::Green)),
+                ("user".to_string(), Some(Color::Green)),
+            ]
+        );
+    }
+
+    #[test]
     fn highlighter_fallback_keeps_remaining_text_once() {
         let tree = completion_tree_with_config_show();
-        let highlighter = ReplHighlighter::new(tree, Color::Green);
+        let highlighter = ReplHighlighter::new(tree, Color::Green, None);
         let line = r#"config "say \"hi\"""#;
 
         let styled = highlighter.highlight(line, 0);
