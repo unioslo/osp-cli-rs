@@ -251,9 +251,17 @@ fn command_restarts_repl(command: &Commands) -> bool {
         command,
         Commands::Theme(ThemeArgs {
             command: ThemeCommands::Use(_)
-        }) | Commands::Config(ConfigArgs {
-            command: ConfigCommands::Set(_)
         })
+    ) || matches!(
+        command,
+        Commands::Config(ConfigArgs {
+            command: ConfigCommands::Set(set),
+        }) if !set.dry_run
+    ) || matches!(
+        command,
+        Commands::Config(ConfigArgs {
+            command: ConfigCommands::Unset(unset),
+        }) if !unset.dry_run
     )
 }
 
@@ -492,17 +500,22 @@ fn theme_or_palette_change_requires_intro(command: &Commands) -> bool {
             command: ThemeCommands::Use(_),
         }) => true,
         Commands::Config(args) => match &args.command {
-            ConfigCommands::Set(set) => {
-                let key = set.key.trim().to_ascii_lowercase();
-                key == "theme.name"
-                    || key.starts_with("theme.")
-                    || key.starts_with("color.")
-                    || key.starts_with("palette.")
+            ConfigCommands::Set(set) => !set.dry_run && config_key_change_requires_intro(&set.key),
+            ConfigCommands::Unset(unset) => {
+                !unset.dry_run && config_key_change_requires_intro(&unset.key)
             }
             _ => false,
         },
         _ => false,
     }
+}
+
+fn config_key_change_requires_intro(key: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    key == "theme.name"
+        || key.starts_with("theme.")
+        || key.starts_with("color.")
+        || key.starts_with("palette.")
 }
 
 #[cfg(test)]

@@ -398,7 +398,11 @@ fn run_config_unset(
 
         match store {
             ConfigStore::Session => {
-                let previous = context.session_overrides.remove_scoped(&key, scope);
+                let previous = if args.dry_run {
+                    session_scoped_value(context.session_overrides, &key, scope)
+                } else {
+                    context.session_overrides.remove_scoped(&key, scope)
+                };
                 row.insert("path", serde_json::Value::Null);
                 row.insert("changed", previous.is_some());
                 row.insert(
@@ -488,6 +492,18 @@ fn run_config_unset(
         output: rows_to_output_result(rows),
         format_hint: None,
     })
+}
+
+fn session_scoped_value(
+    layer: &ConfigLayer,
+    key: &str,
+    scope: &Scope,
+) -> Option<osp_config::ConfigValue> {
+    layer
+        .entries()
+        .iter()
+        .rfind(|entry| entry.key == key && &entry.scope == scope)
+        .map(|entry| entry.value.clone())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

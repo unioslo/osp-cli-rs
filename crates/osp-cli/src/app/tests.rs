@@ -1202,6 +1202,116 @@ fn repl_reload_intent_matches_command_scope_unit() {
             ..
         }
     ));
+
+    let unset_format_result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config unset ui.format",
+    )
+    .expect("config unset should succeed");
+    assert!(matches!(
+        unset_format_result,
+        osp_repl::ReplLineResult::Restart {
+            reload: osp_repl::ReplReloadKind::Default,
+            ..
+        }
+    ));
+
+    let unset_color_result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config unset color.prompt.text",
+    )
+    .expect("color config unset should succeed");
+    assert!(matches!(
+        unset_color_result,
+        osp_repl::ReplLineResult::Restart {
+            reload: osp_repl::ReplReloadKind::WithIntro,
+            ..
+        }
+    ));
+
+    let dry_run_unset_result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config unset ui.format --dry-run",
+    )
+    .expect("dry-run config unset should succeed");
+    assert!(matches!(
+        dry_run_unset_result,
+        osp_repl::ReplLineResult::Continue(_)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_config_unset_rebuilds_runtime_state_unit() {
+    let mut state = make_test_state(Vec::new());
+    state
+        .session
+        .config_overrides
+        .set_for_profile("default", "ui.format", "table");
+    state = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
+
+    let history = make_test_history(&mut state);
+    let result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config unset ui.format",
+    )
+    .expect("config unset should succeed");
+    assert!(matches!(
+        result,
+        osp_repl::ReplLineResult::Restart {
+            reload: osp_repl::ReplReloadKind::Default,
+            ..
+        }
+    ));
+    assert_eq!(
+        layer_value(&state.session.config_overrides, "ui.format"),
+        None
+    );
+
+    let next = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    assert_eq!(next.runtime.config.resolved().get_string("ui.format"), None);
+    assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Auto);
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_config_unset_dry_run_preserves_session_state_unit() {
+    let mut state = make_test_state(Vec::new());
+    state
+        .session
+        .config_overrides
+        .set_for_profile("default", "ui.format", "table");
+    state = super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
+
+    let history = make_test_history(&mut state);
+    let result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config unset ui.format --dry-run",
+    )
+    .expect("dry-run config unset should succeed");
+    assert!(matches!(result, osp_repl::ReplLineResult::Continue(_)));
+    assert_eq!(
+        layer_value(&state.session.config_overrides, "ui.format"),
+        Some(&ConfigValue::from("table"))
+    );
+    assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
 }
 
 #[cfg(unix)]
