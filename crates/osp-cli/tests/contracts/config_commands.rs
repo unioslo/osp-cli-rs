@@ -740,6 +740,81 @@ profile.default = "uio"
 
 #[cfg(unix)]
 #[test]
+fn config_set_allows_terminal_scoped_default_profile_contract() {
+    let home = make_temp_dir("osp-cli-config-set-bootstrap-terminal-scope");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "config",
+        "set",
+        "--global",
+        "--terminal",
+        "repl",
+        "profile.default",
+        "tsd",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"changed\": true"))
+        .stdout(predicate::str::contains("\"scope\": \"terminal:repl\""));
+
+    let payload = std::fs::read_to_string(home.join(".config").join("osp").join("config.toml"))
+        .expect("config should be readable");
+    assert!(payload.contains("terminal"));
+    assert!(payload.contains("repl"));
+    assert!(payload.contains("profile"));
+    assert!(payload.contains("default = \"tsd\""));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_unset_allows_terminal_scoped_default_profile_contract() {
+    let home = make_temp_dir("osp-cli-config-unset-bootstrap-terminal-scope");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+
+[terminal.repl]
+profile.default = "tsd"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "config",
+        "unset",
+        "--global",
+        "--terminal",
+        "repl",
+        "profile.default",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"changed\": true"))
+        .stdout(predicate::str::contains("\"scope\": \"terminal:repl\""));
+
+    let payload = std::fs::read_to_string(home.join(".config").join("osp").join("config.toml"))
+        .expect("config should be readable");
+    assert!(!payload.contains("profile.default = \"tsd\""));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn config_get_missing_key_honors_rich_color_and_unicode_contract() {
     let home = make_temp_dir("osp-cli-config-missing-key-rich");
     write_config(
