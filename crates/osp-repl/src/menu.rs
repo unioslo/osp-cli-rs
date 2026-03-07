@@ -34,6 +34,32 @@ thread_local! {
     static ACTIVE_EDITOR: Cell<*mut Editor> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+/// Scoped registration for the reedline editor pointer used by menu callbacks.
+///
+/// reedline's menu callback API does not pass the active `Editor` into
+/// `menu_event`, so the menu keeps a same-thread raw pointer while it runs the
+/// callback path. This is only sound as long as:
+/// - the pointer is registered and used on the same thread
+/// - the pointed-to `Editor` outlives the callback scope
+/// - the thread-local is cleared before the editor can be moved or dropped
+///
+/// The guard enforces the last invariant so future REPL lifecycle refactors do
+/// not accidentally leave a stale pointer behind.
+struct ActiveEditorGuard;
+
+impl ActiveEditorGuard {
+    fn register(editor: &mut Editor) -> Self {
+        ACTIVE_EDITOR.with(|cell| cell.set(editor as *mut Editor));
+        Self
+    }
+}
+
+impl Drop for ActiveEditorGuard {
+    fn drop(&mut self) {
+        ACTIVE_EDITOR.with(|cell| cell.set(std::ptr::null_mut()));
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApplyMode {
     Cycle,
@@ -304,8 +330,9 @@ impl Menu for OspCompletionMenu {
         ) {
             let ptr = ACTIVE_EDITOR.with(|cell| cell.get());
             if !ptr.is_null() {
-                // SAFETY: Editor is owned by reedline for the duration of the session.
-                // We only use this on the same thread when a menu event is handled.
+                // SAFETY: `ActiveEditorGuard` registers this pointer from the same
+                // thread immediately before menu callbacks run and clears it on
+                // scope exit, so the editor outlives this dereference.
                 let editor = unsafe { &mut *ptr };
                 let action = self.core.handle_event(event);
                 if matches!(action, MenuAction::ApplySelection) {
@@ -337,7 +364,7 @@ impl Menu for OspCompletionMenu {
         completer: &mut dyn Completer,
         painter: &Painter,
     ) {
-        ACTIVE_EDITOR.with(|cell| cell.set(editor as *mut Editor));
+        let _active_editor = ActiveEditorGuard::register(editor);
         self.apply_event(editor, completer);
         self.last_available_lines = painter.remaining_lines();
         let indent = compute_menu_indent(self, editor);
@@ -479,7 +506,7 @@ impl OspCompletionMenu {
         completer: &mut dyn Completer,
         screen_width: u16,
     ) {
-        ACTIVE_EDITOR.with(|cell| cell.set(editor as *mut Editor));
+        let _active_editor = ActiveEditorGuard::register(editor);
         self.apply_event(editor, completer);
         let indent = compute_menu_indent(self, editor);
         self.core.update_layout(screen_width, indent);
