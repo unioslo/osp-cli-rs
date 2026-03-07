@@ -1,5 +1,9 @@
 use super::key_spec::{ExactMode, KeySpec};
 
+/// Scope modifiers for quick-search stages.
+///
+/// Bare quick search is "key or value". `K` and `V` are explicit narrowers,
+/// not separate pipeline concepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickScope {
     KeyOrValue,
@@ -14,6 +18,11 @@ pub struct QuickSpec {
     pub key_not_equals: bool,
 }
 
+/// Parse the prefix operators used by the quick-search mini-language.
+///
+/// This parser is intentionally order-sensitive and loops until it reaches the
+/// actual token. That keeps odd-but-supported forms like `!?field` readable in
+/// one place instead of scattering prefix handling across the matcher code.
 pub fn parse_quick_spec(input: &str) -> QuickSpec {
     let mut remaining = input.trim();
     let mut scope: Option<QuickScope> = None;

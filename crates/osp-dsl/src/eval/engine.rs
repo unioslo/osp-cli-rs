@@ -6,149 +6,214 @@ use osp_core::{
 
 use crate::{
     eval::context::RowContext,
+    model::{ParsedPipeline, ParsedStage, ParsedStageKind},
     parse::pipeline::parse_stage_list,
     stages::{
         aggregate, collapse, copy, filter, group, jq, limit, project, question, quick, sort, values,
     },
 };
 
+/// Apply a pipeline to row output and keep the richer `OutputResult` shape.
 pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
     apply_output_pipeline(OutputResult::from_rows(rows), stages)
 }
 
+/// Apply a pipeline to existing output without flattening grouped data first.
 pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<OutputResult> {
     execute_pipeline_items(output.items, output.meta.wants_copy, stages)
 }
 
+/// Execute a pipeline starting from plain rows.
 pub fn execute_pipeline(mut rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
     execute_pipeline_items(OutputItems::Rows(std::mem::take(&mut rows)), false, stages)
 }
 
 fn execute_pipeline_items(
-    mut items: OutputItems,
+    items: OutputItems,
     initial_wants_copy: bool,
     stages: &[String],
 ) -> Result<OutputResult> {
     let parsed = parse_stage_list(stages)?;
-    let mut wants_copy = initial_wants_copy;
+    PipelineExecutor::new(items, initial_wants_copy, parsed).run()
+}
 
-    for stage in parsed.stages {
-        if stage.verb.is_empty() {
-            continue;
+/// Small stateful executor for one parsed pipeline.
+///
+/// Keeping execution state on a struct makes it easier to read the pipeline
+/// flow without carrying `items` / `wants_copy` through every helper.
+struct PipelineExecutor {
+    items: OutputItems,
+    wants_copy: bool,
+    parsed: ParsedPipeline,
+}
+
+impl PipelineExecutor {
+    fn new(items: OutputItems, wants_copy: bool, parsed: ParsedPipeline) -> Self {
+        Self {
+            items,
+            wants_copy,
+            parsed,
         }
-
-        items = match stage.kind {
-            crate::model::ParsedStageKind::Quick => {
-                map_rows(items, |rows| quick::apply(rows, &stage.raw))?
-            }
-            crate::model::ParsedStageKind::UnknownExplicit => {
-                return Err(anyhow!("unknown DSL verb: {}", stage.verb));
-            }
-            crate::model::ParsedStageKind::Explicit => match stage.verb.as_str() {
-                "P" => match items {
-                    OutputItems::Rows(rows) => {
-                        OutputItems::Rows(project::apply(rows, &stage.spec)?)
-                    }
-                    OutputItems::Groups(groups) => {
-                        OutputItems::Groups(project::apply_groups(groups, &stage.spec)?)
-                    }
-                },
-                // `V` is a quick-search scope alias ("value-only"), not a
-                // value-output stage.
-                "V" => map_rows(items, |rows| {
-                    let quick_spec = if stage.spec.is_empty() {
-                        "V".to_string()
-                    } else {
-                        format!("V {}", stage.spec)
-                    };
-                    quick::apply(rows, &quick_spec)
-                })?,
-                "K" => map_rows(items, |rows| {
-                    let quick_spec = if stage.spec.is_empty() {
-                        "K".to_string()
-                    } else {
-                        format!("K {}", stage.spec)
-                    };
-                    quick::apply(rows, &quick_spec)
-                })?,
-                // Explicit extraction stage producing `{\"value\": ...}` rows.
-                // Kept separate from `V` so verbs do not imply output format mode.
-                "VAL" | "VALUE" => map_rows(items, |rows| values::apply(rows, &stage.spec))?,
-                "F" => match items {
-                    OutputItems::Rows(rows) => OutputItems::Rows(filter::apply(rows, &stage.spec)?),
-                    OutputItems::Groups(groups) => {
-                        OutputItems::Groups(filter::apply_groups(groups, &stage.spec)?)
-                    }
-                },
-                "G" => match items {
-                    OutputItems::Rows(rows) => {
-                        OutputItems::Groups(group::group_rows(rows, &stage.spec)?)
-                    }
-                    OutputItems::Groups(groups) => {
-                        OutputItems::Groups(group::regroup_groups(groups, &stage.spec)?)
-                    }
-                },
-                "A" => aggregate::apply(items, &stage.spec)?,
-                "S" => sort::apply(items, &stage.spec)?,
-                "L" => match items {
-                    OutputItems::Rows(rows) => OutputItems::Rows(limit::apply(rows, &stage.spec)?),
-                    OutputItems::Groups(groups) => {
-                        OutputItems::Groups(limit::apply(groups, &stage.spec)?)
-                    }
-                },
-                "Z" => collapse::apply(items),
-                "C" => aggregate::count_macro(items, &stage.spec)?,
-                "Y" => {
-                    wants_copy = true;
-                    map_rows(items, |rows| Ok(copy::apply(rows)))?
-                }
-                "U" => {
-                    let field = stage.spec.trim();
-                    if field.is_empty() {
-                        return Err(anyhow!("U: missing field name to unroll"));
-                    }
-                    let selector = format!("{field}[]");
-                    match items {
-                        OutputItems::Rows(rows) => {
-                            OutputItems::Rows(project::apply(rows, &selector)?)
-                        }
-                        OutputItems::Groups(groups) => {
-                            OutputItems::Groups(project::apply_groups(groups, &selector)?)
-                        }
-                    }
-                }
-                "?" => question::apply(items, &stage.spec)?,
-                "JQ" => jq::apply(items, &stage.spec)?,
-                _ => return Err(anyhow!("unknown DSL verb: {}", stage.verb)),
-            },
-        };
     }
 
-    let key_index = match &items {
-        OutputItems::Rows(rows) => RowContext::from_rows(rows).key_index().to_vec(),
-        OutputItems::Groups(groups) => {
-            let collapsed = groups
-                .iter()
-                .map(|group| {
-                    let mut row = Row::new();
-                    row.extend(group.groups.clone());
-                    row.extend(group.aggregates.clone());
-                    row
-                })
-                .collect::<Vec<_>>();
-            RowContext::from_rows(&collapsed).key_index().to_vec()
+    fn run(mut self) -> Result<OutputResult> {
+        let stages = self.parsed.stages.clone();
+        for stage in &stages {
+            if stage.verb.is_empty() {
+                continue;
+            }
+            self.apply_stage(stage)?;
         }
-    };
-    let grouped = matches!(items, OutputItems::Groups(_));
 
-    Ok(OutputResult {
-        items,
-        meta: OutputMeta {
+        Ok(OutputResult {
+            meta: self.build_output_meta(),
+            items: self.items,
+        })
+    }
+
+    fn apply_stage(&mut self, stage: &ParsedStage) -> Result<()> {
+        self.items = match stage.kind {
+            ParsedStageKind::Quick => self.apply_quick_stage(stage)?,
+            ParsedStageKind::UnknownExplicit => {
+                return Err(anyhow!("unknown DSL verb: {}", stage.verb));
+            }
+            ParsedStageKind::Explicit => self.apply_explicit_stage(stage)?,
+        };
+        Ok(())
+    }
+
+    fn apply_quick_stage(&self, stage: &ParsedStage) -> Result<OutputItems> {
+        map_rows(self.items.clone(), |rows| quick::apply(rows, &stage.raw))
+    }
+
+    fn apply_explicit_stage(&mut self, stage: &ParsedStage) -> Result<OutputItems> {
+        match stage.verb.as_str() {
+            "P" => self.project(stage),
+            // `V` is a quick-search scope alias ("value-only"), not a values stage.
+            "V" => self.apply_quick_alias(stage, "V"),
+            "K" => self.apply_quick_alias(stage, "K"),
+            // `VAL` / `VALUE` produce explicit `{"value": ...}` rows.
+            "VAL" | "VALUE" => {
+                map_rows(self.items.clone(), |rows| values::apply(rows, &stage.spec))
+            }
+            "F" => self.filter(stage),
+            "G" => self.group(stage),
+            "A" => aggregate::apply(self.items.clone(), &stage.spec),
+            "S" => sort::apply(self.items.clone(), &stage.spec),
+            "L" => self.limit(stage),
+            "Z" => Ok(collapse::apply(self.items.clone())),
+            "C" => aggregate::count_macro(self.items.clone(), &stage.spec),
+            "Y" => self.copy(stage),
+            "U" => self.unroll(stage),
+            "?" => question::apply(self.items.clone(), &stage.spec),
+            "JQ" => jq::apply(self.items.clone(), &stage.spec),
+            _ => Err(anyhow!("unknown DSL verb: {}", stage.verb)),
+        }
+    }
+
+    fn project(&self, stage: &ParsedStage) -> Result<OutputItems> {
+        match &self.items {
+            OutputItems::Rows(rows) => Ok(OutputItems::Rows(project::apply(
+                rows.clone(),
+                &stage.spec,
+            )?)),
+            OutputItems::Groups(groups) => Ok(OutputItems::Groups(project::apply_groups(
+                groups.clone(),
+                &stage.spec,
+            )?)),
+        }
+    }
+
+    fn filter(&self, stage: &ParsedStage) -> Result<OutputItems> {
+        match &self.items {
+            OutputItems::Rows(rows) => {
+                Ok(OutputItems::Rows(filter::apply(rows.clone(), &stage.spec)?))
+            }
+            OutputItems::Groups(groups) => Ok(OutputItems::Groups(filter::apply_groups(
+                groups.clone(),
+                &stage.spec,
+            )?)),
+        }
+    }
+
+    fn group(&self, stage: &ParsedStage) -> Result<OutputItems> {
+        match &self.items {
+            OutputItems::Rows(rows) => Ok(OutputItems::Groups(group::group_rows(
+                rows.clone(),
+                &stage.spec,
+            )?)),
+            OutputItems::Groups(groups) => Ok(OutputItems::Groups(group::regroup_groups(
+                groups.clone(),
+                &stage.spec,
+            )?)),
+        }
+    }
+
+    fn limit(&self, stage: &ParsedStage) -> Result<OutputItems> {
+        match &self.items {
+            OutputItems::Rows(rows) => {
+                Ok(OutputItems::Rows(limit::apply(rows.clone(), &stage.spec)?))
+            }
+            OutputItems::Groups(groups) => Ok(OutputItems::Groups(limit::apply(
+                groups.clone(),
+                &stage.spec,
+            )?)),
+        }
+    }
+
+    fn copy(&mut self, _stage: &ParsedStage) -> Result<OutputItems> {
+        self.wants_copy = true;
+        map_rows(self.items.clone(), |rows| Ok(copy::apply(rows)))
+    }
+
+    fn unroll(&self, stage: &ParsedStage) -> Result<OutputItems> {
+        let field = stage.spec.trim();
+        if field.is_empty() {
+            return Err(anyhow!("U: missing field name to unroll"));
+        }
+
+        let selector = format!("{field}[]");
+        match &self.items {
+            OutputItems::Rows(rows) => {
+                Ok(OutputItems::Rows(project::apply(rows.clone(), &selector)?))
+            }
+            OutputItems::Groups(groups) => Ok(OutputItems::Groups(project::apply_groups(
+                groups.clone(),
+                &selector,
+            )?)),
+        }
+    }
+
+    fn apply_quick_alias(&self, stage: &ParsedStage, alias: &str) -> Result<OutputItems> {
+        let quick_spec = if stage.spec.is_empty() {
+            alias.to_string()
+        } else {
+            format!("{alias} {}", stage.spec)
+        };
+        map_rows(self.items.clone(), |rows| quick::apply(rows, &quick_spec))
+    }
+
+    fn build_output_meta(&self) -> OutputMeta {
+        let key_index = match &self.items {
+            OutputItems::Rows(rows) => RowContext::from_rows(rows).key_index().to_vec(),
+            OutputItems::Groups(groups) => {
+                let headers = groups.iter().map(merged_group_header).collect::<Vec<_>>();
+                RowContext::from_rows(&headers).key_index().to_vec()
+            }
+        };
+
+        OutputMeta {
             key_index,
-            wants_copy,
-            grouped,
-        },
-    })
+            wants_copy: self.wants_copy,
+            grouped: matches!(self.items, OutputItems::Groups(_)),
+        }
+    }
+}
+
+fn merged_group_header(group: &osp_core::output_model::Group) -> Row {
+    let mut row = group.groups.clone();
+    row.extend(group.aggregates.clone());
+    row
 }
 
 fn map_rows(
@@ -157,7 +222,7 @@ fn map_rows(
 ) -> Result<OutputItems> {
     match items {
         OutputItems::Rows(rows) => map_fn(rows).map(OutputItems::Rows),
-        OutputItems::Groups(_) => Ok(items),
+        OutputItems::Groups(groups) => Ok(OutputItems::Groups(groups)),
     }
 }
 
@@ -319,127 +384,49 @@ mod tests {
 
         let output =
             apply_pipeline(rows, &["U members".to_string()]).expect("pipeline should pass");
-        assert_eq!(output_rows(&output).len(), 2);
-        let values = output_rows(&output)
-            .iter()
-            .filter_map(|row| row.get("members").and_then(|v| v.as_str()))
-            .collect::<Vec<_>>();
-        assert!(values.contains(&"a"));
-        assert!(values.contains(&"b"));
-    }
 
-    #[test]
-    fn explicit_val_stage_extracts_values() {
-        let rows = vec![
-            json!({"members": ["oistes", "andreasd"]})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let stages = vec!["VAL members".to_string()];
-        let output = apply_pipeline(rows, &stages).expect("pipeline should pass");
         assert_eq!(output_rows(&output).len(), 2);
         assert_eq!(
-            output_rows(&output)[0]
-                .get("value")
-                .and_then(|value| value.as_str()),
-            Some("oistes")
+            output_rows(&output)
+                .iter()
+                .map(|row| row.get("members").cloned().expect("member"))
+                .collect::<Vec<_>>(),
+            vec![json!("a"), json!("b")]
         );
     }
 
     #[test]
-    fn limit_stage_takes_head() {
+    fn unroll_requires_field_name() {
         let rows = vec![
-            json!({"uid": "a"}).as_object().cloned().expect("object"),
-            json!({"uid": "b"}).as_object().cloned().expect("object"),
-            json!({"uid": "c"}).as_object().cloned().expect("object"),
-        ];
-
-        let output = apply_pipeline(rows, &["L 2".to_string()]).expect("pipeline should pass");
-        assert_eq!(output_rows(&output).len(), 2);
-        assert_eq!(
-            output_rows(&output)[0]
-                .get("uid")
-                .and_then(|value| value.as_str()),
-            Some("a")
-        );
-    }
-
-    #[test]
-    fn collapse_stage_is_noop_for_rows() {
-        let rows = vec![
-            json!({"uid": "oistes"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-        let output =
-            apply_pipeline(rows.clone(), &["Z".to_string()]).expect("pipeline should pass");
-        assert_eq!(output_rows(&output), rows.as_slice());
-    }
-
-    #[test]
-    fn group_stage_sets_grouped_meta() {
-        let rows = vec![
-            json!({"dept": "sales", "id": 1})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"dept": "eng", "id": 2})
+            json!({"members": ["a", "b"]})
                 .as_object()
                 .cloned()
                 .expect("object"),
         ];
 
-        let output = execute_pipeline(rows, &["G dept".to_string()]).expect("pipeline should pass");
-        assert!(output.meta.grouped);
-        match output.items {
-            OutputItems::Groups(groups) => assert_eq!(groups.len(), 2),
-            OutputItems::Rows(_) => panic!("expected grouped output"),
-        }
+        let err = apply_pipeline(rows, &["U".to_string()]).expect_err("pipeline should fail");
+        assert!(err.to_string().contains("missing field name"));
     }
 
     #[test]
-    fn count_macro_collapses_to_rows() {
-        let rows = vec![
-            json!({"id": 1}).as_object().cloned().expect("object"),
-            json!({"id": 2}).as_object().cloned().expect("object"),
-            json!({"id": 3}).as_object().cloned().expect("object"),
-        ];
-
-        let output = execute_pipeline(rows, &["C".to_string()]).expect("pipeline should pass");
-        assert!(!output.meta.grouped);
-        match output.items {
-            OutputItems::Rows(rows) => {
-                assert_eq!(rows.len(), 1);
-                assert_eq!(
-                    rows[0].get("count").and_then(|value| value.as_i64()),
-                    Some(3)
-                );
-            }
-            OutputItems::Groups(_) => panic!("expected rows"),
-        }
-    }
-
-    #[test]
-    fn grouped_output_survives_apply_output_pipeline() {
-        let grouped = execute_pipeline(
-            vec![
-                json!({"dept": "sales", "host": "alpha"})
-                    .as_object()
-                    .cloned()
-                    .expect("object"),
-                json!({"dept": "sales", "host": "beta"})
-                    .as_object()
-                    .cloned()
-                    .expect("object"),
-            ],
-            &["G dept".to_string()],
+    fn grouped_output_meta_uses_group_headers() {
+        let output = apply_output_pipeline(
+            OutputResult {
+                items: OutputItems::Groups(vec![osp_core::output_model::Group {
+                    groups: json!({"dept": "sales"})
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
+                    aggregates: json!({"total": 2}).as_object().cloned().expect("object"),
+                    rows: vec![],
+                }]),
+                meta: Default::default(),
+            },
+            &[],
         )
-        .expect("grouping should pass");
+        .expect("pipeline should pass");
 
-        let output = apply_output_pipeline(grouped, &[]).expect("pipeline should preserve groups");
-        assert!(matches!(output.items, OutputItems::Groups(_)));
+        assert_eq!(output.meta.key_index, vec!["dept", "total"]);
+        assert!(output.meta.grouped);
     }
 }

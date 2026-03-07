@@ -70,6 +70,7 @@ enum State {
     EscapeDouble,
 }
 
+/// Split a full `command | stage | stage` string while respecting quotes.
 pub fn split_pipeline(input: &str) -> Result<Vec<StageSegment>, LexerError> {
     let mut out = Vec::new();
     let mut state = State::Normal;
@@ -133,6 +134,7 @@ pub fn split_pipeline(input: &str) -> Result<Vec<StageSegment>, LexerError> {
     Ok(out)
 }
 
+/// Tokenize one stage into words/operators while preserving token spans.
 pub fn tokenize_stage(segment: &StageSegment) -> Result<Vec<Token>, LexerError> {
     let mut words = tokenize_words(&segment.raw, segment.span.start)?;
     let mut out = Vec::new();

@@ -1,3 +1,11 @@
+//! Grouping stage (`G`).
+//!
+//! Conceptually, grouping works on dimensions rather than structures:
+//! - grouping by scalar keys is allowed
+//! - grouping by selectors/fan-out paths is allowed
+//! - grouping by plain objects or arrays of objects should fail and push the
+//!   user toward a leaf field or `?field`
+
 use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
@@ -18,7 +26,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-struct GroupSpec {
+struct GroupKeyPlan {
     key_spec: KeySpec,
     header_key: String,
     flat_hint: Option<String>,
@@ -26,76 +34,57 @@ struct GroupSpec {
 }
 
 pub fn group_rows(rows: Vec<Row>, spec: &str) -> Result<Vec<Group>> {
-    let specs = parse_group_specs(spec)?;
-    let mut buckets: Vec<Group> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
+    let plan = parse_group_plan(spec)?;
+    let mut buckets = GroupBuckets::default();
 
     for row in rows {
         let flat = flatten_row(&row);
-        let combinations = build_header_combinations(&flat, &specs)?;
-        for header in combinations {
-            let key = serde_json::to_string(&header)
-                .map_err(|error| anyhow!("failed to encode group key: {error}"))?;
-            if let Some(existing) = index.get(&key) {
-                buckets[*existing].rows.push(row.clone());
-            } else {
-                let position = buckets.len();
-                index.insert(key, position);
-                buckets.push(Group {
-                    groups: header,
-                    aggregates: Row::new(),
-                    rows: vec![row.clone()],
-                });
-            }
+        let headers = resolve_group_headers(&flat, &plan)?;
+        for header in headers {
+            buckets.push(Group {
+                groups: header,
+                aggregates: Row::new(),
+                rows: vec![row.clone()],
+            })?;
         }
     }
 
-    Ok(buckets)
+    Ok(buckets.finish())
 }
 
 pub fn regroup_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
-    let specs = parse_group_specs(spec)?;
-    let mut buckets: Vec<Group> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
+    let plan = parse_group_plan(spec)?;
+    let mut buckets = GroupBuckets::default();
 
     for group in groups {
         let base_headers = group.groups;
         let base_aggregates = group.aggregates;
         for row in group.rows {
             let flat = flatten_row(&row);
-            let combinations = build_header_combinations(&flat, &specs)?;
-            for header in combinations {
+            let headers = resolve_group_headers(&flat, &plan)?;
+            for header in headers {
                 let mut merged_headers = base_headers.clone();
                 merged_headers.extend(header);
-
-                let key = serde_json::to_string(&merged_headers)
-                    .map_err(|error| anyhow!("failed to encode regroup key: {error}"))?;
-                if let Some(existing) = index.get(&key) {
-                    buckets[*existing].rows.push(row.clone());
-                } else {
-                    let position = buckets.len();
-                    index.insert(key, position);
-                    buckets.push(Group {
-                        groups: merged_headers,
-                        aggregates: base_aggregates.clone(),
-                        rows: vec![row.clone()],
-                    });
-                }
+                buckets.push(Group {
+                    groups: merged_headers,
+                    aggregates: base_aggregates.clone(),
+                    rows: vec![row.clone()],
+                })?;
             }
         }
     }
 
-    Ok(buckets)
+    Ok(buckets.finish())
 }
 
-fn parse_group_specs(spec: &str) -> Result<Vec<GroupSpec>> {
+fn parse_group_plan(spec: &str) -> Result<Vec<GroupKeyPlan>> {
     let words = parse_stage_words(spec)?;
 
     if words.is_empty() {
         return Err(anyhow!("G requires one or more keys"));
     }
 
-    let mut specs = Vec::new();
+    let mut plan = Vec::new();
     let mut index = 0usize;
     while index < words.len() {
         let token = words[index].clone();
@@ -105,7 +94,7 @@ fn parse_group_specs(spec: &str) -> Result<Vec<GroupSpec>> {
         let key_spec = KeySpec::parse(&token);
         let (flat_hint, allow_multiple) = classify_group_key(&key_spec.token);
 
-        specs.push(GroupSpec {
+        plan.push(GroupKeyPlan {
             key_spec,
             header_key,
             flat_hint,
@@ -113,7 +102,7 @@ fn parse_group_specs(spec: &str) -> Result<Vec<GroupSpec>> {
         });
     }
 
-    Ok(specs)
+    Ok(plan)
 }
 
 fn canonical_header_key(token: &str) -> String {
@@ -139,17 +128,17 @@ fn classify_group_key(token: &str) -> (Option<String>, bool) {
     (expression_to_flat_key(&path), allow_multiple)
 }
 
-fn build_header_combinations(row: &Row, specs: &[GroupSpec]) -> Result<Vec<Row>> {
+fn resolve_group_headers(row: &Row, plan: &[GroupKeyPlan]) -> Result<Vec<Row>> {
     let mut combinations = vec![Row::new()];
 
-    for spec in specs {
-        let values = resolve_group_values(row, spec)?;
+    for key_plan in plan {
+        let values = resolve_group_values(row, key_plan)?;
         let mut next = Vec::new();
 
         for combination in &combinations {
             for value in &values {
                 let mut candidate = combination.clone();
-                candidate.insert(spec.header_key.clone(), value.clone());
+                candidate.insert(key_plan.header_key.clone(), value.clone());
                 next.push(candidate);
             }
         }
@@ -160,15 +149,19 @@ fn build_header_combinations(row: &Row, specs: &[GroupSpec]) -> Result<Vec<Row>>
     Ok(combinations)
 }
 
-fn resolve_group_values(row: &Row, spec: &GroupSpec) -> Result<Vec<Value>> {
-    let values = resolve_group_pairs(row, spec)?
+fn resolve_group_values(row: &Row, key_plan: &GroupKeyPlan) -> Result<Vec<Value>> {
+    let values = resolve_group_pairs(row, key_plan)?
         .into_iter()
         .map(|(_, value)| value)
         .collect::<Vec<_>>();
 
-    if spec.key_spec.existence {
+    if key_plan.key_spec.existence {
         let found = values.iter().any(is_truthy);
-        let value = if spec.key_spec.negated { !found } else { found };
+        let value = if key_plan.key_spec.negated {
+            !found
+        } else {
+            found
+        };
         return Ok(vec![Value::Bool(value)]);
     }
 
@@ -179,28 +172,28 @@ fn resolve_group_values(row: &Row, spec: &GroupSpec) -> Result<Vec<Value>> {
     }
 }
 
-fn resolve_group_pairs(row: &Row, spec: &GroupSpec) -> Result<Vec<(String, Value)>> {
-    if let Some(expr) = selector_expression(&spec.key_spec.token) {
+fn resolve_group_pairs(row: &Row, key_plan: &GroupKeyPlan) -> Result<Vec<(String, Value)>> {
+    if let Some(expr) = selector_expression(&key_plan.key_spec.token) {
         let nested = Value::Object(coalesce_flat_row(row));
         return Ok(enumerate_path_values(&nested, &expr));
     }
 
-    let matches = match_row_keys_detailed(row, &spec.key_spec.token, spec.key_spec.exact);
-    let mut keys = select_match_keys(&matches, spec.key_spec.exact);
+    let matches = match_row_keys_detailed(row, &key_plan.key_spec.token, key_plan.key_spec.exact);
+    let mut keys = select_match_keys(&matches, key_plan.key_spec.exact);
 
     if keys.is_empty()
-        && let Some(flat_hint) = &spec.flat_hint
+        && let Some(flat_hint) = &key_plan.flat_hint
         && row.contains_key(flat_hint)
     {
         keys.push(flat_hint.clone());
     }
 
-    reject_structured_container_token(row, spec, &keys)?;
+    reject_structured_container_token(row, key_plan, &keys)?;
 
-    if !spec.allow_multiple && keys.len() > 1 {
+    if !key_plan.allow_multiple && keys.len() > 1 {
         return Err(anyhow!(
             "G: token '{}' matched multiple keys: {}",
-            spec.key_spec.token,
+            key_plan.key_spec.token,
             keys.join(", ")
         ));
     }
@@ -211,12 +204,16 @@ fn resolve_group_pairs(row: &Row, spec: &GroupSpec) -> Result<Vec<(String, Value
         .collect())
 }
 
-fn reject_structured_container_token(row: &Row, spec: &GroupSpec, keys: &[String]) -> Result<()> {
-    if spec.key_spec.existence || spec.allow_multiple || keys.is_empty() {
+fn reject_structured_container_token(
+    row: &Row,
+    key_plan: &GroupKeyPlan,
+    keys: &[String],
+) -> Result<()> {
+    if key_plan.key_spec.existence || key_plan.allow_multiple || keys.is_empty() {
         return Ok(());
     }
 
-    let Some(flat_hint) = &spec.flat_hint else {
+    let Some(flat_hint) = &key_plan.flat_hint else {
         return Ok(());
     };
     if row.contains_key(flat_hint) {
@@ -226,8 +223,8 @@ fn reject_structured_container_token(row: &Row, spec: &GroupSpec, keys: &[String
     if keys.iter().all(|key| is_descendant_key(key, flat_hint)) {
         return Err(anyhow!(
             "G: token '{}' refers to structured content; pick a leaf field, a selector, or use ?{}",
-            spec.key_spec.token,
-            spec.key_spec.token
+            key_plan.key_spec.token,
+            key_plan.key_spec.token
         ));
     }
 
@@ -260,6 +257,33 @@ fn select_match_keys(matches: &crate::eval::matchers::KeyMatches, exact: ExactMo
         return matches.exact.clone();
     }
     matches.partial.clone()
+}
+
+#[derive(Default)]
+struct GroupBuckets {
+    groups: Vec<Group>,
+    index_by_key: HashMap<String, usize>,
+}
+
+impl GroupBuckets {
+    fn push(&mut self, group: Group) -> Result<()> {
+        let key = serde_json::to_string(&group.groups)
+            .map_err(|error| anyhow!("failed to encode group key: {error}"))?;
+
+        if let Some(existing) = self.index_by_key.get(&key) {
+            self.groups[*existing].rows.extend(group.rows);
+            return Ok(());
+        }
+
+        let position = self.groups.len();
+        self.index_by_key.insert(key, position);
+        self.groups.push(group);
+        Ok(())
+    }
+
+    fn finish(self) -> Vec<Group> {
+        self.groups
+    }
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ pub struct Pipeline {
     pub stages: Vec<String>,
 }
 
+/// Split a full command line into its command portion and raw pipe stages.
 pub fn parse_pipeline(line: &str) -> Result<Pipeline, LexerError> {
     let segments = split_pipeline(line)?;
 
@@ -28,35 +29,32 @@ pub fn parse_pipeline(line: &str) -> Result<Pipeline, LexerError> {
     Ok(Pipeline { command, stages })
 }
 
-const EXPLICIT_STAGE_VERBS: &[&str] = &[
+/// Verbs that are always interpreted as explicit DSL stages.
+const REGISTERED_EXPLICIT_STAGE_VERBS: &[&str] = &[
     "P", "V", "K", "VAL", "VALUE", "F", "G", "A", "S", "L", "Z", "C", "Y", "U", "?", "JQ",
 ];
 
+/// Parse a raw stage string into the structured form the evaluator consumes.
+///
+/// This is intentionally conservative:
+/// - registered verbs become explicit stages
+/// - unknown one-letter tokens are treated as likely typos and fail later
+/// - everything else becomes quick-search text
 pub fn parse_stage(raw_stage: &str) -> Result<ParsedStage, LexerError> {
-    let segment = StageSegment {
-        raw: raw_stage.trim().to_string(),
-        span: super::lexer::Span {
-            start: 0,
-            end: raw_stage.trim().len(),
-        },
-    };
+    let segment = stage_segment_from_raw(raw_stage);
 
     if segment.raw.is_empty() {
-        return Ok(ParsedStage::new(ParsedStageKind::Quick, "", "", raw_stage));
+        return Ok(empty_quick_stage(raw_stage));
     }
 
     let tokens = tokenize_stage(&segment)?;
 
     let Some(first) = tokens.first() else {
-        return Ok(ParsedStage::new(ParsedStageKind::Quick, "", "", raw_stage));
+        return Ok(empty_quick_stage(raw_stage));
     };
 
     let verb = first.text.to_ascii_uppercase();
-    let spec = if first.span.end <= segment.raw.len() {
-        segment.raw[first.span.end..].trim().to_string()
-    } else {
-        String::new()
-    };
+    let spec = stage_spec_after_first_token(&segment, first.span.end);
 
     Ok(ParsedStage::new(
         classify_stage_kind(&verb),
@@ -66,6 +64,7 @@ pub fn parse_stage(raw_stage: &str) -> Result<ParsedStage, LexerError> {
     ))
 }
 
+/// Parse an already-split list of stage strings.
 pub fn parse_stage_list(stages: &[String]) -> Result<ParsedPipeline, LexerError> {
     Ok(ParsedPipeline {
         raw: stages.join(" | "),
@@ -76,8 +75,30 @@ pub fn parse_stage_list(stages: &[String]) -> Result<ParsedPipeline, LexerError>
     })
 }
 
+fn stage_segment_from_raw(raw_stage: &str) -> StageSegment {
+    let trimmed = raw_stage.trim();
+    StageSegment {
+        raw: trimmed.to_string(),
+        span: super::lexer::Span {
+            start: 0,
+            end: trimmed.len(),
+        },
+    }
+}
+
+fn empty_quick_stage(raw_stage: &str) -> ParsedStage {
+    ParsedStage::new(ParsedStageKind::Quick, "", "", raw_stage)
+}
+
+fn stage_spec_after_first_token(segment: &StageSegment, token_end: usize) -> String {
+    if token_end > segment.raw.len() {
+        return String::new();
+    }
+    segment.raw[token_end..].trim().to_string()
+}
+
 fn classify_stage_kind(verb: &str) -> ParsedStageKind {
-    if EXPLICIT_STAGE_VERBS.contains(&verb) {
+    if REGISTERED_EXPLICIT_STAGE_VERBS.contains(&verb) {
         return ParsedStageKind::Explicit;
     }
 
