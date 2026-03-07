@@ -36,6 +36,18 @@ fn flat_rows() -> Vec<Map<String, Value>> {
     ]
 }
 
+fn large_rows() -> Vec<Map<String, Value>> {
+    let payload = "x".repeat(4096);
+    (0..128)
+        .map(|index| {
+            obj(json!({
+                "id": index,
+                "payload": payload,
+            }))
+        })
+        .collect()
+}
+
 fn jq_available() -> bool {
     Command::new("jq")
         .arg("--version")
@@ -162,4 +174,19 @@ fn jq_missing_binary_returns_clear_error() {
         error.to_string().contains("jq executable not found"),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn jq_large_identity_payload_roundtrips_contract() {
+    let _guard = path_lock().lock().expect("lock should not be poisoned");
+    if !jq_available() {
+        eprintln!("skipping jq contract test: jq executable not available");
+        return;
+    }
+
+    let rows = large_rows();
+    let output = apply_pipeline(rows.clone(), &["JQ .".to_string()])
+        .expect("jq should handle large payloads");
+
+    assert_eq!(output_rows(&output), rows.as_slice());
 }

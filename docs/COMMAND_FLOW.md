@@ -72,6 +72,33 @@ That file owns:
 - how config/theme/plugin state is reconstructed
 - how rebuilt state is reattached to the live REPL session
 
+## Shared vs REPL-only
+
+CLI one-shot execution and REPL line execution now share the same core
+"turn plugin output into renderable output" path.
+
+Shared pieces:
+
+- plugin dispatch context construction
+- plugin response decoding
+- plugin message extraction
+- DSL pipeline application
+- format-hint handling after pipeline stages
+
+Those shared pieces live under `crates/osp-cli/src/app/command_output.rs` and
+the nearby app helpers.
+
+REPL-only pieces stay in `crates/osp-cli/src/repl/`:
+
+- bang/history expansion
+- shell scope enter/leave behavior
+- REPL help shortcuts
+- restart/reload decisions after config/theme changes
+- line-editor and completion lifecycle
+
+That split is intentional: command execution should be shared where possible,
+while interactive shell behavior stays local to the REPL code.
+
 ## If You Are New
 
 Use this reading order:

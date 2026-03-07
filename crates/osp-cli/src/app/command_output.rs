@@ -2,11 +2,14 @@ use miette::Result;
 use osp_config::ResolvedConfig;
 use osp_core::output::OutputFormat;
 use osp_core::output_model::OutputResult;
+use osp_core::plugin::{ResponseMessageLevelV1, ResponseV1};
+use osp_dsl::apply_output_pipeline;
 use osp_ui::clipboard::ClipboardService;
 use osp_ui::messages::{MessageBuffer, MessageLevel, MessageRenderFormat};
 use osp_ui::{copy_output_to_clipboard, render_output};
 
 use crate::app::resolve_effective_render_settings;
+use crate::rows::output::plugin_data_to_output_result;
 use crate::state::{AppState, UiState};
 
 pub(crate) enum ReplCommandOutput {
@@ -20,6 +23,22 @@ pub(crate) enum ReplCommandOutput {
 pub(crate) struct CliCommandResult {
     pub(crate) exit_code: i32,
     pub(crate) output: Option<ReplCommandOutput>,
+}
+
+pub(crate) struct PreparedPluginOutput {
+    pub(crate) messages: MessageBuffer,
+    pub(crate) output: OutputResult,
+    pub(crate) format_hint: Option<OutputFormat>,
+}
+
+pub(crate) struct FailedPluginOutput {
+    pub(crate) messages: MessageBuffer,
+    pub(crate) report: String,
+}
+
+pub(crate) enum PreparedPluginResponse {
+    Output(PreparedPluginOutput),
+    Failure(FailedPluginOutput),
 }
 
 impl CliCommandResult {
@@ -151,6 +170,81 @@ pub(crate) fn maybe_copy_output_with_runtime(
         let mut messages = MessageBuffer::default();
         messages.warning(format!("clipboard copy failed: {err}"));
         emit_messages_with_runtime(runtime, &messages, runtime.ui().message_verbosity);
+    }
+}
+
+pub(crate) fn prepare_plugin_response(
+    response: ResponseV1,
+    stages: &[String],
+) -> anyhow::Result<PreparedPluginResponse> {
+    let mut messages = plugin_response_messages(&response);
+    if !response.ok {
+        let report = if let Some(error) = response.error {
+            messages.error(format!("{}: {}", error.code, error.message));
+            format!("{}: {}", error.code, error.message)
+        } else {
+            messages.error("plugin command failed");
+            "plugin command failed".to_string()
+        };
+        return Ok(PreparedPluginResponse::Failure(FailedPluginOutput {
+            messages,
+            report,
+        }));
+    }
+
+    let (output, format_hint) = apply_output_stages(
+        plugin_data_to_output_result(response.data, Some(&response.meta)),
+        stages,
+        parse_output_format_hint(response.meta.format_hint.as_deref()),
+    )?;
+
+    Ok(PreparedPluginResponse::Output(PreparedPluginOutput {
+        messages,
+        output,
+        format_hint,
+    }))
+}
+
+pub(crate) fn apply_output_stages(
+    mut output: OutputResult,
+    stages: &[String],
+    format_hint: Option<OutputFormat>,
+) -> anyhow::Result<(OutputResult, Option<OutputFormat>)> {
+    if !stages.is_empty() {
+        output = apply_output_pipeline(output, stages)?;
+        // Once a DSL pipeline runs, the transformed output should use the
+        // caller's format settings rather than the producer's original hint.
+        return Ok((output, None));
+    }
+
+    Ok((output, format_hint))
+}
+
+pub(crate) fn plugin_response_messages(response: &ResponseV1) -> MessageBuffer {
+    let mut out = MessageBuffer::default();
+    for message in &response.messages {
+        let level = match message.level {
+            ResponseMessageLevelV1::Error => MessageLevel::Error,
+            ResponseMessageLevelV1::Warning => MessageLevel::Warning,
+            ResponseMessageLevelV1::Success => MessageLevel::Success,
+            ResponseMessageLevelV1::Info => MessageLevel::Info,
+            ResponseMessageLevelV1::Trace => MessageLevel::Trace,
+        };
+        out.push(level, message.text.clone());
+    }
+    out
+}
+
+pub(crate) fn parse_output_format_hint(value: Option<&str>) -> Option<OutputFormat> {
+    let normalized = value?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "auto" => Some(OutputFormat::Auto),
+        "json" => Some(OutputFormat::Json),
+        "table" => Some(OutputFormat::Table),
+        "md" | "markdown" => Some(OutputFormat::Markdown),
+        "mreg" => Some(OutputFormat::Mreg),
+        "value" => Some(OutputFormat::Value),
+        _ => None,
     }
 }
 

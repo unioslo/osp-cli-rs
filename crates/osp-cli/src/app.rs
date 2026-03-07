@@ -2,11 +2,9 @@ use clap::Parser;
 use miette::{Result, miette};
 use osp_config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
 use osp_core::output::OutputFormat;
-use osp_core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
-use osp_dsl::apply_output_pipeline;
 
-use osp_ui::messages::{MessageBuffer, MessageLevel};
+use osp_ui::messages::MessageLevel;
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 use osp_ui::{RenderRuntime, RenderSettings, render_output};
 use std::borrow::Cow;
@@ -44,9 +42,10 @@ pub(crate) use bootstrap::{
     resolve_runtime_config,
 };
 pub(crate) use command_output::{
-    CliCommandResult, CommandRenderRuntime, ReplCommandOutput, emit_messages, emit_messages_for_ui,
-    emit_messages_with_runtime, emit_messages_with_verbosity, maybe_copy_output,
-    maybe_copy_output_with_runtime, run_cli_command,
+    CliCommandResult, CommandRenderRuntime, PreparedPluginResponse, ReplCommandOutput,
+    apply_output_stages, emit_messages, emit_messages_for_ui, emit_messages_with_runtime,
+    emit_messages_with_verbosity, maybe_copy_output, maybe_copy_output_with_runtime,
+    prepare_plugin_response, run_cli_command,
 };
 pub(crate) use config_explain::{
     config_explain_json, config_explain_output, config_value_to_json, explain_runtime_config,
@@ -604,34 +603,6 @@ fn config_value_to_plugin_env_json(value: &ConfigValue) -> serde_json::Value {
     }
 }
 
-pub(crate) fn plugin_response_messages(response: &ResponseV1) -> MessageBuffer {
-    let mut out = MessageBuffer::default();
-    for message in &response.messages {
-        let level = match message.level {
-            ResponseMessageLevelV1::Error => MessageLevel::Error,
-            ResponseMessageLevelV1::Warning => MessageLevel::Warning,
-            ResponseMessageLevelV1::Success => MessageLevel::Success,
-            ResponseMessageLevelV1::Info => MessageLevel::Info,
-            ResponseMessageLevelV1::Trace => MessageLevel::Trace,
-        };
-        out.push(level, message.text.clone());
-    }
-    out
-}
-
-pub(crate) fn parse_output_format_hint(value: Option<&str>) -> Option<OutputFormat> {
-    let normalized = value?.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "auto" => Some(OutputFormat::Auto),
-        "json" => Some(OutputFormat::Json),
-        "table" => Some(OutputFormat::Table),
-        "md" | "markdown" => Some(OutputFormat::Markdown),
-        "mreg" => Some(OutputFormat::Mreg),
-        "value" => Some(OutputFormat::Value),
-        _ => None,
-    }
-}
-
 pub(crate) fn resolve_effective_render_settings(
     settings: &RenderSettings,
     format_hint: Option<OutputFormat>,
@@ -648,12 +619,13 @@ pub(crate) fn resolve_effective_render_settings(
 
 #[cfg(test)]
 mod tests {
+    use super::command_output::parse_output_format_hint;
     use super::help::parse_help_render_overrides;
     use super::{
         PluginConfigEntry, PluginConfigScope, ReplCommandOutput, RunAction,
         build_cli_session_layer, build_dispatch_plan, collect_plugin_config_env,
-        config_value_to_plugin_env, doctor_cmd, is_sensitive_key, parse_output_format_hint,
-        plugin_config_env_name, resolve_effective_render_settings, run_inline_builtin_command,
+        config_value_to_plugin_env, doctor_cmd, is_sensitive_key, plugin_config_env_name,
+        resolve_effective_render_settings, run_inline_builtin_command,
     };
     use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
@@ -668,7 +640,7 @@ mod tests {
     use osp_repl::{HistoryConfig, HistoryShellContext, SharedHistory};
     use osp_ui::messages::MessageLevel;
     use osp_ui::theme::DEFAULT_THEME_NAME;
-    use osp_ui::{RenderRuntime, RenderSettings};
+    use osp_ui::{RenderRuntime, RenderSettings, render_output};
     use std::collections::BTreeSet;
     use std::ffi::OsString;
 
@@ -1014,6 +986,44 @@ mod tests {
                 assert!(matches!(args.command, PluginsCommands::List));
             }
             _ => panic!("expected plugins action"),
+        }
+    }
+
+    #[test]
+    fn positional_profile_plugins_matches_explicit_profile_unit() {
+        let mut positional = Cli::parse_from(["osp", "tsd", "plugins", "list"]);
+        let positional_plan = build_dispatch_plan(&mut positional, &profiles(&["uio", "tsd"]))
+            .expect("positional dispatch plan should parse");
+
+        let mut explicit = Cli::parse_from(["osp", "--profile", "tsd", "plugins", "list"]);
+        let explicit_plan = build_dispatch_plan(&mut explicit, &profiles(&["uio", "tsd"]))
+            .expect("explicit dispatch plan should parse");
+
+        assert_eq!(
+            positional_plan.profile_override,
+            explicit_plan.profile_override
+        );
+        assert!(matches!(positional_plan.action, RunAction::Plugins(_)));
+        assert!(matches!(explicit_plan.action, RunAction::Plugins(_)));
+    }
+
+    #[test]
+    fn positional_profile_external_matches_explicit_profile_unit() {
+        let mut positional = Cli::parse_from(["osp", "tsd", "ldap", "user", "oistes"]);
+        let positional_plan = build_dispatch_plan(&mut positional, &profiles(&["uio", "tsd"]))
+            .expect("positional dispatch plan should parse");
+
+        let mut explicit = Cli::parse_from(["osp", "--profile", "tsd", "ldap", "user", "oistes"]);
+        let explicit_plan = build_dispatch_plan(&mut explicit, &profiles(&["uio", "tsd"]))
+            .expect("explicit dispatch plan should parse");
+
+        assert_eq!(
+            positional_plan.profile_override,
+            explicit_plan.profile_override
+        );
+        match (positional_plan.action, explicit_plan.action) {
+            (RunAction::External(left), RunAction::External(right)) => assert_eq!(left, right),
+            _ => panic!("expected external action on both plans"),
         }
     }
 
@@ -1636,6 +1646,50 @@ JSON
 
     #[cfg(unix)]
     #[test]
+    fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
+        let dir = make_temp_dir("osp-cli-plugin-pipeline-parity");
+        let _plugin_path = write_pipeline_test_plugin(&dir);
+        let mut state = make_test_state(vec![dir.clone()]);
+        let history = make_test_history(&mut state);
+        let stages = vec!["message".to_string()];
+
+        let dispatch_context = super::plugin_dispatch_context(&state, None);
+        let response = state
+            .clients
+            .plugins
+            .dispatch("hello", &[], &dispatch_context)
+            .expect("plugin dispatch should succeed");
+        let prepared = match super::prepare_plugin_response(response, &stages)
+            .expect("plugin response should prepare")
+        {
+            super::PreparedPluginResponse::Output(prepared) => prepared,
+            super::PreparedPluginResponse::Failure(failure) => {
+                panic!("unexpected plugin failure: {}", failure.report)
+            }
+        };
+        let cli_rendered = render_output(
+            &prepared.output,
+            &super::resolve_effective_render_settings(
+                &state.ui.render_settings,
+                prepared.format_hint,
+            ),
+        );
+
+        let repl_rendered = repl::execute_repl_plugin_line(&mut state, &history, "hello | message")
+            .expect("repl command should succeed");
+        match repl_rendered {
+            osp_repl::ReplLineResult::Continue(text) => {
+                assert_eq!(text.trim(), cli_rendered.trim());
+                assert!(text.contains("hello-from-plugin"));
+            }
+            other => panic!("unexpected repl result: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn rebuild_repl_state_preserves_session_defaults_and_shell_context_unit() {
         let mut state = make_test_state(Vec::new());
         state
@@ -1979,6 +2033,35 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
             themes: crate::theme_loader::ThemeCatalog::default(),
             launch,
         })
+    }
+
+    #[cfg(unix)]
+    fn write_pipeline_test_plugin(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let plugin_path = dir.join("osp-hello");
+        std::fs::write(
+            &plugin_path,
+            r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"hello","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hello","about":"hello plugin","args":[],"flags":{},"subcommands":[]}]}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{"protocol_version":1,"ok":true,"data":{"message":"hello-from-plugin"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}
+JSON
+"#,
+        )
+        .expect("plugin script should be written");
+        let mut perms = std::fs::metadata(&plugin_path)
+            .expect("metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+        plugin_path
     }
 
     #[cfg(unix)]

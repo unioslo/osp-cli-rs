@@ -1,5 +1,4 @@
 use miette::{Result, miette};
-use osp_dsl::apply_output_pipeline;
 use osp_repl::{ReplLineResult, ReplReloadKind, SharedHistory, expand_history};
 use osp_ui::messages::adjust_verbosity;
 use osp_ui::render_output;
@@ -18,7 +17,7 @@ use crate::cli::{
     Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands,
     ThemeArgs, ThemeCommands, parse_repl_tokens,
 };
-use crate::rows::output::{output_to_rows, plugin_data_to_output_result};
+use crate::rows::output::output_to_rows;
 use crate::state::AppState;
 
 use super::{completion, help, input, presentation, surface};
@@ -235,17 +234,14 @@ fn render_repl_command_output(
 ) -> Result<String> {
     match output {
         ReplCommandOutput::Output {
-            mut output,
+            output,
             format_hint,
         } => {
-            if !stages.is_empty() {
-                output = apply_output_pipeline(output, stages).map_err(|err| miette!("{err:#}"))?;
-            }
+            let (output, format_hint) = app::apply_output_stages(output, stages, format_hint)
+                .map_err(|err| miette!("{err:#}"))?;
 
-            let render_settings = app::resolve_effective_render_settings(
-                &state.ui.render_settings,
-                if stages.is_empty() { format_hint } else { None },
-            );
+            let render_settings =
+                app::resolve_effective_render_settings(&state.ui.render_settings, format_hint);
             let rendered = render_output(&output, &render_settings);
             state.record_repl_rows(line, output_to_rows(&output));
             app::maybe_copy_output(state, &output);
@@ -628,25 +624,30 @@ fn run_repl_external_command(
         .plugins
         .dispatch(command, args, &dispatch_context)
         .map_err(app::enrich_dispatch_error)?;
-    let mut messages = app::plugin_response_messages(&response);
-    if !response.ok {
-        let report = if let Some(error) = response.error {
-            messages.error(format!("{}: {}", error.code, error.message));
-            miette!("{}: {}", error.code, error.message)
-        } else {
-            messages.error("plugin command failed");
-            miette!("plugin command failed")
-        };
-        app::emit_messages_with_verbosity(state, &messages, overrides.message_verbosity);
-        return Err(report);
+    match app::prepare_plugin_response(response, &[]) {
+        Ok(app::PreparedPluginResponse::Failure(failure)) => {
+            app::emit_messages_with_verbosity(
+                state,
+                &failure.messages,
+                overrides.message_verbosity,
+            );
+            Err(miette!(failure.report))
+        }
+        Ok(app::PreparedPluginResponse::Output(prepared)) => {
+            if !prepared.messages.is_empty() {
+                app::emit_messages_with_verbosity(
+                    state,
+                    &prepared.messages,
+                    overrides.message_verbosity,
+                );
+            }
+            Ok(ReplCommandOutput::Output {
+                output: prepared.output,
+                format_hint: prepared.format_hint,
+            })
+        }
+        Err(err) => Err(miette!("{err:#}")),
     }
-    if !messages.is_empty() {
-        app::emit_messages_with_verbosity(state, &messages, overrides.message_verbosity);
-    }
-    Ok(ReplCommandOutput::Output {
-        output: plugin_data_to_output_result(response.data, Some(&response.meta)),
-        format_hint: app::parse_output_format_hint(response.meta.format_hint.as_deref()),
-    })
 }
 
 pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {

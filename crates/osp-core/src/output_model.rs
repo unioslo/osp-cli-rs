@@ -69,3 +69,26 @@ pub fn compute_key_index(rows: &[Row]) -> Vec<String> {
 
     key_index
 }
+
+#[cfg(test)]
+mod tests {
+    use super::OutputResult;
+    use serde_json::json;
+
+    #[test]
+    fn from_rows_keeps_first_seen_key_order() {
+        let rows = vec![
+            json!({"uid": "oistes", "cn": "Oistein"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"mail": "o@uio.no", "uid": "oistes", "title": "Engineer"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let output = OutputResult::from_rows(rows);
+        assert_eq!(output.meta.key_index, vec!["uid", "cn", "mail", "title"]);
+    }
+}

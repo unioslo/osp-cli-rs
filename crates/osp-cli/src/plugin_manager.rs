@@ -790,16 +790,22 @@ fn collect_completion_words(spec: &CommandSpec) -> Vec<String> {
 }
 
 fn load_manifest_state(root: &SearchRoot) -> ManifestState {
-    if root.source != PluginSource::Bundled {
+    let Some(path) = bundled_manifest_path(root) else {
         return ManifestState::NotBundled;
-    }
-
-    let path = root.path.join(BUNDLED_MANIFEST_FILE);
+    };
     if !path.exists() {
         return ManifestState::Missing;
     }
 
-    match load_and_validate_manifest(&path) {
+    load_manifest_state_from_path(&path)
+}
+
+fn bundled_manifest_path(root: &SearchRoot) -> Option<PathBuf> {
+    (root.source == PluginSource::Bundled).then(|| root.path.join(BUNDLED_MANIFEST_FILE))
+}
+
+fn load_manifest_state_from_path(path: &Path) -> ManifestState {
+    match load_and_validate_manifest(path) {
         Ok(manifest) => ManifestState::Valid(manifest),
         Err(err) => ManifestState::Invalid(err.to_string()),
     }
@@ -946,23 +952,22 @@ fn apply_manifest_discovery_issue(
     manifest_state: &ManifestState,
     manifest_entry: Option<&ManifestPlugin>,
 ) {
+    if let Some(message) = manifest_discovery_issue(manifest_state, manifest_entry) {
+        merge_issue(issue, message);
+    }
+}
+
+fn manifest_discovery_issue(
+    manifest_state: &ManifestState,
+    manifest_entry: Option<&ManifestPlugin>,
+) -> Option<String> {
     match manifest_state {
-        ManifestState::Missing => {
-            merge_issue(
-                issue,
-                format!("bundled {} not found", BUNDLED_MANIFEST_FILE),
-            );
-        }
-        ManifestState::Invalid(err) => {
-            merge_issue(issue, format!("bundled manifest invalid: {err}"));
-        }
+        ManifestState::Missing => Some(format!("bundled {} not found", BUNDLED_MANIFEST_FILE)),
+        ManifestState::Invalid(err) => Some(format!("bundled manifest invalid: {err}")),
         ManifestState::Valid(_) if manifest_entry.is_none() => {
-            merge_issue(
-                issue,
-                "plugin executable not present in bundled manifest".to_string(),
-            );
+            Some("plugin executable not present in bundled manifest".to_string())
         }
-        ManifestState::NotBundled | ManifestState::Valid(_) => {}
+        ManifestState::NotBundled | ManifestState::Valid(_) => None,
     }
 }
 
@@ -995,28 +1000,40 @@ fn apply_describe_metadata(
 }
 
 fn load_and_validate_manifest(path: &Path) -> Result<ValidatedBundledManifest> {
+    let manifest = read_bundled_manifest(path)?;
+    validate_manifest_protocol(&manifest)?;
+    Ok(ValidatedBundledManifest {
+        by_exe: index_manifest_plugins(manifest.plugin)?,
+    })
+}
+
+fn read_bundled_manifest(path: &Path) -> Result<BundledManifest> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read manifest {}", path.display()))?;
+    toml::from_str::<BundledManifest>(&raw)
+        .with_context(|| format!("failed to parse manifest TOML at {}", path.display()))
+}
 
-    let manifest = toml::from_str::<BundledManifest>(&raw)
-        .with_context(|| format!("failed to parse manifest TOML at {}", path.display()))?;
-
+fn validate_manifest_protocol(manifest: &BundledManifest) -> Result<()> {
     if manifest.protocol_version != 1 {
         return Err(anyhow!(
             "unsupported manifest protocol_version {}",
             manifest.protocol_version
         ));
     }
+    Ok(())
+}
 
+fn index_manifest_plugins(plugins: Vec<ManifestPlugin>) -> Result<HashMap<String, ManifestPlugin>> {
     let mut by_exe: HashMap<String, ManifestPlugin> = HashMap::new();
     let mut ids = HashSet::new();
 
-    for plugin in manifest.plugin {
+    for plugin in plugins {
         validate_manifest_plugin(&plugin)?;
         insert_manifest_plugin(&mut by_exe, &mut ids, plugin)?;
     }
 
-    Ok(ValidatedBundledManifest { by_exe })
+    Ok(by_exe)
 }
 
 fn validate_manifest_plugin(plugin: &ManifestPlugin) -> Result<()> {

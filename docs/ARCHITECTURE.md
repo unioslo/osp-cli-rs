@@ -34,8 +34,12 @@ crates/
 - `osp-api`
   - Concrete adapters implementing ports (MVP: mocked LDAP backend).
 - `osp-services`
-  - Use-case orchestration, command parsing, command execution.
-  - Bridges ports + DSL.
+  - Current state: a small service layer around LDAP-oriented command parsing
+    and execution.
+  - Today it bridges `osp-ports` + `osp-dsl` for service-style command flows,
+    but it does not yet own the main CLI/REPL orchestration path.
+  - Target direction: grow into a larger use-case orchestration layer only if
+    more command execution moves behind a stable service boundary.
 - `osp-ui`
   - Rendering (`json`, `table`, `mreg`, `value`) and color/unicode behavior.
 - `osp-repl`
@@ -114,6 +118,20 @@ For the interactive path, start at `crates/osp-cli/src/repl/mod.rs`.
 - REPL completion tree shaping lives in `crates/osp-cli/src/repl/completion.rs`.
 
 See `docs/COMMAND_FLOW.md` for a short "where do I read next?" guide.
+
+## Current State vs Target State
+
+- Current state:
+  - `osp-cli` owns the real startup/bootstrap flow, one-shot dispatch, REPL
+    lifecycle, executable plugin discovery/dispatch, and most command
+    orchestration.
+  - `osp-services` is still a narrower crate used for service-style command
+    execution, not the main application runtime.
+- Target direction:
+  - If more built-in or domain command execution needs a reusable service
+    boundary, move that logic into `osp-services` deliberately.
+  - Do not move code there just to make `osp-cli` smaller; only promote stable
+    orchestration seams.
 
 ## PR Gate Checklist
 

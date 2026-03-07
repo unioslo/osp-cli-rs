@@ -5,16 +5,15 @@ use crate::pipeline::parse_command_tokens_with_aliases;
 use crate::plugin_manager::PluginManager;
 use crate::repl::completion;
 use crate::repl::help as repl_help;
-use crate::rows::output::plugin_data_to_output_result;
 use crate::state::{AppState, AuthState, RuntimeContext, UiState};
 
 use super::{
-    CMD_HELP, CommandRenderRuntime, apply_output_pipeline, emit_messages_with_runtime,
+    CMD_HELP, CommandRenderRuntime, PreparedPluginResponse, emit_messages_with_runtime,
     enrich_dispatch_error, ensure_plugin_visible_for, maybe_copy_output_with_runtime,
-    parse_output_format_hint, plugin_dispatch_context_for, plugin_response_messages,
-    resolve_effective_render_settings, run_cli_command, run_inline_builtin_command,
+    plugin_dispatch_context_for, prepare_plugin_response, resolve_effective_render_settings,
+    run_cli_command, run_inline_builtin_command,
 };
-use super::{ResolvedConfig, ResponseV1, render_output};
+use super::{ResolvedConfig, render_output};
 
 pub(super) struct ExternalCommandRuntime<'a> {
     pub(super) context: &'a RuntimeContext,
@@ -175,40 +174,36 @@ fn run_external_plugin_command(
 
 fn render_external_plugin_response(
     runtime: &ExternalCommandRuntime<'_>,
-    response: ResponseV1,
+    response: osp_core::plugin::ResponseV1,
     stages: &[String],
 ) -> Result<i32> {
-    let mut messages = plugin_response_messages(&response);
-    if !response.ok {
-        if let Some(error) = response.error {
-            messages.error(format!("{}: {}", error.code, error.message));
-        } else {
-            messages.error("plugin command failed");
+    let render_runtime = CommandRenderRuntime::new(runtime.config, runtime.ui);
+    match prepare_plugin_response(response, stages).map_err(|err| miette!("{err:#}"))? {
+        PreparedPluginResponse::Failure(failure) => {
+            emit_messages_with_runtime(
+                &render_runtime,
+                &failure.messages,
+                runtime.ui.message_verbosity,
+            );
+            Ok(1)
         }
-        let render_runtime = CommandRenderRuntime::new(runtime.config, runtime.ui);
-        emit_messages_with_runtime(&render_runtime, &messages, runtime.ui.message_verbosity);
-        return Ok(1);
+        PreparedPluginResponse::Output(prepared) => {
+            if !prepared.messages.is_empty() {
+                emit_messages_with_runtime(
+                    &render_runtime,
+                    &prepared.messages,
+                    runtime.ui.message_verbosity,
+                );
+            }
+            let effective = resolve_effective_render_settings(
+                &runtime.ui.render_settings,
+                prepared.format_hint,
+            );
+            print!("{}", render_output(&prepared.output, &effective));
+            maybe_copy_output_with_runtime(&render_runtime, &prepared.output);
+            Ok(0)
+        }
     }
-    if !messages.is_empty() {
-        let render_runtime = CommandRenderRuntime::new(runtime.config, runtime.ui);
-        emit_messages_with_runtime(&render_runtime, &messages, runtime.ui.message_verbosity);
-    }
-
-    let mut output = plugin_data_to_output_result(response.data, Some(&response.meta));
-    if !stages.is_empty() {
-        output = apply_output_pipeline(output, stages).map_err(|err| miette!("{err:#}"))?;
-    }
-    let effective = resolve_effective_render_settings(
-        &runtime.ui.render_settings,
-        parse_output_format_hint(response.meta.format_hint.as_deref()),
-    );
-    print!("{}", render_output(&output, &effective));
-    maybe_copy_output_with_runtime(
-        &CommandRenderRuntime::new(runtime.config, runtime.ui),
-        &output,
-    );
-
-    Ok(0)
 }
 
 pub(crate) fn is_help_passthrough(args: &[String]) -> bool {
@@ -221,4 +216,69 @@ pub(crate) fn is_help_passthrough(args: &[String]) -> bool {
     }
 
     matches!(args.first(), Some(first) if first == CMD_HELP)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExternalParse, parse_external_invocation};
+    use crate::plugin_manager::PluginManager;
+    use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+    use osp_ui::messages::MessageLevel;
+    use osp_ui::theme::DEFAULT_THEME_NAME;
+    use osp_ui::{RenderRuntime, RenderSettings};
+
+    fn make_test_state() -> AppState {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let config = resolver
+            .resolve(ResolveOptions::default())
+            .expect("test config should resolve");
+
+        AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Cli, None),
+            config,
+            render_settings: RenderSettings {
+                format: OutputFormat::Json,
+                mode: RenderMode::Plain,
+                color: ColorMode::Never,
+                unicode: UnicodeMode::Never,
+                width: None,
+                margin: 0,
+                indent_size: 2,
+                short_list_max: 1,
+                medium_list_max: 5,
+                grid_padding: 4,
+                grid_columns: None,
+                column_weight: 3,
+                table_overflow: osp_ui::TableOverflow::Clip,
+                mreg_stack_min_col_width: 10,
+                mreg_stack_overflow_ratio: 200,
+                theme_name: DEFAULT_THEME_NAME.to_string(),
+                theme: None,
+                style_overrides: osp_ui::StyleOverrides::default(),
+                runtime: RenderRuntime::default(),
+            },
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+            plugins: PluginManager::new(Vec::new()),
+            themes: crate::theme_loader::ThemeCatalog::default(),
+            launch: LaunchContext::default(),
+        })
+    }
+
+    #[test]
+    fn external_builtin_help_passthrough_is_handled_unit() {
+        let state = make_test_state();
+        let tokens = ["config", "--help"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        let parsed = parse_external_invocation(&state, &tokens).expect("help should parse");
+        assert!(matches!(parsed, ExternalParse::Handled(0)));
+    }
 }
