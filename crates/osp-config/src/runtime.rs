@@ -43,13 +43,13 @@ impl Default for RuntimeLoadOptions {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
-    pub default_profile: String,
+    pub active_profile: String,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            default_profile: DEFAULT_PROFILE_NAME.to_string(),
+            active_profile: DEFAULT_PROFILE_NAME.to_string(),
         }
     }
 }
@@ -57,7 +57,7 @@ impl Default for RuntimeConfig {
 impl RuntimeConfig {
     pub fn from_resolved(resolved: &ResolvedConfig) -> Self {
         Self {
-            default_profile: resolved.active_profile().to_string(),
+            active_profile: resolved.active_profile().to_string(),
         }
     }
 }

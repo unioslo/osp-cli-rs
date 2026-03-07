@@ -191,6 +191,7 @@ pub struct SchemaEntry {
     value_type: SchemaValueType,
     required: bool,
     allowed_values: Option<Vec<String>>,
+    runtime_visible: bool,
 }
 
 impl SchemaEntry {
@@ -199,6 +200,7 @@ impl SchemaEntry {
             value_type: SchemaValueType::String,
             required: false,
             allowed_values: None,
+            runtime_visible: true,
         }
     }
 
@@ -207,6 +209,7 @@ impl SchemaEntry {
             value_type: SchemaValueType::Bool,
             required: false,
             allowed_values: None,
+            runtime_visible: true,
         }
     }
 
@@ -215,6 +218,7 @@ impl SchemaEntry {
             value_type: SchemaValueType::Integer,
             required: false,
             allowed_values: None,
+            runtime_visible: true,
         }
     }
 
@@ -223,6 +227,7 @@ impl SchemaEntry {
             value_type: SchemaValueType::Float,
             required: false,
             allowed_values: None,
+            runtime_visible: true,
         }
     }
 
@@ -231,11 +236,17 @@ impl SchemaEntry {
             value_type: SchemaValueType::StringList,
             required: false,
             allowed_values: None,
+            runtime_visible: true,
         }
     }
 
     pub fn required(mut self) -> Self {
         self.required = true;
+        self
+    }
+
+    pub fn bootstrap_only(mut self) -> Self {
+        self.runtime_visible = false;
         self
     }
 
@@ -260,6 +271,10 @@ impl SchemaEntry {
     pub fn allowed_values(&self) -> Option<&[String]> {
         self.allowed_values.as_deref()
     }
+
+    pub fn runtime_visible(&self) -> bool {
+        self.runtime_visible
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -275,7 +290,7 @@ impl Default for ConfigSchema {
             allow_extensions_namespace: true,
         };
 
-        schema.insert("profile.default", SchemaEntry::string());
+        schema.insert("profile.default", SchemaEntry::string().bootstrap_only());
         schema.insert("profile.active", SchemaEntry::string().required());
         schema.insert("theme.name", SchemaEntry::string());
         schema.insert("theme.path", SchemaEntry::string_list());
@@ -390,6 +405,13 @@ impl ConfigSchema {
         self.entries.contains_key(key) || self.is_extension_key(key)
     }
 
+    pub fn is_runtime_visible_key(&self, key: &str) -> bool {
+        self.entries
+            .get(key)
+            .is_some_and(SchemaEntry::runtime_visible)
+            || self.is_extension_key(key)
+    }
+
     pub fn entries(&self) -> impl Iterator<Item = (&str, &SchemaEntry)> {
         self.entries
             .iter()
@@ -469,7 +491,7 @@ impl ConfigSchema {
     ) -> Result<(), ConfigError> {
         let mut unknown = Vec::new();
         for key in values.keys() {
-            if self.entries.contains_key(key) || self.is_extension_key(key) {
+            if self.is_runtime_visible_key(key) {
                 continue;
             }
             unknown.push(key.clone());
@@ -480,7 +502,7 @@ impl ConfigSchema {
         }
 
         for (key, entry) in &self.entries {
-            if entry.required && !values.contains_key(key) {
+            if entry.runtime_visible && entry.required && !values.contains_key(key) {
                 return Err(ConfigError::MissingRequiredKey { key: key.clone() });
             }
         }
@@ -489,6 +511,9 @@ impl ConfigSchema {
             let Some(schema_entry) = self.entries.get(key) else {
                 continue;
             };
+            if !schema_entry.runtime_visible {
+                continue;
+            }
             resolved.value = adapt_value_for_schema(key, &resolved.value, schema_entry)?;
         }
 
@@ -1368,8 +1393,8 @@ pub(crate) fn normalize_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootstrapPhase, BootstrapScopeRule, Scope, bootstrap_key_spec, is_bootstrap_only_key,
-        validate_key_scope,
+        BootstrapPhase, BootstrapScopeRule, ConfigSchema, Scope, bootstrap_key_spec,
+        is_bootstrap_only_key, validate_key_scope,
     };
 
     #[test]
@@ -1398,5 +1423,13 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn schema_marks_profile_default_bootstrap_only() {
+        let schema = ConfigSchema::default();
+        assert!(schema.is_known_key("profile.default"));
+        assert!(!schema.is_runtime_visible_key("profile.default"));
+        assert!(schema.is_runtime_visible_key("profile.active"));
     }
 }
