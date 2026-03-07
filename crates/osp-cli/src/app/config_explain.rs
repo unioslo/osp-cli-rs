@@ -135,12 +135,12 @@ pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: 
 
     out.push_str("context:\n");
     out.push_str(&format!("  active_profile: {}\n", explain.active_profile));
-    if let Some(source) = explain.active_profile_source {
-        // Bootstrap explains should say whether the active profile came from an
-        // explicit override or from `profile.default`; otherwise the chosen
-        // profile is visible but the reason is hidden.
-        out.push_str(&format!("  active_profile_source: {}\n", source.as_str()));
-    }
+    // Runtime and bootstrap explains both resolve through the same active
+    // profile decision, so the source is always part of the contract now.
+    out.push_str(&format!(
+        "  active_profile_source: {}\n",
+        explain.active_profile_source.as_str()
+    ));
     out.push_str(&format!(
         "  terminal: {}\n\n",
         explain.terminal.as_deref().unwrap_or("none")
@@ -218,9 +218,7 @@ pub(crate) fn config_explain_json(
     );
     root.insert(
         "active_profile_source".to_string(),
-        explain
-            .active_profile_source
-            .map_or(serde_json::Value::Null, |source| source.as_str().into()),
+        explain.active_profile_source.as_str().into(),
     );
     root.insert(
         "bootstrap_scope_policy".to_string(),

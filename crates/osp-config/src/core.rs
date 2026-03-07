@@ -947,9 +947,10 @@ impl ConfigLayer {
         Ok(layer)
     }
 
-    pub(crate) fn validate_key_scopes(&self) -> Result<(), ConfigError> {
+    pub(crate) fn validate_entries(&self) -> Result<(), ConfigError> {
         for entry in &self.entries {
             validate_key_scope(&entry.key, &entry.scope)?;
+            validate_bootstrap_value(&entry.key, &entry.value)?;
         }
 
         Ok(())
@@ -1040,7 +1041,7 @@ impl ActiveProfileSource {
 pub struct ConfigExplain {
     pub key: String,
     pub active_profile: String,
-    pub active_profile_source: Option<ActiveProfileSource>,
+    pub active_profile_source: ActiveProfileSource,
     pub terminal: Option<String>,
     pub known_profiles: BTreeSet<String>,
     pub layers: Vec<ExplainLayer>,

@@ -12,7 +12,7 @@ pub(crate) fn build_runtime_explain(
     ConfigExplain {
         key: key.to_string(),
         active_profile: frame.active_profile,
-        active_profile_source: None,
+        active_profile_source: frame.active_profile_source,
         terminal: frame.terminal,
         known_profiles: frame.known_profiles,
         layers,

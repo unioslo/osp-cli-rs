@@ -23,7 +23,7 @@ pub(crate) fn prepare_resolution(
     layers: [LayerRef<'_>; 6],
     options: ResolveOptions,
 ) -> Result<ResolutionFrame, ConfigError> {
-    validate_layer_scopes(layers)?;
+    validate_layers(layers)?;
     let terminal = options.terminal.map(|value| normalize_identifier(&value));
     let profile_override = options
         .profile_override
@@ -92,7 +92,7 @@ impl From<BootstrapConfigExplain> for ConfigExplain {
         Self {
             key: value.key,
             active_profile: value.active_profile,
-            active_profile_source: Some(value.active_profile_source),
+            active_profile_source: value.active_profile_source,
             terminal: value.terminal,
             known_profiles: value.known_profiles,
             layers: value.layers,
@@ -102,9 +102,9 @@ impl From<BootstrapConfigExplain> for ConfigExplain {
     }
 }
 
-fn validate_layer_scopes(layers: [LayerRef<'_>; 6]) -> Result<(), ConfigError> {
+fn validate_layers(layers: [LayerRef<'_>; 6]) -> Result<(), ConfigError> {
     for layer in layers {
-        layer.layer.validate_key_scopes()?;
+        layer.layer.validate_entries()?;
     }
 
     Ok(())

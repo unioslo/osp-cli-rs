@@ -565,6 +565,30 @@ fn bootstrap_explain_has_explicit_type_contract() {
 }
 
 #[test]
+fn runtime_explain_reports_active_profile_source_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "uio");
+
+    let mut file = ConfigLayer::default();
+    file.set_for_profile("uio", "ui.mode", "plain");
+    file.set_for_profile("tsd", "ui.mode", "rich");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_file(file);
+
+    let explain = resolver
+        .explain_key("ui.mode", ResolveOptions::default().with_profile("tsd"))
+        .expect("runtime explain should succeed");
+
+    assert_eq!(explain.active_profile, "tsd");
+    assert_eq!(
+        explain.active_profile_source,
+        osp_config::ActiveProfileSource::Override
+    );
+}
+
+#[test]
 fn bootstrap_explain_reports_profile_override_source_contract() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "uio");
@@ -621,6 +645,25 @@ fn bootstrap_rejects_non_string_default_profile_contract() {
     assert!(matches!(
         err,
         osp_config::ConfigError::InvalidDefaultProfileType(_)
+    ));
+}
+
+#[test]
+fn programmatic_layer_rejects_invalid_bootstrap_value_during_prepare_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "   ");
+
+    let resolver = ConfigResolver::from_loaded_layers(osp_config::LoadedLayers {
+        defaults,
+        ..osp_config::LoadedLayers::default()
+    });
+
+    let err = resolver
+        .resolve(ResolveOptions::default())
+        .expect_err("invalid bootstrap value should fail during layer validation");
+    assert!(matches!(
+        err,
+        osp_config::ConfigError::InvalidDefaultProfileValue(_)
     ));
 }
 
