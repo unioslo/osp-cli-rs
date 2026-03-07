@@ -170,10 +170,9 @@ mod tests {
         AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
     };
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
-    use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+    use osp_core::output::OutputFormat;
+    use osp_ui::RenderSettings;
     use osp_ui::messages::MessageLevel;
-    use osp_ui::theme::DEFAULT_THEME_NAME;
-    use osp_ui::{RenderRuntime, RenderSettings};
 
     fn make_state() -> (AppRuntime, AppSession) {
         let mut defaults = ConfigLayer::default();
@@ -184,27 +183,7 @@ mod tests {
             .resolve(ResolveOptions::default().with_terminal("repl"))
             .expect("test config should resolve");
 
-        let settings = RenderSettings {
-            format: OutputFormat::Json,
-            mode: RenderMode::Plain,
-            color: ColorMode::Never,
-            unicode: UnicodeMode::Never,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: osp_ui::TableOverflow::Clip,
-            mreg_stack_min_col_width: 10,
-            mreg_stack_overflow_ratio: 200,
-            theme_name: DEFAULT_THEME_NAME.to_string(),
-            theme: None,
-            style_overrides: osp_ui::StyleOverrides::default(),
-            runtime: RenderRuntime::default(),
-        };
+        let settings = RenderSettings::test_plain(OutputFormat::Json);
 
         let state = AppState::new(AppStateInit {
             context: RuntimeContext::new(None, TerminalKind::Repl, None),
