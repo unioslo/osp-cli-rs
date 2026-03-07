@@ -10,9 +10,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter, Write as FmtWrite};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PLUGIN_EXECUTABLE_PREFIX: &str = "osp-";
@@ -250,7 +251,7 @@ struct DescribeCacheEntry {
 
 pub struct PluginManager {
     explicit_dirs: Vec<PathBuf>,
-    discovered_cache: RwLock<Option<Vec<DiscoveredPlugin>>>,
+    discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
     config_root: Option<PathBuf>,
     cache_root: Option<PathBuf>,
 }
@@ -276,30 +277,31 @@ impl PluginManager {
         let state = self.load_state().unwrap_or_default();
 
         Ok(discovered
-            .into_iter()
+            .iter()
             .map(|plugin| PluginSummary {
                 enabled: is_enabled(&state, &plugin.plugin_id, plugin.default_enabled),
                 healthy: plugin.issue.is_none(),
                 issue: plugin.issue.clone(),
-                plugin_id: plugin.plugin_id,
-                plugin_version: plugin.plugin_version,
-                executable: plugin.executable,
+                plugin_id: plugin.plugin_id.clone(),
+                plugin_version: plugin.plugin_version.clone(),
+                executable: plugin.executable.clone(),
                 source: plugin.source,
-                commands: plugin.commands,
+                commands: plugin.commands.clone(),
             })
             .collect())
     }
 
     pub fn command_catalog(&self) -> Result<Vec<CommandCatalogEntry>> {
         let state = self.load_state().unwrap_or_default();
-        let active = self.active_plugins(&state).collect::<Vec<_>>();
+        let discovered = self.discover();
+        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
         let provider_index = provider_labels_by_command(&active);
         let mut seen = HashSet::new();
         let mut out = Vec::new();
 
         for plugin in active {
-            let selected_label = plugin_label(&plugin);
-            for spec in plugin.command_specs {
+            let selected_label = plugin_label(plugin);
+            for spec in &plugin.command_specs {
                 if !seen.insert(spec.name.clone()) {
                     continue;
                 }
@@ -310,8 +312,8 @@ impl PluginManager {
                 out.push(CommandCatalogEntry {
                     name: spec.name.clone(),
                     about: spec.tooltip.clone().unwrap_or_default(),
-                    subcommands: direct_subcommand_names(&spec),
-                    completion: spec,
+                    subcommands: direct_subcommand_names(spec),
+                    completion: spec.clone(),
                     provider: plugin.plugin_id.clone(),
                     providers: providers.clone(),
                     conflicted: providers.len() > 1,
@@ -389,8 +391,9 @@ impl PluginManager {
 
     pub fn command_providers(&self, command: &str) -> Vec<String> {
         let state = self.load_state().unwrap_or_default();
+        let discovered = self.discover();
         let mut out = Vec::new();
-        for plugin in self.active_plugins(&state) {
+        for plugin in active_plugins(discovered.as_ref(), &state) {
             if plugin.commands.iter().any(|name| name == command) {
                 out.push(format!("{} ({})", plugin.plugin_id, plugin.source));
             }
@@ -502,20 +505,13 @@ impl PluginManager {
         command: &str,
     ) -> std::result::Result<DiscoveredPlugin, PluginDispatchError> {
         let state = self.load_state().unwrap_or_default();
-        self.active_plugins(&state)
+        let discovered = self.discover();
+        active_plugins(discovered.as_ref(), &state)
             .find(|plugin| plugin.commands.iter().any(|c| c == command))
+            .cloned()
             .ok_or_else(|| PluginDispatchError::CommandNotFound {
                 command: command.to_string(),
             })
-    }
-
-    fn active_plugins<'a>(
-        &'a self,
-        state: &'a PluginState,
-    ) -> impl Iterator<Item = DiscoveredPlugin> + 'a {
-        self.discover()
-            .into_iter()
-            .filter(move |plugin| is_active_plugin(plugin, state))
     }
 
     pub fn refresh(&self) {
@@ -526,7 +522,7 @@ impl PluginManager {
         *guard = None;
     }
 
-    fn discover(&self) -> Vec<DiscoveredPlugin> {
+    fn discover(&self) -> Arc<[DiscoveredPlugin]> {
         if let Some(cached) = self
             .discovered_cache
             .read()
@@ -536,13 +532,17 @@ impl PluginManager {
             return cached;
         }
 
-        let discovered = self.discover_uncached();
         let mut guard = self
             .discovered_cache
             .write()
             .unwrap_or_else(|err| err.into_inner());
-        *guard = Some(discovered.clone());
-        discovered
+        if let Some(cached) = guard.clone() {
+            return cached;
+        }
+        let discovered = self.discover_uncached();
+        let shared = Arc::<[DiscoveredPlugin]>::from(discovered);
+        *guard = Some(shared.clone());
+        shared
     }
 
     fn discover_uncached(&self) -> Vec<DiscoveredPlugin> {
@@ -1148,11 +1148,16 @@ fn run_provider(
     context: &PluginDispatchContext,
 ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
     let mut command = Command::new(&provider.executable);
+    // Pass the selected command in both env and argv so plugin authors can
+    // treat plugin executables as ordinary CLIs without losing host context.
+    command.arg(selected_command);
     command.args(args);
     command.env(ENV_OSP_COMMAND, selected_command);
     for (key, value) in context.runtime_hints.env_pairs() {
         command.env(key, value);
     }
+    // Later env() calls win, so app-owned plugin config can intentionally
+    // override shared defaults after runtime hints are injected.
     for (key, value) in context.env_pairs_for(&provider.plugin_id) {
         command.env(key, value);
     }
@@ -1298,11 +1303,20 @@ fn is_active_plugin(plugin: &DiscoveredPlugin, state: &PluginState) -> bool {
     plugin.issue.is_none() && is_enabled(state, &plugin.plugin_id, plugin.default_enabled)
 }
 
+fn active_plugins<'a>(
+    discovered: &'a [DiscoveredPlugin],
+    state: &'a PluginState,
+) -> impl Iterator<Item = &'a DiscoveredPlugin> + 'a {
+    discovered
+        .iter()
+        .filter(move |plugin| is_active_plugin(plugin, state))
+}
+
 fn plugin_label(plugin: &DiscoveredPlugin) -> String {
     format!("{} ({})", plugin.plugin_id, plugin.source)
 }
 
-fn provider_labels_by_command(plugins: &[DiscoveredPlugin]) -> HashMap<String, Vec<String>> {
+fn provider_labels_by_command(plugins: &[&DiscoveredPlugin]) -> HashMap<String, Vec<String>> {
     let mut index = HashMap::new();
     for plugin in plugins {
         let label = plugin_label(plugin);
@@ -1329,60 +1343,24 @@ fn is_enabled(state: &PluginState, plugin_id: &str, default_enabled: bool) -> bo
 }
 
 fn write_text_atomic(path: &Path, payload: &str) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("path has no file name: {}", path.display()))?;
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let temp_path = path.with_extension(format!("tmp-{}-{suffix}", std::process::id()));
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(file_name);
+    temp_name.push(format!(".tmp-{}-{suffix}", std::process::id()));
+    let temp_path = parent.join(temp_name);
     std::fs::write(&temp_path, payload)?;
-    std::fs::rename(&temp_path, path)?;
+    if let Err(err) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(err.into());
+    }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PluginState, is_enabled};
-
-    #[test]
-    fn explicit_enable_overrides_default_disabled() {
-        let state = PluginState {
-            enabled: vec!["hello".to_string()],
-            disabled: Vec::new(),
-        };
-
-        assert!(is_enabled(&state, "hello", false));
-    }
-
-    #[test]
-    fn explicit_disable_overrides_default_enabled() {
-        let state = PluginState {
-            enabled: Vec::new(),
-            disabled: vec!["hello".to_string()],
-        };
-
-        assert!(!is_enabled(&state, "hello", true));
-    }
-
-    #[test]
-    fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins() {
-        let state = PluginState {
-            enabled: vec!["alpha".to_string()],
-            disabled: Vec::new(),
-        };
-
-        assert!(is_enabled(&state, "alpha", true));
-        assert!(is_enabled(&state, "beta", true));
-    }
-
-    #[test]
-    fn explicit_enable_wins_if_state_file_contains_conflicting_entries() {
-        let state = PluginState {
-            enabled: vec!["hello".to_string()],
-            disabled: vec!["hello".to_string()],
-        };
-
-        assert!(is_enabled(&state, "hello", false));
-    }
 }
 
 fn merge_issue(target: &mut Option<String>, message: String) {
@@ -1410,13 +1388,30 @@ fn normalize_checksum(checksum: &str) -> Result<String> {
 }
 
 fn file_sha256_hex(path: &Path) -> Result<String> {
-    let content = std::fs::read(path).with_context(|| {
+    let file = std::fs::File::open(path).with_context(|| {
         format!(
             "failed to read plugin executable for checksum: {}",
             path.display()
         )
     })?;
-    let digest = Sha256::digest(content);
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 16 * 1024];
+
+    loop {
+        let read = reader.read(&mut buffer).with_context(|| {
+            format!(
+                "failed to stream plugin executable for checksum: {}",
+                path.display()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    let digest = hasher.finalize();
 
     let mut out = String::with_capacity(digest.len() * 2);
     for b in digest {
@@ -1478,4 +1473,132 @@ fn is_executable_file(path: &Path) -> bool {
 #[cfg(not(unix))]
 fn is_executable_file(path: &Path) -> bool {
     path.is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PluginManager, PluginState, is_enabled};
+
+    #[test]
+    fn explicit_enable_overrides_default_disabled() {
+        let state = PluginState {
+            enabled: vec!["hello".to_string()],
+            disabled: Vec::new(),
+        };
+
+        assert!(is_enabled(&state, "hello", false));
+    }
+
+    #[test]
+    fn explicit_disable_overrides_default_enabled() {
+        let state = PluginState {
+            enabled: Vec::new(),
+            disabled: vec!["hello".to_string()],
+        };
+
+        assert!(!is_enabled(&state, "hello", true));
+    }
+
+    #[test]
+    fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins() {
+        let state = PluginState {
+            enabled: vec!["alpha".to_string()],
+            disabled: Vec::new(),
+        };
+
+        assert!(is_enabled(&state, "alpha", true));
+        assert!(is_enabled(&state, "beta", true));
+    }
+
+    #[test]
+    fn explicit_enable_wins_if_state_file_contains_conflicting_entries() {
+        let state = PluginState {
+            enabled: vec!["hello".to_string()],
+            disabled: vec!["hello".to_string()],
+        };
+
+        assert!(is_enabled(&state, "hello", false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refresh_picks_up_filesystem_changes_and_prunes_stale_cache() {
+        let root = make_temp_dir("osp-cli-plugin-manager-refresh");
+        let plugins_dir = root.join("plugins");
+        let config_root = root.join("config");
+        let cache_root = root.join("cache");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        let alpha_path = write_named_test_plugin(&plugins_dir, "alpha");
+        let manager = PluginManager::new(vec![plugins_dir.clone()])
+            .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
+
+        let first = manager.list_plugins().expect("plugins should list");
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].plugin_id, "alpha");
+
+        std::fs::remove_file(&alpha_path).expect("alpha plugin should be removable");
+        write_named_test_plugin(&plugins_dir, "beta");
+
+        let cached = manager.list_plugins().expect("cached plugins should list");
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].plugin_id, "alpha");
+
+        manager.refresh();
+        let refreshed = manager
+            .list_plugins()
+            .expect("refreshed plugins should list");
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].plugin_id, "beta");
+
+        let cache_path = cache_root.join("describe-v1.json");
+        let cache_raw =
+            std::fs::read_to_string(&cache_path).expect("describe cache should be written");
+        assert!(cache_raw.contains("osp-beta"));
+        assert!(!cache_raw.contains("osp-alpha"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be valid")
+            .as_nanos();
+        dir.push(format!("{prefix}-{nonce}"));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+        dir
+    }
+
+    #[cfg(unix)]
+    fn write_named_test_plugin(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let plugin_path = dir.join(format!("osp-{name}"));
+        let script = format!(
+            r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+            name = name
+        );
+
+        std::fs::write(&plugin_path, script).expect("plugin should be written");
+        let mut perms = std::fs::metadata(&plugin_path)
+            .expect("metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+        plugin_path
+    }
 }

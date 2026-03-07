@@ -311,7 +311,8 @@ fn multi_command_plugin_receives_selected_command_contract() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"selected_command\": \"alpha\""))
-        .stdout(predicate::str::contains("\"arg0\": \"run\""));
+        .stdout(predicate::str::contains("\"arg0\": \"alpha\""))
+        .stdout(predicate::str::contains("\"arg1\": \"run\""));
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -805,7 +806,8 @@ JSON
   exit 0
 fi
 
-if [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ "$1" = "help" ]; then
+if [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ "$1" = "help" ] || \
+   [ "$2" = "--help" ] || [ "$2" = "-h" ] || [ "$2" = "help" ]; then
   echo "hello plugin help text"
   exit 0
 fi
@@ -942,7 +944,7 @@ JSON
 fi
 
 cat <<JSON
-{"protocol_version":1,"ok":true,"data":{"selected_command":"${OSP_COMMAND:-}","arg0":"${1:-}"},"error":null,"meta":{"format_hint":"json"}}
+{"protocol_version":1,"ok":true,"data":{"selected_command":"${OSP_COMMAND:-}","arg0":"${1:-}","arg1":"${2:-}"},"error":null,"meta":{"format_hint":"json"}}
 JSON
 "#;
 

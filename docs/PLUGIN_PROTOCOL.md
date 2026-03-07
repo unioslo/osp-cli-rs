@@ -22,12 +22,12 @@ Plugins are separate binaries discovered at runtime (Option B).
   - Exit code 0 on success.
 - Normal execution
   - Backbone resolves the plugin from the selected top-level command and then
-    forwards only the remaining argv tail to the plugin process.
+    invokes the plugin as `<plugin-exe> <selected-command> <remaining-argv...>`.
   - Example: `osp ldap user oistes` invokes the plugin with argv
-    `["user", "oistes"]`.
-  - Backbone also sets `OSP_COMMAND=<selected-top-level-command>` so one
-    executable can safely advertise multiple top-level commands without
-    overloading argv shape.
+    `["ldap", "user", "oistes"]`.
+  - Backbone also sets `OSP_COMMAND=<selected-top-level-command>`.
+  - `OSP_COMMAND` and `argv[1]` carry the same selected command on purpose.
+    Plugins may use either, but they should agree.
   - Prints `ResponseV1` JSON to stdout.
   - Uses non-zero exit for process-level failure.
 
@@ -172,6 +172,9 @@ Env mapping rules:
   - become `OSP_PLUGIN_CFG_API_URL` and `OSP_PLUGIN_CFG_BIND_PASSWORD`
 - plugin-specific values override shared values when they map to the same env
   name.
+- app-owned plugin config is injected after runtime hints, so later
+  `OSP_PLUGIN_CFG_*` values intentionally win if a plugin reuses the same env
+  name across shared and plugin-specific config.
 - scalar config values are stringified directly.
 - list values are encoded as JSON arrays.
 
