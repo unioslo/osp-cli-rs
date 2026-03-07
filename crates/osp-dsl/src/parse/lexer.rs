@@ -139,7 +139,7 @@ pub fn tokenize_stage(segment: &StageSegment) -> Result<Vec<Token>, LexerError> 
     let mut words = tokenize_words(&segment.raw, segment.span.start)?;
     let mut out = Vec::new();
     for word in words.drain(..) {
-        split_word_token(word, &mut out);
+        split_word_token(word, segment, &mut out);
     }
     Ok(out)
 }
@@ -259,13 +259,17 @@ fn finish_word(
     }
 }
 
-fn split_word_token(token: Token, out: &mut Vec<Token>) {
+fn split_word_token(token: Token, segment: &StageSegment, out: &mut Vec<Token>) {
     if token.kind != TokenKind::Word {
         out.push(token);
         return;
     }
 
-    if let Some(op) = parse_full_operator(&token.text) {
+    let relative_start = token.span.start.saturating_sub(segment.span.start);
+    let relative_end = token.span.end.saturating_sub(segment.span.start);
+    let raw = &segment.raw[relative_start..relative_end];
+
+    if let Some(op) = parse_full_operator(raw) {
         out.push(Token {
             kind: TokenKind::Op(op),
             ..token
@@ -273,39 +277,103 @@ fn split_word_token(token: Token, out: &mut Vec<Token>) {
         return;
     }
 
-    let protected_prefix_len = protected_prefix_len(&token.text);
-    let mut cursor = protected_prefix_len;
-    let mut chunk_start = 0usize;
+    let mut state = State::Normal;
     let mut split_happened = false;
+    let mut current_text = String::new();
+    let mut current_raw_start: Option<usize> = None;
+    let mut cursor = 0usize;
 
-    while cursor < token.text.len() {
-        if let Some((op, width)) = parse_operator_at(&token.text, cursor) {
-            if cursor > chunk_start {
-                out.push(Token {
-                    kind: TokenKind::Word,
-                    span: Span {
-                        start: token.span.start + chunk_start,
-                        end: token.span.start + cursor,
-                    },
-                    text: token.text[chunk_start..cursor].to_string(),
-                });
+    while cursor < raw.len() {
+        let tail = &raw[cursor..];
+        let ch = tail
+            .chars()
+            .next()
+            .expect("cursor should always point at a valid character boundary");
+        let width = ch.len_utf8();
+
+        match state {
+            State::Normal => {
+                if current_raw_start.is_none()
+                    && current_text.is_empty()
+                    && cursor == 0
+                    && !raw.is_empty()
+                {
+                    let protected_prefix_len = protected_prefix_len(raw);
+                    if protected_prefix_len > 0 && protected_prefix_len < raw.len() {
+                        current_raw_start = Some(0);
+                        current_text.push_str(&raw[..protected_prefix_len]);
+                        cursor += protected_prefix_len;
+                        continue;
+                    }
+                }
+
+                match ch {
+                    '\\' => {
+                        current_raw_start.get_or_insert(cursor);
+                        state = State::EscapeNormal;
+                    }
+                    '\'' => {
+                        current_raw_start.get_or_insert(cursor);
+                        state = State::SingleQuote;
+                    }
+                    '"' => {
+                        current_raw_start.get_or_insert(cursor);
+                        state = State::DoubleQuote;
+                    }
+                    _ => {
+                        if let Some((op, op_width)) = parse_operator_at(raw, cursor) {
+                            push_split_word(
+                                out,
+                                token.span.start,
+                                current_raw_start.take(),
+                                cursor,
+                                &mut current_text,
+                            );
+                            out.push(Token {
+                                kind: TokenKind::Op(op),
+                                span: Span {
+                                    start: token.span.start + cursor,
+                                    end: token.span.start + cursor + op_width,
+                                },
+                                text: raw[cursor..cursor + op_width].to_string(),
+                            });
+                            split_happened = true;
+                            cursor += op_width;
+                            continue;
+                        }
+
+                        current_raw_start.get_or_insert(cursor);
+                        current_text.push(ch);
+                    }
+                }
             }
-
-            out.push(Token {
-                kind: TokenKind::Op(op),
-                span: Span {
-                    start: token.span.start + cursor,
-                    end: token.span.start + cursor + width,
-                },
-                text: token.text[cursor..cursor + width].to_string(),
-            });
-
-            cursor += width;
-            chunk_start = cursor;
-            split_happened = true;
-            continue;
+            State::SingleQuote => {
+                if ch == '\'' {
+                    state = State::Normal;
+                } else {
+                    current_text.push(ch);
+                }
+            }
+            State::DoubleQuote => {
+                if ch == '"' {
+                    state = State::Normal;
+                } else if ch == '\\' {
+                    state = State::EscapeDouble;
+                } else {
+                    current_text.push(ch);
+                }
+            }
+            State::EscapeNormal => {
+                current_text.push(ch);
+                state = State::Normal;
+            }
+            State::EscapeDouble => {
+                current_text.push(ch);
+                state = State::DoubleQuote;
+            }
         }
-        cursor += 1;
+
+        cursor += width;
     }
 
     if !split_happened {
@@ -313,16 +381,34 @@ fn split_word_token(token: Token, out: &mut Vec<Token>) {
         return;
     }
 
-    if chunk_start < token.text.len() {
-        out.push(Token {
-            kind: TokenKind::Word,
-            span: Span {
-                start: token.span.start + chunk_start,
-                end: token.span.end,
-            },
-            text: token.text[chunk_start..].to_string(),
-        });
-    }
+    push_split_word(
+        out,
+        token.span.start,
+        current_raw_start,
+        raw.len(),
+        &mut current_text,
+    );
+}
+
+fn push_split_word(
+    out: &mut Vec<Token>,
+    base_start: usize,
+    raw_start: Option<usize>,
+    raw_end: usize,
+    text: &mut String,
+) {
+    let Some(raw_start) = raw_start else {
+        return;
+    };
+
+    out.push(Token {
+        kind: TokenKind::Word,
+        span: Span {
+            start: base_start + raw_start,
+            end: base_start + raw_end,
+        },
+        text: std::mem::take(text),
+    });
 }
 
 fn parse_full_operator(text: &str) -> Option<Op> {
@@ -489,6 +575,21 @@ mod tests {
         assert_eq!(tokens[1].text, "cn");
         assert_eq!(tokens[2].kind, TokenKind::Op(Op::Eq));
         assert_eq!(tokens[3].text, "foo bar");
+    }
+
+    #[test]
+    fn tokenize_stage_keeps_operator_chars_inside_quoted_value() {
+        let stage = StageSegment {
+            raw: "F note=\"a=b>=c\"".to_string(),
+            span: Span { start: 0, end: 15 },
+        };
+
+        let tokens = tokenize_stage(&stage).expect("tokenization should work");
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[0].text, "F");
+        assert_eq!(tokens[1].text, "note");
+        assert_eq!(tokens[2].kind, TokenKind::Op(Op::Eq));
+        assert_eq!(tokens[3].text, "a=b>=c");
     }
 
     #[test]

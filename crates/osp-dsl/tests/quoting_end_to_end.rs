@@ -53,6 +53,34 @@ fn filter_matches_escaped_quotes_inside_value() {
 }
 
 #[test]
+fn filter_matches_operator_chars_inside_quoted_value() {
+    let rows = vec![
+        obj(json!({"note": "a=b>=c", "id": 1})),
+        obj(json!({"note": "a b c", "id": 2})),
+    ];
+
+    let output = apply_pipeline(rows, &[r#"F note="a=b>=c""#.to_string()])
+        .expect("quoted operator filter should work");
+
+    let expected = vec![obj(json!({"note": "a=b>=c", "id": 1}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
+}
+
+#[test]
+fn filter_matches_empty_quoted_value() {
+    let rows = vec![
+        obj(json!({"note": "", "id": 1})),
+        obj(json!({"note": "non-empty", "id": 2})),
+    ];
+
+    let output = apply_pipeline(rows, &[r#"F note="""#.to_string()])
+        .expect("empty quoted filter should work");
+
+    let expected = vec![obj(json!({"note": "", "id": 1}))];
+    assert_eq!(output_rows(&output), expected.as_slice());
+}
+
+#[test]
 fn filter_matches_single_quoted_value_ending_with_backslash() {
     let rows = vec![
         obj(json!({"path": "C:\\Temp\\", "id": 1})),
