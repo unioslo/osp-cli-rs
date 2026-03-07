@@ -189,6 +189,8 @@ pub(crate) fn config_explain_json(
 ) -> serde_json::Value {
     let mut root = serde_json::Map::new();
     root.insert("key".to_string(), explain.key.clone().into());
+    // Keep the resolution phase explicit in output so bootstrap-only keys such
+    // as `profile.default` are not mistaken for ordinary runtime config.
     root.insert(
         "phase".to_string(),
         if is_bootstrap_only_key(&explain.key) {

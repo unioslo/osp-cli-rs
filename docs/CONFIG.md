@@ -225,6 +225,8 @@ The resolver should provide:
 - `config explain <key>` for winner + precedence chain + interpolation trace
 - bootstrap-aware explain for bootstrap keys such as `profile.default`
 - explain output should label whether a key was resolved in bootstrap or runtime
+- JSON explain output includes `"phase": "bootstrap"` or `"phase": "runtime"`
+- bootstrap-only keys stay out of ordinary runtime `config show`
 - `config diagnostics` summary
 
 Diagnostics must redact secrets and avoid logging token contents.

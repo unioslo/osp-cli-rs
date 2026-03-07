@@ -17,31 +17,31 @@ to be more disciplined.
 
 ## Non-Negotiable Direction
 
-- [ ] Keep the Rust model staged and deterministic.
-- [ ] Support dynamic config-file and profile selection only through explicit
+- [x] Keep the Rust model staged and deterministic.
+- [x] Support dynamic config-file and profile selection only through explicit
       bootstrap inputs.
-- [ ] Keep runtime config resolution data-oriented: select winners, interpolate,
+- [x] Keep runtime config resolution data-oriented: select winners, interpolate,
       validate, derive.
-- [ ] Reject Python-style fixed-point resolution, config callables, loader
+- [x] Reject Python-style fixed-point resolution, config callables, loader
       dependency graphs, and context stabilization loops.
-- [ ] Accept breaking changes where they make the semantics cleaner.
+- [x] Accept breaking changes where they make the semantics cleaner.
 
 ## Hard Invariants
 
 These should be treated as contract rules, not implementation details.
 
-- [ ] bootstrap-only keys never appear as ordinary runtime resolved keys
-- [ ] runtime snapshots contain only runtime-visible keys
-- [ ] runtime resolution never changes the active profile
-- [ ] bootstrap keys are never resolved through profile-dependent scopes
-- [ ] interpolation operates only on already-selected raw winners
-- [ ] explain output is derived from the same phase-specific selection rules as
+- [x] bootstrap-only keys never appear as ordinary runtime resolved keys
+- [x] runtime snapshots contain only runtime-visible keys
+- [x] runtime resolution never changes the active profile
+- [x] bootstrap keys are never resolved through profile-dependent scopes
+- [x] interpolation operates only on already-selected raw winners
+- [x] explain output is derived from the same phase-specific selection rules as
       normal resolution
 
 The biggest one is the key-category boundary:
 
-- [ ] `profile.default` is bootstrap-only
-- [ ] `profile.active` is runtime-visible and derived
+- [x] `profile.default` is bootstrap-only
+- [x] `profile.active` is runtime-visible and derived
 
 If a bootstrap value needs runtime visibility, that should happen through an
 intentional derived mirror, not by leaking bootstrap keys into
@@ -100,9 +100,9 @@ Bootstrap should be expressive by layer, but intentionally restricted by scope.
 
 That means:
 
-- [ ] bootstrap may read across all normal layers once those layers exist
-- [ ] bootstrap must ignore scopes that require an already-active profile
-- [ ] bootstrap must never recurse back into file selection or profile-scoped
+- [x] bootstrap may read across all normal layers once those layers exist
+- [x] bootstrap must ignore scopes that require an already-active profile
+- [x] bootstrap must never recurse back into file selection or profile-scoped
       runtime resolution
 
 Short version:
@@ -155,9 +155,9 @@ Reads only non-profile-dependent entries from:
 
 Recommended policy:
 
-- [ ] path bootstrap reads only pre-file inputs
-- [ ] profile bootstrap reads across all loaded layers
-- [ ] profile bootstrap ignores any profile-dependent scope
+- [x] path bootstrap reads only pre-file inputs
+- [x] profile bootstrap reads across all loaded layers
+- [x] profile bootstrap ignores any profile-dependent scope
 - [ ] secrets do not participate in bootstrap profile selection unless we later
       have a concrete need
 
@@ -194,12 +194,12 @@ loops.
 
 It should:
 
-- [ ] decide `profile.active` when no explicit override exists
-- [ ] be resolved across all loaded layers, but only from scopes that do not
+- [x] decide `profile.active` when no explicit override exists
+- [x] be resolved across all loaded layers, but only from scopes that do not
       require an active profile
-- [ ] be absent from `ResolvedConfig.values`
-- [ ] not appear as a normal runtime key selected under profile scope
-- [ ] use bootstrap-aware explain output
+- [x] be absent from `ResolvedConfig.values`
+- [x] not appear as a normal runtime key selected under profile scope
+- [x] use bootstrap-aware explain output
 
 It should not:
 
@@ -213,8 +213,8 @@ Config-path selection is also bootstrap.
 
 The sane rule is:
 
-- [ ] config file path may depend on CLI/env/session/bootstrap context
-- [ ] config file path may not depend on values stored in the file being chosen
+- [x] config file path may depend on CLI/env/session/bootstrap context
+- [x] config file path may not depend on values stored in the file being chosen
 
 This is the clean answer to "config depends on env / session values" without
 making the whole resolver recursive.
@@ -242,15 +242,15 @@ Bootstrap keys should not be modeled as scattered special cases.
 Add one explicit registry or schema annotation that defines, for each
 bootstrap-only key:
 
-- [ ] whether the key is bootstrap-only or runtime-visible
-- [ ] which bootstrap phase owns it
-- [ ] which scopes are valid
+- [x] whether the key is bootstrap-only or runtime-visible
+- [x] which bootstrap phase owns it
+- [x] which scopes are valid
 - [ ] which sources/layers are valid
 - [ ] whether it has a derived runtime mirror
 
 Conceptually:
 
-- [ ] `profile.default` => bootstrap-only, phase: profile bootstrap, scopes:
+- [x] `profile.default` => bootstrap-only, phase: profile bootstrap, scopes:
       global + terminal-only
 - [ ] future path keys => bootstrap-only, phase: path bootstrap, scopes:
       probably global-only unless there is a real reason otherwise
@@ -332,7 +332,7 @@ Recommended resolver-facing methods:
 - [ ] `load_layers_for_bootstrap(...)`
 - [ ] `resolve_bootstrap_profile(...)`
 - [ ] `resolve_runtime(...)`
-- [ ] `explain_bootstrap_key(...)`
+- [x] `explain_bootstrap_key(...)`
 
 The point is not to add surface area for its own sake. The point is to stop
 smuggling bootstrap logic through normal runtime resolution.
@@ -344,22 +344,22 @@ few focused helpers.
 
 Suggested split:
 
-- [ ] `bootstrap.rs`
+- [x] `bootstrap.rs`
       path discovery, bootstrap-profile selection, bootstrap explain types
-- [ ] `selector.rs`
+- [x] `selector.rs`
       scope ranking and layer selection
-- [ ] `interpolate.rs`
+- [x] `interpolate.rs`
       placeholder parsing, interpolation, cycle detection
-- [ ] `explain.rs`
+- [x] `explain.rs`
       explain-layer and explain-interpolation assembly
-- [ ] `resolver.rs`
+- [x] `resolver.rs`
       small orchestration layer that wires the pieces together
 
 Target shape:
 
-- [ ] top-level `resolver.rs` should read like orchestration, not implementation
+- [x] top-level `resolver.rs` should read like orchestration, not implementation
 - [ ] comments should describe policy, not compensate for tangled control flow
-- [ ] helper modules should each have one job
+- [x] helper modules should each have one job
 
 This should reduce the file from "one good but growing file" to "one readable
 entrypoint and a few obvious submodules".
@@ -376,16 +376,16 @@ entrypoint and a few obvious submodules".
 
 ### Add
 
-- [ ] bootstrap explain types
+- [x] bootstrap explain types
 - [ ] bootstrap result types
 - [ ] explicit bootstrap source enum for profile selection
-- [ ] bootstrap key registry or schema annotation
+- [x] bootstrap key registry or schema annotation
 
 ### Adjust
 
-- [ ] stop treating `profile.default` as a required runtime-resolved key
-- [ ] keep `profile.active` as the required runtime key
-- [ ] make `ResolvedConfig` carry only runtime values
+- [x] stop treating `profile.default` as a required runtime-resolved key
+- [x] keep `profile.active` as the required runtime key
+- [x] make `ResolvedConfig` carry only runtime values
 
 That last point matters. Runtime snapshots should not contain keys whose meaning
 changes between bootstrap and runtime.
@@ -398,24 +398,24 @@ This area needs a clearer contract than it has today.
 
 For normal keys:
 
-- [ ] show layer candidates
-- [ ] show winner
-- [ ] show raw template when interpolation happened
-- [ ] show interpolation dependencies
-- [ ] show final runtime value
+- [x] show layer candidates
+- [x] show winner
+- [x] show raw template when interpolation happened
+- [x] show interpolation dependencies
+- [x] show final runtime value
 
 ### Bootstrap explain
 
 For bootstrap keys such as `profile.default`:
 
-- [ ] show bootstrap candidates only
+- [x] show bootstrap candidates only
 - [ ] show why profile scope was ignored
-- [ ] show the final chosen `profile.active`
+- [x] show the final chosen `profile.active`
 - [ ] show whether CLI override bypassed `profile.default`
 
 Recommended shape:
 
-- [ ] use a separate bootstrap explain result type instead of forcing bootstrap
+- [x] use a separate bootstrap explain result type instead of forcing bootstrap
       and runtime explain into one structure with optional fields
 
 ### Placeholder explain rule
@@ -436,8 +436,8 @@ Recommended direction:
 
 Secret behavior should be explicit and boring.
 
-- [ ] keep secret propagation through interpolation
-- [ ] guarantee explain output is redacted by default
+- [x] keep secret propagation through interpolation
+- [x] guarantee explain output is redacted by default
 - [ ] ensure both runtime explain and bootstrap explain use the same redaction
       policy
 - [ ] avoid any formatting path that accidentally reveals secret payloads
@@ -449,12 +449,12 @@ replace it.
 
 Keep placeholder syntax intentionally small.
 
-- [ ] `${key}` remains the only placeholder syntax
-- [ ] unresolved placeholders are errors
-- [ ] cycles are errors
-- [ ] no shell-style defaults
-- [ ] no nested mini-language
-- [ ] no implicit runtime computation
+- [x] `${key}` remains the only placeholder syntax
+- [x] unresolved placeholders are errors
+- [x] cycles are errors
+- [x] no shell-style defaults
+- [x] no nested mini-language
+- [x] no implicit runtime computation
 
 If alias expansion needs different behavior, that should live in alias-specific
 code, not in the generic resolver.
@@ -478,15 +478,15 @@ stop teaching the resolver alias-specific behavior.
 
 The schema story should stay stricter than the Python resolver.
 
-- [ ] validate unknown keys strictly except `extensions.*`
-- [ ] keep adaptation strict
-- [ ] do not silently keep the old value when adaptation should be a contract
+- [x] validate unknown keys strictly except `extensions.*`
+- [x] keep adaptation strict
+- [x] do not silently keep the old value when adaptation should be a contract
       failure
 - [ ] separate bootstrap validation from runtime validation where useful
 
 Recommended change:
 
-- [ ] `profile.default` should be validated in bootstrap resolution, not as part
+- [x] `profile.default` should be validated in bootstrap resolution, not as part
       of required runtime keys
 
 ## Error Model
@@ -495,7 +495,7 @@ The error types should reflect the new contract.
 
 Potential additions:
 
-- [ ] `InvalidBootstrapScope { key, scope }`
+- [x] `InvalidBootstrapScope { key, scope }`
 - [ ] `BootstrapKeyNotRuntimeVisible { key }`
 - [ ] `InvalidBootstrapValue { key, reason }`
 
@@ -507,13 +507,13 @@ Potential cleanups:
 
 Validation timing:
 
-- [ ] reject invalid bootstrap-key scopes as early as possible
-- [ ] prefer load-time or layer-validation-time rejection over deferred
+- [x] reject invalid bootstrap-key scopes as early as possible
+- [x] prefer load-time or layer-validation-time rejection over deferred
       resolution-time rejection
 
 Preferred rule:
 
-- [ ] if a layer contains `profile.default` in profile or profile+terminal
+- [x] if a layer contains `profile.default` in profile or profile+terminal
       scope, loading that layer should fail
 
 If that proves awkward in a specific path, resolution-time rejection is an
@@ -544,14 +544,14 @@ Recommended refactor in `runtime.rs`:
 These rules should be enforced consistently in CLI, store helpers, and config
 commands.
 
-- [ ] `--profile` always wins
-- [ ] `config set profile.default ...` is allowed only in global or
+- [x] `--profile` always wins
+- [x] `config set profile.default ...` is allowed only in global or
       terminal-only scope
-- [ ] `config set --profile foo profile.default ...` is rejected
-- [ ] `config set --profile foo --terminal repl profile.default ...` is rejected
-- [ ] `config unset` follows the same scope rules
-- [ ] `config explain profile.active` explains runtime selection
-- [ ] `config explain profile.default` explains bootstrap selection
+- [x] `config set --profile foo profile.default ...` is rejected
+- [x] `config set --profile foo --terminal repl profile.default ...` is rejected
+- [x] `config unset` follows the same scope rules
+- [x] `config explain profile.active` explains runtime selection
+- [x] `config explain profile.default` explains bootstrap selection
 
 This is where breaking changes are a benefit. Silent ignore would be worse than
 hard errors.
@@ -567,32 +567,32 @@ hard errors.
 
 ### Phase 1: lock bootstrap semantics
 
-- [ ] add bootstrap-key registry / validation rules
-- [ ] reject profile-scoped `profile.default`
-- [ ] reject profile+terminal-scoped `profile.default`
-- [ ] remove `profile.default` from normal runtime selection
-- [ ] add explicit bootstrap-profile resolution
+- [x] add bootstrap-key registry / validation rules
+- [x] reject profile-scoped `profile.default`
+- [x] reject profile+terminal-scoped `profile.default`
+- [x] remove `profile.default` from normal runtime selection
+- [x] add explicit bootstrap-profile resolution
 
 ### Phase 2: split the file
 
-- [ ] move scope selection into `selector.rs`
-- [ ] move interpolation into `interpolate.rs`
-- [ ] move explain assembly into `explain.rs`
-- [ ] move bootstrap logic into `bootstrap.rs`
-- [ ] shrink `resolver.rs` to orchestration
+- [x] move scope selection into `selector.rs`
+- [x] move interpolation into `interpolate.rs`
+- [x] move explain assembly into `explain.rs`
+- [x] move bootstrap logic into `bootstrap.rs`
+- [x] shrink `resolver.rs` to orchestration
 
 ### Phase 3: clean up public contracts
 
-- [ ] introduce bootstrap result/explain types
-- [ ] update `ResolvedConfig` to runtime-only semantics
-- [ ] update config commands to enforce bootstrap-key scope rules
+- [x] introduce bootstrap result/explain types
+- [x] update `ResolvedConfig` to runtime-only semantics
+- [x] update config commands to enforce bootstrap-key scope rules
 
 ### Phase 4: docs and UX
 
-- [ ] update [docs/CONFIG.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/CONFIG.md)
-- [ ] update [docs/STATE.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/STATE.md)
-- [ ] update [docs/ARCHITECTURE.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/ARCHITECTURE.md)
-- [ ] update config explain output text/JSON contract
+- [x] update [docs/CONFIG.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/CONFIG.md)
+- [x] update [docs/STATE.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/STATE.md)
+- [x] update [docs/ARCHITECTURE.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/ARCHITECTURE.md)
+- [x] update config explain output text/JSON contract
 
 ## Test Plan
 
@@ -629,7 +629,7 @@ hard errors.
 
 ### Mutation tests
 
-- [ ] invalid scoped writes to `profile.default` fail
+- [x] invalid scoped writes to `profile.default` fail
 - [ ] valid global and terminal-only writes succeed
 - [ ] unset follows the same validation rules
 

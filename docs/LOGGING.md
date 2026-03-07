@@ -142,7 +142,9 @@ duplicate env parsing logic in each plugin.
 - `log.file.path` (string/path)
 - `log.file.level` (`warn|info|debug|trace`)
 
-Keep all keys in schema and surfaced through `config show/get/explain`.
+Keep all runtime-visible keys in schema and surfaced through
+`config show/get/explain`. Bootstrap-only keys may use bootstrap-specific
+explain/get behavior instead of appearing in ordinary runtime `config show`.
 
 ## Implementation Plan
 

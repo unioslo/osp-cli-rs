@@ -290,6 +290,38 @@ profile.default = "tsd"
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"key\": \"profile.default\""))
+        .stdout(predicate::str::contains("\"phase\": \"bootstrap\""))
+        .stdout(predicate::str::contains("\"value\": \"uio\""));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_explain_profile_active_reports_runtime_phase_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-active-profile");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+
+[profile.uio]
+ui.mode = "plain"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "config",
+        "explain",
+        "profile.active",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"key\": \"profile.active\""))
+        .stdout(predicate::str::contains("\"phase\": \"runtime\""))
         .stdout(predicate::str::contains("\"value\": \"uio\""));
 
     let _ = std::fs::remove_dir_all(&home);
@@ -622,6 +654,36 @@ profile.default = "uio"
         "set",
         "--profile",
         "work",
+        "profile.default",
+        "personal",
+    ]);
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "bootstrap-only key profile.default is not allowed",
+    ));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_set_rejects_profile_terminal_scoped_default_profile_contract() {
+    let home = make_temp_dir("osp-cli-config-set-bootstrap-profile-terminal-scope");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "config",
+        "set",
+        "--profile",
+        "work",
+        "--terminal",
+        "repl",
         "profile.default",
         "personal",
     ]);

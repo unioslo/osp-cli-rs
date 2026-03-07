@@ -54,6 +54,8 @@ pub(crate) fn explain_default_profile_bootstrap(
     options: ResolveOptions,
 ) -> Result<BootstrapConfigExplain, ConfigError> {
     let frame = prepare_resolution(layers, options)?;
+    // Default-profile lookup is a bootstrap pass, so it must not see any scope
+    // that already depends on the active profile being chosen.
     let selector = ScopeSelector::global(frame.terminal.as_deref());
     let explain_layers = layers
         .into_iter()
@@ -149,6 +151,8 @@ fn resolve_default_profile(
     terminal: Option<&str>,
 ) -> Result<String, ConfigError> {
     let mut picked: Option<ConfigValue> = None;
+    // Bootstrap selection is layer-wide but scope-restricted: later layers may
+    // still override earlier ones, but profile-scoped values are invisible.
     let selector = ScopeSelector::global(terminal);
 
     for layer in layers {

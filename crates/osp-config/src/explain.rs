@@ -25,6 +25,8 @@ pub(crate) fn explain_layers_for_runtime_key(
     key: &str,
     frame: &ResolutionFrame,
 ) -> Vec<ExplainLayer> {
+    // Runtime explain must use the exact same scoped selector as runtime
+    // resolution, otherwise "why" answers drift from actual behavior.
     let selector = ScopeSelector::scoped(&frame.active_profile, frame.terminal.as_deref());
     layers
         .into_iter()
