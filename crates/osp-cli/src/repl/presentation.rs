@@ -1,5 +1,5 @@
-use crate::app::DEFAULT_REPL_PROMPT;
 use crate::app::format_timing_badge;
+use crate::app::{CMD_CONFIG, CMD_HELP, CMD_PLUGINS, CMD_THEME, DEFAULT_REPL_PROMPT};
 use crate::state::DebugTimingState;
 use osp_repl::{ReplAppearance, ReplPrompt};
 use osp_ui::messages::render_section_block_with_overrides;
@@ -35,9 +35,22 @@ pub(crate) fn render_repl_intro(view: ReplViewContext<'_>) -> String {
     }
 
     if matches!(intro_style, ReplIntroStyle::Minimal) {
-        let summary = format!(
-            "Welcome `{display_name}`. v{version}. Commands: `help`, `config`, `theme`, `plugins`. See `help` for more."
-        );
+        let visible_commands = [CMD_HELP, CMD_CONFIG, CMD_THEME, CMD_PLUGINS]
+            .into_iter()
+            .filter(|command| view.auth.is_builtin_visible(command))
+            .map(|command| format!("`{command}`"))
+            .collect::<Vec<_>>();
+        let help_hint = if view.auth.is_builtin_visible(CMD_HELP) {
+            "See `help` for more.".to_string()
+        } else {
+            "Use completion to explore commands.".to_string()
+        };
+        let command_summary = if visible_commands.is_empty() {
+            help_hint
+        } else {
+            format!("Commands: {}. {help_hint}", visible_commands.join(", "))
+        };
+        let summary = format!("Welcome `{display_name}`. v{version}. {command_summary}");
         let mut out = String::new();
         out.push('\n');
         out.push_str(&render_inline(
@@ -274,7 +287,11 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
             resolved.color,
             theme,
         );
-        format!("{profile_text}{suffix}")
+        if indicator.trim().is_empty() {
+            format!("{profile_text}{suffix}")
+        } else {
+            format!("{profile_text} {indicator_text}{suffix}")
+        }
     } else {
         let template = config
             .get_string("repl.prompt")
@@ -483,3 +500,6 @@ fn style_prompt_fragment(
         _ => apply_style_with_theme(value, fallback, color, theme),
     }
 }
+
+#[cfg(test)]
+mod tests;

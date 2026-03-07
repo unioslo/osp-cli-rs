@@ -2062,10 +2062,11 @@ fn is_executable_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DescribeV1, PluginDispatchContext, PluginDispatchError, PluginManager, PluginState,
-        is_enabled, min_osp_version_issue,
+        DescribeV1, PluginDispatchContext, PluginDispatchError, PluginManager, PluginSource,
+        PluginState, collect_completion_words, is_enabled, min_osp_version_issue,
     };
     use std::collections::BTreeMap;
+    use std::error::Error as _;
     use std::time::Duration;
 
     #[test]
@@ -2350,6 +2351,216 @@ mod tests {
                 .expect("issue should be present")
                 .contains("timed out after 50 ms")
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preferred_provider_rejects_unknown_command_and_provider_unit() {
+        let root = make_temp_dir("osp-cli-plugin-manager-invalid-provider");
+        let plugins_dir = root.join("plugins");
+        let config_root = root.join("config");
+        let cache_root = root.join("cache");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+        let manager = PluginManager::new(vec![plugins_dir.clone()])
+            .with_roots(Some(config_root), Some(cache_root));
+
+        let err = manager
+            .set_preferred_provider("missing", "alpha")
+            .expect_err("unknown command should fail");
+        assert!(
+            err.to_string()
+                .contains("no active plugin provides command")
+        );
+
+        let err = manager
+            .set_preferred_provider("shared", "beta")
+            .expect_err("unknown provider should fail");
+        assert!(err.to_string().contains("does not provide active command"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clear_preferred_provider_rejects_empty_command_unit() {
+        let manager = PluginManager::new(Vec::new());
+        let err = manager
+            .clear_preferred_provider("   ")
+            .expect_err("empty command should fail");
+        assert!(err.to_string().contains("command must not be empty"));
+    }
+
+    #[test]
+    fn plugin_dispatch_context_merges_shared_and_plugin_env_pairs_unit() {
+        let context = PluginDispatchContext {
+            shared_env: vec![("OSP_FORMAT".to_string(), "json".to_string())],
+            plugin_env: std::collections::HashMap::from([(
+                "alpha".to_string(),
+                vec![("OSP_PLUGIN_FLAG".to_string(), "1".to_string())],
+            )]),
+            ..PluginDispatchContext::default()
+        };
+
+        let pairs = context.env_pairs_for("alpha").collect::<Vec<_>>();
+        assert_eq!(
+            pairs,
+            vec![("OSP_FORMAT", "json"), ("OSP_PLUGIN_FLAG", "1")]
+        );
+        assert_eq!(
+            context.env_pairs_for("missing").collect::<Vec<_>>(),
+            vec![("OSP_FORMAT", "json")]
+        );
+    }
+
+    #[test]
+    fn plugin_dispatch_error_formats_cover_terminal_variants_unit() {
+        let timeout_plain = PluginDispatchError::TimedOut {
+            plugin_id: "alpha".to_string(),
+            timeout: Duration::from_millis(25),
+            stderr: String::new(),
+        };
+        assert!(
+            timeout_plain
+                .to_string()
+                .contains("plugin alpha timed out after 25 ms")
+        );
+
+        let timeout_stderr = PluginDispatchError::TimedOut {
+            plugin_id: "alpha".to_string(),
+            timeout: Duration::from_millis(25),
+            stderr: "stuck".to_string(),
+        };
+        assert!(timeout_stderr.to_string().contains("stuck"));
+
+        let nonzero_plain = PluginDispatchError::NonZeroExit {
+            plugin_id: "beta".to_string(),
+            status_code: 9,
+            stderr: String::new(),
+        };
+        assert_eq!(
+            nonzero_plain.to_string(),
+            "plugin beta exited with status 9"
+        );
+
+        let nonzero_stderr = PluginDispatchError::NonZeroExit {
+            plugin_id: "beta".to_string(),
+            status_code: 9,
+            stderr: "boom".to_string(),
+        };
+        assert!(nonzero_stderr.to_string().contains("boom"));
+
+        let ambiguous = PluginDispatchError::CommandAmbiguous {
+            command: "shared".to_string(),
+            providers: vec!["alpha".to_string(), "beta".to_string()],
+        };
+        assert!(ambiguous.to_string().contains("multiple plugins"));
+
+        let provider_missing = PluginDispatchError::ProviderNotFound {
+            command: "shared".to_string(),
+            requested_provider: "gamma".to_string(),
+            providers: vec!["alpha".to_string(), "beta".to_string()],
+        };
+        assert!(provider_missing.to_string().contains("available providers"));
+
+        let execute_failed = PluginDispatchError::ExecuteFailed {
+            plugin_id: "alpha".to_string(),
+            source: std::io::Error::other("spawn failed"),
+        };
+        assert_eq!(
+            execute_failed.source().map(|err| err.to_string()),
+            Some("spawn failed".to_string())
+        );
+
+        let invalid_json = PluginDispatchError::InvalidJsonResponse {
+            plugin_id: "alpha".to_string(),
+            source: serde_json::from_str::<serde_json::Value>("not-json").expect_err("invalid"),
+        };
+        assert!(invalid_json.to_string().contains("invalid JSON response"));
+        assert!(invalid_json.source().is_some());
+
+        let invalid_payload = PluginDispatchError::InvalidResponsePayload {
+            plugin_id: "alpha".to_string(),
+            reason: "missing data".to_string(),
+        };
+        assert!(invalid_payload.to_string().contains("missing data"));
+        assert!(invalid_payload.source().is_none());
+    }
+
+    #[test]
+    fn completion_words_collect_flags_and_backbone_commands_unit() {
+        let spec = osp_completion::CommandSpec::new("ldap")
+            .flag("--json", osp_completion::FlagNode::new())
+            .subcommand(
+                osp_completion::CommandSpec::new("user")
+                    .subcommand(osp_completion::CommandSpec::new("show")),
+            );
+
+        let words = collect_completion_words(&spec);
+        assert!(words.contains(&"ldap".to_string()));
+        assert!(words.contains(&"--json".to_string()));
+        assert!(words.contains(&"user".to_string()));
+        assert!(words.contains(&"show".to_string()));
+
+        let manager = PluginManager::new(Vec::new());
+        assert_eq!(
+            manager
+                .completion_words()
+                .expect("backbone completion words should render"),
+            vec![
+                "F".to_string(),
+                "P".to_string(),
+                "V".to_string(),
+                "exit".to_string(),
+                "help".to_string(),
+                "quit".to_string(),
+                "|".to_string(),
+            ]
+        );
+        assert!(
+            manager
+                .repl_help_text()
+                .expect("empty help should render")
+                .contains("No plugin commands available.")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() {
+        let root = make_temp_dir("osp-cli-plugin-manager-help");
+        let plugins_dir = root.join("plugins");
+        let config_root = root.join("config");
+        let cache_root = root.join("cache");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+        write_provider_test_plugin(&plugins_dir, "beta", "shared");
+        write_named_test_plugin(&plugins_dir, "solo");
+
+        let manager = PluginManager::new(vec![plugins_dir.clone()])
+            .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
+
+        let ambiguous_help = manager.repl_help_text().expect("help should render");
+        assert!(ambiguous_help.contains("shared - provider selection required"));
+        assert!(ambiguous_help.contains("solo - solo plugin"));
+        assert_eq!(
+            manager.command_providers("shared"),
+            vec![
+                format!("alpha ({})", PluginSource::Explicit),
+                format!("beta ({})", PluginSource::Explicit)
+            ]
+        );
+
+        manager
+            .set_preferred_provider("shared", "beta")
+            .expect("preferred provider should save");
+        let preferred_help = manager
+            .repl_help_text()
+            .expect("preferred provider help should render");
+        assert!(preferred_help.contains("shared - beta plugin (beta/explicit)"));
 
         let _ = std::fs::remove_dir_all(&root);
     }

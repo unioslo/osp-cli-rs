@@ -1,6 +1,6 @@
 use crate::app::CMD_CONFIG;
+use crate::invocation::scan_command_tokens;
 use crate::pipeline::{is_cli_help_stage, validate_cli_dsl_stages};
-use crate::state::ReplScopeStack;
 use miette::Result;
 use osp_completion::{
     ArgNode, CommandLineParser, CompletionNode, CompletionTree, CompletionTreeBuilder,
@@ -10,6 +10,7 @@ use osp_dsl::parse::pipeline::parse_stage;
 use osp_repl::default_pipe_verbs;
 use osp_ui::messages::render_section_block_with_overrides;
 use osp_ui::style::StyleToken;
+use std::collections::BTreeMap;
 
 use super::ReplViewContext;
 use super::surface::{ReplAliasEntry, ReplSurface, config_set_key_specs};
@@ -26,15 +27,6 @@ pub(crate) fn build_repl_completion_tree(
     }
     inject_invocation_flags(&mut tree.root);
     mark_context_only_flags(&mut tree.root);
-    for alias in &surface.aliases {
-        let alias_name = &alias.name;
-        if tree.root.children.contains_key(alias_name.as_str()) {
-            continue;
-        }
-        tree.root
-            .children
-            .insert(alias_name.clone(), alias_completion_node(&tree, alias));
-    }
 
     let root_suggestions = surface
         .root_words
@@ -48,18 +40,67 @@ pub(crate) fn build_repl_completion_tree(
         ..ArgNode::default()
     }];
 
-    scope_completion_tree(&tree, view.scope)
+    let root_base = tree.root.clone();
+    inject_alias_nodes(&mut tree.root, &root_base, None, &surface.aliases);
+
+    if view.scope.is_root() {
+        return tree;
+    }
+
+    let mut rooted = CompletionTree {
+        root: scoped_completion_root(&tree.root, &view.scope.commands()),
+        ..tree.clone()
+    };
+    let scoped_base = rooted.root.clone();
+    inject_alias_nodes(
+        &mut rooted.root,
+        &scoped_base,
+        Some(&tree.root),
+        &surface.aliases,
+    );
+    apply_shell_root_controls(&mut rooted.root);
+    rooted
 }
 
-fn alias_completion_node(tree: &CompletionTree, alias: &ReplAliasEntry) -> CompletionNode {
-    let Some(command) = alias_completion_command(&alias.template) else {
+#[derive(Debug, Clone)]
+struct AliasCompletionCommand {
+    command: osp_completion::CommandLine,
+    prefilled_flags: BTreeMap<String, Vec<String>>,
+}
+
+fn inject_alias_nodes(
+    target_root: &mut CompletionNode,
+    preferred_root: &CompletionNode,
+    fallback_root: Option<&CompletionNode>,
+    aliases: &[ReplAliasEntry],
+) {
+    for alias in aliases {
+        if target_root.children.contains_key(alias.name.as_str()) {
+            continue;
+        }
+        target_root.children.insert(
+            alias.name.clone(),
+            alias_completion_node(preferred_root, fallback_root, alias),
+        );
+    }
+}
+
+fn alias_completion_node(
+    preferred_root: &CompletionNode,
+    fallback_root: Option<&CompletionNode>,
+    alias: &ReplAliasEntry,
+) -> CompletionNode {
+    let Some(parsed) = alias_completion_command(&alias.template) else {
         return CompletionNode {
             tooltip: Some(alias.tooltip.clone()),
             ..CompletionNode::default()
         };
     };
 
-    let Some((mut node, prefilled_positionals)) = resolved_alias_target_node(&tree.root, &command)
+    let Some((mut node, prefilled_positionals)) =
+        resolved_alias_target_node(preferred_root, &parsed.command).or_else(|| {
+            fallback_root.and_then(|root| resolved_alias_target_node(root, &parsed.command))
+        })
     else {
         return CompletionNode {
             tooltip: Some(alias.tooltip.clone()),
@@ -68,21 +109,31 @@ fn alias_completion_node(tree: &CompletionTree, alias: &ReplAliasEntry) -> Compl
     };
 
     node.tooltip = Some(alias.tooltip.clone());
-    node.prefilled_flags = command.flag_values_map().clone();
+    node.prefilled_flags = parsed.prefilled_flags;
+    for (flag, values) in parsed.command.flag_values_map() {
+        node.prefilled_flags
+            .entry(flag.clone())
+            .or_default()
+            .extend(values.clone());
+    }
     node.prefilled_positionals = prefilled_positionals;
     node
 }
 
-fn alias_completion_command(template: &str) -> Option<osp_completion::CommandLine> {
+fn alias_completion_command(template: &str) -> Option<AliasCompletionCommand> {
     let sanitized = sanitize_alias_template_for_completion(template);
     let parsed = osp_dsl::parse_pipeline(&sanitized).ok()?;
     let tokens = shell_words::split(&parsed.command).ok()?;
-    if tokens.is_empty() {
+    let scanned = scan_command_tokens(&tokens).ok()?;
+    if scanned.tokens.is_empty() {
         return None;
     }
 
     let parser = CommandLineParser;
-    Some(parser.parse(&tokens))
+    Some(AliasCompletionCommand {
+        command: parser.parse(&scanned.tokens),
+        prefilled_flags: invocation_prefilled_flags(&scanned.invocation),
+    })
 }
 
 fn sanitize_alias_template_for_completion(template: &str) -> String {
@@ -135,7 +186,11 @@ fn resolved_alias_target_node(
     Some((node.clone(), prefilled_positionals))
 }
 
-fn scope_completion_tree(tree: &CompletionTree, scope: &ReplScopeStack) -> CompletionTree {
+#[cfg(test)]
+fn scope_completion_tree(
+    tree: &CompletionTree,
+    scope: &crate::state::ReplScopeStack,
+) -> CompletionTree {
     if scope.is_root() {
         return tree.clone();
     }
@@ -160,6 +215,42 @@ fn scoped_completion_root(root: &CompletionNode, path: &[String]) -> CompletionN
         node = child;
     }
     node.clone()
+}
+
+fn invocation_prefilled_flags(
+    invocation: &crate::invocation::InvocationOptions,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+
+    if let Some(format) = invocation.format {
+        out.insert("--format".to_string(), vec![format.as_str().to_string()]);
+    }
+    if let Some(mode) = invocation.mode {
+        out.insert("--mode".to_string(), vec![mode.as_str().to_string()]);
+    }
+    if let Some(color) = invocation.color {
+        out.insert("--color".to_string(), vec![color.as_str().to_string()]);
+    }
+    if let Some(unicode) = invocation.unicode {
+        out.insert("--unicode".to_string(), vec![unicode.as_str().to_string()]);
+    }
+    if invocation.verbose > 0 {
+        out.insert("--verbose".to_string(), Vec::new());
+    }
+    if invocation.quiet > 0 {
+        out.insert("--quiet".to_string(), Vec::new());
+    }
+    if invocation.debug > 0 {
+        out.insert("--debug".to_string(), Vec::new());
+    }
+    if invocation.cache {
+        out.insert("--cache".to_string(), Vec::new());
+    }
+    if let Some(provider) = invocation.plugin_provider.clone() {
+        out.insert("--plugin-provider".to_string(), vec![provider]);
+    }
+
+    out
 }
 
 fn apply_shell_root_controls(root: &mut CompletionNode) {
@@ -430,7 +521,12 @@ pub(crate) fn validate_dsl_stages(stages: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{inject_invocation_flags, mark_context_only_flags, scope_completion_tree};
+    use super::{
+        ALIAS_PLACEHOLDER_TOKEN, alias_completion_command, alias_completion_node,
+        inject_alias_nodes, inject_invocation_flags, mark_context_only_flags,
+        sanitize_alias_template_for_completion, scope_completion_tree,
+    };
+    use crate::repl::surface::ReplAliasEntry;
     use crate::state::ReplScopeStack;
     use osp_completion::{CompletionNode, CompletionTree, ContextScope, FlagNode};
 
@@ -531,5 +627,73 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["auto", "json", "table", "mreg", "value", "md"]
         );
+    }
+
+    #[test]
+    fn alias_template_sanitizer_replaces_placeholders_and_preserves_suffixes() {
+        let sanitized =
+            sanitize_alias_template_for_completion("ldap user ${uid} | project ${field}.name");
+
+        assert_eq!(
+            sanitized,
+            format!("ldap user {ALIAS_PLACEHOLDER_TOKEN} | project {ALIAS_PLACEHOLDER_TOKEN}.name")
+        );
+    }
+
+    #[test]
+    fn alias_completion_command_captures_prefilled_invocation_flags_unit() {
+        let parsed =
+            alias_completion_command("--json --no-color ldap user ${uid}").expect("alias parses");
+
+        assert!(
+            !parsed.command.head().is_empty()
+                || parsed.command.tail_len() > 0
+                || !parsed.command.pipes().is_empty()
+        );
+        assert_eq!(
+            parsed.prefilled_flags.get("--format"),
+            Some(&vec!["json".to_string()])
+        );
+    }
+
+    #[test]
+    fn alias_completion_command_handles_invocation_only_alias_unit() {
+        let parsed = alias_completion_command("--json --no-color")
+            .expect("invocation-only aliases still normalize host flags");
+        assert_eq!(
+            parsed.prefilled_flags.get("--format"),
+            Some(&vec!["json".to_string()])
+        );
+    }
+
+    #[test]
+    fn alias_completion_node_keeps_tooltip_when_target_is_missing_unit() {
+        let alias = ReplAliasEntry {
+            name: "lookup".to_string(),
+            template: "missing user ${uid}".to_string(),
+            tooltip: "Lookup a user".to_string(),
+        };
+
+        let node = alias_completion_node(&CompletionNode::default(), None, &alias);
+        assert_eq!(node.tooltip.as_deref(), Some("Lookup a user"));
+        assert!(node.children.is_empty());
+    }
+
+    #[test]
+    fn inject_alias_nodes_skips_existing_root_children_unit() {
+        let mut root = CompletionNode::default();
+        root.children
+            .insert("lookup".to_string(), CompletionNode::default());
+
+        let aliases = vec![ReplAliasEntry {
+            name: "lookup".to_string(),
+            template: "ldap user ${uid}".to_string(),
+            tooltip: "Lookup user".to_string(),
+        }];
+
+        inject_alias_nodes(&mut root, &CompletionNode::default(), None, &aliases);
+
+        assert!(root.children.contains_key("lookup"));
+        assert_eq!(root.children.len(), 1);
     }
 }

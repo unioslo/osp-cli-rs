@@ -519,7 +519,7 @@ impl OspCompletionMenu {
 
 #[cfg(test)]
 mod tests {
-    use super::OspCompletionMenu;
+    use super::{OspCompletionMenu, needs_space_prefix};
     use nu_ansi_term::{Color, Style};
     use reedline::{Completer, Editor, Menu, MenuEvent, Span, Suggestion, UndoBehavior};
     use unicode_width::UnicodeWidthStr;
@@ -901,5 +901,77 @@ mod tests {
         assert_eq!(debug.selected_index, -1);
         assert_eq!(debug.selected_row, 0);
         assert_eq!(debug.selected_col, 0);
+    }
+
+    #[test]
+    fn indicator_is_empty_until_menu_has_values() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "co");
+        let mut completer = DynamicSpanCompleter;
+        let mut menu = OspCompletionMenu::default().with_marker(">> ");
+
+        assert_eq!(menu.indicator(), "");
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        assert_eq!(menu.indicator(), ">> ");
+        assert!(menu.menu_required_lines(80) >= 1);
+    }
+
+    #[test]
+    fn partial_complete_uses_buffer_prefix_when_requested() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "config sh");
+        let cursor = editor.line_buffer().len();
+        let mut completer = FixedCompleter {
+            suggestions: vec![
+                suggestion(
+                    "show",
+                    Span {
+                        start: cursor - 2,
+                        end: cursor,
+                    },
+                ),
+                suggestion(
+                    "shell",
+                    Span {
+                        start: cursor - 2,
+                        end: cursor,
+                    },
+                ),
+            ],
+        };
+        let mut menu = OspCompletionMenu::default().with_only_buffer_difference(true);
+
+        assert!(menu.can_partially_complete(false, &mut editor, &mut completer));
+    }
+
+    #[test]
+    fn replace_in_buffer_inserts_missing_space_before_completion() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "doctor");
+        let cursor = editor.line_buffer().len();
+        let mut completer = FixedCompleter {
+            suggestions: vec![suggestion(
+                "config",
+                Span {
+                    start: cursor,
+                    end: cursor,
+                },
+            )],
+        };
+        let mut menu = OspCompletionMenu::default();
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+        menu.menu_event(MenuEvent::NextElement);
+        menu.update_for_test(&mut editor, &mut completer, 80);
+        menu.replace_in_buffer(&mut editor);
+
+        assert_eq!(editor.line_buffer().get_buffer(), "doctor config ");
+        assert!(needs_space_prefix("doctor", 6, 6));
+        assert!(!needs_space_prefix("doctor ", 7, 7));
+        assert!(!needs_space_prefix("a=", 2, 2));
     }
 }

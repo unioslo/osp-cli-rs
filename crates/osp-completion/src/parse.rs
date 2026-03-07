@@ -688,7 +688,7 @@ fn token_replace_start(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::QuoteStyle;
+    use crate::model::{FlagOccurrence, QuoteStyle};
 
     use super::CommandLineParser;
 
@@ -847,5 +847,110 @@ mod tests {
         assert_eq!(analyzed.cursor.token_stub, "oi");
         assert_eq!(analyzed.cursor.raw_stub, "oi");
         assert_eq!(analyzed.cursor.quote_style, Some(QuoteStyle::Double));
+    }
+
+    #[test]
+    fn tokenize_with_spans_preserves_offsets_for_quotes_and_pipes() {
+        let parser = CommandLineParser;
+        let source = r#"ldap user "alice smith" | P uid"#;
+        let spans = parser.tokenize_with_spans(source);
+
+        assert_eq!(spans[0].value, "ldap");
+        assert_eq!(spans[0].start, 0);
+        assert_eq!(spans[2].value, "alice smith");
+        assert_eq!(&source[spans[2].start..spans[2].end], "\"alice smith\"");
+        assert_eq!(spans[3].value, "|");
+    }
+
+    #[test]
+    fn parse_keeps_inline_flag_values_and_repeated_empty_occurrences() {
+        let parser = CommandLineParser;
+        let tokens = parser.tokenize("cmd --format=json --os= --format=table");
+        let cmd = parser.parse(&tokens);
+
+        assert_eq!(
+            cmd.flag_occurrences().cloned().collect::<Vec<_>>(),
+            vec![
+                FlagOccurrence {
+                    name: "--format".to_string(),
+                    values: vec!["json".to_string()],
+                },
+                FlagOccurrence {
+                    name: "--os".to_string(),
+                    values: vec![],
+                },
+                FlagOccurrence {
+                    name: "--format".to_string(),
+                    values: vec!["table".to_string()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn analyze_clamps_non_char_boundary_cursor_back_to_safe_boundary() {
+        let parser = CommandLineParser;
+        let line = "ldap user å";
+        let analyzed = parser.analyze(line, line.len() - 1);
+
+        assert!(analyzed.parsed.safe_cursor < line.len());
+        assert_eq!(analyzed.cursor.token_stub, "");
+    }
+
+    #[test]
+    fn parse_switches_to_tail_mode_after_first_flag_like_token() {
+        let parser = CommandLineParser;
+        let tokens = parser.tokenize("ldap user --provider vmware region eu-central");
+        let cmd = parser.parse(&tokens);
+
+        assert_eq!(cmd.head(), ["ldap".to_string(), "user".to_string()]);
+        assert_eq!(
+            cmd.flag_values("--provider"),
+            Some(
+                &[
+                    "vmware".to_string(),
+                    "region".to_string(),
+                    "eu-central".to_string()
+                ][..]
+            )
+        );
+    }
+
+    #[test]
+    fn parse_treats_pipe_after_double_dash_as_dsl_boundary() {
+        let parser = CommandLineParser;
+        let tokens = parser.tokenize("cmd -- literal | F name");
+        let cmd = parser.parse(&tokens);
+
+        assert_eq!(cmd.head(), ["cmd".to_string()]);
+        assert_eq!(
+            cmd.positional_args().cloned().collect::<Vec<_>>(),
+            vec!["literal".to_string()]
+        );
+        assert!(cmd.has_pipe());
+        assert_eq!(cmd.pipes(), ["F".to_string(), "name".to_string()]);
+    }
+
+    #[test]
+    fn tokenize_with_spans_falls_back_for_unmatched_quotes() {
+        let parser = CommandLineParser;
+        let spans = parser.tokenize_with_spans("cmd --name 'alice");
+
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].value, "cmd");
+        assert_eq!(spans[1].value, "--name");
+        assert_eq!(spans[2].value, "'alice");
+    }
+
+    #[test]
+    fn analyze_falls_back_when_cursor_is_inside_unbalanced_quote() {
+        let parser = CommandLineParser;
+        let line = r#"ldap user "alice"#;
+        let analyzed = parser.analyze(line, line.len());
+
+        assert_eq!(analyzed.parsed.full_tokens, vec!["ldap", "user", "alice"]);
+        assert_eq!(analyzed.parsed.cursor_tokens, vec!["ldap", "user", "alice"]);
+        assert_eq!(analyzed.cursor.quote_style, Some(QuoteStyle::Double));
+        assert_eq!(analyzed.cursor.token_stub, "alice");
     }
 }

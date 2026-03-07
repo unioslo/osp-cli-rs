@@ -192,4 +192,11 @@ mod tests {
         assert!(!projected.contains("help"));
         assert_eq!(projected.len(), "--json help ldap user".len());
     }
+
+    #[test]
+    fn projects_empty_repl_ui_line_without_tokenization_unit() {
+        let projected =
+            project_repl_ui_line("", &make_config()).expect("projection should succeed");
+        assert_eq!(projected, "");
+    }
 }

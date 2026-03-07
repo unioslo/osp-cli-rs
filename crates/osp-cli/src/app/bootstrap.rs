@@ -194,3 +194,58 @@ fn parse_message_level(value: &str) -> Option<MessageLevel> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_logging_config, effective_debug_verbosity, effective_message_verbosity,
+        parse_message_level,
+    };
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_ui::messages::MessageLevel;
+
+    fn resolved(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        for (key, value) in entries {
+            defaults.set(*key, *value);
+        }
+
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        resolver
+            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .expect("test config should resolve")
+    }
+
+    #[test]
+    fn parse_message_level_accepts_warn_alias_and_rejects_unknown_values_unit() {
+        assert_eq!(parse_message_level(" warn "), Some(MessageLevel::Warning));
+        assert_eq!(parse_message_level("TRACE"), Some(MessageLevel::Trace));
+        assert_eq!(parse_message_level("loud"), None);
+    }
+
+    #[test]
+    fn effective_debug_verbosity_clamps_string_and_integer_inputs_unit() {
+        let string_config = resolved(&[("debug.level", "9")]);
+        let integer_config = resolved(&[("debug.level", "-2")]);
+
+        assert_eq!(effective_debug_verbosity(&string_config), 3);
+        assert_eq!(effective_debug_verbosity(&integer_config), 0);
+    }
+
+    #[test]
+    fn build_logging_config_ignores_blank_paths_even_when_file_logging_is_enabled_unit() {
+        let config = resolved(&[
+            ("log.file.enabled", "true"),
+            ("log.file.level", "debug"),
+            ("log.file.path", "   "),
+            ("ui.verbosity.level", "warning"),
+        ]);
+
+        let logging = build_logging_config(&config, 2);
+        assert!(logging.file.is_none());
+        assert_eq!(effective_message_verbosity(&config), MessageLevel::Warning);
+        assert_eq!(logging.debug_count, 2);
+    }
+}

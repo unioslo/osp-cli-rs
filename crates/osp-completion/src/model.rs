@@ -471,3 +471,6 @@ pub enum SuggestionOutput {
     Item(Suggestion),
     PathSentinel,
 }
+
+#[cfg(test)]
+mod tests;

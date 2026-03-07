@@ -198,3 +198,111 @@ fn config_value_to_plugin_env_json(value: &ConfigValue) -> serde_json::Value {
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
+
+    use super::{
+        PluginConfigEnvCache, PluginConfigScope, collect_plugin_config_env,
+        config_value_to_plugin_env, effective_plugin_config_entries, plugin_config_env_name,
+    };
+    use crate::state::ConfigState;
+
+    fn resolved_config(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        for (key, value) in entries {
+            defaults.set(*key, *value);
+        }
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        resolver
+            .resolve(ResolveOptions::default())
+            .expect("test config should resolve")
+    }
+
+    #[test]
+    fn effective_plugin_entries_merge_shared_and_plugin_specific_values() {
+        let config = resolved_config(&[
+            ("extensions.plugins.env.endpoint", "shared"),
+            ("extensions.plugins.demo.env.endpoint", "plugin"),
+            ("extensions.plugins.demo.env.api.token", "token-123"),
+        ]);
+
+        let entries = effective_plugin_config_entries(&config, "demo");
+        let endpoint = entries
+            .iter()
+            .find(|entry| entry.env_key == "OSP_PLUGIN_CFG_ENDPOINT")
+            .expect("endpoint entry should exist");
+        assert_eq!(endpoint.value, "plugin");
+        assert_eq!(endpoint.scope, PluginConfigScope::Plugin);
+
+        let token = entries
+            .iter()
+            .find(|entry| entry.env_key == "OSP_PLUGIN_CFG_API_TOKEN")
+            .expect("plugin token should exist");
+        assert_eq!(token.value, "token-123");
+    }
+
+    #[test]
+    fn collect_plugin_config_env_ignores_incomplete_plugin_keys() {
+        let config = resolved_config(&[
+            ("extensions.plugins..env.endpoint", "skip-empty-plugin"),
+            ("extensions.plugins.demo.value", "skip-non-env"),
+            (
+                "extensions.plugins.env.shared.url",
+                "https://shared.example",
+            ),
+        ]);
+
+        let env = collect_plugin_config_env(&config);
+        assert!(env.by_plugin_id.is_empty());
+        assert_eq!(env.shared.len(), 1);
+        assert_eq!(env.shared[0].env_key, "OSP_PLUGIN_CFG_SHARED_URL");
+    }
+
+    #[test]
+    fn plugin_config_env_cache_reuses_revision_and_refreshes_after_replace() {
+        let cache = PluginConfigEnvCache::default();
+        let first = resolved_config(&[("extensions.plugins.env.endpoint", "shared")]);
+        let mut state = ConfigState::new(first);
+
+        let shared = cache.collect(&state);
+        assert_eq!(shared.shared[0].value, "shared");
+
+        let changed = state.replace_resolved(resolved_config(&[(
+            "extensions.plugins.env.endpoint",
+            "updated",
+        )]));
+        assert!(changed);
+
+        let updated = cache.collect(&state);
+        assert_eq!(updated.shared[0].value, "updated");
+    }
+
+    #[test]
+    fn plugin_config_env_name_normalizes_mixed_separators() {
+        assert_eq!(
+            plugin_config_env_name("api.token-url"),
+            Some("OSP_PLUGIN_CFG_API_TOKEN_URL".to_string())
+        );
+        assert_eq!(plugin_config_env_name("..."), None);
+    }
+
+    #[test]
+    fn config_value_to_plugin_env_serializes_scalars_lists_and_nans() {
+        assert_eq!(
+            config_value_to_plugin_env(&ConfigValue::Bool(true)),
+            "true".to_string()
+        );
+        assert_eq!(
+            config_value_to_plugin_env(&ConfigValue::List(vec![
+                ConfigValue::Integer(7),
+                ConfigValue::String("alpha".to_string()),
+                ConfigValue::Float(f64::NAN),
+            ])),
+            r#"[7,"alpha",null]"#.to_string()
+        );
+    }
+}

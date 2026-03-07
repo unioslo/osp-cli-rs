@@ -201,9 +201,16 @@ fn history_scope_label(session: &AppSession) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{history_scope_label, repl_history_exclude_patterns};
+    use super::{
+        history_command_spec, history_scope_label, repl_history_enabled,
+        repl_history_exclude_patterns, run_history_repl_command,
+    };
+    use crate::app::ReplCommandOutput;
+    use crate::cli::{HistoryArgs, HistoryCommands, HistoryPruneArgs};
     use crate::state::AppSession;
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_repl::{HistoryConfig, SharedHistory};
+    use serde_json::Value;
 
     #[test]
     fn history_exclude_patterns_include_repl_defaults() {
@@ -254,5 +261,177 @@ mod tests {
         session.scope.enter("orch");
         session.scope.enter("vm");
         assert_eq!(history_scope_label(&session), "orch / vm shell history");
+    }
+
+    #[test]
+    fn history_command_spec_exposes_expected_subcommands_unit() {
+        let spec = history_command_spec();
+        let names = spec
+            .subcommands
+            .iter()
+            .map(|child| child.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(spec.name, "history");
+        assert_eq!(names, vec!["list", "prune", "clear"]);
+    }
+
+    #[test]
+    fn repl_history_enabled_obeys_toggle_and_capacity_unit() {
+        let disabled = config_with_entries(&[
+            ("profile.default", "default"),
+            ("repl.history.enabled", "false"),
+        ]);
+        assert!(!repl_history_enabled(&disabled));
+
+        let zero_capacity_falls_back = config_with_entries(&[
+            ("profile.default", "default"),
+            ("repl.history.max_entries", "0"),
+        ]);
+        assert!(repl_history_enabled(&zero_capacity_falls_back));
+
+        let enabled = config_with_entries(&[("profile.default", "default")]);
+        assert!(repl_history_enabled(&enabled));
+    }
+
+    #[test]
+    fn run_history_repl_command_reports_disabled_history_unit() {
+        let history = shared_history(false);
+        let mut session = AppSession::with_cache_limit(8);
+
+        let output = run_history_repl_command(
+            &mut session,
+            HistoryArgs {
+                command: HistoryCommands::List,
+            },
+            &history,
+        )
+        .expect("history command should return a disabled notice");
+
+        match output {
+            ReplCommandOutput::Text(text) => assert_eq!(text, "History is disabled.\n"),
+            other => panic!("unexpected disabled history output: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_history_repl_command_lists_visible_rows_unit() {
+        let history = shared_history(true);
+        history
+            .save_command_line("config show")
+            .expect("history seed should save");
+        let mut session = AppSession::with_cache_limit(8);
+
+        let output = run_history_repl_command(
+            &mut session,
+            HistoryArgs {
+                command: HistoryCommands::List,
+            },
+            &history,
+        )
+        .expect("history list should succeed");
+
+        match output {
+            ReplCommandOutput::Output { output, .. } => {
+                let rows = output.into_rows().expect("list should produce rows");
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0]["command"], Value::String("config show".to_string()));
+                assert!(rows[0].contains_key("timestamp_ms"));
+            }
+            other => panic!("unexpected history list output: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_history_repl_command_prunes_and_clears_with_scope_unit() {
+        let history = shared_history(true);
+        history
+            .save_command_line("ldap user alice")
+            .expect("history seed should save");
+        history
+            .save_command_line("ldap user bob")
+            .expect("history seed should save");
+        history
+            .save_command_line("mreg host a")
+            .expect("history seed should save");
+        let mut session = AppSession::with_cache_limit(8);
+        session.scope.enter("ldap");
+
+        let prune = run_history_repl_command(
+            &mut session,
+            HistoryArgs {
+                command: HistoryCommands::Prune(HistoryPruneArgs { keep: 1 }),
+            },
+            &history,
+        )
+        .expect("scoped prune should succeed");
+        match prune {
+            ReplCommandOutput::Text(text) => {
+                assert_eq!(text, "Removed 1 entry from ldap shell history.\n")
+            }
+            other => panic!("unexpected prune output: {other:?}"),
+        }
+
+        let remaining = history.list_entries_for(Some("ldap"));
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].command, "user bob");
+        assert_eq!(history.list_entries_for(Some("mreg")).len(), 1);
+
+        let clear = run_history_repl_command(
+            &mut session,
+            HistoryArgs {
+                command: HistoryCommands::Clear,
+            },
+            &history,
+        )
+        .expect("scoped clear should succeed");
+        match clear {
+            ReplCommandOutput::Text(text) => assert_eq!(text, "Cleared ldap shell history.\n"),
+            other => panic!("unexpected clear output: {other:?}"),
+        }
+        assert!(history.list_entries_for(Some("ldap")).is_empty());
+        assert_eq!(history.list_entries_for(Some("mreg")).len(), 1);
+    }
+
+    fn config_with_entries(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
+        let mut defaults = ConfigLayer::default();
+        for (key, value) in entries {
+            defaults.set(*key, *value);
+        }
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        resolver
+            .resolve(ResolveOptions::default())
+            .expect("config should resolve")
+    }
+
+    fn shared_history(enabled: bool) -> SharedHistory {
+        let temp_dir = make_temp_dir("osp-cli-repl-history");
+        SharedHistory::new(
+            HistoryConfig {
+                path: Some(temp_dir.join("history.jsonl")),
+                max_entries: 32,
+                enabled,
+                dedupe: false,
+                profile_scoped: false,
+                exclude_patterns: Vec::new(),
+                profile: None,
+                terminal: None,
+                shell_context: osp_repl::HistoryShellContext::default(),
+            }
+            .normalized(),
+        )
+        .expect("history should initialize")
+    }
+
+    fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be valid")
+            .as_nanos();
+        dir.push(format!("{prefix}-{nonce}"));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+        dir
     }
 }

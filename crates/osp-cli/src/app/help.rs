@@ -252,3 +252,105 @@ fn parse_unicode_mode_arg(value: &str) -> Option<UnicodeMode> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_color_mode_arg, parse_help_render_overrides, parse_render_mode_arg,
+        parse_unicode_mode_arg, render_settings_for_help,
+    };
+    use crate::ui_presentation::HelpLayout;
+    use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+    use std::ffi::OsString;
+
+    #[test]
+    fn render_settings_for_help_honors_austere_override_without_external_config_unit() {
+        let context = render_settings_for_help(&[
+            OsString::from("osp"),
+            OsString::from("--gammel-og-bitter"),
+            OsString::from("--no-env"),
+            OsString::from("--no-config-file"),
+        ]);
+
+        assert_eq!(context.layout, HelpLayout::Minimal);
+        assert_eq!(context.settings.mode, RenderMode::Plain);
+        assert_eq!(context.settings.color, ColorMode::Never);
+        assert_eq!(context.settings.unicode, UnicodeMode::Never);
+    }
+
+    #[test]
+    fn render_settings_for_help_applies_explicit_overrides_after_preset_unit() {
+        let context = render_settings_for_help(&[
+            OsString::from("osp"),
+            OsString::from("--presentation"),
+            OsString::from("compact"),
+            OsString::from("--mode"),
+            OsString::from("rich"),
+            OsString::from("--color"),
+            OsString::from("always"),
+            OsString::from("--unicode"),
+            OsString::from("always"),
+            OsString::from("--no-env"),
+            OsString::from("--no-config-file"),
+        ]);
+
+        assert_eq!(context.layout, HelpLayout::Compact);
+        assert_eq!(context.settings.mode, RenderMode::Rich);
+        assert_eq!(context.settings.color, ColorMode::Always);
+        assert_eq!(context.settings.unicode, UnicodeMode::Always);
+        assert_eq!(context.settings.format, OutputFormat::Auto);
+    }
+
+    #[test]
+    fn parse_help_render_overrides_supports_inline_assignment_forms_unit() {
+        let parsed = parse_help_render_overrides(&[
+            OsString::from("osp"),
+            OsString::from("--profile=prod"),
+            OsString::from("--theme=nord"),
+            OsString::from("--presentation=compact"),
+            OsString::from("--mode=plain"),
+            OsString::from("--color=always"),
+            OsString::from("--unicode=never"),
+        ]);
+
+        assert_eq!(parsed.profile.as_deref(), Some("prod"));
+        assert_eq!(parsed.theme.as_deref(), Some("nord"));
+        assert_eq!(
+            parsed.presentation,
+            Some(crate::ui_presentation::UiPresentation::Compact)
+        );
+        assert_eq!(parsed.mode, Some(RenderMode::Plain));
+        assert_eq!(parsed.color, Some(ColorMode::Always));
+        assert_eq!(parsed.unicode, Some(UnicodeMode::Never));
+    }
+
+    #[test]
+    fn parse_help_render_overrides_ignores_invalid_values_without_eating_later_flags_unit() {
+        let parsed = parse_help_render_overrides(&[
+            OsString::from("osp"),
+            OsString::from("--presentation"),
+            OsString::from("loud"),
+            OsString::from("--mode=LOUD"),
+            OsString::from("--color=sideways"),
+            OsString::from("--unicode"),
+            OsString::from("sometimes"),
+            OsString::from("--profile"),
+            OsString::from("dev"),
+        ]);
+
+        assert_eq!(parsed.presentation, None);
+        assert_eq!(parsed.mode, None);
+        assert_eq!(parsed.color, None);
+        assert_eq!(parsed.unicode, None);
+        assert_eq!(parsed.profile.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn help_arg_parsers_accept_case_and_whitespace_unit() {
+        assert_eq!(parse_render_mode_arg(" rich "), Some(RenderMode::Rich));
+        assert_eq!(parse_color_mode_arg(" WARNING "), None);
+        assert_eq!(parse_color_mode_arg(" Always "), Some(ColorMode::Always));
+        assert_eq!(parse_unicode_mode_arg(" Never "), Some(UnicodeMode::Never));
+        assert_eq!(parse_unicode_mode_arg("maybe"), None);
+    }
+}

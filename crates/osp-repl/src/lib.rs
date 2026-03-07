@@ -1347,14 +1347,22 @@ impl Prompt for OspPrompt {
 mod tests {
     use nu_ansi_term::Color;
     use osp_completion::{CompletionNode, CompletionTree};
-    use reedline::{Completer, Highlighter, StyledText};
+    use reedline::{
+        Completer, EditCommand, Highlighter, Prompt, PromptEditMode, PromptHistorySearch,
+        PromptHistorySearchStatus, StyledText,
+    };
+    use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use super::{
-        HistoryConfig, HistoryShellContext, ReplCompleter, ReplHighlighter, ReplLineResult,
-        SharedHistory, SubmissionContext, SubmissionResult, color_from_style_spec,
-        default_pipe_verbs, expand_history, process_submission,
+        AutoCompleteEmacs, CompletionDebugOptions, DebugStep, HistoryConfig, HistoryShellContext,
+        OspPrompt, PromptRightRenderer, ReplAppearance, ReplCompleter, ReplHighlighter,
+        ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunResult, SharedHistory,
+        SubmissionContext, SubmissionResult, build_repl_highlighter, color_from_style_spec,
+        debug_completion, debug_completion_steps, default_pipe_verbs, expand_history, expand_home,
+        is_cursor_position_error, path_suggestions, process_submission, split_path_stub,
+        trace_completion, trace_completion_enabled,
     };
 
     fn token_styles(styled: &StyledText) -> Vec<(String, Option<Color>)> {
@@ -1700,5 +1708,429 @@ mod tests {
         assert_eq!(lookup, PathBuf::from("."));
         assert_eq!(insert_prefix, "");
         assert_eq!(typed_prefix, "do");
+    }
+
+    #[test]
+    fn debug_step_parse_round_trips_known_values_unit() {
+        assert_eq!(DebugStep::Tab.as_str(), "tab");
+        assert_eq!(DebugStep::Up.as_str(), "up");
+        assert_eq!(DebugStep::Down.as_str(), "down");
+        assert_eq!(DebugStep::Left.as_str(), "left");
+        assert_eq!(DebugStep::parse("shift-tab"), Some(DebugStep::BackTab));
+        assert_eq!(DebugStep::parse("ENTER"), Some(DebugStep::Accept));
+        assert_eq!(DebugStep::parse("esc"), Some(DebugStep::Close));
+        assert_eq!(DebugStep::Right.as_str(), "right");
+        assert_eq!(DebugStep::parse("wat"), None);
+    }
+
+    #[test]
+    fn debug_completion_and_steps_surface_menu_state_unit() {
+        let tree = completion_tree_with_config_show();
+        let debug = debug_completion(
+            &tree,
+            "config sh",
+            "config sh".len(),
+            CompletionDebugOptions::new(80, 6),
+        );
+        assert_eq!(debug.stub, "sh");
+        assert!(debug.matches.iter().any(|item| item.id == "show"));
+
+        let frames = debug_completion_steps(
+            &tree,
+            "config sh",
+            "config sh".len(),
+            CompletionDebugOptions::new(80, 6),
+            &[DebugStep::Tab, DebugStep::Accept],
+        );
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].step, "tab");
+        assert!(frames[0].state.matches.iter().any(|item| item.id == "show"));
+        assert_eq!(frames[1].step, "accept");
+        assert_eq!(frames[1].state.line, "config show ");
+    }
+
+    #[test]
+    fn debug_completion_options_and_empty_steps_cover_builder_paths_unit() {
+        let appearance = ReplAppearance {
+            completion_text_style: Some("white".to_string()),
+            completion_background_style: Some("black".to_string()),
+            completion_highlight_style: Some("cyan".to_string()),
+            command_highlight_style: Some("green".to_string()),
+        };
+        let options = CompletionDebugOptions::new(90, 12)
+            .ansi(true)
+            .unicode(true)
+            .appearance(Some(&appearance));
+
+        assert!(options.ansi);
+        assert!(options.unicode);
+        assert!(options.appearance.is_some());
+
+        let tree = completion_tree_with_config_show();
+        let frames = debug_completion_steps(&tree, "config sh", 9, options, &[]);
+        assert!(frames.is_empty());
+    }
+
+    #[test]
+    fn debug_completion_navigation_variants_and_empty_matches_are_stable_unit() {
+        let tree = completion_tree_with_config_show();
+        let frames = debug_completion_steps(
+            &tree,
+            "config sh",
+            "config sh".len(),
+            CompletionDebugOptions::new(80, 6),
+            &[
+                DebugStep::Tab,
+                DebugStep::Down,
+                DebugStep::Right,
+                DebugStep::Left,
+                DebugStep::Up,
+                DebugStep::BackTab,
+                DebugStep::Close,
+            ],
+        );
+        assert_eq!(frames.len(), 7);
+        assert_eq!(
+            frames.last().map(|frame| frame.step.as_str()),
+            Some("close")
+        );
+
+        let debug = debug_completion(&tree, "zzz", 3, CompletionDebugOptions::new(80, 6));
+        assert!(debug.matches.is_empty());
+        assert_eq!(debug.selected, -1);
+    }
+
+    #[test]
+    fn autocomplete_policy_and_path_helpers_cover_non_happy_paths_unit() {
+        assert!(AutoCompleteEmacs::should_reopen_menu(&[
+            EditCommand::InsertChar('x')
+        ]));
+        assert!(!AutoCompleteEmacs::should_reopen_menu(&[
+            EditCommand::MoveToStart { select: false }
+        ]));
+
+        let missing = path_suggestions(
+            "/definitely/not/a/real/dir/",
+            reedline::Span { start: 0, end: 0 },
+        );
+        assert!(missing.is_empty());
+
+        let (lookup, insert_prefix, typed_prefix) = split_path_stub("/tmp/demo/");
+        assert_eq!(lookup, PathBuf::from("/tmp/demo/"));
+        assert_eq!(insert_prefix, "/tmp/demo/");
+        assert!(typed_prefix.is_empty());
+    }
+
+    #[test]
+    fn completion_debug_options_builders_and_empty_steps_unit() {
+        let appearance = super::ReplAppearance {
+            completion_text_style: Some("cyan".to_string()),
+            ..Default::default()
+        };
+        let options = CompletionDebugOptions::new(120, 40)
+            .ansi(true)
+            .unicode(true)
+            .appearance(Some(&appearance));
+
+        assert_eq!(options.width, 120);
+        assert_eq!(options.height, 40);
+        assert!(options.ansi);
+        assert!(options.unicode);
+        assert!(options.appearance.is_some());
+
+        let tree = completion_tree_with_config_show();
+        let frames = debug_completion_steps(&tree, "config sh", 9, options, &[]);
+        assert!(frames.is_empty());
+    }
+
+    #[test]
+    fn debug_completion_navigation_steps_cover_menu_branches_unit() {
+        let tree = completion_tree_with_config_show();
+        let frames = debug_completion_steps(
+            &tree,
+            "config sh",
+            9,
+            CompletionDebugOptions::new(80, 6),
+            &[
+                DebugStep::Tab,
+                DebugStep::Down,
+                DebugStep::Right,
+                DebugStep::Left,
+                DebugStep::Up,
+                DebugStep::BackTab,
+                DebugStep::Close,
+            ],
+        );
+
+        assert_eq!(frames.len(), 7);
+        assert_eq!(frames[0].step, "tab");
+        assert_eq!(frames[1].step, "down");
+        assert_eq!(frames[2].step, "right");
+        assert_eq!(frames[3].step, "left");
+        assert_eq!(frames[4].step, "up");
+        assert_eq!(frames[5].step, "backtab");
+        assert_eq!(frames[6].step, "close");
+    }
+
+    #[test]
+    fn debug_completion_without_matches_reports_unmatched_cursor_state_unit() {
+        let tree = completion_tree_with_config_show();
+        let debug = debug_completion(&tree, "zzz", 99, CompletionDebugOptions::new(80, 6));
+
+        assert_eq!(debug.line, "zzz");
+        assert_eq!(debug.cursor, 3);
+        assert!(debug.matches.is_empty());
+        assert_eq!(debug.selected, -1);
+        assert_eq!(debug.stub, "zzz");
+        assert_eq!(debug.replace_range, [0, 3]);
+    }
+
+    #[test]
+    fn autocomplete_emacs_reopens_for_edits_but_not_movement_unit() {
+        assert!(super::AutoCompleteEmacs::should_reopen_menu(&[
+            EditCommand::InsertChar('x')
+        ]));
+        assert!(super::AutoCompleteEmacs::should_reopen_menu(&[
+            EditCommand::BackspaceWord
+        ]));
+        assert!(!super::AutoCompleteEmacs::should_reopen_menu(&[
+            EditCommand::MoveLeft { select: false }
+        ]));
+        assert!(!super::AutoCompleteEmacs::should_reopen_menu(&[
+            EditCommand::MoveToLineEnd { select: false }
+        ]));
+    }
+
+    #[test]
+    fn process_submission_handles_restart_and_error_paths_unit() {
+        let history = disabled_history();
+
+        let mut restart_execute = |_line: &str, _: &SharedHistory| {
+            Ok(ReplLineResult::Restart {
+                output: "restarting".to_string(),
+                reload: ReplReloadKind::WithIntro,
+            })
+        };
+        let mut submission = SubmissionContext {
+            history_store: &history,
+            execute: &mut restart_execute,
+        };
+        let restart =
+            process_submission("config set", &mut submission).expect("restart should map");
+        assert!(matches!(
+            restart,
+            SubmissionResult::Restart {
+                output,
+                reload: ReplReloadKind::WithIntro
+            } if output == "restarting"
+        ));
+
+        let mut failing_execute =
+            |_line: &str, _: &SharedHistory| -> anyhow::Result<ReplLineResult> {
+                Err(anyhow::anyhow!("boom"))
+            };
+        let mut failing_submission = SubmissionContext {
+            history_store: &history,
+            execute: &mut failing_execute,
+        };
+        let result = process_submission("broken", &mut failing_submission)
+            .expect("error should be absorbed");
+        assert!(matches!(result, SubmissionResult::Noop));
+
+        let mut noop_execute =
+            |_line: &str, _: &SharedHistory| Ok(ReplLineResult::Continue("ignored".to_string()));
+        let mut noop_submission = SubmissionContext {
+            history_store: &history,
+            execute: &mut noop_execute,
+        };
+        let result =
+            process_submission("   ", &mut noop_submission).expect("blank lines should noop");
+        assert!(matches!(result, SubmissionResult::Noop));
+    }
+
+    #[test]
+    fn highlighter_builder_requires_command_color_unit() {
+        let tree = completion_tree_with_config_show();
+        let none = build_repl_highlighter(&tree, &super::ReplAppearance::default(), None);
+        assert!(none.is_none());
+
+        let some = build_repl_highlighter(
+            &tree,
+            &super::ReplAppearance {
+                command_highlight_style: Some("green".to_string()),
+                ..Default::default()
+            },
+            None,
+        );
+        assert!(some.is_some());
+    }
+
+    #[test]
+    fn path_suggestions_distinguish_files_and_directories_unit() {
+        let root = make_temp_dir("osp-repl-paths");
+        std::fs::write(root.join("alpha.txt"), "x").expect("file should be written");
+        std::fs::create_dir_all(root.join("alpine")).expect("dir should be created");
+        let stub = format!("{}/al", root.display());
+
+        let suggestions = path_suggestions(
+            &stub,
+            reedline::Span {
+                start: 0,
+                end: stub.len(),
+            },
+        );
+        let values = suggestions
+            .iter()
+            .map(|item| {
+                (
+                    item.value.clone(),
+                    item.description.clone(),
+                    item.append_whitespace,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|(value, desc, append)| {
+            value.ends_with("alpha.txt") && desc.as_deref() == Some("file") && *append
+        }));
+        assert!(values.iter().any(|(value, desc, append)| {
+            value.ends_with("alpine/") && desc.as_deref() == Some("dir") && !*append
+        }));
+    }
+
+    #[test]
+    fn trace_completion_writes_jsonl_when_enabled_unit() {
+        let temp_dir = make_temp_dir("osp-repl-trace");
+        let trace_path = temp_dir.join("trace.jsonl");
+        let previous_enabled = std::env::var("OSP_REPL_TRACE_COMPLETION").ok();
+        let previous_path = std::env::var("OSP_REPL_TRACE_PATH").ok();
+        set_env_var_for_test("OSP_REPL_TRACE_COMPLETION", "1");
+        set_env_var_for_test("OSP_REPL_TRACE_PATH", &trace_path);
+
+        assert!(trace_completion_enabled());
+        trace_completion(super::CompletionTraceEvent {
+            event: "complete",
+            line: "config sh",
+            cursor: 9,
+            stub: "sh",
+            matches: vec!["show".to_string()],
+            replace_range: Some([7, 9]),
+            menu: None,
+            buffer_before: None,
+            buffer_after: None,
+            cursor_before: None,
+            cursor_after: None,
+            accepted_value: None,
+        });
+
+        let contents = std::fs::read_to_string(&trace_path).expect("trace file should exist");
+        assert!(contents.contains("\"event\":\"complete\""));
+        assert!(contents.contains("\"stub\":\"sh\""));
+
+        restore_env("OSP_REPL_TRACE_COMPLETION", previous_enabled);
+        restore_env("OSP_REPL_TRACE_PATH", previous_path);
+    }
+
+    #[test]
+    fn trace_completion_enabled_recognizes_falsey_values_unit() {
+        let previous = std::env::var("OSP_REPL_TRACE_COMPLETION").ok();
+
+        set_env_var_for_test("OSP_REPL_TRACE_COMPLETION", "off");
+        assert!(!trace_completion_enabled());
+        set_env_var_for_test("OSP_REPL_TRACE_COMPLETION", "yes");
+        assert!(trace_completion_enabled());
+
+        restore_env("OSP_REPL_TRACE_COMPLETION", previous);
+    }
+
+    #[test]
+    fn cursor_position_errors_are_recognized_unit() {
+        assert!(is_cursor_position_error(&io::Error::from_raw_os_error(25)));
+        assert!(is_cursor_position_error(&io::Error::other(
+            "Cursor position could not be read"
+        )));
+        assert!(!is_cursor_position_error(&io::Error::other(
+            "permission denied"
+        )));
+    }
+
+    #[test]
+    fn expand_home_and_prompt_renderers_behave_unit() {
+        let previous_home = std::env::var("HOME").ok();
+        set_env_var_for_test("HOME", "/tmp/osp-home");
+        assert_eq!(expand_home("~"), "/tmp/osp-home");
+        assert_eq!(expand_home("~/cache"), "/tmp/osp-home/cache");
+        assert_eq!(expand_home("/etc/hosts"), "/etc/hosts");
+
+        let right: PromptRightRenderer = Arc::new(|| "rhs".to_string());
+        let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), Some(right));
+        assert_eq!(prompt.render_prompt_left(), "left");
+        assert_eq!(prompt.render_prompt_right(), "rhs");
+        assert_eq!(
+            prompt.render_prompt_indicator(PromptEditMode::Default),
+            "> "
+        );
+        assert_eq!(prompt.render_prompt_multiline_indicator(), "... ");
+        assert_eq!(
+            prompt.render_prompt_history_search_indicator(PromptHistorySearch {
+                status: PromptHistorySearchStatus::Passing,
+                term: "ldap".to_string(),
+            }),
+            "(reverse-search: ldap) "
+        );
+
+        let simple = ReplPrompt::simple("osp");
+        assert_eq!(simple.left, "osp");
+        assert!(simple.indicator.is_empty());
+
+        let restart = ReplRunResult::Restart {
+            output: "x".to_string(),
+            reload: ReplReloadKind::Default,
+        };
+        assert!(matches!(
+            restart,
+            ReplRunResult::Restart {
+                output,
+                reload: ReplReloadKind::Default
+            } if output == "x"
+        ));
+
+        restore_env("HOME", previous_home);
+    }
+
+    fn make_temp_dir(prefix: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be valid")
+            .as_nanos();
+        dir.push(format!("{prefix}-{nonce}"));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+        dir
+    }
+
+    fn restore_env(key: &str, value: Option<String>) {
+        if let Some(value) = value {
+            set_env_var_for_test(key, value);
+        } else {
+            remove_env_var_for_test(key);
+        }
+    }
+
+    fn set_env_var_for_test(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+        // Test-only environment mutation is process-global on Rust 2024.
+        // Keep the unsafe boundary explicit and local to these regression
+        // tests instead of spreading raw calls through the module.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+
+    fn remove_env_var_for_test(key: &str) {
+        // See `set_env_var_for_test`; these tests intentionally restore the
+        // process environment after probing env-dependent behavior.
+        unsafe {
+            std::env::remove_var(key);
+        }
     }
 }

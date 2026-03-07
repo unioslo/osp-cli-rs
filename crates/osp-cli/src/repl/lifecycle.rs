@@ -122,3 +122,106 @@ pub(crate) fn build_cycle_chrome_output(
     out.push_str(pending_output);
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ReplLoopState, build_cycle_chrome_output};
+    use crate::repl::ReplViewContext;
+    use crate::state::{AuthState, ReplScopeStack, UiState};
+    use crate::theme_loader::ThemeCatalog;
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_core::output::OutputFormat;
+    use osp_repl::{ReplReloadKind, ReplRunResult};
+    use osp_ui::RenderSettings;
+    use osp_ui::messages::MessageLevel;
+
+    #[test]
+    fn apply_run_result_handles_exit_and_restart_modes() {
+        let mut loop_state = ReplLoopState::new(true);
+        assert_eq!(loop_state.apply_run_result(ReplRunResult::Exit(7)), Some(7));
+
+        let mut loop_state = ReplLoopState::new(false);
+        assert_eq!(
+            loop_state.apply_run_result(ReplRunResult::Restart {
+                output: "hello".to_string(),
+                reload: ReplReloadKind::WithIntro,
+            }),
+            None
+        );
+        assert!(loop_state.pending_reload);
+        assert!(loop_state.show_intro);
+        assert_eq!(loop_state.pending_output, "hello");
+
+        let mut loop_state = ReplLoopState::new(true);
+        assert_eq!(
+            loop_state.apply_run_result(ReplRunResult::Restart {
+                output: "ignored".to_string(),
+                reload: ReplReloadKind::Default,
+            }),
+            None
+        );
+        assert!(loop_state.pending_reload);
+        assert!(!loop_state.show_intro);
+        assert!(loop_state.pending_output.is_empty());
+    }
+
+    #[test]
+    fn build_cycle_chrome_output_includes_intro_help_and_pending_output() {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let resolved = resolver
+            .resolve(ResolveOptions::default())
+            .expect("config should resolve");
+        let themes = ThemeCatalog::default();
+        let ui = UiState {
+            render_settings: RenderSettings::test_plain(OutputFormat::Table),
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+        };
+        let auth = AuthState::from_resolved(&resolved);
+        let scope = ReplScopeStack::default();
+        let view = ReplViewContext {
+            config: &resolved,
+            ui: &ui,
+            auth: &auth,
+            themes: &themes,
+            scope: &scope,
+        };
+
+        let rendered = build_cycle_chrome_output(view, "Commands\n", true, "Queued\n");
+        assert!(rendered.starts_with("\x1b[2J\x1b[H"));
+        assert!(rendered.contains("Commands"));
+        assert!(rendered.contains("Queued"));
+    }
+
+    #[test]
+    fn build_cycle_chrome_output_skips_intro_when_not_requested() {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let resolved = resolver
+            .resolve(ResolveOptions::default())
+            .expect("config should resolve");
+        let themes = ThemeCatalog::default();
+        let ui = UiState {
+            render_settings: RenderSettings::test_plain(OutputFormat::Table),
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+        };
+        let auth = AuthState::from_resolved(&resolved);
+        let scope = ReplScopeStack::default();
+        let view = ReplViewContext {
+            config: &resolved,
+            ui: &ui,
+            auth: &auth,
+            themes: &themes,
+            scope: &scope,
+        };
+
+        let rendered = build_cycle_chrome_output(view, "Commands\n", false, "Queued\n");
+        assert_eq!(rendered, "Queued\n");
+    }
+}
