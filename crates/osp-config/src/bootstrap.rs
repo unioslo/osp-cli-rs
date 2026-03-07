@@ -1,0 +1,173 @@
+use std::collections::BTreeSet;
+
+use crate::{
+    ConfigError, ConfigExplain, ConfigSource, ConfigValue, ResolveOptions, ResolvedValue, Scope,
+    normalize_identifier,
+};
+
+use crate::selector::{LayerRef, ScopeSelector};
+
+/// One resolution request always runs against a single active profile/terminal
+/// pair. Bootstrap computes this frame once up front so runtime resolution and
+/// explain both describe the same view of the world.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolutionFrame {
+    pub(crate) active_profile: String,
+    pub(crate) terminal: Option<String>,
+    pub(crate) known_profiles: BTreeSet<String>,
+}
+
+pub(crate) fn prepare_resolution(
+    layers: [LayerRef<'_>; 6],
+    options: ResolveOptions,
+) -> Result<ResolutionFrame, ConfigError> {
+    validate_layer_scopes(layers)?;
+    let terminal = options.terminal.map(|value| normalize_identifier(&value));
+    let profile_override = options
+        .profile_override
+        .map(|value| normalize_identifier(&value));
+    let known_profiles = collect_known_profiles(layers);
+    let active_profile = resolve_active_profile(
+        layers,
+        profile_override.as_deref(),
+        terminal.as_deref(),
+        &known_profiles,
+    )?;
+
+    Ok(ResolutionFrame {
+        active_profile,
+        terminal,
+        known_profiles,
+    })
+}
+
+pub(crate) fn explain_default_profile_key(
+    layers: [LayerRef<'_>; 6],
+    options: ResolveOptions,
+) -> Result<ConfigExplain, ConfigError> {
+    let frame = prepare_resolution(layers, options)?;
+    let selector = ScopeSelector::global(frame.terminal.as_deref());
+    let explain_layers = layers
+        .into_iter()
+        .filter_map(|layer| selector.explain_layer(layer, "profile.default"))
+        .collect::<Vec<_>>();
+
+    let final_entry = select_default_profile_across_layers(layers, selector)
+        .map(selected_value)
+        .or_else(|| {
+            Some(ResolvedValue {
+                raw_value: ConfigValue::String("default".to_string()),
+                value: ConfigValue::String("default".to_string()),
+                source: ConfigSource::Derived,
+                scope: Scope::global(),
+                origin: None,
+            })
+        });
+
+    Ok(ConfigExplain {
+        key: "profile.default".to_string(),
+        active_profile: frame.active_profile,
+        terminal: frame.terminal,
+        known_profiles: frame.known_profiles,
+        layers: explain_layers,
+        final_entry,
+        interpolation: None,
+    })
+}
+
+fn validate_layer_scopes(layers: [LayerRef<'_>; 6]) -> Result<(), ConfigError> {
+    for layer in layers {
+        layer.layer.validate_key_scopes()?;
+    }
+
+    Ok(())
+}
+
+fn collect_known_profiles(layers: [LayerRef<'_>; 6]) -> BTreeSet<String> {
+    let mut known = BTreeSet::new();
+
+    for layer in layers {
+        for entry in &layer.layer.entries {
+            if let Some(profile) = entry.scope.profile.as_deref() {
+                known.insert(profile.to_string());
+            }
+        }
+    }
+
+    known
+}
+
+fn resolve_active_profile(
+    layers: [LayerRef<'_>; 6],
+    explicit: Option<&str>,
+    terminal: Option<&str>,
+    known_profiles: &BTreeSet<String>,
+) -> Result<String, ConfigError> {
+    let chosen = if let Some(profile) = explicit {
+        normalize_identifier(profile)
+    } else {
+        resolve_default_profile(layers, terminal)?
+    };
+
+    if chosen.trim().is_empty() {
+        return Err(ConfigError::MissingDefaultProfile);
+    }
+
+    if !known_profiles.is_empty() && !known_profiles.contains(&chosen) {
+        return Err(ConfigError::UnknownProfile {
+            profile: chosen,
+            known: known_profiles.iter().cloned().collect::<Vec<String>>(),
+        });
+    }
+
+    Ok(chosen)
+}
+
+fn resolve_default_profile(
+    layers: [LayerRef<'_>; 6],
+    terminal: Option<&str>,
+) -> Result<String, ConfigError> {
+    let mut picked: Option<ConfigValue> = None;
+    let selector = ScopeSelector::global(terminal);
+
+    for layer in layers {
+        if let Some(selected) = selector.select(layer, "profile.default") {
+            picked = Some(selected.entry.value.clone());
+        }
+    }
+
+    match picked {
+        None => Ok("default".to_string()),
+        Some(value) => match value.reveal() {
+            ConfigValue::String(profile) if !profile.trim().is_empty() => {
+                Ok(normalize_identifier(profile))
+            }
+            other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
+        },
+    }
+}
+
+fn select_default_profile_across_layers<'a>(
+    layers: [LayerRef<'a>; 6],
+    selector: ScopeSelector<'a>,
+) -> Option<crate::selector::SelectedLayerEntry<'a>> {
+    let mut selected = None;
+
+    for layer in layers {
+        if let Some(entry) = selector.select(layer, "profile.default") {
+            selected = Some(entry);
+        }
+    }
+
+    selected
+}
+
+fn selected_value(selected: crate::selector::SelectedLayerEntry<'_>) -> ResolvedValue {
+    ResolvedValue {
+        raw_value: selected.entry.value.clone(),
+        value: selected.entry.value.clone(),
+        source: selected.source,
+        scope: selected.entry.scope.clone(),
+        origin: selected.entry.origin.clone(),
+    }
+}

@@ -1,8 +1,10 @@
+mod bootstrap;
 mod core;
 mod error;
 mod loader;
 mod resolver;
 mod runtime;
+mod selector;
 mod store;
 
 pub use core::*;

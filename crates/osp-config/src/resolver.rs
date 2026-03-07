@@ -1,27 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use crate::bootstrap::{ResolutionFrame, explain_default_profile_key, prepare_resolution};
+use crate::selector::{LayerRef, ScopeSelector, SelectedLayerEntry};
 use crate::{
     ConfigError, ConfigExplain, ConfigLayer, ConfigSchema, ConfigSource, ConfigValue,
-    ExplainCandidate, ExplainInterpolation, ExplainInterpolationStep, ExplainLayer, LayerEntry,
-    LoadedLayers, ResolveOptions, ResolvedConfig, ResolvedValue, Scope, is_bootstrap_only_key,
-    normalize_identifier,
+    ExplainInterpolation, ExplainInterpolationStep, ExplainLayer, LoadedLayers, ResolveOptions,
+    ResolvedConfig, ResolvedValue, Scope, is_bootstrap_only_key,
 };
 
 #[derive(Debug, Clone, Default)]
 pub struct ConfigResolver {
     layers: LoadedLayers,
     schema: ConfigSchema,
-}
-
-/// One resolution request always runs against a single active profile/terminal pair.
-///
-/// The resolver computes this frame once up front so value selection, explain output,
-/// and interpolation all describe the same view of the world.
-#[derive(Debug, Clone)]
-struct ResolutionFrame {
-    active_profile: String,
-    terminal: Option<String>,
-    known_profiles: BTreeSet<String>,
 }
 
 /// Resolution happens in two steps:
@@ -31,19 +21,6 @@ struct ResolutionFrame {
 struct ResolvedMaps {
     pre_interpolated: BTreeMap<String, ResolvedValue>,
     final_values: BTreeMap<String, ResolvedValue>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LayerRef<'a> {
-    source: ConfigSource,
-    layer: &'a ConfigLayer,
-}
-
-#[derive(Debug, Clone)]
-struct SelectedLayerEntry<'a> {
-    source: ConfigSource,
-    entry_index: usize,
-    entry: &'a LayerEntry,
 }
 
 #[derive(Debug, Clone)]
@@ -67,120 +44,6 @@ struct PlaceholderSpan {
 struct Interpolator {
     raw: HashMap<String, ConfigValue>,
     cache: HashMap<String, ConfigValue>,
-}
-
-/// Scope precedence is small but subtle:
-/// profile+terminal > profile > terminal > global.
-///
-/// Keeping that policy in one selector object makes `resolve()`, default-profile
-/// lookup, and `explain_key()` share the same matching rules instead of each
-/// rebuilding them slightly differently.
-#[derive(Debug, Clone, Copy)]
-struct ScopeSelector<'a> {
-    profile: Option<&'a str>,
-    terminal: Option<&'a str>,
-}
-
-impl<'a> ScopeSelector<'a> {
-    fn scoped(profile: &'a str, terminal: Option<&'a str>) -> Self {
-        Self {
-            profile: Some(profile),
-            terminal,
-        }
-    }
-
-    fn global(terminal: Option<&'a str>) -> Self {
-        Self {
-            profile: None,
-            terminal,
-        }
-    }
-
-    fn rank(self, scope: &Scope) -> Option<u8> {
-        // Lower rank wins:
-        // 0 = exact profile+terminal match
-        // 1 = profile-only match
-        // 2 = terminal-only match
-        // 3 = global fallback
-        match (
-            self.profile,
-            scope.profile.as_deref(),
-            scope.terminal.as_deref(),
-            self.terminal,
-        ) {
-            (Some(active_profile), Some(profile), Some(term), Some(active_term))
-                if profile == active_profile && term == active_term =>
-            {
-                Some(0)
-            }
-            (Some(active_profile), Some(profile), None, _) if profile == active_profile => Some(1),
-            (_, None, Some(term), Some(active_term)) if term == active_term => Some(2),
-            (_, None, None, _) => Some(3),
-            _ => None,
-        }
-    }
-
-    fn select(self, layer: LayerRef<'a>, key: &str) -> Option<SelectedLayerEntry<'a>> {
-        let mut best: Option<(usize, u8, &'a LayerEntry)> = None;
-
-        for (entry_index, entry) in layer.layer.entries.iter().enumerate() {
-            if entry.key != key {
-                continue;
-            }
-
-            let Some(rank) = self.rank(&entry.scope) else {
-                continue;
-            };
-
-            let replace = match best {
-                None => true,
-                Some((best_index, best_rank, _)) => {
-                    rank < best_rank || (rank == best_rank && entry_index > best_index)
-                }
-            };
-
-            if replace {
-                best = Some((entry_index, rank, entry));
-            }
-        }
-
-        best.map(|(entry_index, _, entry)| SelectedLayerEntry {
-            source: layer.source,
-            entry_index,
-            entry,
-        })
-    }
-
-    fn explain_layer(self, layer: LayerRef<'a>, key: &str) -> Option<ExplainLayer> {
-        let selected = self.select(layer, key);
-        let selected_entry_index = selected.as_ref().map(|entry| entry.entry_index);
-
-        let candidates = layer
-            .layer
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.key == key)
-            .map(|(entry_index, entry)| ExplainCandidate {
-                entry_index,
-                value: entry.value.clone(),
-                scope: entry.scope.clone(),
-                origin: entry.origin.clone(),
-                rank: self.rank(&entry.scope),
-                selected_in_layer: selected_entry_index == Some(entry_index),
-            })
-            .collect::<Vec<ExplainCandidate>>();
-
-        if candidates.is_empty() {
-            None
-        } else {
-            Some(ExplainLayer {
-                source: layer.source,
-                selected_entry_index,
-                candidates,
-            })
-        }
-    }
 }
 
 impl Interpolator {
@@ -457,7 +320,7 @@ impl ConfigResolver {
     }
 
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
-        let frame = self.prepare_resolution(options)?;
+        let frame = prepare_resolution(self.layers(), options)?;
         let values = self.resolve_values_for_frame(&frame)?;
 
         Ok(ResolvedConfig {
@@ -474,10 +337,10 @@ impl ConfigResolver {
         options: ResolveOptions,
     ) -> Result<ConfigExplain, ConfigError> {
         if key.eq_ignore_ascii_case("profile.default") {
-            return self.explain_default_profile_key(options);
+            return explain_default_profile_key(self.layers(), options);
         }
 
-        let frame = self.prepare_resolution(options)?;
+        let frame = prepare_resolution(self.layers(), options)?;
         let layers = self.explain_layers_for_key(key, &frame);
         let resolved = self.resolve_maps_for_frame(&frame)?;
         let final_entry = resolved.final_values.get(key).cloned();
@@ -496,36 +359,6 @@ impl ConfigResolver {
             final_entry,
             interpolation,
         })
-    }
-
-    /// Build the single resolution frame shared by normal resolution and
-    /// `config explain`.
-    fn prepare_resolution(&self, options: ResolveOptions) -> Result<ResolutionFrame, ConfigError> {
-        self.validate_layer_scopes()?;
-        let terminal = options.terminal.map(|value| normalize_identifier(&value));
-        let profile_override = options
-            .profile_override
-            .map(|value| normalize_identifier(&value));
-        let known_profiles = self.collect_known_profiles();
-        let active_profile = self.resolve_active_profile(
-            profile_override.as_deref(),
-            terminal.as_deref(),
-            &known_profiles,
-        )?;
-
-        Ok(ResolutionFrame {
-            active_profile,
-            terminal,
-            known_profiles,
-        })
-    }
-
-    fn validate_layer_scopes(&self) -> Result<(), ConfigError> {
-        for layer in self.layers() {
-            layer.layer.validate_key_scopes()?;
-        }
-
-        Ok(())
     }
 
     fn resolve_values_for_frame(
@@ -604,73 +437,6 @@ impl ConfigResolver {
         }
     }
 
-    fn collect_known_profiles(&self) -> BTreeSet<String> {
-        let mut known = BTreeSet::new();
-
-        for layer in self.layers() {
-            for entry in &layer.layer.entries {
-                if let Some(profile) = entry.scope.profile.as_deref() {
-                    known.insert(profile.to_string());
-                }
-            }
-        }
-
-        known
-    }
-
-    fn resolve_active_profile(
-        &self,
-        explicit: Option<&str>,
-        terminal: Option<&str>,
-        known_profiles: &BTreeSet<String>,
-    ) -> Result<String, ConfigError> {
-        // Explicit `--profile` wins. Otherwise fall back to the resolved
-        // `profile.default` view for the current terminal.
-        let chosen = if let Some(profile) = explicit {
-            normalize_identifier(profile)
-        } else {
-            self.resolve_default_profile(terminal)?
-        };
-
-        if chosen.trim().is_empty() {
-            return Err(ConfigError::MissingDefaultProfile);
-        }
-
-        // Fresh configs may not define any profile-scoped entries yet. In that
-        // case allow any explicit/default profile name instead of failing early.
-        if !known_profiles.is_empty() && !known_profiles.contains(&chosen) {
-            return Err(ConfigError::UnknownProfile {
-                profile: chosen,
-                known: known_profiles.iter().cloned().collect::<Vec<String>>(),
-            });
-        }
-
-        Ok(chosen)
-    }
-
-    fn resolve_default_profile(&self, terminal: Option<&str>) -> Result<String, ConfigError> {
-        let mut picked: Option<ConfigValue> = None;
-        // `profile.default` must be selected without an active profile, because
-        // this lookup is what decides which profile becomes active.
-        let selector = ScopeSelector::global(terminal);
-
-        for layer in self.layers() {
-            if let Some(selected) = selector.select(layer, "profile.default") {
-                picked = Some(selected.entry.value.clone());
-            }
-        }
-
-        match picked {
-            None => Ok("default".to_string()),
-            Some(value) => match value.reveal() {
-                ConfigValue::String(profile) if !profile.trim().is_empty() => {
-                    Ok(normalize_identifier(profile))
-                }
-                other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
-            },
-        }
-    }
-
     fn collect_keys(&self) -> BTreeSet<String> {
         let mut keys = BTreeSet::new();
 
@@ -707,42 +473,6 @@ impl ConfigResolver {
             .into_iter()
             .filter_map(|layer| selector.explain_layer(layer, key))
             .collect()
-    }
-
-    fn explain_default_profile_key(
-        &self,
-        options: ResolveOptions,
-    ) -> Result<ConfigExplain, ConfigError> {
-        let frame = self.prepare_resolution(options)?;
-        let selector = ScopeSelector::global(frame.terminal.as_deref());
-        let layers = self
-            .layers()
-            .into_iter()
-            .filter_map(|layer| selector.explain_layer(layer, "profile.default"))
-            .collect::<Vec<ExplainLayer>>();
-
-        let final_entry = self
-            .select_across_layers("profile.default", selector)
-            .map(|selected| Self::selected_value(&selected))
-            .or_else(|| {
-                Some(ResolvedValue {
-                    raw_value: ConfigValue::String("default".to_string()),
-                    value: ConfigValue::String("default".to_string()),
-                    source: ConfigSource::Derived,
-                    scope: Scope::global(),
-                    origin: None,
-                })
-            });
-
-        Ok(ConfigExplain {
-            key: "profile.default".to_string(),
-            active_profile: frame.active_profile,
-            terminal: frame.terminal,
-            known_profiles: frame.known_profiles,
-            layers,
-            final_entry,
-            interpolation: None,
-        })
     }
 
     fn layers(&self) -> [LayerRef<'_>; 6] {
