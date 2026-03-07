@@ -23,3 +23,10 @@ target
 # Generated local planning notes and coverage artifacts
 docs/plans/
 lcov.info
+
+# Python generated artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
