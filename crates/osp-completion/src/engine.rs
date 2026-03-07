@@ -39,26 +39,9 @@ impl CompletionEngine {
     }
 
     pub fn analyze(&self, line: &str, cursor: usize) -> CompletionAnalysis {
-        let safe_cursor = clamp_to_char_boundary(line, cursor.min(line.len()));
-        let before_cursor = &line[..safe_cursor];
+        let parsed = self.parser.analyze(line, cursor);
 
-        let full_tokens = self.parser.tokenize(line);
-        let full_cmd = self.parser.parse(&full_tokens);
-
-        let cursor_tokens = self.parser.tokenize(before_cursor);
-        let cursor = self.parser.cursor_state(before_cursor, safe_cursor);
-        let cursor_cmd = self.parser.parse(&cursor_tokens);
-
-        self.analyze_command_parts(
-            ParsedLine {
-                safe_cursor,
-                full_tokens,
-                cursor_tokens,
-                full_cmd,
-                cursor_cmd,
-            },
-            cursor,
-        )
+        self.analyze_command_parts(parsed.parsed, parsed.cursor)
     }
 
     pub fn analyze_command(
@@ -202,17 +185,6 @@ impl CompletionEngine {
             subcommand_context,
         }
     }
-}
-
-fn clamp_to_char_boundary(input: &str, cursor: usize) -> usize {
-    if input.is_char_boundary(cursor) {
-        return cursor;
-    }
-    let mut safe = cursor;
-    while safe > 0 && !input.is_char_boundary(safe) {
-        safe -= 1;
-    }
-    safe
 }
 
 fn collect_global_context_flags(root: &CompletionNode) -> BTreeSet<String> {

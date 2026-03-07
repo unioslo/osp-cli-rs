@@ -205,6 +205,33 @@ fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
     );
 }
 
+#[test]
+fn plugin_dispatch_context_refreshes_cached_plugin_env_after_config_change() {
+    let mut state =
+        make_completion_state_with_entries(None, &[("extensions.plugins.env.endpoint", "before")]);
+    let before = super::plugin_dispatch_context_for_runtime(&state.runtime, &state.clients, None);
+    assert_eq!(
+        before.shared_env,
+        vec![("OSP_PLUGIN_CFG_ENDPOINT".to_string(), "before".to_string(),)]
+    );
+
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    defaults.set("extensions.plugins.env.endpoint", "after");
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    let updated = resolver
+        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .expect("test config should resolve");
+    assert!(state.runtime.config.replace_resolved(updated));
+
+    let after = super::plugin_dispatch_context_for_runtime(&state.runtime, &state.clients, None);
+    assert_eq!(
+        after.shared_env,
+        vec![("OSP_PLUGIN_CFG_ENDPOINT".to_string(), "after".to_string(),)]
+    );
+}
+
 fn layer_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {
     layer
         .entries()
@@ -1031,7 +1058,8 @@ fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
     let history = make_test_history(&mut state);
     let stages = vec!["message".to_string()];
 
-    let dispatch_context = super::plugin_dispatch_context_for_runtime(&state.runtime, None);
+    let dispatch_context =
+        super::plugin_dispatch_context_for_runtime(&state.runtime, &state.clients, None);
     let response = state
         .clients
         .plugins
@@ -1247,8 +1275,10 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
             },
             plugins: crate::cli::commands::plugins::PluginsCommandContext {
                 config: state.runtime.config.resolved(),
+                config_state: Some(&state.runtime.config),
                 ui: &state.runtime.ui,
                 auth: &state.runtime.auth,
+                clients: Some(&state.clients),
                 plugin_manager: &state.clients.plugins,
             },
             ui: &state.runtime.ui,

@@ -9,6 +9,7 @@ use osp_repl::HistoryShellContext;
 use osp_ui::RenderSettings;
 use osp_ui::messages::MessageLevel;
 
+use crate::plugin_config::{PluginConfigEntry, PluginConfigEnv, PluginConfigEnvCache};
 use crate::plugin_manager::PluginManager;
 use crate::theme_loader::ThemeCatalog;
 
@@ -299,23 +300,37 @@ impl AppSession {
 
 pub struct AppClients {
     pub plugins: PluginManager,
-    config_revision: u64,
+    plugin_config_env: PluginConfigEnvCache,
 }
 
 impl AppClients {
-    pub fn new(plugins: PluginManager, config_revision: u64) -> Self {
+    pub fn new(plugins: PluginManager) -> Self {
         Self {
             plugins,
-            config_revision,
+            plugin_config_env: PluginConfigEnvCache::default(),
         }
     }
 
-    pub fn config_revision(&self) -> u64 {
-        self.config_revision
+    pub(crate) fn plugin_config_env(&self, config: &ConfigState) -> PluginConfigEnv {
+        self.plugin_config_env.collect(config)
     }
 
-    pub fn sync_config_revision(&mut self, config_revision: u64) {
-        self.config_revision = config_revision;
+    pub(crate) fn effective_plugin_config_entries(
+        &self,
+        config: &ConfigState,
+        plugin_id: &str,
+    ) -> Vec<PluginConfigEntry> {
+        let config_env = self.plugin_config_env(config);
+        let mut effective = std::collections::BTreeMap::new();
+        for entry in config_env.shared {
+            effective.insert(entry.env_key.clone(), entry);
+        }
+        if let Some(entries) = config_env.by_plugin_id.get(plugin_id) {
+            for entry in entries {
+                effective.insert(entry.env_key.clone(), entry.clone());
+            }
+        }
+        effective.into_values().collect()
     }
 }
 
@@ -370,7 +385,6 @@ pub(crate) struct AppStateInit {
 impl AppState {
     pub(crate) fn new(init: AppStateInit) -> Self {
         let config_state = ConfigState::new(init.config);
-        let config_revision = config_state.revision();
         let auth_state = AuthState::from_resolved(config_state.resolved());
         let session_cache_max_results = configured_usize(
             config_state.resolved(),
@@ -392,7 +406,7 @@ impl AppState {
                 launch: init.launch,
             },
             session: AppSession::with_cache_limit(session_cache_max_results),
-            clients: AppClients::new(init.plugins, config_revision),
+            clients: AppClients::new(init.plugins),
         }
     }
 

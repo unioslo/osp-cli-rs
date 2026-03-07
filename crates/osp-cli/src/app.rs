@@ -8,7 +8,6 @@ use osp_ui::messages::MessageLevel;
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 use osp_ui::{RenderRuntime, RenderSettings, render_output};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use terminal_size::{Width, terminal_size};
@@ -34,6 +33,13 @@ mod external;
 mod help;
 mod repl_lifecycle;
 
+pub(crate) use crate::plugin_config::{
+    PluginConfigEntry, PluginConfigScope, effective_plugin_config_entries,
+};
+#[cfg(test)]
+pub(crate) use crate::plugin_config::{
+    collect_plugin_config_env, config_value_to_plugin_env, plugin_config_env_name,
+};
 use crate::repl::help as repl_help;
 use crate::theme_loader;
 pub(crate) use bootstrap::{
@@ -72,10 +78,6 @@ pub(crate) const CMD_USE: &str = "use";
 pub(crate) const DEFAULT_REPL_PROMPT: &str = "╭─{user}@{domain} {indicator}\n╰─{profile}> ";
 pub(crate) const CURRENT_TERMINAL_SENTINEL: &str = "__current__";
 pub(crate) const REPL_SHELLABLE_COMMANDS: [&str; 5] = ["nh", "mreg", "ldap", "vm", "orch"];
-const SHARED_PLUGIN_ENV_PREFIX: &str = "extensions.plugins.env.";
-const PLUGIN_ENV_ROOT_PREFIX: &str = "extensions.plugins.";
-const PLUGIN_ENV_SEPARATOR: &str = ".env.";
-const PLUGIN_CONFIG_ENV_PREFIX: &str = "OSP_PLUGIN_CFG_";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReplCommandSpec {
@@ -87,26 +89,6 @@ pub(crate) struct ReplCommandSpec {
 pub(crate) struct ReplDispatchOverrides {
     pub(crate) message_verbosity: MessageLevel,
     pub(crate) debug_verbosity: u8,
-}
-
-#[derive(Debug, Clone, Default)]
-struct PluginConfigEnv {
-    shared: Vec<PluginConfigEntry>,
-    by_plugin_id: HashMap<String, Vec<PluginConfigEntry>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PluginConfigScope {
-    Shared,
-    Plugin,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PluginConfigEntry {
-    pub(crate) env_key: String,
-    pub(crate) value: String,
-    pub(crate) config_key: String,
-    pub(crate) scope: PluginConfigScope,
 }
 
 pub fn run_from<I, T>(args: I) -> Result<i32>
@@ -320,8 +302,10 @@ fn dispatch_builtin_command_parts(
             plugins_cmd::run_plugins_command(
                 plugins_cmd::PluginsCommandContext {
                     config: runtime.config.resolved(),
+                    config_state: Some(&runtime.config),
                     ui: &runtime.ui,
                     auth: &runtime.auth,
+                    clients: Some(clients),
                     plugin_manager: &clients.plugins,
                 },
                 args,
@@ -342,8 +326,10 @@ fn dispatch_builtin_command_parts(
                     },
                     plugins: plugins_cmd::PluginsCommandContext {
                         config: runtime.config.resolved(),
+                        config_state: Some(&runtime.config),
                         ui: &runtime.ui,
                         auth: &runtime.auth,
+                        clients: Some(clients),
                         plugin_manager: &clients.plugins,
                     },
                     ui: &runtime.ui,
@@ -520,11 +506,13 @@ fn to_ui_verbosity(level: MessageLevel) -> UiVerbosity {
 
 pub(crate) fn plugin_dispatch_context_for_runtime(
     runtime: &crate::state::AppRuntime,
+    clients: &AppClients,
     overrides: Option<ReplDispatchOverrides>,
 ) -> PluginDispatchContext {
     build_plugin_dispatch_context(
         &runtime.context,
-        runtime.config.resolved(),
+        &runtime.config,
+        clients,
         &runtime.ui,
         overrides,
     )
@@ -534,16 +522,23 @@ fn plugin_dispatch_context_for(
     runtime: &ExternalCommandRuntime<'_>,
     overrides: Option<ReplDispatchOverrides>,
 ) -> PluginDispatchContext {
-    build_plugin_dispatch_context(runtime.context, runtime.config, runtime.ui, overrides)
+    build_plugin_dispatch_context(
+        runtime.context,
+        runtime.config_state,
+        runtime.clients,
+        runtime.ui,
+        overrides,
+    )
 }
 
 fn build_plugin_dispatch_context(
     context: &crate::state::RuntimeContext,
-    config: &ResolvedConfig,
+    config: &crate::state::ConfigState,
+    clients: &AppClients,
     ui: &crate::state::UiState,
     overrides: Option<ReplDispatchOverrides>,
 ) -> PluginDispatchContext {
-    let config_env = collect_plugin_config_env(config);
+    let config_env = clients.plugin_config_env(config);
     let ui_verbosity = overrides
         .map(|value| value.message_verbosity)
         .unwrap_or(ui.message_verbosity);
@@ -561,7 +556,7 @@ fn build_plugin_dispatch_context(
             format: ui.render_settings.format,
             color: ui.render_settings.color,
             unicode: ui.render_settings.unicode,
-            profile: Some(config.active_profile().to_string()),
+            profile: Some(config.resolved().active_profile().to_string()),
             terminal: context.terminal_env().map(ToOwned::to_owned),
             terminal_kind,
         },
@@ -583,134 +578,6 @@ fn build_plugin_dispatch_context(
                 )
             })
             .collect(),
-    }
-}
-
-fn collect_plugin_config_env(config: &ResolvedConfig) -> PluginConfigEnv {
-    let mut shared: BTreeMap<String, PluginConfigEntry> = BTreeMap::new();
-    let mut by_plugin_id: HashMap<String, BTreeMap<String, PluginConfigEntry>> = HashMap::new();
-
-    for (key, entry) in config.values() {
-        if let Some(name) = key.strip_prefix(SHARED_PLUGIN_ENV_PREFIX) {
-            if let Some(env_entry) =
-                plugin_env_mapping(key, name, &entry.value, PluginConfigScope::Shared)
-            {
-                shared.insert(env_entry.env_key.clone(), env_entry);
-            }
-            continue;
-        }
-
-        let Some(plugin_key) = key.strip_prefix(PLUGIN_ENV_ROOT_PREFIX) else {
-            continue;
-        };
-        let Some((plugin_id, name)) = plugin_key.split_once(PLUGIN_ENV_SEPARATOR) else {
-            continue;
-        };
-        if plugin_id.is_empty() {
-            continue;
-        }
-        if let Some(env_entry) =
-            plugin_env_mapping(key, name, &entry.value, PluginConfigScope::Plugin)
-        {
-            by_plugin_id
-                .entry(plugin_id.to_string())
-                .or_default()
-                .insert(env_entry.env_key.clone(), env_entry);
-        }
-    }
-
-    PluginConfigEnv {
-        shared: shared.into_values().collect(),
-        by_plugin_id: by_plugin_id
-            .into_iter()
-            .map(|(plugin_id, env)| (plugin_id, env.into_values().collect()))
-            .collect(),
-    }
-}
-
-pub(crate) fn effective_plugin_config_entries(
-    config: &ResolvedConfig,
-    plugin_id: &str,
-) -> Vec<PluginConfigEntry> {
-    let config_env = collect_plugin_config_env(config);
-    let mut effective = BTreeMap::new();
-    for entry in config_env.shared {
-        effective.insert(entry.env_key.clone(), entry);
-    }
-    if let Some(entries) = config_env.by_plugin_id.get(plugin_id) {
-        for entry in entries {
-            effective.insert(entry.env_key.clone(), entry.clone());
-        }
-    }
-    effective.into_values().collect()
-}
-
-fn plugin_env_mapping(
-    config_key: &str,
-    name: &str,
-    value: &ConfigValue,
-    scope: PluginConfigScope,
-) -> Option<PluginConfigEntry> {
-    Some(PluginConfigEntry {
-        env_key: plugin_config_env_name(name)?,
-        value: config_value_to_plugin_env(value),
-        config_key: config_key.to_string(),
-        scope,
-    })
-}
-
-pub(crate) fn plugin_config_env_name(name: &str) -> Option<String> {
-    let mut normalized = String::new();
-    let mut last_was_separator = true;
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            normalized.push(ch.to_ascii_uppercase());
-            last_was_separator = false;
-        } else if !last_was_separator {
-            normalized.push('_');
-            last_was_separator = true;
-        }
-    }
-    while normalized.ends_with('_') {
-        normalized.pop();
-    }
-    if normalized.is_empty() {
-        return None;
-    }
-    Some(format!("{PLUGIN_CONFIG_ENV_PREFIX}{normalized}"))
-}
-
-pub(crate) fn config_value_to_plugin_env(value: &ConfigValue) -> String {
-    match value {
-        ConfigValue::Secret(secret) => config_value_to_plugin_env(secret.expose()),
-        ConfigValue::String(value) => value.clone(),
-        ConfigValue::Bool(value) => value.to_string(),
-        ConfigValue::Integer(value) => value.to_string(),
-        ConfigValue::Float(value) => value.to_string(),
-        // Lists are encoded as JSON so plugins can round-trip structured values.
-        ConfigValue::List(values) => serde_json::Value::Array(
-            values
-                .iter()
-                .map(config_value_to_plugin_env_json)
-                .collect::<Vec<_>>(),
-        )
-        .to_string(),
-    }
-}
-
-fn config_value_to_plugin_env_json(value: &ConfigValue) -> serde_json::Value {
-    match value {
-        ConfigValue::Secret(secret) => config_value_to_plugin_env_json(secret.expose()),
-        ConfigValue::String(value) => value.clone().into(),
-        ConfigValue::Bool(value) => (*value).into(),
-        ConfigValue::Integer(value) => (*value).into(),
-        ConfigValue::Float(value) => (*value).into(),
-        ConfigValue::List(values) => serde_json::Value::Array(
-            values
-                .iter()
-                .map(config_value_to_plugin_env_json)
-                .collect::<Vec<_>>(),
-        ),
     }
 }
 

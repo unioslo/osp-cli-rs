@@ -585,8 +585,10 @@ fn run_repl_command(
                 plugins_cmd::run_plugins_repl_command(
                     plugins_cmd::PluginsCommandContext {
                         config: runtime.config.resolved(),
+                        config_state: Some(&runtime.config),
                         ui: &runtime.ui,
                         auth: &runtime.auth,
+                        clients: Some(clients),
                         plugin_manager: &clients.plugins,
                     },
                     args,
@@ -617,8 +619,10 @@ fn run_repl_command(
                         },
                         plugins: plugins_cmd::PluginsCommandContext {
                             config: runtime.config.resolved(),
+                            config_state: Some(&runtime.config),
                             ui: &runtime.ui,
                             auth: &runtime.auth,
+                            clients: Some(clients),
                             plugin_manager: &clients.plugins,
                         },
                         ui: &runtime.ui,
@@ -695,7 +699,8 @@ fn run_repl_external_command(
         .ok_or_else(|| miette!("missing command"))?;
     app::ensure_plugin_visible_for(&runtime.auth, command)?;
     if app::is_help_passthrough(args) {
-        let dispatch_context = app::plugin_dispatch_context_for_runtime(runtime, Some(overrides));
+        let dispatch_context =
+            app::plugin_dispatch_context_for_runtime(runtime, clients, Some(overrides));
         let raw = clients
             .plugins
             .dispatch_passthrough(command, args, &dispatch_context)
@@ -719,7 +724,8 @@ fn run_repl_external_command(
         return Ok(ReplCommandOutput::Text(out));
     }
 
-    let dispatch_context = app::plugin_dispatch_context_for_runtime(runtime, Some(overrides));
+    let dispatch_context =
+        app::plugin_dispatch_context_for_runtime(runtime, clients, Some(overrides));
     let response = clients
         .plugins
         .dispatch(command, args, &dispatch_context)

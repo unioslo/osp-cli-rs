@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod logging;
 pub mod pipeline;
+mod plugin_config;
 mod plugin_manager;
 mod repl;
 mod rows;

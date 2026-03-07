@@ -9,14 +9,16 @@ use crate::app::{
 use crate::cli::{PluginConfigArgs, PluginToggleArgs, PluginsArgs, PluginsCommands};
 use crate::plugin_manager::{CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary};
 use crate::rows::output::rows_to_output_result;
-use crate::state::{AuthState, UiState};
+use crate::state::{AppClients, AuthState, ConfigState, UiState};
 use osp_core::row::Row;
 
 #[derive(Clone, Copy)]
 pub(crate) struct PluginsCommandContext<'a> {
     pub(crate) config: &'a ResolvedConfig,
+    pub(crate) config_state: Option<&'a ConfigState>,
     pub(crate) ui: &'a UiState,
     pub(crate) auth: &'a AuthState,
+    pub(crate) clients: Option<&'a AppClients>,
     pub(crate) plugin_manager: &'a PluginManager,
 }
 
@@ -48,7 +50,7 @@ pub(crate) fn run_plugins_command(
         PluginsCommands::Config(PluginConfigArgs { plugin_id }) => Ok(CliCommandResult::output(
             rows_to_output_result(plugin_config_rows(
                 &plugin_id,
-                &effective_plugin_config_entries(context.config, &plugin_id),
+                &projected_plugin_config_entries(context, &plugin_id),
             )),
             None,
         )),
@@ -118,7 +120,7 @@ pub(crate) fn run_plugins_repl_command(
         PluginsCommands::Config(PluginConfigArgs { plugin_id }) => Ok(ReplCommandOutput::Output {
             output: rows_to_output_result(plugin_config_rows(
                 &plugin_id,
-                &effective_plugin_config_entries(context.config, &plugin_id),
+                &projected_plugin_config_entries(context, &plugin_id),
             )),
             format_hint: None,
         }),
@@ -171,6 +173,16 @@ fn emit_messages(
     verbosity: MessageLevel,
 ) {
     emit_messages_for_ui(context.config, context.ui, messages, verbosity);
+}
+
+fn projected_plugin_config_entries(
+    context: PluginsCommandContext<'_>,
+    plugin_id: &str,
+) -> Vec<crate::app::PluginConfigEntry> {
+    if let (Some(config_state), Some(clients)) = (context.config_state, context.clients) {
+        return clients.effective_plugin_config_entries(config_state, plugin_id);
+    }
+    effective_plugin_config_entries(context.config, plugin_id)
 }
 
 fn plugin_list_rows(plugins: &[PluginSummary]) -> Vec<Row> {

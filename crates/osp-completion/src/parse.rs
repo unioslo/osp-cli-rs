@@ -1,4 +1,4 @@
-use crate::model::{CommandLine, CursorState, FlagOccurrence, QuoteStyle};
+use crate::model::{CommandLine, CursorState, FlagOccurrence, ParsedLine, QuoteStyle};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +140,19 @@ impl ParseState {
 #[derive(Debug, Clone, Default)]
 pub struct CommandLineParser;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedCursorLine {
+    pub parsed: ParsedLine,
+    pub cursor: CursorState,
+}
+
+#[derive(Debug, Clone)]
+struct CursorTokenization {
+    full_tokens: Vec<String>,
+    cursor_tokens: Vec<String>,
+    cursor_quote_style: Option<QuoteStyle>,
+}
+
 impl CommandLineParser {
     /// Tokenization is intentionally permissive for interactive use.
     ///
@@ -150,6 +163,55 @@ impl CommandLineParser {
             .or_else(|| self.tokenize_inner(&format!("{line}\"")))
             .or_else(|| self.tokenize_inner(&format!("{line}'")))
             .unwrap_or_else(|| line.split_whitespace().map(str::to_string).collect())
+    }
+
+    /// Parse the full line and the cursor-local prefix from one lexical walk.
+    ///
+    /// The common case keeps completion analysis in one tokenization pass. If
+    /// the line ends in an unmatched quote we fall back to the permissive
+    /// tokenization path so interactive behavior stays unchanged.
+    pub fn analyze(&self, line: &str, cursor: usize) -> ParsedCursorLine {
+        let safe_cursor = clamp_to_char_boundary(line, cursor.min(line.len()));
+        let before_cursor = &line[..safe_cursor];
+
+        if let Some(tokenized) = self.tokenize_with_cursor_inner(line, safe_cursor) {
+            let full_cmd = self.parse(&tokenized.full_tokens);
+            let cursor_cmd = self.parse(&tokenized.cursor_tokens);
+            let cursor = self.build_cursor_state(
+                before_cursor,
+                safe_cursor,
+                &tokenized.cursor_tokens,
+                tokenized.cursor_quote_style,
+            );
+
+            return ParsedCursorLine {
+                parsed: ParsedLine {
+                    safe_cursor,
+                    full_tokens: tokenized.full_tokens,
+                    cursor_tokens: tokenized.cursor_tokens,
+                    full_cmd,
+                    cursor_cmd,
+                },
+                cursor,
+            };
+        }
+
+        let full_tokens = self.tokenize(line);
+        let cursor_tokens = self.tokenize(before_cursor);
+        let full_cmd = self.parse(&full_tokens);
+        let cursor_cmd = self.parse(&cursor_tokens);
+        let cursor = self.cursor_state(before_cursor, safe_cursor);
+
+        ParsedCursorLine {
+            parsed: ParsedLine {
+                safe_cursor,
+                full_tokens,
+                cursor_tokens,
+                full_cmd,
+                cursor_cmd,
+            },
+            cursor,
+        }
     }
 
     fn tokenize_inner(&self, line: &str) -> Option<Vec<String>> {
@@ -232,8 +294,22 @@ impl CommandLineParser {
 
     pub fn cursor_state(&self, text_before_cursor: &str, safe_cursor: usize) -> CursorState {
         let tokens = self.tokenize(text_before_cursor);
-        let token_stub = self.compute_stub(text_before_cursor, &tokens);
-        let quote_style = self.compute_stub_quote(text_before_cursor);
+        self.build_cursor_state(
+            text_before_cursor,
+            safe_cursor,
+            &tokens,
+            self.compute_stub_quote(text_before_cursor),
+        )
+    }
+
+    fn build_cursor_state(
+        &self,
+        text_before_cursor: &str,
+        safe_cursor: usize,
+        tokens: &[String],
+        quote_style: Option<QuoteStyle>,
+    ) -> CursorState {
+        let token_stub = self.compute_stub(text_before_cursor, tokens);
         let replace_start = token_replace_start(text_before_cursor, safe_cursor, quote_style);
         let raw_stub = text_before_cursor
             .get(replace_start..safe_cursor)
@@ -246,6 +322,81 @@ impl CommandLineParser {
             replace_start..safe_cursor,
             quote_style,
         )
+    }
+
+    fn tokenize_with_cursor_inner(
+        &self,
+        line: &str,
+        safe_cursor: usize,
+    ) -> Option<CursorTokenization> {
+        let mut out = Vec::new();
+        let mut state = LexState::Normal;
+        let mut current = String::new();
+        let mut cursor_tokens = None;
+        let mut cursor_quote_style = None;
+
+        for (idx, ch) in line.char_indices() {
+            if idx == safe_cursor && cursor_tokens.is_none() {
+                cursor_tokens = Some(snapshot_tokens(&out, &current));
+                cursor_quote_style = Some(quote_style_for_state(state));
+            }
+
+            match state {
+                LexState::Normal => {
+                    if ch.is_whitespace() {
+                        push_current(&mut out, &mut current);
+                    } else {
+                        match ch {
+                            '|' => {
+                                push_current(&mut out, &mut current);
+                                out.push("|".to_string());
+                            }
+                            '\\' => state = LexState::EscapeNormal,
+                            '\'' => state = LexState::SingleQuote,
+                            '"' => state = LexState::DoubleQuote,
+                            _ => current.push(ch),
+                        }
+                    }
+                }
+                LexState::SingleQuote => {
+                    if ch == '\'' {
+                        state = LexState::Normal;
+                    } else {
+                        current.push(ch);
+                    }
+                }
+                LexState::DoubleQuote => match ch {
+                    '"' => state = LexState::Normal,
+                    '\\' => state = LexState::EscapeDouble,
+                    _ => current.push(ch),
+                },
+                LexState::EscapeNormal => {
+                    current.push(ch);
+                    state = LexState::Normal;
+                }
+                LexState::EscapeDouble => {
+                    current.push(ch);
+                    state = LexState::DoubleQuote;
+                }
+            }
+        }
+
+        if safe_cursor == line.len() && cursor_tokens.is_none() {
+            cursor_tokens = Some(snapshot_tokens(&out, &current));
+            cursor_quote_style = Some(quote_style_for_state(state));
+        }
+
+        match state {
+            LexState::Normal => {
+                push_current(&mut out, &mut current);
+                Some(CursorTokenization {
+                    full_tokens: out,
+                    cursor_tokens: cursor_tokens.unwrap_or_default(),
+                    cursor_quote_style: cursor_quote_style.unwrap_or(None),
+                })
+            }
+            _ => None,
+        }
     }
 
     fn compute_stub(&self, text_before_cursor: &str, tokens: &[String]) -> String {
@@ -265,6 +416,33 @@ impl CommandLineParser {
 
     pub fn compute_stub_quote(&self, text_before_cursor: &str) -> Option<QuoteStyle> {
         current_quote_state(text_before_cursor)
+    }
+}
+
+fn snapshot_tokens(out: &[String], current: &str) -> Vec<String> {
+    let mut tokens = out.to_vec();
+    if !current.is_empty() {
+        tokens.push(current.to_string());
+    }
+    tokens
+}
+
+fn clamp_to_char_boundary(input: &str, cursor: usize) -> usize {
+    if input.is_char_boundary(cursor) {
+        return cursor;
+    }
+    let mut safe = cursor;
+    while safe > 0 && !input.is_char_boundary(safe) {
+        safe -= 1;
+    }
+    safe
+}
+
+fn quote_style_for_state(state: LexState) -> Option<QuoteStyle> {
+    match state {
+        LexState::SingleQuote => Some(QuoteStyle::Single),
+        LexState::DoubleQuote | LexState::EscapeDouble => Some(QuoteStyle::Double),
+        LexState::Normal | LexState::EscapeNormal => None,
     }
 }
 
@@ -507,5 +685,48 @@ mod tests {
         assert_eq!(cursor.raw_stub, "oi");
         assert_eq!(cursor.replace_range, 11..13);
         assert_eq!(cursor.quote_style, Some(QuoteStyle::Double));
+    }
+
+    #[test]
+    fn analyze_reuses_one_cursor_snapshot_for_full_and_prefix_parse() {
+        let parser = CommandLineParser;
+        let line = "orch provision --provider vmware --os rhel | F name";
+        let cursor = "orch provision --provider vmware".len();
+        let analyzed = parser.analyze(line, cursor);
+
+        assert_eq!(
+            analyzed.parsed.full_tokens,
+            vec![
+                "orch",
+                "provision",
+                "--provider",
+                "vmware",
+                "--os",
+                "rhel",
+                "|",
+                "F",
+                "name",
+            ]
+        );
+        assert_eq!(
+            analyzed.parsed.cursor_tokens,
+            vec!["orch", "provision", "--provider", "vmware"]
+        );
+        assert_eq!(
+            analyzed.parsed.cursor_cmd.flag_values("--provider"),
+            Some(&["vmware".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn analyze_preserves_cursor_quote_state_inside_balanced_line() {
+        let parser = CommandLineParser;
+        let line = r#"ldap user "oi ste" --format json"#;
+        let cursor = r#"ldap user "oi"#.len();
+        let analyzed = parser.analyze(line, cursor);
+
+        assert_eq!(analyzed.cursor.token_stub, "oi");
+        assert_eq!(analyzed.cursor.raw_stub, "oi");
+        assert_eq!(analyzed.cursor.quote_style, Some(QuoteStyle::Double));
     }
 }

@@ -19,9 +19,11 @@ use super::{ResolvedConfig, render_output};
 
 pub(super) struct ExternalCommandRuntime<'a> {
     pub(super) context: &'a RuntimeContext,
+    pub(super) config_state: &'a crate::state::ConfigState,
     pub(super) config: &'a ResolvedConfig,
     pub(super) ui: &'a UiState,
     pub(super) auth: &'a AuthState,
+    pub(super) clients: &'a AppClients,
     pub(super) plugins: &'a PluginManager,
 }
 
@@ -29,9 +31,11 @@ impl<'a> ExternalCommandRuntime<'a> {
     pub(super) fn from_parts(runtime: &'a AppRuntime, clients: &'a AppClients) -> Self {
         Self {
             context: &runtime.context,
+            config_state: &runtime.config,
             config: runtime.config.resolved(),
             ui: &runtime.ui,
             auth: &runtime.auth,
+            clients,
             plugins: &clients.plugins,
         }
     }
