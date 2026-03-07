@@ -304,6 +304,66 @@ fn env_mapping_supports_profile_and_terminal_scopes_contract() {
 }
 
 #[test]
+fn env_mapping_supports_bootstrap_default_profile_contract() {
+    let env = ConfigLayer::from_env_iter([("OSP__PROFILE__DEFAULT", "tsd")])
+        .expect("env bootstrap override should parse");
+
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "uio");
+
+    let mut file = ConfigLayer::default();
+    file.set_for_profile("uio", "ui.mode", "plain");
+    file.set_for_profile("tsd", "ui.mode", "rich");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_file(file);
+    resolver.set_env(env);
+
+    let resolved = resolver
+        .resolve(ResolveOptions::default())
+        .expect("config should resolve");
+
+    assert_eq!(resolved.active_profile(), "tsd");
+    assert_eq!(resolved.get_string("ui.mode"), Some("rich"));
+}
+
+#[test]
+fn env_mapping_supports_terminal_bootstrap_default_profile_contract() {
+    let env = ConfigLayer::from_env_iter([("OSP__TERM__REPL__PROFILE__DEFAULT", "tsd")])
+        .expect("terminal bootstrap override should parse");
+
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "uio");
+
+    let mut file = ConfigLayer::default();
+    file.set_for_profile("uio", "ui.mode", "plain");
+    file.set_for_profile("tsd", "ui.mode", "rich");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_file(file);
+    resolver.set_env(env);
+
+    let resolved = resolver
+        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .expect("config should resolve");
+
+    assert_eq!(resolved.active_profile(), "tsd");
+    assert_eq!(resolved.get_string("ui.mode"), Some("rich"));
+}
+
+#[test]
+fn env_rejects_empty_bootstrap_default_profile_contract() {
+    let err = ConfigLayer::from_env_iter([("OSP__PROFILE__DEFAULT", "")])
+        .expect_err("empty bootstrap env override should fail");
+    assert!(matches!(
+        err,
+        osp_config::ConfigError::InvalidDefaultProfileValue(_)
+    ));
+}
+
+#[test]
 fn profile_and_terminal_matching_is_case_insensitive_contract() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "UIO");
@@ -470,12 +530,10 @@ fn explain_reports_precedence_chain_with_winner_contract() {
     assert_eq!(explain.layers[0].source, ConfigSource::BuiltinDefaults);
     assert_eq!(explain.layers[1].source, ConfigSource::Environment);
     assert_eq!(explain.layers[2].source, ConfigSource::Cli);
-    assert!(
-        explain.layers[1].candidates[0]
-            .origin
-            .as_deref()
-            .is_some_and(|origin| origin.starts_with("OSP__UI__FORMAT"))
-    );
+    assert!(explain.layers[1].candidates[0]
+        .origin
+        .as_deref()
+        .is_some_and(|origin| origin.starts_with("OSP__UI__FORMAT")));
 }
 
 #[test]
@@ -684,13 +742,11 @@ fn explain_marks_same_layer_winner_consistently_contract() {
         .expect("file layer should be present");
 
     assert_eq!(file_layer.selected_entry_index, Some(3));
-    assert!(
-        file_layer
-            .candidates
-            .iter()
-            .any(|candidate| candidate.selected_in_layer
-                && candidate.value == ConfigValue::String("value".to_string()))
-    );
+    assert!(file_layer
+        .candidates
+        .iter()
+        .any(|candidate| candidate.selected_in_layer
+            && candidate.value == ConfigValue::String("value".to_string())));
 }
 
 #[test]

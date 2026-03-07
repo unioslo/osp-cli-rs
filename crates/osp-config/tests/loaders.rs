@@ -1,7 +1,7 @@
 use osp_config::{
-    ChainedLoader, ConfigError, ConfigLayer, ConfigLoader, ConfigSource, EnvSecretsLoader,
-    EnvVarLoader, LoaderPipeline, ResolveOptions, Scope, SecretsTomlLoader, StaticLayerLoader,
-    TomlFileLoader, set_scoped_value_in_toml, unset_scoped_value_in_toml,
+    set_scoped_value_in_toml, unset_scoped_value_in_toml, ChainedLoader, ConfigError, ConfigLayer,
+    ConfigLoader, ConfigSource, EnvSecretsLoader, EnvVarLoader, LoaderPipeline, ResolveOptions,
+    Scope, SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
 };
 
 #[test]
@@ -69,12 +69,10 @@ ui.format = "table"
     let loader = TomlFileLoader::new(path.clone()).required();
     let layer = loader.load().expect("loader should parse");
     assert!(!layer.entries().is_empty());
-    assert!(
-        layer
-            .entries()
-            .iter()
-            .all(|entry| entry.origin.as_deref() == Some(path.to_string_lossy().as_ref()))
-    );
+    assert!(layer
+        .entries()
+        .iter()
+        .all(|entry| entry.origin.as_deref() == Some(path.to_string_lossy().as_ref())));
 }
 
 #[test]
@@ -287,6 +285,61 @@ profile.default = "uio"
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn toml_loader_rejects_empty_default_profile_value_contract() {
+    let dir = make_temp_dir("osp-config-bootstrap-empty");
+    let path = dir.join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[default]
+profile.default = "   "
+"#,
+    )
+    .expect("config file should be written");
+
+    let loader = TomlFileLoader::new(path).required();
+    let err = loader
+        .load()
+        .expect_err("empty bootstrap default should fail at load time");
+
+    match err {
+        ConfigError::LayerLoad { source, .. } => {
+            assert!(matches!(
+                *source,
+                ConfigError::InvalidDefaultProfileValue(_)
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn set_scoped_value_rejects_empty_default_profile_value_contract() {
+    let dir = make_temp_dir("osp-config-set-bootstrap-empty");
+    let path = dir.join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    )
+    .expect("config file should be written");
+
+    let err = set_scoped_value_in_toml(
+        &path,
+        "profile.default",
+        &"   ".into(),
+        &Scope::global(),
+        false,
+        false,
+    )
+    .expect_err("empty bootstrap value should fail before write");
+
+    assert!(matches!(err, ConfigError::InvalidDefaultProfileValue(_)));
 }
 
 fn make_temp_dir(prefix: &str) -> std::path::PathBuf {

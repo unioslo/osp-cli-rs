@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use crate::explain::selected_value;
 use crate::{
-    ActiveProfileSource, BootstrapConfigExplain, ConfigError, ConfigExplain, ConfigSource,
-    ConfigValue, ResolveOptions, ResolvedValue, Scope, normalize_identifier,
+    normalize_identifier, validate_bootstrap_value, ActiveProfileSource, BootstrapConfigExplain,
+    ConfigError, ConfigExplain, ConfigSource, ConfigValue, ResolveOptions, ResolvedValue, Scope,
 };
 
 use crate::selector::{LayerRef, ScopeSelector};
@@ -173,15 +173,13 @@ fn resolve_default_profile(
 
     match picked {
         None => Ok("default".to_string()),
-        Some(value) => match value.reveal() {
-            ConfigValue::String(profile) if !profile.trim().is_empty() => {
-                Ok(normalize_identifier(profile))
+        Some(value) => {
+            validate_bootstrap_value("profile.default", &value)?;
+            match value.reveal() {
+                ConfigValue::String(profile) => Ok(normalize_identifier(profile)),
+                other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
             }
-            ConfigValue::String(profile) => Err(ConfigError::InvalidDefaultProfileValue(format!(
-                "{profile:?}"
-            ))),
-            other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
-        },
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
+use std::sync::OnceLock;
 
 use crate::ConfigError;
 
@@ -170,15 +171,20 @@ pub enum BootstrapScopeRule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapValueRule {
+    NonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapKeySpec {
-    pub key: &'static str,
+    pub key: String,
     pub phase: BootstrapPhase,
     pub runtime_visible: bool,
     pub scope_rule: BootstrapScopeRule,
 }
 
 impl BootstrapKeySpec {
-    fn allows_scope(self, scope: &Scope) -> bool {
+    fn allows_scope(&self, scope: &Scope) -> bool {
         match self.scope_rule {
             BootstrapScopeRule::GlobalOnly => scope.profile.is_none() && scope.terminal.is_none(),
             BootstrapScopeRule::GlobalOrTerminal => scope.profile.is_none(),
@@ -192,6 +198,9 @@ pub struct SchemaEntry {
     required: bool,
     allowed_values: Option<Vec<String>>,
     runtime_visible: bool,
+    bootstrap_phase: Option<BootstrapPhase>,
+    bootstrap_scope_rule: Option<BootstrapScopeRule>,
+    bootstrap_value_rule: Option<BootstrapValueRule>,
 }
 
 impl SchemaEntry {
@@ -201,6 +210,9 @@ impl SchemaEntry {
             required: false,
             allowed_values: None,
             runtime_visible: true,
+            bootstrap_phase: None,
+            bootstrap_scope_rule: None,
+            bootstrap_value_rule: None,
         }
     }
 
@@ -210,6 +222,9 @@ impl SchemaEntry {
             required: false,
             allowed_values: None,
             runtime_visible: true,
+            bootstrap_phase: None,
+            bootstrap_scope_rule: None,
+            bootstrap_value_rule: None,
         }
     }
 
@@ -219,6 +234,9 @@ impl SchemaEntry {
             required: false,
             allowed_values: None,
             runtime_visible: true,
+            bootstrap_phase: None,
+            bootstrap_scope_rule: None,
+            bootstrap_value_rule: None,
         }
     }
 
@@ -228,6 +246,9 @@ impl SchemaEntry {
             required: false,
             allowed_values: None,
             runtime_visible: true,
+            bootstrap_phase: None,
+            bootstrap_scope_rule: None,
+            bootstrap_value_rule: None,
         }
     }
 
@@ -237,6 +258,9 @@ impl SchemaEntry {
             required: false,
             allowed_values: None,
             runtime_visible: true,
+            bootstrap_phase: None,
+            bootstrap_scope_rule: None,
+            bootstrap_value_rule: None,
         }
     }
 
@@ -245,8 +269,15 @@ impl SchemaEntry {
         self
     }
 
-    pub fn bootstrap_only(mut self) -> Self {
+    pub fn bootstrap_only(mut self, phase: BootstrapPhase, scope_rule: BootstrapScopeRule) -> Self {
         self.runtime_visible = false;
+        self.bootstrap_phase = Some(phase);
+        self.bootstrap_scope_rule = Some(scope_rule);
+        self
+    }
+
+    pub fn with_bootstrap_value_rule(mut self, rule: BootstrapValueRule) -> Self {
+        self.bootstrap_value_rule = Some(rule);
         self
     }
 
@@ -275,6 +306,28 @@ impl SchemaEntry {
     pub fn runtime_visible(&self) -> bool {
         self.runtime_visible
     }
+
+    fn bootstrap_spec(&self, key: &str) -> Option<BootstrapKeySpec> {
+        Some(BootstrapKeySpec {
+            key: key.to_string(),
+            phase: self.bootstrap_phase?,
+            runtime_visible: self.runtime_visible,
+            scope_rule: self.bootstrap_scope_rule?,
+        })
+    }
+
+    fn validate_bootstrap_value(&self, _key: &str, value: &ConfigValue) -> Result<(), ConfigError> {
+        match self.bootstrap_value_rule {
+            Some(BootstrapValueRule::NonEmptyString) => match value.reveal() {
+                ConfigValue::String(current) if !current.trim().is_empty() => Ok(()),
+                ConfigValue::String(current) => Err(ConfigError::InvalidDefaultProfileValue(
+                    format!("{current:?}"),
+                )),
+                other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
+            },
+            None => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -285,12 +338,26 @@ pub struct ConfigSchema {
 
 impl Default for ConfigSchema {
     fn default() -> Self {
+        builtin_config_schema().clone()
+    }
+}
+
+impl ConfigSchema {
+    fn builtin() -> Self {
         let mut schema = Self {
             entries: BTreeMap::new(),
             allow_extensions_namespace: true,
         };
 
-        schema.insert("profile.default", SchemaEntry::string().bootstrap_only());
+        schema.insert(
+            "profile.default",
+            SchemaEntry::string()
+                .bootstrap_only(
+                    BootstrapPhase::Profile,
+                    BootstrapScopeRule::GlobalOrTerminal,
+                )
+                .with_bootstrap_value_rule(BootstrapValueRule::NonEmptyString),
+        );
         schema.insert("profile.active", SchemaEntry::string().required());
         schema.insert("theme.name", SchemaEntry::string());
         schema.insert("theme.path", SchemaEntry::string_list());
@@ -412,6 +479,13 @@ impl ConfigSchema {
             || self.is_extension_key(key)
     }
 
+    pub fn bootstrap_key_spec(&self, key: &str) -> Option<BootstrapKeySpec> {
+        let normalized = key.trim().to_ascii_lowercase();
+        self.entries
+            .get(&normalized)
+            .and_then(|entry| entry.bootstrap_spec(&normalized))
+    }
+
     pub fn entries(&self) -> impl Iterator<Item = (&str, &SchemaEntry)> {
         self.entries
             .iter()
@@ -524,6 +598,38 @@ impl ConfigSchema {
         self.allow_extensions_namespace
             && (key.starts_with("extensions.") || key.starts_with("alias."))
     }
+
+    pub fn validate_key_scope(&self, key: &str, scope: &Scope) -> Result<(), ConfigError> {
+        let normalized_scope = normalize_scope(scope.clone());
+        if let Some(spec) = self.bootstrap_key_spec(key)
+            && !spec.allows_scope(&normalized_scope)
+        {
+            return Err(ConfigError::InvalidBootstrapScope {
+                key: spec.key,
+                profile: normalized_scope.profile,
+                terminal: normalized_scope.terminal,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_bootstrap_value(
+        &self,
+        key: &str,
+        value: &ConfigValue,
+    ) -> Result<(), ConfigError> {
+        let normalized = key.trim().to_ascii_lowercase();
+        let Some(entry) = self.entries.get(&normalized) else {
+            return Ok(());
+        };
+        entry.validate_bootstrap_value(&normalized, value)
+    }
+}
+
+fn builtin_config_schema() -> &'static ConfigSchema {
+    static BUILTIN_SCHEMA: OnceLock<ConfigSchema> = OnceLock::new();
+    BUILTIN_SCHEMA.get_or_init(ConfigSchema::builtin)
 }
 
 impl Display for ConfigValue {
@@ -833,7 +939,9 @@ impl ConfigLayer {
 
             let spec = parse_env_key(key)?;
             validate_key_scope(&spec.key, &spec.scope)?;
-            layer.insert_with_origin(spec.key, value.as_ref(), spec.scope, Some(key.to_string()));
+            let converted = ConfigValue::String(value.as_ref().to_string());
+            validate_bootstrap_value(&spec.key, &converted)?;
+            layer.insert_with_origin(spec.key, converted, spec.scope, Some(key.to_string()));
         }
 
         Ok(layer)
@@ -1051,8 +1159,9 @@ fn flatten_key_value(
     match value {
         toml::Value::Table(table) => flatten_table(layer, table, key, scope),
         _ => {
-            validate_key_scope(key, scope)?;
             let converted = ConfigValue::from_toml(key, value)?;
+            validate_key_scope(key, scope)?;
+            validate_bootstrap_value(key, &converted)?;
             layer.insert(key.to_string(), converted, scope.clone());
             Ok(())
         }
@@ -1060,16 +1169,7 @@ fn flatten_key_value(
 }
 
 pub fn bootstrap_key_spec(key: &str) -> Option<BootstrapKeySpec> {
-    let normalized = key.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "profile.default" => Some(BootstrapKeySpec {
-            key: "profile.default",
-            phase: BootstrapPhase::Profile,
-            runtime_visible: false,
-            scope_rule: BootstrapScopeRule::GlobalOrTerminal,
-        }),
-        _ => None,
-    }
+    builtin_config_schema().bootstrap_key_spec(key)
 }
 
 pub fn is_bootstrap_only_key(key: &str) -> bool {
@@ -1077,18 +1177,11 @@ pub fn is_bootstrap_only_key(key: &str) -> bool {
 }
 
 pub fn validate_key_scope(key: &str, scope: &Scope) -> Result<(), ConfigError> {
-    let normalized_scope = normalize_scope(scope.clone());
-    if let Some(spec) = bootstrap_key_spec(key)
-        && !spec.allows_scope(&normalized_scope)
-    {
-        return Err(ConfigError::InvalidBootstrapScope {
-            key: spec.key.to_string(),
-            profile: normalized_scope.profile,
-            terminal: normalized_scope.terminal,
-        });
-    }
+    builtin_config_schema().validate_key_scope(key, scope)
+}
 
-    Ok(())
+pub fn validate_bootstrap_value(key: &str, value: &ConfigValue) -> Result<(), ConfigError> {
+    builtin_config_schema().validate_bootstrap_value(key, value)
 }
 
 fn adapt_value_for_schema(
@@ -1348,6 +1441,16 @@ pub(crate) fn parse_env_key(key: &str) -> Result<EnvKeySpec, ConfigError> {
         }
 
         if part.eq_ignore_ascii_case("PROFILE") {
+            // `profile.default` is a bootstrap key, not a profile scope. When
+            // PROFILE/DEFAULT is the entire remaining path, treat it as the
+            // key name so env can participate in bootstrap selection.
+            if parts[cursor..]
+                .iter()
+                .map(|segment| segment.to_ascii_lowercase())
+                .eq(["profile".to_string(), "default".to_string()])
+            {
+                break;
+            }
             if profile.is_some() {
                 return Err(ConfigError::InvalidEnvOverride {
                     key: key.to_string(),
@@ -1411,8 +1514,8 @@ pub(crate) fn normalize_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootstrapPhase, BootstrapScopeRule, ConfigSchema, Scope, bootstrap_key_spec,
-        is_bootstrap_only_key, validate_key_scope,
+        bootstrap_key_spec, is_bootstrap_only_key, validate_key_scope, BootstrapPhase,
+        BootstrapScopeRule, ConfigSchema, Scope,
     };
 
     #[test]
