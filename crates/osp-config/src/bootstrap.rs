@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use crate::explain::selected_value;
 use crate::{
-    normalize_identifier, ActiveProfileSource, BootstrapConfigExplain, ConfigError, ConfigExplain,
-    ConfigSource, ConfigValue, ResolveOptions, ResolvedValue, Scope,
+    ActiveProfileSource, BootstrapConfigExplain, ConfigError, ConfigExplain, ConfigSource,
+    ConfigValue, ResolveOptions, ResolvedValue, Scope, normalize_identifier,
 };
 
 use crate::selector::{LayerRef, ScopeSelector};

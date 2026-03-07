@@ -1,7 +1,8 @@
 use miette::{IntoDiagnostic, Result, WrapErr};
 use osp_config::{
-    build_runtime_pipeline, is_bootstrap_only_key, ConfigExplain, ConfigResolver, ConfigValue,
-    ResolveOptions, ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults,
+    bootstrap_key_spec, build_runtime_pipeline, is_bootstrap_only_key, BootstrapScopeRule,
+    ConfigExplain, ConfigResolver, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths,
+    RuntimeDefaults,
 };
 use osp_core::output::OutputFormat;
 use osp_ui::messages::MessageBuffer;
@@ -145,6 +146,10 @@ pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: 
         explain.terminal.as_deref().unwrap_or("none")
     ));
 
+    if let Some(policy) = bootstrap_scope_policy(&explain.key) {
+        out.push_str(&format!("bootstrap_scope_policy: {policy}\n\n"));
+    }
+
     let precedence = effective_precedence_chain(explain);
     if !precedence.is_empty() {
         out.push_str("candidates (in priority order):\n");
@@ -216,6 +221,10 @@ pub(crate) fn config_explain_json(
         explain
             .active_profile_source
             .map_or(serde_json::Value::Null, |source| source.as_str().into()),
+    );
+    root.insert(
+        "bootstrap_scope_policy".to_string(),
+        bootstrap_scope_policy(&explain.key).map_or(serde_json::Value::Null, Into::into),
     );
     root.insert(
         "terminal".to_string(),
@@ -444,6 +453,18 @@ fn contains_sensitive_values(explain: &ConfigExplain) -> bool {
                 || step.value.is_secret()
                 || is_sensitive_key(&step.placeholder)
         })
+    })
+}
+
+fn bootstrap_scope_policy(key: &str) -> Option<&'static str> {
+    let spec = bootstrap_key_spec(key)?;
+    Some(match spec.scope_rule {
+        BootstrapScopeRule::GlobalOnly => {
+            "global only; terminal and profile scopes are ignored during bootstrap"
+        }
+        BootstrapScopeRule::GlobalOrTerminal => {
+            "global and terminal-only; profile scopes are ignored during bootstrap"
+        }
     })
 }
 

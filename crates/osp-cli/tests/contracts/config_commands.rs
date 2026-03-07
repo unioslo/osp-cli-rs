@@ -294,6 +294,9 @@ profile.default = "tsd"
         .stdout(predicate::str::contains(
             "\"active_profile_source\": \"profile.default\"",
         ))
+        .stdout(predicate::str::contains(
+            "\"bootstrap_scope_policy\": \"global and terminal-only; profile scopes are ignored during bootstrap\"",
+        ))
         .stdout(predicate::str::contains("\"value\": \"uio\""));
 
     let _ = std::fs::remove_dir_all(&home);

@@ -1411,8 +1411,8 @@ pub(crate) fn normalize_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        bootstrap_key_spec, is_bootstrap_only_key, validate_key_scope, BootstrapPhase,
-        BootstrapScopeRule, ConfigSchema, Scope,
+        BootstrapPhase, BootstrapScopeRule, ConfigSchema, Scope, bootstrap_key_spec,
+        is_bootstrap_only_key, validate_key_scope,
     };
 
     #[test]

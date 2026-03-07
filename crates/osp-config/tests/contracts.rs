@@ -470,10 +470,12 @@ fn explain_reports_precedence_chain_with_winner_contract() {
     assert_eq!(explain.layers[0].source, ConfigSource::BuiltinDefaults);
     assert_eq!(explain.layers[1].source, ConfigSource::Environment);
     assert_eq!(explain.layers[2].source, ConfigSource::Cli);
-    assert!(explain.layers[1].candidates[0]
-        .origin
-        .as_deref()
-        .is_some_and(|origin| origin.starts_with("OSP__UI__FORMAT")));
+    assert!(
+        explain.layers[1].candidates[0]
+            .origin
+            .as_deref()
+            .is_some_and(|origin| origin.starts_with("OSP__UI__FORMAT"))
+    );
 }
 
 #[test]
@@ -682,11 +684,13 @@ fn explain_marks_same_layer_winner_consistently_contract() {
         .expect("file layer should be present");
 
     assert_eq!(file_layer.selected_entry_index, Some(3));
-    assert!(file_layer
-        .candidates
-        .iter()
-        .any(|candidate| candidate.selected_in_layer
-            && candidate.value == ConfigValue::String("value".to_string())));
+    assert!(
+        file_layer
+            .candidates
+            .iter()
+            .any(|candidate| candidate.selected_in_layer
+                && candidate.value == ConfigValue::String("value".to_string()))
+    );
 }
 
 #[test]
