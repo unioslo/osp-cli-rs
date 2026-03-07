@@ -100,6 +100,8 @@ without custom code in `osp-cli`:
   `extensions.plugins.env.*` and `extensions.plugins.<plugin-id>.env.*` into
   plugin subprocess env. Inspect the effective projection with
   `osp plugins config <plugin-id>`. See `docs/PLUGIN_PROTOCOL.md`.
+- `extensions.plugins.timeout_ms` bounds plugin discovery (`--describe`) and
+  command execution. Default: `10000`.
 - Values are adapted to schema type after merge/interpolation:
   strings, booleans, integers, floats.
 - Enum-like string keys (for example `ui.format`) are validated against

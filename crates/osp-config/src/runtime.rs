@@ -142,6 +142,7 @@ impl RuntimeDefaults {
             "ui.column_weight" => DEFAULT_UI_COLUMN_WEIGHT,
             "ui.mreg.stack_min_col_width" => DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH,
             "ui.mreg.stack_overflow_ratio" => DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO,
+            "extensions.plugins.timeout_ms" => 10_000,
         }
 
         let theme_path = env.theme_paths();

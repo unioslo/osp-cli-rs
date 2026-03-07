@@ -13,13 +13,16 @@ use std::error::Error as StdError;
 use std::fmt::{Display, Formatter, Write as FmtWrite};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PLUGIN_EXECUTABLE_PREFIX: &str = "osp-";
 const BUNDLED_MANIFEST_FILE: &str = "manifest.toml";
 const ENV_OSP_COMMAND: &str = "OSP_COMMAND";
+pub const DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS: usize = 10_000;
+const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginSource {
@@ -136,6 +139,11 @@ pub enum PluginDispatchError {
         plugin_id: String,
         source: std::io::Error,
     },
+    TimedOut {
+        plugin_id: String,
+        timeout: Duration,
+        stderr: String,
+    },
     NonZeroExit {
         plugin_id: String,
         status_code: i32,
@@ -159,6 +167,26 @@ impl Display for PluginDispatchError {
             }
             PluginDispatchError::ExecuteFailed { plugin_id, source } => {
                 write!(f, "failed to execute plugin {plugin_id}: {source}")
+            }
+            PluginDispatchError::TimedOut {
+                plugin_id,
+                timeout,
+                stderr,
+            } => {
+                if stderr.trim().is_empty() {
+                    write!(
+                        f,
+                        "plugin {plugin_id} timed out after {} ms",
+                        timeout.as_millis()
+                    )
+                } else {
+                    write!(
+                        f,
+                        "plugin {plugin_id} timed out after {} ms: {}",
+                        timeout.as_millis(),
+                        stderr.trim()
+                    )
+                }
             }
             PluginDispatchError::NonZeroExit {
                 plugin_id,
@@ -191,6 +219,7 @@ impl StdError for PluginDispatchError {
             PluginDispatchError::ExecuteFailed { source, .. } => Some(source),
             PluginDispatchError::InvalidJsonResponse { source, .. } => Some(source),
             PluginDispatchError::CommandNotFound { .. }
+            | PluginDispatchError::TimedOut { .. }
             | PluginDispatchError::NonZeroExit { .. }
             | PluginDispatchError::InvalidResponsePayload { .. } => None,
         }
@@ -270,6 +299,7 @@ pub struct PluginManager {
     discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
     config_root: Option<PathBuf>,
     cache_root: Option<PathBuf>,
+    process_timeout: Duration,
 }
 
 impl PluginManager {
@@ -279,12 +309,18 @@ impl PluginManager {
             discovered_cache: RwLock::new(None),
             config_root: None,
             cache_root: None,
+            process_timeout: Duration::from_millis(DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as u64),
         }
     }
 
     pub fn with_roots(mut self, config_root: Option<PathBuf>, cache_root: Option<PathBuf>) -> Self {
         self.config_root = config_root;
         self.cache_root = cache_root;
+        self
+    }
+
+    pub fn with_process_timeout(mut self, timeout: Duration) -> Self {
+        self.process_timeout = timeout.max(Duration::from_millis(1));
         self
     }
 
@@ -556,7 +592,7 @@ impl PluginManager {
     ) -> std::result::Result<ResponseV1, PluginDispatchError> {
         let provider = self.resolve_provider(command)?;
 
-        let raw = run_provider(&provider, command, args, context)?;
+        let raw = run_provider(&provider, command, args, context, self.process_timeout)?;
         if raw.status_code != 0 {
             return Err(PluginDispatchError::NonZeroExit {
                 plugin_id: provider.plugin_id.clone(),
@@ -589,7 +625,7 @@ impl PluginManager {
         context: &PluginDispatchContext,
     ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
         let provider = self.resolve_provider(command)?;
-        run_provider(&provider, command, args, context)
+        run_provider(&provider, command, args, context, self.process_timeout)
     }
 
     fn resolve_provider(
@@ -652,6 +688,7 @@ impl PluginManager {
                 &mut describe_cache,
                 &mut seen_describe_paths,
                 &mut cache_dirty,
+                self.process_timeout,
             ));
         }
 
@@ -941,6 +978,7 @@ fn discover_plugins_in_root(
     describe_cache: &mut DescribeCacheFile,
     seen_describe_paths: &mut HashSet<String>,
     cache_dirty: &mut bool,
+    process_timeout: Duration,
 ) -> Vec<DiscoveredPlugin> {
     let manifest_state = load_manifest_state(root);
 
@@ -955,6 +993,7 @@ fn discover_plugins_in_root(
                 describe_cache,
                 seen_describe_paths,
                 cache_dirty,
+                process_timeout,
             )
         })
         .collect()
@@ -967,6 +1006,7 @@ fn assemble_discovered_plugin(
     describe_cache: &mut DescribeCacheFile,
     seen_describe_paths: &mut HashSet<String>,
     cache_dirty: &mut bool,
+    process_timeout: Duration,
 ) -> DiscoveredPlugin {
     let file_name = executable
         .file_name()
@@ -984,6 +1024,7 @@ fn assemble_discovered_plugin(
         describe_cache,
         seen_describe_paths,
         cache_dirty,
+        process_timeout,
     ) {
         Ok(describe) => {
             apply_describe_metadata(&mut plugin, &describe, manifest_entry.as_ref(), &executable)
@@ -1261,11 +1302,39 @@ fn validate_manifest_entry(
     Ok(())
 }
 
-fn describe_plugin(path: &Path) -> Result<DescribeV1> {
-    let output = Command::new(path)
-        .arg("--describe")
-        .output()
-        .with_context(|| format!("failed to execute --describe for {}", path.display()))?;
+enum CommandRunError {
+    Execute(std::io::Error),
+    TimedOut { timeout: Duration, stderr: Vec<u8> },
+}
+
+fn describe_plugin(path: &Path, timeout: Duration) -> Result<DescribeV1> {
+    let mut command = Command::new(path);
+    command.arg("--describe");
+    let output = run_command_with_timeout(command, timeout).map_err(|err| match err {
+        CommandRunError::Execute(source) => {
+            anyhow!(
+                "failed to execute --describe for {}: {source}",
+                path.display()
+            )
+        }
+        CommandRunError::TimedOut { timeout, stderr } => {
+            let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+            if stderr.is_empty() {
+                anyhow!(
+                    "--describe timed out after {} ms for {}",
+                    timeout.as_millis(),
+                    path.display()
+                )
+            } else {
+                anyhow!(
+                    "--describe timed out after {} ms for {}: {}",
+                    timeout.as_millis(),
+                    path.display(),
+                    stderr
+                )
+            }
+        }
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1295,6 +1364,7 @@ fn run_provider(
     selected_command: &str,
     args: &[String],
     context: &PluginDispatchContext,
+    timeout: Duration,
 ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
     let mut command = Command::new(&provider.executable);
     // Pass the selected command in both env and argv so plugin authors can
@@ -1311,12 +1381,17 @@ fn run_provider(
         command.env(key, value);
     }
 
-    let output = command
-        .output()
-        .map_err(|source| PluginDispatchError::ExecuteFailed {
+    let output = run_command_with_timeout(command, timeout).map_err(|err| match err {
+        CommandRunError::Execute(source) => PluginDispatchError::ExecuteFailed {
             plugin_id: provider.plugin_id.clone(),
             source,
-        })?;
+        },
+        CommandRunError::TimedOut { timeout, stderr } => PluginDispatchError::TimedOut {
+            plugin_id: provider.plugin_id.clone(),
+            timeout,
+            stderr: String::from_utf8_lossy(&stderr).to_string(),
+        },
+    })?;
 
     Ok(RawPluginOutput {
         status_code: output.status.code().unwrap_or(1),
@@ -1330,6 +1405,7 @@ fn describe_with_cache(
     cache: &mut DescribeCacheFile,
     seen_describe_paths: &mut HashSet<String>,
     cache_dirty: &mut bool,
+    process_timeout: Duration,
 ) -> Result<DescribeV1> {
     let key = describe_cache_key(path);
     seen_describe_paths.insert(key.clone());
@@ -1339,11 +1415,41 @@ fn describe_with_cache(
         return Ok(entry.describe.clone());
     }
 
-    let describe = describe_plugin(path)?;
+    let describe = describe_plugin(path, process_timeout)?;
     upsert_cached_describe(cache, key, size, mtime_secs, mtime_nanos, describe.clone());
     *cache_dirty = true;
 
     Ok(describe)
+}
+
+fn run_command_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<Output, CommandRunError> {
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    let mut child = command.spawn().map_err(CommandRunError::Execute)?;
+    let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().map_err(CommandRunError::Execute),
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let output = child.wait_with_output().map_err(CommandRunError::Execute)?;
+                return Err(CommandRunError::TimedOut {
+                    timeout,
+                    stderr: output.stderr,
+                });
+            }
+            Err(source) => return Err(CommandRunError::Execute(source)),
+        }
+    }
 }
 
 fn describe_cache_key(path: &Path) -> String {
@@ -1673,8 +1779,12 @@ fn is_executable_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DescribeV1, PluginManager, PluginState, is_enabled, min_osp_version_issue};
+    use super::{
+        DescribeV1, PluginDispatchContext, PluginDispatchError, PluginManager, PluginState,
+        is_enabled, min_osp_version_issue,
+    };
     use std::collections::BTreeMap;
+    use std::time::Duration;
 
     #[test]
     fn explicit_enable_overrides_default_disabled() {
@@ -1910,6 +2020,60 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn dispatch_times_out_hung_plugin() {
+        let root = make_temp_dir("osp-cli-plugin-manager-dispatch-timeout");
+        let plugins_dir = root.join("plugins");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        write_sleepy_test_plugin(&plugins_dir, "hang", false);
+        let manager = PluginManager::new(vec![plugins_dir.clone()])
+            .with_process_timeout(Duration::from_millis(50));
+
+        let err = manager
+            .dispatch("hang", &[], &PluginDispatchContext::default())
+            .expect_err("hung plugin should time out");
+
+        match err {
+            PluginDispatchError::TimedOut {
+                plugin_id, timeout, ..
+            } => {
+                assert_eq!(plugin_id, "hang");
+                assert_eq!(timeout, Duration::from_millis(50));
+            }
+            other => panic!("expected timeout error, got {other}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hung_describe_marks_plugin_unhealthy() {
+        let root = make_temp_dir("osp-cli-plugin-manager-describe-timeout");
+        let plugins_dir = root.join("plugins");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        write_sleepy_test_plugin(&plugins_dir, "hang-describe", true);
+        let manager = PluginManager::new(vec![plugins_dir.clone()])
+            .with_process_timeout(Duration::from_millis(50));
+
+        let plugins = manager.list_plugins().expect("plugins should list");
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].plugin_id, "hang-describe");
+        assert!(!plugins[0].healthy);
+        assert!(
+            plugins[0]
+                .issue
+                .as_deref()
+                .expect("issue should be present")
+                .contains("timed out after 50 ms")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
     fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
         let mut dir = std::env::temp_dir();
         let nonce = std::time::SystemTime::now()
@@ -1985,6 +2149,45 @@ JSON
 "#,
             plugin_id = plugin_id,
             command_name = command_name
+        );
+
+        std::fs::write(&plugin_path, script).expect("plugin should be written");
+        let mut perms = std::fs::metadata(&plugin_path)
+            .expect("metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+        plugin_path
+    }
+
+    #[cfg(unix)]
+    fn write_sleepy_test_plugin(
+        dir: &std::path::Path,
+        name: &str,
+        sleep_on_describe: bool,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let plugin_path = dir.join(format!("osp-{name}"));
+        let script = format!(
+            r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  if [ "{sleep_on_describe}" = "true" ]; then
+    sleep 1
+  fi
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+sleep 1
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+            name = name,
+            sleep_on_describe = if sleep_on_describe { "true" } else { "false" }
         );
 
         std::fs::write(&plugin_path, script).expect("plugin should be written");

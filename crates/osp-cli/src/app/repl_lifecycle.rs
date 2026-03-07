@@ -2,8 +2,8 @@ use miette::Result;
 
 use crate::app::{
     DEFAULT_THEME_NAME, RuntimeConfigRequest, build_app_state, build_logging_config,
-    effective_debug_verbosity, effective_message_verbosity, resolve_default_render_width,
-    resolve_known_theme_name, resolve_runtime_config,
+    effective_debug_verbosity, effective_message_verbosity, plugin_process_timeout,
+    resolve_default_render_width, resolve_known_theme_name, resolve_runtime_config,
 };
 use crate::logging::init_developer_logging;
 use crate::plugin_manager::PluginManager;
@@ -91,7 +91,8 @@ pub(crate) fn rebuild_repl_parts(
     let context = snapshot.context.clone();
     let launch = snapshot.launch.clone();
     let plugin_manager = PluginManager::new(launch.plugin_dirs.clone())
-        .with_roots(launch.config_root.clone(), launch.cache_root.clone());
+        .with_roots(launch.config_root.clone(), launch.cache_root.clone())
+        .with_process_timeout(plugin_process_timeout(&config));
     let mut next = build_app_state(
         context,
         config,

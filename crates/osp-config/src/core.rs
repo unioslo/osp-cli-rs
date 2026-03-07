@@ -425,6 +425,7 @@ impl ConfigSchema {
         );
         schema.insert("ui.prompt", SchemaEntry::string());
         schema.insert("ui.prompt.secrets", SchemaEntry::boolean());
+        schema.insert("extensions.plugins.timeout_ms", SchemaEntry::integer());
         schema.insert("repl.prompt", SchemaEntry::string());
         schema.insert("repl.simple_prompt", SchemaEntry::boolean());
         schema.insert("repl.shell_indicator", SchemaEntry::string());

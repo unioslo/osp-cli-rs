@@ -19,7 +19,8 @@ use crate::cli::commands::{
 use crate::cli::{Cli, Commands};
 use crate::logging::init_developer_logging;
 use crate::plugin_manager::{
-    CommandCatalogEntry, PluginDispatchContext, PluginDispatchError, PluginManager,
+    CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
+    PluginDispatchError, PluginManager,
 };
 use crate::state::{AppClients, AppRuntime, AppSession, AuthState, LaunchContext, TerminalKind};
 
@@ -179,13 +180,16 @@ fn run(mut cli: Cli) -> Result<i32> {
         "developer logging initialized"
     );
 
+    let plugin_manager = PluginManager::new(cli.plugin_dirs.clone())
+        .with_process_timeout(plugin_process_timeout(&config));
+
     let mut state = build_app_state(
         runtime_context,
         config,
         render_settings,
         message_verbosity,
         debug_verbosity,
-        PluginManager::new(cli.plugin_dirs.clone()),
+        plugin_manager,
         theme_catalog.clone(),
         launch_context,
     );
@@ -437,6 +441,14 @@ pub(crate) fn config_usize(config: &ResolvedConfig, key: &str, fallback: usize) 
             .unwrap_or(fallback),
         _ => fallback,
     }
+}
+
+pub(crate) fn plugin_process_timeout(config: &ResolvedConfig) -> std::time::Duration {
+    std::time::Duration::from_millis(config_usize(
+        config,
+        "extensions.plugins.timeout_ms",
+        DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
+    ) as u64)
 }
 
 fn resolve_default_render_width(config: &ResolvedConfig) -> usize {

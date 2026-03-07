@@ -3,11 +3,13 @@ use super::help::parse_help_render_overrides;
 use super::{
     PluginConfigEntry, PluginConfigScope, ReplCommandOutput, RunAction, build_cli_session_layer,
     build_dispatch_plan, collect_plugin_config_env, config_value_to_plugin_env, doctor_cmd,
-    is_sensitive_key, plugin_config_env_name, resolve_effective_render_settings,
-    run_inline_builtin_command,
+    is_sensitive_key, plugin_config_env_name, plugin_process_timeout,
+    resolve_effective_render_settings, run_inline_builtin_command,
 };
 use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
-use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
+use crate::plugin_manager::{
+    CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginManager, PluginSource,
+};
 use crate::repl;
 use crate::repl::{completion, dispatch as repl_dispatch, help as repl_help, surface};
 use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
@@ -65,6 +67,20 @@ fn make_completion_state_with_entries(
         themes: crate::theme_loader::ThemeCatalog::default(),
         launch: LaunchContext::default(),
     })
+}
+
+fn test_config(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    for (key, value) in entries {
+        defaults.set(*key, *value);
+    }
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver
+        .resolve(ResolveOptions::default().with_terminal("cli"))
+        .expect("test config should resolve")
 }
 
 fn sample_catalog() -> Vec<CommandCatalogEntry> {
@@ -138,6 +154,21 @@ fn plugin_config_env_serializes_lists_and_secrets_unit() {
     assert_eq!(
         config_value_to_plugin_env(&ConfigValue::String("sekrit".to_string()).into_secret()),
         "sekrit"
+    );
+}
+
+#[test]
+fn plugin_process_timeout_reads_config_override_unit() {
+    let config = test_config(&[("extensions.plugins.timeout_ms", "250")]);
+    assert_eq!(
+        plugin_process_timeout(&config),
+        std::time::Duration::from_millis(250)
+    );
+
+    let fallback = test_config(&[]);
+    assert_eq!(
+        plugin_process_timeout(&fallback),
+        std::time::Duration::from_millis(DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as u64)
     );
 }
 
