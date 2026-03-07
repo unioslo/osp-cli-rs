@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use crate::{ConfigError, ConfigValue, Scope, TomlEditResult, normalize_scope, with_path_context};
+use crate::{
+    ConfigError, ConfigValue, Scope, TomlEditResult, normalize_scope, validate_key_scope,
+    with_path_context,
+};
 
 pub fn set_scoped_value_in_toml(
     path: &Path,
@@ -51,6 +54,7 @@ fn edit_scoped_value_in_toml(
     strict_secret_permissions: bool,
 ) -> Result<TomlEditResult, ConfigError> {
     let normalized_scope = normalize_scope(scope.clone());
+    validate_key_scope(key, &normalized_scope)?;
     let mut root = load_or_create_toml_root(path)?;
     let root_table = root
         .as_table_mut()

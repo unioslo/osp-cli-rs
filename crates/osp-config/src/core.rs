@@ -246,7 +246,7 @@ impl Default for ConfigSchema {
             allow_extensions_namespace: true,
         };
 
-        schema.insert("profile.default", SchemaEntry::string().required());
+        schema.insert("profile.default", SchemaEntry::string());
         schema.insert("profile.active", SchemaEntry::string().required());
         schema.insert("theme.name", SchemaEntry::string());
         schema.insert("theme.path", SchemaEntry::string_list());
@@ -734,22 +734,22 @@ impl ConfigLayer {
                                 }
                             })?;
 
-                            for (profile, profile_table_value) in profile_tables {
-                                let profile_table =
-                                    profile_table_value.as_table().ok_or_else(|| {
-                                        ConfigError::InvalidSection {
-                                            section: format!(
-                                                "terminal.{terminal}.profile.{profile}"
-                                            ),
-                                            expected: "table".to_string(),
-                                        }
-                                    })?;
-                                flatten_table(
-                                    &mut layer,
-                                    profile_table,
-                                    "",
-                                    &Scope::profile_terminal(profile, terminal),
-                                )?;
+                            for (profile_key, profile_value) in profile_tables {
+                                if let Some(profile_table) = profile_value.as_table() {
+                                    flatten_table(
+                                        &mut layer,
+                                        profile_table,
+                                        "",
+                                        &Scope::profile_terminal(profile_key, terminal),
+                                    )?;
+                                } else {
+                                    flatten_key_value(
+                                        &mut layer,
+                                        &format!("profile.{profile_key}"),
+                                        profile_value,
+                                        &Scope::terminal(terminal),
+                                    )?;
+                                }
                             }
                         }
                     }
@@ -778,10 +778,19 @@ impl ConfigLayer {
             }
 
             let spec = parse_env_key(key)?;
+            validate_key_scope(&spec.key, &spec.scope)?;
             layer.insert_with_origin(spec.key, value.as_ref(), spec.scope, Some(key.to_string()));
         }
 
         Ok(layer)
+    }
+
+    pub(crate) fn validate_key_scopes(&self) -> Result<(), ConfigError> {
+        for entry in &self.entries {
+            validate_key_scope(&entry.key, &entry.scope)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -960,11 +969,29 @@ fn flatten_key_value(
     match value {
         toml::Value::Table(table) => flatten_table(layer, table, key, scope),
         _ => {
+            validate_key_scope(key, scope)?;
             let converted = ConfigValue::from_toml(key, value)?;
             layer.insert(key.to_string(), converted, scope.clone());
             Ok(())
         }
     }
+}
+
+pub fn is_bootstrap_only_key(key: &str) -> bool {
+    key.trim().eq_ignore_ascii_case("profile.default")
+}
+
+pub fn validate_key_scope(key: &str, scope: &Scope) -> Result<(), ConfigError> {
+    let normalized_scope = normalize_scope(scope.clone());
+    if is_bootstrap_only_key(key) && normalized_scope.profile.is_some() {
+        return Err(ConfigError::InvalidBootstrapScope {
+            key: key.trim().to_ascii_lowercase(),
+            profile: normalized_scope.profile,
+            terminal: normalized_scope.terminal,
+        });
+    }
+
+    Ok(())
 }
 
 fn adapt_value_for_schema(

@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::{
     ConfigError, ConfigExplain, ConfigLayer, ConfigSchema, ConfigSource, ConfigValue,
     ExplainCandidate, ExplainInterpolation, ExplainInterpolationStep, ExplainLayer, LayerEntry,
-    LoadedLayers, ResolveOptions, ResolvedConfig, ResolvedValue, Scope, normalize_identifier,
+    LoadedLayers, ResolveOptions, ResolvedConfig, ResolvedValue, Scope, is_bootstrap_only_key,
+    normalize_identifier,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -96,6 +97,11 @@ impl<'a> ScopeSelector<'a> {
     }
 
     fn rank(self, scope: &Scope) -> Option<u8> {
+        // Lower rank wins:
+        // 0 = exact profile+terminal match
+        // 1 = profile-only match
+        // 2 = terminal-only match
+        // 3 = global fallback
         match (
             self.profile,
             scope.profile.as_deref(),
@@ -180,6 +186,8 @@ impl<'a> ScopeSelector<'a> {
 impl Interpolator {
     fn from_resolved_values(values: &BTreeMap<String, ResolvedValue>) -> Self {
         Self {
+            // Interpolation always starts from the raw pre-interpolation value
+            // for each key, never from another key's already-expanded value.
             raw: values
                 .iter()
                 .map(|(key, value)| (key.clone(), value.raw_value.clone()))
@@ -465,10 +473,17 @@ impl ConfigResolver {
         key: &str,
         options: ResolveOptions,
     ) -> Result<ConfigExplain, ConfigError> {
+        if key.eq_ignore_ascii_case("profile.default") {
+            return self.explain_default_profile_key(options);
+        }
+
         let frame = self.prepare_resolution(options)?;
         let layers = self.explain_layers_for_key(key, &frame);
         let resolved = self.resolve_maps_for_frame(&frame)?;
         let final_entry = resolved.final_values.get(key).cloned();
+        // Explaining interpolation intentionally re-reads the pre-interpolated
+        // values so the trace shows the original placeholder chain rather than
+        // the already-expanded end state.
         let interpolation =
             explain_interpolation(key, &resolved.pre_interpolated, &resolved.final_values)?;
 
@@ -486,6 +501,7 @@ impl ConfigResolver {
     /// Build the single resolution frame shared by normal resolution and
     /// `config explain`.
     fn prepare_resolution(&self, options: ResolveOptions) -> Result<ResolutionFrame, ConfigError> {
+        self.validate_layer_scopes()?;
         let terminal = options.terminal.map(|value| normalize_identifier(&value));
         let profile_override = options
             .profile_override
@@ -504,6 +520,14 @@ impl ConfigResolver {
         })
     }
 
+    fn validate_layer_scopes(&self) -> Result<(), ConfigError> {
+        for layer in self.layers() {
+            layer.layer.validate_key_scopes()?;
+        }
+
+        Ok(())
+    }
+
     fn resolve_values_for_frame(
         &self,
         frame: &ResolutionFrame,
@@ -516,6 +540,9 @@ impl ConfigResolver {
     /// 2. interpolate/adapt those winners into final values
     fn resolve_maps_for_frame(&self, frame: &ResolutionFrame) -> Result<ResolvedMaps, ConfigError> {
         let pre_interpolated = self.collect_selected_values_for_frame(frame);
+        // Keep both snapshots: normal resolution only needs `final_values`, but
+        // `config explain` needs the selected raw winners alongside the final
+        // interpolated/adapted view.
         let mut final_values = pre_interpolated.clone();
         interpolate_all(&mut final_values)?;
         self.schema.validate_and_adapt(&mut final_values)?;
@@ -535,11 +562,13 @@ impl ConfigResolver {
         frame: &ResolutionFrame,
     ) -> BTreeMap<String, ResolvedValue> {
         let selector = ScopeSelector::scoped(&frame.active_profile, frame.terminal.as_deref());
-        let mut keys = self.collect_keys();
-        keys.insert("profile.default".to_string());
+        let keys = self.collect_keys();
 
         let mut values = BTreeMap::new();
         for key in keys {
+            if is_bootstrap_only_key(&key) {
+                continue;
+            }
             if let Some(selected) = self.select_across_layers(&key, selector) {
                 values.insert(key, Self::selected_value(&selected));
             }
@@ -607,6 +636,8 @@ impl ConfigResolver {
             return Err(ConfigError::MissingDefaultProfile);
         }
 
+        // Fresh configs may not define any profile-scoped entries yet. In that
+        // case allow any explicit/default profile name instead of failing early.
         if !known_profiles.is_empty() && !known_profiles.contains(&chosen) {
             return Err(ConfigError::UnknownProfile {
                 profile: chosen,
@@ -619,6 +650,8 @@ impl ConfigResolver {
 
     fn resolve_default_profile(&self, terminal: Option<&str>) -> Result<String, ConfigError> {
         let mut picked: Option<ConfigValue> = None;
+        // `profile.default` must be selected without an active profile, because
+        // this lookup is what decides which profile becomes active.
         let selector = ScopeSelector::global(terminal);
 
         for layer in self.layers() {
@@ -657,6 +690,8 @@ impl ConfigResolver {
     ) -> Option<SelectedLayerEntry<'a>> {
         let mut selected: Option<SelectedLayerEntry<'a>> = None;
 
+        // Layers are returned in ascending priority order, so later matches
+        // intentionally overwrite earlier ones.
         for layer in self.layers() {
             if let Some(entry) = selector.select(layer, key) {
                 selected = Some(entry);
@@ -674,7 +709,45 @@ impl ConfigResolver {
             .collect()
     }
 
+    fn explain_default_profile_key(
+        &self,
+        options: ResolveOptions,
+    ) -> Result<ConfigExplain, ConfigError> {
+        let frame = self.prepare_resolution(options)?;
+        let selector = ScopeSelector::global(frame.terminal.as_deref());
+        let layers = self
+            .layers()
+            .into_iter()
+            .filter_map(|layer| selector.explain_layer(layer, "profile.default"))
+            .collect::<Vec<ExplainLayer>>();
+
+        let final_entry = self
+            .select_across_layers("profile.default", selector)
+            .map(|selected| Self::selected_value(&selected))
+            .or_else(|| {
+                Some(ResolvedValue {
+                    raw_value: ConfigValue::String("default".to_string()),
+                    value: ConfigValue::String("default".to_string()),
+                    source: ConfigSource::Derived,
+                    scope: Scope::global(),
+                    origin: None,
+                })
+            });
+
+        Ok(ConfigExplain {
+            key: "profile.default".to_string(),
+            active_profile: frame.active_profile,
+            terminal: frame.terminal,
+            known_profiles: frame.known_profiles,
+            layers,
+            final_entry,
+            interpolation: None,
+        })
+    }
+
     fn layers(&self) -> [LayerRef<'_>; 6] {
+        // Keep this order in ascending priority so later layers can override
+        // earlier ones in `select_across_layers()`.
         [
             LayerRef {
                 source: ConfigSource::BuiltinDefaults,
@@ -705,6 +778,8 @@ impl ConfigResolver {
 }
 
 fn interpolate_all(values: &mut BTreeMap<String, ResolvedValue>) -> Result<(), ConfigError> {
+    // Build the interpolator from raw selected values, then write expanded
+    // results back into the mutable resolved-value map.
     Interpolator::from_resolved_values(values).apply_all(values)
 }
 

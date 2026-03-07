@@ -12,7 +12,7 @@ use crate::state::{AppState, TerminalKind};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
     ConfigSchema, ResolvedValue, RuntimeConfigPaths, Scope, set_scoped_value_in_toml,
-    unset_scoped_value_in_toml,
+    unset_scoped_value_in_toml, validate_key_scope,
 };
 use osp_core::output::OutputFormat;
 use osp_core::row::Row;
@@ -162,6 +162,7 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
     let target = ConfigWriteTarget::from_set_args(&args);
     let store = resolve_config_store(state, &target);
     let scopes = resolve_config_scopes(state, &target)?;
+    validate_write_scopes(&key, &scopes).into_diagnostic()?;
 
     let mut rows = Vec::new();
     let mut messages = MessageBuffer::default();
@@ -284,6 +285,7 @@ fn run_config_unset(state: &mut AppState, args: ConfigUnsetArgs) -> Result<ReplC
     let target = ConfigWriteTarget::from_unset_args(&args);
     let store = resolve_config_store(state, &target);
     let scopes = resolve_config_scopes(state, &target)?;
+    validate_write_scopes(&key, &scopes).into_diagnostic()?;
 
     let mut rows = Vec::new();
     let mut messages = MessageBuffer::default();
@@ -523,6 +525,17 @@ fn resolve_terminal_selector(state: &AppState, selector: Option<&str>) -> Option
     } else {
         Some(trimmed.to_ascii_lowercase())
     }
+}
+
+fn validate_write_scopes(
+    key: &str,
+    scopes: &[Scope],
+) -> std::result::Result<(), osp_config::ConfigError> {
+    for scope in scopes {
+        validate_key_scope(key, scope)?;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn run_config_repl_command(

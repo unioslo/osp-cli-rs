@@ -1,7 +1,7 @@
 use osp_config::{
     ChainedLoader, ConfigError, ConfigLayer, ConfigLoader, ConfigSource, EnvSecretsLoader,
     EnvVarLoader, LoaderPipeline, ResolveOptions, Scope, SecretsTomlLoader, StaticLayerLoader,
-    TomlFileLoader, unset_scoped_value_in_toml,
+    TomlFileLoader, set_scoped_value_in_toml, unset_scoped_value_in_toml,
 };
 
 #[test]
@@ -250,6 +250,43 @@ ui.format = "table"
     assert!(!payload.contains("[profile.uio]"));
     assert!(payload.contains("tsd"));
     assert!(payload.contains("table"));
+}
+
+#[test]
+fn set_scoped_value_rejects_profile_scoped_default_profile_contract() {
+    let dir = make_temp_dir("osp-config-set-bootstrap-scope");
+    let path = dir.join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    )
+    .expect("config file should be written");
+
+    let err = set_scoped_value_in_toml(
+        &path,
+        "profile.default",
+        &"personal".into(),
+        &Scope::profile("work"),
+        false,
+        false,
+    )
+    .expect_err("profile-scoped bootstrap write should fail");
+
+    match err {
+        ConfigError::InvalidBootstrapScope {
+            key,
+            profile,
+            terminal,
+        } => {
+            assert_eq!(key, "profile.default");
+            assert_eq!(profile.as_deref(), Some("work"));
+            assert_eq!(terminal, None);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 fn make_temp_dir(prefix: &str) -> std::path::PathBuf {

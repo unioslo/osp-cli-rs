@@ -56,11 +56,9 @@ impl Default for RuntimeConfig {
 
 impl RuntimeConfig {
     pub fn from_resolved(resolved: &ResolvedConfig) -> Self {
-        let default_profile = resolved
-            .get_string("profile.default")
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| resolved.active_profile().to_string());
-        Self { default_profile }
+        Self {
+            default_profile: resolved.active_profile().to_string(),
+        }
     }
 }
 

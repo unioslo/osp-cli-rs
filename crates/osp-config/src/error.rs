@@ -39,6 +39,11 @@ pub enum ConfigError {
         key: String,
         reason: String,
     },
+    InvalidBootstrapScope {
+        key: String,
+        profile: Option<String>,
+        terminal: Option<String>,
+    },
     MissingDefaultProfile,
     InvalidDefaultProfileType(String),
     UnknownProfile {
@@ -115,6 +120,24 @@ impl Display for ConfigError {
             }
             ConfigError::InvalidConfigKey { key, reason } => {
                 write!(f, "invalid config key {key}: {reason}")
+            }
+            ConfigError::InvalidBootstrapScope {
+                key,
+                profile,
+                terminal,
+            } => {
+                let scope = match (profile.as_deref(), terminal.as_deref()) {
+                    (Some(profile), Some(terminal)) => {
+                        format!("profile={profile}, terminal={terminal}")
+                    }
+                    (Some(profile), None) => format!("profile={profile}"),
+                    (None, Some(terminal)) => format!("terminal={terminal}"),
+                    (None, None) => "global".to_string(),
+                };
+                write!(
+                    f,
+                    "bootstrap-only key {key} is not allowed in scope {scope}; allowed scopes: global or terminal-only"
+                )
             }
             ConfigError::MissingDefaultProfile => {
                 write!(f, "missing profile.default and no fallback profile")

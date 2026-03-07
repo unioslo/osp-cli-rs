@@ -44,6 +44,53 @@ fn terminal_scope_beats_unscoped_contract() {
 }
 
 #[test]
+fn terminal_scoped_default_profile_bootstraps_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+
+    let mut file = ConfigLayer::default();
+    file.set_for_terminal("repl", "profile.default", "tsd");
+    file.set_for_profile("tsd", "ui.format", "json");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_file(file);
+
+    let resolved = resolver
+        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .expect("config should resolve");
+
+    assert_eq!(resolved.active_profile(), "tsd");
+    assert_eq!(resolved.get_string("ui.format"), Some("json"));
+}
+
+#[test]
+fn profile_scoped_default_profile_errors_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set_for_profile("work", "profile.default", "personal");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+
+    let err = resolver
+        .resolve(ResolveOptions::default())
+        .expect_err("profile-scoped bootstrap key should fail");
+
+    match err {
+        ConfigError::InvalidBootstrapScope {
+            key,
+            profile,
+            terminal,
+        } => {
+            assert_eq!(key, "profile.default");
+            assert_eq!(profile.as_deref(), Some("work"));
+            assert_eq!(terminal, None);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn cli_overrides_environment_and_file_contract() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
@@ -103,6 +150,7 @@ fn placeholder_interpolation_happens_after_merge_contract() {
         resolved.get_string("ui.prompt"),
         Some("uio:ldaps://ldap.uio.no:/etc/osp")
     );
+    assert!(resolved.get("profile.default").is_none());
 }
 
 #[test]
@@ -199,6 +247,33 @@ ui.format = "table"
         uio_cli.get_string("extensions.uio.osp.url"),
         Some("https://osp-orchestrator.uio.no")
     );
+}
+
+#[test]
+fn toml_parser_rejects_profile_scoped_default_profile_contract() {
+    let err = ConfigLayer::from_toml_str(
+        r#"
+[default]
+profile.default = "uio"
+
+[profile.work]
+profile.default = "personal"
+"#,
+    )
+    .expect_err("profile-scoped bootstrap key should fail at load time");
+
+    match err {
+        ConfigError::InvalidBootstrapScope {
+            key,
+            profile,
+            terminal,
+        } => {
+            assert_eq!(key, "profile.default");
+            assert_eq!(profile.as_deref(), Some("work"));
+            assert_eq!(terminal, None);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]

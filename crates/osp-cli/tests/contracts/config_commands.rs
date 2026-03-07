@@ -31,7 +31,7 @@ ui.format = "json"
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"key\": \"ui.format\""))
-        .stdout(predicate::str::contains("\"key\": \"profile.default\""));
+        .stdout(predicate::str::contains("\"key\": \"profile.default\"").not());
 
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -229,6 +229,36 @@ ui.mode = "plain"
         .stdout(predicate::str::contains("\"source\": \"env\""))
         .stdout(predicate::str::contains("\"candidates\""))
         .stdout(predicate::str::contains("\"winner\": true"));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_explain_profile_default_uses_bootstrap_view_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-default-profile");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+
+[terminal.repl]
+profile.default = "tsd"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "config",
+        "explain",
+        "profile.default",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"key\": \"profile.default\""))
+        .stdout(predicate::str::contains("\"value\": \"uio\""));
 
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -538,6 +568,34 @@ profile.default = "uio"
         ))
         .stderr(predicate::str::contains("\x1b[").not())
         .stderr(predicate::str::contains("──").not());
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_set_rejects_profile_scoped_default_profile_contract() {
+    let home = make_temp_dir("osp-cli-config-set-bootstrap-scope");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "config",
+        "set",
+        "--profile",
+        "work",
+        "profile.default",
+        "personal",
+    ]);
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "bootstrap-only key profile.default is not allowed",
+    ));
 
     let _ = std::fs::remove_dir_all(&home);
 }
