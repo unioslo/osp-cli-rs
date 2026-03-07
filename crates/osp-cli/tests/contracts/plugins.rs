@@ -19,9 +19,10 @@ fn plugins_list_and_doctor_contract() {
 #[test]
 fn debug_flag_enables_developer_logs_contract() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env_remove("RUST_LOG").args(["-d", "plugins", "list"]);
+    cmd.env_remove("RUST_LOG").args(["-dd", "plugins", "list"]);
     cmd.assert()
         .success()
+        .stderr(predicate::str::contains("resolving runtime config"))
         .stderr(predicate::str::contains("osp session initialized"));
 }
 

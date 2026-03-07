@@ -17,7 +17,7 @@ use crate::cli::commands::{
     theme as theme_cmd,
 };
 use crate::cli::{Cli, Commands};
-use crate::logging::init_developer_logging;
+use crate::logging::{bootstrap_logging_config, init_developer_logging};
 use crate::plugin_manager::{
     CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
     PluginDispatchError, PluginManager,
@@ -126,6 +126,7 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     let argv = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    init_developer_logging(bootstrap_logging_config(&argv));
     match Cli::try_parse_from(argv.iter().cloned()) {
         Ok(cli) => run(cli),
         Err(err) => handle_clap_parse_error(&argv, err),
