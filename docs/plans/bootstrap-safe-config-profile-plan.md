@@ -377,8 +377,8 @@ entrypoint and a few obvious submodules".
 ### Add
 
 - [x] bootstrap explain types
-- [ ] bootstrap result types
-- [ ] explicit bootstrap source enum for profile selection
+- [x] bootstrap result types
+- [x] explicit bootstrap source enum for profile selection
 - [x] bootstrap key registry or schema annotation
 
 ### Adjust
@@ -409,9 +409,9 @@ For normal keys:
 For bootstrap keys such as `profile.default`:
 
 - [x] show bootstrap candidates only
-- [ ] show why profile scope was ignored
+- [x] show why profile scope was ignored
 - [x] show the final chosen `profile.active`
-- [ ] show whether CLI override bypassed `profile.default`
+- [x] show whether CLI override bypassed `profile.default`
 
 Recommended shape:
 
@@ -422,8 +422,8 @@ Recommended shape:
 
 Make the current ambiguity explicit:
 
-- [ ] record raw placeholder source values separately from final adapted values
-- [ ] decide which one the UI prints by default
+- [x] record raw placeholder source values separately from final adapted values
+- [x] decide which one the UI prints by default
 - [ ] do not pretend those are the same thing
 
 Recommended direction:
@@ -438,7 +438,7 @@ Secret behavior should be explicit and boring.
 
 - [x] keep secret propagation through interpolation
 - [x] guarantee explain output is redacted by default
-- [ ] ensure both runtime explain and bootstrap explain use the same redaction
+- [x] ensure both runtime explain and bootstrap explain use the same redaction
       policy
 - [ ] avoid any formatting path that accidentally reveals secret payloads
 
@@ -465,10 +465,10 @@ The resolver should not carry unexplained magic namespaces.
 
 Recommended direction:
 
-- [ ] decide whether `alias.*` participates in generic interpolation at all
-- [ ] if not, document it as an explicit policy and keep alias expansion outside
+- [x] decide whether `alias.*` participates in generic interpolation at all
+- [x] if not, document it as an explicit policy and keep alias expansion outside
       resolver internals
-- [ ] if yes, remove the special casing and make alias behavior follow normal
+- [x] if yes, remove the special casing and make alias behavior follow normal
       config rules
 
 My preference is to keep alias expansion out of the generic config resolver and
@@ -488,6 +488,7 @@ Recommended change:
 
 - [x] `profile.default` should be validated in bootstrap resolution, not as part
       of required runtime keys
+- [x] keep placeholder errors runtime-specific
 
 ## Error Model
 
@@ -560,10 +561,10 @@ hard errors.
 
 ### Phase 0: freeze current behavior with tests
 
-- [ ] add tests for current `profile.default` bootstrap behavior
-- [ ] add tests for explain output on interpolated keys
-- [ ] add tests for secret redaction in explain output
-- [ ] add tests for alias behavior as it exists today
+- [x] add tests for current `profile.default` bootstrap behavior
+- [x] add tests for explain output on interpolated keys
+- [x] add tests for secret redaction in explain output
+- [x] add tests for alias behavior as it exists today
 
 ### Phase 1: lock bootstrap semantics
 
@@ -598,10 +599,10 @@ hard errors.
 
 ### Bootstrap profile tests
 
-- [ ] explicit profile override beats bootstrap default
-- [ ] terminal-only `profile.default` beats global default for that terminal
-- [ ] profile-scoped `profile.default` errors
-- [ ] profile+terminal-scoped `profile.default` errors
+- [x] explicit profile override beats bootstrap default
+- [x] terminal-only `profile.default` beats global default for that terminal
+- [x] profile-scoped `profile.default` errors
+- [x] profile+terminal-scoped `profile.default` errors
 - [ ] empty or non-string `profile.default` errors
 
 ### Runtime resolution tests
@@ -624,14 +625,14 @@ hard errors.
 ### Explain tests
 
 - [ ] runtime explain shows candidate chain correctly
-- [ ] bootstrap explain shows bootstrap chain correctly
+- [x] bootstrap explain shows bootstrap chain correctly
 - [ ] redaction is consistent in text and JSON output
 
 ### Mutation tests
 
 - [x] invalid scoped writes to `profile.default` fail
 - [ ] valid global and terminal-only writes succeed
-- [ ] unset follows the same validation rules
+- [x] unset follows the same validation rules
 
 ## What We Explicitly Will Not Build
 
@@ -652,8 +653,8 @@ We are done when all of these are true:
 - [ ] a new contributor can explain bootstrap vs runtime resolution from one doc
 - [ ] [resolver.rs](/home/oistes/git/github.uio.no/osp/osp-cli-rust/crates/osp-config/src/resolver.rs)
       reads like orchestration, not a wall of implementation
-- [ ] `profile.default` and `profile.active` no longer have ambiguous roles
-- [ ] `config explain` is trustworthy for both runtime and bootstrap keys
+- [x] `profile.default` and `profile.active` no longer have ambiguous roles
+- [x] `config explain` is trustworthy for both runtime and bootstrap keys
 - [ ] tests cover the semantic contract, not just the current implementation
 - [ ] the Rust resolver is obviously smaller and easier to reason about than
       Python `ResolverV2`
