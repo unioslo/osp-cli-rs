@@ -179,7 +179,6 @@ fn external_plugin_dispatch_contract() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
-#[cfg(unix)]
 #[test]
 fn plugin_dispatch_propagates_runtime_hints_contract() {
     let dir = make_temp_dir("osp-cli-plugin-runtime-hints");
@@ -268,9 +267,12 @@ fn plugin_non_zero_exit_surfaces_stderr_contract() {
     cmd.env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["boom"]);
-    cmd.assert().failure().stderr(predicate::str::contains(
-        "plugin boom exited with status 7: boom-from-stderr",
-    ));
+    cmd.assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "plugin boom exited with status 7: boom-from-stderr",
+        ));
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -287,9 +289,35 @@ fn plugin_invalid_json_response_surfaces_contract() {
     cmd.env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["broken"]);
-    cmd.assert().failure().stderr(predicate::str::contains(
-        "invalid JSON response from plugin broken",
-    ));
+    cmd.assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "invalid JSON response from plugin broken",
+        ));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_messages_stay_on_stderr_when_data_is_json_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-messages-json");
+    let _plugin_path = write_message_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-messages-json-home");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "messageful"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"message\": \"json-from-plugin\"",
+        ))
+        .stdout(predicate::str::contains("plugin-warning-line").not())
+        .stderr(predicate::str::contains("plugin-warning-line"));
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -381,6 +409,27 @@ fn external_plugin_help_is_passed_through_contract() {
         .assert()
         .success()
         .stdout(predicate::str::contains("hello plugin help text"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn external_plugin_help_keeps_raw_stderr_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-help-stderr");
+    let _plugin_path = write_help_stderr_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-help-stderr-home");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["hello", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("hello plugin help text"))
+        .stderr(predicate::str::contains("plugin help note"))
+        .stderr(predicate::str::contains("Warnings").not());
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -963,6 +1012,67 @@ JSON
 }
 
 #[cfg(unix)]
+fn write_message_plugin(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join("osp-messageful");
+    let plugin_script = r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"messageful","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"messageful","about":"messageful plugin","args":[],"flags":{},"subcommands":[]}]}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{"protocol_version":1,"ok":true,"data":{"message":"json-from-plugin"},"error":null,"meta":{"format_hint":"json"},"messages":[{"level":"warning","text":"plugin-warning-line"}]}
+JSON
+"#;
+
+    std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_help_stderr_plugin(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join("osp-hello");
+    let plugin_script = r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"hello","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hello","about":"hello plugin","args":[],"flags":{},"subcommands":[]}]}
+JSON
+  exit 0
+fi
+
+if [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ "$1" = "help" ] || \
+   [ "$2" = "--help" ] || [ "$2" = "-h" ] || [ "$2" = "help" ]; then
+  echo "hello plugin help text"
+  echo "plugin help note" >&2
+  exit 0
+fi
+
+cat <<'JSON'
+{"protocol_version":1,"ok":true,"data":{"message":"hello-from-plugin"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}
+JSON
+"#;
+
+    std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
 fn write_named_plugin(dir: &std::path::Path, name: &str, message: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
@@ -993,7 +1103,6 @@ JSON
     plugin_path
 }
 
-#[cfg(unix)]
 fn write_provider_plugin(
     dir: &std::path::Path,
     plugin_id: &str,
@@ -1212,7 +1321,6 @@ echo "{ definitely-not-json"
     plugin_path
 }
 
-#[cfg(unix)]
 fn write_describe_mismatch_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 

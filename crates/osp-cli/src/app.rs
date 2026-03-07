@@ -7,7 +7,7 @@ use osp_repl::SharedHistory;
 
 use osp_ui::messages::MessageLevel;
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
-use osp_ui::{RenderRuntime, RenderSettings, render_output};
+use osp_ui::{RenderRuntime, RenderSettings};
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -53,11 +53,11 @@ pub(crate) use bootstrap::{
 };
 pub(crate) use command_output::{
     CliCommandResult, CommandRenderRuntime, PreparedPluginResponse, ReplCommandOutput,
-    apply_output_stages, emit_messages_for_ui, emit_messages_with_runtime,
-    maybe_copy_output_with_runtime, prepare_plugin_response, run_cli_command,
+    apply_output_stages, emit_messages_for_ui, maybe_copy_output_with_runtime,
+    prepare_plugin_response, run_cli_command,
 };
 pub(crate) use config_explain::{
-    ConfigExplainContext, config_explain_json, config_explain_output, config_value_to_json,
+    ConfigExplainContext, config_explain_json, config_explain_result, config_value_to_json,
     explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
 };
 pub(crate) use dispatch::{
@@ -295,7 +295,13 @@ fn run(mut cli: Cli) -> Result<i32> {
             &mut state.session,
             &state.clients,
             &tokens,
-        ),
+        )
+        .and_then(|result| {
+            run_cli_command(
+                &CommandRenderRuntime::new(state.runtime.config.resolved(), &state.runtime.ui),
+                result,
+            )
+        }),
     }
 }
 

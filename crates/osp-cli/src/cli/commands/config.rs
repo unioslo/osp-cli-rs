@@ -1,6 +1,6 @@
 use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, ConfigExplainContext, ReplCommandOutput,
-    RuntimeConfigRequest, config_explain_json, config_explain_output, config_value_to_json,
+    RuntimeConfigRequest, config_explain_json, config_explain_result, config_value_to_json,
     explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
 };
 use crate::cli::{
@@ -63,7 +63,7 @@ pub(crate) fn run_config_command(
             None,
         )),
         ConfigCommands::Get(get) => run_config_get(read, get),
-        ConfigCommands::Explain(explain) => match config_explain_output(
+        ConfigCommands::Explain(explain) => config_explain_result(
             &ConfigExplainContext {
                 context: read.context,
                 config: read.config,
@@ -72,10 +72,7 @@ pub(crate) fn run_config_command(
                 runtime_load: read.runtime_load,
             },
             explain,
-        )? {
-            Some(output) => Ok(CliCommandResult::text(output)),
-            None => Ok(CliCommandResult::exit(1)),
-        },
+        ),
         ConfigCommands::Set(set) => run_config_set(context, set),
         ConfigCommands::Unset(unset) => run_config_unset(context, unset),
         ConfigCommands::Doctor => Ok(CliCommandResult::output(
@@ -110,11 +107,13 @@ fn run_config_get(context: ConfigReadContext<'_>, args: ConfigGetArgs) -> Result
                 output: rows_to_output_result(rows),
                 format_hint: None,
             }),
+            stderr_text: None,
         }),
         None => Ok(CliCommandResult {
             exit_code: 1,
             messages,
             output: None,
+            stderr_text: None,
         }),
     }
 }
@@ -373,6 +372,7 @@ fn run_config_set(
         exit_code: 0,
         messages,
         output: Some(output),
+        stderr_text: None,
     })
 }
 
@@ -491,6 +491,7 @@ fn run_config_unset(
             output: rows_to_output_result(rows),
             format_hint: None,
         }),
+        stderr_text: None,
     })
 }
 

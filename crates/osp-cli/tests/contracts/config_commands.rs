@@ -715,6 +715,72 @@ profile.default = "uio"
 
 #[cfg(unix)]
 #[test]
+fn config_explain_missing_key_writes_suggestions_to_stderr_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-missing-key");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+ui.mode = "plain"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--mode",
+        "rich",
+        "--color",
+        "never",
+        "--unicode",
+        "never",
+        "config",
+        "explain",
+        "ui.m",
+    ]);
+    cmd.assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("config key not found: ui.m"));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_explain_missing_key_keeps_stdout_clean_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-missing-key");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+ui.format = "json"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--mode",
+        "rich",
+        "--color",
+        "never",
+        "--unicode",
+        "never",
+        "config",
+        "explain",
+        "ui.formt",
+    ]);
+    cmd.assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("config key not found: ui.formt"));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn config_set_rejects_profile_scoped_default_profile_contract() {
     let home = make_temp_dir("osp-cli-config-set-bootstrap-scope");
     write_config(

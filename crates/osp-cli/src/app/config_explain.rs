@@ -1,8 +1,8 @@
 use miette::{IntoDiagnostic, Result, WrapErr};
 use osp_config::{
-    BootstrapScopeRule, ConfigExplain, ConfigResolver, ConfigValue, ResolveOptions, ResolvedConfig,
-    RuntimeConfigPaths, RuntimeDefaults, bootstrap_key_spec, build_runtime_pipeline,
-    is_bootstrap_only_key,
+    BootstrapScopeRule, ConfigExplain, ConfigResolver, ConfigSchema, ConfigValue, ResolveOptions,
+    ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults, bootstrap_key_spec,
+    build_runtime_pipeline, is_bootstrap_only_key,
 };
 use osp_core::output::OutputFormat;
 use osp_ui::messages::MessageBuffer;
@@ -11,7 +11,7 @@ use osp_ui::theme::DEFAULT_THEME_NAME;
 use crate::cli::ConfigExplainArgs;
 use crate::state::{RuntimeContext, UiState};
 
-use super::{DEFAULT_REPL_PROMPT, RuntimeConfigRequest, emit_messages_for_ui};
+use super::{CliCommandResult, DEFAULT_REPL_PROMPT, RuntimeConfigRequest};
 
 pub(crate) struct ConfigExplainContext<'a> {
     pub(crate) context: &'a RuntimeContext,
@@ -21,10 +21,10 @@ pub(crate) struct ConfigExplainContext<'a> {
     pub(crate) runtime_load: osp_config::RuntimeLoadOptions,
 }
 
-pub(crate) fn config_explain_output(
+pub(crate) fn config_explain_result(
     context: &ConfigExplainContext<'_>,
     args: ConfigExplainArgs,
-) -> Result<Option<String>> {
+) -> Result<CliCommandResult> {
     let explain = explain_runtime_config(
         RuntimeConfigRequest::new(
             context.context.profile_override().map(str::to_owned),
@@ -42,24 +42,23 @@ pub(crate) fn config_explain_output(
         if !suggestions.is_empty() {
             messages.info(format!("did you mean: {}", suggestions.join(", ")));
         }
-        emit_messages_for_ui(
-            context.config,
-            context.ui,
-            &messages,
-            context.ui.message_verbosity,
-        );
-        return Ok(None);
+        return Ok(CliCommandResult {
+            exit_code: 1,
+            messages,
+            output: None,
+            stderr_text: None,
+        });
     }
 
     if matches!(context.ui.render_settings.format, OutputFormat::Json) {
         let payload = config_explain_json(&explain, args.show_secrets);
-        return Ok(Some(format!(
+        return Ok(CliCommandResult::text(format!(
             "{}\n",
             serde_json::to_string_pretty(&payload).into_diagnostic()?
         )));
     }
 
-    Ok(Some(render_config_explain_text(
+    Ok(CliCommandResult::text(render_config_explain_text(
         &explain,
         args.show_secrets,
     )))
@@ -481,11 +480,16 @@ fn bootstrap_scope_policy(key: &str) -> Option<&'static str> {
 
 fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
     let key_lc = key.to_ascii_lowercase();
+    let schema = ConfigSchema::default();
+    let schema_keys = schema.entries().map(|(key, _)| key.to_string());
     let all_keys = config
         .values()
         .keys()
         .chain(config.aliases().keys())
         .cloned()
+        .chain(schema_keys)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<String>>();
 
     let mut prefix_matches = all_keys
