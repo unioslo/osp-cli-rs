@@ -1,7 +1,8 @@
-use osp_core::output_model::{Group, OutputItems, OutputMeta, OutputResult};
+use osp_core::output_model::{
+    Group, OutputItems, OutputMeta, OutputResult, compute_key_index as core_compute_key_index,
+};
 use osp_core::plugin::ResponseMetaV1;
 use osp_core::row::Row;
-use std::collections::HashSet;
 
 pub(crate) fn rows_to_output_result(rows: Vec<Row>) -> OutputResult {
     OutputResult::from_rows(rows)
@@ -63,16 +64,7 @@ fn response_to_rows(data: serde_json::Value) -> Vec<Row> {
 }
 
 fn compute_key_index(rows: &[Row]) -> Vec<String> {
-    let mut keys = Vec::new();
-    let mut seen = HashSet::new();
-    for row in rows {
-        for key in row.keys() {
-            if seen.insert(key.clone()) {
-                keys.push(key.clone());
-            }
-        }
-    }
-    keys
+    core_compute_key_index(rows)
 }
 
 fn merge_group_header_row(group: &Group) -> Row {

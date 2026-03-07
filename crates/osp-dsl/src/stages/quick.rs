@@ -38,6 +38,9 @@ pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
         return Err(anyhow!("quick stage requires a search token"));
     }
 
+    // Quick mode is intentionally dual-purpose:
+    // - multi-row input acts like a row filter
+    // - single-row input acts more like projection/reshaping
     let mode = if rows.len() > 1 {
         MatchMode::Multi
     } else {

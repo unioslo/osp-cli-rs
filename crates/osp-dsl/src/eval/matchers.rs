@@ -134,6 +134,8 @@ fn segments_match(seq: &[String], pattern: &[String], absolute: bool) -> bool {
         return seq[..pattern.len()] == *pattern;
     }
 
+    // Relative paths use segment-subsequence matching: the pattern must appear
+    // in order, but other segments may exist in between.
     let mut pos = 0usize;
     for segment in pattern {
         while pos < seq.len() && &seq[pos] != segment {
@@ -229,7 +231,7 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
     let expr_segments = expr
         .as_ref()
         .map(|expr| expression_segments(expr, case_sensitive));
-    let use_label_fallback = expr.is_none()
+    let should_try_plain_label_match = expr.is_none()
         || (!expr.as_ref().is_some_and(|expr| expr.absolute)
             && !expr_has_selectors
             && expr_segments
@@ -263,7 +265,7 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
             }
         }
 
-        if !use_label_fallback {
+        if !should_try_plain_label_match {
             continue;
         }
 
@@ -300,8 +302,9 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
         }
     }
 
+    let mut seen_partial = partial_keys.iter().cloned().collect::<HashSet<_>>();
     for key in &exact_keys {
-        if !partial_keys.iter().any(|item| item == key) {
+        if seen_partial.insert(key.clone()) {
             partial_keys.push(key.clone());
         }
     }

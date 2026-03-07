@@ -1,4 +1,6 @@
+use std::io::{ErrorKind, Write};
 use std::process::{Command, Stdio};
+use std::thread;
 
 use anyhow::{Result, anyhow};
 use osp_core::{
@@ -149,11 +151,21 @@ fn run_jq(expr: &str, payload: &Value) -> Result<Option<Value>> {
         .spawn()
         .map_err(|err| anyhow!("jq executable not found in PATH: {err}"))?;
 
-    if let Some(stdin) = child.stdin.as_mut() {
-        use std::io::Write;
-        stdin.write_all(input.as_bytes())?;
-    }
+    let writer = child.stdin.take().map(|mut stdin| {
+        let input = input.into_bytes();
+        thread::spawn(move || stdin.write_all(&input))
+    });
+
     let output = child.wait_with_output()?;
+    if let Some(writer) = writer {
+        match writer.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) if !output.status.success() && err.kind() == ErrorKind::BrokenPipe => {}
+            Ok(Err(err)) => return Err(err.into()),
+            Err(_) => return Err(anyhow!("jq stdin writer thread panicked")),
+        }
+    }
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if stderr.is_empty() {

@@ -22,12 +22,16 @@ pub fn resolve_values(row: &Row, token: &str, exact: ExactMode) -> Vec<Value> {
 
     if let Ok(path) = parse_path(trimmed) {
         let nested = Value::Object(row.clone());
+        // Fast path for nested JSON traversal. Absolute paths trust the path
+        // result even when empty; relative paths fall through to flat-key
+        // matching when the nested traversal found nothing.
         let direct = evaluate_path(&nested, &path);
         if path.absolute || !direct.is_empty() {
             return dedup_values(direct);
         }
     }
 
+    // Flat-key fallback for dotted keys that already exist as flattened labels.
     let flattened = flatten_row(row);
     let matched = match_row_keys(&flattened, trimmed, exact);
     let values = matched
@@ -129,6 +133,8 @@ pub fn resolve_pairs(flat_row: &Row, token: &str) -> (Vec<(String, Value)>, bool
         return (pairs, false);
     }
 
+    // Nothing matched at all: materialize the whole flat row so downstream
+    // quick-stage rendering can still project something useful.
     let pairs = flat_row
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -163,62 +169,10 @@ fn apply_selector(values: Vec<Value>, selector: &Selector) -> Vec<Value> {
         Selector::Slice { start, stop, step } => values
             .into_iter()
             .flat_map(|value| match value {
-                Value::Array(items) => {
-                    let length = items.len() as i64;
-                    let step = step.unwrap_or(1);
-                    if step == 0 {
-                        return Vec::new();
-                    }
-
-                    let mut out = Vec::new();
-                    if step > 0 {
-                        let mut index = start.unwrap_or(0);
-                        if index < 0 {
-                            index += length;
-                        }
-                        index = index.clamp(0, length);
-
-                        let mut stop_index = stop.unwrap_or(length);
-                        if stop_index < 0 {
-                            stop_index += length;
-                        }
-                        stop_index = stop_index.clamp(0, length);
-
-                        while index < stop_index {
-                            if index >= 0
-                                && let Some(item) = items.get(index as usize)
-                            {
-                                out.push(item.clone());
-                            }
-                            index += step;
-                        }
-                    } else {
-                        let mut index = start.unwrap_or(length - 1);
-                        if index < 0 {
-                            index += length;
-                        }
-                        index = index.clamp(-1, length - 1);
-
-                        let stop_index = match stop {
-                            Some(stop_value) => {
-                                let mut normalized = *stop_value;
-                                if normalized < 0 {
-                                    normalized += length;
-                                }
-                                normalized.clamp(-1, length - 1)
-                            }
-                            None => -1,
-                        };
-
-                        while index > stop_index {
-                            if let Some(item) = items.get(index as usize) {
-                                out.push(item.clone());
-                            }
-                            index += step;
-                        }
-                    }
-                    out
-                }
+                Value::Array(items) => slice_indices(items.len() as i64, *start, *stop, *step)
+                    .into_iter()
+                    .filter_map(|index| items.get(index as usize).cloned())
+                    .collect(),
                 _ => Vec::new(),
             })
             .collect(),
@@ -406,7 +360,7 @@ mod tests {
 
     use crate::parse::{key_spec::ExactMode, path::parse_path};
 
-    use super::{evaluate_path, is_truthy, resolve_values};
+    use super::{evaluate_path, is_truthy, resolve_values, slice_indices};
 
     #[test]
     fn resolve_values_prefers_direct_path_then_fuzzy_fallback() {
@@ -440,6 +394,15 @@ mod tests {
             evaluate_path(&root, &path),
             vec![json!(3), json!(2), json!(1)]
         );
+    }
+
+    #[test]
+    fn slice_indices_handles_forward_and_reverse_ranges_consistently() {
+        assert_eq!(slice_indices(5, Some(1), Some(4), Some(1)), vec![1, 2, 3]);
+        assert_eq!(slice_indices(5, None, None, Some(-1)), vec![4, 3, 2, 1, 0]);
+        assert_eq!(slice_indices(5, Some(-3), None, Some(1)), vec![2, 3, 4]);
+        assert_eq!(slice_indices(0, None, None, Some(-1)), Vec::<i64>::new());
+        assert_eq!(slice_indices(5, None, None, Some(0)), Vec::<i64>::new());
     }
 
     #[test]

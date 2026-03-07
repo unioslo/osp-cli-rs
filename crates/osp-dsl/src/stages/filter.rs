@@ -69,6 +69,7 @@ struct ComparisonValue {
     exact: bool,
     strict: bool,
     negated: bool,
+    regex: Option<Regex>,
 }
 
 fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
@@ -88,6 +89,7 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
         exact: false,
         strict: false,
         negated: false,
+        regex: None,
     };
 
     if let Some(token) = words.get(index) {
@@ -104,6 +106,7 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
                 exact: matches!(parsed_op, Operator::Eq | Operator::Ne),
                 strict: rhs_spec.exact == ExactMode::CaseSensitive,
                 negated: rhs_spec.negated,
+                regex: None,
             };
         } else {
             rhs_token = Some(token.clone());
@@ -113,21 +116,22 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
                 exact: rhs_spec.exact != ExactMode::None,
                 strict: rhs_spec.exact == ExactMode::CaseSensitive,
                 negated: rhs_spec.negated,
+                regex: None,
             };
         }
     }
 
+    let original_operator = operator;
     if matches!(operator, Operator::Ne) {
         operator = Operator::Eq;
         value.exact = true;
     }
 
-    let negated = column.negated
-        || matches!(
-            parse_operator_token(words.get(1).map(|s| s.as_str()).unwrap_or("")),
-            Some(Operator::Ne)
-        )
-        || value.negated;
+    let negated = column.negated || matches!(original_operator, Operator::Ne) || value.negated;
+    if matches!(operator, Operator::Regex) {
+        value.regex =
+            Some(Regex::new(&value.text).map_err(|err| anyhow!("F: invalid regex: {err}"))?);
+    }
 
     let existence_check = column.existence || rhs_token.is_none();
 
@@ -188,9 +192,10 @@ fn matches_scalar(value: &serde_json::Value, operator: Operator, rhs: &Compariso
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
             compare_numbers(value, &rhs.text, operator)
         }
-        Operator::Regex => Regex::new(&rhs.text)
-            .map(|regex| regex.is_match(&render_value(value)))
-            .unwrap_or(false),
+        Operator::Regex => rhs
+            .regex
+            .as_ref()
+            .is_some_and(|regex| regex.is_match(&render_value(value))),
         Operator::Eq | Operator::Ne => compare_text_or_bool(value, rhs),
     }
 }
@@ -372,6 +377,8 @@ fn parse_second_component(input: &str) -> Option<u32> {
 }
 
 fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    // Howard Hinnant's civil-from-days algorithm:
+    // https://howardhinnant.github.io/date_algorithms.html
     let year = i64::from(year) - i64::from(month <= 2);
     let era = if year >= 0 { year } else { year - 399 } / 400;
     let yoe = year - era * 400;
@@ -424,6 +431,22 @@ mod tests {
 
         let output = apply(rows, "status active").expect("filter should work");
         assert_eq!(output.len(), 2);
+    }
+
+    #[test]
+    fn invalid_regex_fails_at_parse_time() {
+        let rows = vec![
+            json!({"status": "active"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let error = apply(rows, "status ~ [unterminated").expect_err("regex should fail");
+        assert!(
+            error.to_string().contains("invalid regex"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

@@ -484,21 +484,18 @@ impl<'a> DocumentRenderer<'a> {
         }
 
         let aligns = resolve_table_alignments(table_data.headers.len(), block.align.as_deref());
-        let widths = table_data.rows.iter().fold(
-            table_data
-                .headers
-                .iter()
-                .map(|header| display_width(header).max(3))
-                .collect::<Vec<usize>>(),
-            |mut acc, row| {
-                for (index, cell) in row.iter().enumerate() {
-                    if let Some(width) = acc.get_mut(index) {
-                        *width = (*width).max(display_width(&cell.text).max(3));
-                    }
+        let mut widths = table_data
+            .headers
+            .iter()
+            .map(|header| display_width(header).max(3))
+            .collect::<Vec<usize>>();
+        for row in &table_data.rows {
+            for (index, cell) in row.iter().enumerate() {
+                if let Some(width) = widths.get_mut(index) {
+                    *width = (*width).max(display_width(&cell.text).max(3));
                 }
-                acc
-            },
-        );
+            }
+        }
 
         let mut out = String::new();
         out.push('|');

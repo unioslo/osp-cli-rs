@@ -13,17 +13,26 @@ use crate::{
     },
 };
 
-/// Apply a pipeline to row output and keep the richer `OutputResult` shape.
+/// Apply a pipeline to plain row output.
+///
+/// This starts with `wants_copy = false` because there is no prior output meta
+/// to preserve.
 pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
     apply_output_pipeline(OutputResult::from_rows(rows), stages)
 }
 
 /// Apply a pipeline to existing output without flattening grouped data first.
+///
+/// Unlike `apply_pipeline`, this preserves the incoming `OutputMeta.wants_copy`
+/// bit when continuing an existing output flow.
 pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<OutputResult> {
     execute_pipeline_items(output.items, output.meta.wants_copy, stages)
 }
 
 /// Execute a pipeline starting from plain rows.
+///
+/// This is the lower-level row entrypoint used by tests and internal helpers.
+/// Like `apply_pipeline`, it starts with `wants_copy = false`.
 pub fn execute_pipeline(mut rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
     execute_pipeline_items(OutputItems::Rows(std::mem::take(&mut rows)), false, stages)
 }
@@ -222,6 +231,9 @@ fn map_rows(
 ) -> Result<OutputItems> {
     match items {
         OutputItems::Rows(rows) => map_fn(rows).map(OutputItems::Rows),
+        // These stages only make sense on flat rows. When the pipeline is
+        // already grouped, leave groups unchanged instead of flattening them
+        // implicitly behind the caller's back.
         OutputItems::Groups(groups) => Ok(OutputItems::Groups(groups)),
     }
 }

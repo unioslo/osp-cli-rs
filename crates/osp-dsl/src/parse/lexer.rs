@@ -339,6 +339,8 @@ fn parse_full_operator(text: &str) -> Option<Op> {
 }
 
 fn protected_prefix_len(text: &str) -> usize {
+    // DSL prefix sigils such as `!`, `?`, `==`, and `!=` can be part of a
+    // single search token; do not split them off as standalone operators.
     if text.starts_with("!?") || text.starts_with("==") || text.starts_with("!=") {
         2
     } else if text.starts_with('!') || text.starts_with('?') || text.starts_with('=') {

@@ -1,13 +1,3 @@
-use osp_core::output_model::{Group, OutputMeta, OutputResult};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StageCapability {
-    StreamingSafe,
-    NeedsAllRows,
-    NeedsGroups,
-    ExternalProcess,
-}
-
 /// High-level parser classification for a stage token.
 ///
 /// The parser deliberately separates "known explicit verb", "unknown
@@ -54,7 +44,3 @@ pub struct ParsedPipeline {
     pub raw: String,
     pub stages: Vec<ParsedStage>,
 }
-
-pub type DslGroup = Group;
-pub type DslMeta = OutputMeta;
-pub type DslOutput = OutputResult;

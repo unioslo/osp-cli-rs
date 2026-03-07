@@ -1,4 +1,5 @@
 use crate::row::Row;
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
@@ -28,15 +29,7 @@ pub struct OutputResult {
 
 impl OutputResult {
     pub fn from_rows(rows: Vec<Row>) -> Self {
-        let mut key_index = Vec::new();
-        for row in &rows {
-            for key in row.keys() {
-                if !key_index.contains(key) {
-                    key_index.push(key.clone());
-                }
-            }
-        }
-
+        let key_index = compute_key_index(&rows);
         Self {
             items: OutputItems::Rows(rows),
             meta: OutputMeta {
@@ -60,4 +53,19 @@ impl OutputResult {
             OutputItems::Groups(_) => None,
         }
     }
+}
+
+pub fn compute_key_index(rows: &[Row]) -> Vec<String> {
+    let mut key_index = Vec::new();
+    let mut seen = HashSet::new();
+
+    for row in rows {
+        for key in row.keys() {
+            if seen.insert(key.clone()) {
+                key_index.push(key.clone());
+            }
+        }
+    }
+
+    key_index
 }
