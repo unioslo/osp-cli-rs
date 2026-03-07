@@ -900,6 +900,7 @@ pub struct ExplainLayer {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExplainInterpolationStep {
     pub placeholder: String,
+    pub raw_value: ConfigValue,
     pub value: ConfigValue,
     pub source: ConfigSource,
     pub scope: Scope,

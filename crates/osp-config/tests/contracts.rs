@@ -554,6 +554,38 @@ fn explain_reports_interpolation_trace_contract() {
 }
 
 #[test]
+fn explain_interpolation_records_raw_and_final_placeholder_values_contract() {
+    let env = ConfigLayer::from_env_iter([
+        ("OSP__DEBUG__LEVEL", "2"),
+        ("OSP__UI__PROMPT", "debug=${debug.level}"),
+    ])
+    .expect("env overrides should parse");
+
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_env(env);
+
+    let explain = resolver
+        .explain_key("ui.prompt", ResolveOptions::default())
+        .expect("explain should succeed");
+
+    let trace = explain
+        .interpolation
+        .expect("interpolation trace should exist");
+    let step = trace
+        .steps
+        .iter()
+        .find(|step| step.placeholder == "debug.level")
+        .expect("debug.level placeholder should be traced");
+
+    assert_eq!(step.raw_value, ConfigValue::String("2".to_string()));
+    assert_eq!(step.value, ConfigValue::Integer(2));
+}
+
+#[test]
 fn explain_marks_same_layer_winner_consistently_contract() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "uio");

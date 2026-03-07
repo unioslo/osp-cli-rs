@@ -56,6 +56,7 @@ impl Interpolator {
     fn explain(
         &self,
         key: &str,
+        pre_interpolated: &BTreeMap<String, ResolvedValue>,
         final_values: &BTreeMap<String, ResolvedValue>,
     ) -> Result<Option<ExplainInterpolation>, ConfigError> {
         let Some(template) = self.parsed_template(key)? else {
@@ -64,7 +65,14 @@ impl Interpolator {
 
         let mut steps = Vec::new();
         let mut seen = BTreeSet::new();
-        self.collect_steps_recursive(key, final_values, &mut steps, &mut seen, &mut Vec::new())?;
+        self.collect_steps_recursive(
+            key,
+            pre_interpolated,
+            final_values,
+            &mut steps,
+            &mut seen,
+            &mut Vec::new(),
+        )?;
 
         Ok(Some(ExplainInterpolation {
             template: template.raw,
@@ -190,6 +198,7 @@ impl Interpolator {
     fn collect_steps_recursive(
         &self,
         key: &str,
+        pre_interpolated: &BTreeMap<String, ResolvedValue>,
         final_values: &BTreeMap<String, ResolvedValue>,
         steps: &mut Vec<ExplainInterpolationStep>,
         seen: &mut BTreeSet<String>,
@@ -215,18 +224,29 @@ impl Interpolator {
             }
 
             if seen.insert(placeholder.name.clone())
-                && let Some(value_entry) = final_values.get(&placeholder.name)
+                && let (Some(raw_entry), Some(final_entry)) = (
+                    pre_interpolated.get(&placeholder.name),
+                    final_values.get(&placeholder.name),
+                )
             {
                 steps.push(ExplainInterpolationStep {
                     placeholder: placeholder.name.clone(),
-                    value: value_entry.value.clone(),
-                    source: value_entry.source,
-                    scope: value_entry.scope.clone(),
-                    origin: value_entry.origin.clone(),
+                    raw_value: raw_entry.raw_value.clone(),
+                    value: final_entry.value.clone(),
+                    source: raw_entry.source,
+                    scope: raw_entry.scope.clone(),
+                    origin: raw_entry.origin.clone(),
                 });
             }
 
-            self.collect_steps_recursive(&placeholder.name, final_values, steps, seen, stack)?;
+            self.collect_steps_recursive(
+                &placeholder.name,
+                pre_interpolated,
+                final_values,
+                steps,
+                seen,
+                stack,
+            )?;
         }
         stack.pop();
 
@@ -245,7 +265,14 @@ pub(crate) fn explain_interpolation(
     pre_interpolated: &BTreeMap<String, ResolvedValue>,
     final_values: &BTreeMap<String, ResolvedValue>,
 ) -> Result<Option<ExplainInterpolation>, ConfigError> {
-    Interpolator::from_resolved_values(pre_interpolated).explain(key, final_values)
+    // Explain traces follow the raw selected template graph, but each
+    // placeholder step also records the final adapted value so callers can see
+    // where type/schema changes happened after interpolation.
+    Interpolator::from_resolved_values(pre_interpolated).explain(
+        key,
+        pre_interpolated,
+        final_values,
+    )
 }
 
 /// Parse `${key}` segments once so interpolation and explain tracing can share

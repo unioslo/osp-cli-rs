@@ -168,8 +168,9 @@ pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: 
         ));
         for step in &interpolation.steps {
             out.push_str(&format!(
-                "  ${{{}}} -> {} (from {}, {})\n",
+                "  ${{{}}} raw={} final={} (from {}, {})\n",
                 step.placeholder,
+                display_value(&step.placeholder, &step.raw_value, show_secrets),
                 display_value(&step.placeholder, &step.value, show_secrets),
                 step.source,
                 format_scope(&step.scope),
@@ -273,6 +274,10 @@ pub(crate) fn config_explain_json(
         for step in &interpolation.steps {
             let mut item = serde_json::Map::new();
             item.insert("placeholder".to_string(), step.placeholder.clone().into());
+            item.insert(
+                "raw_value".to_string(),
+                redact_value_json(&step.placeholder, &step.raw_value, show_secrets),
+            );
             item.insert(
                 "value".to_string(),
                 redact_value_json(&step.placeholder, &step.value, show_secrets),
@@ -422,10 +427,11 @@ fn contains_sensitive_values(explain: &ConfigExplain) -> bool {
     }
 
     explain.interpolation.as_ref().is_some_and(|trace| {
-        trace
-            .steps
-            .iter()
-            .any(|step| step.value.is_secret() || is_sensitive_key(&step.placeholder))
+        trace.steps.iter().any(|step| {
+            step.raw_value.is_secret()
+                || step.value.is_secret()
+                || is_sensitive_key(&step.placeholder)
+        })
     })
 }
 
