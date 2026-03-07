@@ -594,6 +594,13 @@ impl PluginManager {
 
         let raw = run_provider(&provider, command, args, context, self.process_timeout)?;
         if raw.status_code != 0 {
+            tracing::warn!(
+                plugin_id = %provider.plugin_id,
+                command = %command,
+                status_code = raw.status_code,
+                stderr = %raw.stderr.trim(),
+                "plugin command exited with non-zero status"
+            );
             return Err(PluginDispatchError::NonZeroExit {
                 plugin_id: provider.plugin_id.clone(),
                 status_code: raw.status_code,
@@ -602,18 +609,30 @@ impl PluginManager {
         }
 
         let response: ResponseV1 = serde_json::from_str(&raw.stdout).map_err(|source| {
+            tracing::warn!(
+                plugin_id = %provider.plugin_id,
+                command = %command,
+                error = %source,
+                "plugin command returned invalid JSON"
+            );
             PluginDispatchError::InvalidJsonResponse {
                 plugin_id: provider.plugin_id.clone(),
                 source,
             }
         })?;
 
-        response
-            .validate_v1()
-            .map_err(|reason| PluginDispatchError::InvalidResponsePayload {
+        response.validate_v1().map_err(|reason| {
+            tracing::warn!(
+                plugin_id = %provider.plugin_id,
+                command = %command,
+                reason = %reason,
+                "plugin command returned invalid payload"
+            );
+            PluginDispatchError::InvalidResponsePayload {
                 plugin_id: provider.plugin_id.clone(),
                 reason,
-            })?;
+            }
+        })?;
 
         Ok(response)
     }
@@ -697,6 +716,16 @@ impl PluginManager {
         if cache_dirty {
             let _ = self.save_describe_cache(&describe_cache);
         }
+
+        tracing::debug!(
+            discovered_plugins = plugins.len(),
+            unhealthy_plugins = plugins
+                .iter()
+                .filter(|plugin| plugin.issue.is_some())
+                .count(),
+            search_roots = self.search_roots().len(),
+            "completed plugin discovery"
+        );
 
         plugins
     }
@@ -981,8 +1010,7 @@ fn discover_plugins_in_root(
     process_timeout: Duration,
 ) -> Vec<DiscoveredPlugin> {
     let manifest_state = load_manifest_state(root);
-
-    discover_root_executables(&root.path)
+    let plugins = discover_root_executables(&root.path)
         .into_iter()
         .filter(|path| seen_paths.insert(path.clone()))
         .map(|executable| {
@@ -996,7 +1024,17 @@ fn discover_plugins_in_root(
                 process_timeout,
             )
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    tracing::debug!(
+        root = %root.path.display(),
+        source = %root.source,
+        discovered_plugins = plugins.len(),
+        unhealthy_plugins = plugins.iter().filter(|plugin| plugin.issue.is_some()).count(),
+        "scanned plugin search root"
+    );
+
+    plugins
 }
 
 fn assemble_discovered_plugin(
@@ -1310,8 +1348,19 @@ enum CommandRunError {
 fn describe_plugin(path: &Path, timeout: Duration) -> Result<DescribeV1> {
     let mut command = Command::new(path);
     command.arg("--describe");
+    let started_at = Instant::now();
+    tracing::debug!(
+        executable = %path.display(),
+        timeout_ms = timeout.as_millis(),
+        "running plugin describe"
+    );
     let output = run_command_with_timeout(command, timeout).map_err(|err| match err {
         CommandRunError::Execute(source) => {
+            tracing::warn!(
+                executable = %path.display(),
+                error = %source,
+                "plugin describe execution failed"
+            );
             anyhow!(
                 "failed to execute --describe for {}: {source}",
                 path.display()
@@ -1319,6 +1368,12 @@ fn describe_plugin(path: &Path, timeout: Duration) -> Result<DescribeV1> {
         }
         CommandRunError::TimedOut { timeout, stderr } => {
             let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+            tracing::warn!(
+                executable = %path.display(),
+                timeout_ms = timeout.as_millis(),
+                stderr = %stderr,
+                "plugin describe timed out"
+            );
             if stderr.is_empty() {
                 anyhow!(
                     "--describe timed out after {} ms for {}",
@@ -1335,6 +1390,13 @@ fn describe_plugin(path: &Path, timeout: Duration) -> Result<DescribeV1> {
             }
         }
     })?;
+
+    tracing::debug!(
+        executable = %path.display(),
+        elapsed_ms = started_at.elapsed().as_millis(),
+        status = ?output.status.code(),
+        "plugin describe completed"
+    );
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1367,6 +1429,15 @@ fn run_provider(
     timeout: Duration,
 ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
     let mut command = Command::new(&provider.executable);
+    let started_at = Instant::now();
+    tracing::debug!(
+        plugin_id = %provider.plugin_id,
+        executable = %provider.executable.display(),
+        command = %selected_command,
+        arg_count = args.len(),
+        timeout_ms = timeout.as_millis(),
+        "dispatching plugin command"
+    );
     // Pass the selected command in both env and argv so plugin authors can
     // treat plugin executables as ordinary CLIs without losing host context.
     command.arg(selected_command);
@@ -1382,16 +1453,45 @@ fn run_provider(
     }
 
     let output = run_command_with_timeout(command, timeout).map_err(|err| match err {
-        CommandRunError::Execute(source) => PluginDispatchError::ExecuteFailed {
-            plugin_id: provider.plugin_id.clone(),
-            source,
-        },
-        CommandRunError::TimedOut { timeout, stderr } => PluginDispatchError::TimedOut {
-            plugin_id: provider.plugin_id.clone(),
-            timeout,
-            stderr: String::from_utf8_lossy(&stderr).to_string(),
-        },
+        CommandRunError::Execute(source) => {
+            tracing::warn!(
+                plugin_id = %provider.plugin_id,
+                executable = %provider.executable.display(),
+                command = %selected_command,
+                error = %source,
+                "plugin command execution failed"
+            );
+            PluginDispatchError::ExecuteFailed {
+                plugin_id: provider.plugin_id.clone(),
+                source,
+            }
+        }
+        CommandRunError::TimedOut { timeout, stderr } => {
+            let stderr_text = String::from_utf8_lossy(&stderr).to_string();
+            tracing::warn!(
+                plugin_id = %provider.plugin_id,
+                executable = %provider.executable.display(),
+                command = %selected_command,
+                timeout_ms = timeout.as_millis(),
+                stderr = %stderr_text.trim(),
+                "plugin command timed out"
+            );
+            PluginDispatchError::TimedOut {
+                plugin_id: provider.plugin_id.clone(),
+                timeout,
+                stderr: stderr_text,
+            }
+        }
     })?;
+
+    tracing::debug!(
+        plugin_id = %provider.plugin_id,
+        executable = %provider.executable.display(),
+        command = %selected_command,
+        elapsed_ms = started_at.elapsed().as_millis(),
+        status = ?output.status.code(),
+        "plugin command completed"
+    );
 
     Ok(RawPluginOutput {
         status_code: output.status.code().unwrap_or(1),

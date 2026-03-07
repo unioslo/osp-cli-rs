@@ -10,6 +10,7 @@ use crate::state::{AuthState, TerminalKind};
 
 use super::{CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS, CMD_THEME};
 
+#[derive(Debug)]
 pub(crate) enum RunAction {
     Repl,
     ReplCommand(ReplArgs),

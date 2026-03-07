@@ -138,6 +138,12 @@ fn run(mut cli: Cli) -> Result<i32> {
     )?;
     let known_profiles = initial_config.known_profiles().clone();
     let dispatch = build_dispatch_plan(&mut cli, &known_profiles)?;
+    tracing::debug!(
+        action = ?dispatch.action,
+        profile_override = ?dispatch.profile_override,
+        known_profiles = known_profiles.len(),
+        "built dispatch plan"
+    );
 
     let terminal_kind = dispatch.action.terminal_kind();
     let runtime_context = build_runtime_context(dispatch.profile_override.clone(), terminal_kind);
@@ -201,6 +207,8 @@ fn run(mut cli: Cli) -> Result<i32> {
     tracing::info!(
         profile = %state.runtime.config.resolved().active_profile(),
         terminal = %state.runtime.context.terminal_kind().as_config_terminal(),
+        action = ?dispatch.action,
+        plugin_timeout_ms = plugin_process_timeout(state.runtime.config.resolved()).as_millis(),
         "osp session initialized"
     );
 

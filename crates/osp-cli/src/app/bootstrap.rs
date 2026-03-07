@@ -137,9 +137,11 @@ pub(crate) fn effective_debug_verbosity(config: &ResolvedConfig) -> u8 {
 }
 
 pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<ResolvedConfig> {
+    let has_session_layer = request.session_layer.is_some();
     tracing::debug!(
         profile_override = ?request.profile_override,
         terminal = ?request.terminal,
+        has_session_layer,
         "resolving runtime config"
     );
     let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
@@ -157,10 +159,19 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
         terminal: request.terminal,
     };
 
-    pipeline
+    let resolved = pipeline
         .resolve(options)
         .into_diagnostic()
-        .wrap_err("config resolution failed")
+        .wrap_err("config resolution failed")?;
+
+    tracing::debug!(
+        active_profile = %resolved.active_profile(),
+        known_profiles = resolved.known_profiles().len(),
+        has_session_layer,
+        "resolved runtime config"
+    );
+
+    Ok(resolved)
 }
 
 fn parse_message_level(value: &str) -> Option<MessageLevel> {
