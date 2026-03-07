@@ -128,7 +128,11 @@ impl ConfigResolver {
             frame,
             layers,
             final_entry,
-            interpolation,
+            if key.starts_with("alias.") {
+                None
+            } else {
+                interpolation
+            },
         ))
     }
 
@@ -163,8 +167,10 @@ impl ConfigResolver {
         // `config explain` needs the selected raw winners alongside the final
         // interpolated/adapted view.
         let mut final_values = pre_interpolated.clone();
+        let alias_values = Self::drain_alias_values(&mut final_values);
         interpolate_all(&mut final_values)?;
         self.schema.validate_and_adapt(&mut final_values)?;
+        final_values.extend(alias_values);
 
         Ok(ResolvedMaps {
             pre_interpolated,
@@ -223,6 +229,27 @@ impl ConfigResolver {
         }
 
         keys
+    }
+
+    // Alias expansion is a CLI parsing feature, not a generic config-resolution
+    // feature. Keep alias templates visible in resolved config, but leave them
+    // untouched here so `${1}` / `${@}` placeholders remain for the alias
+    // expander in `osp-cli`.
+    fn drain_alias_values(
+        values: &mut BTreeMap<String, ResolvedValue>,
+    ) -> BTreeMap<String, ResolvedValue> {
+        let alias_keys = values
+            .keys()
+            .filter(|key| key.starts_with("alias."))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut aliases = BTreeMap::new();
+        for key in alias_keys {
+            if let Some(value) = values.remove(&key) {
+                aliases.insert(key, value);
+            }
+        }
+        aliases
     }
 
     fn select_across_layers<'a>(

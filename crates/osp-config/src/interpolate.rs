@@ -104,11 +104,6 @@ impl Interpolator {
                     placeholder: key.to_string(),
                 })?;
 
-        if key.starts_with("alias.") {
-            self.cache.insert(key.to_string(), value.clone());
-            return Ok(value);
-        }
-
         stack.push(key.to_string());
 
         let resolved = match value {
@@ -168,10 +163,6 @@ impl Interpolator {
     }
 
     fn parsed_template(&self, key: &str) -> Result<Option<ParsedTemplate>, ConfigError> {
-        if key.starts_with("alias.") {
-            return Ok(None);
-        }
-
         let Some(ConfigValue::String(template)) = self.raw.get(key).map(ConfigValue::reveal) else {
             return Ok(None);
         };

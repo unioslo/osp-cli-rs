@@ -628,3 +628,26 @@ fn explain_marks_same_layer_winner_consistently_contract() {
                 && candidate.value == ConfigValue::String("value".to_string()))
     );
 }
+
+#[test]
+fn alias_values_remain_raw_and_skip_generic_interpolation_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    defaults.set("user.name", "tester");
+    defaults.set("alias.me", "ldap user ${user.name}");
+    defaults.set("alias.arg", "ldap user ${1}");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+
+    let resolved = resolver
+        .resolve(ResolveOptions::default())
+        .expect("config should resolve");
+    assert_eq!(resolved.get_string("alias.me"), Some("ldap user ${user.name}"));
+    assert_eq!(resolved.get_string("alias.arg"), Some("ldap user ${1}"));
+
+    let explain = resolver
+        .explain_key("alias.me", ResolveOptions::default())
+        .expect("explain should succeed");
+    assert!(explain.interpolation.is_none());
+}
