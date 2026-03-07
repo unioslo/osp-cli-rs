@@ -901,6 +901,16 @@ pub struct ConfigExplain {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct BootstrapConfigExplain {
+    pub key: String,
+    pub active_profile: String,
+    pub terminal: Option<String>,
+    pub known_profiles: BTreeSet<String>,
+    pub layers: Vec<ExplainLayer>,
+    pub final_entry: Option<ResolvedValue>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedConfig {
     pub(crate) active_profile: String,
     pub(crate) terminal: Option<String>,

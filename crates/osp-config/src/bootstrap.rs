@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use crate::explain::selected_value;
 use crate::{
-    ConfigError, ConfigExplain, ConfigSource, ConfigValue, ResolveOptions, ResolvedValue, Scope,
-    normalize_identifier,
+    BootstrapConfigExplain, ConfigError, ConfigExplain, ConfigSource, ConfigValue, ResolveOptions,
+    ResolvedValue, Scope, normalize_identifier,
 };
 
 use crate::selector::{LayerRef, ScopeSelector};
@@ -46,6 +46,13 @@ pub(crate) fn explain_default_profile_key(
     layers: [LayerRef<'_>; 6],
     options: ResolveOptions,
 ) -> Result<ConfigExplain, ConfigError> {
+    Ok(explain_default_profile_bootstrap(layers, options)?.into())
+}
+
+pub(crate) fn explain_default_profile_bootstrap(
+    layers: [LayerRef<'_>; 6],
+    options: ResolveOptions,
+) -> Result<BootstrapConfigExplain, ConfigError> {
     let frame = prepare_resolution(layers, options)?;
     let selector = ScopeSelector::global(frame.terminal.as_deref());
     let explain_layers = layers
@@ -65,15 +72,28 @@ pub(crate) fn explain_default_profile_key(
             })
         });
 
-    Ok(ConfigExplain {
+    Ok(BootstrapConfigExplain {
         key: "profile.default".to_string(),
         active_profile: frame.active_profile,
         terminal: frame.terminal,
         known_profiles: frame.known_profiles,
         layers: explain_layers,
         final_entry,
-        interpolation: None,
     })
+}
+
+impl From<BootstrapConfigExplain> for ConfigExplain {
+    fn from(value: BootstrapConfigExplain) -> Self {
+        Self {
+            key: value.key,
+            active_profile: value.active_profile,
+            terminal: value.terminal,
+            known_profiles: value.known_profiles,
+            layers: value.layers,
+            final_entry: value.final_entry,
+            interpolation: None,
+        }
+    }
 }
 
 fn validate_layer_scopes(layers: [LayerRef<'_>; 6]) -> Result<(), ConfigError> {

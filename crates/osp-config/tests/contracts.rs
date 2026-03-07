@@ -479,6 +479,27 @@ fn explain_reports_precedence_chain_with_winner_contract() {
 }
 
 #[test]
+fn bootstrap_explain_has_explicit_type_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "uio");
+
+    let mut file = ConfigLayer::default();
+    file.set_for_terminal("repl", "profile.default", "tsd");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_file(file);
+
+    let explain = resolver
+        .explain_bootstrap_key("profile.default", ResolveOptions::default().with_terminal("repl"))
+        .expect("bootstrap explain should succeed");
+
+    assert_eq!(explain.key, "profile.default");
+    assert_eq!(explain.active_profile, "tsd");
+    assert!(explain.final_entry.is_some());
+}
+
+#[test]
 fn explain_reports_interpolation_trace_contract() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "uio");

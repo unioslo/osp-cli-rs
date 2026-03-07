@@ -1,12 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::bootstrap::{ResolutionFrame, explain_default_profile_key, prepare_resolution};
+use crate::bootstrap::{
+    ResolutionFrame, explain_default_profile_bootstrap, explain_default_profile_key,
+    prepare_resolution,
+};
 use crate::explain::{build_runtime_explain, explain_layers_for_runtime_key, selected_value};
 use crate::interpolate::{explain_interpolation, interpolate_all};
 use crate::selector::{LayerRef, ScopeSelector, SelectedLayerEntry};
 use crate::{
-    ConfigError, ConfigExplain, ConfigLayer, ConfigSchema, ConfigSource, ConfigValue, LoadedLayers,
-    ResolveOptions, ResolvedConfig, ResolvedValue, Scope, is_bootstrap_only_key,
+    BootstrapConfigExplain, ConfigError, ConfigExplain, ConfigLayer, ConfigSchema, ConfigSource,
+    ConfigValue, LoadedLayers, ResolveOptions, ResolvedConfig, ResolvedValue, Scope,
+    is_bootstrap_only_key,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -126,6 +130,21 @@ impl ConfigResolver {
             final_entry,
             interpolation,
         ))
+    }
+
+    pub fn explain_bootstrap_key(
+        &self,
+        key: &str,
+        options: ResolveOptions,
+    ) -> Result<BootstrapConfigExplain, ConfigError> {
+        if key.eq_ignore_ascii_case("profile.default") {
+            return explain_default_profile_bootstrap(self.layers(), options);
+        }
+
+        Err(ConfigError::InvalidConfigKey {
+            key: key.to_string(),
+            reason: "not a bootstrap key".to_string(),
+        })
     }
 
     fn resolve_values_for_frame(
