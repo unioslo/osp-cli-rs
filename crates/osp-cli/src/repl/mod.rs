@@ -3,101 +3,38 @@ pub(crate) mod dispatch;
 pub(crate) mod help;
 pub(crate) mod history;
 pub(crate) mod input;
+pub(crate) mod lifecycle;
 pub(crate) mod presentation;
 pub(crate) mod surface;
 
 use anyhow::anyhow;
 use miette::{Result, miette};
-use osp_repl::{DebugStep, ReplReloadKind, ReplRunResult, run_repl};
+use osp_repl::{DebugStep, run_repl};
 
 use crate::state::AppState;
 
 use crate::app;
 use crate::app::CliCommandResult;
 use crate::cli::{DebugCompleteArgs, ReplArgs, ReplCommands};
+pub(crate) use dispatch::repl_command_spec;
 #[cfg(test)]
-pub(crate) use dispatch::{
-    apply_repl_shell_prefix, execute_repl_plugin_line, leave_repl_shell, repl_command_spec,
-};
+pub(crate) use dispatch::{apply_repl_shell_prefix, execute_repl_plugin_line, leave_repl_shell};
 #[cfg(test)]
 pub(crate) use input::{ReplParsedLine, is_repl_shellable_command};
+#[cfg(test)]
+pub(crate) use lifecycle::build_cycle_chrome_output;
 use osp_completion::CompletionTree;
+use presentation::build_repl_appearance;
 #[cfg(test)]
 pub(crate) use presentation::render_prompt_template;
 #[cfg(test)]
 pub(crate) use presentation::theme_display_name;
-use presentation::{
-    build_repl_appearance, build_repl_prompt, render_repl_command_overview, render_repl_intro,
-};
 use surface::ReplSurface;
 
-struct ReplLoopState {
-    show_intro: bool,
-    pending_reload: bool,
-    pending_output: String,
-}
-
-impl ReplLoopState {
-    fn new(show_intro: bool) -> Self {
-        Self {
-            show_intro,
-            pending_reload: false,
-            pending_output: String::new(),
-        }
-    }
-
-    fn prepare_cycle(&mut self, state: &mut AppState) -> Result<()> {
-        if std::mem::take(&mut self.pending_reload) {
-            let next = app::rebuild_repl_state(state)?;
-            *state = next;
-        }
-        Ok(())
-    }
-
-    fn render_cycle_chrome(&mut self, state: &AppState, help_text: &str) {
-        let output =
-            build_cycle_chrome_output(state, help_text, self.show_intro, &self.pending_output);
-        if !output.is_empty() {
-            print!("{output}");
-        }
-        self.pending_output.clear();
-    }
-
-    fn apply_run_result(&mut self, result: ReplRunResult) -> Option<i32> {
-        match result {
-            ReplRunResult::Exit(code) => Some(code),
-            ReplRunResult::Restart { output, reload } => {
-                self.pending_reload = true;
-                self.show_intro = matches!(reload, ReplReloadKind::WithIntro);
-                if self.show_intro {
-                    self.pending_output = output;
-                } else if !output.is_empty() {
-                    print!("{output}");
-                }
-                None
-            }
-        }
-    }
-}
-
-fn build_cycle_chrome_output(
-    state: &AppState,
-    help_text: &str,
-    show_intro: bool,
-    pending_output: &str,
-) -> String {
-    let mut out = String::new();
-    if show_intro {
-        out.push_str("\x1b[2J\x1b[H");
-        out.push_str(&render_repl_intro(state));
-        out.push_str(help_text);
-    }
-    out.push_str(pending_output);
-    out
-}
-
+// The REPL loop is intentionally boring at this level:
+// prepare one cycle, render the shell chrome, run the line editor, apply the result.
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
-    let mut loop_state = ReplLoopState::new(
+    let mut loop_state = lifecycle::ReplLoopState::new(
         state
             .config
             .resolved()
@@ -106,25 +43,16 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     );
 
     loop {
-        loop_state.prepare_cycle(state)?;
-        let catalog = app::authorized_command_catalog(state)?;
-        let surface = surface::build_repl_surface(state, &catalog);
-        let completion_tree = build_repl_completion_tree(state, &surface);
-        let help_text = render_repl_command_overview(state, &surface);
-
-        loop_state.render_cycle_chrome(state, &help_text);
-
-        let prompt = build_repl_prompt(state);
-        let appearance = build_repl_appearance(state);
-        let history_config = history::build_history_config(state);
+        let cycle = loop_state.prepare_cycle(state)?;
+        loop_state.render_cycle_chrome(state, &cycle.help_text);
         print!("Preparing prompt...\r");
 
         let result = run_repl(
-            prompt,
-            surface.root_words.clone(),
-            Some(completion_tree),
-            appearance,
-            history_config,
+            cycle.prompt,
+            cycle.root_words,
+            Some(cycle.completion_tree),
+            cycle.appearance,
+            cycle.history_config,
             |line, history| {
                 dispatch::execute_repl_plugin_line(state, history, line)
                     .map_err(|err| anyhow!("{err:#}"))
