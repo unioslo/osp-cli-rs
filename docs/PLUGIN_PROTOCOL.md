@@ -57,7 +57,10 @@ Plugins are separate binaries discovered at runtime (Option B).
     {
       "name": "ldap",
       "about": "LDAP lookups",
-      "subcommands": ["user", "netgroup"]
+      "subcommands": [
+        { "name": "user", "about": "Lookup LDAP users", "subcommands": [] },
+        { "name": "netgroup", "about": "Lookup LDAP netgroups", "subcommands": [] }
+      ]
     }
   ]
 }

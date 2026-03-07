@@ -5,6 +5,7 @@ use osp_core::plugin::{
     DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1, DescribeV1, ResponseV1,
 };
 use osp_core::runtime::RuntimeHints;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -997,6 +998,45 @@ fn apply_describe_metadata(
         .iter()
         .map(to_command_spec)
         .collect::<Vec<CommandSpec>>();
+
+    if let Some(issue) = min_osp_version_issue(describe) {
+        merge_issue(&mut plugin.issue, issue);
+    }
+}
+
+fn min_osp_version_issue(describe: &DescribeV1) -> Option<String> {
+    let min_required = describe
+        .min_osp_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let current_raw = env!("CARGO_PKG_VERSION");
+    let current = match Version::parse(current_raw) {
+        Ok(version) => version,
+        Err(err) => {
+            return Some(format!(
+                "osp version `{current_raw}` is invalid for plugin compatibility checks: {err}"
+            ));
+        }
+    };
+    let min = match Version::parse(min_required) {
+        Ok(version) => version,
+        Err(err) => {
+            return Some(format!(
+                "invalid min_osp_version `{min_required}` declared by plugin {}: {err}",
+                describe.plugin_id
+            ));
+        }
+    };
+
+    if current < min {
+        Some(format!(
+            "plugin {} requires osp >= {min}, current version is {current}",
+            describe.plugin_id
+        ))
+    } else {
+        None
+    }
 }
 
 fn load_and_validate_manifest(path: &Path) -> Result<ValidatedBundledManifest> {
@@ -1494,7 +1534,7 @@ fn is_executable_file(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PluginManager, PluginState, is_enabled};
+    use super::{DescribeV1, PluginManager, PluginState, is_enabled, min_osp_version_issue};
 
     #[test]
     fn explicit_enable_overrides_default_disabled() {
@@ -1535,6 +1575,34 @@ mod tests {
         };
 
         assert!(is_enabled(&state, "hello", false));
+    }
+
+    #[test]
+    fn compatible_min_osp_version_has_no_issue() {
+        let describe = DescribeV1 {
+            protocol_version: 1,
+            plugin_id: "hello".to_string(),
+            plugin_version: "0.1.0".to_string(),
+            min_osp_version: Some("0.1.0".to_string()),
+            commands: Vec::new(),
+        };
+
+        assert_eq!(min_osp_version_issue(&describe), None);
+    }
+
+    #[test]
+    fn invalid_min_osp_version_reports_issue() {
+        let describe = DescribeV1 {
+            protocol_version: 1,
+            plugin_id: "hello".to_string(),
+            plugin_version: "0.1.0".to_string(),
+            min_osp_version: Some("not-a-version".to_string()),
+            commands: Vec::new(),
+        };
+
+        let issue = min_osp_version_issue(&describe).expect("invalid version should report issue");
+        assert!(issue.contains("invalid min_osp_version"));
+        assert!(issue.contains("hello"));
     }
 
     #[cfg(unix)]
@@ -1578,6 +1646,31 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn incompatible_min_osp_version_marks_plugin_unhealthy() {
+        let root = make_temp_dir("osp-cli-plugin-manager-min-version");
+        let plugins_dir = root.join("plugins");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        write_named_test_plugin_with_min_version(&plugins_dir, "future", "9.9.9");
+        let manager = PluginManager::new(vec![plugins_dir.clone()]);
+
+        let plugins = manager.list_plugins().expect("plugins should list");
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].plugin_id, "future");
+        assert!(!plugins[0].healthy);
+        assert!(
+            plugins[0]
+                .issue
+                .as_deref()
+                .expect("issue should be present")
+                .contains("requires osp >=")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
     fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
         let mut dir = std::env::temp_dir();
         let nonce = std::time::SystemTime::now()
@@ -1591,6 +1684,15 @@ mod tests {
 
     #[cfg(unix)]
     fn write_named_test_plugin(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        write_named_test_plugin_with_min_version(dir, name, "0.1.0")
+    }
+
+    #[cfg(unix)]
+    fn write_named_test_plugin_with_min_version(
+        dir: &std::path::Path,
+        name: &str,
+        min_osp_version: &str,
+    ) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
         let plugin_path = dir.join(format!("osp-{name}"));
@@ -1598,7 +1700,7 @@ mod tests {
             r#"#!/usr/bin/env bash
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"{min_osp_version}","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
 JSON
   exit 0
 fi
@@ -1607,7 +1709,8 @@ cat <<'JSON'
 {{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
 JSON
 "#,
-            name = name
+            name = name,
+            min_osp_version = min_osp_version
         );
 
         std::fs::write(&plugin_path, script).expect("plugin should be written");

@@ -160,6 +160,10 @@ JSON
   exit 0
 fi
 
+selected_command="${OSP_COMMAND:-${1:-}}"
+if [ "${1:-}" = "$selected_command" ]; then
+  shift || true
+fi
 cmd="${1:-}"
 shift || true
 

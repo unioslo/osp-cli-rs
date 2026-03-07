@@ -584,6 +584,27 @@ commands = ["hello"]
 
 #[cfg(unix)]
 #[test]
+fn plugin_min_osp_version_mismatch_marks_plugin_unhealthy_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-min-osp-version");
+    let _plugin_path = write_plugin_with_min_version(&dir, "future", "9.9.9");
+    let home = make_temp_dir("osp-cli-plugin-min-osp-version-home");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "plugins", "list"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(r#""plugin_id": "future""#))
+        .stdout(predicate::str::contains(r#""healthy": false"#))
+        .stdout(predicate::str::contains("requires osp >="));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn conflicting_providers_are_visible_in_plugin_commands_contract() {
     let dir = make_temp_dir("osp-cli-plugin-conflicts");
     let _alpha = write_provider_plugin(&dir, "alpha-provider", "hello", "alpha");
@@ -921,6 +942,41 @@ JSON
         plugin_id = plugin_id,
         command_name = command_name,
         message = message
+    );
+
+    std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_plugin_with_min_version(
+    dir: &std::path::Path,
+    plugin_id: &str,
+    min_osp_version: &str,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join(format!("osp-{plugin_id}"));
+    let plugin_script = format!(
+        r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"{min_osp_version}","commands":[{{"name":"{plugin_id}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"{plugin_id}-from-plugin"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+        plugin_id = plugin_id,
+        min_osp_version = min_osp_version
     );
 
     std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
