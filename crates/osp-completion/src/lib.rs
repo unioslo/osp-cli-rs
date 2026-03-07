@@ -8,6 +8,7 @@
 //! Dynamic hints (network/provider/openapi derived) are injected by outer
 //! layers (`osp-cli` / `osp-repl`) and not fetched here.
 
+mod context;
 pub mod engine;
 pub mod model;
 pub mod parse;
@@ -17,7 +18,8 @@ pub mod tree;
 pub use engine::CompletionEngine;
 pub use model::{
     ArgNode, CommandLine, CompletionAnalysis, CompletionContext, CompletionNode, CompletionTree,
-    ContextScope, FlagNode, MatchKind, Suggestion, SuggestionEntry, SuggestionOutput, ValueType,
+    ContextScope, CursorState, FlagNode, FlagOccurrence, MatchKind, ParsedLine, QuoteStyle,
+    Suggestion, SuggestionEntry, SuggestionOutput, TailItem, ValueType,
 };
 pub use parse::CommandLineParser;
 pub use suggest::SuggestionEngine;

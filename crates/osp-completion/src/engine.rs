@@ -1,25 +1,13 @@
 use crate::{
+    context::TreeResolver,
     model::{
         CommandLine, CompletionAnalysis, CompletionContext, CompletionNode, CompletionTree,
-        ContextScope, MatchKind, SuggestionOutput,
+        ContextScope, CursorState, MatchKind, ParsedLine, SuggestionOutput, TailItem,
     },
     parse::CommandLineParser,
     suggest::SuggestionEngine,
 };
 use std::collections::BTreeSet;
-
-/// Resolved tree nodes for the cursor position.
-///
-/// The completer uses two related scopes:
-/// - the matched command node decides visible subcommands/args
-/// - the nearest flag-owning node decides visible flags
-///
-/// Holding both at once keeps the later flow easier to read than resolving them
-/// repeatedly in each branch.
-struct ResolvedNodes<'a> {
-    context_node: &'a CompletionNode,
-    flag_scope_node: &'a CompletionNode,
-}
 
 #[derive(Debug, Clone)]
 pub struct CompletionEngine {
@@ -40,14 +28,10 @@ impl CompletionEngine {
         }
     }
 
-    pub fn suggestions_with_stub(
-        &self,
-        line: &str,
-        cursor: usize,
-    ) -> (String, Vec<SuggestionOutput>) {
+    pub fn complete(&self, line: &str, cursor: usize) -> (CursorState, Vec<SuggestionOutput>) {
         let analysis = self.analyze(line, cursor);
         let suggestions = self.suggestions_for_analysis(&analysis);
-        (analysis.stub, suggestions)
+        (analysis.cursor, suggestions)
     }
 
     pub fn suggestions_for_analysis(&self, analysis: &CompletionAnalysis) -> Vec<SuggestionOutput> {
@@ -62,46 +46,61 @@ impl CompletionEngine {
         let full_cmd = self.parser.parse(&full_tokens);
 
         let cursor_tokens = self.parser.tokenize(before_cursor);
-        let stub = self.parser.compute_stub(before_cursor, &cursor_tokens);
+        let cursor = self.parser.cursor_state(before_cursor, safe_cursor);
         let cursor_cmd = self.parser.parse(&cursor_tokens);
-        let mut analysis = self.analyze_command_parts(full_cmd, cursor_cmd, stub);
-        analysis.safe_cursor = safe_cursor;
-        analysis.full_tokens = full_tokens;
-        analysis.cursor_tokens = cursor_tokens;
-        analysis
+
+        self.analyze_command_parts(
+            ParsedLine {
+                safe_cursor,
+                full_tokens,
+                cursor_tokens,
+                full_cmd,
+                cursor_cmd,
+            },
+            cursor,
+        )
     }
 
     pub fn analyze_command(
         &self,
         full_cmd: CommandLine,
         cursor_cmd: CommandLine,
-        stub: impl Into<String>,
+        cursor: CursorState,
     ) -> CompletionAnalysis {
-        self.analyze_command_parts(full_cmd, cursor_cmd, stub.into())
+        self.analyze_command_parts(
+            ParsedLine {
+                safe_cursor: 0,
+                full_tokens: Vec::new(),
+                cursor_tokens: Vec::new(),
+                full_cmd,
+                cursor_cmd,
+            },
+            cursor,
+        )
     }
 
     fn analyze_command_parts(
         &self,
-        full_cmd: CommandLine,
-        mut cursor_cmd: CommandLine,
-        stub: String,
+        mut parsed: ParsedLine,
+        cursor: CursorState,
     ) -> CompletionAnalysis {
         // Context-only flags can appear later in the line than the cursor.
         // Merge them before scope resolution so completion reflects the user's
         // effective command state, not just the prefix before the cursor.
-        if !cursor_cmd.has_pipe {
-            self.merge_context_flags(&mut cursor_cmd, &full_cmd, &stub);
+        if !parsed.cursor_cmd.has_pipe() {
+            self.merge_context_flags(
+                &mut parsed.cursor_cmd,
+                &parsed.full_cmd,
+                cursor.token_stub.as_str(),
+            );
         }
 
-        let context = self.resolve_completion_context(&cursor_cmd, &stub);
+        let context =
+            self.resolve_completion_context(&parsed.cursor_cmd, cursor.token_stub.as_str());
 
         CompletionAnalysis {
-            safe_cursor: 0,
-            full_tokens: Vec::new(),
-            cursor_tokens: Vec::new(),
-            full_cmd,
-            cursor_cmd,
-            stub,
+            parsed,
+            cursor,
             context,
         }
     }
@@ -111,34 +110,14 @@ impl CompletionEngine {
     }
 
     pub fn matched_command_len_tokens(&self, tokens: &[String]) -> usize {
-        let mut node = &self.tree.root;
-        let mut matched = 0usize;
-
-        for token in tokens {
-            if token == "|" || token.starts_with('-') {
-                break;
-            }
-            let Some(child) = node.children.get(token) else {
-                break;
-            };
-            if child.value_key {
-                break;
-            }
-            matched += 1;
-            if child.value_leaf {
-                break;
-            }
-            node = child;
-        }
-
-        matched
+        TreeResolver::new(&self.tree).matched_command_len_tokens(tokens)
     }
 
     pub fn classify_match(&self, analysis: &CompletionAnalysis, value: &str) -> MatchKind {
-        if analysis.cursor_cmd.has_pipe {
+        if analysis.parsed.cursor_cmd.has_pipe() {
             return MatchKind::Pipe;
         }
-        let nodes = self.resolved_nodes(&analysis.context);
+        let nodes = TreeResolver::new(&self.tree).resolved_nodes(&analysis.context);
 
         if value.starts_with("--") || nodes.flag_scope_node.flags.contains_key(value) {
             return MatchKind::Flag;
@@ -161,53 +140,59 @@ impl CompletionEngine {
     ) {
         let context = self.resolve_completion_context(cursor_cmd, stub);
         let mut scoped_flags = BTreeSet::new();
+        let resolver = TreeResolver::new(&self.tree);
         for i in (0..=context.matched_path.len()).rev() {
-            let (node, matched) = self.resolve_context(&context.matched_path[..i]);
+            let (node, matched) = resolver.resolve_context(&context.matched_path[..i]);
             if matched.len() == i {
                 scoped_flags.extend(node.flags.keys().cloned());
             }
         }
         scoped_flags.extend(self.global_context_flags.iter().cloned());
 
-        for (flag, values) in &full_cmd.flags {
-            if cursor_cmd.flags.contains_key(flag) {
+        for item in full_cmd.tail().iter().skip(cursor_cmd.tail_len()) {
+            let TailItem::Flag(flag) = item else {
+                continue;
+            };
+            if cursor_cmd.has_flag(&flag.name) {
                 continue;
             }
-            if !scoped_flags.contains(flag) {
+            if !scoped_flags.contains(&flag.name) {
                 continue;
             }
-            cursor_cmd.flags.insert(flag.clone(), values.clone());
+            cursor_cmd.merge_flag_values(flag.name.clone(), flag.values.clone());
         }
     }
 
     fn resolve_completion_context(&self, cmd: &CommandLine, stub: &str) -> CompletionContext {
-        let (pre_node, _) = self.resolve_context(&cmd.head);
+        let resolver = TreeResolver::new(&self.tree);
+        let (pre_node, _) = resolver.resolve_context(cmd.head());
         let has_subcommands = !pre_node.children.is_empty();
-        let head_for_context = if !stub.is_empty() && !stub.starts_with('-') && has_subcommands {
-            &cmd.head[..cmd.head.len().saturating_sub(1)]
-        } else {
-            cmd.head.as_slice()
-        };
-        let (_, matched) = self.resolve_context(head_for_context);
-        let flag_scope_path = self.resolve_flag_scope_path(&matched);
+        // When the user is still typing a subcommand, the partial token is the
+        // last `head` element but not yet a resolvable child node. Drop that
+        // partial token so context resolution stays on the parent command.
+        let head_without_partial_subcommand =
+            if !stub.is_empty() && !stub.starts_with('-') && has_subcommands {
+                &cmd.head()[..cmd.head().len().saturating_sub(1)]
+            } else {
+                cmd.head()
+            };
+        let (_, matched) = resolver.resolve_context(head_without_partial_subcommand);
+        let flag_scope_path = resolver.resolve_flag_scope_path(&matched);
 
         let arg_tokens: Vec<String> = cmd
-            .head
+            .head()
             .iter()
             .skip(matched.len())
             .filter(|token| token.as_str() != stub)
             .cloned()
             .chain(
-                cmd.args
-                    .iter()
+                cmd.positional_args()
                     .filter(|token| token.as_str() != stub)
                     .cloned(),
             )
             .collect();
 
-        let context_node = self
-            .resolve_context_exact(&matched)
-            .unwrap_or(&self.tree.root);
+        let context_node = resolver.resolve_exact(&matched).unwrap_or(&self.tree.root);
         let subcommand_context =
             context_node.value_key || (has_subcommands && arg_tokens.is_empty());
 
@@ -216,51 +201,6 @@ impl CompletionEngine {
             flag_scope_path,
             subcommand_context,
         }
-    }
-
-    fn resolved_nodes<'a>(&'a self, context: &CompletionContext) -> ResolvedNodes<'a> {
-        ResolvedNodes {
-            context_node: self
-                .resolve_context_exact(&context.matched_path)
-                .unwrap_or(&self.tree.root),
-            flag_scope_node: self
-                .resolve_context_exact(&context.flag_scope_path)
-                .unwrap_or(&self.tree.root),
-        }
-    }
-
-    fn resolve_context<'a>(&'a self, path: &[String]) -> (&'a CompletionNode, Vec<String>) {
-        let mut node = &self.tree.root;
-        let mut matched = Vec::new();
-        for segment in path {
-            let Some(next) = node.children.get(segment) else {
-                break;
-            };
-            node = next;
-            matched.push(segment.clone());
-            if node.value_leaf {
-                break;
-            }
-        }
-        (node, matched)
-    }
-
-    fn resolve_context_exact<'a>(&'a self, path: &[String]) -> Option<&'a CompletionNode> {
-        let (node, matched) = self.resolve_context(path);
-        (matched.len() == path.len()).then_some(node)
-    }
-
-    fn resolve_flag_scope_path(&self, matched_path: &[String]) -> Vec<String> {
-        for i in (0..=matched_path.len()).rev() {
-            let prefix = &matched_path[..i];
-            let Some(node) = self.resolve_context_exact(prefix) else {
-                continue;
-            };
-            if !node.flags.is_empty() {
-                return prefix.to_vec();
-            }
-        }
-        Vec::new()
     }
 }
 
@@ -299,7 +239,7 @@ mod tests {
     use crate::{
         CompletionEngine,
         model::{
-            CompletionNode, CompletionTree, ContextScope, FlagNode, SuggestionEntry,
+            CompletionNode, CompletionTree, ContextScope, FlagNode, QuoteStyle, SuggestionEntry,
             SuggestionOutput,
         },
     };
@@ -345,7 +285,7 @@ mod tests {
         let line = "orch provision --os  --provider vmware";
         let cursor = line.find("--provider").expect("provider in test line") - 1;
 
-        let (_, suggestions) = engine.suggestions_with_stub(line, cursor);
+        let (_, suggestions) = engine.complete(line, cursor);
         let values: Vec<String> = suggestions
             .into_iter()
             .filter_map(|entry| match entry {
@@ -363,7 +303,7 @@ mod tests {
         let line = "orch provision  --provider vmware";
         let cursor = line.find("--provider").expect("provider in test line") - 2;
 
-        let (_, suggestions) = engine.suggestions_with_stub(line, cursor);
+        let (_, suggestions) = engine.complete(line, cursor);
         let values: Vec<String> = suggestions
             .into_iter()
             .filter_map(|entry| match entry {
@@ -380,14 +320,14 @@ mod tests {
         let engine = CompletionEngine::new(tree());
         let line = "orch å";
         let cursor = line.find('å').expect("multibyte char should exist") + 1;
-        let (_stub, _suggestions) = engine.suggestions_with_stub(line, cursor);
+        let (_cursor, _suggestions) = engine.complete(line, cursor);
     }
 
     #[test]
     fn equals_flag_without_value_still_requests_suggestions() {
         let engine = CompletionEngine::new(tree());
         let line = "orch provision --os=";
-        let (_, suggestions) = engine.suggestions_with_stub(line, line.len());
+        let (_, suggestions) = engine.complete(line, line.len());
         let values: Vec<String> = suggestions
             .into_iter()
             .filter_map(|entry| match entry {
@@ -440,7 +380,7 @@ mod tests {
 
         let line = "orch provision --os  --provider vmware";
         let cursor = line.find("--provider").expect("provider in test line") - 1;
-        let (_, suggestions) = engine.suggestions_with_stub(line, cursor);
+        let (_, suggestions) = engine.complete(line, cursor);
         let values: Vec<String> = suggestions
             .into_iter()
             .filter_map(|entry| match entry {
@@ -493,7 +433,7 @@ mod tests {
 
         let line = "orch provision --os  --provider vmware";
         let cursor = line.find("--provider").expect("provider in test line") - 1;
-        let (_, suggestions) = engine.suggestions_with_stub(line, cursor);
+        let (_, suggestions) = engine.complete(line, cursor);
         let values: Vec<String> = suggestions
             .into_iter()
             .filter_map(|entry| match entry {
@@ -522,7 +462,7 @@ mod tests {
         };
         let engine = CompletionEngine::new(tree);
 
-        let (_, suggestions) = engine.suggestions_with_stub("ld", 2);
+        let (_, suggestions) = engine.complete("ld", 2);
         let meta = suggestions
             .into_iter()
             .find_map(|entry| match entry {
@@ -546,17 +486,54 @@ mod tests {
 
         let analysis = engine.analyze(line, cursor);
 
-        assert_eq!(analysis.stub, "");
+        assert_eq!(analysis.cursor.token_stub, "");
         assert_eq!(analysis.context.matched_path, vec!["orch", "provision"]);
         assert_eq!(analysis.context.flag_scope_path, vec!["orch", "provision"]);
         assert!(!analysis.context.subcommand_context);
         assert_eq!(
             analysis
+                .parsed
                 .cursor_cmd
-                .flags
-                .get("--provider")
+                .flag_values("--provider")
                 .expect("provider should merge into cursor context"),
-            &vec!["vmware".to_string()]
+            &vec!["vmware".to_string()][..]
         );
+    }
+
+    #[test]
+    fn analyze_preserves_open_quote_context() {
+        let engine = CompletionEngine::new(tree());
+        let line = "orch provision --os \"rh";
+
+        let analysis = engine.analyze(line, line.len());
+
+        assert_eq!(analysis.cursor.token_stub, "rh");
+        assert_eq!(analysis.cursor.quote_style, Some(QuoteStyle::Double));
+    }
+
+    #[test]
+    fn matched_command_len_counts_value_keys_consistently() {
+        let mut set = CompletionNode::default();
+        set.children.insert(
+            "ui.mode".to_string(),
+            CompletionNode {
+                value_key: true,
+                ..CompletionNode::default()
+            },
+        );
+        let mut config = CompletionNode::default();
+        config.children.insert("set".to_string(), set);
+        let tree = CompletionTree {
+            root: CompletionNode::default().with_child("config", config),
+            ..CompletionTree::default()
+        };
+        let engine = CompletionEngine::new(tree);
+
+        let tokens = vec![
+            "config".to_string(),
+            "set".to_string(),
+            "ui.mode".to_string(),
+        ];
+        assert_eq!(engine.matched_command_len_tokens(&tokens), 3);
     }
 }

@@ -1,4 +1,4 @@
-use crate::model::CommandLine;
+use crate::model::{CommandLine, CursorState, FlagOccurrence, QuoteStyle};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,9 +19,8 @@ enum LexState {
 #[derive(Debug, Default)]
 struct ParseState {
     head: Vec<String>,
-    args: Vec<String>,
-    flags: BTreeMap<String, Vec<String>>,
-    flag_order: Vec<String>,
+    tail: Vec<crate::model::TailItem>,
+    flag_values: BTreeMap<String, Vec<String>>,
     pipes: Vec<String>,
     has_pipe: bool,
 }
@@ -30,9 +29,8 @@ impl ParseState {
     fn finish(self) -> CommandLine {
         CommandLine {
             head: self.head,
-            args: self.args,
-            flags: self.flags,
-            flag_order: self.flag_order,
+            tail: self.tail,
+            flag_values: self.flag_values,
             pipes: self.pipes,
             has_pipe: self.has_pipe,
         }
@@ -52,7 +50,8 @@ impl ParseState {
                 self.start_pipe(iter);
                 break;
             }
-            self.args.push(next.clone());
+            self.tail
+                .push(crate::model::TailItem::Positional(next.clone()));
         }
     }
 
@@ -64,9 +63,8 @@ impl ParseState {
         // Once the parser has seen the first flag-like token, the rest of the
         // line stays in "tail mode". From that point on we only distinguish
         // between more flags, their values, `--`, and a pipe into DSL mode.
-        let mut token = Some(first_token);
-
-        while let Some(current) = token.take() {
+        let mut current = first_token;
+        loop {
             if current == "|" {
                 self.start_pipe(iter);
                 return;
@@ -78,21 +76,42 @@ impl ParseState {
             }
 
             if let Some((flag, value)) = split_inline_flag_value(&current) {
+                let mut occurrence_values = Vec::new();
                 if !value.is_empty() {
-                    self.flags.entry(flag.clone()).or_default().push(value);
+                    self.flag_values
+                        .entry(flag.clone())
+                        .or_default()
+                        .push(value.clone());
+                    occurrence_values.push(value);
                 } else {
-                    self.flags.entry(flag.clone()).or_default();
+                    self.flag_values.entry(flag.clone()).or_default();
                 }
-                self.flag_order.push(flag);
-                token = iter.next().cloned();
+                self.tail.push(crate::model::TailItem::Flag(FlagOccurrence {
+                    name: flag.clone(),
+                    values: occurrence_values,
+                }));
+                let Some(next) = iter.next().cloned() else {
+                    break;
+                };
+                current = next;
                 continue;
             }
 
             let flag = current;
             let values = self.consume_flag_values(iter);
-            self.flags.entry(flag.clone()).or_default().extend(values);
-            self.flag_order.push(flag);
-            token = iter.next().cloned();
+            self.tail.push(crate::model::TailItem::Flag(FlagOccurrence {
+                name: flag.clone(),
+                values: values.clone(),
+            }));
+            self.flag_values
+                .entry(flag.clone())
+                .or_default()
+                .extend(values);
+
+            let Some(next) = iter.next().cloned() else {
+                break;
+            };
+            current = next;
         }
     }
 
@@ -211,7 +230,25 @@ impl CommandLineParser {
         state.finish()
     }
 
-    pub fn compute_stub(&self, text_before_cursor: &str, tokens: &[String]) -> String {
+    pub fn cursor_state(&self, text_before_cursor: &str, safe_cursor: usize) -> CursorState {
+        let tokens = self.tokenize(text_before_cursor);
+        let token_stub = self.compute_stub(text_before_cursor, &tokens);
+        let quote_style = self.compute_stub_quote(text_before_cursor);
+        let replace_start = token_replace_start(text_before_cursor, safe_cursor, quote_style);
+        let raw_stub = text_before_cursor
+            .get(replace_start..safe_cursor)
+            .unwrap_or("")
+            .to_string();
+
+        CursorState::new(
+            token_stub,
+            raw_stub,
+            replace_start..safe_cursor,
+            quote_style,
+        )
+    }
+
+    fn compute_stub(&self, text_before_cursor: &str, tokens: &[String]) -> String {
         if text_before_cursor.is_empty() || text_before_cursor.ends_with(' ') {
             return String::new();
         }
@@ -224,6 +261,10 @@ impl CommandLineParser {
         }
 
         last.clone()
+    }
+
+    pub fn compute_stub_quote(&self, text_before_cursor: &str) -> Option<QuoteStyle> {
+        current_quote_state(text_before_cursor)
     }
 }
 
@@ -252,8 +293,106 @@ fn is_number(text: &str) -> bool {
     text.parse::<f64>().is_ok()
 }
 
+fn current_quote_state(text: &str) -> Option<QuoteStyle> {
+    let mut state = LexState::Normal;
+
+    for ch in text.chars() {
+        match state {
+            LexState::Normal => match ch {
+                '\\' => state = LexState::EscapeNormal,
+                '\'' => state = LexState::SingleQuote,
+                '"' => state = LexState::DoubleQuote,
+                _ => {}
+            },
+            LexState::SingleQuote => {
+                if ch == '\'' {
+                    state = LexState::Normal;
+                }
+            }
+            LexState::DoubleQuote => match ch {
+                '"' => state = LexState::Normal,
+                '\\' => state = LexState::EscapeDouble,
+                _ => {}
+            },
+            LexState::EscapeNormal => state = LexState::Normal,
+            LexState::EscapeDouble => state = LexState::DoubleQuote,
+        }
+    }
+
+    match state {
+        LexState::SingleQuote => Some(QuoteStyle::Single),
+        LexState::DoubleQuote | LexState::EscapeDouble => Some(QuoteStyle::Double),
+        LexState::Normal | LexState::EscapeNormal => None,
+    }
+}
+
+fn token_replace_start(
+    text_before_cursor: &str,
+    safe_cursor: usize,
+    quote_style: Option<QuoteStyle>,
+) -> usize {
+    if text_before_cursor.is_empty() || text_before_cursor.ends_with(' ') {
+        return safe_cursor;
+    }
+
+    let mut state = LexState::Normal;
+    let mut token_start = 0usize;
+    let mut token_active = false;
+    let mut quote_start = None;
+
+    for (idx, ch) in text_before_cursor.char_indices() {
+        match state {
+            LexState::Normal => {
+                if ch.is_whitespace() {
+                    token_active = false;
+                    token_start = idx + ch.len_utf8();
+                    quote_start = None;
+                    continue;
+                }
+
+                if !token_active {
+                    token_active = true;
+                    token_start = idx;
+                }
+
+                match ch {
+                    '\'' => {
+                        quote_start = Some(idx + ch.len_utf8());
+                        state = LexState::SingleQuote;
+                    }
+                    '"' => {
+                        quote_start = Some(idx + ch.len_utf8());
+                        state = LexState::DoubleQuote;
+                    }
+                    '\\' => state = LexState::EscapeNormal,
+                    _ => {}
+                }
+            }
+            LexState::SingleQuote => {
+                if ch == '\'' {
+                    state = LexState::Normal;
+                }
+            }
+            LexState::DoubleQuote => match ch {
+                '"' => state = LexState::Normal,
+                '\\' => state = LexState::EscapeDouble,
+                _ => {}
+            },
+            LexState::EscapeNormal => state = LexState::Normal,
+            LexState::EscapeDouble => state = LexState::DoubleQuote,
+        }
+    }
+
+    match quote_style {
+        Some(_) => quote_start.unwrap_or(token_start),
+        None => token_start,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::model::QuoteStyle;
+
     use super::CommandLineParser;
 
     #[test]
@@ -286,14 +425,14 @@ mod tests {
         let parser = CommandLineParser;
         let tokens = parser.tokenize("orch provision --provider vmware --os rhel | F name");
         let cmd = parser.parse(&tokens);
-        assert_eq!(cmd.head, vec!["orch", "provision"]);
+        assert_eq!(cmd.head(), ["orch".to_string(), "provision".to_string()]);
         assert_eq!(
-            cmd.flags.get("--provider"),
-            Some(&vec!["vmware".to_string()])
+            cmd.flag_values("--provider"),
+            Some(&["vmware".to_string()][..])
         );
-        assert_eq!(cmd.flags.get("--os"), Some(&vec!["rhel".to_string()]));
-        assert!(cmd.has_pipe);
-        assert_eq!(cmd.pipes, vec!["F", "name"]);
+        assert_eq!(cmd.flag_values("--os"), Some(&vec!["rhel".to_string()][..]));
+        assert!(cmd.has_pipe());
+        assert_eq!(cmd.pipes(), ["F".to_string(), "name".to_string()]);
     }
 
     #[test]
@@ -302,23 +441,71 @@ mod tests {
 
         let tokens = parser.tokenize("cmd -- --not-a-flag");
         let cmd = parser.parse(&tokens);
-        assert_eq!(cmd.head, vec!["cmd"]);
-        assert_eq!(cmd.args, vec!["--not-a-flag"]);
+        assert_eq!(cmd.head(), ["cmd".to_string()]);
+        assert_eq!(
+            cmd.positional_args().cloned().collect::<Vec<_>>(),
+            vec!["--not-a-flag".to_string()]
+        );
 
         let tokens = parser.tokenize("cmd --count -5");
         let cmd = parser.parse(&tokens);
-        assert_eq!(cmd.flags.get("--count"), Some(&vec!["-5".to_string()]));
+        assert_eq!(
+            cmd.flag_values("--count"),
+            Some(&vec!["-5".to_string()][..])
+        );
 
         let tokens = parser.tokenize("cmd --os=");
         let cmd = parser.parse(&tokens);
-        assert_eq!(cmd.flags.get("--os"), Some(&Vec::new()));
+        assert_eq!(cmd.flag_values("--os"), Some(&[][..]));
+    }
+
+    #[test]
+    fn parse_preserves_repeated_flag_occurrence_boundaries() {
+        let parser = CommandLineParser;
+        let tokens = parser.tokenize("cmd --tag red --mode fast --tag blue");
+        let cmd = parser.parse(&tokens);
+        let occurrences = cmd.flag_occurrences().cloned().collect::<Vec<_>>();
+
+        assert_eq!(occurrences.len(), 3);
+        assert_eq!(occurrences[0].name, "--tag");
+        assert_eq!(occurrences[0].values, vec!["red".to_string()]);
+        assert_eq!(occurrences[1].name, "--mode");
+        assert_eq!(occurrences[1].values, vec!["fast".to_string()]);
+        assert_eq!(occurrences[2].name, "--tag");
+        assert_eq!(occurrences[2].values, vec!["blue".to_string()]);
     }
 
     #[test]
     fn compute_stub_respects_equals_boundary() {
         let parser = CommandLineParser;
         let before = "cmd --flag=";
-        let tokens = parser.tokenize(before);
-        assert_eq!(parser.compute_stub(before, &tokens), "");
+        let cursor = parser.cursor_state(before, before.len());
+        assert_eq!(cursor.token_stub, "");
+    }
+
+    #[test]
+    fn compute_stub_quote_tracks_unfinished_quotes() {
+        let parser = CommandLineParser;
+        assert_eq!(
+            parser.compute_stub_quote("cmd --name \"al"),
+            Some(QuoteStyle::Double)
+        );
+        assert_eq!(
+            parser.compute_stub_quote("cmd --name 'al"),
+            Some(QuoteStyle::Single)
+        );
+        assert_eq!(parser.compute_stub_quote("cmd --name al"), None);
+    }
+
+    #[test]
+    fn cursor_state_tracks_replace_range_inside_open_quotes() {
+        let parser = CommandLineParser;
+        let line = "ldap user \"oi";
+        let cursor = parser.cursor_state(line, line.len());
+
+        assert_eq!(cursor.token_stub, "oi");
+        assert_eq!(cursor.raw_stub, "oi");
+        assert_eq!(cursor.replace_range, 11..13);
+        assert_eq!(cursor.quote_style, Some(QuoteStyle::Double));
     }
 }

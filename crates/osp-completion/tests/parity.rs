@@ -60,7 +60,7 @@ fn tree() -> CompletionTree {
 
 fn values(line: &str, cursor: usize) -> Vec<String> {
     let engine = CompletionEngine::new(tree());
-    let (_, suggestions) = engine.suggestions_with_stub(line, cursor);
+    let (_, suggestions) = engine.complete(line, cursor);
     suggestions
         .into_iter()
         .filter_map(|entry| match entry {
@@ -110,7 +110,7 @@ fn unicode_root_command_completion() {
         pipe_verbs: BTreeMap::new(),
     });
 
-    let (_, suggestions) = engine.suggestions_with_stub("sø", "sø".len());
+    let (_, suggestions) = engine.complete("sø", "sø".len());
     let values = suggestions
         .into_iter()
         .filter_map(|entry| match entry {

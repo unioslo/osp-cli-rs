@@ -72,8 +72,13 @@ impl CompletionTreeBuilder {
     ) -> CompletionTree {
         let mut root = CompletionNode::default();
         for spec in specs {
-            root.children
-                .insert(spec.name.clone(), Self::node_from_spec(spec));
+            let name = spec.name.clone();
+            assert!(
+                root.children
+                    .insert(name.clone(), Self::node_from_spec(spec))
+                    .is_none(),
+                "duplicate root command spec: {name}"
+            );
         }
 
         CompletionTree {
@@ -95,6 +100,7 @@ impl CompletionTreeBuilder {
         };
 
         for key in keys {
+            let key_name = key.key.clone();
             let mut node = CompletionNode {
                 tooltip: key.tooltip,
                 value_key: true,
@@ -110,7 +116,10 @@ impl CompletionTreeBuilder {
                     },
                 );
             }
-            set_node.children.insert(key.key, node);
+            assert!(
+                set_node.children.insert(key_name.clone(), node).is_none(),
+                "duplicate config set key: {key_name}"
+            );
         }
     }
 
@@ -123,8 +132,13 @@ impl CompletionTreeBuilder {
         };
 
         for subcommand in &spec.subcommands {
-            node.children
-                .insert(subcommand.name.clone(), Self::node_from_spec(subcommand));
+            let name = subcommand.name.clone();
+            assert!(
+                node.children
+                    .insert(name.clone(), Self::node_from_spec(subcommand))
+                    .is_none(),
+                "duplicate subcommand spec: {name}"
+            );
         }
 
         node
@@ -201,5 +215,27 @@ mod tests {
         assert!(set_node.children.contains_key("ui.format"));
         assert!(set_node.children.contains_key("log.level"));
         assert!(set_node.children["ui.format"].value_key);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate root command spec")]
+    fn duplicate_root_specs_fail_fast() {
+        let _ = CompletionTreeBuilder.build_from_specs(
+            &[CommandSpec::new("config"), CommandSpec::new("config")],
+            [],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate config set key")]
+    fn duplicate_config_keys_fail_fast() {
+        let mut tree = build_tree();
+        CompletionTreeBuilder.apply_config_set_keys(
+            &mut tree,
+            [
+                ConfigKeySpec::new("ui.format"),
+                ConfigKeySpec::new("ui.format"),
+            ],
+        );
     }
 }

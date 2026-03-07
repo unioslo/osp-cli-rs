@@ -1,8 +1,55 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Range};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueType {
     Path,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteStyle {
+    Single,
+    Double,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorState {
+    pub token_stub: String,
+    pub raw_stub: String,
+    pub replace_range: Range<usize>,
+    pub quote_style: Option<QuoteStyle>,
+}
+
+impl CursorState {
+    pub fn new(
+        token_stub: impl Into<String>,
+        raw_stub: impl Into<String>,
+        replace_range: Range<usize>,
+        quote_style: Option<QuoteStyle>,
+    ) -> Self {
+        Self {
+            token_stub: token_stub.into(),
+            raw_stub: raw_stub.into(),
+            replace_range,
+            quote_style,
+        }
+    }
+
+    pub fn synthetic(token_stub: impl Into<String>) -> Self {
+        let token_stub = token_stub.into();
+        let len = token_stub.len();
+        Self {
+            raw_stub: token_stub.clone(),
+            token_stub,
+            replace_range: 0..len,
+            quote_style: None,
+        }
+    }
+}
+
+impl Default for CursorState {
+    fn default() -> Self {
+        Self::synthetic("")
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -186,7 +233,9 @@ pub struct CompletionNode {
     /// A node can expose child commands, flags, positional arguments, or
     /// value-like leaves for config-style key completion.
     pub tooltip: Option<String>,
+    /// This node expects the next token to be a key chosen from `children`.
     pub value_key: bool,
+    /// This node is itself a terminal value that can be suggested/accepted.
     pub value_leaf: bool,
     pub children: BTreeMap<String, CompletionNode>,
     pub flags: BTreeMap<String, FlagNode>,
@@ -220,23 +269,119 @@ pub struct CommandLine {
     ///
     /// `head` is the command path, `flags` and `args` are the option/positional
     /// tail, and `pipes` contains the first pipeline segment onward.
-    pub head: Vec<String>,
-    pub args: Vec<String>,
-    pub flags: BTreeMap<String, Vec<String>>,
-    pub flag_order: Vec<String>,
-    pub pipes: Vec<String>,
-    pub has_pipe: bool,
+    pub(crate) head: Vec<String>,
+    pub(crate) tail: Vec<TailItem>,
+    pub(crate) flag_values: BTreeMap<String, Vec<String>>,
+    pub(crate) pipes: Vec<String>,
+    pub(crate) has_pipe: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CompletionAnalysis {
-    /// Full parser output plus the cursor-local context derived from it.
+pub struct FlagOccurrence {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TailItem {
+    Flag(FlagOccurrence),
+    Positional(String),
+}
+
+impl CommandLine {
+    pub fn head(&self) -> &[String] {
+        &self.head
+    }
+
+    pub fn tail(&self) -> &[TailItem] {
+        &self.tail
+    }
+
+    pub fn pipes(&self) -> &[String] {
+        &self.pipes
+    }
+
+    pub fn has_pipe(&self) -> bool {
+        self.has_pipe
+    }
+
+    pub fn flag_values_map(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.flag_values
+    }
+
+    pub fn flag_values(&self, name: &str) -> Option<&[String]> {
+        self.flag_values.get(name).map(Vec::as_slice)
+    }
+
+    pub fn has_flag(&self, name: &str) -> bool {
+        self.flag_values.contains_key(name)
+    }
+
+    pub fn flag_occurrences(&self) -> impl Iterator<Item = &FlagOccurrence> {
+        self.tail.iter().filter_map(|item| match item {
+            TailItem::Flag(flag) => Some(flag),
+            TailItem::Positional(_) => None,
+        })
+    }
+
+    pub fn last_flag_occurrence(&self) -> Option<&FlagOccurrence> {
+        self.flag_occurrences().last()
+    }
+
+    pub fn positional_args(&self) -> impl Iterator<Item = &String> {
+        self.tail.iter().filter_map(|item| match item {
+            TailItem::Positional(value) => Some(value),
+            TailItem::Flag(_) => None,
+        })
+    }
+
+    pub fn tail_len(&self) -> usize {
+        self.tail.len()
+    }
+
+    pub fn push_flag_occurrence(&mut self, occurrence: FlagOccurrence) {
+        self.flag_values
+            .entry(occurrence.name.clone())
+            .or_default()
+            .extend(occurrence.values.iter().cloned());
+        self.tail.push(TailItem::Flag(occurrence));
+    }
+
+    pub fn push_positional(&mut self, value: impl Into<String>) {
+        self.tail.push(TailItem::Positional(value.into()));
+    }
+
+    pub fn merge_flag_values(&mut self, name: impl Into<String>, values: Vec<String>) {
+        self.flag_values
+            .entry(name.into())
+            .or_default()
+            .extend(values);
+    }
+
+    pub fn set_pipe(&mut self, pipes: Vec<String>) {
+        self.has_pipe = true;
+        self.pipes = pipes;
+    }
+
+    pub fn push_head(&mut self, segment: impl Into<String>) {
+        self.head.push(segment.into());
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParsedLine {
     pub safe_cursor: usize,
     pub full_tokens: Vec<String>,
     pub cursor_tokens: Vec<String>,
     pub full_cmd: CommandLine,
     pub cursor_cmd: CommandLine,
-    pub stub: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompletionAnalysis {
+    /// Full parser output plus the cursor-local context derived from it.
+    pub parsed: ParsedLine,
+    pub cursor: CursorState,
     pub context: CompletionContext,
 }
 

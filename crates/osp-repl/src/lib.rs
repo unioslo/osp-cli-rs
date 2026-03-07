@@ -340,8 +340,13 @@ fn snapshot_completion_debug(
         let stub = line.get(start..end).unwrap_or("").to_string();
         (stub, [start, end])
     } else {
-        let start = cursor.saturating_sub(analysis.stub.len());
-        (analysis.stub.clone(), [start, cursor])
+        (
+            analysis.cursor.raw_stub.clone(),
+            [
+                analysis.cursor.replace_range.start,
+                analysis.cursor.replace_range.end,
+            ],
+        )
     };
 
     let matches = values
@@ -691,10 +696,10 @@ impl Completer for ReplCompleter {
             "completer received pos {pos} beyond line length {}",
             line.len()
         );
-        let (stub, outputs) = self.engine.suggestions_with_stub(line, pos);
+        let (cursor_state, outputs) = self.engine.complete(line, pos);
         let span = Span {
-            start: pos.saturating_sub(stub.len()),
-            end: pos,
+            start: cursor_state.replace_range.start,
+            end: cursor_state.replace_range.end,
         };
 
         let mut ranked = Vec::new();
@@ -719,7 +724,7 @@ impl Completer for ReplCompleter {
             .collect::<Vec<_>>();
 
         if has_path_sentinel {
-            suggestions.extend(path_suggestions(&stub, span));
+            suggestions.extend(path_suggestions(&cursor_state.raw_stub, span));
         }
 
         suggestions
