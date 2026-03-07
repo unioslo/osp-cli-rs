@@ -1,0 +1,7 @@
+{
+  "generated_at": "2026-03-07",
+  "overall_line_percent": 86.42,
+  "changed_file_min_line_percent": 90.0,
+  "min_executable_lines": 20,
+  "notes": "Full-workspace coverage gate for pre-push and CI. Pre-commit stays fast."
+}

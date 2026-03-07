@@ -57,7 +57,19 @@ Per-crate internal unit tests may also exist in `src/lib.rs` modules
 - DSL crate only: `cargo test -p osp-dsl`
 - Services crate only: `cargo test -p osp-services`
 
-## Current MVP Coverage (LDAP Mock + DSL + REPL)
+## Coverage and Hooks
+
+`TESTING.md` describes test shape and workflow. Coverage policy and git hook
+behavior live in [CONTRIBUTING.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/CONTRIBUTING.md).
+
+In short:
+
+- install hooks with `./scripts/install-git-hooks.sh`
+- keep `pre-commit` fast
+- coverage is enforced on `pre-push`
+- run `just cov` or `just cov-gate` when you need the full coverage check
+
+## Current Coverage (LDAP Mock + DSL + REPL)
 
 - `contracts`
   - `ldap` and `mreg` domain commands dispatched via executable plugins.

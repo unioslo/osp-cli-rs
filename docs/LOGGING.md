@@ -1,195 +1,93 @@
-# Logging and Verbosity Migration (osprov-cli -> osp-cli-rust)
+# Logging, Verbosity, and Debugging
 
-This document captures how logging and verbosity work in `osprov-cli` today,
-what should be moved to Rust, and what should be improved.
+`osp` separates user-facing message detail from developer-facing debug output.
 
-## Current Behavior in `osprov-cli` (Python)
+## User-Facing Verbosity
 
-### User-facing verbosity (`-v` / `-q`)
+Use:
 
-Source:
-- `osprov-cli/src/osprov_cli/app.py`
-- `osprov-cli/src/osprov_cli/core/verbosity.py`
-- `osprov-cli/src/osprov_cli/errors.py`
-
-Behavior:
-- Global callback maps `-v/-q` into the base session verbosity.
-- Per-command wrapper stores command-local verbosity delta in `ContextVar`.
-- Error renderer combines base level + delta to decide detail level.
-
-In Rust we keep the same intent with explicit message levels:
-
-- `Error`
-- `Warning`
-- `Success` (default baseline)
-- `Info` (`-v`)
-- `Trace` (`-vv`)
-
-Message blocks are grouped by level at render time. This keeps call sites
-simple and allows future styling (for example boxed warnings/errors) without
-changing command logic.
-
-### Developer debug (`-d`)
-
-Source:
-- `osprov-cli/src/osprov_cli/log.py`
-- `osprov-cli/src/osprov_cli/cli/decorators.py`
+- `-v`
+- `-vv`
+- `-q`
+- `-qq`
 
 Behavior:
-- `-d/-dd/-ddd` maps to `INFO/DEBUG/TRACE` for debug sink.
-- Debug override is context-local (`ContextVar`).
-- File logging stays on regardless of `-d` (controlled by config level).
-- Stdout sink is filtered by debug level.
 
-### Logger initialization
+- default: errors, warnings, and normal success messages
+- `-v`: more informational detail
+- `-vv`: trace-level user-facing detail
+- `-q`: fewer non-essential messages
+- `-qq`: quiet except for errors
 
-Source:
-- `osprov-cli/src/osprov_cli/state.py`
-- `osprov-cli/src/osprov_cli/log.py`
-- `osprov-cli/src/osprov_cli/cfg/defaults.py`
-- `osprov-cli/src/osprov_cli/cfg/schema.py`
+These flags work in both CLI and REPL and apply to one invocation at a time.
+
+## Developer Debug Output
+
+Use:
+
+- `-d`
+- `-dd`
+- `-ddd`
 
 Behavior:
-- Logger is initialized after config resolution.
-- Global context (`ctx`, `terminal`, `user`) is bound once.
-- File sink writes JSON-lines style records.
 
-## What To Keep
+- `-d`: high-level debug information
+- `-dd`: more detailed debug output
+- `-ddd`: the most detailed terminal debug stream
 
-- Separate concerns:
-  - user output verbosity (`-v/-q`)
-  - developer diagnostics (`-d`)
-- Persistent file logs for post-mortem diagnostics.
-- Scoped context for logs (profile, terminal, user, command).
-- Secret redaction before writing structured logs.
-- Explicit config keys for log defaults.
+Debug logs are written to `stderr`, not `stdout`.
 
-## What To Fix in Rust
+## Timing Hints
 
-- Do not emit developer logs to `stdout`; use `stderr`.
-- Do not scatter ad-hoc `eprintln!` logging across command code.
-- Do not rely on undocumented config keys (for example rotation/retention).
-- Do not flatten structured fields into message strings.
-- Do not depend on runtime signature mutation/decorators for verbosity flags.
-- Do not drop bootstrap logs before logger setup.
+At debug levels, `osp` shows timing information:
 
-## Rust Target Design
+- CLI: timing footer on `stderr`
+- REPL: right-hand prompt badge with the last command timing
 
-Use `tracing` stack:
-- `tracing`
-- `tracing-subscriber`
+Color bands:
 
-### Model
+- `0-250ms`: green
+- `250-1000ms`: warning
+- `>1000ms`: red
 
-- `ui.verbosity.level`: controls error/help/detail rendering only.
-- `debug.level`: controls developer logs shown on `stderr`.
-- `log.file.*`: controls persistent file logging.
+Higher debug levels may show more detailed timing breakdowns.
 
-Current Rust semantics:
+## REPL Behavior
 
-- Launch `-v/-q` seeds `ui.verbosity.level` into the in-memory session layer.
-- Launch `-d` seeds `debug.level` into that same session layer.
-- REPL command-local `-v/-q/-d` applies on top of the current session base for
-  that invocation only.
-- REPL reload rebuilds from the session layer, so these launch defaults survive
-  reloads.
+In the REPL, `-v/-q/-d` are command-local. They do not permanently change the
+shell’s behavior unless you change config defaults.
 
-### CLI flags
+```text
+ldap user alice -v
+ldap user alice -dd
+```
 
-- `-v/-vv/-vvv` and `-q/-qq` for user-facing output detail.
-- `-d/-dd/-ddd` for developer diagnostics.
+## Config Keys
 
-### Recommended mapping
+Useful config keys:
 
-- User message visibility:
-  - default -> `Error + Warning + Success`
-  - `-v` -> add `Info`
-  - `-vv` -> add `Trace`
-  - `-q` -> hide `Success`
-  - `-qq` -> hide `Success + Warning` (errors still visible)
-- Developer log mapping (`-d`):
-  - none -> no developer log stream on terminal by default
-  - `-d` -> `info`
-  - `-dd` -> `debug`
-  - `-ddd+` -> `trace`
-- Keep `RUST_LOG` support for advanced users; CLI flag should win.
+- `ui.verbosity.level`
+- `debug.level`
+- `log.file.enabled`
+- `log.file.path`
+- `log.file.level`
 
-Precedence:
+Use `config explain <key>` to see where an effective value comes from.
 
-1. command-local REPL `-v/-q/-d`
-2. session layer (`osp -q`, `osp -d`, `config set --session ui.verbosity.level`)
-3. env/file/default config
+## Plugin Runtime Hints
 
-## Plugin Integration Contract
+`osp` passes logging-related hints to plugins:
 
-Backbone propagates verbosity/debug settings to plugins through runtime hints:
+- `OSP_UI_VERBOSITY`
+- `OSP_DEBUG_LEVEL`
 
-- `OSP_UI_VERBOSITY=error|warning|success|info|trace`
-- `OSP_DEBUG_LEVEL=0|1|2|3`
+Plugins should keep data output on `stdout` and diagnostics on `stderr`.
 
-Plugins should:
-- use `OSP_UI_VERBOSITY` for user-facing detail/messages.
-- use `OSP_DEBUG_LEVEL` for developer logging level.
-- avoid printing data-format output to stderr.
+## Scripting Safety
 
-`osp-core` exposes `RuntimeHints::from_env()` for plugin-side parsing to avoid
-duplicate env parsing logic in each plugin.
+`--format json` stays safe for scripts even when `-d` is enabled because data
+stays on `stdout` and diagnostics stay on `stderr`.
 
-## Config Keys to Add in `osp-config`
-
-- `ui.verbosity.level` (enum or bounded integer)
-- `log.file.enabled` (bool)
-- `log.file.path` (string/path)
-- `log.file.level` (`warn|info|debug|trace`)
-
-Keep all runtime-visible keys in schema and surfaced through
-`config show/get/explain`. Bootstrap-only keys may use bootstrap-specific
-explain/get behavior instead of appearing in ordinary runtime `config show`.
-
-## Implementation Plan
-
-### Step 1: Schema + defaults
-
-- Add logging + verbosity keys in `osp-config` schema/defaults.
-- Add adaptation and allowed-value validation.
-- Add contract tests for precedence and value adaptation.
-
-### Step 2: CLI surface
-
-- Add global `-v/-q/-d` in `crates/osp-cli/src/cli.rs`.
-- Compute effective UI verbosity and debug level once in app startup.
-- Ensure both one-shot and REPL share identical semantics.
-
-### Step 3: Logging bootstrap
-
-- Add `crates/osp-cli/src/logging.rs` with `init_logging(...)`.
-- Initialize tracing early with safe bootstrap defaults.
-- Reconfigure/augment with resolved config (file path/level) once config is loaded.
-
-### Step 4: Structured context
-
-- Attach profile, terminal, user, command, plugin_id as structured fields/spans.
-- Ensure plugin dispatch logs include plugin executable + exit status.
-
-### Step 5: Error rendering parity
-
-- Port existing verbosity behavior for known vs unknown errors.
-- Keep concise default errors; expand details at higher verbosity.
-- Ensure `--format json` output remains clean (logs must stay on stderr).
-
-### Step 6: Contracts and integration tests
-
-- `-d` writes debug output to stderr only.
-- `--format json` stdout remains valid JSON even with `-d`.
-- File logs are written at configured path and level.
-- REPL command debug levels do not leak across commands.
-- Redaction test for sensitive keys in structured fields.
-
-## Why This Is Better Than `osprov-cli`
-
-- Strong typed config contract (no hidden keys).
-- Proper structured logs end-to-end (no message flattening).
-- Correct stream separation (data on stdout, diagnostics on stderr).
-- Config-driven file sink and reliable append behavior.
-- Cleaner CLI model without decorator/runtime signature mutation.
-- Easier tests: deterministic levels, deterministic sinks, deterministic context.
+```bash
+osp ldap user alice --json -d 2>debug.log
+```

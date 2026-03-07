@@ -31,6 +31,7 @@ impl From<PresentationArg> for UiPresentation {
 #[derive(Debug, Parser)]
 #[command(
     name = "osp",
+    version = env!("CARGO_PKG_VERSION"),
     about = "OSP CLI",
     after_help = "Use `osp plugins commands` to list plugin-provided commands."
 )]
@@ -643,4 +644,105 @@ fn config_non_empty_string(config: &ResolvedConfig, key: &str) -> Option<String>
 
 pub fn parse_inline_command_tokens(tokens: &[String]) -> Result<Option<Commands>, clap::Error> {
     InlineCommandCli::try_parse_from(tokens.iter().map(String::as_str)).map(|parsed| parsed.command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Cli, ColorMode, Commands, ConfigCommands, InlineCommandCli, OutputFormat, RenderMode,
+        RuntimeLoadOptions, SectionFrameStyle, TableBorderStyle, TableOverflow, UnicodeMode,
+        apply_render_settings_from_config, config_int, config_non_empty_string, parse_color_mode,
+        parse_inline_command_tokens, parse_output_format, parse_render_mode, parse_unicode_mode,
+    };
+    use clap::Parser;
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_ui::RenderSettings;
+
+    fn resolved(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        for (key, value) in entries {
+            defaults.set(*key, *value);
+        }
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        resolver
+            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .expect("test config should resolve")
+    }
+
+    #[test]
+    fn parse_mode_helpers_accept_aliases_and_trim_input_unit() {
+        assert_eq!(
+            parse_output_format(" markdown "),
+            Some(OutputFormat::Markdown)
+        );
+        assert_eq!(parse_render_mode(" Rich "), Some(RenderMode::Rich));
+        assert_eq!(parse_color_mode(" NEVER "), Some(ColorMode::Never));
+        assert_eq!(parse_unicode_mode(" always "), Some(UnicodeMode::Always));
+        assert_eq!(parse_output_format("yaml"), None);
+    }
+
+    #[test]
+    fn config_helpers_ignore_blank_strings_and_parse_integers_unit() {
+        let config = resolved(&[
+            ("ui.width", "120"),
+            ("color.text", "  "),
+            ("ui.margin", "3"),
+        ]);
+
+        assert_eq!(config_int(&config, "ui.width"), Some(120));
+        assert_eq!(config_int(&config, "ui.margin"), Some(3));
+        assert_eq!(config_non_empty_string(&config, "color.text"), None);
+    }
+
+    #[test]
+    fn render_settings_apply_low_level_ui_overrides_unit() {
+        let config = resolved(&[
+            ("ui.width", "88"),
+            ("ui.chrome.frame", "round"),
+            ("ui.table.border", "square"),
+            ("ui.table.overflow", "wrap"),
+        ]);
+        let mut settings = RenderSettings::test_plain(OutputFormat::Table);
+
+        apply_render_settings_from_config(&mut settings, &config);
+
+        assert_eq!(settings.width, Some(88));
+        assert_eq!(settings.chrome_frame, SectionFrameStyle::Round);
+        assert_eq!(settings.table_border, TableBorderStyle::Square);
+        assert_eq!(settings.table_overflow, TableOverflow::Wrap);
+    }
+
+    #[test]
+    fn parse_inline_command_tokens_accepts_builtin_and_external_commands_unit() {
+        let builtin = parse_inline_command_tokens(&["config".to_string(), "doctor".to_string()])
+            .expect("builtin command should parse");
+        assert!(matches!(
+            builtin,
+            Some(Commands::Config(args)) if matches!(args.command, ConfigCommands::Doctor)
+        ));
+
+        let external = parse_inline_command_tokens(&["ldap".to_string(), "user".to_string()])
+            .expect("external command should parse");
+        assert!(
+            matches!(external, Some(Commands::External(tokens)) if tokens == vec!["ldap", "user"])
+        );
+    }
+
+    #[test]
+    fn cli_runtime_load_options_follow_disable_flags_unit() {
+        let cli = Cli::parse_from(["osp", "--no-env", "--no-config-file", "theme", "list"]);
+        assert_eq!(
+            cli.runtime_load_options(),
+            RuntimeLoadOptions {
+                include_env: false,
+                include_config_file: false,
+            }
+        );
+
+        let inline = InlineCommandCli::try_parse_from(["theme", "list"])
+            .expect("inline command should parse");
+        assert!(matches!(inline.command, Some(Commands::Theme(_))));
+    }
 }

@@ -1,97 +1,107 @@
-# Command Formatting Hooks (Rust Plan)
+# Output and Invocation Flags
 
-This document translates `with_formatting` and related hooks from osprov-cli
-into a Rust design. The goal is to keep commands pure while centralizing all
-output concerns.
+These flags affect one command at a time. They work the same way in the CLI
+and in the REPL.
 
-## How `with_formatting` Works Today (Python)
+## Output Format
 
-The decorator:
-
-- Adds flags: `--format`, `--mode`, legacy `--json/--table/--value/--md`,
-  and `--rich/--plain`.
-- Supports `--cache` in REPL.
-- Resolves defaults from config (`ui.format`, `ui.mode`).
-- Executes the command, then calls `state.ui.format_output(...)`.
-- Applies the DSL pipeline.
-- Supports clipboard copy via DSL `| Y`.
-
-This is effectively “middleware” around every command.
-
-## Rust Approach: Central Dispatcher
-
-Instead of a decorator per command, we centralize formatting in the command
-dispatcher. Commands return data; the dispatcher handles formatting.
-
-### Command result type
-
-```
-struct CommandResult {
-    data: serde_json::Value,
-    format_hint: Option<OutputFormat>,
-    allow_cache: bool,
-}
-```
-
-### Dispatcher flow
-
-1. Parse global formatting flags.
-2. Run the command.
-3. Apply DSL pipeline to `data`.
-4. Choose formatter (`auto` or explicit).
-5. Render using plain or rich renderer.
-6. Copy if requested or `wants_copy` is set.
-
-## Output Flags (CLI and REPL)
-
-We keep the same user-facing flags:
+Canonical form:
 
 - `--format {json,table,mreg,value,md,auto}`
+
+Convenience aliases:
+
+- `--json`
+- `--table`
+- `--value`
+- `--md`
+- `--mreg`
+
+Examples:
+
+```bash
+osp ldap user alice --format table
+osp ldap user alice --json
+```
+
+```text
+ldap user alice --format table
+ldap user alice --json
+```
+
+## Rendering
+
+Rendering flags:
+
 - `--mode {plain,rich,auto}`
-- `--color {auto,always,never}` + `--no-color`
-- `--unicode {auto,always,never}` + `--ascii`
-- `--copy`
+- `--color {auto,always,never}`
+- `--no-color`
+- `--unicode {auto,always,never}`
+- `--ascii`
 
-Convenience aliases (`--json`, `--table`, `--value`, `--md`, `--mreg`,
-`--rich`, `--plain`) normalize immediately into the canonical settings above.
+These change how output is rendered, not the underlying command result.
 
-## Current Invocation Semantics
+## Verbosity and Debug
 
-Formatting and verbosity flags are invocation-local in both CLI and REPL:
+These are also invocation-local:
 
-- `osp ldap user alice --json`
-- `osp ldap user alice --format table`
-- `ldap user alice --json`
-- `ldap user alice -vv -d`
+- `-v/-vv`
+- `-q/-qq`
+- `-d/-dd/-ddd`
 
-Rules:
+`-v/-q` control user-facing detail. `-d` controls developer diagnostics on
+`stderr`.
 
-- flags may appear anywhere before `--`
-- they affect only the current invocation
-- they do not seed the session config layer
-- persistent defaults still belong in config (`config set ui.format ...`)
-- `--` ends host-level scanning and passes remaining tokens through literally
+## Provider Selection
 
-## Caching (REPL)
+Use `--plugin-provider <plugin-id>` when multiple plugins provide the same
+command and you want to choose the provider for one invocation.
 
-In the REPL, cache can be applied at the dispatcher level:
+## REPL Cache
 
-- Hash `(command + args + pipeline)` into a cache key.
-- Store `CommandResult` for reuse.
-- Cache should be opt-in per command (`allow_cache`).
+`--cache` is supported only in the REPL.
 
-## Error Handling
+It reuses a successful external command result and reapplies the current pipe
+and output rendering. This is useful when the backend is slow and you want to
+run multiple pipelines against the same response.
 
-Formatting errors should be considered command failures:
+## Placement Rules
 
-- Unknown format -> user error.
-- Renderer failure -> internal error.
-- Clipboard copy failure -> warn but still print output.
+Invocation flags may appear anywhere before `--`.
 
-## Tests to Add
+These are all valid:
 
-- Flag precedence and conflicts (`--format` vs legacy flags).
-- `--mode plain` forces plain rendering.
-- `--no-color` disables colors regardless of renderer.
-- DSL pipeline is applied before formatting.
-- `| Y` triggers clipboard copy behavior.
+```bash
+osp ldap user alice --json
+osp --json ldap user alice
+osp ldap --json user alice
+```
+
+After `--`, remaining tokens are passed through literally.
+
+## Important Rules
+
+- invocation flags affect only the current command
+- they do not write into config
+- persistent defaults belong in config
+- conflicting format aliases are errors
+
+Example default:
+
+```bash
+osp config set ui.format json --save
+```
+
+That sets the default. It is different from:
+
+```bash
+osp ldap user alice --json
+```
+
+Which only affects that invocation.
+
+## Stream Separation
+
+Machine-readable output stays on `stdout`.
+
+Messages, warnings, and debug logs stay on `stderr`.

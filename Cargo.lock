@@ -240,8 +240,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -897,7 +899,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "osp-api"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "osp-core",
@@ -908,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "osp-cli"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -937,14 +939,14 @@ dependencies = [
 
 [[package]]
 name = "osp-completion"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "fuzzy-matcher",
 ]
 
 [[package]]
 name = "osp-config"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "toml",
  "tracing",
@@ -952,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "osp-core"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "clap",
  "serde",
@@ -961,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "osp-dsl"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "osp-core",
@@ -972,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "osp-ports"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "osp-core",
@@ -982,9 +984,10 @@ dependencies = [
 
 [[package]]
 name = "osp-repl"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "anyhow",
+ "chrono",
  "fuzzy-matcher",
  "nu-ansi-term",
  "osp-completion",
@@ -996,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "osp-services"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "osp-api",
@@ -1009,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "osp-ui"
-version = "0.1.0"
+version = "1.4.5"
 dependencies = [
  "comfy-table",
  "dialoguer",

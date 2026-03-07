@@ -1,5 +1,25 @@
 # Contributing
 
+## Local Tooling
+
+This repo expects `just` for the documented developer commands.
+
+Install it with:
+
+```bash
+cargo install just --locked
+```
+
+If `just` is still not found afterwards, make sure `~/.cargo/bin` is on your
+`PATH`.
+
+## Docs Layout
+
+Keep committed docs user-facing.
+
+- product behavior, usage, contributor-facing architecture, and reference docs belong in `docs/`
+- private planning notes, reviews, migration sequencing, and AI working material should stay out of the committed tree
+
 ## Commit Message Contract
 
 This repository uses a strict commit subject format:
@@ -33,3 +53,162 @@ This sets:
 - `commit.template=.gitmessage`
 
 The commit hook is in `.githooks/commit-msg`.
+
+The pre-commit hook intentionally stays fast:
+
+- `fmt`
+- focused `clippy`
+
+Coverage runs on `pre-push`, not `pre-commit`.
+
+## CI And Releases
+
+GitHub Actions runs two separate lanes:
+
+- `Verify`
+  Runs on `pull_request` and pushes to `main`.
+  It enforces:
+  - `./scripts/check-rust-fast.sh`
+  - full workspace tests
+  - the coverage gate
+
+- `Release`
+  Runs when a `v*` tag is pushed.
+  It reruns verification, then builds release artifacts for:
+  - Linux `x86_64-unknown-linux-gnu`
+  - macOS `x86_64-apple-darwin`
+  - Windows `x86_64-pc-windows-msvc`
+
+The release workflow publishes GitHub release assets, not `crates.io` packages.
+
+Release tags are expected to match the workspace version exactly. For example, if
+`Cargo.toml` says `0.1.0`, the release tag must be `v0.1.0`.
+
+Typical release flow:
+
+```bash
+just bump patch "Summarize the release"
+git commit -am "chore(release): Prepare v1.4.5"
+git push origin main
+just release-check
+just release-dry
+just release-sign
+```
+
+## Version Bumps
+
+Use the bump helper to advance the workspace version and create the next release
+notes stub:
+
+```bash
+just bump patch
+just bump patch "Summarize the release"
+just bump 1.4.5 "Summarize the release"
+just bump minor
+just bump major
+just bump-dry patch "Preview the next release"
+```
+
+This updates:
+
+- `Cargo.toml` workspace version
+- workspace package entries in `Cargo.lock`
+- `docs/releases/vX.Y.Z.md` if it does not already exist
+- `CHANGELOG.md` with a matching version section if it does not already exist
+
+The generated release notes file intentionally contains `TODO` markers. The
+generated changelog section also contains placeholders. The release workflow
+refuses to publish while those placeholders remain.
+
+## Local Release Rehearsal
+
+Before tagging, run:
+
+```bash
+just release-check
+```
+
+That enforces the same release prerequisites locally:
+
+- release notes exist for the current workspace version
+- `CHANGELOG.md` has a finished section for the current workspace version
+- fast fmt/clippy checks pass
+- workspace tests pass
+- the coverage gate passes
+
+To create and push the release tag safely, use:
+
+```bash
+just release
+just release-sign
+```
+
+Those helpers:
+
+- re-run release readiness checks
+- refuse to create a tag if it already exists locally or on `origin`
+- create an annotated tag by default, or a signed tag with `release-sign`
+
+## Coverage Gate
+
+This repository keeps a checked-in coverage baseline in
+`.coverage-baseline.json`.
+
+The enforced policy is:
+
+- full workspace line coverage must not drop below the baseline
+- changed Rust source files under `crates/*/src/` must stay at or above `90%`
+- tiny files under `20` executable lines are skipped for the per-file rule
+
+Run it manually with:
+
+```bash
+just cov-gate
+```
+
+Or get the raw workspace summary with:
+
+```bash
+just cov
+```
+
+Update the stored baseline intentionally with:
+
+```bash
+just cov-baseline
+```
+
+Why this runs on `pre-push` instead of `pre-commit`:
+
+- a warm full-workspace `cargo llvm-cov --workspace --all-features` run was about
+  one minute locally on March 7, 2026
+- even a package-scoped run for a small `osp-cli` + `osp-repl` change set was
+  about `35s`
+- package-scoped coverage is also only an approximation in a shared workspace,
+  because downstream crate tests may contribute meaningful coverage
+
+So the pragmatic policy is:
+
+- keep `pre-commit` fast
+- enforce full coverage on `pre-push`
+- use CI for the authoritative shared check when we wire it in
+
+## Updating The Baseline
+
+`.coverage-baseline.json` is a policy file, not an automatically refreshed
+artifact.
+
+Update it only when:
+
+- coverage improved in a way you want to lock in
+- a larger test batch landed and you want that new floor enforced
+- the coverage scope changed on purpose and you are resetting the floor
+
+Do not update it just because the gate failed once.
+
+Recommended workflow:
+
+1. Run `just cov` or `just cov-gate` and confirm the new number is real.
+2. Run `just cov-baseline` to rewrite the stored overall floor.
+3. Review the diff to `.coverage-baseline.json`.
+4. Commit that change deliberately, ideally in a coverage-focused commit.

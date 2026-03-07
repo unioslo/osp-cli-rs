@@ -1,0 +1,228 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to package, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "value=${{ github.event.inputs.tag }}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Validate tag matches workspace version
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          release_tag = os.environ["RELEASE_TAG"]
+          if not release_tag.startswith("v"):
+              raise SystemExit(f"release tag must start with 'v': {release_tag}")
+
+          workspace = tomllib.loads(Path("Cargo.toml").read_text())
+          version = workspace["workspace"]["package"]["version"]
+          expected = f"v{version}"
+          if release_tag != expected:
+              raise SystemExit(
+                  f"release tag {release_tag!r} does not match workspace version {expected!r}"
+              )
+          PY
+
+      - name: Validate release notes
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
+        run: ./scripts/check-release-readiness.py "${RELEASE_TAG}"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install coverage tooling
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run fast checks
+        run: ./scripts/check-rust-fast.sh
+
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features --locked
+
+      - name: Enforce coverage gate
+        run: ./scripts/check-coverage-gate.py
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            bin_name: osp
+          - runner: macos-13
+            triple: x86_64-apple-darwin
+            bin_name: osp
+          - runner: windows-latest
+            triple: x86_64-pc-windows-msvc
+            bin_name: osp.exe
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "value=${{ github.event.inputs.tag }}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked -p osp-cli
+
+      - name: Package Unix artifact
+        if: runner.os != 'Windows'
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
+          TARGET_TRIPLE: ${{ matrix.triple }}
+          BIN_NAME: ${{ matrix.bin_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_base="osp-${RELEASE_TAG}-${TARGET_TRIPLE}"
+          stage_dir="dist/${artifact_base}"
+          mkdir -p "${stage_dir}"
+          cp "target/release/${BIN_NAME}" "${stage_dir}/"
+          cp README.md LICENSE "${stage_dir}/"
+          tar -C dist -czf "dist/${artifact_base}.tar.gz" "${artifact_base}"
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          archive = next(Path("dist").glob("*.tar.gz"))
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n")
+          PY
+
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
+          TARGET_TRIPLE: ${{ matrix.triple }}
+          BIN_NAME: ${{ matrix.bin_name }}
+        shell: pwsh
+        run: |
+          $artifactBase = "osp-$env:RELEASE_TAG-$env:TARGET_TRIPLE"
+          $stageDir = Join-Path "dist" $artifactBase
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          Copy-Item "target/release/$env:BIN_NAME" $stageDir
+          Copy-Item "README.md" $stageDir
+          Copy-Item "LICENSE" $stageDir
+          $archivePath = Join-Path "dist" "$artifactBase.zip"
+          Compress-Archive -Path "$stageDir/*" -DestinationPath $archivePath -Force
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          archive = next(Path("dist").glob("*.zip"))
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n")
+          PY
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.triple }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "value=${{ github.event.inputs.tag }}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Fail if GitHub release already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "GitHub release already exists for ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Copy release notes into publish bundle
+        env:
+          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
+        run: cp "docs/releases/${RELEASE_TAG}.md" release-assets/release-notes.md
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.value }}
+          body_path: release-assets/release-notes.md
+          files: release-assets/*

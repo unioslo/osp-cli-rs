@@ -1,100 +1,121 @@
-# REPL Design
+# REPL
 
-The REPL is a thin loop that reuses the one-shot command execution path.
+The REPL reuses the same command execution path as one-shot `osp` commands.
+The main difference is that shell state and session defaults stay alive between
+commands.
 
+## Start the REPL
 
-## MVP scope
+```bash
+osp
+```
 
-For the first working version, the REPL only needs to support:
+## Same Command Syntax as the CLI
 
-- `ldap user <uid>`
-- `ldap netgroup <name>`
-- DSL pipes after LDAP output
+The same invocation-local flags work in both places:
 
-No login flow is required in MVP.
+```bash
+osp ldap user alice --json -v
+```
 
-## Core behavior
+```text
+ldap user alice --json -v
+```
 
-- Start with a profile-resolved prompt.
-- Parse each REPL line with clap, then dispatch through the same command enums
-  as one-shot mode (`Commands`).
-- Support history and basic completion.
-- Support the same DSL pipe syntax as one-shot commands.
+This includes:
 
-## Command Parsing Contract
+- DSL pipes
+- `--format` and `--json`
+- `-v/-q/-d`
+- `--plugin-provider`
+- `--cache`
 
-- REPL lines are split with shell-compatible tokenization.
-- Tokens are parsed by a dedicated clap parser (`ReplCli`) that accepts the
-  same command tree as one-shot mode.
-- No ad-hoc `args[0] == "..."` parsing for built-ins.
-- Unknown top-level commands route through clap external subcommand handling,
-  then to plugin dispatch.
-- Help/version parse output from clap is rendered directly in REPL.
+## Shell Scope
 
-## DSL Capability Contract
+The REPL can keep a shell scope so a top-level command becomes implicit.
 
-- DSL support is declared per parsed command variant, not by string matching.
-- `plugins list|commands|doctor` and `theme list|show` support DSL pipelines.
-- mutation commands like `plugins enable|disable` and `theme use` do not
-  support DSL stages.
-- plugin external commands support DSL by default because they return row data.
+Example:
 
-## Prompt Config
+```text
+ldap
+user alice --json
+```
 
-Prompt appearance is now config-seeded (with CLI color/unicode/mode overrides
-still respected):
+That behaves like:
 
-- `ui.presentation`
-- `repl.prompt`: multiline template (`{user}`, `{domain}`, `{profile}`,
-  `{context}`, `{indicator}`)
-- `repl.simple_prompt`: one-line prompt mode (`<profile> >`)
-- `repl.shell_indicator`: template for shell stack display (`{shell}`)
-- `repl.intro`: show/hide startup intro banner
-- `repl.intro.style`: `full | minimal | none`
-- `ui.help.layout`: `full | compact | minimal`
-- `ui.messages.layout`: `grouped | minimal`
-- `ui.chrome.frame`
-- `color.prompt.text`: optional explicit style spec for prompt text
-- `color.prompt.command`: optional explicit style spec for profile/command part
+```text
+ldap user alice --json
+```
 
-Current preset behavior:
+Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned.
 
-- `expressive` keeps the multiline prompt and full intro
-- `compact` prefers the simple prompt and minimal intro
-- `austere` prefers the simple prompt, minimal intro, and minimal help/message
-  density
+## History and Completion
 
-## Scope
+The REPL provides:
 
-The REPL now supports:
+- shell-like tokenization
+- command and flag completion
+- scoped completion inside shells
+- history navigation
+- history expansion such as `!!`, `!123`, `!-2`, and `!prefix`
 
-- prompt and intro profiles
-- shell-scoped history
-- command/flag completion
-- invocation-local flags such as `--json`, `--mode`, `-q`, and `--cache`
-- inline help/error recovery for partial builtin commands
+Completion does not call remote services while you are typing. Dynamic hints
+come from already-known runtime state.
 
-Config mutation behavior:
+See [COMPLETION.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/COMPLETION.md).
 
-- `config set` in REPL defaults to session scope
-- prompt/theme/presentation changes rebuild the REPL state on the next cycle
-- use `--save` when you want the change persisted
+## REPL Cache
 
-## Completion integration
+`--cache` is REPL-only. It reuses a successful external command result so you
+can rerun different pipes or output formats without hitting the same backend
+again.
 
-Completion should come from a command tree built at startup. It should not
-hit network services. Dynamic data is injected from state.
+```text
+ldap user alice --cache | P uid mail
+ldap user alice --cache | P uid
+```
 
-For the full completion plan and crate choices, see docs/COMPLETION.md.
+The second command reuses the cached plugin response and reapplies the current
+pipeline and rendering.
 
-## Line editor choice
+## Prompt and Intro
 
-We should use a line editor that supports:
+Useful REPL config keys:
 
-- Ctrl-R reverse search
-- Multi-column completion menus
-- Custom prompts with left and right sections
-- Syntax highlighting for valid commands
+- `repl.prompt`
+- `repl.simple_prompt`
+- `repl.shell_indicator`
+- `repl.intro`
+- `repl.intro.style`
+- `repl.input_mode`
 
-The recommended default is `reedline`. It maps well to prompt_toolkit
-capabilities in the current Python implementation.
+Presentation presets also affect the REPL:
+
+- `expressive`
+- `compact`
+- `austere`
+
+## Config Writes in the REPL
+
+`config set` defaults to session scope in the REPL.
+
+Use `--save` if you want the change persisted:
+
+```text
+config set ui.format json
+config set ui.format json --save
+```
+
+Theme, presentation, and prompt-related changes rebuild the REPL on the next
+cycle so the new state becomes visible immediately.
+
+## Input Modes
+
+`repl.input_mode` controls the line editor behavior:
+
+- `auto`
+- `interactive`
+- `basic`
+
+If the REPL feels unreliable in a weak terminal, `basic` is the first setting
+to try.

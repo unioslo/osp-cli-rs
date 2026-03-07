@@ -21,5 +21,5 @@ target
 #.idea/
 
 # Generated local planning notes and coverage artifacts
-docs/plans/*.md
+docs/plans/
 lcov.info

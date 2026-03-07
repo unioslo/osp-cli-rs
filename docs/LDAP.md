@@ -1,19 +1,17 @@
-# LDAP Client (MVP and Beyond)
+# LDAP Reference
 
-This document defines the LDAP client behavior for the Rust rewrite, with a
-focus on the MVP (`ldap user`, `ldap netgroup`) and anonymous bind.
+This document describes the LDAP-facing behavior used by the LDAP command
+provider.
 
-## MVP Requirements
+## Core Behavior
 
-- Anonymous bind is allowed and should be the default when no credentials are
-  provided.
-- Only two commands are required: `ldap user` and `ldap netgroup`.
-- The client should be mockable for tests; no real LDAP network access is
-  required for MVP tests.
+- Anonymous bind is allowed by default when no credentials are provided.
+- `ldap user` and `ldap netgroup` are the baseline commands documented here.
+- Commands return list-of-row shaped output.
 
 ## Config Keys
 
-MVP keys (all optional):
+All keys are optional:
 
 - `ldap.url` (string) — LDAP server URL.
 - `ldap.base_dn` (string) — base search DN.
@@ -21,41 +19,42 @@ MVP keys (all optional):
 - `ldap.bind_password` (secret) — bind password.
 - `ldap.anonymous` (bool, default true) — allow anonymous bind.
 
-Compatibility aliases (optional):
+Compatibility aliases:
 
 - `ldap.bind_user` -> `ldap.bind_dn`
 - `ldap.domain_controlers` (legacy) -> derive `base_dn` if no base is set
 
 ## Command Contracts
 
-If `ldap user` is called without a uid, default to the active `user.name` from config or `-u/--user`.
+If `ldap user` is called without a uid, it defaults to the active `user.name`
+from config or `-u/--user`.
 
 
 **ldap user <uid>**
 
 - Returns a list of rows (even if one row).
-- Fields should match the MVP contract in docs/MVP_LDAP_REPL.md.
+- Fields should match the documented command contract and integration fixtures.
 
 **ldap netgroup <name>**
 
 - Returns a list of rows (even if one row).
-- Fields should match the MVP contract in docs/MVP_LDAP_REPL.md.
+- Fields should match the documented command contract and integration fixtures.
 
 ## Error Mapping
 
 - Connection failures -> `ConfigError` if URL missing, or `NetworkError` if unreachable.
 - Search yields no results -> empty list, not an error.
-- Invalid DN or auth failure -> `AuthError` (but MVP should avoid auth).
+- Invalid DN or auth failure -> `AuthError`.
 
-## Mock Client (MVP)
+## Test Fixture Expectations
 
-For tests, a simple in-memory LDAP client is acceptable:
+For tests and fixtures:
 
 - Use fixtures for `user` and `netgroup` responses.
 - Deterministic ordering of list fields.
 - Always return list-of-rows.
 
-## Later Extensions
+## Common Extensions
 
 - `ldap host`, `ldap org`, `ldap automount`, `ldap filegroup`.
 - Attribute filtering and custom LDAP filters.

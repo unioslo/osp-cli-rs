@@ -13,5 +13,11 @@ mod config_commands;
 #[path = "contracts/doctor_commands.rs"]
 mod doctor_commands;
 
+#[path = "contracts/history_commands.rs"]
+mod history_commands;
+
 #[path = "contracts/theme_commands.rs"]
 mod theme_commands;
+
+#[path = "contracts/version_commands.rs"]
+mod version_commands;

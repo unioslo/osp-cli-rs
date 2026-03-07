@@ -1,36 +1,18 @@
 # Config and Profile Resolution
 
-This is a deliberately simpler and more deterministic design than the current
-osprov-cli config system. It keeps the good parts (multi-source, profile +
-terminal scoping, placeholders, secrets isolation) and removes the parts that
-caused complexity (context stabilization loops, callable values in config).
+`osp` resolves config from multiple sources with explicit precedence, profile
+scoping, terminal scoping, and separate secret storage.
 
-## What We Keep From osprov-cli
+## Overview
 
-The current system has strong ideas worth preserving:
+Key properties:
 
-- Multiple sources with explicit precedence.
-- Two scoping axes with predictable resolution order.
-- Placeholder interpolation for paths and derived strings.
-- Separate secrets backend with strict permissions.
-- Diagnostics that show where values came from.
-
-## What We Do Differently
-
-- Config bootstrap is explicit:
-  - path bootstrap chooses which files to load
-  - profile bootstrap chooses the active profile
-  - runtime resolution handles ordinary keys after bootstrap is fixed
-- Profile is selected before config resolution. No resolver loops to “stabilize”
-  a profile. This removes oscillation risk entirely.
-- Config values are static. No callables stored in config files or defaults.
-  Derived values are computed in code after resolution.
-- Loader precedence is “last wins” and is listed in the docs. No hidden priority
-  math or “first wins” merging.
-- No default secrets in code. Tokens and passwords must come from secrets,
-  env vars, or CLI flags.
-- Strict schema by default. Unknown keys are rejected unless explicitly allowed
-  under an `extensions.*` namespace.
+- multiple sources with explicit precedence
+- profile and terminal scoping
+- placeholder interpolation for strings
+- separate secret storage
+- diagnostics that show where values came from
+- strict schema validation with `extensions.*` as the open namespace
 
 ## Data Model
 
@@ -303,7 +285,7 @@ ui.chrome.frame = "none"
 ui.messages.layout = "minimal"
 ```
 
-Migration note:
+Compatibility note:
 
 - if you used `gammel-og-bitter` before, use `ui.presentation = "austere"`
 - the old name remains a CLI alias, not the canonical config vocabulary
