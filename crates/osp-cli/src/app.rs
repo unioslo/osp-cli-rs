@@ -10,6 +10,7 @@ use osp_ui::messages::{MessageBuffer, MessageLevel};
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 use osp_ui::{RenderRuntime, RenderSettings, render_output};
 use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use terminal_size::{Width, terminal_size};
@@ -23,7 +24,7 @@ use crate::logging::init_developer_logging;
 use crate::plugin_manager::{
     CommandCatalogEntry, PluginDispatchContext, PluginDispatchError, PluginManager,
 };
-use crate::state::{AppState, LaunchContext, RuntimeContext, TerminalKind};
+use crate::state::{AppState, LaunchContext, TerminalKind};
 
 use crate::repl;
 
@@ -39,7 +40,8 @@ use crate::repl::help as repl_help;
 use crate::theme_loader;
 pub(crate) use bootstrap::{
     RuntimeConfigRequest, build_app_state, build_cli_session_layer, build_logging_config,
-    effective_debug_verbosity, effective_message_verbosity, resolve_runtime_config,
+    build_runtime_context, effective_debug_verbosity, effective_message_verbosity,
+    resolve_runtime_config,
 };
 pub(crate) use command_output::{
     CliCommandResult, CommandRenderRuntime, ReplCommandOutput, emit_messages, emit_messages_for_ui,
@@ -52,7 +54,8 @@ pub(crate) use config_explain::{
 };
 pub(crate) use dispatch::{
     RunAction, build_dispatch_plan, ensure_builtin_visible, ensure_dispatch_visibility,
-    ensure_plugin_visible, ensure_plugin_visible_for, normalize_profile_override,
+    ensure_plugin_visible, ensure_plugin_visible_for, normalize_cli_profile,
+    normalize_profile_override,
 };
 pub(crate) use external::is_help_passthrough;
 use external::{ExternalCommandRuntime, run_external_command};
@@ -70,6 +73,10 @@ pub(crate) const CMD_USE: &str = "use";
 pub(crate) const DEFAULT_REPL_PROMPT: &str = "╭─{user}@{domain} {indicator}\n╰─{profile}> ";
 pub(crate) const CURRENT_TERMINAL_SENTINEL: &str = "__current__";
 pub(crate) const REPL_SHELLABLE_COMMANDS: [&str; 5] = ["nh", "mreg", "ldap", "vm", "orch"];
+const SHARED_PLUGIN_ENV_PREFIX: &str = "extensions.plugins.env.";
+const PLUGIN_ENV_ROOT_PREFIX: &str = "extensions.plugins.";
+const PLUGIN_ENV_SEPARATOR: &str = ".env.";
+const PLUGIN_CONFIG_ENV_PREFIX: &str = "OSP_PLUGIN_CFG_";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReplCommandSpec {
@@ -81,6 +88,26 @@ pub(crate) struct ReplCommandSpec {
 pub(crate) struct ReplDispatchOverrides {
     pub(crate) message_verbosity: MessageLevel,
     pub(crate) debug_verbosity: u8,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PluginConfigEnv {
+    shared: Vec<PluginConfigEntry>,
+    by_plugin_id: HashMap<String, Vec<PluginConfigEntry>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PluginConfigScope {
+    Shared,
+    Plugin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginConfigEntry {
+    pub(crate) env_key: String,
+    pub(crate) value: String,
+    pub(crate) config_key: String,
+    pub(crate) scope: PluginConfigScope,
 }
 
 pub fn run_from<I, T>(args: I) -> Result<i32>
@@ -114,9 +141,10 @@ fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
     }
 }
 
+// Keep the top-level CLI entrypoint readable as a table of contents:
+// normalize input -> bootstrap runtime state -> hand off to the selected mode.
 fn run(mut cli: Cli) -> Result<i32> {
-    let normalized_profile = normalize_profile_override(cli.profile.clone());
-    cli.profile = normalized_profile.clone();
+    let normalized_profile = normalize_cli_profile(&mut cli);
     let runtime_load = cli.runtime_load_options();
     // Startup resolves config in three phases:
     // 1. bootstrap once to discover known profiles
@@ -130,11 +158,7 @@ fn run(mut cli: Cli) -> Result<i32> {
     let dispatch = build_dispatch_plan(&mut cli, &known_profiles)?;
 
     let terminal_kind = dispatch.action.terminal_kind();
-    let runtime_context = RuntimeContext::new(
-        dispatch.profile_override.clone(),
-        terminal_kind,
-        std::env::var("TERM").ok(),
-    );
+    let runtime_context = build_runtime_context(dispatch.profile_override.clone(), terminal_kind);
     let session_layer = build_cli_session_layer(
         &cli,
         runtime_context.profile_override().map(ToOwned::to_owned),
@@ -409,6 +433,7 @@ fn plugin_dispatch_context_for(
     runtime: &ExternalCommandRuntime<'_>,
     overrides: Option<ReplDispatchOverrides>,
 ) -> PluginDispatchContext {
+    let config_env = collect_plugin_config_env(runtime.config);
     let ui_verbosity = overrides
         .map(|value| value.message_verbosity)
         .unwrap_or(runtime.ui.message_verbosity);
@@ -430,6 +455,152 @@ fn plugin_dispatch_context_for(
             terminal: runtime.context.terminal_env().map(ToOwned::to_owned),
             terminal_kind,
         },
+        shared_env: config_env
+            .shared
+            .iter()
+            .map(|entry| (entry.env_key.clone(), entry.value.clone()))
+            .collect(),
+        plugin_env: config_env
+            .by_plugin_id
+            .into_iter()
+            .map(|(plugin_id, entries)| {
+                (
+                    plugin_id,
+                    entries
+                        .into_iter()
+                        .map(|entry| (entry.env_key, entry.value))
+                        .collect(),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn collect_plugin_config_env(config: &ResolvedConfig) -> PluginConfigEnv {
+    let mut shared: BTreeMap<String, PluginConfigEntry> = BTreeMap::new();
+    let mut by_plugin_id: HashMap<String, BTreeMap<String, PluginConfigEntry>> = HashMap::new();
+
+    for (key, entry) in config.values() {
+        if let Some(name) = key.strip_prefix(SHARED_PLUGIN_ENV_PREFIX) {
+            if let Some(env_entry) =
+                plugin_env_mapping(key, name, &entry.value, PluginConfigScope::Shared)
+            {
+                shared.insert(env_entry.env_key.clone(), env_entry);
+            }
+            continue;
+        }
+
+        let Some(plugin_key) = key.strip_prefix(PLUGIN_ENV_ROOT_PREFIX) else {
+            continue;
+        };
+        let Some((plugin_id, name)) = plugin_key.split_once(PLUGIN_ENV_SEPARATOR) else {
+            continue;
+        };
+        if plugin_id.is_empty() {
+            continue;
+        }
+        if let Some(env_entry) =
+            plugin_env_mapping(key, name, &entry.value, PluginConfigScope::Plugin)
+        {
+            by_plugin_id
+                .entry(plugin_id.to_string())
+                .or_default()
+                .insert(env_entry.env_key.clone(), env_entry);
+        }
+    }
+
+    PluginConfigEnv {
+        shared: shared.into_values().collect(),
+        by_plugin_id: by_plugin_id
+            .into_iter()
+            .map(|(plugin_id, env)| (plugin_id, env.into_values().collect()))
+            .collect(),
+    }
+}
+
+pub(crate) fn effective_plugin_config_entries(
+    config: &ResolvedConfig,
+    plugin_id: &str,
+) -> Vec<PluginConfigEntry> {
+    let config_env = collect_plugin_config_env(config);
+    let mut effective = BTreeMap::new();
+    for entry in config_env.shared {
+        effective.insert(entry.env_key.clone(), entry);
+    }
+    if let Some(entries) = config_env.by_plugin_id.get(plugin_id) {
+        for entry in entries {
+            effective.insert(entry.env_key.clone(), entry.clone());
+        }
+    }
+    effective.into_values().collect()
+}
+
+fn plugin_env_mapping(
+    config_key: &str,
+    name: &str,
+    value: &ConfigValue,
+    scope: PluginConfigScope,
+) -> Option<PluginConfigEntry> {
+    Some(PluginConfigEntry {
+        env_key: plugin_config_env_name(name)?,
+        value: config_value_to_plugin_env(value),
+        config_key: config_key.to_string(),
+        scope,
+    })
+}
+
+pub(crate) fn plugin_config_env_name(name: &str) -> Option<String> {
+    let mut normalized = String::new();
+    let mut last_was_separator = true;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_uppercase());
+            last_was_separator = false;
+        } else if !last_was_separator {
+            normalized.push('_');
+            last_was_separator = true;
+        }
+    }
+    while normalized.ends_with('_') {
+        normalized.pop();
+    }
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(format!("{PLUGIN_CONFIG_ENV_PREFIX}{normalized}"))
+}
+
+pub(crate) fn config_value_to_plugin_env(value: &ConfigValue) -> String {
+    match value {
+        ConfigValue::Secret(secret) => config_value_to_plugin_env(secret.expose()),
+        ConfigValue::String(value) => value.clone(),
+        ConfigValue::Bool(value) => value.to_string(),
+        ConfigValue::Integer(value) => value.to_string(),
+        ConfigValue::Float(value) => value.to_string(),
+        // Lists are encoded as JSON so plugins can round-trip structured values.
+        ConfigValue::List(values) => serde_json::Value::Array(
+            values
+                .iter()
+                .map(config_value_to_plugin_env_json)
+                .collect::<Vec<_>>(),
+        )
+        .to_string(),
+    }
+}
+
+fn config_value_to_plugin_env_json(value: &ConfigValue) -> serde_json::Value {
+    match value {
+        ConfigValue::Secret(secret) => config_value_to_plugin_env_json(secret.expose()),
+        ConfigValue::String(value) => value.clone().into(),
+        ConfigValue::Bool(value) => (*value).into(),
+        ConfigValue::Integer(value) => (*value).into(),
+        ConfigValue::Float(value) => (*value).into(),
+        ConfigValue::List(values) => serde_json::Value::Array(
+            values
+                .iter()
+                .map(config_value_to_plugin_env_json)
+                .collect::<Vec<_>>(),
+        ),
     }
 }
 
@@ -479,9 +650,10 @@ pub(crate) fn resolve_effective_render_settings(
 mod tests {
     use super::help::parse_help_render_overrides;
     use super::{
-        ReplCommandOutput, RunAction, build_cli_session_layer, build_dispatch_plan, doctor_cmd,
-        is_sensitive_key, parse_output_format_hint, resolve_effective_render_settings,
-        run_inline_builtin_command,
+        PluginConfigEntry, PluginConfigScope, ReplCommandOutput, RunAction,
+        build_cli_session_layer, build_dispatch_plan, collect_plugin_config_env,
+        config_value_to_plugin_env, doctor_cmd, is_sensitive_key, parse_output_format_hint,
+        plugin_config_env_name, resolve_effective_render_settings, run_inline_builtin_command,
     };
     use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
@@ -575,6 +747,8 @@ mod tests {
                 ..osp_completion::CommandSpec::default()
             },
             provider: "mock-provider".to_string(),
+            providers: vec!["mock-provider (explicit)".to_string()],
+            conflicted: false,
             source: PluginSource::Explicit,
         }]
     }
@@ -600,6 +774,100 @@ mod tests {
             Some(OutputFormat::Markdown)
         );
         assert_eq!(parse_output_format_hint(Some("unknown")), None);
+    }
+
+    #[test]
+    fn plugin_config_env_name_normalizes_extension_keys_unit() {
+        assert_eq!(
+            plugin_config_env_name("api.token"),
+            Some("OSP_PLUGIN_CFG_API_TOKEN".to_string())
+        );
+        assert_eq!(
+            plugin_config_env_name("nested-value/path"),
+            Some("OSP_PLUGIN_CFG_NESTED_VALUE_PATH".to_string())
+        );
+        assert_eq!(plugin_config_env_name("..."), None);
+    }
+
+    #[test]
+    fn plugin_config_env_serializes_lists_and_secrets_unit() {
+        assert_eq!(
+            config_value_to_plugin_env(&ConfigValue::List(vec![
+                ConfigValue::String("alpha".to_string()),
+                ConfigValue::Integer(2),
+                ConfigValue::Bool(true),
+            ])),
+            r#"["alpha",2,true]"#
+        );
+        assert_eq!(
+            config_value_to_plugin_env(&ConfigValue::String("sekrit".to_string()).into_secret()),
+            "sekrit"
+        );
+    }
+
+    #[test]
+    fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        defaults.set(
+            "extensions.plugins.env.shared.url",
+            "https://common.example",
+        );
+        defaults.set("extensions.plugins.env.endpoint", "shared");
+        defaults.set("extensions.plugins.cfg.env.endpoint", "plugin");
+        defaults.set("extensions.plugins.cfg.env.api.token", "token-123");
+        defaults.set("extensions.plugins.other.env.endpoint", "other");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let config = resolver
+            .resolve(ResolveOptions::default())
+            .expect("test config should resolve");
+
+        let env = collect_plugin_config_env(&config);
+
+        assert_eq!(
+            env.shared,
+            vec![
+                PluginConfigEntry {
+                    env_key: "OSP_PLUGIN_CFG_ENDPOINT".to_string(),
+                    value: "shared".to_string(),
+                    config_key: "extensions.plugins.env.endpoint".to_string(),
+                    scope: PluginConfigScope::Shared,
+                },
+                PluginConfigEntry {
+                    env_key: "OSP_PLUGIN_CFG_SHARED_URL".to_string(),
+                    value: "https://common.example".to_string(),
+                    config_key: "extensions.plugins.env.shared.url".to_string(),
+                    scope: PluginConfigScope::Shared,
+                },
+            ]
+        );
+        assert_eq!(
+            env.by_plugin_id.get("cfg"),
+            Some(&vec![
+                PluginConfigEntry {
+                    env_key: "OSP_PLUGIN_CFG_API_TOKEN".to_string(),
+                    value: "token-123".to_string(),
+                    config_key: "extensions.plugins.cfg.env.api.token".to_string(),
+                    scope: PluginConfigScope::Plugin,
+                },
+                PluginConfigEntry {
+                    env_key: "OSP_PLUGIN_CFG_ENDPOINT".to_string(),
+                    value: "plugin".to_string(),
+                    config_key: "extensions.plugins.cfg.env.endpoint".to_string(),
+                    scope: PluginConfigScope::Plugin,
+                },
+            ])
+        );
+        assert_eq!(
+            env.by_plugin_id.get("other"),
+            Some(&vec![PluginConfigEntry {
+                env_key: "OSP_PLUGIN_CFG_ENDPOINT".to_string(),
+                value: "other".to_string(),
+                config_key: "extensions.plugins.other.env.endpoint".to_string(),
+                scope: PluginConfigScope::Plugin,
+            }])
+        );
     }
 
     fn layer_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {
