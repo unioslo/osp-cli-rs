@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use osp_config::{ConfigSource, ResolvedConfig};
 use osp_ui::theme::{
-    builtin_themes, display_name_from_id, find_builtin_theme, normalize_theme_name,
-    ThemeDefinition, ThemeOverrides, ThemePalette,
+    ThemeDefinition, ThemeOverrides, ThemePalette, builtin_themes, display_name_from_id,
+    find_builtin_theme, normalize_theme_name,
 };
 
 #[derive(Debug, Clone)]
@@ -158,11 +158,10 @@ fn load_custom_themes(config: &ResolvedConfig) -> CustomThemeLoad {
                         Err(_) => {
                             // The full recursive resolve runs after all specs are known.
                             // Validate only the direct patch values at parse time here.
-                            let preview = apply_theme_overrides(
+                            apply_theme_overrides(
                                 empty_theme(&spec.id, &spec.name, spec.base.clone()),
                                 &spec,
-                            );
-                            preview
+                            )
                         }
                     };
                     for message in validate_theme_specs(&theme) {
@@ -577,8 +576,8 @@ fn empty_palette() -> ThemePalette {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_theme_overrides, empty_theme, is_valid_color_spec, parse_theme_spec,
-        resolve_theme_spec, ThemePaletteFile, ThemeSpec,
+        ThemePaletteFile, ThemeSpec, apply_theme_overrides, empty_theme, is_valid_color_spec,
+        parse_theme_spec, resolve_theme_spec,
     };
     use std::collections::BTreeMap;
     use std::fs;
