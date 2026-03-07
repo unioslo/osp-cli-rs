@@ -109,12 +109,6 @@ pub struct UiState {
     pub debug_verbosity: u8,
 }
 
-pub struct ReplState {
-    pub prompt_prefix: String,
-    pub history_enabled: bool,
-    pub history_shell: HistoryShellContext,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplScopeFrame {
     command: String,
@@ -219,8 +213,10 @@ pub struct LaunchContext {
     pub runtime_load: RuntimeLoadOptions,
 }
 
-#[derive(Default)]
-pub struct SessionState {
+pub struct AppSession {
+    pub prompt_prefix: String,
+    pub history_enabled: bool,
+    pub history_shell: HistoryShellContext,
     pub scope: ReplScopeStack,
     pub last_rows: Vec<Row>,
     pub last_failure: Option<LastFailure>,
@@ -237,10 +233,13 @@ pub struct LastFailure {
     pub detail: String,
 }
 
-impl SessionState {
+impl AppSession {
     pub fn with_cache_limit(max_cached_results: usize) -> Self {
         let bounded = max_cached_results.max(1);
         Self {
+            prompt_prefix: "osp".to_string(),
+            history_enabled: true,
+            history_shell: HistoryShellContext::default(),
             scope: ReplScopeStack::default(),
             last_rows: Vec::new(),
             last_failure: None,
@@ -292,14 +291,18 @@ impl SessionState {
             .get(command_line.trim())
             .map(|rows| rows.as_slice())
     }
+
+    pub fn sync_history_shell_context(&self) {
+        self.history_shell.set_prefix(self.scope.history_prefix());
+    }
 }
 
-pub struct ClientsState {
+pub struct AppClients {
     pub plugins: PluginManager,
     config_revision: u64,
 }
 
-impl ClientsState {
+impl AppClients {
     pub fn new(plugins: PluginManager, config_revision: u64) -> Self {
         Self {
             plugins,
@@ -314,6 +317,15 @@ impl ClientsState {
     pub fn sync_config_revision(&mut self, config_revision: u64) {
         self.config_revision = config_revision;
     }
+}
+
+pub struct AppRuntime {
+    pub context: RuntimeContext,
+    pub config: ConfigState,
+    pub ui: UiState,
+    pub auth: AuthState,
+    pub(crate) themes: ThemeCatalog,
+    pub launch: LaunchContext,
 }
 
 pub struct AuthState {
@@ -339,15 +351,9 @@ impl AuthState {
 }
 
 pub struct AppState {
-    pub context: RuntimeContext,
-    pub config: ConfigState,
-    pub ui: UiState,
-    pub auth: AuthState,
-    pub(crate) themes: ThemeCatalog,
-    pub repl: ReplState,
-    pub session: SessionState,
-    pub clients: ClientsState,
-    pub launch: LaunchContext,
+    pub runtime: AppRuntime,
+    pub session: AppSession,
+    pub clients: AppClients,
 }
 
 pub(crate) struct AppStateInit {
@@ -373,34 +379,29 @@ impl AppState {
         );
 
         Self {
-            context: init.context,
-            config: config_state,
-            ui: UiState {
-                render_settings: init.render_settings,
-                message_verbosity: init.message_verbosity,
-                debug_verbosity: init.debug_verbosity,
+            runtime: AppRuntime {
+                context: init.context,
+                config: config_state,
+                ui: UiState {
+                    render_settings: init.render_settings,
+                    message_verbosity: init.message_verbosity,
+                    debug_verbosity: init.debug_verbosity,
+                },
+                auth: auth_state,
+                themes: init.themes,
+                launch: init.launch,
             },
-            auth: auth_state,
-            themes: init.themes,
-            repl: ReplState {
-                prompt_prefix: "osp".to_string(),
-                history_enabled: true,
-                history_shell: HistoryShellContext::default(),
-            },
-            session: SessionState::with_cache_limit(session_cache_max_results),
-            clients: ClientsState::new(init.plugins, config_revision),
-            launch: init.launch,
+            session: AppSession::with_cache_limit(session_cache_max_results),
+            clients: AppClients::new(init.plugins, config_revision),
         }
     }
 
     pub fn prompt_prefix(&self) -> String {
-        self.repl.prompt_prefix.clone()
+        self.session.prompt_prefix.clone()
     }
 
     pub fn sync_history_shell_context(&self) {
-        self.repl
-            .history_shell
-            .set_prefix(self.session.scope.history_prefix());
+        self.session.sync_history_shell_context();
     }
 
     pub fn record_repl_rows(&mut self, command_line: &str, rows: Vec<Row>) {

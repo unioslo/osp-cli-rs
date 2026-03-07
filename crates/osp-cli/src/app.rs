@@ -22,7 +22,7 @@ use crate::logging::init_developer_logging;
 use crate::plugin_manager::{
     CommandCatalogEntry, PluginDispatchContext, PluginDispatchError, PluginManager,
 };
-use crate::state::{AppState, LaunchContext, TerminalKind};
+use crate::state::{AppClients, AppRuntime, AppSession, AuthState, LaunchContext, TerminalKind};
 
 use crate::repl;
 
@@ -43,21 +43,21 @@ pub(crate) use bootstrap::{
 };
 pub(crate) use command_output::{
     CliCommandResult, CommandRenderRuntime, PreparedPluginResponse, ReplCommandOutput,
-    apply_output_stages, emit_messages, emit_messages_for_ui, emit_messages_with_runtime,
-    emit_messages_with_verbosity, maybe_copy_output, maybe_copy_output_with_runtime,
-    prepare_plugin_response, run_cli_command,
+    apply_output_stages, emit_messages_for_ui, emit_messages_with_runtime,
+    maybe_copy_output_with_runtime, prepare_plugin_response, run_cli_command,
 };
 pub(crate) use config_explain::{
-    config_explain_json, config_explain_output, config_value_to_json, explain_runtime_config,
-    format_scope, is_sensitive_key, render_config_explain_text,
+    ConfigExplainContext, config_explain_json, config_explain_output, config_value_to_json,
+    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
 };
 pub(crate) use dispatch::{
-    RunAction, build_dispatch_plan, ensure_builtin_visible, ensure_dispatch_visibility,
-    ensure_plugin_visible, ensure_plugin_visible_for, normalize_cli_profile,
-    normalize_profile_override,
+    RunAction, build_dispatch_plan, ensure_builtin_visible_for, ensure_dispatch_visibility,
+    ensure_plugin_visible_for, normalize_cli_profile, normalize_profile_override,
 };
 pub(crate) use external::is_help_passthrough;
 use external::{ExternalCommandRuntime, run_external_command};
+pub(crate) use repl_lifecycle::rebuild_repl_parts;
+#[cfg(test)]
 pub(crate) use repl_lifecycle::rebuild_repl_state;
 
 pub(crate) const CMD_PLUGINS: &str = "plugins";
@@ -210,46 +210,92 @@ fn run(mut cli: Cli) -> Result<i32> {
     if let Some(layer) = session_layer {
         state.session.config_overrides = layer;
     }
-    ensure_dispatch_visibility(&state, &dispatch.action)?;
+    ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
 
     tracing::info!(
-        profile = %state.config.resolved().active_profile(),
-        terminal = %state.context.terminal_kind().as_config_terminal(),
+        profile = %state.runtime.config.resolved().active_profile(),
+        terminal = %state.runtime.context.terminal_kind().as_config_terminal(),
         "osp session initialized"
     );
 
     match dispatch.action {
         RunAction::Repl => repl::run_plugin_repl(&mut state),
-        RunAction::ReplCommand(args) => run_builtin_cli_command(&mut state, Commands::Repl(args)),
-        RunAction::Plugins(args) => run_builtin_cli_command(&mut state, Commands::Plugins(args)),
-        RunAction::Doctor(args) => run_builtin_cli_command(&mut state, Commands::Doctor(args)),
-        RunAction::Theme(args) => run_builtin_cli_command(&mut state, Commands::Theme(args)),
-        RunAction::Config(args) => run_builtin_cli_command(&mut state, Commands::Config(args)),
-        RunAction::History(args) => run_builtin_cli_command(&mut state, Commands::History(args)),
-        RunAction::External(tokens) => run_external_command(&mut state, &tokens),
+        RunAction::ReplCommand(args) => run_builtin_cli_command_parts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            Commands::Repl(args),
+        ),
+        RunAction::Plugins(args) => run_builtin_cli_command_parts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            Commands::Plugins(args),
+        ),
+        RunAction::Doctor(args) => run_builtin_cli_command_parts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            Commands::Doctor(args),
+        ),
+        RunAction::Theme(args) => run_builtin_cli_command_parts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            Commands::Theme(args),
+        ),
+        RunAction::Config(args) => run_builtin_cli_command_parts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            Commands::Config(args),
+        ),
+        RunAction::History(args) => run_builtin_cli_command_parts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            Commands::History(args),
+        ),
+        RunAction::External(tokens) => run_external_command(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &tokens,
+        ),
     }
 }
 
-pub(crate) fn authorized_command_catalog(state: &AppState) -> Result<Vec<CommandCatalogEntry>> {
-    let all = state
-        .clients
-        .plugins
+pub(crate) fn authorized_command_catalog_for(
+    auth: &AuthState,
+    plugins: &PluginManager,
+) -> Result<Vec<CommandCatalogEntry>> {
+    let all = plugins
         .command_catalog()
         .map_err(|err| miette!("{err:#}"))?;
     Ok(all
         .into_iter()
-        .filter(|entry| state.auth.is_plugin_command_visible(&entry.name))
+        .filter(|entry| auth.is_plugin_command_visible(&entry.name))
         .collect())
 }
 
-fn run_builtin_cli_command(state: &mut AppState, command: Commands) -> Result<i32> {
-    let result = dispatch_builtin_command(state, command)?
+fn run_builtin_cli_command_parts(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    command: Commands,
+) -> Result<i32> {
+    let result = dispatch_builtin_command_parts(runtime, session, clients, command)?
         .ok_or_else(|| miette!("expected builtin command"))?;
-    run_cli_command(&CommandRenderRuntime::from_state(state), result)
+    run_cli_command(
+        &CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui),
+        result,
+    )
 }
 
 fn run_inline_builtin_command(
-    state: &mut AppState,
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
     command: Commands,
     stages: &[String],
 ) -> Result<Option<CliCommandResult>> {
@@ -259,44 +305,95 @@ fn run_inline_builtin_command(
 
     let spec = repl::repl_command_spec(&command);
     ensure_command_supports_dsl(&spec, stages)?;
-    dispatch_builtin_command(state, command)
+    dispatch_builtin_command_parts(runtime, session, clients, command)
 }
 
-fn dispatch_builtin_command(
-    state: &mut AppState,
+fn dispatch_builtin_command_parts(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
     command: Commands,
 ) -> Result<Option<CliCommandResult>> {
     match command {
         Commands::Plugins(args) => {
-            ensure_builtin_visible(state, CMD_PLUGINS)?;
-            plugins_cmd::run_plugins_command(state, args).map(Some)
-        }
-        Commands::Doctor(args) => {
-            ensure_builtin_visible(state, CMD_DOCTOR)?;
-            doctor_cmd::run_doctor_command(state, args).map(Some)
-        }
-        Commands::Theme(args) => {
-            ensure_builtin_visible(state, CMD_THEME)?;
-            theme_cmd::run_theme_command(
-                &mut state.session.config_overrides,
-                theme_cmd::ThemeCommandContext {
-                    config: state.config.resolved(),
-                    ui: &state.ui,
-                    themes: &state.themes,
+            ensure_builtin_visible_for(&runtime.auth, CMD_PLUGINS)?;
+            plugins_cmd::run_plugins_command(
+                plugins_cmd::PluginsCommandContext {
+                    config: runtime.config.resolved(),
+                    ui: &runtime.ui,
+                    auth: &runtime.auth,
+                    plugin_manager: &clients.plugins,
                 },
                 args,
             )
             .map(Some)
         }
+        Commands::Doctor(args) => {
+            ensure_builtin_visible_for(&runtime.auth, CMD_DOCTOR)?;
+            doctor_cmd::run_doctor_command(
+                doctor_cmd::DoctorCommandContext {
+                    config: config_cmd::ConfigReadContext {
+                        context: &runtime.context,
+                        config: runtime.config.resolved(),
+                        ui: &runtime.ui,
+                        themes: &runtime.themes,
+                        session_layer: &session.config_overrides,
+                        runtime_load: runtime.launch.runtime_load,
+                    },
+                    plugins: plugins_cmd::PluginsCommandContext {
+                        config: runtime.config.resolved(),
+                        ui: &runtime.ui,
+                        auth: &runtime.auth,
+                        plugin_manager: &clients.plugins,
+                    },
+                    ui: &runtime.ui,
+                    auth: &runtime.auth,
+                    themes: &runtime.themes,
+                    last_failure: session.last_failure.as_ref(),
+                },
+                args,
+            )
+            .map(Some)
+        }
+        Commands::Theme(args) => {
+            ensure_builtin_visible_for(&runtime.auth, CMD_THEME)?;
+            let config = runtime.config.resolved();
+            let ui = &runtime.ui;
+            let themes = &runtime.themes;
+            theme_cmd::run_theme_command(
+                &mut session.config_overrides,
+                theme_cmd::ThemeCommandContext { config, ui, themes },
+                args,
+            )
+            .map(Some)
+        }
         Commands::Config(args) => {
-            ensure_builtin_visible(state, CMD_CONFIG)?;
-            config_cmd::run_config_command(state, args).map(Some)
+            ensure_builtin_visible_for(&runtime.auth, CMD_CONFIG)?;
+            let context = &runtime.context;
+            let config = runtime.config.resolved();
+            let ui = &runtime.ui;
+            let themes = &runtime.themes;
+            let runtime_load = runtime.launch.runtime_load;
+            config_cmd::run_config_command(
+                config_cmd::ConfigCommandContext {
+                    context,
+                    config,
+                    ui,
+                    themes,
+                    session_overrides: &mut session.config_overrides,
+                    runtime_load,
+                },
+                args,
+            )
+            .map(Some)
         }
         Commands::History(args) => {
-            ensure_builtin_visible(state, CMD_HISTORY)?;
-            history_cmd::run_history_command(state, args).map(Some)
+            ensure_builtin_visible_for(&runtime.auth, CMD_HISTORY)?;
+            history_cmd::run_history_command(args).map(Some)
         }
-        Commands::Repl(args) => repl::run_repl_debug_command(state, args).map(Some),
+        Commands::Repl(args) => {
+            repl::run_repl_debug_command_for(runtime, session, clients, args).map(Some)
+        }
         Commands::External(_) => Ok(None),
     }
 }
@@ -421,25 +518,39 @@ fn to_ui_verbosity(level: MessageLevel) -> UiVerbosity {
     }
 }
 
-pub(crate) fn plugin_dispatch_context(
-    state: &AppState,
+pub(crate) fn plugin_dispatch_context_for_runtime(
+    runtime: &crate::state::AppRuntime,
     overrides: Option<ReplDispatchOverrides>,
 ) -> PluginDispatchContext {
-    plugin_dispatch_context_for(&ExternalCommandRuntime::from_state(state), overrides)
+    build_plugin_dispatch_context(
+        &runtime.context,
+        runtime.config.resolved(),
+        &runtime.ui,
+        overrides,
+    )
 }
 
 fn plugin_dispatch_context_for(
     runtime: &ExternalCommandRuntime<'_>,
     overrides: Option<ReplDispatchOverrides>,
 ) -> PluginDispatchContext {
-    let config_env = collect_plugin_config_env(runtime.config);
+    build_plugin_dispatch_context(runtime.context, runtime.config, runtime.ui, overrides)
+}
+
+fn build_plugin_dispatch_context(
+    context: &crate::state::RuntimeContext,
+    config: &ResolvedConfig,
+    ui: &crate::state::UiState,
+    overrides: Option<ReplDispatchOverrides>,
+) -> PluginDispatchContext {
+    let config_env = collect_plugin_config_env(config);
     let ui_verbosity = overrides
         .map(|value| value.message_verbosity)
-        .unwrap_or(runtime.ui.message_verbosity);
+        .unwrap_or(ui.message_verbosity);
     let debug_verbosity = overrides
         .map(|value| value.debug_verbosity)
-        .unwrap_or(runtime.ui.debug_verbosity);
-    let terminal_kind = match runtime.context.terminal_kind() {
+        .unwrap_or(ui.debug_verbosity);
+    let terminal_kind = match context.terminal_kind() {
         TerminalKind::Cli => RuntimeTerminalKind::Cli,
         TerminalKind::Repl => RuntimeTerminalKind::Repl,
     };
@@ -447,11 +558,11 @@ fn plugin_dispatch_context_for(
         runtime_hints: RuntimeHints {
             ui_verbosity: to_ui_verbosity(ui_verbosity),
             debug_level: debug_verbosity.min(3),
-            format: runtime.ui.render_settings.format,
-            color: runtime.ui.render_settings.color,
-            unicode: runtime.ui.render_settings.unicode,
-            profile: Some(runtime.config.active_profile().to_string()),
-            terminal: runtime.context.terminal_env().map(ToOwned::to_owned),
+            format: ui.render_settings.format,
+            color: ui.render_settings.color,
+            unicode: ui.render_settings.unicode,
+            profile: Some(config.active_profile().to_string()),
+            terminal: context.terminal_env().map(ToOwned::to_owned),
             terminal_kind,
         },
         shared_env: config_env
@@ -630,7 +741,7 @@ mod tests {
     use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
     use crate::plugin_manager::{CommandCatalogEntry, PluginManager, PluginSource};
     use crate::repl;
-    use crate::repl::{completion, help as repl_help, surface};
+    use crate::repl::{completion, dispatch as repl_dispatch, help as repl_help, surface};
     use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
     use clap::Parser;
     use osp_config::{
@@ -646,6 +757,13 @@ mod tests {
 
     fn profiles(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn repl_view<'a>(
+        runtime: &'a crate::state::AppRuntime,
+        session: &'a crate::state::AppSession,
+    ) -> repl::ReplViewContext<'a> {
+        repl::ReplViewContext::from_parts(runtime, session)
     }
 
     fn make_completion_state(auth_visible_builtins: Option<&str>) -> AppState {
@@ -1192,7 +1310,13 @@ mod tests {
             }),
         });
 
-        let err = match run_inline_builtin_command(&mut state, command, &["uid".to_string()]) {
+        let err = match run_inline_builtin_command(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            command,
+            &["uid".to_string()],
+        ) {
             Ok(_) => panic!("expected DSL rejection"),
             Err(err) => err,
         };
@@ -1225,8 +1349,9 @@ mod tests {
     #[test]
     fn repl_help_alias_rewrites_to_command_help_unit() {
         let state = make_completion_state(None);
-        let rewritten = repl::ReplParsedLine::parse("help ldap user", state.config.resolved())
-            .expect("help alias should parse");
+        let rewritten =
+            repl::ReplParsedLine::parse("help ldap user", state.runtime.config.resolved())
+                .expect("help alias should parse");
         assert_eq!(
             rewritten.dispatch_tokens,
             vec!["ldap".to_string(), "user".to_string(), "--help".to_string()]
@@ -1236,8 +1361,9 @@ mod tests {
     #[test]
     fn repl_help_alias_preserves_existing_help_flag_unit() {
         let state = make_completion_state(None);
-        let rewritten = repl::ReplParsedLine::parse("help ldap --help", state.config.resolved())
-            .expect("help alias should parse");
+        let rewritten =
+            repl::ReplParsedLine::parse("help ldap --help", state.runtime.config.resolved())
+                .expect("help alias should parse");
         assert_eq!(
             rewritten.dispatch_tokens,
             vec!["ldap".to_string(), "--help".to_string()]
@@ -1247,7 +1373,7 @@ mod tests {
     #[test]
     fn repl_help_alias_skips_bare_help_unit() {
         let state = make_completion_state(None);
-        let parsed = repl::ReplParsedLine::parse("help", state.config.resolved())
+        let parsed = repl::ReplParsedLine::parse("help", state.runtime.config.resolved())
             .expect("bare help should parse");
         assert_eq!(parsed.command_tokens, vec!["help".to_string()]);
         assert_eq!(parsed.dispatch_tokens, vec!["help".to_string()]);
@@ -1285,7 +1411,8 @@ mod tests {
     fn repl_shell_leave_message_unit() {
         let mut state = make_completion_state(None);
         state.session.scope.enter("ldap");
-        let message = repl::leave_repl_shell(&mut state).expect("shell should leave");
+        let message =
+            repl_dispatch::leave_repl_shell(&mut state.session).expect("shell should leave");
         assert_eq!(message, "Leaving ldap shell. Back at root.\n");
         assert!(state.session.scope.is_root());
     }
@@ -1293,11 +1420,11 @@ mod tests {
     #[test]
     fn repl_shell_enter_only_from_root_unit() {
         let mut state = make_completion_state(None);
-        let ldap = repl::ReplParsedLine::parse("ldap", state.config.resolved())
+        let ldap = repl::ReplParsedLine::parse("ldap", state.runtime.config.resolved())
             .expect("ldap should parse");
         assert_eq!(ldap.shell_entry_command(&state.session.scope), Some("ldap"));
         state.session.scope.enter("ldap");
-        let mreg = repl::ReplParsedLine::parse("mreg", state.config.resolved())
+        let mreg = repl::ReplParsedLine::parse("mreg", state.runtime.config.resolved())
             .expect("mreg should parse");
         assert_eq!(mreg.shell_entry_command(&state.session.scope), Some("mreg"));
         assert_eq!(ldap.shell_entry_command(&state.session.scope), None);
@@ -1307,8 +1434,12 @@ mod tests {
     fn repl_partial_root_completion_does_not_enter_shell_unit() {
         let state = make_completion_state(None);
         let catalog = sample_catalog();
-        let surface = surface::build_repl_surface(&state, &catalog);
-        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let surface =
+            surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+        let tree = completion::build_repl_completion_tree(
+            repl_view(&state.runtime, &state.session),
+            &surface,
+        );
         let engine = osp_completion::CompletionEngine::new(tree);
 
         let (_, suggestions) = engine.complete("or", 2);
@@ -1317,7 +1448,7 @@ mod tests {
             osp_completion::SuggestionOutput::Item(item) if item.text == "orch"
         )));
 
-        let parsed = repl::ReplParsedLine::parse("or", state.config.resolved())
+        let parsed = repl::ReplParsedLine::parse("or", state.runtime.config.resolved())
             .expect("partial command should parse");
         assert_eq!(parsed.shell_entry_command(&state.session.scope), None);
     }
@@ -1327,8 +1458,12 @@ mod tests {
         let mut state = make_completion_state(None);
         state.session.scope.enter("orch");
         let catalog = sample_catalog();
-        let surface = surface::build_repl_surface(&state, &catalog);
-        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let surface =
+            surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+        let tree = completion::build_repl_completion_tree(
+            repl_view(&state.runtime, &state.session),
+            &surface,
+        );
         let engine = osp_completion::CompletionEngine::new(tree);
 
         let (_, suggestions) = engine.complete("prov", 4);
@@ -1337,8 +1472,9 @@ mod tests {
             osp_completion::SuggestionOutput::Item(item) if item.text == "provision"
         )));
 
-        let parsed = repl::ReplParsedLine::parse("provision --os alma", state.config.resolved())
-            .expect("scoped command should parse");
+        let parsed =
+            repl::ReplParsedLine::parse("provision --os alma", state.runtime.config.resolved())
+                .expect("scoped command should parse");
         assert_eq!(
             parsed.prefixed_tokens(&state.session.scope),
             vec![
@@ -1357,8 +1493,12 @@ mod tests {
             &[("alias.ops", "orch provision --provider vmware")],
         );
         let catalog = sample_catalog();
-        let surface = surface::build_repl_surface(&state, &catalog);
-        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let surface =
+            surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+        let tree = completion::build_repl_completion_tree(
+            repl_view(&state.runtime, &state.session),
+            &surface,
+        );
         let engine = osp_completion::CompletionEngine::new(tree);
 
         let (_, suggestions) = engine.complete("op", 2);
@@ -1367,7 +1507,7 @@ mod tests {
             osp_completion::SuggestionOutput::Item(item) if item.text == "ops"
         )));
 
-        let parsed = repl::ReplParsedLine::parse("op", state.config.resolved())
+        let parsed = repl::ReplParsedLine::parse("op", state.runtime.config.resolved())
             .expect("partial alias should parse");
         assert_eq!(parsed.shell_entry_command(&state.session.scope), None);
     }
@@ -1377,7 +1517,8 @@ mod tests {
         let state = make_completion_state(None);
         let raw =
             "Usage: config <COMMAND>\n\nCommands:\n  show\n\nOptions:\n  -h, --help  Print help\n";
-        let rendered = repl_help::render_repl_help_with_chrome(&state, raw);
+        let rendered =
+            repl_help::render_repl_help_with_chrome(repl_view(&state.runtime, &state.session), raw);
         assert!(rendered.contains("  Usage: config <COMMAND>"));
         assert!(rendered.contains("Commands:"));
         assert!(rendered.contains("Options:"));
@@ -1387,7 +1528,10 @@ mod tests {
     fn repl_help_chrome_passthrough_without_known_sections_unit() {
         let state = make_completion_state(None);
         let raw = "custom help text";
-        assert_eq!(repl_help::render_repl_help_with_chrome(&state, raw), raw);
+        assert_eq!(
+            repl_help::render_repl_help_with_chrome(repl_view(&state.runtime, &state.session), raw,),
+            raw
+        );
     }
 
     #[test]
@@ -1434,7 +1578,7 @@ mod tests {
     #[test]
     fn help_chrome_uses_unicode_dividers_when_enabled_unit() {
         let state = make_completion_state(None);
-        let mut resolved = state.ui.render_settings.resolve_render_settings();
+        let mut resolved = state.runtime.ui.render_settings.resolve_render_settings();
         resolved.unicode = true;
         let rendered = repl_help::render_help_with_chrome(
             "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
@@ -1460,9 +1604,13 @@ mod tests {
     fn repl_completion_tree_contains_builtin_and_plugin_commands_unit() {
         let state = make_completion_state(None);
         let catalog = sample_catalog();
-        let surface = surface::build_repl_surface(&state, &catalog);
+        let surface =
+            surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
-        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let tree = completion::build_repl_completion_tree(
+            repl_view(&state.runtime, &state.session),
+            &surface,
+        );
         assert!(tree.root.children.contains_key("help"));
         assert!(tree.root.children.contains_key("exit"));
         assert!(tree.root.children.contains_key("quit"));
@@ -1487,9 +1635,13 @@ mod tests {
     fn repl_completion_tree_injects_config_set_schema_keys_unit() {
         let state = make_completion_state(None);
         let catalog = sample_catalog();
-        let surface = surface::build_repl_surface(&state, &catalog);
+        let surface =
+            surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
-        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let tree = completion::build_repl_completion_tree(
+            repl_view(&state.runtime, &state.session),
+            &surface,
+        );
         let set_node = &tree.root.children["config"].children["set"];
         let ui_mode = &set_node.children["ui.mode"];
         assert!(ui_mode.value_key);
@@ -1506,9 +1658,13 @@ mod tests {
     fn repl_completion_tree_respects_builtin_visibility_unit() {
         let state = make_completion_state(Some("theme"));
         let catalog = sample_catalog();
-        let surface = surface::build_repl_surface(&state, &catalog);
+        let surface =
+            surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
-        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let tree = completion::build_repl_completion_tree(
+            repl_view(&state.runtime, &state.session),
+            &surface,
+        );
         assert!(tree.root.children.contains_key("theme"));
         assert!(!tree.root.children.contains_key("config"));
         assert!(!tree.root.children.contains_key("plugins"));
@@ -1520,9 +1676,13 @@ mod tests {
         let mut state = make_completion_state(None);
         state.session.scope.enter("orch");
         let catalog = sample_catalog();
-        let surface = surface::build_repl_surface(&state, &catalog);
+        let surface =
+            surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
-        let tree = completion::build_repl_completion_tree(&state, &surface);
+        let tree = completion::build_repl_completion_tree(
+            repl_view(&state.runtime, &state.session),
+            &surface,
+        );
         assert!(!tree.root.children.contains_key("orch"));
         assert!(tree.root.children.contains_key("provision"));
         assert!(tree.root.children.contains_key("help"));
@@ -1534,7 +1694,8 @@ mod tests {
     fn repl_surface_drives_overview_and_completion_visibility_unit() {
         let state = make_completion_state(Some("theme config"));
         let catalog = sample_catalog();
-        let surface = surface::build_repl_surface(&state, &catalog);
+        let surface =
+            surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
         let names = surface
             .overview_entries
@@ -1583,8 +1744,14 @@ JSON
         let mut state = make_test_state(vec![dir.clone()]);
 
         let history = make_test_history(&mut state);
-        let err = repl::execute_repl_plugin_line(&mut state, &history, "fail")
-            .expect_err("response ok=false should become repl error");
+        let err = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "fail",
+        )
+        .expect_err("response ok=false should become repl error");
         assert!(err.to_string().contains("MOCK_ERR: mock failure"));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1622,15 +1789,27 @@ JSON
         state.session.max_cached_results = 1;
 
         let history = make_test_history(&mut state);
-        let first = repl::execute_repl_plugin_line(&mut state, &history, "cache first")
-            .expect("first command should succeed");
+        let first = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "cache first",
+        )
+        .expect("first command should succeed");
         match first {
             osp_repl::ReplLineResult::Continue(text) => assert!(text.contains("ok")),
             other => panic!("unexpected repl result: {other:?}"),
         }
 
-        let second = repl::execute_repl_plugin_line(&mut state, &history, "cache second")
-            .expect("second command should succeed");
+        let second = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "cache second",
+        )
+        .expect("second command should succeed");
         match second {
             osp_repl::ReplLineResult::Continue(text) => assert!(text.contains("ok")),
             other => panic!("unexpected repl result: {other:?}"),
@@ -1653,7 +1832,7 @@ JSON
         let history = make_test_history(&mut state);
         let stages = vec!["message".to_string()];
 
-        let dispatch_context = super::plugin_dispatch_context(&state, None);
+        let dispatch_context = super::plugin_dispatch_context_for_runtime(&state.runtime, None);
         let response = state
             .clients
             .plugins
@@ -1670,13 +1849,19 @@ JSON
         let cli_rendered = render_output(
             &prepared.output,
             &super::resolve_effective_render_settings(
-                &state.ui.render_settings,
+                &state.runtime.ui.render_settings,
                 prepared.format_hint,
             ),
         );
 
-        let repl_rendered = repl::execute_repl_plugin_line(&mut state, &history, "hello | message")
-            .expect("repl command should succeed");
+        let repl_rendered = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "hello | message",
+        )
+        .expect("repl command should succeed");
         match repl_rendered {
             osp_repl::ReplLineResult::Continue(text) => {
                 assert_eq!(text.trim(), cli_rendered.trim());
@@ -1705,21 +1890,24 @@ JSON
         state.session.config_overrides.set("theme.name", "dracula");
         state.session.scope.enter("orch");
 
-        state.repl.history_shell = HistoryShellContext::default();
+        state.session.history_shell = HistoryShellContext::default();
         state.sync_history_shell_context();
 
         let next = super::rebuild_repl_state(&state).expect("rebuild should succeed");
 
         assert_eq!(
-            next.config.resolved().get_string("user.name"),
+            next.runtime.config.resolved().get_string("user.name"),
             Some("launch-user")
         );
-        assert_eq!(next.ui.message_verbosity, MessageLevel::Trace);
-        assert_eq!(next.ui.debug_verbosity, 2);
-        assert_eq!(next.ui.render_settings.format, OutputFormat::Json);
-        assert_eq!(next.ui.render_settings.theme_name, "dracula");
+        assert_eq!(next.runtime.ui.message_verbosity, MessageLevel::Trace);
+        assert_eq!(next.runtime.ui.debug_verbosity, 2);
+        assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Json);
+        assert_eq!(next.runtime.ui.render_settings.theme_name, "dracula");
         assert_eq!(next.session.scope.commands(), vec!["orch".to_string()]);
-        assert_eq!(next.repl.history_shell.prefix(), Some("orch ".to_string()));
+        assert_eq!(
+            next.session.history_shell.prefix(),
+            Some("orch ".to_string())
+        );
     }
 
     #[cfg(unix)]
@@ -1730,19 +1918,25 @@ JSON
 
         let next = super::rebuild_repl_state(&state).expect("rebuild should succeed");
 
-        assert_eq!(next.ui.render_settings.format, OutputFormat::Table);
+        assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Table);
     }
 
     #[cfg(unix)]
     #[test]
     fn repl_reload_intent_matches_command_scope_unit() {
         let mut state = make_test_state(Vec::new());
-        state.themes = crate::theme_loader::load_theme_catalog(state.config.resolved());
+        state.runtime.themes =
+            crate::theme_loader::load_theme_catalog(state.runtime.config.resolved());
         let history = make_test_history(&mut state);
 
-        let theme_result =
-            repl::execute_repl_plugin_line(&mut state, &history, "theme use dracula")
-                .expect("theme use should succeed");
+        let theme_result = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "theme use dracula",
+        )
+        .expect("theme use should succeed");
         assert!(matches!(
             theme_result,
             osp_repl::ReplLineResult::Restart {
@@ -1751,9 +1945,14 @@ JSON
             }
         ));
 
-        let format_result =
-            repl::execute_repl_plugin_line(&mut state, &history, "config set ui.format json")
-                .expect("config set should succeed");
+        let format_result = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "config set ui.format json",
+        )
+        .expect("config set should succeed");
         assert!(matches!(
             format_result,
             osp_repl::ReplLineResult::Restart {
@@ -1762,8 +1961,10 @@ JSON
             }
         ));
 
-        let color_result = repl::execute_repl_plugin_line(
-            &mut state,
+        let color_result = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
             &history,
             "config set color.prompt.text '#ffffff'",
         )
@@ -1783,13 +1984,25 @@ JSON
         let mut state = make_test_state(Vec::new());
         let history = make_test_history(&mut state);
 
-        let root_exit = repl::execute_repl_plugin_line(&mut state, &history, "exit")
-            .expect("root exit should be handled by host dispatch");
+        let root_exit = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "exit",
+        )
+        .expect("root exit should be handled by host dispatch");
         assert_eq!(root_exit, osp_repl::ReplLineResult::Exit(0));
 
         state.session.scope.enter("orch");
-        let shell_exit = repl::execute_repl_plugin_line(&mut state, &history, "exit")
-            .expect("shell exit should leave the current shell");
+        let shell_exit = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "exit",
+        )
+        .expect("shell exit should leave the current shell");
         match shell_exit {
             osp_repl::ReplLineResult::Continue(text) => {
                 assert!(text.contains("Leaving orch shell"));
@@ -1805,8 +2018,14 @@ JSON
         let mut state = make_test_state(Vec::new());
         let history = make_test_history(&mut state);
 
-        let err = repl::execute_repl_plugin_line(&mut state, &history, "missing")
-            .expect_err("unknown command should fail");
+        let err = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "missing",
+        )
+        .expect_err("unknown command should fail");
         assert!(
             err.to_string()
                 .contains("no plugin provides command: missing")
@@ -1819,7 +2038,26 @@ JSON
         assert!(last.summary.contains("no plugin provides command: missing"));
 
         let rendered = doctor_cmd::run_doctor_repl_command(
-            &mut state,
+            doctor_cmd::DoctorCommandContext {
+                config: crate::cli::commands::config::ConfigReadContext {
+                    context: &state.runtime.context,
+                    config: state.runtime.config.resolved(),
+                    ui: &state.runtime.ui,
+                    themes: &state.runtime.themes,
+                    session_layer: &state.session.config_overrides,
+                    runtime_load: state.runtime.launch.runtime_load,
+                },
+                plugins: crate::cli::commands::plugins::PluginsCommandContext {
+                    config: state.runtime.config.resolved(),
+                    ui: &state.runtime.ui,
+                    auth: &state.runtime.auth,
+                    plugin_manager: &state.clients.plugins,
+                },
+                ui: &state.runtime.ui,
+                auth: &state.runtime.auth,
+                themes: &state.runtime.themes,
+                last_failure: state.session.last_failure.as_ref(),
+            },
             crate::cli::DoctorArgs {
                 command: Some(crate::cli::DoctorCommands::Last),
             },
@@ -1880,14 +2118,26 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
         let mut state = make_test_state(vec![dir.clone()]);
         let history = make_test_history(&mut state);
 
-        repl::execute_repl_plugin_line(&mut state, &history, "cache first")
-            .expect("seed command should succeed");
+        repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "cache first",
+        )
+        .expect("seed command should succeed");
         history
             .save_command_line("cache first")
             .expect("history seed should save");
         let cache_size_before = state.repl_cache_size();
-        let expanded = repl::execute_repl_plugin_line(&mut state, &history, "!!")
-            .expect("bang expansion should succeed");
+        let expanded = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "!!",
+        )
+        .expect("bang expansion should succeed");
         match expanded {
             osp_repl::ReplLineResult::ReplaceInput(text) => {
                 assert_eq!(text, "cache first");
@@ -1928,19 +2178,37 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
         let mut state = make_test_state(vec![dir.clone()]);
         let history = make_test_history(&mut state);
 
-        repl::execute_repl_plugin_line(&mut state, &history, "cache alpha")
-            .expect("first seed command should succeed");
+        repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "cache alpha",
+        )
+        .expect("first seed command should succeed");
         history
             .save_command_line("cache alpha")
             .expect("history seed should save");
-        repl::execute_repl_plugin_line(&mut state, &history, "cache beta")
-            .expect("second seed command should succeed");
+        repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "cache beta",
+        )
+        .expect("second seed command should succeed");
         history
             .save_command_line("cache beta")
             .expect("history seed should save");
         let cache_size_before = state.repl_cache_size();
-        let expanded = repl::execute_repl_plugin_line(&mut state, &history, "!?alpha")
-            .expect("contains bang expansion should succeed");
+        let expanded = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "!?alpha",
+        )
+        .expect("contains bang expansion should succeed");
         match expanded {
             osp_repl::ReplLineResult::ReplaceInput(text) => {
                 assert_eq!(text, "cache alpha");
@@ -1956,7 +2224,7 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
     fn make_test_history(state: &mut AppState) -> SharedHistory {
         let history_dir = make_temp_dir("osp-cli-test-history");
         let history_path = history_dir.join("history.jsonl");
-        let history_shell = state.repl.history_shell.clone();
+        let history_shell = state.session.history_shell.clone();
         state.sync_history_shell_context();
 
         let history_config = HistoryConfig {
@@ -1966,9 +2234,10 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
             dedupe: true,
             profile_scoped: true,
             exclude_patterns: Vec::new(),
-            profile: Some(state.config.resolved().active_profile().to_string()),
+            profile: Some(state.runtime.config.resolved().active_profile().to_string()),
             terminal: Some(
                 state
+                    .runtime
                     .context
                     .terminal_kind()
                     .as_config_terminal()

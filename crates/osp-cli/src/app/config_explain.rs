@@ -1,44 +1,57 @@
 use miette::{IntoDiagnostic, Result, WrapErr};
 use osp_config::{
-    bootstrap_key_spec, build_runtime_pipeline, is_bootstrap_only_key, BootstrapScopeRule,
-    ConfigExplain, ConfigResolver, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths,
-    RuntimeDefaults,
+    BootstrapScopeRule, ConfigExplain, ConfigResolver, ConfigValue, ResolveOptions, ResolvedConfig,
+    RuntimeConfigPaths, RuntimeDefaults, bootstrap_key_spec, build_runtime_pipeline,
+    is_bootstrap_only_key,
 };
 use osp_core::output::OutputFormat;
 use osp_ui::messages::MessageBuffer;
 use osp_ui::theme::DEFAULT_THEME_NAME;
 
 use crate::cli::ConfigExplainArgs;
-use crate::state::AppState;
+use crate::state::{RuntimeContext, UiState};
 
-use super::{emit_messages, RuntimeConfigRequest, DEFAULT_REPL_PROMPT};
+use super::{DEFAULT_REPL_PROMPT, RuntimeConfigRequest, emit_messages_for_ui};
+
+pub(crate) struct ConfigExplainContext<'a> {
+    pub(crate) context: &'a RuntimeContext,
+    pub(crate) config: &'a ResolvedConfig,
+    pub(crate) ui: &'a UiState,
+    pub(crate) session_layer: &'a osp_config::ConfigLayer,
+    pub(crate) runtime_load: osp_config::RuntimeLoadOptions,
+}
 
 pub(crate) fn config_explain_output(
-    state: &AppState,
+    context: &ConfigExplainContext<'_>,
     args: ConfigExplainArgs,
 ) -> Result<Option<String>> {
     let explain = explain_runtime_config(
         RuntimeConfigRequest::new(
-            state.context.profile_override().map(str::to_owned),
-            Some(state.context.terminal_kind().as_config_terminal()),
+            context.context.profile_override().map(str::to_owned),
+            Some(context.context.terminal_kind().as_config_terminal()),
         )
-        .with_runtime_load(state.launch.runtime_load)
-        .with_session_layer(Some(state.session.config_overrides.clone())),
+        .with_runtime_load(context.runtime_load)
+        .with_session_layer(Some(context.session_layer.clone())),
         &args.key,
     )?;
 
     if explain.final_entry.is_none() && explain.layers.is_empty() {
-        let suggestions = suggest_config_keys(state.config.resolved(), &args.key);
+        let suggestions = suggest_config_keys(context.config, &args.key);
         let mut messages = MessageBuffer::default();
         messages.error(format!("config key not found: {}", args.key));
         if !suggestions.is_empty() {
             messages.info(format!("did you mean: {}", suggestions.join(", ")));
         }
-        emit_messages(state, &messages);
+        emit_messages_for_ui(
+            context.config,
+            context.ui,
+            &messages,
+            context.ui.message_verbosity,
+        );
         return Ok(None);
     }
 
-    if matches!(state.ui.render_settings.format, OutputFormat::Json) {
+    if matches!(context.ui.render_settings.format, OutputFormat::Json) {
         let payload = config_explain_json(&explain, args.show_secrets);
         return Ok(Some(format!(
             "{}\n",

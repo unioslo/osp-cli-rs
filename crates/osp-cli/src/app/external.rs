@@ -3,9 +3,11 @@ use miette::{Result, miette};
 use crate::cli::{Commands, parse_inline_command_tokens};
 use crate::pipeline::parse_command_tokens_with_aliases;
 use crate::plugin_manager::PluginManager;
+use crate::repl::ReplViewContext;
 use crate::repl::completion;
 use crate::repl::help as repl_help;
-use crate::state::{AppState, AuthState, RuntimeContext, UiState};
+use crate::state::{AppClients, AppRuntime, AppSession};
+use crate::state::{AuthState, RuntimeContext, UiState};
 
 use super::{
     CMD_HELP, CommandRenderRuntime, PreparedPluginResponse, emit_messages_with_runtime,
@@ -24,13 +26,13 @@ pub(super) struct ExternalCommandRuntime<'a> {
 }
 
 impl<'a> ExternalCommandRuntime<'a> {
-    pub(super) fn from_state(state: &'a AppState) -> Self {
+    pub(super) fn from_parts(runtime: &'a AppRuntime, clients: &'a AppClients) -> Self {
         Self {
-            context: &state.context,
-            config: state.config.resolved(),
-            ui: &state.ui,
-            auth: &state.auth,
-            plugins: &state.clients.plugins,
+            context: &runtime.context,
+            config: runtime.config.resolved(),
+            ui: &runtime.ui,
+            auth: &runtime.auth,
+            plugins: &clients.plugins,
         }
     }
 }
@@ -46,16 +48,25 @@ enum ExternalParse {
     Invocation(ParsedExternalInvocation),
 }
 
-pub(super) fn run_external_command(state: &mut AppState, tokens: &[String]) -> Result<i32> {
-    let invocation = match parse_external_invocation(state, tokens)? {
+pub(super) fn run_external_command(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    tokens: &[String],
+) -> Result<i32> {
+    let invocation = match parse_external_invocation(runtime, session, tokens)? {
         ExternalParse::Handled(code) => return Ok(code),
         ExternalParse::Invocation(invocation) => invocation,
     };
 
     if let Some(command) = invocation.inline_command
-        && let Some(result) = run_inline_builtin_command(state, command, &invocation.stages)?
+        && let Some(result) =
+            run_inline_builtin_command(runtime, session, clients, command, &invocation.stages)?
     {
-        return run_cli_command(&CommandRenderRuntime::from_state(state), result);
+        return run_cli_command(
+            &CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui),
+            result,
+        );
     }
     if !invocation.stages.is_empty() {
         completion::validate_dsl_stages(&invocation.stages)?;
@@ -65,16 +76,23 @@ pub(super) fn run_external_command(state: &mut AppState, tokens: &[String]) -> R
         .tokens
         .split_first()
         .ok_or_else(|| miette!("missing external command"))?;
-    let runtime = ExternalCommandRuntime::from_state(state);
-    run_external_plugin_command(&runtime, command, args, &invocation.stages)
+    let external_runtime = ExternalCommandRuntime::from_parts(runtime, clients);
+    run_external_plugin_command(&external_runtime, command, args, &invocation.stages)
 }
 
-fn parse_external_invocation(state: &AppState, tokens: &[String]) -> Result<ExternalParse> {
-    let parsed = parse_command_tokens_with_aliases(tokens, state.config.resolved())?;
+fn parse_external_invocation(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    tokens: &[String],
+) -> Result<ExternalParse> {
+    let parsed = parse_command_tokens_with_aliases(tokens, runtime.config.resolved())?;
     if parsed.tokens.is_empty() {
         return Err(miette!("missing external command"));
     }
-    if let Some(help) = completion::maybe_render_dsl_help(state, &parsed.stages) {
+    if let Some(help) = completion::maybe_render_dsl_help(
+        ReplViewContext::from_parts(runtime, session),
+        &parsed.stages,
+    ) {
         print!("{help}");
         return Ok(ExternalParse::Handled(0));
     }
@@ -85,7 +103,7 @@ fn parse_external_invocation(state: &AppState, tokens: &[String]) -> Result<Exte
             if err.kind() == clap::error::ErrorKind::DisplayHelp
                 || err.kind() == clap::error::ErrorKind::DisplayVersion
             {
-                let resolved = state.ui.render_settings.resolve_render_settings();
+                let resolved = runtime.ui.render_settings.resolve_render_settings();
                 print!(
                     "{}",
                     repl_help::render_help_with_chrome(&err.to_string(), &resolved)
@@ -222,14 +240,16 @@ pub(crate) fn is_help_passthrough(args: &[String]) -> bool {
 mod tests {
     use super::{ExternalParse, parse_external_invocation};
     use crate::plugin_manager::PluginManager;
-    use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
+    use crate::state::{
+        AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
+    };
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_ui::messages::MessageLevel;
     use osp_ui::theme::DEFAULT_THEME_NAME;
     use osp_ui::{RenderRuntime, RenderSettings};
 
-    fn make_test_state() -> AppState {
+    fn make_test_state() -> (AppRuntime, AppSession) {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         let mut resolver = ConfigResolver::default();
@@ -238,7 +258,7 @@ mod tests {
             .resolve(ResolveOptions::default())
             .expect("test config should resolve");
 
-        AppState::new(AppStateInit {
+        let state = AppState::new(AppStateInit {
             context: RuntimeContext::new(None, TerminalKind::Cli, None),
             config,
             render_settings: RenderSettings {
@@ -267,18 +287,20 @@ mod tests {
             plugins: PluginManager::new(Vec::new()),
             themes: crate::theme_loader::ThemeCatalog::default(),
             launch: LaunchContext::default(),
-        })
+        });
+        (state.runtime, state.session)
     }
 
     #[test]
     fn external_builtin_help_passthrough_is_handled_unit() {
-        let state = make_test_state();
+        let (runtime, session) = make_test_state();
         let tokens = ["config", "--help"]
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
 
-        let parsed = parse_external_invocation(&state, &tokens).expect("help should parse");
+        let parsed =
+            parse_external_invocation(&runtime, &session, &tokens).expect("help should parse");
         assert!(matches!(parsed, ExternalParse::Handled(0)));
     }
 }

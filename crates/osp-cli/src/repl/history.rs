@@ -7,7 +7,7 @@ use osp_ui::theme::DEFAULT_THEME_NAME;
 use std::path::PathBuf;
 
 use crate::cli::{HistoryArgs, HistoryCommands, HistoryPruneArgs};
-use crate::state::AppState;
+use crate::state::{AppRuntime, AppSession};
 
 use crate::app::{CMD_HISTORY, CMD_LIST, DEFAULT_REPL_PROMPT, ReplCommandOutput, config_usize};
 use crate::rows::output::rows_to_output_result;
@@ -24,8 +24,11 @@ pub(crate) fn history_command_spec() -> CommandSpec {
         ])
 }
 
-pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
-    let config = state.config.resolved();
+pub(crate) fn build_history_config(
+    runtime: &AppRuntime,
+    session: &mut AppSession,
+) -> HistoryConfig {
+    let config = runtime.config.resolved();
     let history_max_entries = config_usize(
         config,
         "repl.history.max_entries",
@@ -50,8 +53,8 @@ pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
         .get_bool("repl.history.profile_scoped")
         .unwrap_or(true);
     let history_exclude = repl_history_exclude_patterns(config);
-    let history_shell = state.repl.history_shell.clone();
-    state.sync_history_shell_context();
+    let history_shell = session.history_shell.clone();
+    session.sync_history_shell_context();
 
     HistoryConfig {
         path: Some(history_path),
@@ -62,7 +65,7 @@ pub(crate) fn build_history_config(state: &mut AppState) -> HistoryConfig {
         exclude_patterns: history_exclude,
         profile: Some(config.active_profile().to_string()),
         terminal: Some(
-            state
+            runtime
                 .context
                 .terminal_kind()
                 .as_config_terminal()
@@ -83,7 +86,7 @@ pub(crate) fn repl_history_enabled(config: &ResolvedConfig) -> bool {
 }
 
 pub(crate) fn run_history_repl_command(
-    state: &mut AppState,
+    session: &mut AppSession,
     args: HistoryArgs,
     history: &SharedHistory,
 ) -> Result<ReplCommandOutput> {
@@ -93,7 +96,7 @@ pub(crate) fn run_history_repl_command(
         ));
     }
 
-    let scope = repl_history_scope(state);
+    let scope = repl_history_scope(session);
     match args.command {
         HistoryCommands::List => {
             let rows = history_entries_rows(history.list_entries_for(scope.as_deref()));
@@ -164,8 +167,8 @@ fn repl_history_exclude_patterns(config: &ResolvedConfig) -> Vec<String> {
     patterns
 }
 
-fn repl_history_scope(state: &AppState) -> Option<String> {
-    let prefix = state.session.scope.history_prefix();
+fn repl_history_scope(session: &AppSession) -> Option<String> {
+    let prefix = session.scope.history_prefix();
     if prefix.is_empty() {
         None
     } else {

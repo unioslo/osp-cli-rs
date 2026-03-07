@@ -9,16 +9,19 @@ pub(crate) mod surface;
 
 use anyhow::anyhow;
 use miette::{Result, miette};
+use osp_config::ResolvedConfig;
 use osp_repl::{DebugStep, run_repl};
 
-use crate::state::AppState;
+use crate::state::{AppRuntime, AppSession, AppState};
+use crate::state::{AuthState, ReplScopeStack, UiState};
+use crate::theme_loader::ThemeCatalog;
 
 use crate::app;
 use crate::app::CliCommandResult;
 use crate::cli::{DebugCompleteArgs, ReplArgs, ReplCommands};
-pub(crate) use dispatch::repl_command_spec;
 #[cfg(test)]
-pub(crate) use dispatch::{apply_repl_shell_prefix, execute_repl_plugin_line, leave_repl_shell};
+pub(crate) use dispatch::apply_repl_shell_prefix;
+pub(crate) use dispatch::repl_command_spec;
 #[cfg(test)]
 pub(crate) use input::{ReplParsedLine, is_repl_shellable_command};
 #[cfg(test)]
@@ -31,11 +34,37 @@ pub(crate) use presentation::render_prompt_template;
 pub(crate) use presentation::theme_display_name;
 use surface::ReplSurface;
 
+#[derive(Clone, Copy)]
+pub(crate) struct ReplViewContext<'a> {
+    pub(crate) config: &'a ResolvedConfig,
+    pub(crate) ui: &'a UiState,
+    pub(crate) auth: &'a AuthState,
+    pub(crate) themes: &'a ThemeCatalog,
+    pub(crate) scope: &'a ReplScopeStack,
+}
+
+impl<'a> ReplViewContext<'a> {
+    pub(crate) fn from_state(state: &'a AppState) -> Self {
+        Self::from_parts(&state.runtime, &state.session)
+    }
+
+    pub(crate) fn from_parts(runtime: &'a AppRuntime, session: &'a AppSession) -> Self {
+        Self {
+            config: runtime.config.resolved(),
+            ui: &runtime.ui,
+            auth: &runtime.auth,
+            themes: &runtime.themes,
+            scope: &session.scope,
+        }
+    }
+}
+
 // The REPL loop is intentionally boring at this level:
 // prepare one cycle, render the shell chrome, run the line editor, apply the result.
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     let mut loop_state = lifecycle::ReplLoopState::new(
         state
+            .runtime
             .config
             .resolved()
             .get_bool("repl.intro")
@@ -43,8 +72,9 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     );
 
     loop {
-        let cycle = loop_state.prepare_cycle(state)?;
-        loop_state.render_cycle_chrome(state, &cycle.help_text);
+        let cycle =
+            loop_state.prepare_cycle(&mut state.runtime, &mut state.session, &mut state.clients)?;
+        loop_state.render_cycle_chrome(ReplViewContext::from_state(state), &cycle.help_text);
         print!("Preparing prompt...\r");
 
         let result = run_repl(
@@ -54,8 +84,14 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             cycle.appearance,
             cycle.history_config,
             |line, history| {
-                dispatch::execute_repl_plugin_line(state, history, line)
-                    .map_err(|err| anyhow!("{err:#}"))
+                dispatch::execute_repl_plugin_line(
+                    &mut state.runtime,
+                    &mut state.session,
+                    &state.clients,
+                    history,
+                    line,
+                )
+                .map_err(|err| anyhow!("{err:#}"))
             },
         )
         .map_err(|err| miette!("{err:#}"))?;
@@ -65,17 +101,30 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     }
 }
 
-pub(crate) fn run_repl_debug_command(state: &AppState, args: ReplArgs) -> Result<CliCommandResult> {
+pub(crate) fn run_repl_debug_command_for(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    clients: &crate::state::AppClients,
+    args: ReplArgs,
+) -> Result<CliCommandResult> {
     match args.command {
-        ReplCommands::DebugComplete(args) => run_repl_debug_complete(state, args),
+        ReplCommands::DebugComplete(args) => {
+            run_repl_debug_complete(runtime, session, clients, args)
+        }
     }
 }
 
-fn run_repl_debug_complete(state: &AppState, args: DebugCompleteArgs) -> Result<CliCommandResult> {
-    let catalog = app::authorized_command_catalog(state)?;
-    let surface = surface::build_repl_surface(state, &catalog);
-    let completion_tree = build_repl_completion_tree(state, &surface);
-    let appearance = build_repl_appearance(state);
+fn run_repl_debug_complete(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    clients: &crate::state::AppClients,
+    args: DebugCompleteArgs,
+) -> Result<CliCommandResult> {
+    let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
+    let view = ReplViewContext::from_parts(runtime, session);
+    let surface = surface::build_repl_surface(view, &catalog);
+    let completion_tree = build_repl_completion_tree(view, &surface);
+    let appearance = build_repl_appearance(view);
     let cursor = args.cursor.unwrap_or(args.line.len());
 
     let steps = args
@@ -111,21 +160,23 @@ fn run_repl_debug_complete(state: &AppState, args: DebugCompleteArgs) -> Result<
     Ok(CliCommandResult::text(format!("{payload}\n")))
 }
 
-fn build_repl_completion_tree(state: &AppState, surface: &ReplSurface) -> CompletionTree {
-    completion::build_repl_completion_tree(state, surface)
+fn build_repl_completion_tree(view: ReplViewContext<'_>, surface: &ReplSurface) -> CompletionTree {
+    completion::build_repl_completion_tree(view, surface)
 }
 
 #[cfg(test)]
 mod tests {
     use super::build_cycle_chrome_output;
-    use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
+    use crate::state::{
+        AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
+    };
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_ui::messages::MessageLevel;
     use osp_ui::theme::DEFAULT_THEME_NAME;
     use osp_ui::{RenderRuntime, RenderSettings};
 
-    fn make_state() -> AppState {
+    fn make_state() -> (AppRuntime, AppSession) {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         let mut resolver = ConfigResolver::default();
@@ -156,7 +207,7 @@ mod tests {
             runtime: RenderRuntime::default(),
         };
 
-        AppState::new(AppStateInit {
+        let state = AppState::new(AppStateInit {
             context: RuntimeContext::new(None, TerminalKind::Repl, None),
             config,
             render_settings: settings,
@@ -165,13 +216,19 @@ mod tests {
             plugins: crate::plugin_manager::PluginManager::new(Vec::new()),
             themes: crate::theme_loader::ThemeCatalog::default(),
             launch: LaunchContext::default(),
-        })
+        });
+        (state.runtime, state.session)
     }
 
     #[test]
     fn cycle_chrome_renders_intro_then_help_then_pending_output() {
-        let state = make_state();
-        let output = build_cycle_chrome_output(&state, "HELP\n", true, "PENDING\n");
+        let (runtime, session) = make_state();
+        let output = build_cycle_chrome_output(
+            super::ReplViewContext::from_parts(&runtime, &session),
+            "HELP\n",
+            true,
+            "PENDING\n",
+        );
 
         let intro_pos = output.find("Welcome").expect("intro should render");
         let help_pos = output.find("HELP").expect("help should render");
@@ -186,8 +243,13 @@ mod tests {
 
     #[test]
     fn cycle_chrome_without_intro_keeps_pending_output_only() {
-        let state = make_state();
-        let output = build_cycle_chrome_output(&state, "HELP\n", false, "PENDING\n");
+        let (runtime, session) = make_state();
+        let output = build_cycle_chrome_output(
+            super::ReplViewContext::from_parts(&runtime, &session),
+            "HELP\n",
+            false,
+            "PENDING\n",
+        );
 
         assert_eq!(output, "PENDING\n");
     }

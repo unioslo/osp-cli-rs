@@ -7,8 +7,8 @@ use crate::app::{
     CURRENT_TERMINAL_SENTINEL,
 };
 use crate::plugin_manager::CommandCatalogEntry;
-use crate::state::AppState;
 
+use super::ReplViewContext;
 use super::history;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,9 +25,12 @@ pub(crate) struct ReplSurface {
     pub(crate) overview_entries: Vec<ReplOverviewEntry>,
 }
 
-pub(crate) fn build_repl_surface(state: &AppState, catalog: &[CommandCatalogEntry]) -> ReplSurface {
-    let history_enabled = history::repl_history_enabled(state.config.resolved());
-    let aliases = collect_alias_entries(state.config.resolved());
+pub(crate) fn build_repl_surface(
+    view: ReplViewContext<'_>,
+    catalog: &[CommandCatalogEntry],
+) -> ReplSurface {
+    let history_enabled = history::repl_history_enabled(view.config);
+    let aliases = collect_alias_entries(view.config);
 
     let mut root_words = catalog_completion_words(catalog);
     let mut specs = vec![
@@ -54,7 +57,7 @@ pub(crate) fn build_repl_surface(state: &AppState, catalog: &[CommandCatalogEntr
     );
     overview_entries.extend(catalog.iter().map(plugin_overview_entry));
 
-    if state.auth.is_builtin_visible(CMD_PLUGINS) {
+    if view.auth.is_builtin_visible(CMD_PLUGINS) {
         root_words.extend([CMD_PLUGINS.to_string(), CMD_LIST.to_string()]);
         specs.push(plugins_command_spec(catalog));
         overview_entries.push(ReplOverviewEntry {
@@ -62,7 +65,7 @@ pub(crate) fn build_repl_surface(state: &AppState, catalog: &[CommandCatalogEntr
             summary: "subcommands: list, commands, enable, disable, doctor".to_string(),
         });
     }
-    if state.auth.is_builtin_visible(CMD_DOCTOR) {
+    if view.auth.is_builtin_visible(CMD_DOCTOR) {
         root_words.push(CMD_DOCTOR.to_string());
         specs.push(doctor_command_spec());
         overview_entries.push(ReplOverviewEntry {
@@ -70,20 +73,20 @@ pub(crate) fn build_repl_surface(state: &AppState, catalog: &[CommandCatalogEntr
             summary: "subcommands: all, config, last, plugins, theme".to_string(),
         });
     }
-    if state.auth.is_builtin_visible(CMD_THEME) {
+    if view.auth.is_builtin_visible(CMD_THEME) {
         root_words.extend([
             CMD_THEME.to_string(),
             CMD_LIST.to_string(),
             CMD_SHOW.to_string(),
             CMD_USE.to_string(),
         ]);
-        specs.push(theme_command_spec(state));
+        specs.push(theme_command_spec(view));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_THEME.to_string(),
             summary: "subcommands: list, show, use".to_string(),
         });
     }
-    if state.auth.is_builtin_visible(CMD_CONFIG) {
+    if view.auth.is_builtin_visible(CMD_CONFIG) {
         root_words.extend([
             CMD_CONFIG.to_string(),
             "get".to_string(),
@@ -92,13 +95,13 @@ pub(crate) fn build_repl_surface(state: &AppState, catalog: &[CommandCatalogEntr
             "set".to_string(),
             "doctor".to_string(),
         ]);
-        specs.push(config_command_spec(state));
+        specs.push(config_command_spec(view));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_CONFIG.to_string(),
             summary: "subcommands: show, get, explain, set, doctor".to_string(),
         });
     }
-    if history_enabled && state.auth.is_builtin_visible(CMD_HISTORY) {
+    if history_enabled && view.auth.is_builtin_visible(CMD_HISTORY) {
         root_words.extend([
             CMD_HISTORY.to_string(),
             CMD_LIST.to_string(),
@@ -112,7 +115,7 @@ pub(crate) fn build_repl_surface(state: &AppState, catalog: &[CommandCatalogEntr
         });
     }
 
-    root_words.extend(state.themes.ids());
+    root_words.extend(view.themes.ids());
     root_words.extend(aliases.iter().map(|(name, _)| name.clone()));
     root_words.sort();
     root_words.dedup();
@@ -241,8 +244,8 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
         ])
 }
 
-fn theme_command_spec(state: &AppState) -> CommandSpec {
-    let theme_names = state
+fn theme_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
+    let theme_names = view
         .themes
         .ids()
         .into_iter()
@@ -262,11 +265,10 @@ fn theme_command_spec(state: &AppState) -> CommandSpec {
         ])
 }
 
-fn config_command_spec(state: &AppState) -> CommandSpec {
+fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
     let key_suggestions = config_key_suggestions();
-    let profile_suggestions = state
+    let profile_suggestions = view
         .config
-        .resolved()
         .known_profiles()
         .iter()
         .map(SuggestionEntry::value)

@@ -6,7 +6,7 @@ use crate::cli::{
     Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, PluginsArgs, ReplArgs, ThemeArgs,
     parse_inline_command_tokens,
 };
-use crate::state::{AppState, AuthState, TerminalKind};
+use crate::state::{AuthState, TerminalKind};
 
 use super::{CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS, CMD_THEME};
 
@@ -110,35 +110,31 @@ pub(crate) fn normalize_cli_profile(cli: &mut Cli) -> Option<String> {
     normalized
 }
 
-pub(crate) fn ensure_dispatch_visibility(state: &AppState, action: &RunAction) -> Result<()> {
+pub(crate) fn ensure_dispatch_visibility(auth: &AuthState, action: &RunAction) -> Result<()> {
     match action {
-        RunAction::Plugins(_) => ensure_builtin_visible(state, CMD_PLUGINS),
-        RunAction::Doctor(_) => ensure_builtin_visible(state, CMD_DOCTOR),
-        RunAction::Theme(_) => ensure_builtin_visible(state, CMD_THEME),
-        RunAction::Config(_) => ensure_builtin_visible(state, CMD_CONFIG),
-        RunAction::History(_) => ensure_builtin_visible(state, CMD_HISTORY),
+        RunAction::Plugins(_) => ensure_builtin_visible_for(auth, CMD_PLUGINS),
+        RunAction::Doctor(_) => ensure_builtin_visible_for(auth, CMD_DOCTOR),
+        RunAction::Theme(_) => ensure_builtin_visible_for(auth, CMD_THEME),
+        RunAction::Config(_) => ensure_builtin_visible_for(auth, CMD_CONFIG),
+        RunAction::History(_) => ensure_builtin_visible_for(auth, CMD_HISTORY),
         RunAction::ReplCommand(_) | RunAction::Repl => Ok(()),
         RunAction::External(tokens) => {
             if let Some(command) = tokens.first() {
-                ensure_plugin_visible(state, command)?;
+                ensure_plugin_visible_for(auth, command)?;
             }
             Ok(())
         }
     }
 }
 
-pub(crate) fn ensure_builtin_visible(state: &AppState, command: &str) -> Result<()> {
-    if state.auth.is_builtin_visible(command) {
+pub(crate) fn ensure_builtin_visible_for(auth: &AuthState, command: &str) -> Result<()> {
+    if auth.is_builtin_visible(command) {
         Ok(())
     } else {
         Err(miette!(
             "command `{command}` is hidden by current auth policy"
         ))
     }
-}
-
-pub(crate) fn ensure_plugin_visible(state: &AppState, command: &str) -> Result<()> {
-    ensure_plugin_visible_for(&state.auth, command)
 }
 
 pub(crate) fn ensure_plugin_visible_for(auth: &AuthState, command: &str) -> Result<()> {

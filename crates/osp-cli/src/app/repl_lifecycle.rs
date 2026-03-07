@@ -7,7 +7,9 @@ use crate::app::{
 };
 use crate::logging::init_developer_logging;
 use crate::plugin_manager::PluginManager;
+#[cfg(test)]
 use crate::state::AppState;
+use crate::state::{AppClients, AppRuntime, AppSession};
 use crate::theme_loader;
 
 struct ReplSessionSnapshot {
@@ -23,17 +25,17 @@ struct ReplSessionSnapshot {
 }
 
 impl ReplSessionSnapshot {
-    fn capture(current: &AppState) -> Self {
+    fn capture(runtime: &AppRuntime, session: &AppSession) -> Self {
         Self {
-            context: current.context.clone(),
-            scope: current.session.scope.clone(),
-            history_shell: current.repl.history_shell.clone(),
-            result_cache: current.session.result_cache.clone(),
-            cache_order: current.session.cache_order.clone(),
-            last_rows: current.session.last_rows.clone(),
-            last_failure: current.session.last_failure.clone(),
-            session_overrides: current.session.config_overrides.clone(),
-            launch: current.launch.clone(),
+            context: runtime.context.clone(),
+            scope: session.scope.clone(),
+            history_shell: session.history_shell.clone(),
+            result_cache: session.result_cache.clone(),
+            cache_order: session.cache_order.clone(),
+            last_rows: session.last_rows.clone(),
+            last_failure: session.last_failure.clone(),
+            session_overrides: session.config_overrides.clone(),
+            launch: runtime.launch.clone(),
         }
     }
 
@@ -41,20 +43,23 @@ impl ReplSessionSnapshot {
         (!self.session_overrides.entries().is_empty()).then(|| self.session_overrides.clone())
     }
 
-    fn apply_to(self, next: &mut AppState) {
-        next.session.config_overrides = self.session_overrides;
-        next.session.scope = self.scope;
-        next.session.last_rows = self.last_rows;
-        next.session.last_failure = self.last_failure;
-        next.session.result_cache = self.result_cache;
-        next.session.cache_order = self.cache_order;
-        next.repl.history_shell = self.history_shell;
+    fn apply_to(self, next: &mut AppSession) {
+        next.config_overrides = self.session_overrides;
+        next.scope = self.scope;
+        next.last_rows = self.last_rows;
+        next.last_failure = self.last_failure;
+        next.result_cache = self.result_cache;
+        next.cache_order = self.cache_order;
+        next.history_shell = self.history_shell;
         next.sync_history_shell_context();
     }
 }
 
-pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
-    let snapshot = ReplSessionSnapshot::capture(current);
+pub(crate) fn rebuild_repl_parts(
+    runtime: &AppRuntime,
+    session: &AppSession,
+) -> Result<(AppRuntime, AppSession, AppClients)> {
+    let snapshot = ReplSessionSnapshot::capture(runtime, session);
     let config = resolve_runtime_config(
         RuntimeConfigRequest::new(
             snapshot.context.profile_override().map(ToOwned::to_owned),
@@ -97,6 +102,16 @@ pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
         theme_catalog,
         launch,
     );
-    snapshot.apply_to(&mut next);
-    Ok(next)
+    snapshot.apply_to(&mut next.session);
+    Ok((next.runtime, next.session, next.clients))
+}
+
+#[cfg(test)]
+pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
+    let (runtime, session, clients) = rebuild_repl_parts(&current.runtime, &current.session)?;
+    Ok(AppState {
+        runtime,
+        session,
+        clients,
+    })
 }

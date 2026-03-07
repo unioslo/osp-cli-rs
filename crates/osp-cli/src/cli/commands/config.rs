@@ -1,62 +1,106 @@
 use crate::app::{
-    CURRENT_TERMINAL_SENTINEL, CliCommandResult, ReplCommandOutput, RuntimeConfigRequest,
-    config_explain_json, config_explain_output, config_value_to_json, emit_messages,
-    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
+    CURRENT_TERMINAL_SENTINEL, CliCommandResult, ConfigExplainContext, ReplCommandOutput,
+    RuntimeConfigRequest, config_explain_json, config_explain_output, config_value_to_json,
+    emit_messages_for_ui, explain_runtime_config, format_scope, is_sensitive_key,
+    render_config_explain_text,
 };
 use crate::cli::{
     ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs, ConfigUnsetArgs,
 };
 use crate::rows::RowBuilder;
 use crate::rows::output::rows_to_output_result;
-use crate::state::{AppState, TerminalKind};
+use crate::state::{RuntimeContext, TerminalKind, UiState};
+use crate::theme_loader::ThemeCatalog;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
-    ConfigSchema, ResolvedValue, RuntimeConfigPaths, Scope, is_bootstrap_only_key,
-    set_scoped_value_in_toml, unset_scoped_value_in_toml, validate_bootstrap_value,
-    validate_key_scope,
+    ConfigLayer, ConfigSchema, ResolvedConfig, ResolvedValue, RuntimeConfigPaths,
+    RuntimeLoadOptions, Scope, is_bootstrap_only_key, set_scoped_value_in_toml,
+    unset_scoped_value_in_toml, validate_bootstrap_value, validate_key_scope,
 };
 use osp_core::output::OutputFormat;
 use osp_core::row::Row;
 use osp_ui::messages::MessageBuffer;
 
+pub(crate) struct ConfigCommandContext<'a> {
+    pub(crate) context: &'a RuntimeContext,
+    pub(crate) config: &'a ResolvedConfig,
+    pub(crate) ui: &'a UiState,
+    pub(crate) themes: &'a ThemeCatalog,
+    pub(crate) session_overrides: &'a mut ConfigLayer,
+    pub(crate) runtime_load: RuntimeLoadOptions,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ConfigReadContext<'a> {
+    pub(crate) context: &'a RuntimeContext,
+    pub(crate) config: &'a ResolvedConfig,
+    pub(crate) ui: &'a UiState,
+    pub(crate) themes: &'a ThemeCatalog,
+    pub(crate) session_layer: &'a ConfigLayer,
+    pub(crate) runtime_load: RuntimeLoadOptions,
+}
+
+impl<'a> ConfigCommandContext<'a> {
+    fn read(&self) -> ConfigReadContext<'_> {
+        ConfigReadContext {
+            context: self.context,
+            config: self.config,
+            ui: self.ui,
+            themes: self.themes,
+            session_layer: &*self.session_overrides,
+            runtime_load: self.runtime_load,
+        }
+    }
+}
+
 pub(crate) fn run_config_command(
-    state: &mut AppState,
+    context: ConfigCommandContext<'_>,
     args: ConfigArgs,
 ) -> Result<CliCommandResult> {
+    let read = context.read();
     match args.command {
         ConfigCommands::Show(show) => Ok(CliCommandResult::output(
-            rows_to_output_result(config_show_rows(state, show)),
+            rows_to_output_result(config_show_rows(read, show)),
             None,
         )),
-        ConfigCommands::Get(get) => match config_get_rows(state, get)? {
+        ConfigCommands::Get(get) => match config_get_rows(read, get)? {
             Some(rows) => Ok(CliCommandResult::output(rows_to_output_result(rows), None)),
             None => Ok(CliCommandResult::exit(1)),
         },
-        ConfigCommands::Explain(explain) => match config_explain_output(state, explain)? {
+        ConfigCommands::Explain(explain) => match config_explain_output(
+            &ConfigExplainContext {
+                context: read.context,
+                config: read.config,
+                ui: read.ui,
+                session_layer: read.session_layer,
+                runtime_load: read.runtime_load,
+            },
+            explain,
+        )? {
             Some(output) => Ok(CliCommandResult::text(output)),
             None => Ok(CliCommandResult::exit(1)),
         },
         ConfigCommands::Set(set) => Ok(CliCommandResult {
             exit_code: 0,
-            output: Some(run_config_set(state, set)?),
+            output: Some(run_config_set(context, set)?),
         }),
         ConfigCommands::Unset(unset) => Ok(CliCommandResult {
             exit_code: 0,
-            output: Some(run_config_unset(state, unset)?),
+            output: Some(run_config_unset(context, unset)?),
         }),
         ConfigCommands::Doctor => Ok(CliCommandResult::output(
-            rows_to_output_result(config_diagnostics_rows(state)),
+            rows_to_output_result(config_diagnostics_rows(read)),
             None,
         )),
     }
 }
 
-fn config_show_rows(state: &AppState, args: ConfigShowArgs) -> Vec<Row> {
-    let resolved = state.config.resolved();
-    let mut entries = resolved
+fn config_show_rows(context: ConfigReadContext<'_>, args: ConfigShowArgs) -> Vec<Row> {
+    let mut entries = context
+        .config
         .values()
         .iter()
-        .chain(resolved.aliases().iter())
+        .chain(context.config.aliases().iter())
         .collect::<Vec<(&String, &ResolvedValue)>>();
     entries.sort_by(|(left, _), (right, _)| left.cmp(right));
     entries
@@ -65,13 +109,16 @@ fn config_show_rows(state: &AppState, args: ConfigShowArgs) -> Vec<Row> {
         .collect()
 }
 
-fn config_get_rows(state: &AppState, args: ConfigGetArgs) -> Result<Option<Vec<Row>>> {
-    if let Some(entry) = state.config.resolved().get_value_entry(&args.key) {
+fn config_get_rows(
+    context: ConfigReadContext<'_>,
+    args: ConfigGetArgs,
+) -> Result<Option<Vec<Row>>> {
+    if let Some(entry) = context.config.get_value_entry(&args.key) {
         let row = config_entry_row(&args.key, entry, args.sources, args.raw);
         return Ok(Some(vec![row]));
     }
 
-    if let Some(entry) = state.config.resolved().get_alias_entry(&args.key) {
+    if let Some(entry) = context.config.get_alias_entry(&args.key) {
         let key = if args.key.starts_with("alias.") {
             args.key.clone()
         } else {
@@ -84,11 +131,11 @@ fn config_get_rows(state: &AppState, args: ConfigGetArgs) -> Result<Option<Vec<R
     if is_bootstrap_only_key(&args.key) {
         let explain = explain_runtime_config(
             RuntimeConfigRequest::new(
-                state.context.profile_override().map(str::to_owned),
-                Some(state.context.terminal_kind().as_config_terminal()),
+                context.context.profile_override().map(str::to_owned),
+                Some(context.context.terminal_kind().as_config_terminal()),
             )
-            .with_runtime_load(state.launch.runtime_load)
-            .with_session_layer(Some(state.session.config_overrides.clone())),
+            .with_runtime_load(context.runtime_load)
+            .with_session_layer(Some(context.session_layer.clone())),
             &args.key,
         )?;
 
@@ -100,22 +147,26 @@ fn config_get_rows(state: &AppState, args: ConfigGetArgs) -> Result<Option<Vec<R
 
     let mut messages = MessageBuffer::default();
     messages.error(format!("config key not found: {}", args.key));
-    emit_messages(state, &messages);
+    emit_messages_for_ui(
+        context.config,
+        context.ui,
+        &messages,
+        context.ui.message_verbosity,
+    );
     Ok(None)
 }
 
-pub(crate) fn config_diagnostics_rows(state: &AppState) -> Vec<Row> {
+pub(crate) fn config_diagnostics_rows(context: ConfigReadContext<'_>) -> Vec<Row> {
     let known_profiles = serde_json::Value::Array(
-        state
+        context
             .config
-            .resolved()
             .known_profiles()
             .iter()
             .map(|value| value.clone().into())
             .collect(),
     );
     let theme_issues = serde_json::Value::Array(
-        state
+        context
             .themes
             .issues
             .iter()
@@ -129,11 +180,11 @@ pub(crate) fn config_diagnostics_rows(state: &AppState) -> Vec<Row> {
     );
     vec![crate::row! {
         "status" => "ok",
-        "active_profile" => state.config.resolved().active_profile().to_string(),
+        "active_profile" => context.config.active_profile().to_string(),
         "known_profiles" => known_profiles,
-        "resolved_keys" => (state.config.resolved().values().len()
-            + state.config.resolved().aliases().len()) as i64,
-        "theme_issue_count" => state.themes.issues.len() as i64,
+        "resolved_keys" => (context.config.values().len()
+            + context.config.aliases().len()) as i64,
+        "theme_issue_count" => context.themes.issues.len() as i64,
         "theme_issues" => theme_issues,
     }]
 }
@@ -185,7 +236,10 @@ fn config_entry_row(
     row.build()
 }
 
-fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplCommandOutput> {
+fn run_config_set(
+    context: ConfigCommandContext<'_>,
+    args: ConfigSetArgs,
+) -> Result<ReplCommandOutput> {
     let key = args.key.trim().to_ascii_lowercase();
     let schema = ConfigSchema::default();
     let value = schema
@@ -196,8 +250,9 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
         .into_diagnostic()
         .wrap_err("invalid bootstrap value")?;
     let target = ConfigWriteTarget::from_set_args(&args);
-    let store = resolve_config_store(state, &target);
-    let scopes = resolve_config_scopes(state, &target)?;
+    let read = context.read();
+    let store = resolve_config_store(read, &target);
+    let scopes = resolve_config_scopes(read, &target)?;
     validate_write_scopes(&key, &scopes).into_diagnostic()?;
 
     let mut rows = Vec::new();
@@ -223,11 +278,9 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
         match store {
             ConfigStore::Session => {
                 if !args.dry_run {
-                    state.session.config_overrides.insert(
-                        key.clone(),
-                        value.clone(),
-                        scope.clone(),
-                    );
+                    context
+                        .session_overrides
+                        .insert(key.clone(), value.clone(), scope.clone());
                 }
                 row.insert("path", serde_json::Value::Null);
                 row.insert("changed", true);
@@ -282,14 +335,14 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
     let output = if args.explain {
         let explain = explain_runtime_config(
             RuntimeConfigRequest::new(
-                state.context.profile_override().map(str::to_owned),
-                Some(state.context.terminal_kind().as_config_terminal()),
+                context.context.profile_override().map(str::to_owned),
+                Some(context.context.terminal_kind().as_config_terminal()),
             )
-            .with_runtime_load(state.launch.runtime_load)
-            .with_session_layer(Some(state.session.config_overrides.clone())),
+            .with_runtime_load(context.runtime_load)
+            .with_session_layer(Some(context.session_overrides.clone())),
             &key,
         )?;
-        if matches!(state.ui.render_settings.format, OutputFormat::Json) {
+        if matches!(context.ui.render_settings.format, OutputFormat::Json) {
             let payload = config_explain_json(&explain, false);
             let rendered = serde_json::to_string_pretty(&payload).into_diagnostic()?;
             ReplCommandOutput::Text(format!("{rendered}\n"))
@@ -312,15 +365,24 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
             .map(format_scope)
             .unwrap_or_else(|| "global".to_string())
     ));
-    emit_messages(state, &messages);
+    emit_messages_for_ui(
+        context.config,
+        context.ui,
+        &messages,
+        context.ui.message_verbosity,
+    );
     Ok(output)
 }
 
-fn run_config_unset(state: &mut AppState, args: ConfigUnsetArgs) -> Result<ReplCommandOutput> {
+fn run_config_unset(
+    context: ConfigCommandContext<'_>,
+    args: ConfigUnsetArgs,
+) -> Result<ReplCommandOutput> {
     let key = args.key.trim().to_ascii_lowercase();
     let target = ConfigWriteTarget::from_unset_args(&args);
-    let store = resolve_config_store(state, &target);
-    let scopes = resolve_config_scopes(state, &target)?;
+    let read = context.read();
+    let store = resolve_config_store(read, &target);
+    let scopes = resolve_config_scopes(read, &target)?;
     validate_write_scopes(&key, &scopes).into_diagnostic()?;
 
     let mut rows = Vec::new();
@@ -336,7 +398,7 @@ fn run_config_unset(state: &mut AppState, args: ConfigUnsetArgs) -> Result<ReplC
 
         match store {
             ConfigStore::Session => {
-                let previous = state.session.config_overrides.remove_scoped(&key, scope);
+                let previous = context.session_overrides.remove_scoped(&key, scope);
                 row.insert("path", serde_json::Value::Null);
                 row.insert("changed", previous.is_some());
                 row.insert(
@@ -416,7 +478,12 @@ fn run_config_unset(state: &mut AppState, args: ConfigUnsetArgs) -> Result<ReplC
         ));
     }
 
-    emit_messages(state, &messages);
+    emit_messages_for_ui(
+        context.config,
+        context.ui,
+        &messages,
+        context.ui.message_verbosity,
+    );
     Ok(ReplCommandOutput::Output {
         output: rows_to_output_result(rows),
         format_hint: None,
@@ -470,7 +537,7 @@ impl ConfigWriteTarget {
     }
 }
 
-fn resolve_config_store(state: &AppState, args: &ConfigWriteTarget) -> ConfigStore {
+fn resolve_config_store(context: ConfigReadContext<'_>, args: &ConfigWriteTarget) -> ConfigStore {
     if args.session {
         return ConfigStore::Session;
     }
@@ -483,7 +550,7 @@ fn resolve_config_store(state: &AppState, args: &ConfigWriteTarget) -> ConfigSto
     if args.save {
         return ConfigStore::Config;
     }
-    if matches!(state.context.terminal_kind(), TerminalKind::Repl) {
+    if matches!(context.context.terminal_kind(), TerminalKind::Repl) {
         ConfigStore::Session
     } else {
         ConfigStore::Config
@@ -498,16 +565,18 @@ fn config_store_name(store: ConfigStore) -> &'static str {
     }
 }
 
-fn resolve_config_scopes(state: &AppState, args: &ConfigWriteTarget) -> Result<Vec<Scope>> {
-    let terminal = resolve_terminal_selector(state, args.terminal.as_deref());
+fn resolve_config_scopes(
+    context: ConfigReadContext<'_>,
+    args: &ConfigWriteTarget,
+) -> Result<Vec<Scope>> {
+    let terminal = resolve_terminal_selector(context, args.terminal.as_deref());
 
     if args.profile_all {
-        let profiles = if state.config.resolved().known_profiles().is_empty() {
-            vec![state.config.resolved().active_profile().to_string()]
+        let profiles = if context.config.known_profiles().is_empty() {
+            vec![context.config.active_profile().to_string()]
         } else {
-            state
+            context
                 .config
-                .resolved()
                 .known_profiles()
                 .iter()
                 .cloned()
@@ -537,18 +606,21 @@ fn resolve_config_scopes(state: &AppState, args: &ConfigWriteTarget) -> Result<V
     let profile = args
         .profile
         .as_deref()
-        .unwrap_or_else(|| state.config.resolved().active_profile());
+        .unwrap_or_else(|| context.config.active_profile());
     Ok(vec![terminal.as_deref().map_or_else(
         || Scope::profile(profile),
         |current| Scope::profile_terminal(profile, current),
     )])
 }
 
-fn resolve_terminal_selector(state: &AppState, selector: Option<&str>) -> Option<String> {
+fn resolve_terminal_selector(
+    context: ConfigReadContext<'_>,
+    selector: Option<&str>,
+) -> Option<String> {
     let value = selector?;
     if value == CURRENT_TERMINAL_SENTINEL {
         return Some(
-            state
+            context
                 .context
                 .terminal_kind()
                 .as_config_terminal()
@@ -575,29 +647,39 @@ fn validate_write_scopes(
 }
 
 pub(crate) fn run_config_repl_command(
-    state: &mut AppState,
+    context: ConfigCommandContext<'_>,
     args: ConfigArgs,
 ) -> Result<ReplCommandOutput> {
+    let read = context.read();
     match args.command {
         ConfigCommands::Show(show) => Ok(ReplCommandOutput::Output {
-            output: rows_to_output_result(config_show_rows(state, show)),
+            output: rows_to_output_result(config_show_rows(read, show)),
             format_hint: None,
         }),
-        ConfigCommands::Get(get) => match config_get_rows(state, get)? {
+        ConfigCommands::Get(get) => match config_get_rows(read, get)? {
             Some(rows) => Ok(ReplCommandOutput::Output {
                 output: rows_to_output_result(rows),
                 format_hint: None,
             }),
             None => Ok(ReplCommandOutput::Text(String::new())),
         },
-        ConfigCommands::Explain(explain) => match config_explain_output(state, explain)? {
+        ConfigCommands::Explain(explain) => match config_explain_output(
+            &ConfigExplainContext {
+                context: read.context,
+                config: read.config,
+                ui: read.ui,
+                session_layer: read.session_layer,
+                runtime_load: read.runtime_load,
+            },
+            explain,
+        )? {
             Some(output) => Ok(ReplCommandOutput::Text(output)),
             None => Ok(ReplCommandOutput::Text(String::new())),
         },
-        ConfigCommands::Set(set) => run_config_set(state, set),
-        ConfigCommands::Unset(unset) => run_config_unset(state, unset),
+        ConfigCommands::Set(set) => run_config_set(context, set),
+        ConfigCommands::Unset(unset) => run_config_unset(context, unset),
         ConfigCommands::Doctor => Ok(ReplCommandOutput::Output {
-            output: rows_to_output_result(config_diagnostics_rows(state)),
+            output: rows_to_output_result(config_diagnostics_rows(read)),
             format_hint: None,
         }),
     }

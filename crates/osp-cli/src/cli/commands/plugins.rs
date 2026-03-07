@@ -1,17 +1,30 @@
 use miette::Result;
+use osp_config::ResolvedConfig;
+use osp_ui::messages::MessageLevel;
 
 use crate::app::{
-    CliCommandResult, PluginConfigScope, ReplCommandOutput, authorized_command_catalog,
-    effective_plugin_config_entries, emit_messages_with_verbosity,
+    CliCommandResult, PluginConfigScope, ReplCommandOutput, authorized_command_catalog_for,
+    effective_plugin_config_entries, emit_messages_for_ui,
 };
 use crate::cli::{PluginConfigArgs, PluginToggleArgs, PluginsArgs, PluginsCommands};
-use crate::plugin_manager::{CommandCatalogEntry, DoctorReport, PluginSummary};
+use crate::plugin_manager::{CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary};
 use crate::rows::output::rows_to_output_result;
-use crate::state::AppState;
+use crate::state::{AuthState, UiState};
 use osp_core::row::Row;
 
-pub(crate) fn run_plugins_command(state: &AppState, args: PluginsArgs) -> Result<CliCommandResult> {
-    let plugin_manager = &state.clients.plugins;
+#[derive(Clone, Copy)]
+pub(crate) struct PluginsCommandContext<'a> {
+    pub(crate) config: &'a ResolvedConfig,
+    pub(crate) ui: &'a UiState,
+    pub(crate) auth: &'a AuthState,
+    pub(crate) plugin_manager: &'a PluginManager,
+}
+
+pub(crate) fn run_plugins_command(
+    context: PluginsCommandContext<'_>,
+    args: PluginsArgs,
+) -> Result<CliCommandResult> {
+    let plugin_manager = context.plugin_manager;
     match args.command {
         PluginsCommands::List => {
             let mut plugins = plugin_manager
@@ -24,7 +37,8 @@ pub(crate) fn run_plugins_command(state: &AppState, args: PluginsArgs) -> Result
             ))
         }
         PluginsCommands::Commands => {
-            let mut commands = authorized_command_catalog(state)?;
+            let mut commands =
+                authorized_command_catalog_for(context.auth, context.plugin_manager)?;
             commands.sort_by(|a, b| a.name.cmp(&b.name));
             Ok(CliCommandResult::output(
                 rows_to_output_result(command_catalog_rows(&commands)),
@@ -34,7 +48,7 @@ pub(crate) fn run_plugins_command(state: &AppState, args: PluginsArgs) -> Result
         PluginsCommands::Config(PluginConfigArgs { plugin_id }) => Ok(CliCommandResult::output(
             rows_to_output_result(plugin_config_rows(
                 &plugin_id,
-                &effective_plugin_config_entries(state.config.resolved(), &plugin_id),
+                &effective_plugin_config_entries(context.config, &plugin_id),
             )),
             None,
         )),
@@ -42,7 +56,7 @@ pub(crate) fn run_plugins_command(state: &AppState, args: PluginsArgs) -> Result
             plugin_manager.refresh();
             let mut messages = osp_ui::messages::MessageBuffer::default();
             messages.success("refreshed plugin discovery cache");
-            emit_messages_with_verbosity(state, &messages, state.ui.message_verbosity);
+            emit_messages(context, &messages, context.ui.message_verbosity);
             Ok(CliCommandResult::exit(0))
         }
         PluginsCommands::Doctor => {
@@ -60,7 +74,7 @@ pub(crate) fn run_plugins_command(state: &AppState, args: PluginsArgs) -> Result
                 .map_err(|err| miette::miette!("{err:#}"))?;
             let mut messages = osp_ui::messages::MessageBuffer::default();
             messages.success(format!("enabled plugin: {plugin_id}"));
-            emit_messages_with_verbosity(state, &messages, state.ui.message_verbosity);
+            emit_messages(context, &messages, context.ui.message_verbosity);
             Ok(CliCommandResult::exit(0))
         }
         PluginsCommands::Disable(PluginToggleArgs { plugin_id }) => {
@@ -69,18 +83,18 @@ pub(crate) fn run_plugins_command(state: &AppState, args: PluginsArgs) -> Result
                 .map_err(|err| miette::miette!("{err:#}"))?;
             let mut messages = osp_ui::messages::MessageBuffer::default();
             messages.success(format!("disabled plugin: {plugin_id}"));
-            emit_messages_with_verbosity(state, &messages, state.ui.message_verbosity);
+            emit_messages(context, &messages, context.ui.message_verbosity);
             Ok(CliCommandResult::exit(0))
         }
     }
 }
 
 pub(crate) fn run_plugins_repl_command(
-    state: &AppState,
+    context: PluginsCommandContext<'_>,
     args: PluginsArgs,
-    verbosity: osp_ui::messages::MessageLevel,
+    verbosity: MessageLevel,
 ) -> Result<ReplCommandOutput> {
-    let plugin_manager = &state.clients.plugins;
+    let plugin_manager = context.plugin_manager;
     match args.command {
         PluginsCommands::List => {
             let mut plugins = plugin_manager
@@ -93,7 +107,8 @@ pub(crate) fn run_plugins_repl_command(
             })
         }
         PluginsCommands::Commands => {
-            let mut commands = authorized_command_catalog(state)?;
+            let mut commands =
+                authorized_command_catalog_for(context.auth, context.plugin_manager)?;
             commands.sort_by(|a, b| a.name.cmp(&b.name));
             Ok(ReplCommandOutput::Output {
                 output: rows_to_output_result(command_catalog_rows(&commands)),
@@ -103,7 +118,7 @@ pub(crate) fn run_plugins_repl_command(
         PluginsCommands::Config(PluginConfigArgs { plugin_id }) => Ok(ReplCommandOutput::Output {
             output: rows_to_output_result(plugin_config_rows(
                 &plugin_id,
-                &effective_plugin_config_entries(state.config.resolved(), &plugin_id),
+                &effective_plugin_config_entries(context.config, &plugin_id),
             )),
             format_hint: None,
         }),
@@ -111,7 +126,7 @@ pub(crate) fn run_plugins_repl_command(
             plugin_manager.refresh();
             let mut messages = osp_ui::messages::MessageBuffer::default();
             messages.success("refreshed plugin discovery cache");
-            emit_messages_with_verbosity(state, &messages, verbosity);
+            emit_messages(context, &messages, verbosity);
             Ok(ReplCommandOutput::Text(
                 "refreshed plugin discovery cache\n".to_string(),
             ))
@@ -131,7 +146,7 @@ pub(crate) fn run_plugins_repl_command(
                 .map_err(|err| miette::miette!("{err:#}"))?;
             let mut messages = osp_ui::messages::MessageBuffer::default();
             messages.success(format!("enabled plugin: {plugin_id}"));
-            emit_messages_with_verbosity(state, &messages, verbosity);
+            emit_messages(context, &messages, verbosity);
             Ok(ReplCommandOutput::Text(format!(
                 "enabled plugin: {plugin_id}\n"
             )))
@@ -142,12 +157,20 @@ pub(crate) fn run_plugins_repl_command(
                 .map_err(|err| miette::miette!("{err:#}"))?;
             let mut messages = osp_ui::messages::MessageBuffer::default();
             messages.success(format!("disabled plugin: {plugin_id}"));
-            emit_messages_with_verbosity(state, &messages, verbosity);
+            emit_messages(context, &messages, verbosity);
             Ok(ReplCommandOutput::Text(format!(
                 "disabled plugin: {plugin_id}\n"
             )))
         }
     }
+}
+
+fn emit_messages(
+    context: PluginsCommandContext<'_>,
+    messages: &osp_ui::messages::MessageBuffer,
+    verbosity: MessageLevel,
+) {
+    emit_messages_for_ui(context.config, context.ui, messages, verbosity);
 }
 
 fn plugin_list_rows(plugins: &[PluginSummary]) -> Vec<Row> {

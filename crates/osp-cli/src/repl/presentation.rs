@@ -1,5 +1,4 @@
 use crate::app::DEFAULT_REPL_PROMPT;
-use crate::state::AppState;
 use osp_repl::{ReplAppearance, ReplPrompt};
 use osp_ui::messages::render_section_divider_with_overrides;
 use osp_ui::render_inline;
@@ -7,11 +6,12 @@ use osp_ui::style::{
     StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
 };
 
+use super::ReplViewContext;
 use super::surface::ReplSurface;
 
-pub(crate) fn render_repl_intro(state: &AppState) -> String {
-    let resolved = state.ui.render_settings.resolve_render_settings();
-    let config = state.config.resolved();
+pub(crate) fn render_repl_intro(view: ReplViewContext<'_>) -> String {
+    let resolved = view.ui.render_settings.resolve_render_settings();
+    let config = view.config;
     let theme = &resolved.theme;
 
     let user = config.get_string("user.name").unwrap_or("anonymous");
@@ -19,7 +19,7 @@ pub(crate) fn render_repl_intro(state: &AppState) -> String {
         .get_string("user.display_name")
         .or_else(|| config.get_string("user.full_name"))
         .unwrap_or(user);
-    let theme_id = state.ui.render_settings.theme_name.clone();
+    let theme_id = view.ui.render_settings.theme_name.clone();
     let version = env!("CARGO_PKG_VERSION");
     let theme_display = theme_display_name(&theme_id);
 
@@ -135,8 +135,11 @@ pub(crate) fn render_repl_intro(state: &AppState) -> String {
     out
 }
 
-pub(crate) fn render_repl_command_overview(state: &AppState, surface: &ReplSurface) -> String {
-    let resolved = state.ui.render_settings.resolve_render_settings();
+pub(crate) fn render_repl_command_overview(
+    view: ReplViewContext<'_>,
+    surface: &ReplSurface,
+) -> String {
+    let resolved = view.ui.render_settings.resolve_render_settings();
     let theme = &resolved.theme;
     let mut out = String::new();
 
@@ -227,13 +230,13 @@ pub(crate) fn theme_display_name(slug: &str) -> String {
     }
 }
 
-pub(crate) fn build_repl_appearance(state: &AppState) -> ReplAppearance {
-    let resolved = state.ui.render_settings.resolve_render_settings();
+pub(crate) fn build_repl_appearance(view: ReplViewContext<'_>) -> ReplAppearance {
+    let resolved = view.ui.render_settings.resolve_render_settings();
     if !resolved.color {
         return ReplAppearance::default();
     }
     let theme = &resolved.theme;
-    let config = state.config.resolved();
+    let config = view.config;
 
     let config_style = |key: &str| {
         config
@@ -260,15 +263,15 @@ pub(crate) fn build_repl_appearance(state: &AppState) -> ReplAppearance {
     }
 }
 
-pub(crate) fn build_repl_prompt(state: &AppState) -> ReplPrompt {
-    let resolved = state.ui.render_settings.resolve_render_settings();
-    let config = state.config.resolved();
+pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
+    let resolved = view.ui.render_settings.resolve_render_settings();
+    let config = view.config;
     let theme = &resolved.theme;
     let simple = config.get_bool("repl.simple_prompt").unwrap_or(false);
     let profile = config.active_profile();
     let user = config.get_string("user.name").unwrap_or("anonymous");
     let domain = config.get_string("domain").unwrap_or("local");
-    let indicator = build_shell_indicator(state);
+    let indicator = build_shell_indicator(view);
     let prompt_style = config.get_string("color.prompt.text");
 
     let user_text = style_prompt_fragment(
@@ -330,13 +333,12 @@ pub(crate) fn build_repl_prompt(state: &AppState) -> ReplPrompt {
     ReplPrompt::simple(prompt)
 }
 
-fn build_shell_indicator(state: &AppState) -> String {
-    let Some(stack) = state.session.scope.display_label() else {
+fn build_shell_indicator(view: ReplViewContext<'_>) -> String {
+    let Some(stack) = view.scope.display_label() else {
         return String::new();
     };
-    let template = state
+    let template = view
         .config
-        .resolved()
         .get_string("repl.shell_indicator")
         .unwrap_or("[{shell}]");
     if template.contains("{shell}") {

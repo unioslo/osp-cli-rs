@@ -1,10 +1,10 @@
 use osp_ui::ResolvedRenderSettings;
 use osp_ui::style::{StyleToken, apply_style_with_theme_overrides};
 
-use crate::state::AppState;
+use super::ReplViewContext;
 
-pub(crate) fn render_repl_help_with_chrome(state: &AppState, help_text: &str) -> String {
-    let resolved = state.ui.render_settings.resolve_render_settings();
+pub(crate) fn render_repl_help_with_chrome(view: ReplViewContext<'_>, help_text: &str) -> String {
+    let resolved = view.ui.render_settings.resolve_render_settings();
     render_help_with_chrome(help_text, &resolved)
 }
 

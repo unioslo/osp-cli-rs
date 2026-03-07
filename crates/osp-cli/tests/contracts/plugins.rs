@@ -258,6 +258,44 @@ extensions.plugins.cfg.env.retries = 3
 
 #[cfg(unix)]
 #[test]
+fn plugin_non_zero_exit_surfaces_stderr_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-non-zero-exit");
+    let _plugin_path = write_non_zero_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-non-zero-exit-home");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["boom"]);
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "plugin boom exited with status 7: boom-from-stderr",
+    ));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_invalid_json_response_surfaces_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-invalid-json");
+    let _plugin_path = write_invalid_json_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-invalid-json-home");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["broken"]);
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "invalid JSON response from plugin broken",
+    ));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn plugins_config_reports_effective_projected_env_contract() {
     let home = make_temp_dir("osp-cli-plugin-config-view-home");
     write_config(
@@ -979,6 +1017,57 @@ cat <<JSON
   "retries":"${OSP_PLUGIN_CFG_RETRIES:-}"
 },"error":null,"meta":{"format_hint":"json"}}
 JSON
+"#;
+
+    std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_non_zero_plugin(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join("osp-boom");
+    let plugin_script = r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"boom","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"boom","about":"boom plugin","args":[],"flags":{},"subcommands":[]}]}
+JSON
+  exit 0
+fi
+
+echo "boom-from-stderr" >&2
+exit 7
+"#;
+
+    std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_invalid_json_plugin(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join("osp-broken");
+    let plugin_script = r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"broken","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"broken","about":"broken plugin","args":[],"flags":{},"subcommands":[]}]}
+JSON
+  exit 0
+fi
+
+echo "{ definitely-not-json"
 "#;
 
     std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");

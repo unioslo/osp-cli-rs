@@ -3,7 +3,7 @@ use crate::app::{
 };
 use crate::cli::{ThemeArgs, ThemeCommands, ThemeShowArgs, ThemeUseArgs};
 use crate::rows::output::rows_to_output_result;
-use crate::state::{SessionState, UiState};
+use crate::state::{AppSession, UiState};
 use crate::theme_loader::{ThemeCatalog, ThemeSource};
 use miette::Result;
 use miette::miette;
@@ -59,7 +59,7 @@ pub(crate) fn run_theme_command(
 }
 
 pub(crate) fn run_theme_repl_command(
-    session: &mut SessionState,
+    session: &mut AppSession,
     themes: &ThemeCatalog,
     ui: &UiState,
     args: ThemeArgs,

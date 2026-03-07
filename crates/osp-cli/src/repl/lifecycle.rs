@@ -3,8 +3,9 @@ use osp_completion::CompletionTree;
 use osp_repl::{HistoryConfig, ReplAppearance, ReplPrompt, ReplReloadKind, ReplRunResult};
 
 use crate::app;
-use crate::state::AppState;
+use crate::state::{AppClients, AppRuntime, AppSession};
 
+use super::ReplViewContext;
 use super::completion;
 use super::history;
 use super::presentation::{
@@ -27,16 +28,25 @@ impl ReplLoopState {
         }
     }
 
-    pub(super) fn prepare_cycle(&mut self, state: &mut AppState) -> Result<ReplCycle> {
+    pub(super) fn prepare_cycle(
+        &mut self,
+        runtime: &mut AppRuntime,
+        session: &mut AppSession,
+        clients: &mut AppClients,
+    ) -> Result<ReplCycle> {
         if std::mem::take(&mut self.pending_reload) {
-            *state = app::rebuild_repl_state(state)?;
+            let (next_runtime, next_session, next_clients) =
+                app::rebuild_repl_parts(runtime, session)?;
+            *runtime = next_runtime;
+            *session = next_session;
+            *clients = next_clients;
         }
-        ReplCycle::prepare(state)
+        ReplCycle::prepare(runtime, session, clients)
     }
 
-    pub(super) fn render_cycle_chrome(&mut self, state: &AppState, help_text: &str) {
+    pub(super) fn render_cycle_chrome(&mut self, view: ReplViewContext<'_>, help_text: &str) {
         let output =
-            build_cycle_chrome_output(state, help_text, self.show_intro, &self.pending_output);
+            build_cycle_chrome_output(view, help_text, self.show_intro, &self.pending_output);
         if !output.is_empty() {
             print!("{output}");
         }
@@ -70,25 +80,30 @@ pub(super) struct ReplCycle {
 }
 
 impl ReplCycle {
-    fn prepare(state: &mut AppState) -> Result<Self> {
-        let catalog = app::authorized_command_catalog(state)?;
-        let surface = surface::build_repl_surface(state, &catalog);
-        let completion_tree = completion::build_repl_completion_tree(state, &surface);
-        let help_text = render_repl_command_overview(state, &surface);
+    fn prepare(
+        runtime: &mut AppRuntime,
+        session: &mut AppSession,
+        clients: &AppClients,
+    ) -> Result<Self> {
+        let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
+        let view = ReplViewContext::from_parts(runtime, session);
+        let surface = surface::build_repl_surface(view, &catalog);
+        let completion_tree = completion::build_repl_completion_tree(view, &surface);
+        let help_text = render_repl_command_overview(view, &surface);
 
         Ok(Self {
-            prompt: build_repl_prompt(state),
+            prompt: build_repl_prompt(view),
             root_words: surface.root_words.clone(),
             completion_tree,
-            appearance: build_repl_appearance(state),
-            history_config: history::build_history_config(state),
+            appearance: build_repl_appearance(view),
+            history_config: history::build_history_config(runtime, session),
             help_text,
         })
     }
 }
 
 pub(crate) fn build_cycle_chrome_output(
-    state: &AppState,
+    view: ReplViewContext<'_>,
     help_text: &str,
     show_intro: bool,
     pending_output: &str,
@@ -96,7 +111,7 @@ pub(crate) fn build_cycle_chrome_output(
     let mut out = String::new();
     if show_intro {
         out.push_str("\x1b[2J\x1b[H");
-        out.push_str(&render_repl_intro(state));
+        out.push_str(&render_repl_intro(view));
         out.push_str(help_text);
     }
     out.push_str(pending_output);

@@ -10,7 +10,7 @@ use osp_ui::{copy_output_to_clipboard, render_output};
 
 use crate::app::resolve_effective_render_settings;
 use crate::rows::output::plugin_data_to_output_result;
-use crate::state::{AppState, UiState};
+use crate::state::UiState;
 
 pub(crate) enum ReplCommandOutput {
     Output {
@@ -78,10 +78,6 @@ impl<'a> CommandRenderRuntime<'a> {
         Self { config, ui }
     }
 
-    pub(crate) fn from_state(state: &'a AppState) -> Self {
-        Self::new(state.config.resolved(), &state.ui)
-    }
-
     pub(crate) fn ui(&self) -> &UiState {
         self.ui
     }
@@ -99,26 +95,6 @@ pub(crate) fn run_cli_command(
         render_cli_output(runtime, output);
     }
     Ok(result.exit_code)
-}
-
-pub(crate) fn emit_messages(state: &AppState, messages: &MessageBuffer) {
-    emit_messages_with_runtime(
-        &CommandRenderRuntime::from_state(state),
-        messages,
-        state.ui.message_verbosity,
-    );
-}
-
-pub(crate) fn emit_messages_with_verbosity(
-    state: &AppState,
-    messages: &MessageBuffer,
-    verbosity: MessageLevel,
-) {
-    emit_messages_with_runtime(
-        &CommandRenderRuntime::from_state(state),
-        messages,
-        verbosity,
-    );
 }
 
 pub(crate) fn emit_messages_for_ui(
@@ -152,10 +128,6 @@ pub(crate) fn emit_messages_with_runtime(
     verbosity: MessageLevel,
 ) {
     emit_messages_for_ui(runtime.config(), runtime.ui(), messages, verbosity);
-}
-
-pub(crate) fn maybe_copy_output(state: &AppState, output: &OutputResult) {
-    maybe_copy_output_with_runtime(&CommandRenderRuntime::from_state(state), output);
 }
 
 pub(crate) fn maybe_copy_output_with_runtime(
