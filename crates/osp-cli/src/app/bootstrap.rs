@@ -1,4 +1,4 @@
-use miette::{IntoDiagnostic, Result, WrapErr};
+use miette::Result;
 use osp_config::{
     ConfigLayer, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults,
     RuntimeLoadOptions, build_runtime_pipeline,
@@ -12,7 +12,7 @@ use crate::plugin_manager::PluginManager;
 use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
 use crate::theme_loader::ThemeCatalog;
 
-use super::{DEFAULT_REPL_PROMPT, DEFAULT_THEME_NAME};
+use super::{DEFAULT_REPL_PROMPT, DEFAULT_THEME_NAME, report_std_error_with_context};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeConfigRequest {
@@ -175,8 +175,7 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
 
     let resolved = pipeline
         .resolve(options)
-        .into_diagnostic()
-        .wrap_err("config resolution failed")?;
+        .map_err(|err| report_std_error_with_context(err, "config resolution failed"))?;
 
     tracing::debug!(
         active_profile = %resolved.active_profile(),

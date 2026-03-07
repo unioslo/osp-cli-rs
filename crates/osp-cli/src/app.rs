@@ -1,5 +1,5 @@
 use clap::Parser;
-use miette::{Result, miette};
+use miette::{IntoDiagnostic, Result, miette};
 use osp_config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
 use osp_core::output::OutputFormat;
 use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
@@ -76,6 +76,10 @@ pub(crate) const CMD_HELP: &str = "help";
 pub(crate) const CMD_LIST: &str = "list";
 pub(crate) const CMD_SHOW: &str = "show";
 pub(crate) const CMD_USE: &str = "use";
+pub const EXIT_CODE_ERROR: i32 = 1;
+pub const EXIT_CODE_USAGE: i32 = 2;
+pub const EXIT_CODE_CONFIG: i32 = 3;
+pub const EXIT_CODE_PLUGIN: i32 = 4;
 pub(crate) const DEFAULT_REPL_PROMPT: &str = "╭─{user}@{domain} {indicator}\n╰─{profile}> ";
 pub(crate) const CURRENT_TERMINAL_SENTINEL: &str = "__current__";
 pub(crate) const REPL_SHELLABLE_COMMANDS: [&str; 5] = ["nh", "mreg", "ldap", "vm", "orch"];
@@ -90,6 +94,30 @@ pub(crate) struct ReplCommandSpec {
 pub(crate) struct ReplDispatchOverrides {
     pub(crate) message_verbosity: MessageLevel,
     pub(crate) debug_verbosity: u8,
+}
+
+#[derive(Debug)]
+struct ContextError<E> {
+    context: &'static str,
+    source: E,
+}
+
+impl<E> std::fmt::Display for ContextError<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.context)
+    }
+}
+
+impl<E> std::error::Error for ContextError<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
 }
 
 pub fn run_from<I, T>(args: I) -> Result<i32>
@@ -119,7 +147,10 @@ fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
             print!("{err}");
             Ok(0)
         }
-        _ => Err(miette!(err.to_string())),
+        _ => Err(report_std_error_with_context(
+            err,
+            "failed to parse CLI arguments",
+        )),
     }
 }
 
@@ -430,12 +461,49 @@ pub(crate) fn resolve_known_theme_name(
 }
 
 pub(crate) fn enrich_dispatch_error(err: PluginDispatchError) -> miette::Report {
-    match err {
-        not_found @ PluginDispatchError::CommandNotFound { .. } => miette!(
-            "{not_found}\nHint: run `osp plugins list` and set --plugin-dir or OSP_PLUGIN_PATH"
-        ),
-        other => miette!("{other}"),
+    report_std_error_with_context(err, "plugin command failed")
+}
+
+pub fn classify_exit_code(err: &miette::Report) -> i32 {
+    if find_error_in_chain::<clap::Error>(err).is_some() {
+        EXIT_CODE_USAGE
+    } else if find_error_in_chain::<osp_config::ConfigError>(err).is_some() {
+        EXIT_CODE_CONFIG
+    } else if find_error_in_chain::<PluginDispatchError>(err).is_some() {
+        EXIT_CODE_PLUGIN
+    } else {
+        EXIT_CODE_ERROR
     }
+}
+
+pub fn render_report_message(err: &miette::Report, verbosity: MessageLevel) -> String {
+    if verbosity >= MessageLevel::Trace {
+        return format!("{err:?}");
+    }
+
+    let mut message = base_error_message(err);
+
+    if verbosity >= MessageLevel::Info {
+        let mut next: Option<&(dyn std::error::Error + 'static)> = Some(err.as_ref());
+        while let Some(source) = next {
+            let source_text = source.to_string();
+            if !source_text.is_empty() && !message.contains(&source_text) {
+                message.push_str(": ");
+                message.push_str(&source_text);
+            }
+            next = source.source();
+        }
+    }
+
+    if verbosity >= MessageLevel::Success
+        && let Some(hint) = known_error_hint(err)
+        && !message.contains(hint)
+    {
+        message.push_str("\nHint: ");
+        message.push_str(hint);
+    }
+
+    message
 }
 
 pub(crate) fn config_usize(config: &ResolvedConfig, key: &str, fallback: usize) -> usize {
@@ -457,6 +525,89 @@ pub(crate) fn plugin_process_timeout(config: &ResolvedConfig) -> std::time::Dura
         "extensions.plugins.timeout_ms",
         DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
     ) as u64)
+}
+
+fn known_error_hint(err: &miette::Report) -> Option<&'static str> {
+    if let Some(plugin_err) = find_error_in_chain::<PluginDispatchError>(err) {
+        return Some(match plugin_err {
+            PluginDispatchError::CommandNotFound { .. } => {
+                "run `osp plugins list` and set --plugin-dir or OSP_PLUGIN_PATH"
+            }
+            PluginDispatchError::ExecuteFailed { .. } => {
+                "verify the plugin executable exists and is executable"
+            }
+            PluginDispatchError::TimedOut { .. } => {
+                "increase extensions.plugins.timeout_ms or inspect the plugin executable"
+            }
+            PluginDispatchError::NonZeroExit { .. } => {
+                "inspect the plugin stderr output or rerun with -v/-vv for more context"
+            }
+            PluginDispatchError::InvalidJsonResponse { .. }
+            | PluginDispatchError::InvalidResponsePayload { .. } => {
+                "inspect the plugin response contract and stderr output"
+            }
+        });
+    }
+
+    if let Some(config_err) = find_error_in_chain::<osp_config::ConfigError>(err) {
+        return Some(match config_err {
+            osp_config::ConfigError::UnknownProfile { .. } => {
+                "run `osp config explain profile.default` or choose a known profile"
+            }
+            osp_config::ConfigError::InsecureSecretsPermissions { .. } => {
+                "restrict the secrets file permissions to 0600"
+            }
+            _ => "run `osp config explain <key>` to inspect config provenance",
+        });
+    }
+
+    if find_error_in_chain::<clap::Error>(err).is_some() {
+        return Some("use --help to inspect accepted flags and subcommands");
+    }
+
+    None
+}
+
+fn base_error_message(err: &miette::Report) -> String {
+    if let Some(plugin_err) = find_error_in_chain::<PluginDispatchError>(err) {
+        return plugin_err.to_string();
+    }
+
+    if let Some(config_err) = find_error_in_chain::<osp_config::ConfigError>(err) {
+        return config_err.to_string();
+    }
+
+    if let Some(clap_err) = find_error_in_chain::<clap::Error>(err) {
+        return clap_err.to_string();
+    }
+
+    err.to_string()
+}
+
+fn report_std_error_with_context<E>(err: E, context: &'static str) -> miette::Report
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Err::<(), ContextError<E>>(ContextError {
+        context,
+        source: err,
+    })
+    .into_diagnostic()
+    .unwrap_err()
+}
+
+fn find_error_in_chain<E>(err: &miette::Report) -> Option<&E>
+where
+    E: std::error::Error + 'static,
+{
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err.as_ref());
+    while let Some(source) = current {
+        if let Some(found) = source.downcast_ref::<E>() {
+            return Some(found);
+        }
+        current = source.source();
+    }
+    None
 }
 
 fn resolve_default_render_width(config: &ResolvedConfig) -> usize {

@@ -1,14 +1,17 @@
 use super::command_output::parse_output_format_hint;
 use super::help::parse_help_render_overrides;
 use super::{
-    PluginConfigEntry, PluginConfigScope, ReplCommandOutput, RunAction, build_cli_session_layer,
-    build_dispatch_plan, collect_plugin_config_env, config_value_to_plugin_env, doctor_cmd,
-    is_sensitive_key, plugin_config_env_name, plugin_process_timeout,
-    resolve_effective_render_settings, run_inline_builtin_command,
+    EXIT_CODE_CONFIG, EXIT_CODE_PLUGIN, EXIT_CODE_USAGE, PluginConfigEntry, PluginConfigScope,
+    ReplCommandOutput, RunAction, RuntimeConfigRequest, build_cli_session_layer,
+    build_dispatch_plan, classify_exit_code, collect_plugin_config_env, config_value_to_plugin_env,
+    doctor_cmd, enrich_dispatch_error, is_sensitive_key, plugin_config_env_name,
+    plugin_process_timeout, render_report_message, resolve_effective_render_settings,
+    run_inline_builtin_command,
 };
 use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
 use crate::plugin_manager::{
-    CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginManager, PluginSource,
+    CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchError, PluginManager,
+    PluginSource,
 };
 use crate::repl;
 use crate::repl::{completion, dispatch as repl_dispatch, help as repl_help, surface};
@@ -81,6 +84,55 @@ fn test_config(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
     resolver
         .resolve(ResolveOptions::default().with_terminal("cli"))
         .expect("test config should resolve")
+}
+
+#[test]
+fn default_plugin_error_render_preserves_primary_detail_unit() {
+    let report = enrich_dispatch_error(PluginDispatchError::NonZeroExit {
+        plugin_id: "ldap".to_string(),
+        status_code: 7,
+        stderr: "backend exploded".to_string(),
+    });
+
+    let rendered = render_report_message(&report, MessageLevel::Success);
+
+    assert!(rendered.contains("plugin ldap exited with status 7: backend exploded"));
+    assert!(rendered.contains("Hint:"));
+}
+
+#[test]
+fn verbose_plugin_error_render_includes_detail_chain_unit() {
+    let report = enrich_dispatch_error(PluginDispatchError::NonZeroExit {
+        plugin_id: "ldap".to_string(),
+        status_code: 7,
+        stderr: "backend exploded".to_string(),
+    });
+
+    let rendered = render_report_message(&report, MessageLevel::Info);
+
+    assert!(rendered.contains("plugin ldap exited with status 7"));
+    assert!(rendered.contains("plugin command failed"));
+    assert!(rendered.contains("backend exploded"));
+}
+
+#[test]
+fn exit_code_classification_distinguishes_usage_config_and_plugin_unit() {
+    let clap_report =
+        super::run_from(["osp", "--definitely-not-a-flag"]).expect_err("parse should fail");
+    assert_eq!(classify_exit_code(&clap_report), EXIT_CODE_USAGE);
+
+    let mut invalid_session = ConfigLayer::default();
+    invalid_session.set("ui.verbosity.level", "definitely-invalid");
+    let config_report = super::resolve_runtime_config(
+        RuntimeConfigRequest::new(None, Some("cli")).with_session_layer(Some(invalid_session)),
+    )
+    .expect_err("config resolution should fail");
+    assert_eq!(classify_exit_code(&config_report), EXIT_CODE_CONFIG);
+
+    let plugin_report = enrich_dispatch_error(PluginDispatchError::CommandNotFound {
+        command: "ldap".to_string(),
+    });
+    assert_eq!(classify_exit_code(&plugin_report), EXIT_CODE_PLUGIN);
 }
 
 fn sample_catalog() -> Vec<CommandCatalogEntry> {

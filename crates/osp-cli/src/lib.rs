@@ -9,5 +9,5 @@ mod rows;
 pub mod state;
 mod theme_loader;
 
-pub use app::run_from;
+pub use app::{classify_exit_code, render_report_message, run_from};
 pub use cli::Cli;

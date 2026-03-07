@@ -9,9 +9,9 @@ fn main() {
         Ok(code) => code,
         Err(err) => {
             let mut messages = MessageBuffer::default();
-            messages.error(render_report_message(&err, message_verbosity));
+            messages.error(osp_cli::render_report_message(&err, message_verbosity));
             eprint!("{}", messages.render_grouped(message_verbosity));
-            1
+            osp_cli::classify_exit_code(&err)
         }
     };
     std::process::exit(exit_code);
@@ -50,23 +50,4 @@ fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {
     }
 
     adjust_verbosity(MessageLevel::Success, verbose, quiet)
-}
-
-fn render_report_message(err: &miette::Report, verbosity: MessageLevel) -> String {
-    if verbosity >= MessageLevel::Trace {
-        return format!("{err:?}");
-    }
-
-    let mut message = err.to_string();
-    let mut next = err.source();
-    while let Some(source) = next {
-        let source_text = source.to_string();
-        if !source_text.is_empty() && !message.contains(&source_text) {
-            message.push_str(": ");
-            message.push_str(&source_text);
-        }
-        next = source.source();
-    }
-
-    message
 }
