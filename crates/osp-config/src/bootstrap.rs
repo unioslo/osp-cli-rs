@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use crate::explain::selected_value;
 use crate::{
     ConfigError, ConfigExplain, ConfigSource, ConfigValue, ResolveOptions, ResolvedValue, Scope,
     normalize_identifier,
@@ -53,7 +54,7 @@ pub(crate) fn explain_default_profile_key(
         .collect::<Vec<_>>();
 
     let final_entry = select_default_profile_across_layers(layers, selector)
-        .map(selected_value)
+        .map(|selected| selected_value(&selected))
         .or_else(|| {
             Some(ResolvedValue {
                 raw_value: ConfigValue::String("default".to_string()),
@@ -160,14 +161,4 @@ fn select_default_profile_across_layers<'a>(
     }
 
     selected
-}
-
-fn selected_value(selected: crate::selector::SelectedLayerEntry<'_>) -> ResolvedValue {
-    ResolvedValue {
-        raw_value: selected.entry.value.clone(),
-        value: selected.entry.value.clone(),
-        source: selected.source,
-        scope: selected.entry.scope.clone(),
-        origin: selected.entry.origin.clone(),
-    }
 }

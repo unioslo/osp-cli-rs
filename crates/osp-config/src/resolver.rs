@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::bootstrap::{ResolutionFrame, explain_default_profile_key, prepare_resolution};
+use crate::explain::{build_runtime_explain, explain_layers_for_runtime_key, selected_value};
 use crate::interpolate::{explain_interpolation, interpolate_all};
 use crate::selector::{LayerRef, ScopeSelector, SelectedLayerEntry};
 use crate::{
-    ConfigError, ConfigExplain, ConfigLayer, ConfigSchema, ConfigSource, ConfigValue, ExplainLayer,
-    LoadedLayers, ResolveOptions, ResolvedConfig, ResolvedValue, Scope, is_bootstrap_only_key,
+    ConfigError, ConfigExplain, ConfigLayer, ConfigSchema, ConfigSource, ConfigValue, LoadedLayers,
+    ResolveOptions, ResolvedConfig, ResolvedValue, Scope, is_bootstrap_only_key,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -109,7 +110,7 @@ impl ConfigResolver {
         }
 
         let frame = prepare_resolution(self.layers(), options)?;
-        let layers = self.explain_layers_for_key(key, &frame);
+        let layers = explain_layers_for_runtime_key(self.layers(), key, &frame);
         let resolved = self.resolve_maps_for_frame(&frame)?;
         let final_entry = resolved.final_values.get(key).cloned();
         // Explaining interpolation intentionally re-reads the pre-interpolated
@@ -118,15 +119,13 @@ impl ConfigResolver {
         let interpolation =
             explain_interpolation(key, &resolved.pre_interpolated, &resolved.final_values)?;
 
-        Ok(ConfigExplain {
-            key: key.to_string(),
-            active_profile: frame.active_profile,
-            terminal: frame.terminal,
-            known_profiles: frame.known_profiles,
+        Ok(build_runtime_explain(
+            key,
+            frame,
             layers,
             final_entry,
             interpolation,
-        })
+        ))
     }
 
     fn resolve_values_for_frame(
@@ -171,7 +170,7 @@ impl ConfigResolver {
                 continue;
             }
             if let Some(selected) = self.select_across_layers(&key, selector) {
-                values.insert(key, Self::selected_value(&selected));
+                values.insert(key, selected_value(&selected));
             }
         }
 
@@ -181,16 +180,6 @@ impl ConfigResolver {
         );
 
         values
-    }
-
-    fn selected_value(selected: &SelectedLayerEntry<'_>) -> ResolvedValue {
-        ResolvedValue {
-            raw_value: selected.entry.value.clone(),
-            value: selected.entry.value.clone(),
-            source: selected.source,
-            scope: selected.entry.scope.clone(),
-            origin: selected.entry.origin.clone(),
-        }
     }
 
     /// Expose the chosen profile as a normal resolved value so later schema
@@ -233,14 +222,6 @@ impl ConfigResolver {
         }
 
         selected
-    }
-
-    fn explain_layers_for_key(&self, key: &str, frame: &ResolutionFrame) -> Vec<ExplainLayer> {
-        let selector = ScopeSelector::scoped(&frame.active_profile, frame.terminal.as_deref());
-        self.layers()
-            .into_iter()
-            .filter_map(|layer| selector.explain_layer(layer, key))
-            .collect()
     }
 
     fn layers(&self) -> [LayerRef<'_>; 6] {
