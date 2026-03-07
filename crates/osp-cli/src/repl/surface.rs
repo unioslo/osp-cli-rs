@@ -145,7 +145,7 @@ pub(crate) fn catalog_completion_words(catalog: &[CommandCatalogEntry]) -> Vec<S
 
 pub(crate) fn collect_alias_entries(config: &osp_config::ResolvedConfig) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    for (key, entry) in config.values() {
+    for (key, entry) in config.aliases() {
         let Some(name) = key.strip_prefix("alias.") else {
             continue;
         };

@@ -6,7 +6,6 @@ use osp_dsl::{
     parse_pipeline,
 };
 
-const ALIAS_PREFIX: &str = "alias.";
 const MAX_ALIAS_EXPANSION_DEPTH: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,12 +47,11 @@ fn maybe_expand_alias(
     positional_args: &[String],
     config: &ResolvedConfig,
 ) -> Result<Option<String>> {
-    let key = alias_key(candidate);
-    let Some(value) = config.get(&key) else {
+    let Some(value) = config.get_alias_entry(candidate) else {
         return Ok(None);
     };
 
-    let template = value.to_string();
+    let template = value.raw_value.to_string();
     let expanded = expand_alias_template(candidate, &template, positional_args, config)?;
     Ok(Some(expanded))
 }
@@ -198,15 +196,6 @@ fn split_command_tokens(tokens: &[String]) -> SplitCommandTokens {
     SplitCommandTokens {
         command_tokens,
         stages,
-    }
-}
-
-fn alias_key(candidate: &str) -> String {
-    let normalized = candidate.trim().to_ascii_lowercase();
-    if normalized.starts_with(ALIAS_PREFIX) {
-        normalized
-    } else {
-        format!("{ALIAS_PREFIX}{normalized}")
     }
 }
 

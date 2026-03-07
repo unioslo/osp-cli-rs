@@ -9,7 +9,7 @@ use crate::interpolate::{explain_interpolation, interpolate_all};
 use crate::selector::{LayerRef, ScopeSelector, SelectedLayerEntry};
 use crate::{
     BootstrapConfigExplain, ConfigError, ConfigExplain, ConfigLayer, ConfigSchema, ConfigSource,
-    ConfigValue, LoadedLayers, ResolveOptions, ResolvedConfig, ResolvedValue, Scope,
+    ConfigValue, LoadedLayers, ResolveOptions, ResolvedConfig, ResolvedValue, Scope, is_alias_key,
     is_bootstrap_only_key,
 };
 
@@ -26,6 +26,7 @@ pub struct ConfigResolver {
 struct ResolvedMaps {
     pre_interpolated: BTreeMap<String, ResolvedValue>,
     final_values: BTreeMap<String, ResolvedValue>,
+    alias_values: BTreeMap<String, ResolvedValue>,
 }
 
 impl ConfigResolver {
@@ -94,13 +95,14 @@ impl ConfigResolver {
 
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
         let frame = prepare_resolution(self.layers(), options)?;
-        let values = self.resolve_values_for_frame(&frame)?;
+        let resolved = self.resolve_maps_for_frame(&frame)?;
 
         Ok(ResolvedConfig {
             active_profile: frame.active_profile,
             terminal: frame.terminal,
             known_profiles: frame.known_profiles,
-            values,
+            values: resolved.final_values,
+            aliases: resolved.alias_values,
         })
     }
 
@@ -116,7 +118,11 @@ impl ConfigResolver {
         let frame = prepare_resolution(self.layers(), options)?;
         let layers = explain_layers_for_runtime_key(self.layers(), key, &frame);
         let resolved = self.resolve_maps_for_frame(&frame)?;
-        let final_entry = resolved.final_values.get(key).cloned();
+        let final_entry = if is_alias_key(key) {
+            resolved.alias_values.get(key).cloned()
+        } else {
+            resolved.final_values.get(key).cloned()
+        };
         // Explaining interpolation intentionally re-reads the pre-interpolated
         // values so the trace shows the original placeholder chain rather than
         // the already-expanded end state.
@@ -128,7 +134,7 @@ impl ConfigResolver {
             frame,
             layers,
             final_entry,
-            if key.starts_with("alias.") {
+            if is_alias_key(key) {
                 None
             } else {
                 interpolation
@@ -151,30 +157,26 @@ impl ConfigResolver {
         })
     }
 
-    fn resolve_values_for_frame(
-        &self,
-        frame: &ResolutionFrame,
-    ) -> Result<BTreeMap<String, ResolvedValue>, ConfigError> {
-        Ok(self.resolve_maps_for_frame(frame)?.final_values)
-    }
-
     /// Run the resolver's two actual phases:
     /// 1. select the winning raw value for each key
     /// 2. interpolate/adapt those winners into final values
     fn resolve_maps_for_frame(&self, frame: &ResolutionFrame) -> Result<ResolvedMaps, ConfigError> {
-        let pre_interpolated = self.collect_selected_values_for_frame(frame);
+        let mut pre_interpolated = self.collect_selected_values_for_frame(frame);
+        // Aliases are selected with the same precedence rules so explain can
+        // still show their winning raw source, but they stay out of ordinary
+        // runtime interpolation and schema validation.
+        let alias_values = Self::drain_alias_values(&mut pre_interpolated);
         // Keep both snapshots: normal resolution only needs `final_values`, but
         // `config explain` needs the selected raw winners alongside the final
         // interpolated/adapted view.
         let mut final_values = pre_interpolated.clone();
-        let alias_values = Self::drain_alias_values(&mut final_values);
         interpolate_all(&mut final_values)?;
         self.schema.validate_and_adapt(&mut final_values)?;
-        final_values.extend(alias_values);
 
         Ok(ResolvedMaps {
             pre_interpolated,
             final_values,
+            alias_values,
         })
     }
 
@@ -231,16 +233,12 @@ impl ConfigResolver {
         keys
     }
 
-    // Alias expansion is a CLI parsing feature, not a generic config-resolution
-    // feature. Keep alias templates visible in resolved config, but leave them
-    // untouched here so `${1}` / `${@}` placeholders remain for the alias
-    // expander in `osp-cli`.
     fn drain_alias_values(
         values: &mut BTreeMap<String, ResolvedValue>,
     ) -> BTreeMap<String, ResolvedValue> {
         let alias_keys = values
             .keys()
-            .filter(|key| key.starts_with("alias."))
+            .filter(|key| is_alias_key(key))
             .cloned()
             .collect::<Vec<_>>();
         let mut aliases = BTreeMap::new();

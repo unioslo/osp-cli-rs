@@ -485,7 +485,7 @@ impl ConfigSchema {
     }
 
     pub fn is_known_key(&self, key: &str) -> bool {
-        self.entries.contains_key(key) || self.is_extension_key(key)
+        self.entries.contains_key(key) || self.is_extension_key(key) || self.is_alias_key(key)
     }
 
     pub fn is_runtime_visible_key(&self, key: &str) -> bool {
@@ -611,8 +611,11 @@ impl ConfigSchema {
     }
 
     fn is_extension_key(&self, key: &str) -> bool {
-        self.allow_extensions_namespace
-            && (key.starts_with("extensions.") || key.starts_with("alias."))
+        self.allow_extensions_namespace && key.starts_with("extensions.")
+    }
+
+    fn is_alias_key(&self, key: &str) -> bool {
+        key.starts_with("alias.")
     }
 
     pub fn validate_key_scope(&self, key: &str, scope: &Scope) -> Result<(), ConfigError> {
@@ -1082,6 +1085,7 @@ pub struct ResolvedConfig {
     pub(crate) terminal: Option<String>,
     pub(crate) known_profiles: BTreeSet<String>,
     pub(crate) values: BTreeMap<String, ResolvedValue>,
+    pub(crate) aliases: BTreeMap<String, ResolvedValue>,
 }
 
 impl ResolvedConfig {
@@ -1099,6 +1103,10 @@ impl ResolvedConfig {
 
     pub fn values(&self) -> &BTreeMap<String, ResolvedValue> {
         &self.values
+    }
+
+    pub fn aliases(&self) -> &BTreeMap<String, ResolvedValue> {
+        &self.aliases
     }
 
     pub fn get(&self, key: &str) -> Option<&ConfigValue> {
@@ -1146,6 +1154,15 @@ impl ResolvedConfig {
     pub fn get_value_entry(&self, key: &str) -> Option<&ResolvedValue> {
         self.values.get(key)
     }
+
+    pub fn get_alias_entry(&self, key: &str) -> Option<&ResolvedValue> {
+        let normalized = if key.trim().to_ascii_lowercase().starts_with("alias.") {
+            key.trim().to_ascii_lowercase()
+        } else {
+            format!("alias.{}", key.trim().to_ascii_lowercase())
+        };
+        self.aliases.get(&normalized)
+    }
 }
 
 fn flatten_table(
@@ -1191,6 +1208,10 @@ pub fn bootstrap_key_spec(key: &str) -> Option<BootstrapKeySpec> {
 
 pub fn is_bootstrap_only_key(key: &str) -> bool {
     bootstrap_key_spec(key).is_some_and(|spec| !spec.runtime_visible)
+}
+
+pub fn is_alias_key(key: &str) -> bool {
+    key.trim().to_ascii_lowercase().starts_with("alias.")
 }
 
 pub fn validate_key_scope(key: &str, scope: &Scope) -> Result<(), ConfigError> {
@@ -1532,8 +1553,8 @@ pub(crate) fn normalize_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        bootstrap_key_spec, is_bootstrap_only_key, validate_key_scope, BootstrapPhase,
-        BootstrapScopeRule, ConfigSchema, Scope,
+        BootstrapPhase, BootstrapScopeRule, ConfigSchema, Scope, bootstrap_key_spec,
+        is_bootstrap_only_key, validate_key_scope,
     };
 
     #[test]

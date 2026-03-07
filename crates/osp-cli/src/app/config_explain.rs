@@ -468,18 +468,23 @@ fn bootstrap_scope_policy(key: &str) -> Option<&'static str> {
 
 fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
     let key_lc = key.to_ascii_lowercase();
-    let mut prefix_matches = config
+    let all_keys = config
         .values()
         .keys()
+        .chain(config.aliases().keys())
+        .cloned()
+        .collect::<Vec<String>>();
+
+    let mut prefix_matches = all_keys
+        .iter()
         .filter(|candidate| candidate.starts_with(&key_lc) || candidate.contains(&key_lc))
         .take(5)
         .cloned()
         .collect::<Vec<String>>();
 
     if prefix_matches.is_empty() {
-        prefix_matches = config
-            .values()
-            .keys()
+        prefix_matches = all_keys
+            .iter()
             .filter(|candidate| {
                 let left = candidate.split('.').next().unwrap_or_default();
                 let right = key_lc.split('.').next().unwrap_or_default();

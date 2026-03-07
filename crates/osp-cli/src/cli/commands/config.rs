@@ -52,18 +52,32 @@ pub(crate) fn run_config_command(
 }
 
 fn config_show_rows(state: &AppState, args: ConfigShowArgs) -> Vec<Row> {
-    state
-        .config
-        .resolved()
+    let resolved = state.config.resolved();
+    let mut entries = resolved
         .values()
         .iter()
+        .chain(resolved.aliases().iter())
+        .collect::<Vec<(&String, &ResolvedValue)>>();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    entries
+        .into_iter()
         .map(|(key, entry)| config_entry_row(key, entry, args.sources, args.raw))
-        .collect::<Vec<Row>>()
+        .collect()
 }
 
 fn config_get_rows(state: &AppState, args: ConfigGetArgs) -> Result<Option<Vec<Row>>> {
     if let Some(entry) = state.config.resolved().get_value_entry(&args.key) {
         let row = config_entry_row(&args.key, entry, args.sources, args.raw);
+        return Ok(Some(vec![row]));
+    }
+
+    if let Some(entry) = state.config.resolved().get_alias_entry(&args.key) {
+        let key = if args.key.starts_with("alias.") {
+            args.key.clone()
+        } else {
+            format!("alias.{}", args.key.trim().to_ascii_lowercase())
+        };
+        let row = config_entry_row(&key, entry, args.sources, args.raw);
         return Ok(Some(vec![row]));
     }
 
@@ -117,7 +131,8 @@ pub(crate) fn config_diagnostics_rows(state: &AppState) -> Vec<Row> {
         "status" => "ok",
         "active_profile" => state.config.resolved().active_profile().to_string(),
         "known_profiles" => known_profiles,
-        "resolved_keys" => state.config.resolved().values().len() as i64,
+        "resolved_keys" => (state.config.resolved().values().len()
+            + state.config.resolved().aliases().len()) as i64,
         "theme_issue_count" => state.themes.issues.len() as i64,
         "theme_issues" => theme_issues,
     }]

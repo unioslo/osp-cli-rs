@@ -530,10 +530,12 @@ fn explain_reports_precedence_chain_with_winner_contract() {
     assert_eq!(explain.layers[0].source, ConfigSource::BuiltinDefaults);
     assert_eq!(explain.layers[1].source, ConfigSource::Environment);
     assert_eq!(explain.layers[2].source, ConfigSource::Cli);
-    assert!(explain.layers[1].candidates[0]
-        .origin
-        .as_deref()
-        .is_some_and(|origin| origin.starts_with("OSP__UI__FORMAT")));
+    assert!(
+        explain.layers[1].candidates[0]
+            .origin
+            .as_deref()
+            .is_some_and(|origin| origin.starts_with("OSP__UI__FORMAT"))
+    );
 }
 
 #[test]
@@ -785,11 +787,13 @@ fn explain_marks_same_layer_winner_consistently_contract() {
         .expect("file layer should be present");
 
     assert_eq!(file_layer.selected_entry_index, Some(3));
-    assert!(file_layer
-        .candidates
-        .iter()
-        .any(|candidate| candidate.selected_in_layer
-            && candidate.value == ConfigValue::String("value".to_string())));
+    assert!(
+        file_layer
+            .candidates
+            .iter()
+            .any(|candidate| candidate.selected_in_layer
+                && candidate.value == ConfigValue::String("value".to_string()))
+    );
 }
 
 #[test]
@@ -806,11 +810,25 @@ fn alias_values_remain_raw_and_skip_generic_interpolation_contract() {
     let resolved = resolver
         .resolve(ResolveOptions::default())
         .expect("config should resolve");
+    assert!(resolved.get_value_entry("alias.me").is_none());
     assert_eq!(
-        resolved.get_string("alias.me"),
-        Some("ldap user ${user.name}")
+        resolved
+            .get_alias_entry("alias.me")
+            .map(|entry| entry.raw_value.to_string()),
+        Some("ldap user ${user.name}".to_string())
     );
-    assert_eq!(resolved.get_string("alias.arg"), Some("ldap user ${1}"));
+    assert_eq!(
+        resolved
+            .get_alias_entry("me")
+            .map(|entry| entry.raw_value.to_string()),
+        Some("ldap user ${user.name}".to_string())
+    );
+    assert_eq!(
+        resolved
+            .get_alias_entry("alias.arg")
+            .map(|entry| entry.raw_value.to_string()),
+        Some("ldap user ${1}".to_string())
+    );
 
     let explain = resolver
         .explain_key("alias.me", ResolveOptions::default())
