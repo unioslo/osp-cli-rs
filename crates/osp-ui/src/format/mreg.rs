@@ -424,14 +424,14 @@ mod tests {
     use crate::document::{Block, MregBlock, MregValue, TableBlock};
     use serde_json::{Map, Value, json};
 
-    fn mreg_blocks<'a>(blocks: &'a [Block]) -> impl Iterator<Item = &'a MregBlock> {
+    fn mreg_blocks(blocks: &[Block]) -> impl Iterator<Item = &MregBlock> {
         blocks.iter().filter_map(|block| match block {
             Block::Mreg(mreg) => Some(mreg),
             _ => None,
         })
     }
 
-    fn table_blocks<'a>(blocks: &'a [Block]) -> impl Iterator<Item = &'a TableBlock> {
+    fn table_blocks(blocks: &[Block]) -> impl Iterator<Item = &TableBlock> {
         blocks.iter().filter_map(|block| match block {
             Block::Table(table) => Some(table),
             _ => None,

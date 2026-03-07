@@ -10,7 +10,7 @@ pub(crate) mod surface;
 use anyhow::anyhow;
 use miette::{Result, miette};
 use osp_config::ResolvedConfig;
-use osp_repl::{DebugStep, run_repl};
+use osp_repl::{DebugStep, ReplRunConfig, run_repl};
 use std::sync::Arc;
 
 use crate::state::{AppRuntime, AppSession, AppState};
@@ -74,19 +74,23 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
         );
 
         let result = run_repl(
-            cycle.prompt,
-            cycle.root_words,
-            Some(cycle.completion_tree),
-            cycle.appearance,
-            cycle.history_config,
-            map_repl_input_mode(effective_repl_input_mode(state.runtime.config.resolved())),
-            Some(build_repl_prompt_right_renderer(
-                ReplViewContext::from_parts(&state.runtime, &state.session),
-                state.session.prompt_timing.clone(),
-            )),
-            Some(build_repl_ui_line_projector(
-                state.runtime.config.resolved(),
-            )),
+            ReplRunConfig {
+                prompt: cycle.prompt,
+                completion_words: cycle.root_words,
+                completion_tree: Some(cycle.completion_tree),
+                appearance: cycle.appearance,
+                history_config: cycle.history_config,
+                input_mode: map_repl_input_mode(effective_repl_input_mode(
+                    state.runtime.config.resolved(),
+                )),
+                prompt_right: Some(build_repl_prompt_right_renderer(
+                    ReplViewContext::from_parts(&state.runtime, &state.session),
+                    state.session.prompt_timing.clone(),
+                )),
+                line_projector: Some(build_repl_ui_line_projector(
+                    state.runtime.config.resolved(),
+                )),
+            },
             |line, history| {
                 dispatch::execute_repl_plugin_line(
                     &mut state.runtime,

@@ -3,7 +3,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::{Arc, Mutex};
 #[cfg(unix)]
@@ -31,7 +31,7 @@ fn make_temp_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn write_repl_config(home: &PathBuf, config: &str) {
+fn write_repl_config(home: &Path, config: &str) {
     let config_dir = home.join(".config").join("osp");
     std::fs::create_dir_all(&config_dir).expect("config dir should be created");
     std::fs::write(config_dir.join("config.toml"), config).expect("config should be written");

@@ -120,6 +120,19 @@ pub struct GroupedRenderOptions<'a> {
     pub style_overrides: StyleOverrides,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SectionStyleTokens {
+    pub border: StyleToken,
+    pub title: StyleToken,
+}
+
+#[derive(Clone, Copy)]
+pub struct SectionRenderContext<'a> {
+    pub color: bool,
+    pub theme: &'a ThemeDefinition,
+    pub style_overrides: &'a StyleOverrides,
+}
+
 impl MessageBuffer {
     pub fn push<T: Into<String>>(&mut self, level: MessageLevel, text: T) {
         self.entries.push(UiMessage {
@@ -263,11 +276,15 @@ impl MessageBuffer {
                 options.chrome_frame,
                 options.unicode,
                 options.width,
-                options.color,
-                options.theme,
-                level.style_token(),
-                level.style_token(),
-                &options.style_overrides,
+                SectionRenderContext {
+                    color: options.color,
+                    theme: options.theme,
+                    style_overrides: &options.style_overrides,
+                },
+                SectionStyleTokens {
+                    border: level.style_token(),
+                    title: level.style_token(),
+                },
             ));
         }
 
@@ -436,75 +453,34 @@ pub fn render_section_block_with_overrides(
     frame_style: SectionFrameStyle,
     unicode: bool,
     width: Option<usize>,
-    color: bool,
-    theme: &ThemeDefinition,
-    border_token: StyleToken,
-    title_token: StyleToken,
-    style_overrides: &StyleOverrides,
+    render: SectionRenderContext<'_>,
+    tokens: SectionStyleTokens,
 ) -> String {
     match frame_style {
-        SectionFrameStyle::None => {
-            render_plain_section(title, body, color, theme, title_token, style_overrides)
+        SectionFrameStyle::None => render_plain_section(title, body, render, tokens.title),
+        SectionFrameStyle::Top => {
+            render_ruled_section(title, body, true, false, unicode, width, render, tokens)
         }
-        SectionFrameStyle::Top => render_ruled_section(
-            title,
-            body,
-            true,
-            false,
-            unicode,
-            width,
-            color,
-            theme,
-            border_token,
-            title_token,
-            style_overrides,
-        ),
-        SectionFrameStyle::Bottom => render_ruled_section(
-            title,
-            body,
-            false,
-            true,
-            unicode,
-            width,
-            color,
-            theme,
-            border_token,
-            title_token,
-            style_overrides,
-        ),
-        SectionFrameStyle::TopBottom => render_ruled_section(
-            title,
-            body,
-            true,
-            true,
-            unicode,
-            width,
-            color,
-            theme,
-            border_token,
-            title_token,
-            style_overrides,
-        ),
+        SectionFrameStyle::Bottom => {
+            render_ruled_section(title, body, false, true, unicode, width, render, tokens)
+        }
+        SectionFrameStyle::TopBottom => {
+            render_ruled_section(title, body, true, true, unicode, width, render, tokens)
+        }
         SectionFrameStyle::Square => render_boxed_section(
             title,
             body,
             unicode,
-            color,
-            theme,
-            border_token,
-            title_token,
-            style_overrides,
+            render,
+            tokens,
             BoxFrameChars::square(unicode),
         ),
         SectionFrameStyle::Round => render_boxed_section(
             title,
             body,
             unicode,
-            color,
-            theme,
-            border_token,
-            title_token,
-            style_overrides,
+            render,
+            tokens,
             BoxFrameChars::round(unicode),
         ),
     }
@@ -513,10 +489,8 @@ pub fn render_section_block_with_overrides(
 fn render_plain_section(
     title: &str,
     body: &str,
-    color: bool,
-    theme: &ThemeDefinition,
+    render: SectionRenderContext<'_>,
     title_token: StyleToken,
-    style_overrides: &StyleOverrides,
 ) -> String {
     let mut out = String::new();
     let title = title.trim();
@@ -525,10 +499,10 @@ fn render_plain_section(
     if !title.is_empty() {
         out.push_str(&render_section_title_with_overrides(
             title,
-            color,
-            theme,
+            render.color,
+            render.theme,
             title_token,
-            style_overrides,
+            render.style_overrides,
         ));
         if !body.is_empty() {
             out.push('\n');
@@ -548,11 +522,8 @@ fn render_ruled_section(
     bottom_rule: bool,
     unicode: bool,
     width: Option<usize>,
-    color: bool,
-    theme: &ThemeDefinition,
-    border_token: StyleToken,
-    title_token: StyleToken,
-    style_overrides: &StyleOverrides,
+    render: SectionRenderContext<'_>,
+    tokens: SectionStyleTokens,
 ) -> String {
     let mut out = String::new();
     let body = body.trim_end_matches('\n');
@@ -563,18 +534,18 @@ fn render_ruled_section(
             title,
             unicode,
             width,
-            color,
-            theme,
-            border_token,
-            style_overrides,
+            render.color,
+            render.theme,
+            tokens.border,
+            render.style_overrides,
         ));
     } else if !title.is_empty() {
         out.push_str(&render_section_title_with_overrides(
             title,
-            color,
-            theme,
-            title_token,
-            style_overrides,
+            render.color,
+            render.theme,
+            tokens.title,
+            render.style_overrides,
         ));
     }
 
@@ -593,10 +564,10 @@ fn render_ruled_section(
             "",
             unicode,
             width,
-            color,
-            theme,
-            border_token,
-            style_overrides,
+            render.color,
+            render.theme,
+            tokens.border,
+            render.style_overrides,
         ));
     }
 
@@ -657,11 +628,8 @@ fn render_boxed_section(
     title: &str,
     body: &str,
     _unicode: bool,
-    color: bool,
-    theme: &ThemeDefinition,
-    border_token: StyleToken,
-    title_token: StyleToken,
-    style_overrides: &StyleOverrides,
+    render: SectionRenderContext<'_>,
+    tokens: SectionStyleTokens,
     chars: BoxFrameChars,
 ) -> String {
     let lines = section_body_lines(body);
@@ -679,16 +647,7 @@ fn render_boxed_section(
     let inner_width = body_width.max(title_width).max(8);
 
     let mut out = String::new();
-    out.push_str(&render_box_top(
-        title,
-        inner_width,
-        chars,
-        color,
-        theme,
-        border_token,
-        title_token,
-        style_overrides,
-    ));
+    out.push_str(&render_box_top(title, inner_width, chars, render, tokens));
 
     if !lines.is_empty() {
         out.push('\n');
@@ -702,10 +661,8 @@ fn render_boxed_section(
             line,
             inner_width,
             chars,
-            color,
-            theme,
-            border_token,
-            style_overrides,
+            render,
+            tokens.border,
         ));
     }
 
@@ -719,10 +676,10 @@ fn render_boxed_section(
             chars.horizontal.to_string().repeat(inner_width + 2),
             chars.bottom_right
         ),
-        color,
-        theme,
-        border_token,
-        style_overrides,
+        render.color,
+        render.theme,
+        tokens.border,
+        render.style_overrides,
     ));
     out
 }
@@ -731,11 +688,8 @@ fn render_box_top(
     title: &str,
     inner_width: usize,
     chars: BoxFrameChars,
-    color: bool,
-    theme: &ThemeDefinition,
-    border_token: StyleToken,
-    title_token: StyleToken,
-    style_overrides: &StyleOverrides,
+    render: SectionRenderContext<'_>,
+    tokens: SectionStyleTokens,
 ) -> String {
     if title.is_empty() {
         return style_border_segment(
@@ -745,10 +699,10 @@ fn render_box_top(
                 chars.horizontal.to_string().repeat(inner_width + 2),
                 chars.top_right
             ),
-            color,
-            theme,
-            border_token,
-            style_overrides,
+            render.color,
+            render.theme,
+            tokens.border,
+            render.style_overrides,
         );
     }
 
@@ -763,9 +717,27 @@ fn render_box_top(
 
     format!(
         "{}{}{}",
-        style_border_segment(&left, color, theme, border_token, style_overrides),
-        style_title_segment(title, color, theme, title_token, style_overrides),
-        style_border_segment(&right, color, theme, border_token, style_overrides),
+        style_border_segment(
+            &left,
+            render.color,
+            render.theme,
+            tokens.border,
+            render.style_overrides,
+        ),
+        style_title_segment(
+            title,
+            render.color,
+            render.theme,
+            tokens.title,
+            render.style_overrides,
+        ),
+        style_border_segment(
+            &right,
+            render.color,
+            render.theme,
+            tokens.border,
+            render.style_overrides,
+        ),
     )
 }
 
@@ -773,19 +745,29 @@ fn render_box_body_line(
     line: &str,
     inner_width: usize,
     chars: BoxFrameChars,
-    color: bool,
-    theme: &ThemeDefinition,
+    render: SectionRenderContext<'_>,
     border_token: StyleToken,
-    style_overrides: &StyleOverrides,
 ) -> String {
     let padding = inner_width.saturating_sub(visible_width(line));
     let left = format!("{} ", chars.vertical);
     let right = format!("{} {}", " ".repeat(padding), chars.vertical);
     format!(
         "{}{}{}",
-        style_border_segment(&left, color, theme, border_token, style_overrides),
+        style_border_segment(
+            &left,
+            render.color,
+            render.theme,
+            border_token,
+            render.style_overrides,
+        ),
         line,
-        style_border_segment(&right, color, theme, border_token, style_overrides),
+        style_border_segment(
+            &right,
+            render.color,
+            render.theme,
+            border_token,
+            render.style_overrides,
+        ),
     )
 }
 
@@ -863,8 +845,9 @@ pub fn adjust_verbosity(base: MessageLevel, verbose: u8, quiet: u8) -> MessageLe
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageBuffer, MessageLayout, MessageLevel, SectionFrameStyle, adjust_verbosity,
-        render_section_block_with_overrides, render_section_divider,
+        MessageBuffer, MessageLayout, MessageLevel, SectionFrameStyle, SectionRenderContext,
+        SectionStyleTokens, adjust_verbosity, render_section_block_with_overrides,
+        render_section_divider,
     };
     use std::sync::{Mutex, OnceLock};
 
@@ -1073,17 +1056,23 @@ mod tests {
     #[test]
     fn top_bottom_section_frame_wraps_body_with_rules_unit() {
         let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+        let render = SectionRenderContext {
+            color: false,
+            theme: &theme,
+            style_overrides: &crate::style::StyleOverrides::default(),
+        };
+        let tokens = SectionStyleTokens {
+            border: crate::style::StyleToken::PanelBorder,
+            title: crate::style::StyleToken::PanelTitle,
+        };
         let rendered = render_section_block_with_overrides(
             "Commands",
             "  show\n  delete",
             SectionFrameStyle::TopBottom,
             true,
             Some(18),
-            false,
-            &theme,
-            crate::style::StyleToken::PanelBorder,
-            crate::style::StyleToken::PanelTitle,
-            &crate::style::StyleOverrides::default(),
+            render,
+            tokens,
         );
 
         assert!(rendered.contains("Commands"));
@@ -1099,17 +1088,23 @@ mod tests {
     #[test]
     fn square_section_frame_boxes_body_unit() {
         let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+        let render = SectionRenderContext {
+            color: false,
+            theme: &theme,
+            style_overrides: &crate::style::StyleOverrides::default(),
+        };
+        let tokens = SectionStyleTokens {
+            border: crate::style::StyleToken::PanelBorder,
+            title: crate::style::StyleToken::PanelTitle,
+        };
         let rendered = render_section_block_with_overrides(
             "Usage",
             "osp config show",
             SectionFrameStyle::Square,
             true,
             None,
-            false,
-            &theme,
-            crate::style::StyleToken::PanelBorder,
-            crate::style::StyleToken::PanelTitle,
-            &crate::style::StyleOverrides::default(),
+            render,
+            tokens,
         );
 
         assert!(rendered.contains("┌"));
@@ -1154,17 +1149,23 @@ mod tests {
     #[test]
     fn section_frame_styles_cover_none_bottom_and_round_unit() {
         let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+        let render = SectionRenderContext {
+            color: false,
+            theme: &theme,
+            style_overrides: &crate::style::StyleOverrides::default(),
+        };
+        let tokens = SectionStyleTokens {
+            border: crate::style::StyleToken::PanelBorder,
+            title: crate::style::StyleToken::PanelTitle,
+        };
         let plain = render_section_block_with_overrides(
             "Note",
             "body",
             SectionFrameStyle::None,
             false,
             Some(16),
-            false,
-            &theme,
-            crate::style::StyleToken::PanelBorder,
-            crate::style::StyleToken::PanelTitle,
-            &crate::style::StyleOverrides::default(),
+            render,
+            tokens,
         );
         let bottom = render_section_block_with_overrides(
             "Note",
@@ -1172,11 +1173,8 @@ mod tests {
             SectionFrameStyle::Bottom,
             false,
             Some(16),
-            false,
-            &theme,
-            crate::style::StyleToken::PanelBorder,
-            crate::style::StyleToken::PanelTitle,
-            &crate::style::StyleOverrides::default(),
+            render,
+            tokens,
         );
         let round = render_section_block_with_overrides(
             "Note",
@@ -1184,11 +1182,8 @@ mod tests {
             SectionFrameStyle::Round,
             true,
             Some(16),
-            false,
-            &theme,
-            crate::style::StyleToken::PanelBorder,
-            crate::style::StyleToken::PanelTitle,
-            &crate::style::StyleOverrides::default(),
+            render,
+            tokens,
         );
 
         assert!(plain.contains("Note:"));

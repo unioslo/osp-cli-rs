@@ -264,7 +264,7 @@ struct ParsedReplInvocation {
 
 enum ParsedReplDispatch {
     Help(String),
-    Invocation(ParsedReplInvocation),
+    Invocation(Box<ParsedReplInvocation>),
 }
 
 fn parse_repl_invocation(
@@ -297,14 +297,16 @@ fn parse_repl_invocation(
         completion::validate_dsl_stages(&parsed.stages)?;
     }
 
-    Ok(ParsedReplDispatch::Invocation(ParsedReplInvocation {
-        cache_key: repl_cache_key_for_command(runtime, &command, &scanned.invocation),
-        effective: resolve_effective_invocation(&runtime.ui, &scanned.invocation),
-        restart_repl: command_restarts_repl(&command),
-        show_intro_on_reload: theme_or_palette_change_requires_intro(&command),
-        command,
-        stages: parsed.stages.clone(),
-    }))
+    Ok(ParsedReplDispatch::Invocation(Box::new(
+        ParsedReplInvocation {
+            cache_key: repl_cache_key_for_command(runtime, &command, &scanned.invocation),
+            effective: resolve_effective_invocation(&runtime.ui, &scanned.invocation),
+            restart_repl: command_restarts_repl(&command),
+            show_intro_on_reload: theme_or_palette_change_requires_intro(&command),
+            command,
+            stages: parsed.stages.clone(),
+        },
+    )))
 }
 
 fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {

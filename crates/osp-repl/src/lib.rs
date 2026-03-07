@@ -32,6 +32,7 @@ pub struct ReplPrompt {
 }
 
 pub type PromptRightRenderer = Arc<dyn Fn() -> String + Send + Sync>;
+pub type LineProjector = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplInputMode {
@@ -64,6 +65,17 @@ pub enum ReplRunResult {
         output: String,
         reload: ReplReloadKind,
     },
+}
+
+pub struct ReplRunConfig {
+    pub prompt: ReplPrompt,
+    pub completion_words: Vec<String>,
+    pub completion_tree: Option<CompletionTree>,
+    pub appearance: ReplAppearance,
+    pub history_config: HistoryConfig,
+    pub input_mode: ReplInputMode,
+    pub prompt_right: Option<PromptRightRenderer>,
+    pub line_projector: Option<LineProjector>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -541,20 +553,20 @@ where
     Ok(result)
 }
 
-pub fn run_repl<F>(
-    prompt: ReplPrompt,
-    completion_words: Vec<String>,
-    completion_tree: Option<CompletionTree>,
-    appearance: ReplAppearance,
-    history_config: HistoryConfig,
-    input_mode: ReplInputMode,
-    prompt_right: Option<PromptRightRenderer>,
-    line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
-    mut execute: F,
-) -> Result<ReplRunResult>
+pub fn run_repl<F>(config: ReplRunConfig, mut execute: F) -> Result<ReplRunResult>
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
+    let ReplRunConfig {
+        prompt,
+        completion_words,
+        completion_tree,
+        appearance,
+        history_config,
+        input_mode,
+        prompt_right,
+        line_projector,
+    } = config;
     let history_store = SharedHistory::new(history_config)?;
     let mut submission = SubmissionContext {
         history_store: &history_store,
@@ -699,14 +711,14 @@ where
 
 struct ReplCompleter {
     engine: CompletionEngine,
-    line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
+    line_projector: Option<LineProjector>,
 }
 
 impl ReplCompleter {
     fn new(
         mut words: Vec<String>,
         completion_tree: Option<CompletionTree>,
-        line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
+        line_projector: Option<LineProjector>,
     ) -> Self {
         words.sort();
         words.dedup();
@@ -840,7 +852,7 @@ fn build_completion_menu(appearance: &ReplAppearance) -> OspCompletionMenu {
 fn build_repl_highlighter(
     tree: &CompletionTree,
     appearance: &ReplAppearance,
-    line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
+    line_projector: Option<LineProjector>,
 ) -> Option<ReplHighlighter> {
     let command_color = appearance
         .command_highlight_style
@@ -867,14 +879,14 @@ fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
 struct ReplHighlighter {
     engine: CompletionEngine,
     command_color: Color,
-    line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
+    line_projector: Option<LineProjector>,
 }
 
 impl ReplHighlighter {
     fn new(
         tree: CompletionTree,
         command_color: Color,
-        line_projector: Option<Arc<dyn Fn(&str) -> String + Send + Sync>>,
+        line_projector: Option<LineProjector>,
     ) -> Self {
         Self {
             engine: CompletionEngine::new(tree),

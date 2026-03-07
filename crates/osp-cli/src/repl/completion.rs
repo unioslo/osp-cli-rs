@@ -8,7 +8,9 @@ use osp_completion::{
 };
 use osp_dsl::parse::pipeline::parse_stage;
 use osp_repl::default_pipe_verbs;
-use osp_ui::messages::render_section_block_with_overrides;
+use osp_ui::messages::{
+    SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
+};
 use osp_ui::style::StyleToken;
 use std::collections::BTreeMap;
 
@@ -507,11 +509,15 @@ fn render_dsl_help(view: ReplViewContext<'_>, spec: &str) -> String {
         resolved.chrome_frame,
         resolved.unicode,
         resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::MessageInfo,
-        StyleToken::PanelTitle,
-        &resolved.style_overrides,
+        SectionRenderContext {
+            color: resolved.color,
+            theme,
+            style_overrides: &resolved.style_overrides,
+        },
+        SectionStyleTokens {
+            border: StyleToken::MessageInfo,
+            title: StyleToken::PanelTitle,
+        },
     )
 }
 

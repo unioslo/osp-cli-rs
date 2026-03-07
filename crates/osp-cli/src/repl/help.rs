@@ -1,5 +1,7 @@
 use osp_ui::ResolvedRenderSettings;
-use osp_ui::messages::render_section_block_with_overrides;
+use osp_ui::messages::{
+    SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
+};
 use osp_ui::style::StyleToken;
 
 use super::ReplViewContext;
@@ -41,11 +43,15 @@ pub(crate) fn render_help_with_chrome(
             resolved.chrome_frame,
             resolved.unicode,
             resolved.width,
-            resolved.color,
-            theme,
-            StyleToken::PanelBorder,
-            StyleToken::PanelTitle,
-            &resolved.style_overrides,
+            SectionRenderContext {
+                color: resolved.color,
+                theme,
+                style_overrides: &resolved.style_overrides,
+            },
+            SectionStyleTokens {
+                border: StyleToken::PanelBorder,
+                title: StyleToken::PanelTitle,
+            },
         ));
     }
 
@@ -72,7 +78,7 @@ fn section_separator(layout: HelpLayout) -> &'static str {
     }
 }
 
-fn trim_blank_lines<'a>(mut lines: Vec<&'a str>) -> Vec<&'a str> {
+fn trim_blank_lines(mut lines: Vec<&str>) -> Vec<&str> {
     while lines.first().is_some_and(|line| line.trim().is_empty()) {
         lines.remove(0);
     }

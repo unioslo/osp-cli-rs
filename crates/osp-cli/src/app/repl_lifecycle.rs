@@ -102,16 +102,16 @@ pub(crate) fn rebuild_repl_parts(
     let plugin_manager = PluginManager::new(launch.plugin_dirs.clone())
         .with_roots(launch.config_root.clone(), launch.cache_root.clone())
         .with_process_timeout(plugin_process_timeout(&config));
-    let mut next = build_app_state(
+    let mut next = build_app_state(crate::state::AppStateInit {
         context,
         config,
         render_settings,
         message_verbosity,
         debug_verbosity,
-        plugin_manager,
-        theme_catalog,
+        plugins: plugin_manager,
+        themes: theme_catalog,
         launch,
-    );
+    });
     snapshot.apply_to(&mut next.session);
     Ok((next.runtime, next.session, next.clients))
 }

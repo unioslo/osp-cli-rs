@@ -3,14 +3,11 @@ use osp_config::{
     ConfigLayer, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults,
     RuntimeLoadOptions, build_runtime_pipeline,
 };
-use osp_ui::RenderSettings;
 use osp_ui::messages::MessageLevel;
 
 use crate::cli::Cli;
 use crate::logging::{DeveloperLoggingConfig, FileLoggingConfig, parse_level_filter};
-use crate::plugin_manager::PluginManager;
-use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
-use crate::theme_loader::ThemeCatalog;
+use crate::state::{AppState, AppStateInit, RuntimeContext, TerminalKind};
 
 use super::{DEFAULT_REPL_PROMPT, DEFAULT_THEME_NAME, report_std_error_with_context};
 
@@ -84,26 +81,8 @@ pub(crate) fn build_runtime_context(
     RuntimeContext::new(profile_override, terminal_kind, std::env::var("TERM").ok())
 }
 
-pub(crate) fn build_app_state(
-    context: RuntimeContext,
-    config: ResolvedConfig,
-    render_settings: RenderSettings,
-    message_verbosity: MessageLevel,
-    debug_verbosity: u8,
-    plugins: PluginManager,
-    themes: ThemeCatalog,
-    launch: LaunchContext,
-) -> AppState {
-    AppState::new(AppStateInit {
-        context,
-        config,
-        render_settings,
-        message_verbosity,
-        debug_verbosity,
-        plugins,
-        themes,
-        launch,
-    })
+pub(crate) fn build_app_state(init: AppStateInit) -> AppState {
+    AppState::new(init)
 }
 
 pub(crate) fn build_logging_config(

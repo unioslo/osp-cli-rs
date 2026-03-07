@@ -236,16 +236,16 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
     let plugin_manager = PluginManager::new(cli.plugin_dirs.clone())
         .with_process_timeout(plugin_process_timeout(&config));
 
-    let mut state = build_app_state(
-        runtime_context,
+    let mut state = build_app_state(crate::state::AppStateInit {
+        context: runtime_context,
         config,
         render_settings,
         message_verbosity,
         debug_verbosity,
-        plugin_manager,
-        theme_catalog.clone(),
-        launch_context,
-    );
+        plugins: plugin_manager,
+        themes: theme_catalog.clone(),
+        launch: launch_context,
+    });
     if let Some(layer) = session_layer {
         state.session.config_overrides = layer;
     }

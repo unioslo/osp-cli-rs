@@ -2,7 +2,9 @@ use crate::app::format_timing_badge;
 use crate::app::{CMD_CONFIG, CMD_HELP, CMD_PLUGINS, CMD_THEME, DEFAULT_REPL_PROMPT};
 use crate::state::DebugTimingState;
 use osp_repl::{ReplAppearance, ReplPrompt};
-use osp_ui::messages::render_section_block_with_overrides;
+use osp_ui::messages::{
+    SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
+};
 use osp_ui::render_inline;
 use osp_ui::style::{
     StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
@@ -158,11 +160,15 @@ fn render_chrome_section(
         resolved.chrome_frame,
         resolved.unicode,
         resolved.width,
-        resolved.color,
-        theme,
-        StyleToken::PanelBorder,
-        StyleToken::PanelTitle,
-        &resolved.style_overrides,
+        SectionRenderContext {
+            color: resolved.color,
+            theme,
+            style_overrides: &resolved.style_overrides,
+        },
+        SectionStyleTokens {
+            border: StyleToken::PanelBorder,
+            title: StyleToken::PanelTitle,
+        },
     )
 }
 

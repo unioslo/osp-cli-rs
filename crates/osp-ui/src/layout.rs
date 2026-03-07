@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     fn next_shrink_step_uses_second_widest_column_gap() {
-        let tables = vec![TableDescriptor {
+        let tables = [TableDescriptor {
             block_id: 1,
             headers: vec![
                 "name".to_string(),
