@@ -146,7 +146,7 @@ fn flatten_value(prefix: Option<&str>, value: &Value, out: &mut Row) {
 mod tests {
     use serde_json::json;
 
-    use super::{coalesce_flat_row, flatten_row};
+    use super::{coalesce_flat_row, flatten_row, flatten_rows};
 
     #[test]
     fn flattens_nested_objects_and_lists() {
@@ -198,5 +198,38 @@ mod tests {
             coalesced.get("metadata"),
             Some(&json!({"asset": {"id": 42}}))
         );
+    }
+
+    #[test]
+    fn flatten_rows_maps_each_row_independently() {
+        let rows = vec![
+            json!({"user": {"name": "alice"}})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"user": {"name": "bob"}})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let flattened = flatten_rows(&rows);
+        assert_eq!(flattened[0].get("user.name"), Some(&json!("alice")));
+        assert_eq!(flattened[1].get("user.name"), Some(&json!("bob")));
+    }
+
+    #[test]
+    fn coalesce_skips_invalid_or_negative_index_paths() {
+        let row = json!({
+            "items[-1].id": 1,
+            "items[*].id": 2,
+            "items[0].id": 3
+        })
+        .as_object()
+        .cloned()
+        .expect("object");
+
+        let coalesced = coalesce_flat_row(&row);
+        assert_eq!(coalesced.get("items"), Some(&json!([{"id": 3}])));
     }
 }

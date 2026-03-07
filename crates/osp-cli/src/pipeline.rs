@@ -361,7 +361,10 @@ fn quote_token(token: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_alias_template, parse_command_tokens_with_aliases};
+    use super::{
+        expand_alias_template, parse_command_text_with_aliases, parse_command_tokens_with_aliases,
+        validate_cli_dsl_stages,
+    };
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
 
     fn test_config(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
@@ -396,5 +399,104 @@ mod tests {
             err.to_string()
                 .contains("cannot expand sensitive config placeholder")
         );
+    }
+
+    #[test]
+    fn alias_expands_and_merges_following_stages() {
+        let config = test_config(&[("alias.demo", "orch provision --os alma 9 | P uid")]);
+
+        let parsed = parse_command_tokens_with_aliases(
+            &["demo".to_string(), "|".to_string(), "alice".to_string()],
+            &config,
+        )
+        .expect("alias should expand");
+
+        assert_eq!(
+            parsed.tokens,
+            vec![
+                "orch".to_string(),
+                "provision".to_string(),
+                "--os".to_string(),
+                "alma9".to_string()
+            ]
+        );
+        assert_eq!(
+            parsed.stages,
+            vec!["P uid".to_string(), "alice".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_command_text_with_aliases_splits_shell_words_and_dsl() {
+        let config = test_config(&[]);
+        let parsed = parse_command_text_with_aliases("ldap user \"alice smith\" | P uid", &config)
+            .expect("command text should parse");
+
+        assert_eq!(
+            parsed.tokens,
+            vec![
+                "ldap".to_string(),
+                "user".to_string(),
+                "alice smith".to_string()
+            ]
+        );
+        assert_eq!(parsed.stages, vec!["P uid".to_string()]);
+    }
+
+    #[test]
+    fn validate_cli_dsl_stages_rejects_unknown_verbs() {
+        let err =
+            validate_cli_dsl_stages(&["R uid".to_string()]).expect_err("unknown verb should fail");
+        assert!(err.to_string().contains("Unknown DSL verb"));
+    }
+
+    #[test]
+    fn alias_placeholders_support_positional_defaults_and_star_quoting() {
+        let config = test_config(&[]);
+
+        let expanded = expand_alias_template(
+            "demo",
+            "echo ${1} ${2:guest} ${*}",
+            &[
+                "alice".to_string(),
+                "two words".to_string(),
+                "O'Neil".to_string(),
+            ],
+            &config,
+        )
+        .expect("alias should expand");
+
+        assert_eq!(
+            expanded,
+            "echo alice two words alice 'two words' 'O'\"'\"'Neil'"
+        );
+    }
+
+    #[test]
+    fn alias_placeholder_syntax_errors_are_reported_cleanly() {
+        let config = test_config(&[]);
+
+        let err = expand_alias_template("demo", "echo ${}", &[], &config)
+            .expect_err("empty placeholder should fail");
+        assert!(err.to_string().contains("invalid alias placeholder syntax"));
+
+        let err = expand_alias_template("demo", "echo ${user", &[], &config)
+            .expect_err("unterminated placeholder should fail");
+        assert!(err.to_string().contains("invalid alias placeholder syntax"));
+    }
+
+    #[test]
+    fn parse_command_tokens_with_aliases_handles_empty_input() {
+        let config = test_config(&[]);
+        let parsed =
+            parse_command_tokens_with_aliases(&[], &config).expect("empty command should parse");
+
+        assert!(parsed.tokens.is_empty());
+        assert!(parsed.stages.is_empty());
+    }
+
+    #[test]
+    fn validate_cli_dsl_stages_allows_help_stage() {
+        validate_cli_dsl_stages(&["H sort".to_string()]).expect("help stage should be allowed");
     }
 }

@@ -195,7 +195,7 @@ fn to_string_normalized(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use osp_core::output_model::OutputItems;
+    use osp_core::output_model::{Group, OutputItems};
     use serde_json::json;
 
     use super::apply;
@@ -312,5 +312,168 @@ mod tests {
             }
             OutputItems::Groups(_) => panic!("expected rows"),
         }
+    }
+
+    #[test]
+    fn sort_supports_explicit_ip_and_string_casts() {
+        let rows = vec![
+            json!({"host": "b", "ip": "10.0.0.20"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"host": "a", "ip": "10.0.0.3"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let output =
+            apply(OutputItems::Rows(rows.clone()), "ip as ip").expect("ip sort should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected rows");
+        };
+        let hosts = rows
+            .iter()
+            .filter_map(|row| row.get("host").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(hosts, vec!["a", "b"]);
+
+        let output = apply(OutputItems::Rows(rows.clone()), "!host as str")
+            .expect("string cast should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected rows");
+        };
+        let hosts = rows
+            .iter()
+            .filter_map(|row| row.get("host").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(hosts, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn sort_places_missing_values_last_and_sorts_groups_using_merged_rows() {
+        let rows = vec![
+            json!({"host": "missing"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"host": "present", "score": "20"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"host": "small", "score": "5"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+        let output = apply(OutputItems::Rows(rows), "score").expect("sort should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected rows");
+        };
+        let hosts = rows
+            .iter()
+            .filter_map(|row| row.get("host").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(hosts, vec!["small", "present", "missing"]);
+
+        let groups = vec![
+            Group {
+                groups: json!({"dept": "sales"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+                aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+                rows: Vec::new(),
+            },
+            Group {
+                groups: json!({"dept": "eng"}).as_object().cloned().expect("object"),
+                aggregates: json!({"count": 5}).as_object().cloned().expect("object"),
+                rows: Vec::new(),
+            },
+        ];
+        let output = apply(OutputItems::Groups(groups), "!count").expect("group sort should work");
+        let OutputItems::Groups(groups) = output else {
+            panic!("expected groups");
+        };
+        let depts = groups
+            .iter()
+            .filter_map(|group| group.groups.get("dept").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(depts, vec!["eng", "sales"]);
+    }
+
+    #[test]
+    fn sort_rejects_missing_keys_and_unknown_casts() {
+        let err =
+            apply(OutputItems::Rows(Vec::new()), "").expect_err("missing sort spec should fail");
+        assert!(err.to_string().contains("S requires one or more keys"));
+
+        let rows = vec![json!({"host": "a"}).as_object().cloned().expect("object")];
+        let err = apply(OutputItems::Rows(rows), "host as wat")
+            .expect_err("unknown sort cast should fail");
+        assert!(err.to_string().contains("unsupported cast 'wat'"));
+    }
+
+    #[test]
+    fn sort_auto_cast_orders_booleans_before_strings() {
+        let rows = vec![
+            json!({"host": "c", "enabled": "zzz"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"host": "b", "enabled": true})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"host": "a", "enabled": false})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let output = apply(OutputItems::Rows(rows), "enabled").expect("sort should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected rows");
+        };
+        let hosts = rows
+            .iter()
+            .filter_map(|row| row.get("host").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(hosts, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn explicit_ip_and_number_casts_fall_back_to_string_comparison() {
+        let rows = vec![
+            json!({"host": "b", "ip": "banana", "score": "20a"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"host": "a", "ip": "apple", "score": "100a"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let output = apply(OutputItems::Rows(rows.clone()), "ip as ip").expect("sort should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected rows");
+        };
+        let hosts = rows
+            .iter()
+            .filter_map(|row| row.get("host").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(hosts, vec!["a", "b"]);
+
+        let output =
+            apply(OutputItems::Rows(rows.clone()), "score as num").expect("sort should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected rows");
+        };
+        let hosts = rows
+            .iter()
+            .filter_map(|row| row.get("host").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(hosts, vec!["a", "b"]);
     }
 }

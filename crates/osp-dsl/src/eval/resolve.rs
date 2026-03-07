@@ -360,7 +360,10 @@ mod tests {
 
     use crate::parse::{key_spec::ExactMode, path::parse_path};
 
-    use super::{evaluate_path, is_truthy, resolve_values, slice_indices};
+    use super::{
+        enumerate_path_values, evaluate_path, is_truthy, resolve_first_value, resolve_pairs,
+        resolve_values, slice_indices,
+    };
 
     #[test]
     fn resolve_values_prefers_direct_path_then_fuzzy_fallback() {
@@ -412,5 +415,81 @@ mod tests {
         assert!(!is_truthy(&json!([])));
         assert!(is_truthy(&json!("x")));
         assert!(is_truthy(&json!([1])));
+    }
+
+    #[test]
+    fn resolve_first_value_unwraps_arrays_and_dedups_results() {
+        let row = json!({
+            "items": [{"id": 7}, {"id": 7}],
+            "dup": [1, 1]
+        })
+        .as_object()
+        .cloned()
+        .expect("object");
+
+        assert_eq!(
+            resolve_first_value(&row, "items[].id", ExactMode::None),
+            Some(json!(7))
+        );
+        assert_eq!(
+            resolve_values(&row, "dup[]", ExactMode::None),
+            vec![json!(1)]
+        );
+    }
+
+    #[test]
+    fn resolve_pairs_handles_path_flat_fallback_and_full_materialization() {
+        let flat = json!({
+            "items[0].id": 1,
+            "items[1].id": 2,
+            "flat.value": "x"
+        })
+        .as_object()
+        .cloned()
+        .expect("object");
+
+        let (path_pairs, materialized) = resolve_pairs(&flat, "items[].id");
+        assert!(!materialized);
+        assert_eq!(
+            path_pairs,
+            vec![
+                ("items[0].id".to_string(), json!(1)),
+                ("items[1].id".to_string(), json!(2))
+            ]
+        );
+
+        let (materialized_pairs, materialized) = resolve_pairs(&flat, "items[-1].id");
+        assert!(materialized);
+        assert_eq!(
+            materialized_pairs,
+            vec![("items[1].id".to_string(), json!(2))]
+        );
+
+        let (flat_pairs, materialized) = resolve_pairs(&flat, "flat.value");
+        assert!(!materialized);
+        assert_eq!(flat_pairs, vec![("flat.value".to_string(), json!("x"))]);
+
+        let (fallback_pairs, materialized) = resolve_pairs(&flat, "missing");
+        assert!(materialized);
+        assert_eq!(fallback_pairs.len(), 3);
+    }
+
+    #[test]
+    fn enumerate_paths_and_selectors_cover_negative_indexes() {
+        let root = json!({"items": [{"id": 1}, {"id": 2}, {"id": 3}]});
+        let path = parse_path("items[-1].id").expect("path should parse");
+        assert_eq!(evaluate_path(&root, &path), vec![json!(3)]);
+
+        let enumerated = enumerate_path_values(
+            &root,
+            &parse_path("items[:2].id").expect("path should parse"),
+        );
+        assert_eq!(
+            enumerated,
+            vec![
+                ("items[0].id".to_string(), json!(1)),
+                ("items[1].id".to_string(), json!(2))
+            ]
+        );
     }
 }

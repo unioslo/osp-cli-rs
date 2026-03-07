@@ -73,7 +73,7 @@ pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
             }
             QuickScope::ValueOnly | QuickScope::KeyOrValue => {
                 if matches!(mode, MatchMode::Multi) {
-                    result.matched ^ spec.key_spec.negated
+                    result.matched
                 } else {
                     result.matched || spec.key_spec.negated
                 }
@@ -308,7 +308,9 @@ fn transform_row(
     if filtered.is_empty() {
         None
     } else {
-        Some(vec![coalesce_flat_row(&filtered)])
+        let mut coalesced = coalesce_flat_row(&filtered);
+        compact_sparse_arrays_in_row(&mut coalesced);
+        Some(vec![coalesced])
     }
 }
 
@@ -419,84 +421,30 @@ fn squeeze_single_entry(row: Row) -> Row {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::apply;
-
-    #[test]
-    fn quick_matches_keys_and_values_by_default() {
-        let rows = vec![
-            json!({"uid": "oistes"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"cn": "Andreas"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let output = apply(rows, "oist").expect("quick should work");
-        assert_eq!(output.len(), 1);
-    }
-
-    #[test]
-    fn quick_key_scope_not_equals_works() {
-        let rows = vec![
-            json!({"uid": "oistes"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"cn": "Andreas"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let output = apply(rows, "K !=uid").expect("quick should work");
-        assert_eq!(output.len(), 1);
-        assert!(output[0].contains_key("cn"));
-    }
-
-    #[test]
-    fn quick_value_scope_works() {
-        let rows = vec![
-            json!({"uid": "oistes"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"uid": "andreasd"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let output = apply(rows, "V oist").expect("quick should work");
-        assert_eq!(output.len(), 1);
-        assert_eq!(
-            output[0].get("uid").and_then(|v| v.as_str()),
-            Some("oistes")
-        );
-    }
-
-    #[test]
-    fn quick_projects_exact_key_matches() {
-        let rows = vec![
-            json!({"uid": "oistes", "cn": "Oistein"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"uid": "andreasd", "cn": "Andreas"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let output = apply(rows, "K uid").expect("quick should work");
-        assert_eq!(output.len(), 2);
-        assert!(output.iter().all(|row| row.contains_key("uid")));
-        assert!(output.iter().all(|row| !row.contains_key("cn")));
+fn compact_sparse_arrays_in_row(row: &mut Row) {
+    for value in row.values_mut() {
+        compact_sparse_arrays(value);
     }
 }
+
+fn compact_sparse_arrays(value: &mut Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                compact_sparse_arrays(item);
+            }
+            if items.iter().any(|item| !item.is_null()) {
+                items.retain(|item| !item.is_null());
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                compact_sparse_arrays(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests;

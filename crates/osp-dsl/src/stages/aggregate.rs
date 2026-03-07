@@ -387,4 +387,216 @@ mod tests {
             OutputItems::Groups(_) => panic!("expected rows"),
         }
     }
+
+    #[test]
+    fn aggregate_supports_min_max_and_existence_count() {
+        let rows = vec![
+            json!({"score": 10, "enabled": true, "name": "beta"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"score": 3, "enabled": false, "name": "alpha"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"name": "gamma"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let min = apply(OutputItems::Rows(rows.clone()), "min(score) lowest")
+            .expect("min aggregate should work");
+        let OutputItems::Rows(min_rows) = min else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            min_rows[0].get("lowest").and_then(|value| value.as_i64()),
+            Some(3)
+        );
+
+        let max = apply(OutputItems::Rows(rows.clone()), "max(name) highest")
+            .expect("max aggregate should work");
+        let OutputItems::Rows(max_rows) = max else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            max_rows[0].get("highest").and_then(|value| value.as_str()),
+            Some("gamma")
+        );
+
+        let count = apply(OutputItems::Rows(rows), "count(?enabled) enabled_count")
+            .expect("existence count should work");
+        let OutputItems::Rows(count_rows) = count else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            count_rows[0]
+                .get("enabled_count")
+                .and_then(|value| value.as_i64()),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn aggregate_parses_default_aliases_and_group_count_macro() {
+        let rows = vec![
+            json!({"amount": 4}).as_object().cloned().expect("object"),
+            json!({"amount": 6}).as_object().cloned().expect("object"),
+        ];
+        let summed = apply(OutputItems::Rows(rows), "sum(amount)").expect("sum should work");
+        let OutputItems::Rows(rows) = summed else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            rows[0].get("sum(amount)").and_then(|value| value.as_f64()),
+            Some(10.0)
+        );
+
+        let grouped = OutputItems::Groups(vec![Group {
+            groups: json!({"dept": "sales"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            aggregates: serde_json::Map::new(),
+            rows: vec![
+                json!({"id": 1}).as_object().cloned().expect("object"),
+                json!({"id": 2}).as_object().cloned().expect("object"),
+            ],
+        }]);
+        let counted = count_macro(grouped, "").expect("count macro should work for groups");
+        let OutputItems::Rows(rows) = counted else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            rows[0].get("dept").and_then(|value| value.as_str()),
+            Some("sales")
+        );
+        assert_eq!(
+            rows[0].get("count").and_then(|value| value.as_i64()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn aggregate_rejects_invalid_forms() {
+        let rows = OutputItems::Rows(vec![json!({"id": 1}).as_object().cloned().expect("object")]);
+
+        let missing_fn = apply(rows.clone(), "").expect_err("missing function should fail");
+        assert!(
+            missing_fn
+                .to_string()
+                .contains("A requires an aggregate function")
+        );
+
+        let malformed = apply(rows.clone(), "sum(id").expect_err("malformed function should fail");
+        assert!(malformed.to_string().contains("malformed function call"));
+
+        let unsupported =
+            apply(rows.clone(), "median(id)").expect_err("unsupported function should fail");
+        assert!(
+            unsupported
+                .to_string()
+                .contains("unsupported function 'median'")
+        );
+
+        let count_err = count_macro(rows, "extra").expect_err("C should reject arguments");
+        assert!(count_err.to_string().contains("C takes no arguments"));
+    }
+
+    #[test]
+    fn aggregate_supports_alias_after_as_and_mixed_numeric_inputs() {
+        let rows = vec![
+            json!({"value": "4"}).as_object().cloned().expect("object"),
+            json!({"value": true}).as_object().cloned().expect("object"),
+            json!({"value": 2}).as_object().cloned().expect("object"),
+        ];
+
+        let output =
+            apply(OutputItems::Rows(rows), "sum(value) AS total").expect("sum alias should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            rows[0].get("total").and_then(|value| value.as_f64()),
+            Some(7.0)
+        );
+    }
+
+    #[test]
+    fn aggregate_handles_empty_inputs_and_parenthesized_count_aliases() {
+        let empty_rows = OutputItems::Rows(vec![
+            json!({"value": null}).as_object().cloned().expect("object"),
+        ]);
+
+        let avg = apply(empty_rows.clone(), "avg(value) average").expect("avg should work");
+        let OutputItems::Rows(avg_rows) = avg else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            avg_rows[0].get("average").and_then(|value| value.as_f64()),
+            Some(0.0)
+        );
+
+        let min = apply(empty_rows, "min(value) lowest").expect("min should work");
+        let OutputItems::Rows(min_rows) = min else {
+            panic!("expected row output");
+        };
+        assert_eq!(min_rows[0].get("lowest"), Some(&json!(null)));
+
+        let count_rows = vec![
+            json!({"enabled": true})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"enabled": false})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+        let counted =
+            apply(OutputItems::Rows(count_rows), "count(enabled) AS matches").expect("count");
+        let OutputItems::Rows(rows) = counted else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            rows[0].get("matches").and_then(|value| value.as_i64()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn aggregate_prefers_alias_token_for_two_word_count_form() {
+        let rows = vec![
+            json!({"id": 1}).as_object().cloned().expect("object"),
+            json!({"id": 2}).as_object().cloned().expect("object"),
+            json!({"id": 3}).as_object().cloned().expect("object"),
+        ];
+
+        let output = apply(OutputItems::Rows(rows), "count total").expect("count should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            rows[0].get("total").and_then(|value| value.as_i64()),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn aggregate_space_separated_column_form_keeps_column_name_as_alias() {
+        let rows = vec![
+            json!({"amount": 4}).as_object().cloned().expect("object"),
+            json!({"amount": 6}).as_object().cloned().expect("object"),
+        ];
+
+        let output = apply(OutputItems::Rows(rows), "sum amount").expect("sum should work");
+        let OutputItems::Rows(rows) = output else {
+            panic!("expected row output");
+        };
+        assert_eq!(
+            rows[0].get("amount").and_then(|value| value.as_f64()),
+            Some(10.0)
+        );
+    }
 }

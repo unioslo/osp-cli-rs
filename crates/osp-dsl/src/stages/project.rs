@@ -125,10 +125,7 @@ fn project_single_row(row: &Row, keepers: &[Pattern], droppers: &[Pattern]) -> V
     }
 
     for pattern in droppers {
-        if pattern.dotted {
-            let label = pattern_label(pattern);
-            dynamic_columns.retain(|(dynamic_label, _)| dynamic_label != &label);
-        }
+        dynamic_columns.retain(|(dynamic_label, _)| !dynamic_label_matches(pattern, dynamic_label));
 
         for key in matched_flat_keys(&flattened, pattern) {
             static_flat.remove(&key);
@@ -289,11 +286,22 @@ fn pattern_label(pattern: &Pattern) -> String {
     }
 }
 
+fn dynamic_label_matches(pattern: &Pattern, label: &str) -> bool {
+    if pattern_label(pattern) == label {
+        return true;
+    }
+
+    let mut row = Row::new();
+    row.insert(label.to_string(), Value::Null);
+    !match_row_keys(&row, &pattern.key_spec.token, pattern.key_spec.exact).is_empty()
+}
+
 #[cfg(test)]
 mod tests {
+    use osp_core::output_model::Group;
     use serde_json::json;
 
-    use super::apply;
+    use super::{apply, apply_groups};
 
     #[test]
     fn keeps_requested_columns() {
@@ -371,6 +379,87 @@ mod tests {
                 .as_object()
                 .cloned()
                 .expect("object")
+            ]
+        );
+    }
+
+    #[test]
+    fn absolute_path_projection_keeps_only_exact_nested_key() {
+        let rows = vec![
+            json!({"id": 1, "nested": {"id": 2}, "other": {"id": 3}})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let projected = apply(rows, ".nested.id").expect("project should work");
+        assert_eq!(
+            projected,
+            vec![
+                json!({"nested": {"id": 2}})
+                    .as_object()
+                    .cloned()
+                    .expect("object")
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_groups_keeps_aggregate_only_groups_even_when_rows_drop_out() {
+        let groups = vec![Group {
+            groups: json!({"dept": "eng"}).as_object().cloned().expect("object"),
+            aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+            rows: vec![
+                json!({"uid": "alice"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+                json!({"uid": "bob"}).as_object().cloned().expect("object"),
+            ],
+        }];
+
+        let projected = apply_groups(groups, "missing").expect("group project should work");
+        assert_eq!(projected.len(), 1);
+        assert!(projected[0].rows.is_empty());
+        assert_eq!(projected[0].aggregates.get("count"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn empty_project_spec_is_rejected() {
+        let err = apply(
+            vec![
+                json!({"uid": "alice"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ],
+            "   ",
+        )
+        .expect_err("empty spec should fail");
+
+        assert!(err.to_string().contains("requires one or more keys"));
+    }
+
+    #[test]
+    fn dropping_dynamic_projection_label_removes_fanout_column() {
+        let rows = vec![
+            json!({
+                "uid": "alice",
+                "interfaces": [{"mac": "aa:bb"}, {"mac": "cc:dd"}]
+            })
+            .as_object()
+            .cloned()
+            .expect("object"),
+        ];
+
+        let projected = apply(rows, "uid interfaces[].mac !mac").expect("project should work");
+        assert_eq!(
+            projected,
+            vec![
+                json!({"uid": "alice"})
+                    .as_object()
+                    .cloned()
+                    .expect("object")
             ]
         );
     }

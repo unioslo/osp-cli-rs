@@ -321,7 +321,7 @@ mod tests {
 
     use crate::parse::key_spec::ExactMode;
 
-    use super::match_row_keys;
+    use super::{match_row_keys, match_row_keys_detailed, value_contains};
 
     #[test]
     fn matches_last_segment_case_insensitive() {
@@ -375,5 +375,29 @@ mod tests {
 
         let matched = match_row_keys(&row, "items[0].id", ExactMode::None);
         assert_eq!(matched, vec!["items[0].id"]);
+    }
+
+    #[test]
+    fn detailed_matching_reports_partial_hits_when_exact_match_is_absent() {
+        let row = json!({
+            "metadata.asset.id": 42,
+            "metadata.asset.name": "vm-01"
+        })
+        .as_object()
+        .cloned()
+        .expect("object");
+
+        let matches = match_row_keys_detailed(&row, "nam", ExactMode::None);
+        assert!(matches.exact.is_empty());
+        assert_eq!(matches.partial, vec!["metadata.asset.name".to_string()]);
+    }
+
+    #[test]
+    fn value_contains_handles_arrays_and_case_sensitivity() {
+        let value = json!(["Alpha", {"name": "Bravo"}]);
+
+        assert!(value_contains(&value, "bravo", false));
+        assert!(!value_contains(&value, "bravo", true));
+        assert!(value_contains(&value, "Alpha", true));
     }
 }

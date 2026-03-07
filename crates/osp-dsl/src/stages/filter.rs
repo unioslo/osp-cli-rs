@@ -391,9 +391,10 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use osp_core::output_model::Group;
     use serde_json::json;
 
-    use super::{apply, parse_timestamp};
+    use super::{apply, apply_groups, parse_timestamp};
 
     #[test]
     fn filters_on_equals_predicate() {
@@ -492,5 +493,95 @@ mod tests {
         assert!(
             parse_timestamp("2026-02-13T20:00:00+00:00") > parse_timestamp("2026-02-13 00:00:00")
         );
+    }
+
+    #[test]
+    fn groups_keep_matching_rows_when_headers_do_not_match() {
+        let groups = vec![Group {
+            groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
+            aggregates: serde_json::Map::new(),
+            rows: vec![
+                json!({"uid": "alice", "score": 9})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+                json!({"uid": "bob", "score": 15})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ],
+        }];
+
+        let output = apply_groups(groups, "score >= 10").expect("group filter should work");
+
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].rows.len(), 1);
+        assert_eq!(output[0].rows[0].get("uid"), Some(&json!("bob")));
+    }
+
+    #[test]
+    fn supports_numeric_timestamp_and_missing_negated_comparisons() {
+        let rows = vec![
+            json!({"uid": "alice", "score": 10, "created": "2024-01-01T12:00:00Z"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "bob", "score": 2, "created": "2023-01-01T12:00:00Z"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "carol"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let numeric = apply(rows.clone(), "score >= 10").expect("numeric comparison should work");
+        assert_eq!(numeric.len(), 1);
+        assert_eq!(numeric[0].get("uid"), Some(&json!("alice")));
+
+        let timestamp =
+            apply(rows.clone(), "created > 2023-12-31T23:59:59Z").expect("time comparison");
+        assert_eq!(timestamp.len(), 1);
+        assert_eq!(timestamp[0].get("uid"), Some(&json!("alice")));
+
+        let negated_missing = apply(rows, "score != 2").expect("negated missing should work");
+        assert_eq!(negated_missing.len(), 2);
+        assert!(
+            negated_missing
+                .iter()
+                .any(|row| row.get("uid") == Some(&json!("alice")))
+        );
+        assert!(
+            negated_missing
+                .iter()
+                .any(|row| row.get("uid") == Some(&json!("carol")))
+        );
+    }
+
+    #[test]
+    fn supports_array_regex_and_boolean_matches() {
+        let rows = vec![
+            json!({"uid": "alice", "tags": ["dev", "ops"], "enabled": true})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "bob", "tags": ["sales"], "enabled": false})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let array_match = apply(rows.clone(), "tags ops").expect("array contains should work");
+        assert_eq!(array_match.len(), 1);
+        assert_eq!(array_match[0].get("uid"), Some(&json!("alice")));
+
+        let regex = apply(rows.clone(), "uid ~ ^a").expect("regex match should work");
+        assert_eq!(regex.len(), 1);
+        assert_eq!(regex[0].get("uid"), Some(&json!("alice")));
+
+        let boolean = apply(rows, "enabled false").expect("bool compare should work");
+        assert_eq!(boolean.len(), 1);
+        assert_eq!(boolean[0].get("uid"), Some(&json!("bob")));
     }
 }

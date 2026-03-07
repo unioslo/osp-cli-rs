@@ -187,3 +187,229 @@ fn run_jq(expr: &str, payload: &Value) -> Result<Option<Value>> {
         .map_err(|_| anyhow!("jq output is not valid JSON"))?;
     Ok(Some(parsed))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    use osp_core::output_model::{Group, OutputItems};
+    use serde_json::json;
+
+    use super::{
+        apply, apply_rows, group_to_value, json_to_rows, normalize_expression, run_jq,
+        value_to_group,
+    };
+
+    fn row(value: serde_json::Value) -> osp_core::row::Row {
+        value
+            .as_object()
+            .cloned()
+            .expect("fixture should be an object")
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn set_env_for_test(key: &str, value: Option<&str>) {
+        match value {
+            Some(value) => unsafe { std::env::set_var(key, value) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    #[test]
+    fn normalize_expression_trims_quotes_and_leading_pipe() {
+        assert_eq!(
+            normalize_expression(" '| .rows' ").expect("quoted expression should normalize"),
+            ".rows"
+        );
+        assert_eq!(
+            normalize_expression("| map(.uid)").expect("leading pipe should normalize"),
+            "map(.uid)"
+        );
+        assert!(normalize_expression("   ").is_err());
+        assert!(normalize_expression("'   '").is_err());
+    }
+
+    #[test]
+    fn json_helpers_round_trip_groups_and_scalar_rows() {
+        let group = Group {
+            groups: row(json!({"team": "ops"})),
+            aggregates: row(json!({"count": 2})),
+            rows: vec![row(json!({"uid": "oistes"}))],
+        };
+        let payload = group_to_value(&group);
+        let restored = value_to_group(
+            &json!({
+                "groups": {"team": "eng"},
+                "aggregates": {"count": 9},
+                "rows": [{"uid": "andreasd"}]
+            }),
+            &group,
+        )
+        .expect("group payload should restore");
+        assert_eq!(
+            restored.groups.get("team").and_then(|value| value.as_str()),
+            Some("eng")
+        );
+        assert_eq!(
+            restored
+                .aggregates
+                .get("count")
+                .and_then(|value| value.as_i64()),
+            Some(9)
+        );
+        assert_eq!(
+            restored.rows[0].get("uid").and_then(|value| value.as_str()),
+            Some("andreasd")
+        );
+
+        let rows = json_to_rows(json!([{"uid": "oistes"}, 7]));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].get("uid").and_then(|value| value.as_str()),
+            Some("oistes")
+        );
+        assert_eq!(
+            rows[1].get("value").and_then(|value| value.as_i64()),
+            Some(7)
+        );
+
+        let fallback =
+            value_to_group(&payload, &group).expect("original payload should round trip");
+        assert_eq!(fallback.rows.len(), 1);
+    }
+
+    #[test]
+    fn run_jq_and_apply_cover_row_and_group_paths() {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
+        let rows = vec![
+            row(json!({"uid": "oistes"})),
+            row(json!({"uid": "andreasd"})),
+        ];
+        let filtered = apply_rows(rows.clone(), "map(select(.uid == \"oistes\"))")
+            .expect("jq row filter should succeed");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(
+            filtered[0].get("uid").and_then(|value| value.as_str()),
+            Some("oistes")
+        );
+
+        let payload = json!([{"uid": "oistes"}]);
+        let direct = run_jq("map(.uid)", &payload).expect("jq should run");
+        assert_eq!(direct, Some(json!(["oistes"])));
+
+        let none = run_jq("empty", &payload).expect("jq empty output should be allowed");
+        assert!(none.is_none());
+
+        let groups = OutputItems::Groups(vec![Group {
+            groups: row(json!({"team": "ops"})),
+            aggregates: row(json!({"count": 1})),
+            rows: vec![row(json!({"uid": "oistes"}))],
+        }]);
+        let replaced = apply(
+            groups,
+            "{groups:{team:\"eng\"}, aggregates:{count:9}, rows:[{uid:\"andreasd\"}]}",
+        )
+        .expect("group replacement should succeed");
+        let OutputItems::Groups(groups) = replaced else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(
+            groups[0]
+                .groups
+                .get("team")
+                .and_then(|value| value.as_str()),
+            Some("eng")
+        );
+        assert_eq!(
+            groups[0].rows[0]
+                .get("uid")
+                .and_then(|value| value.as_str()),
+            Some("andreasd")
+        );
+    }
+
+    #[test]
+    fn run_jq_reports_missing_binary_and_invalid_output() {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
+        let original_path = std::env::var("PATH").ok();
+        set_env_for_test("PATH", Some(""));
+        let missing =
+            run_jq(".", &json!({"uid": "oistes"})).expect_err("missing jq binary should fail");
+        if let Some(value) = original_path.as_deref() {
+            set_env_for_test("PATH", Some(value));
+        } else {
+            set_env_for_test("PATH", None);
+        }
+        assert!(missing.to_string().contains("jq executable not found"));
+
+        let invalid = run_jq(".[]", &json!([1, 2])).expect_err("non-json jq output should fail");
+        assert!(invalid.to_string().contains("jq output is not valid JSON"));
+    }
+
+    #[test]
+    fn jq_helpers_cover_empty_rows_and_group_fallbacks_unit() {
+        let rows = apply_rows(Vec::new(), ".").expect("empty rows should succeed");
+        assert!(rows.is_empty());
+
+        let fallback = Group {
+            groups: row(json!({"team": "ops"})),
+            aggregates: row(json!({"count": 1})),
+            rows: vec![row(json!({"uid": "oistes"}))],
+        };
+        let restored = value_to_group(&json!({"rows": [{"uid": "andreasd"}]}), &fallback)
+            .expect("rows-only payload should still become a group");
+        assert_eq!(
+            restored.groups.get("team").and_then(|value| value.as_str()),
+            Some("ops")
+        );
+        assert_eq!(
+            restored
+                .aggregates
+                .get("count")
+                .and_then(|value| value.as_i64()),
+            Some(1)
+        );
+        assert!(value_to_group(&json!("scalar"), &fallback).is_none());
+    }
+
+    #[test]
+    fn apply_groups_handles_empty_and_row_style_jq_output_unit() {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
+        let groups = vec![Group {
+            groups: row(json!({"team": "ops"})),
+            aggregates: row(json!({"count": 2})),
+            rows: vec![
+                row(json!({"uid": "oistes"})),
+                row(json!({"uid": "andreasd"})),
+            ],
+        }];
+
+        let emptied = apply(OutputItems::Groups(groups.clone()), "empty")
+            .expect("empty jq output should keep group metadata");
+        let OutputItems::Groups(emptied_groups) = emptied else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(emptied_groups[0].groups.get("team"), Some(&json!("ops")));
+        assert!(emptied_groups[0].rows.is_empty());
+
+        let projected = apply(
+            OutputItems::Groups(groups),
+            "{groups, aggregates, rows: (.rows | map({uid}))}",
+        )
+        .expect("group jq output with explicit rows should succeed");
+        let OutputItems::Groups(projected_groups) = projected else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(
+            projected_groups[0].rows[0]
+                .get("uid")
+                .and_then(|value| value.as_str()),
+            Some("oistes")
+        );
+        assert_eq!(projected_groups[0].rows.len(), 2);
+    }
+}

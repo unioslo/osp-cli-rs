@@ -74,3 +74,116 @@ fn apply_groups_quick(groups: Vec<Group>, raw: &str) -> Result<Vec<Group>> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use osp_core::output_model::{Group, OutputItems};
+    use serde_json::json;
+
+    use super::apply;
+
+    fn row(value: serde_json::Value) -> osp_core::row::Row {
+        value
+            .as_object()
+            .cloned()
+            .expect("fixture should be an object")
+    }
+
+    #[test]
+    fn empty_spec_cleans_rows_and_drops_empty_results() {
+        let items = OutputItems::Rows(vec![
+            row(json!({"uid": "oistes", "mail": "", "tags": [], "note": null})),
+            row(json!({"mail": "", "tags": [], "note": null})),
+        ]);
+
+        let cleaned = apply(items, "   ").expect("cleaning should succeed");
+        let OutputItems::Rows(rows) = cleaned else {
+            panic!("expected row output");
+        };
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 1);
+        assert_eq!(
+            rows[0].get("uid").and_then(|value| value.as_str()),
+            Some("oistes")
+        );
+    }
+
+    #[test]
+    fn empty_spec_cleans_group_rows_without_touching_group_metadata() {
+        let items = OutputItems::Groups(vec![Group {
+            groups: row(json!({"team": "ops"})),
+            aggregates: row(json!({"count": 2})),
+            rows: vec![
+                row(json!({"uid": "oistes", "mail": ""})),
+                row(json!({"mail": "", "tags": []})),
+            ],
+        }]);
+
+        let cleaned = apply(items, "").expect("group cleaning should succeed");
+        let OutputItems::Groups(groups) = cleaned else {
+            panic!("expected grouped output");
+        };
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0]
+                .groups
+                .get("team")
+                .and_then(|value| value.as_str()),
+            Some("ops")
+        );
+        assert_eq!(
+            groups[0]
+                .aggregates
+                .get("count")
+                .and_then(|value| value.as_i64()),
+            Some(2)
+        );
+        assert_eq!(groups[0].rows.len(), 1);
+        assert_eq!(groups[0].rows[0].len(), 1);
+        assert_eq!(
+            groups[0].rows[0]
+                .get("uid")
+                .and_then(|value| value.as_str()),
+            Some("oistes")
+        );
+    }
+
+    #[test]
+    fn non_empty_spec_reuses_quick_filter_for_rows_and_groups() {
+        let rows = OutputItems::Rows(vec![
+            row(json!({"uid": "oistes"})),
+            row(json!({"mail": "other@example.org"})),
+        ]);
+        let filtered = apply(rows, "uid").expect("row filter should succeed");
+        let OutputItems::Rows(rows) = filtered else {
+            panic!("expected row output");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("uid").and_then(|value| value.as_str()),
+            Some("oistes")
+        );
+
+        let groups = OutputItems::Groups(vec![Group {
+            groups: row(json!({"team": "ops"})),
+            aggregates: row(json!({"count": 2})),
+            rows: vec![
+                row(json!({"uid": "oistes"})),
+                row(json!({"mail": "other@example.org"})),
+            ],
+        }]);
+        let filtered = apply(groups, "uid").expect("group filter should succeed");
+        let OutputItems::Groups(groups) = filtered else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(groups[0].rows.len(), 1);
+        assert_eq!(
+            groups[0].rows[0]
+                .get("uid")
+                .and_then(|value| value.as_str()),
+            Some("oistes")
+        );
+    }
+}

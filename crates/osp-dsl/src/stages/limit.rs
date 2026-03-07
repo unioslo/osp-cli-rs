@@ -92,4 +92,11 @@ mod tests {
         let output = apply(rows, "-1 -2").expect("limit should work");
         assert_eq!(output, vec![5]);
     }
+
+    #[test]
+    fn rejects_invalid_argument_count() {
+        let rows = vec![1, 2, 3];
+        let err = apply(rows, "1 2 3").expect_err("invalid arity should fail");
+        assert!(err.to_string().contains("L expects 1 or 2 integers"));
+    }
 }
