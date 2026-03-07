@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use osp_config::{ConfigSource, ResolvedConfig};
 use osp_ui::theme::{
-    ThemeDefinition, ThemeOverrides, ThemePalette, builtin_themes, display_name_from_id,
-    find_builtin_theme, normalize_theme_name,
+    builtin_themes, display_name_from_id, find_builtin_theme, normalize_theme_name,
+    ThemeDefinition, ThemeOverrides, ThemePalette,
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +55,15 @@ struct CustomThemeLoad {
     issues: Vec<ThemeLoadIssue>,
 }
 
+#[derive(Debug, Clone)]
+struct ThemeSpec {
+    id: String,
+    name: String,
+    base: Option<String>,
+    palette: ThemePaletteFile,
+    overrides: ThemeOverrides,
+}
+
 struct ThemePathSelection {
     paths: Vec<PathBuf>,
     explicit: bool,
@@ -100,7 +109,7 @@ pub(crate) fn load_theme_catalog(config: &ResolvedConfig) -> ThemeCatalog {
 
 fn load_custom_themes(config: &ResolvedConfig) -> CustomThemeLoad {
     let mut issues = Vec::new();
-    let mut catalog: BTreeMap<String, ThemeDefinition> = BTreeMap::new();
+    let mut specs: BTreeMap<String, ThemeSpec> = BTreeMap::new();
     let mut origins: BTreeMap<String, PathBuf> = BTreeMap::new();
 
     let selection = resolve_theme_paths(config);
@@ -137,26 +146,43 @@ fn load_custom_themes(config: &ResolvedConfig) -> CustomThemeLoad {
                 continue;
             }
 
-            match parse_theme_file(&path) {
-                Ok(theme) => {
+            match parse_theme_spec(&path) {
+                Ok(spec) => {
+                    let theme = match resolve_theme_spec(
+                        &spec.id,
+                        &specs,
+                        &mut BTreeMap::new(),
+                        &mut Vec::new(),
+                    ) {
+                        Ok(theme) => apply_theme_overrides(theme, &spec),
+                        Err(_) => {
+                            // The full recursive resolve runs after all specs are known.
+                            // Validate only the direct patch values at parse time here.
+                            let preview = apply_theme_overrides(
+                                empty_theme(&spec.id, &spec.name, spec.base.clone()),
+                                &spec,
+                            );
+                            preview
+                        }
+                    };
                     for message in validate_theme_specs(&theme) {
                         issues.push(ThemeLoadIssue {
                             path: path.clone(),
                             message,
                         });
                     }
-                    if let Some(existing) = origins.get(&theme.id) {
+                    if let Some(existing) = origins.get(&spec.id) {
                         issues.push(ThemeLoadIssue {
                             path: path.clone(),
                             message: format!(
                                 "theme id collision: {} overridden (previous: {})",
-                                theme.id,
+                                spec.id,
                                 existing.display()
                             ),
                         });
                     }
-                    origins.insert(theme.id.clone(), path.clone());
-                    catalog.insert(theme.id.clone(), theme);
+                    origins.insert(spec.id.clone(), path.clone());
+                    specs.insert(spec.id.clone(), spec);
                 }
                 Err(err) => {
                     issues.push(ThemeLoadIssue { path, message: err });
@@ -165,8 +191,21 @@ fn load_custom_themes(config: &ResolvedConfig) -> CustomThemeLoad {
         }
     }
 
+    let mut resolved = BTreeMap::new();
+    for id in specs.keys().cloned().collect::<Vec<_>>() {
+        let mut stack = Vec::new();
+        match resolve_theme_spec(&id, &specs, &mut resolved, &mut stack) {
+            Ok(_) => {}
+            Err(message) => {
+                if let Some(path) = origins.get(&id).cloned() {
+                    issues.push(ThemeLoadIssue { path, message });
+                }
+            }
+        }
+    }
+
     CustomThemeLoad {
-        themes: catalog.into_values().collect(),
+        themes: resolved.into_values().collect(),
         origins,
         issues,
     }
@@ -248,7 +287,7 @@ struct ThemeFile {
     overrides: ThemeOverridesFile,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 struct ThemePaletteFile {
     text: Option<String>,
     muted: Option<String>,
@@ -273,7 +312,7 @@ struct ThemeOverridesFile {
     repl_completion_highlight: Option<String>,
 }
 
-fn parse_theme_file(path: &Path) -> Result<ThemeDefinition, String> {
+fn parse_theme_spec(path: &Path) -> Result<ThemeSpec, String> {
     let raw =
         fs::read_to_string(path).map_err(|err| format!("failed to read theme file: {err}"))?;
     let parsed: ThemeFile =
@@ -303,59 +342,12 @@ fn parse_theme_file(path: &Path) -> Result<ThemeDefinition, String> {
         .map(str::to_string)
         .unwrap_or_else(|| display_name_from_id(&id));
 
-    let base_id = parsed
+    let base = parsed
         .base
         .as_deref()
         .map(normalize_theme_name)
         .filter(|value| !value.is_empty())
         .filter(|value| value != "none");
-    let mut palette = match base_id.as_deref() {
-        Some(base) => find_builtin_theme(base)
-            .map(|theme| theme.palette)
-            .ok_or_else(|| format!("unknown base theme: {base}"))?,
-        None => empty_palette(),
-    };
-    if let Some(file_palette) = parsed.palette {
-        if let Some(value) = file_palette.text {
-            palette.text = value;
-        }
-        if let Some(value) = file_palette.muted {
-            palette.muted = value;
-        }
-        if let Some(value) = file_palette.accent {
-            palette.accent = value;
-        }
-        if let Some(value) = file_palette.info {
-            palette.info = value;
-        }
-        if let Some(value) = file_palette.warning {
-            palette.warning = value;
-        }
-        if let Some(value) = file_palette.success {
-            palette.success = value;
-        }
-        if let Some(value) = file_palette.error {
-            palette.error = value;
-        }
-        if let Some(value) = file_palette.border {
-            palette.border = value;
-        }
-        if let Some(value) = file_palette.title {
-            palette.title = value;
-        }
-        if let Some(value) = file_palette.selection {
-            palette.selection = value;
-        }
-        if let Some(value) = file_palette.link {
-            palette.link = value;
-        }
-        if let Some(value) = file_palette.bg {
-            palette.bg = Some(value);
-        }
-        if let Some(value) = file_palette.bg_alt {
-            palette.bg_alt = Some(value);
-        }
-    }
 
     let overrides = ThemeOverrides {
         value_number: parsed.overrides.value_number,
@@ -364,13 +356,106 @@ fn parse_theme_file(path: &Path) -> Result<ThemeDefinition, String> {
         repl_completion_highlight: parsed.overrides.repl_completion_highlight,
     };
 
-    Ok(ThemeDefinition {
+    Ok(ThemeSpec {
         id,
         name,
-        base: base_id,
-        palette,
+        base,
+        palette: parsed.palette.unwrap_or_default(),
         overrides,
     })
+}
+
+fn resolve_theme_spec(
+    id: &str,
+    specs: &BTreeMap<String, ThemeSpec>,
+    resolved: &mut BTreeMap<String, ThemeDefinition>,
+    stack: &mut Vec<String>,
+) -> Result<ThemeDefinition, String> {
+    if let Some(theme) = resolved.get(id) {
+        return Ok(theme.clone());
+    }
+    if stack.iter().any(|entry| entry == id) {
+        stack.push(id.to_string());
+        return Err(format!("theme base cycle detected: {}", stack.join(" -> ")));
+    }
+
+    let spec = specs
+        .get(id)
+        .ok_or_else(|| format!("theme missing during resolution: {id}"))?;
+    stack.push(id.to_string());
+
+    let base_theme = match spec.base.as_deref() {
+        Some(base) if specs.contains_key(base) => {
+            Some(resolve_theme_spec(base, specs, resolved, stack)?)
+        }
+        Some(base) => find_builtin_theme(base)
+            .ok_or_else(|| format!("unknown base theme: {base}"))
+            .map(Some)?,
+        None => None,
+    };
+
+    let theme = apply_theme_overrides(
+        base_theme.unwrap_or_else(|| empty_theme(&spec.id, &spec.name, spec.base.clone())),
+        spec,
+    );
+    stack.pop();
+    resolved.insert(id.to_string(), theme.clone());
+    Ok(theme)
+}
+
+fn empty_theme(id: &str, name: &str, base: Option<String>) -> ThemeDefinition {
+    ThemeDefinition::new(id, name, base, empty_palette(), ThemeOverrides::default())
+}
+
+fn apply_theme_overrides(theme: ThemeDefinition, spec: &ThemeSpec) -> ThemeDefinition {
+    let mut palette = theme.palette.clone();
+    if let Some(value) = spec.palette.text.as_ref() {
+        palette.text = value.clone();
+    }
+    if let Some(value) = spec.palette.muted.as_ref() {
+        palette.muted = value.clone();
+    }
+    if let Some(value) = spec.palette.accent.as_ref() {
+        palette.accent = value.clone();
+    }
+    if let Some(value) = spec.palette.info.as_ref() {
+        palette.info = value.clone();
+    }
+    if let Some(value) = spec.palette.warning.as_ref() {
+        palette.warning = value.clone();
+    }
+    if let Some(value) = spec.palette.success.as_ref() {
+        palette.success = value.clone();
+    }
+    if let Some(value) = spec.palette.error.as_ref() {
+        palette.error = value.clone();
+    }
+    if let Some(value) = spec.palette.border.as_ref() {
+        palette.border = value.clone();
+    }
+    if let Some(value) = spec.palette.title.as_ref() {
+        palette.title = value.clone();
+    }
+    if let Some(value) = spec.palette.selection.as_ref() {
+        palette.selection = value.clone();
+    }
+    if let Some(value) = spec.palette.link.as_ref() {
+        palette.link = value.clone();
+    }
+    if let Some(value) = spec.palette.bg.as_ref() {
+        palette.bg = Some(value.clone());
+    }
+    if let Some(value) = spec.palette.bg_alt.as_ref() {
+        palette.bg_alt = Some(value.clone());
+    }
+
+    ThemeDefinition::new(
+        spec.id.clone(),
+        spec.name.clone(),
+        spec.base.clone(),
+        palette,
+        spec.overrides.clone(),
+    )
 }
 
 fn validate_theme_specs(theme: &ThemeDefinition) -> Vec<String> {
@@ -491,7 +576,11 @@ fn empty_palette() -> ThemePalette {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_color_spec, parse_theme_file};
+    use super::{
+        apply_theme_overrides, empty_theme, is_valid_color_spec, parse_theme_spec,
+        resolve_theme_spec, ThemePaletteFile, ThemeSpec,
+    };
+    use std::collections::BTreeMap;
     use std::fs;
     #[test]
     fn theme_file_defaults_id_and_name_from_file_stem() {
@@ -515,7 +604,9 @@ title = "#586e75"
         )
         .expect("theme file should be written");
 
-        let theme = parse_theme_file(&path).expect("theme should parse");
+        let spec = parse_theme_spec(&path).expect("theme should parse");
+        let theme =
+            apply_theme_overrides(empty_theme(&spec.id, &spec.name, spec.base.clone()), &spec);
         assert_eq!(theme.id, "solarized-dark");
         assert_eq!(theme.name, "Solarized Dark");
 
@@ -539,12 +630,55 @@ accent = "#123456"
         )
         .expect("theme file should be written");
 
-        let theme = parse_theme_file(&path).expect("theme should parse");
+        let spec = parse_theme_spec(&path).expect("theme should parse");
+        let mut specs = BTreeMap::new();
+        specs.insert(spec.id.clone(), spec);
+        let theme = resolve_theme_spec("custom", &specs, &mut BTreeMap::new(), &mut Vec::new())
+            .expect("theme should resolve");
         assert_eq!(theme.palette.accent, "#123456");
         assert_eq!(theme.palette.text, "#f8f8f2");
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_theme_can_inherit_from_custom_base() {
+        let mut specs = BTreeMap::new();
+        specs.insert(
+            "brand-base".to_string(),
+            ThemeSpec {
+                id: "brand-base".to_string(),
+                name: "Brand Base".to_string(),
+                base: Some("nord".to_string()),
+                palette: ThemePaletteFile {
+                    accent: Some("#123456".to_string()),
+                    ..ThemePaletteFile::default()
+                },
+                overrides: Default::default(),
+            },
+        );
+        specs.insert(
+            "brand-child".to_string(),
+            ThemeSpec {
+                id: "brand-child".to_string(),
+                name: "Brand Child".to_string(),
+                base: Some("brand-base".to_string()),
+                palette: ThemePaletteFile {
+                    warning: Some("#abcdef".to_string()),
+                    ..ThemePaletteFile::default()
+                },
+                overrides: Default::default(),
+            },
+        );
+
+        let theme =
+            resolve_theme_spec("brand-child", &specs, &mut BTreeMap::new(), &mut Vec::new())
+                .expect("custom base chain should resolve");
+
+        assert_eq!(theme.palette.accent, "#123456");
+        assert_eq!(theme.palette.warning, "#abcdef");
+        assert_eq!(theme.palette.text, "#d8dee9");
     }
 
     #[test]

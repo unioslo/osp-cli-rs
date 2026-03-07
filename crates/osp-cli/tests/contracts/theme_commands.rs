@@ -78,6 +78,58 @@ theme.name = "nord"
 
 #[cfg(unix)]
 #[test]
+fn custom_theme_inherits_custom_base_contract() {
+    let home = make_temp_dir("osp-cli-theme-custom-base");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+theme.name = "brand-child"
+"#,
+    );
+
+    let theme_dir = home.join(".config").join("osp").join("themes");
+    std::fs::create_dir_all(&theme_dir).expect("theme dir should be created");
+    std::fs::write(
+        theme_dir.join("brand-base.toml"),
+        r##"
+base = "nord"
+
+[palette]
+accent = "#123456"
+"##,
+    )
+    .expect("base theme should be written");
+    std::fs::write(
+        theme_dir.join("brand-child.toml"),
+        r##"
+base = "brand-base"
+
+[palette]
+warning = "#abcdef"
+"##,
+    )
+    .expect("child theme should be written");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "theme", "show"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"id\": \"brand-child\""))
+        .stdout(predicate::str::contains("\"base\": \"brand-base\""))
+        .stdout(predicate::str::contains("\"source\": \"custom\""))
+        .stdout(predicate::str::contains("\"accent\": \"#123456\""))
+        .stdout(predicate::str::contains("\"warning\": \"#abcdef\""))
+        .stdout(predicate::str::contains("\"text\": \"#d8dee9\""));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn unknown_theme_fails_fast_contract() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd.env("PATH", "/usr/bin:/bin")
