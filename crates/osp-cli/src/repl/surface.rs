@@ -174,13 +174,22 @@ fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
     let summary = if entry.about.trim().is_empty() {
         "Plugin command".to_string()
     } else if entry.subcommands.is_empty() {
-        entry.about.clone()
+        if entry.conflicted {
+            format!("{} (multiple providers)", entry.about)
+        } else {
+            entry.about.clone()
+        }
     } else {
-        format!(
+        let base = format!(
             "{} (subcommands: {})",
             entry.about,
             entry.subcommands.join(", ")
-        )
+        );
+        if entry.conflicted {
+            format!("{base}; multiple providers")
+        } else {
+            base
+        }
     };
 
     ReplOverviewEntry {
@@ -203,7 +212,15 @@ fn spec_completion_words(spec: &CommandSpec) -> Vec<String> {
 fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
     let plugin_ids = catalog
         .iter()
-        .map(|entry| entry.provider.clone())
+        .flat_map(|entry| {
+            std::iter::once(entry.provider.clone()).chain(entry.providers.iter().filter_map(
+                |label| {
+                    label
+                        .split_once(" (")
+                        .map(|(plugin_id, _)| plugin_id.to_string())
+                },
+            ))
+        })
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(SuggestionEntry::value)

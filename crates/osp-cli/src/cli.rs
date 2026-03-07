@@ -247,6 +247,8 @@ pub enum DoctorCommands {
 pub enum PluginsCommands {
     List,
     Commands,
+    Config(PluginConfigArgs),
+    Refresh,
     Enable(PluginToggleArgs),
     Disable(PluginToggleArgs),
     Doctor,
@@ -277,6 +279,11 @@ pub struct ThemeUseArgs {
 
 #[derive(Debug, Args)]
 pub struct PluginToggleArgs {
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PluginConfigArgs {
     pub plugin_id: String,
 }
 

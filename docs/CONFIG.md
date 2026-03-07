@@ -96,6 +96,10 @@ without custom code in `osp-cli`:
 
 - Unknown keys are rejected by default.
 - `extensions.*` is the only open namespace for unknown keys.
+- Plugin-owned config can live under `extensions.plugins.*`; the CLI projects
+  `extensions.plugins.env.*` and `extensions.plugins.<plugin-id>.env.*` into
+  plugin subprocess env. Inspect the effective projection with
+  `osp plugins config <plugin-id>`. See `docs/PLUGIN_PROTOCOL.md`.
 - Values are adapted to schema type after merge/interpolation:
   strings, booleans, integers, floats.
 - Enum-like string keys (for example `ui.format`) are validated against

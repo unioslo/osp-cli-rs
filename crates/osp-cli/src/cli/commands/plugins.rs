@@ -1,9 +1,10 @@
 use miette::Result;
 
 use crate::app::{
-    CliCommandResult, ReplCommandOutput, authorized_command_catalog, emit_messages_with_verbosity,
+    CliCommandResult, PluginConfigScope, ReplCommandOutput, authorized_command_catalog,
+    effective_plugin_config_entries, emit_messages_with_verbosity,
 };
-use crate::cli::{PluginToggleArgs, PluginsArgs, PluginsCommands};
+use crate::cli::{PluginConfigArgs, PluginToggleArgs, PluginsArgs, PluginsCommands};
 use crate::plugin_manager::{CommandCatalogEntry, DoctorReport, PluginSummary};
 use crate::rows::output::rows_to_output_result;
 use crate::state::AppState;
@@ -29,6 +30,20 @@ pub(crate) fn run_plugins_command(state: &AppState, args: PluginsArgs) -> Result
                 rows_to_output_result(command_catalog_rows(&commands)),
                 None,
             ))
+        }
+        PluginsCommands::Config(PluginConfigArgs { plugin_id }) => Ok(CliCommandResult::output(
+            rows_to_output_result(plugin_config_rows(
+                &plugin_id,
+                &effective_plugin_config_entries(state.config.resolved(), &plugin_id),
+            )),
+            None,
+        )),
+        PluginsCommands::Refresh => {
+            plugin_manager.refresh();
+            let mut messages = osp_ui::messages::MessageBuffer::default();
+            messages.success("refreshed plugin discovery cache");
+            emit_messages_with_verbosity(state, &messages, state.ui.message_verbosity);
+            Ok(CliCommandResult::exit(0))
         }
         PluginsCommands::Doctor => {
             let report = plugin_manager
@@ -84,6 +99,22 @@ pub(crate) fn run_plugins_repl_command(
                 output: rows_to_output_result(command_catalog_rows(&commands)),
                 format_hint: None,
             })
+        }
+        PluginsCommands::Config(PluginConfigArgs { plugin_id }) => Ok(ReplCommandOutput::Output {
+            output: rows_to_output_result(plugin_config_rows(
+                &plugin_id,
+                &effective_plugin_config_entries(state.config.resolved(), &plugin_id),
+            )),
+            format_hint: None,
+        }),
+        PluginsCommands::Refresh => {
+            plugin_manager.refresh();
+            let mut messages = osp_ui::messages::MessageBuffer::default();
+            messages.success("refreshed plugin discovery cache");
+            emit_messages_with_verbosity(state, &messages, verbosity);
+            Ok(ReplCommandOutput::Text(
+                "refreshed plugin discovery cache\n".to_string(),
+            ))
         }
         PluginsCommands::Doctor => {
             let report = plugin_manager
@@ -181,8 +212,43 @@ fn command_catalog_rows(commands: &[CommandCatalogEntry]) -> Vec<Row> {
                 "name" => command.name.clone(),
                 "about" => command.about.clone(),
                 "provider" => command.provider.clone(),
+                "providers" => serde_json::Value::Array(
+                    command
+                        .providers
+                        .iter()
+                        .map(|value| value.clone().into())
+                        .collect(),
+                ),
+                "conflicted" => command.conflicted,
                 "source" => command.source.to_string(),
                 "subcommands" => subcommands,
+            }
+        })
+        .collect()
+}
+
+fn plugin_config_rows(plugin_id: &str, entries: &[crate::app::PluginConfigEntry]) -> Vec<Row> {
+    if entries.is_empty() {
+        return vec![crate::row! {
+            "status" => "empty",
+            "plugin_id" => plugin_id.to_string(),
+            "message" => "No app-owned plugin config is projected for this plugin.",
+        }];
+    }
+
+    entries
+        .iter()
+        .map(|entry| {
+            let scope = match entry.scope {
+                PluginConfigScope::Shared => "shared",
+                PluginConfigScope::Plugin => "plugin",
+            };
+            crate::row! {
+                "plugin_id" => plugin_id.to_string(),
+                "env" => entry.env_key.clone(),
+                "value" => entry.value.clone(),
+                "config_key" => entry.config_key.clone(),
+                "scope" => scope,
             }
         })
         .collect()

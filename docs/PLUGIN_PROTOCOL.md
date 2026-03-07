@@ -21,7 +21,13 @@ Plugins are separate binaries discovered at runtime (Option B).
   - Prints `DescribeV1` JSON to stdout.
   - Exit code 0 on success.
 - Normal execution
-  - Plugin receives command arguments from backbone.
+  - Backbone resolves the plugin from the selected top-level command and then
+    forwards only the remaining argv tail to the plugin process.
+  - Example: `osp ldap user oistes` invokes the plugin with argv
+    `["user", "oistes"]`.
+  - Backbone also sets `OSP_COMMAND=<selected-top-level-command>` so one
+    executable can safely advertise multiple top-level commands without
+    overloading argv shape.
   - Prints `ResponseV1` JSON to stdout.
   - Uses non-zero exit for process-level failure.
 
@@ -140,3 +146,35 @@ Required hints:
 Optional hints:
 - `OSP_PROFILE=<active-profile>`
 - `OSP_TERMINAL=<raw-TERM-value>`
+
+Additional process env:
+- `OSP_COMMAND=<selected-top-level-command>`
+
+## Config-Driven Plugin Env
+
+Backbone can also project selected config values into plugin subprocess env.
+This is intended for plugin-specific settings owned by the app config, not for
+the runtime hints above.
+
+Config namespaces:
+- shared across all plugins:
+  - `extensions.plugins.env.<name> = <value>`
+- scoped to one plugin id:
+  - `extensions.plugins.<plugin-id>.env.<name> = <value>`
+
+Env mapping rules:
+- `<name>` is normalized to uppercase with non-alphanumeric characters replaced
+  by `_`.
+- Backbone prefixes the name with `OSP_PLUGIN_CFG_`.
+- Example:
+  - `extensions.plugins.env.api.url = "https://example"`
+  - `extensions.plugins.ldap.env.bind.password = "sekrit"`
+  - become `OSP_PLUGIN_CFG_API_URL` and `OSP_PLUGIN_CFG_BIND_PASSWORD`
+- plugin-specific values override shared values when they map to the same env
+  name.
+- scalar config values are stringified directly.
+- list values are encoded as JSON arrays.
+
+Examples:
+- `extensions.plugins.env.api.url = "https://common.example"`
+- `extensions.plugins.ldap.env.bind.password = "sekrit"`

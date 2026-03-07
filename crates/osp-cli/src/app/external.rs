@@ -53,10 +53,10 @@ pub(super) fn run_external_command(state: &mut AppState, tokens: &[String]) -> R
         ExternalParse::Invocation(invocation) => invocation,
     };
 
-    if let Some(command) = invocation.inline_command {
-        if let Some(result) = run_inline_builtin_command(state, command, &invocation.stages)? {
-            return run_cli_command(&CommandRenderRuntime::from_state(state), result);
-        }
+    if let Some(command) = invocation.inline_command
+        && let Some(result) = run_inline_builtin_command(state, command, &invocation.stages)?
+    {
+        return run_cli_command(&CommandRenderRuntime::from_state(state), result);
     }
     if !invocation.stages.is_empty() {
         completion::validate_dsl_stages(&invocation.stages)?;

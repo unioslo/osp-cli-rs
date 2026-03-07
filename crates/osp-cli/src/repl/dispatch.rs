@@ -76,45 +76,104 @@ fn execute_repl_plugin_line_inner(
         return Ok(ReplLineResult::Continue(help));
     }
 
-    let base_overrides = ReplDispatchOverrides {
-        message_verbosity: state.ui.message_verbosity,
-        debug_verbosity: state.ui.debug_verbosity,
-    };
-    if parsed.requests_repl_help() {
-        return Ok(ReplLineResult::Continue(repl_help_for_scope(
-            state,
-            base_overrides,
-        )?));
+    let base_overrides = base_repl_overrides(state);
+    if let Some(result) = maybe_handle_repl_shortcuts(state, &parsed, base_overrides)? {
+        return Ok(result);
     }
 
-    if parsed.dispatch_tokens.len() == 1 {
-        match parsed.dispatch_tokens[0].as_str() {
-            CMD_HELP => {
-                return Ok(ReplLineResult::Continue(repl_help_for_scope(
-                    state,
-                    base_overrides,
-                )?));
-            }
-            "exit" | "quit" => {
-                if state.session.scope.is_root() {
-                    state.sync_history_shell_context();
-                    return Ok(ReplLineResult::Exit(0));
-                }
-                if let Some(message) = leave_repl_shell(state) {
-                    state.sync_history_shell_context();
-                    return Ok(ReplLineResult::Continue(message));
-                }
-            }
-            _ => {}
-        }
+    let invocation = match parse_repl_invocation(state, &parsed)? {
+        ParsedReplDispatch::Help(rendered) => return Ok(ReplLineResult::Continue(rendered)),
+        ParsedReplDispatch::Invocation(invocation) => invocation,
+    };
+    let output = run_repl_command(state, invocation.command, invocation.overrides, history)?;
+    let rendered = render_repl_command_output(state, line, &invocation.stages, output)?;
+    Ok(finalize_repl_command(
+        state,
+        rendered,
+        invocation.restart_repl,
+        invocation.show_intro_on_reload,
+    ))
+}
+
+fn base_repl_overrides(state: &AppState) -> ReplDispatchOverrides {
+    ReplDispatchOverrides {
+        message_verbosity: state.ui.message_verbosity,
+        debug_verbosity: state.ui.debug_verbosity,
+    }
+}
+
+fn maybe_handle_repl_shortcuts(
+    state: &mut AppState,
+    parsed: &input::ReplParsedLine,
+    base_overrides: ReplDispatchOverrides,
+) -> Result<Option<ReplLineResult>> {
+    if parsed.requests_repl_help() {
+        return repl_help_result(state, base_overrides).map(Some);
+    }
+
+    if let Some(result) = maybe_handle_single_token_shortcut(state, parsed, base_overrides)? {
+        return Ok(Some(result));
     }
 
     if let Some(command) = parsed.shell_entry_command(&state.session.scope) {
         let entered = enter_repl_shell(state, command, base_overrides)?;
         state.sync_history_shell_context();
-        return Ok(ReplLineResult::Continue(entered));
+        return Ok(Some(ReplLineResult::Continue(entered)));
     }
 
+    Ok(None)
+}
+
+fn maybe_handle_single_token_shortcut(
+    state: &mut AppState,
+    parsed: &input::ReplParsedLine,
+    base_overrides: ReplDispatchOverrides,
+) -> Result<Option<ReplLineResult>> {
+    if parsed.dispatch_tokens.len() != 1 {
+        return Ok(None);
+    }
+
+    match parsed.dispatch_tokens[0].as_str() {
+        CMD_HELP => repl_help_result(state, base_overrides).map(Some),
+        "exit" | "quit" => Ok(handle_repl_exit_request(state)),
+        _ => Ok(None),
+    }
+}
+
+fn repl_help_result(state: &AppState, overrides: ReplDispatchOverrides) -> Result<ReplLineResult> {
+    Ok(ReplLineResult::Continue(repl_help_for_scope(
+        state, overrides,
+    )?))
+}
+
+fn handle_repl_exit_request(state: &mut AppState) -> Option<ReplLineResult> {
+    if state.session.scope.is_root() {
+        state.sync_history_shell_context();
+        return Some(ReplLineResult::Exit(0));
+    }
+
+    let message = leave_repl_shell(state)?;
+    state.sync_history_shell_context();
+    Some(ReplLineResult::Continue(message))
+}
+
+struct ParsedReplInvocation {
+    command: Commands,
+    overrides: ReplDispatchOverrides,
+    stages: Vec<String>,
+    restart_repl: bool,
+    show_intro_on_reload: bool,
+}
+
+enum ParsedReplDispatch {
+    Help(String),
+    Invocation(ParsedReplInvocation),
+}
+
+fn parse_repl_invocation(
+    state: &AppState,
+    parsed: &input::ReplParsedLine,
+) -> Result<ParsedReplDispatch> {
     let prefixed_tokens = parsed.prefixed_tokens(&state.session.scope);
     let parsed_command = match parse_repl_tokens(&prefixed_tokens) {
         Ok(parsed) => parsed,
@@ -123,83 +182,97 @@ fn execute_repl_plugin_line_inner(
                 || err.kind() == clap::error::ErrorKind::DisplayVersion
             {
                 let rendered = help::render_repl_help_with_chrome(state, &err.to_string());
-                return Ok(ReplLineResult::Continue(rendered));
+                return Ok(ParsedReplDispatch::Help(rendered));
             }
             return Err(miette!(err.to_string()));
         }
     };
-    let overrides = ReplDispatchOverrides {
-        message_verbosity: adjust_verbosity(
-            state.ui.message_verbosity,
-            parsed_command.verbose,
-            parsed_command.quiet,
-        ),
-        debug_verbosity: if parsed_command.debug > 0 {
-            parsed_command.debug.min(3)
-        } else {
-            state.ui.debug_verbosity
-        },
-    };
     let command = parsed_command
         .command
         .ok_or_else(|| miette!("missing command"))?;
-    let restart_repl = matches!(
-        &command,
+    let spec = repl_command_spec(&command);
+    app::ensure_command_supports_dsl(&spec, &parsed.stages)?;
+    if !parsed.stages.is_empty() {
+        completion::validate_dsl_stages(&parsed.stages)?;
+    }
+
+    Ok(ParsedReplDispatch::Invocation(ParsedReplInvocation {
+        overrides: ReplDispatchOverrides {
+            message_verbosity: adjust_verbosity(
+                state.ui.message_verbosity,
+                parsed_command.verbose,
+                parsed_command.quiet,
+            ),
+            debug_verbosity: if parsed_command.debug > 0 {
+                parsed_command.debug.min(3)
+            } else {
+                state.ui.debug_verbosity
+            },
+        },
+        restart_repl: command_restarts_repl(&command),
+        show_intro_on_reload: theme_or_palette_change_requires_intro(&command),
+        command,
+        stages: parsed.stages.clone(),
+    }))
+}
+
+fn command_restarts_repl(command: &Commands) -> bool {
+    matches!(
+        command,
         Commands::Theme(ThemeArgs {
             command: ThemeCommands::Use(_)
         }) | Commands::Config(ConfigArgs {
             command: ConfigCommands::Set(_)
         })
-    );
-    let spec = repl_command_spec(&command);
-    let show_intro_on_reload = theme_or_palette_change_requires_intro(&command);
-    if !spec.supports_dsl && !parsed.stages.is_empty() {
-        return Err(miette!(
-            "`{}` does not support DSL pipeline stages",
-            spec.name
-        ));
-    }
-    if !parsed.stages.is_empty() {
-        completion::validate_dsl_stages(&parsed.stages)?;
-    }
+    )
+}
 
-    let rendered = match run_repl_command(state, command, overrides, history)? {
+fn render_repl_command_output(
+    state: &mut AppState,
+    line: &str,
+    stages: &[String],
+    output: ReplCommandOutput,
+) -> Result<String> {
+    match output {
         ReplCommandOutput::Output {
             mut output,
             format_hint,
         } => {
-            if !parsed.stages.is_empty() {
-                output = apply_output_pipeline(output, &parsed.stages)
-                    .map_err(|err| miette!("{err:#}"))?;
+            if !stages.is_empty() {
+                output = apply_output_pipeline(output, stages).map_err(|err| miette!("{err:#}"))?;
             }
 
             let render_settings = app::resolve_effective_render_settings(
                 &state.ui.render_settings,
-                if parsed.stages.is_empty() {
-                    format_hint
-                } else {
-                    None
-                },
+                if stages.is_empty() { format_hint } else { None },
             );
             let rendered = render_output(&output, &render_settings);
             state.record_repl_rows(line, output_to_rows(&output));
             app::maybe_copy_output(state, &output);
-            rendered
+            Ok(rendered)
         }
-        ReplCommandOutput::Text(text) => text,
-    };
+        ReplCommandOutput::Text(text) => Ok(text),
+    }
+}
+
+fn finalize_repl_command(
+    state: &mut AppState,
+    rendered: String,
+    restart_repl: bool,
+    show_intro_on_reload: bool,
+) -> ReplLineResult {
     state.sync_history_shell_context();
     if restart_repl {
-        Ok(ReplLineResult::Restart {
+        ReplLineResult::Restart {
             output: rendered,
             reload: if show_intro_on_reload {
                 ReplReloadKind::WithIntro
             } else {
                 ReplReloadKind::Default
             },
-        })
+        }
     } else {
-        Ok(ReplLineResult::Continue(rendered))
+        ReplLineResult::Continue(rendered)
     }
 }
 
@@ -319,14 +392,17 @@ fn execute_bang_command(
             }
             expand_history(&format!("!{prefix}"), &recent, scope.as_deref(), true)
         }
-        BangCommand::Contains(term) => recent
-            .iter()
-            .rev()
-            .filter_map(|full| {
+        BangCommand::Contains(term) => {
+            let mut found = None;
+            for full in recent.iter().rev() {
                 let visible = strip_history_scope(full, scope.as_deref());
-                visible.contains(&term).then_some(visible)
-            })
-            .next(),
+                if visible.contains(&term) {
+                    found = Some(visible);
+                    break;
+                }
+            }
+            found
+        }
     };
 
     let Some(expanded) = expanded else {
@@ -465,7 +541,12 @@ fn run_repl_command(
         Commands::Theme(args) => {
             app::ensure_builtin_visible(state, CMD_THEME)?;
             with_repl_verbosity_overrides(state, overrides, |state| {
-                theme_cmd::run_theme_repl_command(state, args)
+                theme_cmd::run_theme_repl_command(
+                    &mut state.session,
+                    &state.themes,
+                    &state.ui,
+                    args,
+                )
             })
         }
         Commands::Doctor(args) => {
@@ -583,7 +664,10 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
             name: Cow::Borrowed(CMD_PLUGINS),
             supports_dsl: matches!(
                 args.command,
-                PluginsCommands::List | PluginsCommands::Commands | PluginsCommands::Doctor
+                PluginsCommands::List
+                    | PluginsCommands::Commands
+                    | PluginsCommands::Config(_)
+                    | PluginsCommands::Doctor
             ),
         },
         Commands::Theme(args) => ReplCommandSpec {
