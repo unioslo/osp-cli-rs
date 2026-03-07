@@ -157,6 +157,37 @@ impl Display for SchemaValueType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapPhase {
+    Path,
+    Profile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapScopeRule {
+    GlobalOnly,
+    GlobalOrTerminal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BootstrapKeySpec {
+    pub key: &'static str,
+    pub phase: BootstrapPhase,
+    pub runtime_visible: bool,
+    pub scope_rule: BootstrapScopeRule,
+}
+
+impl BootstrapKeySpec {
+    fn allows_scope(self, scope: &Scope) -> bool {
+        match self.scope_rule {
+            BootstrapScopeRule::GlobalOnly => {
+                scope.profile.is_none() && scope.terminal.is_none()
+            }
+            BootstrapScopeRule::GlobalOrTerminal => scope.profile.is_none(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SchemaEntry {
     value_type: SchemaValueType,
@@ -977,15 +1008,30 @@ fn flatten_key_value(
     }
 }
 
+pub fn bootstrap_key_spec(key: &str) -> Option<BootstrapKeySpec> {
+    let normalized = key.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "profile.default" => Some(BootstrapKeySpec {
+            key: "profile.default",
+            phase: BootstrapPhase::Profile,
+            runtime_visible: false,
+            scope_rule: BootstrapScopeRule::GlobalOrTerminal,
+        }),
+        _ => None,
+    }
+}
+
 pub fn is_bootstrap_only_key(key: &str) -> bool {
-    key.trim().eq_ignore_ascii_case("profile.default")
+    bootstrap_key_spec(key).is_some_and(|spec| !spec.runtime_visible)
 }
 
 pub fn validate_key_scope(key: &str, scope: &Scope) -> Result<(), ConfigError> {
     let normalized_scope = normalize_scope(scope.clone());
-    if is_bootstrap_only_key(key) && normalized_scope.profile.is_some() {
+    if let Some(spec) = bootstrap_key_spec(key)
+        && !spec.allows_scope(&normalized_scope)
+    {
         return Err(ConfigError::InvalidBootstrapScope {
-            key: key.trim().to_ascii_lowercase(),
+            key: spec.key.to_string(),
             profile: normalized_scope.profile,
             terminal: normalized_scope.terminal,
         });
@@ -1309,4 +1355,40 @@ pub(crate) fn normalize_scope(scope: Scope) -> Scope {
 
 pub(crate) fn normalize_identifier(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BootstrapPhase, BootstrapScopeRule, Scope, bootstrap_key_spec, is_bootstrap_only_key,
+        validate_key_scope,
+    };
+
+    #[test]
+    fn bootstrap_key_registry_describes_profile_default() {
+        let spec = bootstrap_key_spec("profile.default").expect("spec should exist");
+        assert_eq!(spec.key, "profile.default");
+        assert_eq!(spec.phase, BootstrapPhase::Profile);
+        assert!(!spec.runtime_visible);
+        assert_eq!(spec.scope_rule, BootstrapScopeRule::GlobalOrTerminal);
+        assert!(is_bootstrap_only_key("profile.default"));
+    }
+
+    #[test]
+    fn bootstrap_key_registry_rejects_profile_scopes() {
+        let err = validate_key_scope("profile.default", &Scope::profile("work"))
+            .expect_err("profile scope should be rejected");
+        match err {
+            crate::ConfigError::InvalidBootstrapScope {
+                key,
+                profile,
+                terminal,
+            } => {
+                assert_eq!(key, "profile.default");
+                assert_eq!(profile.as_deref(), Some("work"));
+                assert_eq!(terminal, None);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }
