@@ -263,8 +263,8 @@ fn group_header_pairs(
 #[cfg(test)]
 mod tests {
     use super::{build_document_from_output, resolve_output_format};
-    use crate::document::{Block, TableStyle};
     use crate::RenderSettings;
+    use crate::document::{Block, TableStyle};
     use osp_core::output::{OutputFormat, RenderMode};
     use osp_core::output_model::{Group, OutputItems, OutputMeta, OutputResult};
     use osp_core::row::Row;

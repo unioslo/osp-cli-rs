@@ -311,7 +311,7 @@ pub fn copy_output_to_clipboard(
 
 #[cfg(test)]
 mod tests {
-    use super::{format, render_rows_for_copy, RenderBackend, RenderSettings};
+    use super::{RenderBackend, RenderSettings, format, render_rows_for_copy};
     use crate::document::{Block, MregValue, TableStyle};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_core::row::Row;
@@ -381,14 +381,18 @@ mod tests {
             panic!("expected mreg block");
         };
         assert_eq!(block.rows.len(), 1);
-        assert!(block.rows[0]
-            .entries
-            .iter()
-            .any(|entry| matches!(entry.value, MregValue::Scalar(_))));
-        assert!(block.rows[0]
-            .entries
-            .iter()
-            .any(|entry| matches!(entry.value, MregValue::VerticalList(_))));
+        assert!(
+            block.rows[0]
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.value, MregValue::Scalar(_)))
+        );
+        assert!(
+            block.rows[0]
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.value, MregValue::VerticalList(_)))
+        );
     }
 
     #[test]

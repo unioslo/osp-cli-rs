@@ -2,7 +2,7 @@ use osp_api::MockLdapClient;
 use osp_core::output::OutputFormat;
 use osp_dsl::{apply_pipeline, parse_pipeline};
 use osp_ports::LdapDirectory;
-use osp_ui::{render_output, RenderSettings};
+use osp_ui::{RenderSettings, render_output};
 use serde_json::json;
 
 #[test]

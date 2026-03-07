@@ -4,7 +4,7 @@ use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use osp_core::output::OutputFormat;
 use osp_dsl::apply_pipeline;
 use osp_ports::LdapDirectory;
-use osp_ui::{render_output, RenderSettings};
+use osp_ui::{RenderSettings, render_output};
 
 fn make_config(entries: &[(&str, &str)]) -> osp_config::ResolvedConfig {
     let mut defaults = ConfigLayer::default();
