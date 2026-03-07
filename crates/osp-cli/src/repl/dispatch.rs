@@ -711,6 +711,7 @@ fn run_repl_external_command(
         .split_first()
         .ok_or_else(|| miette!("missing command"))?;
     app::ensure_plugin_visible_for(&runtime.auth, command)?;
+    emit_repl_command_conflict_warning(runtime, clients, command, overrides);
     if app::is_help_passthrough(args) {
         let dispatch_context =
             app::plugin_dispatch_context_for_runtime(runtime, clients, Some(overrides));
@@ -769,6 +770,25 @@ fn run_repl_external_command(
         }
         Err(err) => Err(miette!("{err:#}")),
     }
+}
+
+fn emit_repl_command_conflict_warning(
+    runtime: &AppRuntime,
+    clients: &AppClients,
+    command: &str,
+    overrides: ReplDispatchOverrides,
+) {
+    let Some(message) = clients.plugins.conflict_warning(command) else {
+        return;
+    };
+    let mut messages = osp_ui::messages::MessageBuffer::default();
+    messages.warning(message);
+    app::emit_messages_for_ui(
+        runtime.config.resolved(),
+        &runtime.ui,
+        &messages,
+        overrides.message_verbosity,
+    );
 }
 
 pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {

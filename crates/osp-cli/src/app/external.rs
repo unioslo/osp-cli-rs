@@ -130,23 +130,11 @@ fn emit_command_conflict_warning_for(
     command: &str,
     plugin_manager: &PluginManager,
 ) {
-    let providers = plugin_manager.command_providers(command);
-    if providers.len() <= 1 {
+    let Some(message) = plugin_manager.conflict_warning(command) else {
         return;
-    }
-    let selected = plugin_manager
-        .selected_provider_label(command)
-        .unwrap_or_else(|| {
-            providers
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_string())
-        });
+    };
     let mut messages = osp_ui::messages::MessageBuffer::default();
-    messages.warning(format!(
-        "command `{command}` is provided by multiple plugins: {}. Using {selected}.",
-        providers.join(", ")
-    ));
+    messages.warning(message);
     let render_runtime = CommandRenderRuntime::new(runtime.config, runtime.ui);
     emit_messages_with_runtime(&render_runtime, &messages, runtime.ui.message_verbosity);
 }

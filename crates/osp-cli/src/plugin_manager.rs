@@ -402,6 +402,23 @@ impl PluginManager {
         out
     }
 
+    pub fn conflict_warning(&self, command: &str) -> Option<String> {
+        let providers = self.command_providers(command);
+        if providers.len() <= 1 {
+            return None;
+        }
+        let selected = self.selected_provider_label(command).unwrap_or_else(|| {
+            providers
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string())
+        });
+        Some(format!(
+            "command `{command}` is provided by multiple plugins: {}. Using {selected}.",
+            providers.join(", ")
+        ))
+    }
+
     pub fn selected_provider_label(&self, command: &str) -> Option<String> {
         self.resolve_provider(command)
             .ok()
@@ -1577,6 +1594,27 @@ mod tests {
         assert!(is_enabled(&state, "hello", false));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn conflict_warning_reports_selected_provider() {
+        let root = make_temp_dir("osp-cli-plugin-manager-conflict-warning");
+        let plugins_dir = root.join("plugins");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+        write_provider_test_plugin(&plugins_dir, "beta", "shared");
+        let manager = PluginManager::new(vec![plugins_dir.clone()]);
+
+        let warning = manager
+            .conflict_warning("shared")
+            .expect("conflicted command should report warning");
+        assert!(warning.contains("multiple plugins"));
+        assert!(warning.contains("alpha (explicit)"));
+        assert!(warning.contains("beta (explicit)"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn compatible_min_osp_version_has_no_issue() {
         let describe = DescribeV1 {
@@ -1711,6 +1749,41 @@ JSON
 "#,
             name = name,
             min_osp_version = min_osp_version
+        );
+
+        std::fs::write(&plugin_path, script).expect("plugin should be written");
+        let mut perms = std::fs::metadata(&plugin_path)
+            .expect("metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+        plugin_path
+    }
+
+    #[cfg(unix)]
+    fn write_provider_test_plugin(
+        dir: &std::path::Path,
+        plugin_id: &str,
+        command_name: &str,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let plugin_path = dir.join(format!("osp-{plugin_id}"));
+        let script = format!(
+            r#"#!/usr/bin/env bash
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+            plugin_id = plugin_id,
+            command_name = command_name
         );
 
         std::fs::write(&plugin_path, script).expect("plugin should be written");
