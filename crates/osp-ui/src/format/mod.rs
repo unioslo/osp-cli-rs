@@ -264,33 +264,19 @@ fn group_header_pairs(
 mod tests {
     use super::{build_document_from_output, resolve_output_format};
     use crate::document::{Block, TableStyle};
-    use crate::{RenderRuntime, RenderSettings};
-    use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+    use crate::RenderSettings;
+    use osp_core::output::{OutputFormat, RenderMode};
     use osp_core::output_model::{Group, OutputItems, OutputMeta, OutputResult};
     use osp_core::row::Row;
     use serde_json::json;
 
     fn settings(format: OutputFormat) -> RenderSettings {
         RenderSettings {
-            format,
             mode: RenderMode::Plain,
-            color: ColorMode::Never,
-            unicode: UnicodeMode::Never,
             width: Some(100),
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
             grid_padding: 2,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: crate::TableOverflow::Clip,
-            mreg_stack_min_col_width: 10,
-            mreg_stack_overflow_ratio: 200,
             theme_name: "plain".to_string(),
-            theme: None,
-            style_overrides: crate::style::StyleOverrides::default(),
-            runtime: RenderRuntime::default(),
+            ..RenderSettings::test_plain(format)
         }
     }
 

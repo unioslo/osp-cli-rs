@@ -101,6 +101,31 @@ pub struct ResolvedRenderSettings {
 }
 
 impl RenderSettings {
+    /// Shared plain-mode baseline for tests so new fields only need one update.
+    pub fn test_plain(format: OutputFormat) -> Self {
+        Self {
+            format,
+            mode: RenderMode::Plain,
+            color: ColorMode::Never,
+            unicode: UnicodeMode::Never,
+            width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            table_overflow: TableOverflow::Clip,
+            mreg_stack_min_col_width: 10,
+            mreg_stack_overflow_ratio: 200,
+            theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: None,
+            style_overrides: crate::style::StyleOverrides::default(),
+            runtime: RenderRuntime::default(),
+        }
+    }
+
     fn resolve_color_mode(&self) -> bool {
         match self.color {
             ColorMode::Always => true,
@@ -286,7 +311,7 @@ pub fn copy_output_to_clipboard(
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderBackend, RenderRuntime, RenderSettings, format, render_rows_for_copy};
+    use super::{format, render_rows_for_copy, RenderBackend, RenderSettings};
     use crate::document::{Block, MregValue, TableStyle};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_core::row::Row;
@@ -294,25 +319,8 @@ mod tests {
 
     fn settings(format: OutputFormat) -> RenderSettings {
         RenderSettings {
-            format,
             mode: RenderMode::Auto,
-            color: ColorMode::Never,
-            unicode: UnicodeMode::Never,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: crate::TableOverflow::Clip,
-            mreg_stack_min_col_width: 10,
-            mreg_stack_overflow_ratio: 200,
-            theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: None,
-            style_overrides: crate::style::StyleOverrides::default(),
-            runtime: RenderRuntime::default(),
+            ..RenderSettings::test_plain(format)
         }
     }
 
@@ -373,18 +381,14 @@ mod tests {
             panic!("expected mreg block");
         };
         assert_eq!(block.rows.len(), 1);
-        assert!(
-            block.rows[0]
-                .entries
-                .iter()
-                .any(|entry| matches!(entry.value, MregValue::Scalar(_)))
-        );
-        assert!(
-            block.rows[0]
-                .entries
-                .iter()
-                .any(|entry| matches!(entry.value, MregValue::VerticalList(_)))
-        );
+        assert!(block.rows[0]
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.value, MregValue::Scalar(_))));
+        assert!(block.rows[0]
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.value, MregValue::VerticalList(_))));
     }
 
     #[test]
@@ -406,24 +410,9 @@ mod tests {
     fn plain_mode_disables_color_and_unicode_even_when_forced() {
         let settings = RenderSettings {
             format: OutputFormat::Table,
-            mode: RenderMode::Plain,
             color: ColorMode::Always,
             unicode: UnicodeMode::Always,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: crate::TableOverflow::Clip,
-            mreg_stack_min_col_width: 10,
-            mreg_stack_overflow_ratio: 200,
-            theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: None,
-            style_overrides: crate::style::StyleOverrides::default(),
-            runtime: RenderRuntime::default(),
+            ..RenderSettings::test_plain(OutputFormat::Table)
         };
 
         let resolved = settings.resolve_render_settings();
@@ -439,21 +428,7 @@ mod tests {
             mode: RenderMode::Rich,
             color: ColorMode::Always,
             unicode: UnicodeMode::Always,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: crate::TableOverflow::Clip,
-            mreg_stack_min_col_width: 10,
-            mreg_stack_overflow_ratio: 200,
-            theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: None,
-            style_overrides: crate::style::StyleOverrides::default(),
-            runtime: RenderRuntime::default(),
+            ..RenderSettings::test_plain(OutputFormat::Table)
         };
 
         let resolved = settings.resolve_render_settings();
@@ -479,21 +454,7 @@ mod tests {
             mode: RenderMode::Rich,
             color: ColorMode::Always,
             unicode: UnicodeMode::Always,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: crate::TableOverflow::Clip,
-            mreg_stack_min_col_width: 10,
-            mreg_stack_overflow_ratio: 200,
-            theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: None,
-            style_overrides: crate::style::StyleOverrides::default(),
-            runtime: RenderRuntime::default(),
+            ..RenderSettings::test_plain(OutputFormat::Table)
         };
 
         let rendered = render_rows_for_copy(&rows, &settings);
