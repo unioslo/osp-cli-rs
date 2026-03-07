@@ -61,6 +61,9 @@ impl ParseState {
         first_token: String,
         iter: &mut std::iter::Peekable<std::slice::Iter<'a, String>>,
     ) {
+        // Once the parser has seen the first flag-like token, the rest of the
+        // line stays in "tail mode". From that point on we only distinguish
+        // between more flags, their values, `--`, and a pipe into DSL mode.
         let mut token = Some(first_token);
 
         while let Some(current) = token.take() {
@@ -103,7 +106,7 @@ impl ParseState {
             if *next == "|" || *next == "--" {
                 break;
             }
-            if next.starts_with('-') && *next != "-" && !CommandLineParser::is_number(next) {
+            if looks_like_flag_start(next) {
                 break;
             }
 
@@ -222,10 +225,6 @@ impl CommandLineParser {
 
         last.clone()
     }
-
-    pub fn is_number(text: &str) -> bool {
-        text.parse::<f64>().is_ok()
-    }
 }
 
 fn split_inline_flag_value(token: &str) -> Option<(String, String)> {
@@ -243,6 +242,14 @@ fn push_current(out: &mut Vec<String>, current: &mut String) {
     if !current.is_empty() {
         out.push(std::mem::take(current));
     }
+}
+
+fn looks_like_flag_start(token: &str) -> bool {
+    token.starts_with('-') && token != "-" && !is_number(token)
+}
+
+fn is_number(text: &str) -> bool {
+    text.parse::<f64>().is_ok()
 }
 
 #[cfg(test)]

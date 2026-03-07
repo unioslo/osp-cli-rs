@@ -7,6 +7,39 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
+struct ResolvedNodes<'a> {
+    context_node: &'a CompletionNode,
+    flag_scope_node: &'a CompletionNode,
+}
+
+struct PositionalRequest<'a> {
+    context_node: &'a CompletionNode,
+    flag_scope_node: &'a CompletionNode,
+    arg_index: usize,
+    stub: &'a str,
+    cmd: &'a CommandLine,
+    show_subcommands: bool,
+    show_flag_names: bool,
+}
+
+enum SuggestionMode<'a> {
+    Pipe,
+    FlagNames {
+        flag_scope_node: &'a CompletionNode,
+    },
+    FlagValues {
+        flag_scope_node: &'a CompletionNode,
+        flag: String,
+    },
+    Positionals {
+        context_node: &'a CompletionNode,
+        flag_scope_node: &'a CompletionNode,
+        arg_index: usize,
+        show_subcommands: bool,
+        show_flag_names: bool,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct SuggestionEngine {
     tree: CompletionTree,
@@ -18,62 +51,126 @@ impl SuggestionEngine {
     }
 
     pub fn generate(&self, analysis: &CompletionAnalysis) -> Vec<SuggestionOutput> {
+        let mode = self.suggestion_mode(analysis);
+        self.emit_suggestions(mode, analysis)
+    }
+
+    fn suggestion_mode<'a>(&'a self, analysis: &'a CompletionAnalysis) -> SuggestionMode<'a> {
         let cmd = &analysis.cursor_cmd;
         let stub = analysis.stub.as_str();
+
         if cmd.has_pipe {
-            let mut out = self.pipe_suggestions(stub);
-            sort_suggestion_outputs(&mut out);
-            return out;
+            return SuggestionMode::Pipe;
         }
 
-        let context_node = self
-            .resolve_exact(&analysis.context.matched_path)
-            .unwrap_or(&self.tree.root);
-        let flag_scope = self
-            .resolve_exact(&analysis.context.flag_scope_path)
-            .unwrap_or(&self.tree.root);
-
+        let nodes = self.resolved_nodes(analysis);
         if stub.starts_with('-') {
-            let mut out = self
-                .flag_name_suggestions(flag_scope, stub, cmd)
+            return SuggestionMode::FlagNames {
+                flag_scope_node: nodes.flag_scope_node,
+            };
+        }
+
+        let (needs_flag_value, last_flag) =
+            self.last_flag_needs_value(nodes.flag_scope_node, cmd, stub);
+        if needs_flag_value && let Some(flag) = last_flag {
+            return SuggestionMode::FlagValues {
+                flag_scope_node: nodes.flag_scope_node,
+                flag,
+            };
+        }
+
+        SuggestionMode::Positionals {
+            context_node: nodes.context_node,
+            flag_scope_node: nodes.flag_scope_node,
+            arg_index: self.arg_index(cmd, stub, analysis.context.matched_path.len()),
+            show_subcommands: analysis.context.subcommand_context,
+            show_flag_names: stub.is_empty() && !analysis.context.subcommand_context,
+        }
+    }
+
+    fn emit_suggestions(
+        &self,
+        mode: SuggestionMode<'_>,
+        analysis: &CompletionAnalysis,
+    ) -> Vec<SuggestionOutput> {
+        let cmd = &analysis.cursor_cmd;
+        let stub = analysis.stub.as_str();
+
+        let mut out = match mode {
+            SuggestionMode::Pipe => self.pipe_suggestions(stub),
+            SuggestionMode::FlagNames { flag_scope_node } => self
+                .flag_name_suggestions(flag_scope_node, stub, cmd)
                 .into_iter()
                 .map(SuggestionOutput::Item)
-                .collect::<Vec<_>>();
-            sort_suggestion_outputs(&mut out);
-            return out;
-        }
+                .collect(),
+            SuggestionMode::FlagValues {
+                flag_scope_node,
+                flag,
+            } => self.flag_value_suggestions(flag_scope_node, &flag, stub, cmd),
+            SuggestionMode::Positionals {
+                context_node,
+                flag_scope_node,
+                arg_index,
+                show_subcommands,
+                show_flag_names,
+            } => {
+                let request = PositionalRequest {
+                    context_node,
+                    flag_scope_node,
+                    arg_index,
+                    stub,
+                    cmd,
+                    show_subcommands,
+                    show_flag_names,
+                };
+                let mut out = self.positional_suggestions(request);
+                sort_suggestion_outputs(&mut out);
+                return out;
+            }
+        };
 
-        let (needs_value, last_flag) = self.last_flag_needs_value(flag_scope, cmd, stub);
-        if needs_value && let Some(flag) = last_flag {
-            let mut out = self.flag_value_suggestions(flag_scope, &flag, stub, cmd);
-            sort_suggestion_outputs(&mut out);
-            return out;
-        }
+        sort_suggestion_outputs(&mut out);
+        out
+    }
 
-        let mut out: Vec<SuggestionOutput> = Vec::new();
-        let arg_index = self.arg_index(cmd, stub, analysis.context.matched_path.len());
+    fn positional_suggestions(&self, request: PositionalRequest<'_>) -> Vec<SuggestionOutput> {
+        let mut out = Vec::new();
 
-        if analysis.context.subcommand_context {
+        if request.show_subcommands {
             out.extend(
-                self.subcommand_suggestions(context_node, stub)
+                self.subcommand_suggestions(request.context_node, request.stub)
                     .into_iter()
                     .map(SuggestionOutput::Item),
             );
         } else {
-            out.extend(self.arg_value_suggestions(context_node, arg_index, stub));
+            out.extend(self.arg_value_suggestions(
+                request.context_node,
+                request.arg_index,
+                request.stub,
+            ));
         }
 
-        if stub.is_empty() && !needs_value && !analysis.context.subcommand_context {
+        if request.show_flag_names {
             out.extend(
-                self.flag_name_suggestions(flag_scope, stub, cmd)
+                self.flag_name_suggestions(request.flag_scope_node, request.stub, request.cmd)
                     .into_iter()
-                    .filter(|s| !cmd.flags.contains_key(&s.text))
+                    .filter(|suggestion| !request.cmd.flags.contains_key(&suggestion.text))
                     .map(SuggestionOutput::Item),
             );
         }
 
-        sort_suggestion_outputs(&mut out);
         out
+    }
+
+    fn resolved_nodes<'a>(&'a self, analysis: &'a CompletionAnalysis) -> ResolvedNodes<'a> {
+        ResolvedNodes {
+            context_node: self
+                .resolve_exact(&analysis.context.matched_path)
+                .unwrap_or(&self.tree.root),
+            flag_scope_node: self
+                .resolve_exact(&analysis.context.flag_scope_path)
+                .unwrap_or(&self.tree.root),
+        }
     }
 
     fn pipe_suggestions(&self, stub: &str) -> Vec<SuggestionOutput> {
@@ -263,6 +360,9 @@ impl SuggestionEngine {
         stub: &str,
         cmd: &CommandLine,
     ) -> Option<Vec<SuggestionOutput>> {
+        // Provider completion has two special cases:
+        // - selecting `--provider` may be constrained by the current `--os`
+        // - many flags expose provider-specific value sets once a provider is chosen
         if flag == "--provider" {
             let os_token = cmd
                 .flags

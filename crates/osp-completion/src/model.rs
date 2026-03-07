@@ -14,9 +14,13 @@ pub enum ContextScope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SuggestionEntry {
+    /// Text inserted into the buffer if this suggestion is accepted.
     pub value: String,
+    /// Short right-column description in menu-style UIs.
     pub meta: Option<String>,
+    /// Optional human-friendly label when the inserted value should stay terse.
     pub display: Option<String>,
+    /// Hidden sort key for cases where display order should differ from labels.
     pub sort: Option<String>,
 }
 
@@ -83,6 +87,7 @@ pub struct FlagHints {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArgNode {
+    /// Positional-argument metadata for one command slot.
     pub name: Option<String>,
     pub tooltip: Option<String>,
     pub multi: bool,
@@ -176,6 +181,10 @@ impl FlagNode {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionNode {
+    /// One command/subcommand scope in the completion tree.
+    ///
+    /// A node can expose child commands, flags, positional arguments, or
+    /// value-like leaves for config-style key completion.
     pub tooltip: Option<String>,
     pub value_key: bool,
     pub value_leaf: bool,
@@ -200,11 +209,17 @@ impl CompletionNode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionTree {
     pub root: CompletionNode,
+    /// Pipe verbs are kept separate from the command tree because they only
+    /// become visible after the parser has entered DSL mode.
     pub pipe_verbs: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandLine {
+    /// Parsed command-line shape before completion-specific analysis.
+    ///
+    /// `head` is the command path, `flags` and `args` are the option/positional
+    /// tail, and `pipes` contains the first pipeline segment onward.
     pub head: Vec<String>,
     pub args: Vec<String>,
     pub flags: BTreeMap<String, Vec<String>>,
@@ -215,6 +230,7 @@ pub struct CommandLine {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionAnalysis {
+    /// Full parser output plus the cursor-local context derived from it.
     pub safe_cursor: usize,
     pub full_tokens: Vec<String>,
     pub cursor_tokens: Vec<String>,

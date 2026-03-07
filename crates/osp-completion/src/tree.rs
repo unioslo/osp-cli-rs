@@ -4,6 +4,7 @@ use crate::model::{ArgNode, CompletionNode, CompletionTree, FlagNode, Suggestion
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandSpec {
+    /// Declarative command description used to build the plain completion tree.
     pub name: String,
     pub tooltip: Option<String>,
     pub args: Vec<ArgNode>,
@@ -59,6 +60,11 @@ impl CommandSpec {
 pub struct CompletionTreeBuilder;
 
 impl CompletionTreeBuilder {
+    /// Build the immutable completion tree from higher-level command specs.
+    ///
+    /// The resulting structure is intentionally plain data so callers can cache
+    /// it, augment it with plugin/provider hints, and pass it into the engine
+    /// without keeping builder state alive.
     pub fn build_from_specs(
         &self,
         specs: &[CommandSpec],

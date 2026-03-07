@@ -8,6 +8,19 @@ use crate::{
 };
 use std::collections::BTreeSet;
 
+/// Resolved tree nodes for the cursor position.
+///
+/// The completer uses two related scopes:
+/// - the matched command node decides visible subcommands/args
+/// - the nearest flag-owning node decides visible flags
+///
+/// Holding both at once keeps the later flow easier to read than resolving them
+/// repeatedly in each branch.
+struct ResolvedNodes<'a> {
+    context_node: &'a CompletionNode,
+    flag_scope_node: &'a CompletionNode,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompletionEngine {
     parser: CommandLineParser,
@@ -50,8 +63,8 @@ impl CompletionEngine {
 
         let cursor_tokens = self.parser.tokenize(before_cursor);
         let stub = self.parser.compute_stub(before_cursor, &cursor_tokens);
-        let mut analysis =
-            self.analyze_command_parts(full_cmd, self.parser.parse(&cursor_tokens), stub);
+        let cursor_cmd = self.parser.parse(&cursor_tokens);
+        let mut analysis = self.analyze_command_parts(full_cmd, cursor_cmd, stub);
         analysis.safe_cursor = safe_cursor;
         analysis.full_tokens = full_tokens;
         analysis.cursor_tokens = cursor_tokens;
@@ -73,6 +86,9 @@ impl CompletionEngine {
         mut cursor_cmd: CommandLine,
         stub: String,
     ) -> CompletionAnalysis {
+        // Context-only flags can appear later in the line than the cursor.
+        // Merge them before scope resolution so completion reflects the user's
+        // effective command state, not just the prefix before the cursor.
         if !cursor_cmd.has_pipe {
             self.merge_context_flags(&mut cursor_cmd, &full_cmd, &stub);
         }
@@ -122,17 +138,12 @@ impl CompletionEngine {
         if analysis.cursor_cmd.has_pipe {
             return MatchKind::Pipe;
         }
-        let context_node = self
-            .resolve_context_exact(&analysis.context.matched_path)
-            .unwrap_or(&self.tree.root);
-        let flag_scope = self
-            .resolve_context_exact(&analysis.context.flag_scope_path)
-            .unwrap_or(&self.tree.root);
+        let nodes = self.resolved_nodes(&analysis.context);
 
-        if value.starts_with("--") || flag_scope.flags.contains_key(value) {
+        if value.starts_with("--") || nodes.flag_scope_node.flags.contains_key(value) {
             return MatchKind::Flag;
         }
-        if context_node.children.contains_key(value) {
+        if nodes.context_node.children.contains_key(value) {
             return if analysis.context.matched_path.is_empty() {
                 MatchKind::Command
             } else {
@@ -204,6 +215,17 @@ impl CompletionEngine {
             matched_path: matched,
             flag_scope_path,
             subcommand_context,
+        }
+    }
+
+    fn resolved_nodes<'a>(&'a self, context: &CompletionContext) -> ResolvedNodes<'a> {
+        ResolvedNodes {
+            context_node: self
+                .resolve_context_exact(&context.matched_path)
+                .unwrap_or(&self.tree.root),
+            flag_scope_node: self
+                .resolve_context_exact(&context.flag_scope_path)
+                .unwrap_or(&self.tree.root),
         }
     }
 
