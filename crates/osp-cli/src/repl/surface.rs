@@ -228,6 +228,10 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
         .into_iter()
         .map(SuggestionEntry::value)
         .collect::<Vec<_>>();
+    let command_names = catalog
+        .iter()
+        .map(|entry| SuggestionEntry::value(entry.name.clone()))
+        .collect::<Vec<_>>();
 
     CommandSpec::new(CMD_PLUGINS)
         .tooltip("Inspect and manage plugin providers")
@@ -240,7 +244,14 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry]) -> CommandSpec {
                 .arg(ArgNode::named("plugin_id").suggestions(plugin_ids.clone())),
             CommandSpec::new("disable")
                 .tooltip("Disable plugin by id")
+                .arg(ArgNode::named("plugin_id").suggestions(plugin_ids.clone())),
+            CommandSpec::new("select-provider")
+                .tooltip("Select provider for one command")
+                .arg(ArgNode::named("command").suggestions(command_names.clone()))
                 .arg(ArgNode::named("plugin_id").suggestions(plugin_ids)),
+            CommandSpec::new("clear-provider")
+                .tooltip("Clear selected provider for one command")
+                .arg(ArgNode::named("command").suggestions(command_names)),
         ])
 }
 

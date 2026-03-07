@@ -6,7 +6,10 @@ use crate::app::{
     CliCommandResult, PluginConfigScope, ReplCommandOutput, authorized_command_catalog_for,
     effective_plugin_config_entries, emit_messages_for_ui,
 };
-use crate::cli::{PluginConfigArgs, PluginToggleArgs, PluginsArgs, PluginsCommands};
+use crate::cli::{
+    PluginConfigArgs, PluginProviderClearArgs, PluginProviderSelectArgs, PluginToggleArgs,
+    PluginsArgs, PluginsCommands,
+};
 use crate::plugin_manager::{CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary};
 use crate::rows::output::rows_to_output_result;
 use crate::state::{AppClients, AuthState, ConfigState, UiState};
@@ -88,6 +91,32 @@ pub(crate) fn run_plugins_command(
             emit_messages(context, &messages, context.ui.message_verbosity);
             Ok(CliCommandResult::exit(0))
         }
+        PluginsCommands::SelectProvider(PluginProviderSelectArgs { command, plugin_id }) => {
+            plugin_manager
+                .set_preferred_provider(&command, &plugin_id)
+                .map_err(|err| miette::miette!("{err:#}"))?;
+            let mut messages = osp_ui::messages::MessageBuffer::default();
+            messages.success(format!(
+                "selected provider for command `{command}`: {plugin_id}"
+            ));
+            emit_messages(context, &messages, context.ui.message_verbosity);
+            Ok(CliCommandResult::exit(0))
+        }
+        PluginsCommands::ClearProvider(PluginProviderClearArgs { command }) => {
+            let removed = plugin_manager
+                .clear_preferred_provider(&command)
+                .map_err(|err| miette::miette!("{err:#}"))?;
+            let mut messages = osp_ui::messages::MessageBuffer::default();
+            if removed {
+                messages.success(format!(
+                    "cleared provider selection for command `{command}`"
+                ));
+            } else {
+                messages.warning(format!("no provider selection set for command `{command}`"));
+            }
+            emit_messages(context, &messages, context.ui.message_verbosity);
+            Ok(CliCommandResult::exit(0))
+        }
     }
 }
 
@@ -163,6 +192,36 @@ pub(crate) fn run_plugins_repl_command(
             Ok(ReplCommandOutput::Text(format!(
                 "disabled plugin: {plugin_id}\n"
             )))
+        }
+        PluginsCommands::SelectProvider(PluginProviderSelectArgs { command, plugin_id }) => {
+            plugin_manager
+                .set_preferred_provider(&command, &plugin_id)
+                .map_err(|err| miette::miette!("{err:#}"))?;
+            let mut messages = osp_ui::messages::MessageBuffer::default();
+            messages.success(format!(
+                "selected provider for command `{command}`: {plugin_id}"
+            ));
+            emit_messages(context, &messages, verbosity);
+            Ok(ReplCommandOutput::Text(format!(
+                "selected provider for command `{command}`: {plugin_id}\n"
+            )))
+        }
+        PluginsCommands::ClearProvider(PluginProviderClearArgs { command }) => {
+            let removed = plugin_manager
+                .clear_preferred_provider(&command)
+                .map_err(|err| miette::miette!("{err:#}"))?;
+            let mut messages = osp_ui::messages::MessageBuffer::default();
+            let text = if removed {
+                messages.success(format!(
+                    "cleared provider selection for command `{command}`"
+                ));
+                format!("cleared provider selection for command `{command}`\n")
+            } else {
+                messages.warning(format!("no provider selection set for command `{command}`"));
+                format!("no provider selection set for command `{command}`\n")
+            };
+            emit_messages(context, &messages, verbosity);
+            Ok(ReplCommandOutput::Text(text))
         }
     }
 }
@@ -255,6 +314,7 @@ fn command_catalog_rows(commands: &[CommandCatalogEntry]) -> Vec<Row> {
                         .collect(),
                 ),
                 "conflicted" => command.conflicted,
+                "selected_explicitly" => command.selected_explicitly,
                 "source" => command.source.to_string(),
                 "subcommands" => subcommands,
             }

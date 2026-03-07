@@ -84,6 +84,7 @@ fn sample_catalog() -> Vec<CommandCatalogEntry> {
         provider: "mock-provider".to_string(),
         providers: vec!["mock-provider (explicit)".to_string()],
         conflicted: false,
+        selected_explicitly: false,
         source: PluginSource::Explicit,
     }]
 }

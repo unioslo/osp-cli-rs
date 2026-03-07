@@ -627,6 +627,82 @@ fn conflicting_providers_are_visible_in_plugin_commands_contract() {
 
 #[cfg(unix)]
 #[test]
+fn selected_provider_overrides_precedence_until_cleared_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-select-provider");
+    let _alpha = write_provider_plugin(&dir, "alpha-provider", "shared", "alpha");
+    let _beta = write_provider_plugin(&dir, "beta-provider", "shared", "beta");
+    let home = make_temp_dir("osp-cli-plugin-select-provider-home");
+
+    let mut before = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    before
+        .env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["shared"]);
+    before
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alpha-from-plugin"))
+        .stderr(predicate::str::contains("multiple plugins"));
+
+    let mut select = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    select
+        .env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["plugins", "select-provider", "shared", "beta-provider"]);
+    select.assert().success().stderr(predicate::str::contains(
+        "selected provider for command `shared`: beta-provider",
+    ));
+
+    let mut commands = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    commands
+        .env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "plugins", "commands"]);
+    commands
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""name": "shared""#))
+        .stdout(predicate::str::contains(r#""provider": "beta-provider""#))
+        .stdout(predicate::str::contains(r#""selected_explicitly": true"#));
+
+    let mut after_select = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    after_select
+        .env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["shared"]);
+    after_select
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("beta-from-plugin"))
+        .stderr(predicate::str::contains("multiple plugins").not());
+
+    let mut clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    clear.env("HOME", &home).env("OSP_PLUGIN_PATH", &dir).args([
+        "plugins",
+        "clear-provider",
+        "shared",
+    ]);
+    clear.assert().success().stderr(predicate::str::contains(
+        "cleared provider selection for command `shared`",
+    ));
+
+    let mut after_clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    after_clear
+        .env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["shared"]);
+    after_clear
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alpha-from-plugin"))
+        .stderr(predicate::str::contains("multiple plugins"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn plugin_source_precedence_is_stable_contract() {
     let explicit_dir = make_temp_dir("osp-cli-plugin-precedence-explicit");
     let env_dir = make_temp_dir("osp-cli-plugin-precedence-env");

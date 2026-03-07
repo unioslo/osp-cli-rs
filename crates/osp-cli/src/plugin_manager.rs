@@ -8,7 +8,7 @@ use osp_core::runtime::RuntimeHints;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error as StdError;
 use std::fmt::{Display, Formatter, Write as FmtWrite};
 use std::io::{BufReader, Read};
@@ -94,6 +94,7 @@ pub struct CommandCatalogEntry {
     pub provider: String,
     pub providers: Vec<String>,
     pub conflicted: bool,
+    pub selected_explicitly: bool,
     pub source: PluginSource,
 }
 
@@ -202,6 +203,20 @@ struct PluginState {
     enabled: Vec<String>,
     #[serde(default)]
     disabled: Vec<String>,
+    #[serde(default)]
+    preferred_providers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderSelectionMode {
+    Preference,
+    Precedence,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProviderSelection<'a> {
+    plugin: &'a DiscoveredPlugin,
+    mode: ProviderSelectionMode,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -297,30 +312,37 @@ impl PluginManager {
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
         let provider_index = provider_labels_by_command(&active);
-        let mut seen = HashSet::new();
+        let command_names = active
+            .iter()
+            .flat_map(|plugin| plugin.command_specs.iter().map(|spec| spec.name.clone()))
+            .collect::<BTreeSet<_>>();
         let mut out = Vec::new();
 
-        for plugin in active {
-            let selected_label = plugin_label(plugin);
-            for spec in &plugin.command_specs {
-                if !seen.insert(spec.name.clone()) {
-                    continue;
-                }
-                let providers = provider_index
-                    .get(&spec.name)
-                    .cloned()
-                    .unwrap_or_else(|| vec![selected_label.clone()]);
-                out.push(CommandCatalogEntry {
-                    name: spec.name.clone(),
-                    about: spec.tooltip.clone().unwrap_or_default(),
-                    subcommands: direct_subcommand_names(spec),
-                    completion: spec.clone(),
-                    provider: plugin.plugin_id.clone(),
-                    providers: providers.clone(),
-                    conflicted: providers.len() > 1,
-                    source: plugin.source,
-                });
-            }
+        for command_name in command_names {
+            let selection = select_provider_for_command(&command_name, &active, &state)
+                .expect("active command name should resolve to a provider");
+            let selected_label = plugin_label(selection.plugin);
+            let spec = selection
+                .plugin
+                .command_specs
+                .iter()
+                .find(|spec| spec.name == command_name)
+                .expect("selected provider should include command spec");
+            let providers = provider_index
+                .get(&command_name)
+                .cloned()
+                .unwrap_or_else(|| vec![selected_label.clone()]);
+            out.push(CommandCatalogEntry {
+                name: command_name,
+                about: spec.tooltip.clone().unwrap_or_default(),
+                subcommands: direct_subcommand_names(spec),
+                completion: spec.clone(),
+                provider: selection.plugin.plugin_id.clone(),
+                providers: providers.clone(),
+                conflicted: providers.len() > 1,
+                selected_explicitly: matches!(selection.mode, ProviderSelectionMode::Preference),
+                source: selection.plugin.source,
+            });
         }
 
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -403,16 +425,18 @@ impl PluginManager {
     }
 
     pub fn conflict_warning(&self, command: &str) -> Option<String> {
-        let providers = self.command_providers(command);
+        let state = self.load_state().unwrap_or_default();
+        let discovered = self.discover();
+        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
+        let providers = provider_labels_for_command(command, &active);
         if providers.len() <= 1 {
             return None;
         }
-        let selected = self.selected_provider_label(command).unwrap_or_else(|| {
-            providers
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_string())
-        });
+        let selection = select_provider_for_command(command, &active, &state)?;
+        if matches!(selection.mode, ProviderSelectionMode::Preference) {
+            return None;
+        }
+        let selected = plugin_label(selection.plugin);
         Some(format!(
             "command `{command}` is provided by multiple plugins: {}. Using {selected}.",
             providers.join(", ")
@@ -420,9 +444,11 @@ impl PluginManager {
     }
 
     pub fn selected_provider_label(&self, command: &str) -> Option<String> {
-        self.resolve_provider(command)
-            .ok()
-            .map(|plugin| format!("{} ({})", plugin.plugin_id, plugin.source))
+        let state = self.load_state().unwrap_or_default();
+        let discovered = self.discover();
+        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
+        select_provider_for_command(command, &active, &state)
+            .map(|selection| plugin_label(selection.plugin))
     }
 
     pub fn doctor(&self) -> Result<DoctorReport> {
@@ -472,6 +498,54 @@ impl PluginManager {
         state.disabled.sort();
         state.disabled.dedup();
         self.save_state(&state)
+    }
+
+    pub fn set_preferred_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
+        let command = command.trim();
+        let plugin_id = plugin_id.trim();
+        if command.is_empty() {
+            return Err(anyhow!("command must not be empty"));
+        }
+        if plugin_id.is_empty() {
+            return Err(anyhow!("plugin id must not be empty"));
+        }
+
+        let mut state = self.load_state().unwrap_or_default();
+        let discovered = self.discover();
+        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
+        let available = providers_for_command(command, &active);
+        if available.is_empty() {
+            return Err(anyhow!("no active plugin provides command `{command}`"));
+        }
+        if !available.iter().any(|plugin| plugin.plugin_id == plugin_id) {
+            return Err(anyhow!(
+                "plugin `{plugin_id}` does not provide active command `{command}`; available providers: {}",
+                available
+                    .iter()
+                    .map(|plugin| plugin_label(plugin))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+
+        state
+            .preferred_providers
+            .insert(command.to_string(), plugin_id.to_string());
+        self.save_state(&state)
+    }
+
+    pub fn clear_preferred_provider(&self, command: &str) -> Result<bool> {
+        let command = command.trim();
+        if command.is_empty() {
+            return Err(anyhow!("command must not be empty"));
+        }
+
+        let mut state = self.load_state().unwrap_or_default();
+        let removed = state.preferred_providers.remove(command).is_some();
+        if removed {
+            self.save_state(&state)?;
+        }
+        Ok(removed)
     }
 
     pub fn dispatch(
@@ -524,8 +598,9 @@ impl PluginManager {
     ) -> std::result::Result<DiscoveredPlugin, PluginDispatchError> {
         let state = self.load_state().unwrap_or_default();
         let discovered = self.discover();
-        active_plugins(discovered.as_ref(), &state)
-            .find(|plugin| plugin.commands.iter().any(|c| c == command))
+        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
+        select_provider_for_command(command, &active, &state)
+            .map(|selection| selection.plugin)
             .cloned()
             .ok_or_else(|| PluginDispatchError::CommandNotFound {
                 command: command.to_string(),
@@ -1390,6 +1465,53 @@ fn plugin_label(plugin: &DiscoveredPlugin) -> String {
     format!("{} ({})", plugin.plugin_id, plugin.source)
 }
 
+fn plugin_provides_command(plugin: &DiscoveredPlugin, command: &str) -> bool {
+    plugin.commands.iter().any(|name| name == command)
+}
+
+fn providers_for_command<'a>(
+    command: &str,
+    plugins: &[&'a DiscoveredPlugin],
+) -> Vec<&'a DiscoveredPlugin> {
+    plugins
+        .iter()
+        .copied()
+        .filter(|plugin| plugin_provides_command(plugin, command))
+        .collect()
+}
+
+fn provider_labels_for_command(command: &str, plugins: &[&DiscoveredPlugin]) -> Vec<String> {
+    providers_for_command(command, plugins)
+        .into_iter()
+        .map(plugin_label)
+        .collect()
+}
+
+fn select_provider_for_command<'a>(
+    command: &str,
+    plugins: &[&'a DiscoveredPlugin],
+    state: &PluginState,
+) -> Option<ProviderSelection<'a>> {
+    if let Some(preferred) = state.preferred_providers.get(command)
+        && let Some(plugin) = providers_for_command(command, plugins)
+            .into_iter()
+            .find(|plugin| plugin.plugin_id == *preferred)
+    {
+        return Some(ProviderSelection {
+            plugin,
+            mode: ProviderSelectionMode::Preference,
+        });
+    }
+
+    providers_for_command(command, plugins)
+        .into_iter()
+        .next()
+        .map(|plugin| ProviderSelection {
+            plugin,
+            mode: ProviderSelectionMode::Precedence,
+        })
+}
+
 fn provider_labels_by_command(plugins: &[&DiscoveredPlugin]) -> HashMap<String, Vec<String>> {
     let mut index = HashMap::new();
     for plugin in plugins {
@@ -1552,12 +1674,14 @@ fn is_executable_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{DescribeV1, PluginManager, PluginState, is_enabled, min_osp_version_issue};
+    use std::collections::BTreeMap;
 
     #[test]
     fn explicit_enable_overrides_default_disabled() {
         let state = PluginState {
             enabled: vec!["hello".to_string()],
             disabled: Vec::new(),
+            preferred_providers: BTreeMap::new(),
         };
 
         assert!(is_enabled(&state, "hello", false));
@@ -1568,6 +1692,7 @@ mod tests {
         let state = PluginState {
             enabled: Vec::new(),
             disabled: vec!["hello".to_string()],
+            preferred_providers: BTreeMap::new(),
         };
 
         assert!(!is_enabled(&state, "hello", true));
@@ -1578,6 +1703,7 @@ mod tests {
         let state = PluginState {
             enabled: vec!["alpha".to_string()],
             disabled: Vec::new(),
+            preferred_providers: BTreeMap::new(),
         };
 
         assert!(is_enabled(&state, "alpha", true));
@@ -1589,6 +1715,7 @@ mod tests {
         let state = PluginState {
             enabled: vec!["hello".to_string()],
             disabled: vec!["hello".to_string()],
+            preferred_providers: BTreeMap::new(),
         };
 
         assert!(is_enabled(&state, "hello", false));
@@ -1611,6 +1738,80 @@ mod tests {
         assert!(warning.contains("multiple plugins"));
         assert!(warning.contains("alpha (explicit)"));
         assert!(warning.contains("beta (explicit)"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preferred_provider_updates_catalog_and_suppresses_conflict_warning() {
+        let root = make_temp_dir("osp-cli-plugin-manager-preferred-provider");
+        let plugins_dir = root.join("plugins");
+        let config_root = root.join("config");
+        let cache_root = root.join("cache");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+        write_provider_test_plugin(&plugins_dir, "beta", "shared");
+        let manager = PluginManager::new(vec![plugins_dir.clone()])
+            .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
+
+        manager
+            .set_preferred_provider("shared", "beta")
+            .expect("preferred provider should be saved");
+
+        let catalog = manager.command_catalog().expect("catalog should load");
+        let entry = catalog
+            .iter()
+            .find(|entry| entry.name == "shared")
+            .expect("shared command should exist");
+        assert_eq!(entry.provider, "beta");
+        assert!(entry.selected_explicitly);
+        assert_eq!(
+            manager.selected_provider_label("shared").as_deref(),
+            Some("beta (explicit)")
+        );
+        assert_eq!(manager.conflict_warning("shared"), None);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clearing_preferred_provider_restores_precedence() {
+        let root = make_temp_dir("osp-cli-plugin-manager-clear-preference");
+        let plugins_dir = root.join("plugins");
+        let config_root = root.join("config");
+        let cache_root = root.join("cache");
+        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+        write_provider_test_plugin(&plugins_dir, "beta", "shared");
+        let manager = PluginManager::new(vec![plugins_dir.clone()])
+            .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
+
+        manager
+            .set_preferred_provider("shared", "beta")
+            .expect("preferred provider should be saved");
+        assert!(
+            manager
+                .clear_preferred_provider("shared")
+                .expect("clearing preferred provider should succeed")
+        );
+
+        let catalog = manager.command_catalog().expect("catalog should load");
+        let entry = catalog
+            .iter()
+            .find(|entry| entry.name == "shared")
+            .expect("shared command should exist");
+        assert_eq!(entry.provider, "alpha");
+        assert!(!entry.selected_explicitly);
+        assert!(
+            manager
+                .conflict_warning("shared")
+                .expect("precedence fallback should warn")
+                .contains("Using alpha (explicit).")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

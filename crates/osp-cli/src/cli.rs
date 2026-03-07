@@ -251,6 +251,8 @@ pub enum PluginsCommands {
     Refresh,
     Enable(PluginToggleArgs),
     Disable(PluginToggleArgs),
+    SelectProvider(PluginProviderSelectArgs),
+    ClearProvider(PluginProviderClearArgs),
     Doctor,
 }
 
@@ -280,6 +282,17 @@ pub struct ThemeUseArgs {
 #[derive(Debug, Args)]
 pub struct PluginToggleArgs {
     pub plugin_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PluginProviderSelectArgs {
+    pub command: String,
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PluginProviderClearArgs {
+    pub command: String,
 }
 
 #[derive(Debug, Args)]

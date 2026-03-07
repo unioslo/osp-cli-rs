@@ -39,17 +39,31 @@ fn builtin_command_verbs_are_consistent() {
     assert_subcommands(
         &cmd,
         "plugins",
-        set(&["list", "commands", "enable", "disable", "doctor"]),
+        set(&[
+            "list",
+            "commands",
+            "config",
+            "refresh",
+            "enable",
+            "disable",
+            "select-provider",
+            "clear-provider",
+            "doctor",
+        ]),
     );
     assert_subcommands(&cmd, "theme", set(&["list", "show", "use"]));
     assert_subcommands(
         &cmd,
         "config",
-        set(&["show", "get", "explain", "set", "doctor"]),
+        set(&["show", "get", "explain", "set", "unset", "doctor"]),
     );
     assert_subcommands(&cmd, "history", set(&["list", "prune", "clear"]));
     // doctor uses selectors rather than verbs.
-    assert_subcommands(&cmd, "doctor", set(&["config", "plugins", "theme", "all"]));
+    assert_subcommands(
+        &cmd,
+        "doctor",
+        set(&["config", "plugins", "theme", "all", "last"]),
+    );
 
     for name in top_level {
         assert_eq!(
