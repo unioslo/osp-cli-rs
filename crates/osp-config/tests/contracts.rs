@@ -531,6 +531,40 @@ fn bootstrap_explain_reports_profile_override_source_contract() {
 }
 
 #[test]
+fn bootstrap_rejects_empty_default_profile_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "   ");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+
+    let err = resolver
+        .resolve(ResolveOptions::default())
+        .expect_err("empty default profile should fail");
+    assert!(matches!(
+        err,
+        osp_config::ConfigError::InvalidDefaultProfileValue(_)
+    ));
+}
+
+#[test]
+fn bootstrap_rejects_non_string_default_profile_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", 42_i64);
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+
+    let err = resolver
+        .resolve(ResolveOptions::default())
+        .expect_err("non-string default profile should fail");
+    assert!(matches!(
+        err,
+        osp_config::ConfigError::InvalidDefaultProfileType(_)
+    ));
+}
+
+#[test]
 fn explain_reports_interpolation_trace_contract() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "uio");

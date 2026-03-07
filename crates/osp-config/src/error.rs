@@ -46,6 +46,7 @@ pub enum ConfigError {
     },
     MissingDefaultProfile,
     InvalidDefaultProfileType(String),
+    InvalidDefaultProfileValue(String),
     UnknownProfile {
         profile: String,
         known: Vec<String>,
@@ -144,6 +145,12 @@ impl Display for ConfigError {
             }
             ConfigError::InvalidDefaultProfileType(actual) => {
                 write!(f, "profile.default must be string, got {actual}")
+            }
+            ConfigError::InvalidDefaultProfileValue(actual) => {
+                write!(
+                    f,
+                    "profile.default must be a non-empty string, got {actual}"
+                )
             }
             ConfigError::UnknownProfile { profile, known } => {
                 write!(

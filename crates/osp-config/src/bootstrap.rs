@@ -177,6 +177,9 @@ fn resolve_default_profile(
             ConfigValue::String(profile) if !profile.trim().is_empty() => {
                 Ok(normalize_identifier(profile))
             }
+            ConfigValue::String(profile) => Err(ConfigError::InvalidDefaultProfileValue(format!(
+                "{profile:?}"
+            ))),
             other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
         },
     }
