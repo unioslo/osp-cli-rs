@@ -5,12 +5,13 @@ use osp_core::output_model::OutputResult;
 use osp_core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use osp_dsl::apply_output_pipeline;
 use osp_ui::clipboard::ClipboardService;
-use osp_ui::messages::{MessageBuffer, MessageLevel, MessageRenderFormat};
+use osp_ui::messages::{MessageBuffer, MessageLevel};
 use osp_ui::{copy_output_to_clipboard, render_output};
 
 use crate::app::resolve_effective_render_settings;
 use crate::rows::output::plugin_data_to_output_result;
 use crate::state::UiState;
+use crate::ui_presentation::effective_message_render_format;
 
 pub(crate) enum ReplCommandOutput {
     Output {
@@ -22,6 +23,7 @@ pub(crate) enum ReplCommandOutput {
 
 pub(crate) struct CliCommandResult {
     pub(crate) exit_code: i32,
+    pub(crate) messages: MessageBuffer,
     pub(crate) output: Option<ReplCommandOutput>,
 }
 
@@ -45,6 +47,7 @@ impl CliCommandResult {
     pub(crate) fn exit(exit_code: i32) -> Self {
         Self {
             exit_code,
+            messages: MessageBuffer::default(),
             output: None,
         }
     }
@@ -52,6 +55,7 @@ impl CliCommandResult {
     pub(crate) fn output(output: OutputResult, format_hint: Option<OutputFormat>) -> Self {
         Self {
             exit_code: 0,
+            messages: MessageBuffer::default(),
             output: Some(ReplCommandOutput::Output {
                 output,
                 format_hint,
@@ -62,6 +66,7 @@ impl CliCommandResult {
     pub(crate) fn text(text: impl Into<String>) -> Self {
         Self {
             exit_code: 0,
+            messages: MessageBuffer::default(),
             output: Some(ReplCommandOutput::Text(text.into())),
         }
     }
@@ -91,6 +96,9 @@ pub(crate) fn run_cli_command(
     runtime: &CommandRenderRuntime<'_>,
     result: CliCommandResult,
 ) -> Result<i32> {
+    if !result.messages.is_empty() {
+        emit_messages_with_runtime(runtime, &result.messages, runtime.ui().message_verbosity);
+    }
     if let Some(output) = result.output {
         render_cli_output(runtime, output);
     }
@@ -104,10 +112,7 @@ pub(crate) fn emit_messages_for_ui(
     verbosity: MessageLevel,
 ) {
     let resolved = ui.render_settings.resolve_render_settings();
-    let message_format = config
-        .get_string("ui.messages.format")
-        .and_then(MessageRenderFormat::parse)
-        .unwrap_or(MessageRenderFormat::Rules);
+    let message_format = effective_message_render_format(config);
     let rendered = messages.render_grouped_with_options(osp_ui::messages::GroupedRenderOptions {
         max_level: verbosity,
         color: resolved.color,

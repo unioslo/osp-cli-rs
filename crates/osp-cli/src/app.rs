@@ -3,6 +3,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use osp_config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
 use osp_core::output::OutputFormat;
 use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
+use osp_repl::SharedHistory;
 
 use osp_ui::messages::MessageLevel;
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
@@ -22,7 +23,9 @@ use crate::plugin_manager::{
     CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
     PluginDispatchError, PluginManager,
 };
-use crate::state::{AppClients, AppRuntime, AppSession, AuthState, LaunchContext, TerminalKind};
+use crate::state::{
+    AppClients, AppRuntime, AppSession, AuthState, LaunchContext, TerminalKind, UiState,
+};
 
 use crate::repl;
 
@@ -94,6 +97,11 @@ pub(crate) struct ReplCommandSpec {
 pub(crate) struct ReplDispatchOverrides {
     pub(crate) message_verbosity: MessageLevel,
     pub(crate) debug_verbosity: u8,
+}
+
+pub(crate) enum BuiltinCommandTransport<'a> {
+    Cli,
+    Repl { history: &'a SharedHistory },
 }
 
 #[derive(Debug)]
@@ -310,8 +318,15 @@ fn run_builtin_cli_command_parts(
     clients: &AppClients,
     command: Commands,
 ) -> Result<i32> {
-    let result = dispatch_builtin_command_parts(runtime, session, clients, command)?
-        .ok_or_else(|| miette!("expected builtin command"))?;
+    let result = dispatch_builtin_command_parts(
+        runtime,
+        session,
+        clients,
+        BuiltinCommandTransport::Cli,
+        None,
+        command,
+    )?
+    .ok_or_else(|| miette!("expected builtin command"))?;
     run_cli_command(
         &CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui),
         result,
@@ -331,15 +346,25 @@ fn run_inline_builtin_command(
 
     let spec = repl::repl_command_spec(&command);
     ensure_command_supports_dsl(&spec, stages)?;
-    dispatch_builtin_command_parts(runtime, session, clients, command)
+    dispatch_builtin_command_parts(
+        runtime,
+        session,
+        clients,
+        BuiltinCommandTransport::Cli,
+        None,
+        command,
+    )
 }
 
-fn dispatch_builtin_command_parts(
+pub(crate) fn dispatch_builtin_command_parts(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
+    transport: BuiltinCommandTransport<'_>,
+    overrides: Option<ReplDispatchOverrides>,
     command: Commands,
 ) -> Result<Option<CliCommandResult>> {
+    let effective_ui = effective_ui_state(&runtime.ui, overrides);
     match command {
         Commands::Plugins(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_PLUGINS)?;
@@ -347,7 +372,6 @@ fn dispatch_builtin_command_parts(
                 plugins_cmd::PluginsCommandContext {
                     config: runtime.config.resolved(),
                     config_state: Some(&runtime.config),
-                    ui: &runtime.ui,
                     auth: &runtime.auth,
                     clients: Some(clients),
                     plugin_manager: &clients.plugins,
@@ -363,7 +387,7 @@ fn dispatch_builtin_command_parts(
                     config: config_cmd::ConfigReadContext {
                         context: &runtime.context,
                         config: runtime.config.resolved(),
-                        ui: &runtime.ui,
+                        ui: &effective_ui,
                         themes: &runtime.themes,
                         session_layer: &session.config_overrides,
                         runtime_load: runtime.launch.runtime_load,
@@ -371,12 +395,11 @@ fn dispatch_builtin_command_parts(
                     plugins: plugins_cmd::PluginsCommandContext {
                         config: runtime.config.resolved(),
                         config_state: Some(&runtime.config),
-                        ui: &runtime.ui,
                         auth: &runtime.auth,
                         clients: Some(clients),
                         plugin_manager: &clients.plugins,
                     },
-                    ui: &runtime.ui,
+                    ui: &effective_ui,
                     auth: &runtime.auth,
                     themes: &runtime.themes,
                     last_failure: session.last_failure.as_ref(),
@@ -387,12 +410,11 @@ fn dispatch_builtin_command_parts(
         }
         Commands::Theme(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_THEME)?;
-            let config = runtime.config.resolved();
-            let ui = &runtime.ui;
+            let ui = &effective_ui;
             let themes = &runtime.themes;
             theme_cmd::run_theme_command(
                 &mut session.config_overrides,
-                theme_cmd::ThemeCommandContext { config, ui, themes },
+                theme_cmd::ThemeCommandContext { ui, themes },
                 args,
             )
             .map(Some)
@@ -401,7 +423,7 @@ fn dispatch_builtin_command_parts(
             ensure_builtin_visible_for(&runtime.auth, CMD_CONFIG)?;
             let context = &runtime.context;
             let config = runtime.config.resolved();
-            let ui = &runtime.ui;
+            let ui = &effective_ui;
             let themes = &runtime.themes;
             let runtime_load = runtime.launch.runtime_load;
             config_cmd::run_config_command(
@@ -419,12 +441,37 @@ fn dispatch_builtin_command_parts(
         }
         Commands::History(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_HISTORY)?;
-            history_cmd::run_history_command(args).map(Some)
+            match transport {
+                BuiltinCommandTransport::Cli => history_cmd::run_history_command(args).map(Some),
+                BuiltinCommandTransport::Repl { history } => {
+                    history_cmd::run_history_repl_command(session, args, history).map(Some)
+                }
+            }
         }
-        Commands::Repl(args) => {
-            repl::run_repl_debug_command_for(runtime, session, clients, args).map(Some)
-        }
+        Commands::Repl(args) => match transport {
+            BuiltinCommandTransport::Cli => {
+                repl::run_repl_debug_command_for(runtime, session, clients, args).map(Some)
+            }
+            BuiltinCommandTransport::Repl { .. } => {
+                Err(miette!("`repl` debug commands are not available in REPL"))
+            }
+        },
         Commands::External(_) => Ok(None),
+    }
+}
+
+fn effective_ui_state(ui: &UiState, overrides: Option<ReplDispatchOverrides>) -> UiState {
+    let Some(overrides) = overrides else {
+        return UiState {
+            render_settings: ui.render_settings.clone(),
+            message_verbosity: ui.message_verbosity,
+            debug_verbosity: ui.debug_verbosity,
+        };
+    };
+    UiState {
+        render_settings: ui.render_settings.clone(),
+        message_verbosity: overrides.message_verbosity,
+        debug_verbosity: overrides.debug_verbosity,
     }
 }
 

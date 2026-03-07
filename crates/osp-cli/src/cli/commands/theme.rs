@@ -1,19 +1,16 @@
-use crate::app::{
-    CliCommandResult, ReplCommandOutput, emit_messages_for_ui, resolve_known_theme_name,
-};
+use crate::app::{CliCommandResult, resolve_known_theme_name};
 use crate::cli::{ThemeArgs, ThemeCommands, ThemeShowArgs, ThemeUseArgs};
 use crate::rows::output::rows_to_output_result;
-use crate::state::{AppSession, UiState};
+use crate::state::UiState;
 use crate::theme_loader::{ThemeCatalog, ThemeSource};
 use miette::Result;
 use miette::miette;
-use osp_config::{ConfigLayer, ResolvedConfig};
+use osp_config::ConfigLayer;
 use osp_core::row::Row;
 use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ThemeCommandContext<'a> {
-    pub(crate) config: &'a ResolvedConfig,
     pub(crate) ui: &'a UiState,
     pub(crate) themes: &'a ThemeCatalog,
 }
@@ -42,46 +39,14 @@ pub(crate) fn run_theme_command(
             let selected = resolve_known_theme_name(&name, context.themes)?;
             session_overrides.set("theme.name", selected.clone());
 
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success(format!("active theme set to: {selected}"));
-            messages.info(
+            let mut result = CliCommandResult::exit(0);
+            result
+                .messages
+                .success(format!("active theme set to: {selected}"));
+            result.messages.info(
                 "theme change is for the current process; persistent writes land with `config set`",
             );
-            emit_messages_for_ui(
-                context.config,
-                context.ui,
-                &messages,
-                context.ui.message_verbosity,
-            );
-            Ok(CliCommandResult::exit(0))
-        }
-    }
-}
-
-pub(crate) fn run_theme_repl_command(
-    session: &mut AppSession,
-    themes: &ThemeCatalog,
-    ui: &UiState,
-    args: ThemeArgs,
-) -> Result<ReplCommandOutput> {
-    match args.command {
-        ThemeCommands::List => Ok(ReplCommandOutput::Output {
-            output: rows_to_output_result(theme_list_rows(themes, &ui.render_settings.theme_name)),
-            format_hint: None,
-        }),
-        ThemeCommands::Show(ThemeShowArgs { name }) => {
-            let selected = name.unwrap_or_else(|| ui.render_settings.theme_name.clone());
-            Ok(ReplCommandOutput::Output {
-                output: rows_to_output_result(theme_show_rows(themes, &selected)?),
-                format_hint: None,
-            })
-        }
-        ThemeCommands::Use(ThemeUseArgs { name }) => {
-            let selected = resolve_known_theme_name(&name, themes)?;
-            session.config_overrides.set("theme.name", selected.clone());
-            Ok(ReplCommandOutput::Text(format!(
-                "active theme set to: {selected}\n"
-            )))
+            Ok(result)
         }
     }
 }

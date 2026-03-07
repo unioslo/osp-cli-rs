@@ -1,10 +1,6 @@
-use miette::Result;
-use osp_config::ResolvedConfig;
-use osp_ui::messages::MessageLevel;
-
 use crate::app::{
-    CliCommandResult, PluginConfigScope, ReplCommandOutput, authorized_command_catalog_for,
-    effective_plugin_config_entries, emit_messages_for_ui,
+    CliCommandResult, PluginConfigScope, authorized_command_catalog_for,
+    effective_plugin_config_entries,
 };
 use crate::cli::{
     PluginConfigArgs, PluginProviderClearArgs, PluginProviderSelectArgs, PluginToggleArgs,
@@ -12,14 +8,15 @@ use crate::cli::{
 };
 use crate::plugin_manager::{CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary};
 use crate::rows::output::rows_to_output_result;
-use crate::state::{AppClients, AuthState, ConfigState, UiState};
+use crate::state::{AppClients, AuthState, ConfigState};
+use miette::Result;
+use osp_config::ResolvedConfig;
 use osp_core::row::Row;
 
 #[derive(Clone, Copy)]
 pub(crate) struct PluginsCommandContext<'a> {
     pub(crate) config: &'a ResolvedConfig,
     pub(crate) config_state: Option<&'a ConfigState>,
-    pub(crate) ui: &'a UiState,
     pub(crate) auth: &'a AuthState,
     pub(crate) clients: Option<&'a AppClients>,
     pub(crate) plugin_manager: &'a PluginManager,
@@ -59,10 +56,9 @@ pub(crate) fn run_plugins_command(
         )),
         PluginsCommands::Refresh => {
             plugin_manager.refresh();
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success("refreshed plugin discovery cache");
-            emit_messages(context, &messages, context.ui.message_verbosity);
-            Ok(CliCommandResult::exit(0))
+            let mut result = CliCommandResult::exit(0);
+            result.messages.success("refreshed plugin discovery cache");
+            Ok(result)
         }
         PluginsCommands::Doctor => {
             let report = plugin_manager
@@ -77,161 +73,49 @@ pub(crate) fn run_plugins_command(
             plugin_manager
                 .set_enabled(&plugin_id, true)
                 .map_err(|err| miette::miette!("{err:#}"))?;
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success(format!("enabled plugin: {plugin_id}"));
-            emit_messages(context, &messages, context.ui.message_verbosity);
-            Ok(CliCommandResult::exit(0))
+            let mut result = CliCommandResult::exit(0);
+            result
+                .messages
+                .success(format!("enabled plugin: {plugin_id}"));
+            Ok(result)
         }
         PluginsCommands::Disable(PluginToggleArgs { plugin_id }) => {
             plugin_manager
                 .set_enabled(&plugin_id, false)
                 .map_err(|err| miette::miette!("{err:#}"))?;
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success(format!("disabled plugin: {plugin_id}"));
-            emit_messages(context, &messages, context.ui.message_verbosity);
-            Ok(CliCommandResult::exit(0))
+            let mut result = CliCommandResult::exit(0);
+            result
+                .messages
+                .success(format!("disabled plugin: {plugin_id}"));
+            Ok(result)
         }
         PluginsCommands::SelectProvider(PluginProviderSelectArgs { command, plugin_id }) => {
             plugin_manager
                 .set_preferred_provider(&command, &plugin_id)
                 .map_err(|err| miette::miette!("{err:#}"))?;
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success(format!(
+            let mut result = CliCommandResult::exit(0);
+            result.messages.success(format!(
                 "selected provider for command `{command}`: {plugin_id}"
             ));
-            emit_messages(context, &messages, context.ui.message_verbosity);
-            Ok(CliCommandResult::exit(0))
+            Ok(result)
         }
         PluginsCommands::ClearProvider(PluginProviderClearArgs { command }) => {
             let removed = plugin_manager
                 .clear_preferred_provider(&command)
                 .map_err(|err| miette::miette!("{err:#}"))?;
-            let mut messages = osp_ui::messages::MessageBuffer::default();
+            let mut result = CliCommandResult::exit(0);
             if removed {
-                messages.success(format!(
+                result.messages.success(format!(
                     "cleared provider selection for command `{command}`"
                 ));
             } else {
-                messages.warning(format!("no provider selection set for command `{command}`"));
+                result
+                    .messages
+                    .warning(format!("no provider selection set for command `{command}`"));
             }
-            emit_messages(context, &messages, context.ui.message_verbosity);
-            Ok(CliCommandResult::exit(0))
+            Ok(result)
         }
     }
-}
-
-pub(crate) fn run_plugins_repl_command(
-    context: PluginsCommandContext<'_>,
-    args: PluginsArgs,
-    verbosity: MessageLevel,
-) -> Result<ReplCommandOutput> {
-    let plugin_manager = context.plugin_manager;
-    match args.command {
-        PluginsCommands::List => {
-            let mut plugins = plugin_manager
-                .list_plugins()
-                .map_err(|err| miette::miette!("{err:#}"))?;
-            plugins.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
-            Ok(ReplCommandOutput::Output {
-                output: rows_to_output_result(plugin_list_rows(&plugins)),
-                format_hint: None,
-            })
-        }
-        PluginsCommands::Commands => {
-            let mut commands =
-                authorized_command_catalog_for(context.auth, context.plugin_manager)?;
-            commands.sort_by(|a, b| a.name.cmp(&b.name));
-            Ok(ReplCommandOutput::Output {
-                output: rows_to_output_result(command_catalog_rows(&commands)),
-                format_hint: None,
-            })
-        }
-        PluginsCommands::Config(PluginConfigArgs { plugin_id }) => Ok(ReplCommandOutput::Output {
-            output: rows_to_output_result(plugin_config_rows(
-                &plugin_id,
-                &projected_plugin_config_entries(context, &plugin_id),
-            )),
-            format_hint: None,
-        }),
-        PluginsCommands::Refresh => {
-            plugin_manager.refresh();
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success("refreshed plugin discovery cache");
-            emit_messages(context, &messages, verbosity);
-            Ok(ReplCommandOutput::Text(
-                "refreshed plugin discovery cache\n".to_string(),
-            ))
-        }
-        PluginsCommands::Doctor => {
-            let report = plugin_manager
-                .doctor()
-                .map_err(|err| miette::miette!("{err:#}"))?;
-            Ok(ReplCommandOutput::Output {
-                output: rows_to_output_result(doctor_rows(&report)),
-                format_hint: None,
-            })
-        }
-        PluginsCommands::Enable(PluginToggleArgs { plugin_id }) => {
-            plugin_manager
-                .set_enabled(&plugin_id, true)
-                .map_err(|err| miette::miette!("{err:#}"))?;
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success(format!("enabled plugin: {plugin_id}"));
-            emit_messages(context, &messages, verbosity);
-            Ok(ReplCommandOutput::Text(format!(
-                "enabled plugin: {plugin_id}\n"
-            )))
-        }
-        PluginsCommands::Disable(PluginToggleArgs { plugin_id }) => {
-            plugin_manager
-                .set_enabled(&plugin_id, false)
-                .map_err(|err| miette::miette!("{err:#}"))?;
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success(format!("disabled plugin: {plugin_id}"));
-            emit_messages(context, &messages, verbosity);
-            Ok(ReplCommandOutput::Text(format!(
-                "disabled plugin: {plugin_id}\n"
-            )))
-        }
-        PluginsCommands::SelectProvider(PluginProviderSelectArgs { command, plugin_id }) => {
-            plugin_manager
-                .set_preferred_provider(&command, &plugin_id)
-                .map_err(|err| miette::miette!("{err:#}"))?;
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            messages.success(format!(
-                "selected provider for command `{command}`: {plugin_id}"
-            ));
-            emit_messages(context, &messages, verbosity);
-            Ok(ReplCommandOutput::Text(format!(
-                "selected provider for command `{command}`: {plugin_id}\n"
-            )))
-        }
-        PluginsCommands::ClearProvider(PluginProviderClearArgs { command }) => {
-            let removed = plugin_manager
-                .clear_preferred_provider(&command)
-                .map_err(|err| miette::miette!("{err:#}"))?;
-            let mut messages = osp_ui::messages::MessageBuffer::default();
-            let text = if removed {
-                messages.success(format!(
-                    "cleared provider selection for command `{command}`"
-                ));
-                format!("cleared provider selection for command `{command}`\n")
-            } else {
-                messages.warning(format!("no provider selection set for command `{command}`"));
-                format!("no provider selection set for command `{command}`\n")
-            };
-            emit_messages(context, &messages, verbosity);
-            Ok(ReplCommandOutput::Text(text))
-        }
-    }
-}
-
-fn emit_messages(
-    context: PluginsCommandContext<'_>,
-    messages: &osp_ui::messages::MessageBuffer,
-    verbosity: MessageLevel,
-) {
-    emit_messages_for_ui(context.config, context.ui, messages, verbosity);
 }
 
 fn projected_plugin_config_entries(

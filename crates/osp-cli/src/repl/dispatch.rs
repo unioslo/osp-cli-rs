@@ -6,12 +6,8 @@ use std::borrow::Cow;
 
 use crate::app;
 use crate::app::{
-    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, CMD_THEME, ReplCommandOutput,
+    BuiltinCommandTransport, CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, CMD_THEME,
     ReplCommandSpec, ReplDispatchOverrides,
-};
-use crate::cli::commands::{
-    config as config_cmd, doctor as doctor_cmd, history as history_cmd, plugins as plugins_cmd,
-    theme as theme_cmd,
 };
 use crate::cli::{
     Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands,
@@ -101,7 +97,14 @@ fn execute_repl_plugin_line_inner(
         invocation.overrides,
         history,
     )?;
-    let rendered = render_repl_command_output(runtime, session, line, &invocation.stages, output)?;
+    let rendered = render_repl_command_output(
+        runtime,
+        session,
+        line,
+        &invocation.stages,
+        output,
+        invocation.overrides.message_verbosity,
+    )?;
     Ok(finalize_repl_command(
         session,
         rendered,
@@ -270,13 +273,23 @@ fn render_repl_command_output(
     session: &mut AppSession,
     line: &str,
     stages: &[String],
-    output: ReplCommandOutput,
+    result: crate::app::CliCommandResult,
+    verbosity: osp_ui::messages::MessageLevel,
 ) -> Result<String> {
-    match output {
-        ReplCommandOutput::Output {
+    if !result.messages.is_empty() {
+        app::emit_messages_for_ui(
+            runtime.config.resolved(),
+            &runtime.ui,
+            &result.messages,
+            verbosity,
+        );
+    }
+
+    match result.output {
+        Some(crate::app::ReplCommandOutput::Output {
             output,
             format_hint,
-        } => {
+        }) => {
             let (output, format_hint) = app::apply_output_stages(output, stages, format_hint)
                 .map_err(|err| miette!("{err:#}"))?;
 
@@ -290,7 +303,8 @@ fn render_repl_command_output(
             );
             Ok(rendered)
         }
-        ReplCommandOutput::Text(text) => Ok(text),
+        Some(crate::app::ReplCommandOutput::Text(text)) => Ok(text),
+        None => Ok(String::new()),
     }
 }
 
@@ -570,16 +584,17 @@ fn repl_help_for_scope(
     }
 
     let tokens = session.scope.help_tokens();
-    match run_repl_external_command(runtime, clients, session, tokens, overrides)? {
-        ReplCommandOutput::Text(text) => Ok(text),
-        ReplCommandOutput::Output {
+    match run_repl_external_command(runtime, clients, session, tokens, overrides)?.output {
+        Some(crate::app::ReplCommandOutput::Text(text)) => Ok(text),
+        Some(crate::app::ReplCommandOutput::Output {
             output,
             format_hint,
-        } => {
+        }) => {
             let render_settings =
                 app::resolve_effective_render_settings(&runtime.ui.render_settings, format_hint);
             Ok(render_output(&output, &render_settings))
         }
+        None => Ok(String::new()),
     }
 }
 
@@ -590,114 +605,21 @@ fn run_repl_command(
     command: Commands,
     overrides: ReplDispatchOverrides,
     history: &SharedHistory,
-) -> Result<ReplCommandOutput> {
+) -> Result<crate::app::CliCommandResult> {
     match command {
-        Commands::Plugins(args) => {
-            app::ensure_builtin_visible_for(&runtime.auth, CMD_PLUGINS)?;
-            with_repl_verbosity_overrides(runtime, overrides, |runtime| {
-                plugins_cmd::run_plugins_repl_command(
-                    plugins_cmd::PluginsCommandContext {
-                        config: runtime.config.resolved(),
-                        config_state: Some(&runtime.config),
-                        ui: &runtime.ui,
-                        auth: &runtime.auth,
-                        clients: Some(clients),
-                        plugin_manager: &clients.plugins,
-                    },
-                    args,
-                    overrides.message_verbosity,
-                )
-            })
-        }
-        Commands::Theme(args) => {
-            app::ensure_builtin_visible_for(&runtime.auth, CMD_THEME)?;
-            with_repl_verbosity_overrides(runtime, overrides, |runtime| {
-                let themes = &runtime.themes;
-                let ui = &runtime.ui;
-                theme_cmd::run_theme_repl_command(session, themes, ui, args)
-            })
-        }
-        Commands::Doctor(args) => {
-            app::ensure_builtin_visible_for(&runtime.auth, CMD_DOCTOR)?;
-            with_repl_verbosity_overrides(runtime, overrides, |runtime| {
-                doctor_cmd::run_doctor_repl_command(
-                    doctor_cmd::DoctorCommandContext {
-                        config: config_cmd::ConfigReadContext {
-                            context: &runtime.context,
-                            config: runtime.config.resolved(),
-                            ui: &runtime.ui,
-                            themes: &runtime.themes,
-                            session_layer: &session.config_overrides,
-                            runtime_load: runtime.launch.runtime_load,
-                        },
-                        plugins: plugins_cmd::PluginsCommandContext {
-                            config: runtime.config.resolved(),
-                            config_state: Some(&runtime.config),
-                            ui: &runtime.ui,
-                            auth: &runtime.auth,
-                            clients: Some(clients),
-                            plugin_manager: &clients.plugins,
-                        },
-                        ui: &runtime.ui,
-                        auth: &runtime.auth,
-                        themes: &runtime.themes,
-                        last_failure: session.last_failure.as_ref(),
-                    },
-                    args,
-                    overrides.message_verbosity,
-                )
-            })
-        }
-        Commands::Config(args) => {
-            app::ensure_builtin_visible_for(&runtime.auth, CMD_CONFIG)?;
-            with_repl_verbosity_overrides(runtime, overrides, |runtime| {
-                let context = &runtime.context;
-                let config = runtime.config.resolved();
-                let ui = &runtime.ui;
-                let themes = &runtime.themes;
-                let runtime_load = runtime.launch.runtime_load;
-                config_cmd::run_config_repl_command(
-                    config_cmd::ConfigCommandContext {
-                        context,
-                        config,
-                        ui,
-                        themes,
-                        session_overrides: &mut session.config_overrides,
-                        runtime_load,
-                    },
-                    args,
-                )
-            })
-        }
-        Commands::History(args) => {
-            app::ensure_builtin_visible_for(&runtime.auth, CMD_HISTORY)?;
-            with_repl_verbosity_overrides(runtime, overrides, |_| {
-                history_cmd::run_history_repl_command(session, args, history)
-            })
-        }
-        Commands::Repl(_) => Err(miette!("`repl` debug commands are not available in REPL")),
         Commands::External(tokens) => {
             run_repl_external_command(runtime, clients, session, tokens, overrides)
         }
+        builtin => app::dispatch_builtin_command_parts(
+            runtime,
+            session,
+            clients,
+            BuiltinCommandTransport::Repl { history },
+            Some(overrides),
+            builtin,
+        )
+        .and_then(|result| result.ok_or_else(|| miette!("expected builtin command"))),
     }
-}
-
-fn with_repl_verbosity_overrides<T, F>(
-    runtime: &mut AppRuntime,
-    overrides: ReplDispatchOverrides,
-    run: F,
-) -> Result<T>
-where
-    F: FnOnce(&mut AppRuntime) -> Result<T>,
-{
-    let previous_message = runtime.ui.message_verbosity;
-    let previous_debug = runtime.ui.debug_verbosity;
-    runtime.ui.message_verbosity = overrides.message_verbosity;
-    runtime.ui.debug_verbosity = overrides.debug_verbosity;
-    let result = run(runtime);
-    runtime.ui.message_verbosity = previous_message;
-    runtime.ui.debug_verbosity = previous_debug;
-    result
 }
 
 fn run_repl_external_command(
@@ -706,7 +628,7 @@ fn run_repl_external_command(
     session: &AppSession,
     tokens: Vec<String>,
     overrides: ReplDispatchOverrides,
-) -> Result<ReplCommandOutput> {
+) -> Result<crate::app::CliCommandResult> {
     let (command, args) = tokens
         .split_first()
         .ok_or_else(|| miette!("missing command"))?;
@@ -735,7 +657,7 @@ fn run_repl_external_command(
         if !raw.stderr.is_empty() {
             out.push_str(&raw.stderr);
         }
-        return Ok(ReplCommandOutput::Text(out));
+        return Ok(crate::app::CliCommandResult::text(out));
     }
 
     let dispatch_context =
@@ -745,29 +667,15 @@ fn run_repl_external_command(
         .dispatch(command, args, &dispatch_context)
         .map_err(app::enrich_dispatch_error)?;
     match app::prepare_plugin_response(response, &[]) {
-        Ok(app::PreparedPluginResponse::Failure(failure)) => {
-            app::emit_messages_for_ui(
-                runtime.config.resolved(),
-                &runtime.ui,
-                &failure.messages,
-                overrides.message_verbosity,
-            );
-            Err(miette!(failure.report))
-        }
-        Ok(app::PreparedPluginResponse::Output(prepared)) => {
-            if !prepared.messages.is_empty() {
-                app::emit_messages_for_ui(
-                    runtime.config.resolved(),
-                    &runtime.ui,
-                    &prepared.messages,
-                    overrides.message_verbosity,
-                );
-            }
-            Ok(ReplCommandOutput::Output {
+        Ok(app::PreparedPluginResponse::Failure(failure)) => Err(miette!(failure.report)),
+        Ok(app::PreparedPluginResponse::Output(prepared)) => Ok(crate::app::CliCommandResult {
+            exit_code: 0,
+            messages: prepared.messages,
+            output: Some(crate::app::ReplCommandOutput::Output {
                 output: prepared.output,
                 format_hint: prepared.format_hint,
-            })
-        }
+            }),
+        }),
         Err(err) => Err(miette!("{err:#}")),
     }
 }

@@ -1,8 +1,7 @@
 use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, ConfigExplainContext, ReplCommandOutput,
     RuntimeConfigRequest, config_explain_json, config_explain_output, config_value_to_json,
-    emit_messages_for_ui, explain_runtime_config, format_scope, is_sensitive_key,
-    render_config_explain_text,
+    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
 };
 use crate::cli::{
     ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs, ConfigUnsetArgs,
@@ -63,10 +62,7 @@ pub(crate) fn run_config_command(
             rows_to_output_result(config_show_rows(read, show)),
             None,
         )),
-        ConfigCommands::Get(get) => match config_get_rows(read, get)? {
-            Some(rows) => Ok(CliCommandResult::output(rows_to_output_result(rows), None)),
-            None => Ok(CliCommandResult::exit(1)),
-        },
+        ConfigCommands::Get(get) => run_config_get(read, get),
         ConfigCommands::Explain(explain) => match config_explain_output(
             &ConfigExplainContext {
                 context: read.context,
@@ -80,14 +76,8 @@ pub(crate) fn run_config_command(
             Some(output) => Ok(CliCommandResult::text(output)),
             None => Ok(CliCommandResult::exit(1)),
         },
-        ConfigCommands::Set(set) => Ok(CliCommandResult {
-            exit_code: 0,
-            output: Some(run_config_set(context, set)?),
-        }),
-        ConfigCommands::Unset(unset) => Ok(CliCommandResult {
-            exit_code: 0,
-            output: Some(run_config_unset(context, unset)?),
-        }),
+        ConfigCommands::Set(set) => run_config_set(context, set),
+        ConfigCommands::Unset(unset) => run_config_unset(context, unset),
         ConfigCommands::Doctor => Ok(CliCommandResult::output(
             rows_to_output_result(config_diagnostics_rows(read)),
             None,
@@ -109,9 +99,30 @@ fn config_show_rows(context: ConfigReadContext<'_>, args: ConfigShowArgs) -> Vec
         .collect()
 }
 
+fn run_config_get(context: ConfigReadContext<'_>, args: ConfigGetArgs) -> Result<CliCommandResult> {
+    let mut messages = MessageBuffer::default();
+    let rows = config_get_rows(context, &args, &mut messages)?;
+    match rows {
+        Some(rows) => Ok(CliCommandResult {
+            exit_code: 0,
+            messages,
+            output: Some(ReplCommandOutput::Output {
+                output: rows_to_output_result(rows),
+                format_hint: None,
+            }),
+        }),
+        None => Ok(CliCommandResult {
+            exit_code: 1,
+            messages,
+            output: None,
+        }),
+    }
+}
+
 fn config_get_rows(
     context: ConfigReadContext<'_>,
-    args: ConfigGetArgs,
+    args: &ConfigGetArgs,
+    messages: &mut MessageBuffer,
 ) -> Result<Option<Vec<Row>>> {
     if let Some(entry) = context.config.get_value_entry(&args.key) {
         let row = config_entry_row(&args.key, entry, args.sources, args.raw);
@@ -145,14 +156,7 @@ fn config_get_rows(
         }
     }
 
-    let mut messages = MessageBuffer::default();
     messages.error(format!("config key not found: {}", args.key));
-    emit_messages_for_ui(
-        context.config,
-        context.ui,
-        &messages,
-        context.ui.message_verbosity,
-    );
     Ok(None)
 }
 
@@ -239,7 +243,7 @@ fn config_entry_row(
 fn run_config_set(
     context: ConfigCommandContext<'_>,
     args: ConfigSetArgs,
-) -> Result<ReplCommandOutput> {
+) -> Result<CliCommandResult> {
     let key = args.key.trim().to_ascii_lowercase();
     let schema = ConfigSchema::default();
     let value = schema
@@ -365,19 +369,17 @@ fn run_config_set(
             .map(format_scope)
             .unwrap_or_else(|| "global".to_string())
     ));
-    emit_messages_for_ui(
-        context.config,
-        context.ui,
-        &messages,
-        context.ui.message_verbosity,
-    );
-    Ok(output)
+    Ok(CliCommandResult {
+        exit_code: 0,
+        messages,
+        output: Some(output),
+    })
 }
 
 fn run_config_unset(
     context: ConfigCommandContext<'_>,
     args: ConfigUnsetArgs,
-) -> Result<ReplCommandOutput> {
+) -> Result<CliCommandResult> {
     let key = args.key.trim().to_ascii_lowercase();
     let target = ConfigWriteTarget::from_unset_args(&args);
     let read = context.read();
@@ -482,15 +484,13 @@ fn run_config_unset(
         ));
     }
 
-    emit_messages_for_ui(
-        context.config,
-        context.ui,
-        &messages,
-        context.ui.message_verbosity,
-    );
-    Ok(ReplCommandOutput::Output {
-        output: rows_to_output_result(rows),
-        format_hint: None,
+    Ok(CliCommandResult {
+        exit_code: 0,
+        messages,
+        output: Some(ReplCommandOutput::Output {
+            output: rows_to_output_result(rows),
+            format_hint: None,
+        }),
     })
 }
 
@@ -660,43 +660,4 @@ fn validate_write_scopes(
     }
 
     Ok(())
-}
-
-pub(crate) fn run_config_repl_command(
-    context: ConfigCommandContext<'_>,
-    args: ConfigArgs,
-) -> Result<ReplCommandOutput> {
-    let read = context.read();
-    match args.command {
-        ConfigCommands::Show(show) => Ok(ReplCommandOutput::Output {
-            output: rows_to_output_result(config_show_rows(read, show)),
-            format_hint: None,
-        }),
-        ConfigCommands::Get(get) => match config_get_rows(read, get)? {
-            Some(rows) => Ok(ReplCommandOutput::Output {
-                output: rows_to_output_result(rows),
-                format_hint: None,
-            }),
-            None => Ok(ReplCommandOutput::Text(String::new())),
-        },
-        ConfigCommands::Explain(explain) => match config_explain_output(
-            &ConfigExplainContext {
-                context: read.context,
-                config: read.config,
-                ui: read.ui,
-                session_layer: read.session_layer,
-                runtime_load: read.runtime_load,
-            },
-            explain,
-        )? {
-            Some(output) => Ok(ReplCommandOutput::Text(output)),
-            None => Ok(ReplCommandOutput::Text(String::new())),
-        },
-        ConfigCommands::Set(set) => run_config_set(context, set),
-        ConfigCommands::Unset(unset) => run_config_unset(context, unset),
-        ConfigCommands::Doctor => Ok(ReplCommandOutput::Output {
-            output: rows_to_output_result(config_diagnostics_rows(read)),
-            format_hint: None,
-        }),
-    }
 }

@@ -1,8 +1,7 @@
 use miette::{IntoDiagnostic, Result};
 
 use crate::app::{
-    CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, ReplCommandOutput,
-    ensure_builtin_visible_for,
+    CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, ensure_builtin_visible_for,
 };
 use crate::cli::{DoctorArgs, DoctorCommands, PluginsArgs, PluginsCommands};
 use crate::rows::output::rows_to_output_result;
@@ -58,50 +57,6 @@ pub(crate) fn run_doctor_command(
             ))
         }
         DoctorCommands::All => run_doctor_all(context),
-    }
-}
-
-pub(crate) fn run_doctor_repl_command(
-    context: DoctorCommandContext<'_>,
-    args: DoctorArgs,
-    verbosity: osp_ui::messages::MessageLevel,
-) -> Result<ReplCommandOutput> {
-    let command = args.command.unwrap_or(DoctorCommands::All);
-    match command {
-        DoctorCommands::Config => {
-            ensure_builtin_visible_for(context.auth, CMD_CONFIG)?;
-            Ok(ReplCommandOutput::Output {
-                output: rows_to_output_result(config_cmd::config_diagnostics_rows(context.config)),
-                format_hint: None,
-            })
-        }
-        DoctorCommands::Plugins => {
-            ensure_builtin_visible_for(context.auth, CMD_PLUGINS)?;
-            plugins_cmd::run_plugins_repl_command(
-                context.plugins,
-                PluginsArgs {
-                    command: PluginsCommands::Doctor,
-                },
-                verbosity,
-            )
-        }
-        DoctorCommands::Last => Ok(ReplCommandOutput::Text(render_last_failure(
-            context.ui,
-            context.last_failure,
-        ))),
-        DoctorCommands::Theme => {
-            ensure_builtin_visible_for(context.auth, CMD_THEME)?;
-            Ok(ReplCommandOutput::Output {
-                output: rows_to_output_result(theme_doctor_rows(context.themes)),
-                format_hint: None,
-            })
-        }
-        DoctorCommands::All => {
-            let result = run_doctor_all(context)?;
-            Ok(result
-                .output
-                .unwrap_or_else(|| ReplCommandOutput::Text(String::new())))
-        }
     }
 }
 

@@ -377,6 +377,44 @@ fn cli_launch_quiet_adjusts_session_base_verbosity_unit() {
 }
 
 #[test]
+fn cli_presentation_flag_sets_session_override_unit() {
+    let cli = Cli::parse_from(["osp", "--presentation", "compact"]);
+
+    let layer = build_cli_session_layer(
+        &cli,
+        None,
+        TerminalKind::Repl,
+        RuntimeLoadOptions::default(),
+    )
+    .expect("session layer should build")
+    .expect("presentation flag should create session overrides");
+
+    assert_eq!(
+        layer_value(&layer, "ui.presentation"),
+        Some(&ConfigValue::from("compact"))
+    );
+}
+
+#[test]
+fn cli_gammel_og_bitter_flag_maps_to_austere_unit() {
+    let cli = Cli::parse_from(["osp", "--gammel-og-bitter"]);
+
+    let layer = build_cli_session_layer(
+        &cli,
+        None,
+        TerminalKind::Repl,
+        RuntimeLoadOptions::default(),
+    )
+    .expect("session layer should build")
+    .expect("legacy presentation flag should create session overrides");
+
+    assert_eq!(
+        layer_value(&layer, "ui.presentation"),
+        Some(&ConfigValue::from("austere"))
+    );
+}
+
+#[test]
 fn cli_runtime_load_options_follow_disable_flags_unit() {
     let cli = Cli::parse_from(["osp", "--no-env", "--no-config"]);
     let options = cli.runtime_load_options();
@@ -842,9 +880,10 @@ fn repl_help_chrome_replaces_clap_headings_unit() {
         "Usage: config <COMMAND>\n\nCommands:\n  show\n\nOptions:\n  -h, --help  Print help\n";
     let rendered =
         repl_help::render_repl_help_with_chrome(repl_view(&state.runtime, &state.session), raw);
-    assert!(rendered.contains("  Usage: config <COMMAND>"));
-    assert!(rendered.contains("Commands:"));
-    assert!(rendered.contains("Options:"));
+    assert!(rendered.contains("Usage"));
+    assert!(rendered.contains("config <COMMAND>"));
+    assert!(rendered.contains("Commands"));
+    assert!(rendered.contains("Options"));
 }
 
 #[test]
@@ -864,6 +903,8 @@ fn help_render_overrides_parse_long_flags_unit() {
         OsString::from("--profile"),
         OsString::from("tsd"),
         OsString::from("--theme=dracula"),
+        OsString::from("--presentation"),
+        OsString::from("compact"),
         OsString::from("--mode"),
         OsString::from("plain"),
         OsString::from("--color=always"),
@@ -877,12 +918,24 @@ fn help_render_overrides_parse_long_flags_unit() {
     let parsed = parse_help_render_overrides(&args);
     assert_eq!(parsed.profile.as_deref(), Some("tsd"));
     assert_eq!(parsed.theme.as_deref(), Some("dracula"));
+    assert_eq!(
+        parsed.presentation,
+        Some(crate::ui_presentation::UiPresentation::Compact)
+    );
     assert_eq!(parsed.mode, Some(osp_core::output::RenderMode::Plain));
     assert_eq!(parsed.color, Some(osp_core::output::ColorMode::Always));
     assert_eq!(parsed.unicode, Some(osp_core::output::UnicodeMode::Never));
     assert!(parsed.no_env);
     assert!(parsed.no_config_file);
     assert!(parsed.ascii_legacy);
+}
+
+#[test]
+fn help_render_overrides_parse_gammel_og_bitter_alias_unit() {
+    let args = vec![OsString::from("osp"), OsString::from("--gammel-og-bitter")];
+
+    let parsed = parse_help_render_overrides(&args);
+    assert!(parsed.gammel_og_bitter);
 }
 
 #[test]
@@ -907,9 +960,10 @@ fn help_chrome_uses_unicode_dividers_when_enabled_unit() {
         "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
         &resolved,
     );
-    assert!(rendered.contains("Usage: osp [OPTIONS]"));
-    assert!(rendered.contains("Commands:"));
-    assert!(rendered.contains("Options:"));
+    assert!(rendered.contains("Usage"));
+    assert!(rendered.contains("osp [OPTIONS]"));
+    assert!(rendered.contains("Commands"));
+    assert!(rendered.contains("Options"));
 }
 
 #[test]
@@ -1400,6 +1454,37 @@ fn repl_config_unset_dry_run_preserves_session_state_unit() {
 
 #[cfg(unix)]
 #[test]
+fn repl_builtin_overrides_do_not_mutate_runtime_ui_state_unit() {
+    let mut state = make_test_state(Vec::new());
+    let history = make_test_history(&mut state);
+    let original_message = state.runtime.ui.message_verbosity;
+    let original_debug = state.runtime.ui.debug_verbosity;
+
+    repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "-q config get missing.key",
+    )
+    .expect("quiet config get should complete");
+    assert_eq!(state.runtime.ui.message_verbosity, original_message);
+    assert_eq!(state.runtime.ui.debug_verbosity, original_debug);
+
+    repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "-d doctor last",
+    )
+    .expect("doctor last with debug override should complete");
+    assert_eq!(state.runtime.ui.message_verbosity, original_message);
+    assert_eq!(state.runtime.ui.debug_verbosity, original_debug);
+}
+
+#[cfg(unix)]
+#[test]
 fn repl_exit_is_host_owned_at_root_but_leaves_shell_in_scope_unit() {
     let mut state = make_test_state(Vec::new());
     let history = make_test_history(&mut state);
@@ -1446,18 +1531,16 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
         "missing",
     )
     .expect_err("unknown command should fail");
-    assert!(
-        err.to_string()
-            .contains("no plugin provides command: missing")
-    );
+    let err_text = err.to_string();
+    assert!(err_text.contains("plugin command failed"));
 
     let last = state
         .last_repl_failure()
         .expect("last failure should be recorded");
     assert_eq!(last.command_line, "missing");
-    assert!(last.summary.contains("no plugin provides command: missing"));
+    assert!(last.summary.contains("plugin command failed"));
 
-    let rendered = doctor_cmd::run_doctor_repl_command(
+    let rendered = doctor_cmd::run_doctor_command(
         doctor_cmd::DoctorCommandContext {
             config: crate::cli::commands::config::ConfigReadContext {
                 context: &state.runtime.context,
@@ -1470,7 +1553,6 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
             plugins: crate::cli::commands::plugins::PluginsCommandContext {
                 config: state.runtime.config.resolved(),
                 config_state: Some(&state.runtime.config),
-                ui: &state.runtime.ui,
                 auth: &state.runtime.auth,
                 clients: Some(&state.clients),
                 plugin_manager: &state.clients.plugins,
@@ -1483,15 +1565,15 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
         crate::cli::DoctorArgs {
             command: Some(crate::cli::DoctorCommands::Last),
         },
-        MessageLevel::Success,
     )
     .expect("doctor last should render");
-    match rendered {
-        ReplCommandOutput::Text(text) => {
+    match rendered.output {
+        Some(ReplCommandOutput::Text(text)) => {
             assert!(text.contains("\"status\": \"error\""));
             assert!(text.contains("\"command\": \"missing\""));
         }
-        ReplCommandOutput::Output { .. } => panic!("unexpected doctor output variant"),
+        Some(ReplCommandOutput::Output { .. }) => panic!("unexpected doctor output variant"),
+        None => panic!("expected doctor output"),
     }
 }
 
