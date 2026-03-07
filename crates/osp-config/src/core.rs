@@ -913,10 +913,26 @@ pub struct ExplainInterpolation {
     pub steps: Vec<ExplainInterpolationStep>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveProfileSource {
+    Override,
+    DefaultProfile,
+}
+
+impl ActiveProfileSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Override => "override",
+            Self::DefaultProfile => "profile.default",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigExplain {
     pub key: String,
     pub active_profile: String,
+    pub active_profile_source: Option<ActiveProfileSource>,
     pub terminal: Option<String>,
     pub known_profiles: BTreeSet<String>,
     pub layers: Vec<ExplainLayer>,
@@ -928,6 +944,7 @@ pub struct ConfigExplain {
 pub struct BootstrapConfigExplain {
     pub key: String,
     pub active_profile: String,
+    pub active_profile_source: ActiveProfileSource,
     pub terminal: Option<String>,
     pub known_profiles: BTreeSet<String>,
     pub layers: Vec<ExplainLayer>,
@@ -1394,8 +1411,8 @@ pub(crate) fn normalize_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BootstrapPhase, BootstrapScopeRule, ConfigSchema, Scope, bootstrap_key_spec,
-        is_bootstrap_only_key, validate_key_scope,
+        bootstrap_key_spec, is_bootstrap_only_key, validate_key_scope, BootstrapPhase,
+        BootstrapScopeRule, ConfigSchema, Scope,
     };
 
     #[test]

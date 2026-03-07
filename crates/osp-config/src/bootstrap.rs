@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use crate::explain::selected_value;
 use crate::{
-    BootstrapConfigExplain, ConfigError, ConfigExplain, ConfigSource, ConfigValue, ResolveOptions,
-    ResolvedValue, Scope, normalize_identifier,
+    normalize_identifier, ActiveProfileSource, BootstrapConfigExplain, ConfigError, ConfigExplain,
+    ConfigSource, ConfigValue, ResolveOptions, ResolvedValue, Scope,
 };
 
 use crate::selector::{LayerRef, ScopeSelector};
@@ -14,6 +14,7 @@ use crate::selector::{LayerRef, ScopeSelector};
 #[derive(Debug, Clone)]
 pub(crate) struct ResolutionFrame {
     pub(crate) active_profile: String,
+    pub(crate) active_profile_source: ActiveProfileSource,
     pub(crate) terminal: Option<String>,
     pub(crate) known_profiles: BTreeSet<String>,
 }
@@ -28,7 +29,7 @@ pub(crate) fn prepare_resolution(
         .profile_override
         .map(|value| normalize_identifier(&value));
     let known_profiles = collect_known_profiles(layers);
-    let active_profile = resolve_active_profile(
+    let profile_selection = resolve_active_profile(
         layers,
         profile_override.as_deref(),
         terminal.as_deref(),
@@ -36,7 +37,8 @@ pub(crate) fn prepare_resolution(
     )?;
 
     Ok(ResolutionFrame {
-        active_profile,
+        active_profile: profile_selection.profile,
+        active_profile_source: profile_selection.source,
         terminal,
         known_profiles,
     })
@@ -77,6 +79,7 @@ pub(crate) fn explain_default_profile_bootstrap(
     Ok(BootstrapConfigExplain {
         key: "profile.default".to_string(),
         active_profile: frame.active_profile,
+        active_profile_source: frame.active_profile_source,
         terminal: frame.terminal,
         known_profiles: frame.known_profiles,
         layers: explain_layers,
@@ -89,6 +92,7 @@ impl From<BootstrapConfigExplain> for ConfigExplain {
         Self {
             key: value.key,
             active_profile: value.active_profile,
+            active_profile_source: Some(value.active_profile_source),
             terminal: value.terminal,
             known_profiles: value.known_profiles,
             layers: value.layers,
@@ -125,25 +129,31 @@ fn resolve_active_profile(
     explicit: Option<&str>,
     terminal: Option<&str>,
     known_profiles: &BTreeSet<String>,
-) -> Result<String, ConfigError> {
-    let chosen = if let Some(profile) = explicit {
-        normalize_identifier(profile)
+) -> Result<ActiveProfileSelection, ConfigError> {
+    let selection = if let Some(profile) = explicit {
+        ActiveProfileSelection {
+            profile: normalize_identifier(profile),
+            source: ActiveProfileSource::Override,
+        }
     } else {
-        resolve_default_profile(layers, terminal)?
+        ActiveProfileSelection {
+            profile: resolve_default_profile(layers, terminal)?,
+            source: ActiveProfileSource::DefaultProfile,
+        }
     };
 
-    if chosen.trim().is_empty() {
+    if selection.profile.trim().is_empty() {
         return Err(ConfigError::MissingDefaultProfile);
     }
 
-    if !known_profiles.is_empty() && !known_profiles.contains(&chosen) {
+    if !known_profiles.is_empty() && !known_profiles.contains(&selection.profile) {
         return Err(ConfigError::UnknownProfile {
-            profile: chosen,
+            profile: selection.profile,
             known: known_profiles.iter().cloned().collect::<Vec<String>>(),
         });
     }
 
-    Ok(chosen)
+    Ok(selection)
 }
 
 fn resolve_default_profile(
@@ -185,4 +195,10 @@ fn select_default_profile_across_layers<'a>(
     }
 
     selected
+}
+
+#[derive(Debug, Clone)]
+struct ActiveProfileSelection {
+    profile: String,
+    source: ActiveProfileSource,
 }

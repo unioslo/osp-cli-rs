@@ -291,6 +291,47 @@ profile.default = "tsd"
         .success()
         .stdout(predicate::str::contains("\"key\": \"profile.default\""))
         .stdout(predicate::str::contains("\"phase\": \"bootstrap\""))
+        .stdout(predicate::str::contains(
+            "\"active_profile_source\": \"profile.default\"",
+        ))
+        .stdout(predicate::str::contains("\"value\": \"uio\""));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_explain_profile_default_reports_override_source_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-default-profile-override");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+
+[profile.uio]
+ui.mode = "plain"
+
+[profile.tsd]
+ui.mode = "rich"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "tsd",
+        "config",
+        "explain",
+        "profile.default",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"phase\": \"bootstrap\""))
+        .stdout(predicate::str::contains("\"active_profile\": \"tsd\""))
+        .stdout(predicate::str::contains(
+            "\"active_profile_source\": \"override\"",
+        ))
         .stdout(predicate::str::contains("\"value\": \"uio\""));
 
     let _ = std::fs::remove_dir_all(&home);

@@ -1,18 +1,18 @@
 use crate::app::{
-    CURRENT_TERMINAL_SENTINEL, CliCommandResult, ReplCommandOutput, RuntimeConfigRequest,
     config_explain_json, config_explain_output, config_value_to_json, emit_messages,
     explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
+    CliCommandResult, ReplCommandOutput, RuntimeConfigRequest, CURRENT_TERMINAL_SENTINEL,
 };
 use crate::cli::{
     ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs, ConfigUnsetArgs,
 };
-use crate::rows::RowBuilder;
 use crate::rows::output::rows_to_output_result;
+use crate::rows::RowBuilder;
 use crate::state::{AppState, TerminalKind};
-use miette::{IntoDiagnostic, Result, WrapErr, miette};
+use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use osp_config::{
-    ConfigSchema, ResolvedValue, RuntimeConfigPaths, Scope, is_bootstrap_only_key,
-    set_scoped_value_in_toml, unset_scoped_value_in_toml, validate_key_scope,
+    is_bootstrap_only_key, set_scoped_value_in_toml, unset_scoped_value_in_toml,
+    validate_key_scope, ConfigSchema, ResolvedValue, RuntimeConfigPaths, Scope,
 };
 use osp_core::output::OutputFormat;
 use osp_core::row::Row;
@@ -69,8 +69,8 @@ fn config_get_rows(state: &AppState, args: ConfigGetArgs) -> Result<Option<Vec<R
     if is_bootstrap_only_key(&args.key) {
         let explain = explain_runtime_config(
             RuntimeConfigRequest::new(
-                Some(state.config.resolved().active_profile().to_string()),
-                state.config.resolved().terminal(),
+                state.context.profile_override().map(str::to_owned),
+                Some(state.context.terminal_kind().as_config_terminal()),
             )
             .with_runtime_load(state.launch.runtime_load)
             .with_session_layer(Some(state.session.config_overrides.clone())),
@@ -263,8 +263,8 @@ fn run_config_set(state: &mut AppState, args: ConfigSetArgs) -> Result<ReplComma
     let output = if args.explain {
         let explain = explain_runtime_config(
             RuntimeConfigRequest::new(
-                Some(state.config.resolved().active_profile().to_string()),
-                state.config.resolved().terminal(),
+                state.context.profile_override().map(str::to_owned),
+                Some(state.context.terminal_kind().as_config_terminal()),
             )
             .with_runtime_load(state.launch.runtime_load)
             .with_session_layer(Some(state.session.config_overrides.clone())),
@@ -508,11 +508,9 @@ fn resolve_config_scopes(state: &AppState, args: &ConfigWriteTarget) -> Result<V
     }
 
     if args.global {
-        return Ok(vec![
-            terminal
-                .as_deref()
-                .map_or_else(Scope::global, Scope::terminal),
-        ]);
+        return Ok(vec![terminal
+            .as_deref()
+            .map_or_else(Scope::global, Scope::terminal)]);
     }
 
     let profile = args

@@ -470,12 +470,10 @@ fn explain_reports_precedence_chain_with_winner_contract() {
     assert_eq!(explain.layers[0].source, ConfigSource::BuiltinDefaults);
     assert_eq!(explain.layers[1].source, ConfigSource::Environment);
     assert_eq!(explain.layers[2].source, ConfigSource::Cli);
-    assert!(
-        explain.layers[1].candidates[0]
-            .origin
-            .as_deref()
-            .is_some_and(|origin| origin.starts_with("OSP__UI__FORMAT"))
-    );
+    assert!(explain.layers[1].candidates[0]
+        .origin
+        .as_deref()
+        .is_some_and(|origin| origin.starts_with("OSP__UI__FORMAT")));
 }
 
 #[test]
@@ -499,7 +497,37 @@ fn bootstrap_explain_has_explicit_type_contract() {
 
     assert_eq!(explain.key, "profile.default");
     assert_eq!(explain.active_profile, "tsd");
+    assert_eq!(
+        explain.active_profile_source,
+        osp_config::ActiveProfileSource::DefaultProfile
+    );
     assert!(explain.final_entry.is_some());
+}
+
+#[test]
+fn bootstrap_explain_reports_profile_override_source_contract() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "uio");
+
+    let mut file = ConfigLayer::default();
+    file.set_for_profile("tsd", "ui.mode", "plain");
+
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_file(file);
+
+    let explain = resolver
+        .explain_bootstrap_key(
+            "profile.default",
+            ResolveOptions::default().with_profile("tsd"),
+        )
+        .expect("bootstrap explain should succeed");
+
+    assert_eq!(explain.active_profile, "tsd");
+    assert_eq!(
+        explain.active_profile_source,
+        osp_config::ActiveProfileSource::Override
+    );
 }
 
 #[test]
@@ -620,13 +648,11 @@ fn explain_marks_same_layer_winner_consistently_contract() {
         .expect("file layer should be present");
 
     assert_eq!(file_layer.selected_entry_index, Some(3));
-    assert!(
-        file_layer
-            .candidates
-            .iter()
-            .any(|candidate| candidate.selected_in_layer
-                && candidate.value == ConfigValue::String("value".to_string()))
-    );
+    assert!(file_layer
+        .candidates
+        .iter()
+        .any(|candidate| candidate.selected_in_layer
+            && candidate.value == ConfigValue::String("value".to_string())));
 }
 
 #[test]
@@ -643,7 +669,10 @@ fn alias_values_remain_raw_and_skip_generic_interpolation_contract() {
     let resolved = resolver
         .resolve(ResolveOptions::default())
         .expect("config should resolve");
-    assert_eq!(resolved.get_string("alias.me"), Some("ldap user ${user.name}"));
+    assert_eq!(
+        resolved.get_string("alias.me"),
+        Some("ldap user ${user.name}")
+    );
     assert_eq!(resolved.get_string("alias.arg"), Some("ldap user ${1}"));
 
     let explain = resolver

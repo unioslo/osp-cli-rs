@@ -1,7 +1,7 @@
 use miette::{IntoDiagnostic, Result, WrapErr};
 use osp_config::{
-    ConfigExplain, ConfigResolver, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths,
-    RuntimeDefaults, build_runtime_pipeline, is_bootstrap_only_key,
+    build_runtime_pipeline, is_bootstrap_only_key, ConfigExplain, ConfigResolver, ConfigValue,
+    ResolveOptions, ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults,
 };
 use osp_core::output::OutputFormat;
 use osp_ui::messages::MessageBuffer;
@@ -10,7 +10,7 @@ use osp_ui::theme::DEFAULT_THEME_NAME;
 use crate::cli::ConfigExplainArgs;
 use crate::state::AppState;
 
-use super::{DEFAULT_REPL_PROMPT, RuntimeConfigRequest, emit_messages};
+use super::{emit_messages, RuntimeConfigRequest, DEFAULT_REPL_PROMPT};
 
 pub(crate) fn config_explain_output(
     state: &AppState,
@@ -18,8 +18,8 @@ pub(crate) fn config_explain_output(
 ) -> Result<Option<String>> {
     let explain = explain_runtime_config(
         RuntimeConfigRequest::new(
-            Some(state.config.resolved().active_profile().to_string()),
-            state.config.resolved().terminal(),
+            state.context.profile_override().map(str::to_owned),
+            Some(state.context.terminal_kind().as_config_terminal()),
         )
         .with_runtime_load(state.launch.runtime_load)
         .with_session_layer(Some(state.session.config_overrides.clone())),
@@ -134,6 +134,12 @@ pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: 
 
     out.push_str("context:\n");
     out.push_str(&format!("  active_profile: {}\n", explain.active_profile));
+    if let Some(source) = explain.active_profile_source {
+        // Bootstrap explains should say whether the active profile came from an
+        // explicit override or from `profile.default`; otherwise the chosen
+        // profile is visible but the reason is hidden.
+        out.push_str(&format!("  active_profile_source: {}\n", source.as_str()));
+    }
     out.push_str(&format!(
         "  terminal: {}\n\n",
         explain.terminal.as_deref().unwrap_or("none")
@@ -204,6 +210,12 @@ pub(crate) fn config_explain_json(
     root.insert(
         "active_profile".to_string(),
         explain.active_profile.clone().into(),
+    );
+    root.insert(
+        "active_profile_source".to_string(),
+        explain
+            .active_profile_source
+            .map_or(serde_json::Value::Null, |source| source.as_str().into()),
     );
     root.insert(
         "terminal".to_string(),
