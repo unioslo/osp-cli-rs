@@ -450,7 +450,7 @@ impl ConfigResolver {
 
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
         let frame = self.prepare_resolution(options)?;
-        let values = self.resolve_values(&frame)?;
+        let values = self.resolve_values_for_frame(&frame)?;
 
         Ok(ResolvedConfig {
             active_profile: frame.active_profile,
@@ -467,8 +467,7 @@ impl ConfigResolver {
     ) -> Result<ConfigExplain, ConfigError> {
         let frame = self.prepare_resolution(options)?;
         let layers = self.explain_layers_for_key(key, &frame);
-
-        let resolved = self.resolve_maps(&frame)?;
+        let resolved = self.resolve_maps_for_frame(&frame)?;
         let final_entry = resolved.final_values.get(key).cloned();
         let interpolation =
             explain_interpolation(key, &resolved.pre_interpolated, &resolved.final_values)?;
@@ -484,6 +483,8 @@ impl ConfigResolver {
         })
     }
 
+    /// Build the single resolution frame shared by normal resolution and
+    /// `config explain`.
     fn prepare_resolution(&self, options: ResolveOptions) -> Result<ResolutionFrame, ConfigError> {
         let terminal = options.terminal.map(|value| normalize_identifier(&value));
         let profile_override = options
@@ -503,16 +504,18 @@ impl ConfigResolver {
         })
     }
 
-    fn resolve_values(
+    fn resolve_values_for_frame(
         &self,
         frame: &ResolutionFrame,
     ) -> Result<BTreeMap<String, ResolvedValue>, ConfigError> {
-        Ok(self.resolve_maps(frame)?.final_values)
+        Ok(self.resolve_maps_for_frame(frame)?.final_values)
     }
 
-    fn resolve_maps(&self, frame: &ResolutionFrame) -> Result<ResolvedMaps, ConfigError> {
-        let pre_interpolated =
-            self.collect_selected_values(&frame.active_profile, frame.terminal.as_deref());
+    /// Run the resolver's two actual phases:
+    /// 1. select the winning raw value for each key
+    /// 2. interpolate/adapt those winners into final values
+    fn resolve_maps_for_frame(&self, frame: &ResolutionFrame) -> Result<ResolvedMaps, ConfigError> {
+        let pre_interpolated = self.collect_selected_values_for_frame(frame);
         let mut final_values = pre_interpolated.clone();
         interpolate_all(&mut final_values)?;
         self.schema.validate_and_adapt(&mut final_values)?;
@@ -523,43 +526,53 @@ impl ConfigResolver {
         })
     }
 
-    fn collect_selected_values(
+    /// Pick one raw winner per key using source precedence + scope precedence.
+    ///
+    /// Interpolation is intentionally excluded here; this map is the exact
+    /// input to the later placeholder-expansion pass.
+    fn collect_selected_values_for_frame(
         &self,
-        active_profile: &str,
-        terminal: Option<&str>,
+        frame: &ResolutionFrame,
     ) -> BTreeMap<String, ResolvedValue> {
-        let selector = ScopeSelector::scoped(active_profile, terminal);
+        let selector = ScopeSelector::scoped(&frame.active_profile, frame.terminal.as_deref());
         let mut keys = self.collect_keys();
         keys.insert("profile.default".to_string());
 
         let mut values = BTreeMap::new();
         for key in keys {
             if let Some(selected) = self.select_across_layers(&key, selector) {
-                values.insert(
-                    key,
-                    ResolvedValue {
-                        raw_value: selected.entry.value.clone(),
-                        value: selected.entry.value.clone(),
-                        source: selected.source,
-                        scope: selected.entry.scope.clone(),
-                        origin: selected.entry.origin.clone(),
-                    },
-                );
+                values.insert(key, Self::selected_value(&selected));
             }
         }
 
         values.insert(
             "profile.active".to_string(),
-            ResolvedValue {
-                raw_value: ConfigValue::String(active_profile.to_string()),
-                value: ConfigValue::String(active_profile.to_string()),
-                source: ConfigSource::Derived,
-                scope: Scope::global(),
-                origin: None,
-            },
+            Self::derived_active_profile_value(frame),
         );
 
         values
+    }
+
+    fn selected_value(selected: &SelectedLayerEntry<'_>) -> ResolvedValue {
+        ResolvedValue {
+            raw_value: selected.entry.value.clone(),
+            value: selected.entry.value.clone(),
+            source: selected.source,
+            scope: selected.entry.scope.clone(),
+            origin: selected.entry.origin.clone(),
+        }
+    }
+
+    /// Expose the chosen profile as a normal resolved value so later schema
+    /// defaults/interpolation can refer to it without special-case APIs.
+    fn derived_active_profile_value(frame: &ResolutionFrame) -> ResolvedValue {
+        ResolvedValue {
+            raw_value: ConfigValue::String(frame.active_profile.to_string()),
+            value: ConfigValue::String(frame.active_profile.to_string()),
+            source: ConfigSource::Derived,
+            scope: Scope::global(),
+            origin: None,
+        }
     }
 
     fn collect_known_profiles(&self) -> BTreeSet<String> {
@@ -582,6 +595,8 @@ impl ConfigResolver {
         terminal: Option<&str>,
         known_profiles: &BTreeSet<String>,
     ) -> Result<String, ConfigError> {
+        // Explicit `--profile` wins. Otherwise fall back to the resolved
+        // `profile.default` view for the current terminal.
         let chosen = if let Some(profile) = explicit {
             normalize_identifier(profile)
         } else {
