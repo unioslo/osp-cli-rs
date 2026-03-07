@@ -161,30 +161,78 @@ fn shrink_global_widths_to_fit(
             break;
         }
 
-        let mut selected_header: Option<&str> = None;
-        let mut selected_width = 0usize;
-
-        for table in oversized {
-            for header in &table.headers {
-                let width = global_width_by_header
-                    .get(header)
-                    .copied()
-                    .unwrap_or(min_column_width);
-                if width > min_column_width && width > selected_width {
-                    selected_header = Some(header);
-                    selected_width = width;
-                }
-            }
-        }
-
-        let Some(header) = selected_header else {
+        // Batch the current winner until the next decision point instead of
+        // shaving one character per pass. That preserves the widest-header
+        // policy while avoiding O(width overflow) iterations.
+        let Some((header, amount)) = next_shrink_step(
+            width_limit,
+            min_column_width,
+            &oversized,
+            global_width_by_header,
+        ) else {
             break;
         };
 
         if let Some(width) = global_width_by_header.get_mut(header) {
-            *width -= 1;
+            *width = width.saturating_sub(amount);
         }
     }
+}
+
+fn next_shrink_step<'a>(
+    width_limit: usize,
+    min_column_width: usize,
+    oversized: &[&'a TableDescriptor],
+    global_width_by_header: &HashMap<String, usize>,
+) -> Option<(&'a str, usize)> {
+    let mut selected_header: Option<&'a str> = None;
+    let mut selected_width = 0usize;
+    let mut second_widest = min_column_width;
+    let mut selected_ties = 0usize;
+
+    for table in oversized {
+        for header in &table.headers {
+            let width = global_width_by_header
+                .get(header)
+                .copied()
+                .unwrap_or(min_column_width);
+            if width <= min_column_width {
+                continue;
+            }
+
+            if width > selected_width {
+                second_widest = selected_width.max(min_column_width);
+                selected_header = Some(header.as_str());
+                selected_width = width;
+                selected_ties = 1;
+            } else if width == selected_width {
+                selected_ties += 1;
+            } else {
+                second_widest = second_widest.max(width);
+            }
+        }
+    }
+
+    let header = selected_header?;
+    let max_overflow = oversized
+        .iter()
+        .filter(|table| table.headers.iter().any(|candidate| candidate == header))
+        .map(|table| table_width(table, global_width_by_header).saturating_sub(width_limit))
+        .max()
+        .unwrap_or(0);
+
+    if max_overflow == 0 {
+        return None;
+    }
+
+    let rank_limited_amount = if selected_ties > 1 {
+        1
+    } else {
+        selected_width.saturating_sub(second_widest.max(min_column_width))
+    };
+    let amount = rank_limited_amount.min(max_overflow).max(1);
+
+    Some((header, amount))
 }
 
 fn table_width(table: &TableDescriptor, widths: &HashMap<String, usize>) -> usize {
@@ -444,6 +492,36 @@ mod tests {
         let plain_total: usize = plain_widths.iter().sum::<usize>() + plain_widths.len() * 3 + 1;
         assert!(rich_total <= 36);
         assert!(plain_total > 36);
+    }
+
+    #[test]
+    fn tie_widths_shrink_without_starving_one_column() {
+        let document = Document {
+            blocks: vec![Block::Table(TableBlock {
+                block_id: 1,
+                style: TableStyle::Grid,
+                headers: vec!["left".to_string(), "right".to_string()],
+                rows: vec![vec![json!("abcdefghijk"), json!("mnopqrstuvw")]],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: true,
+                depth: 0,
+            })],
+        };
+
+        let context = prepare_layout_context(&document, &rich_settings(Some(27)));
+        let table_id = match &document.blocks[0] {
+            Block::Table(table) => table.block_id,
+            _ => 0,
+        };
+        let widths = context
+            .table_column_widths
+            .get(&table_id)
+            .expect("table widths should exist");
+
+        let total: usize = widths.iter().sum::<usize>() + widths.len() * 3 + 1;
+        assert!(total <= 27);
+        assert!(widths[0].abs_diff(widths[1]) <= 1);
     }
 
     #[test]
