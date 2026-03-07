@@ -94,11 +94,12 @@ pub struct CommandCatalogEntry {
     pub about: String,
     pub subcommands: Vec<String>,
     pub completion: CommandSpec,
-    pub provider: String,
+    pub provider: Option<String>,
     pub providers: Vec<String>,
     pub conflicted: bool,
+    pub requires_selection: bool,
     pub selected_explicitly: bool,
-    pub source: PluginSource,
+    pub source: Option<PluginSource>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +114,7 @@ pub struct PluginDispatchContext {
     pub runtime_hints: RuntimeHints,
     pub shared_env: Vec<(String, String)>,
     pub plugin_env: HashMap<String, Vec<(String, String)>>,
+    pub provider_override: Option<String>,
 }
 
 impl PluginDispatchContext {
@@ -134,6 +136,15 @@ impl PluginDispatchContext {
 pub enum PluginDispatchError {
     CommandNotFound {
         command: String,
+    },
+    CommandAmbiguous {
+        command: String,
+        providers: Vec<String>,
+    },
+    ProviderNotFound {
+        command: String,
+        requested_provider: String,
+        providers: Vec<String>,
     },
     ExecuteFailed {
         plugin_id: String,
@@ -164,6 +175,24 @@ impl Display for PluginDispatchError {
         match self {
             PluginDispatchError::CommandNotFound { command } => {
                 write!(f, "no plugin provides command: {command}")
+            }
+            PluginDispatchError::CommandAmbiguous { command, providers } => {
+                write!(
+                    f,
+                    "command `{command}` is provided by multiple plugins: {}",
+                    providers.join(", ")
+                )
+            }
+            PluginDispatchError::ProviderNotFound {
+                command,
+                requested_provider,
+                providers,
+            } => {
+                write!(
+                    f,
+                    "plugin `{requested_provider}` does not provide command `{command}`; available providers: {}",
+                    providers.join(", ")
+                )
             }
             PluginDispatchError::ExecuteFailed { plugin_id, source } => {
                 write!(f, "failed to execute plugin {plugin_id}: {source}")
@@ -219,6 +248,8 @@ impl StdError for PluginDispatchError {
             PluginDispatchError::ExecuteFailed { source, .. } => Some(source),
             PluginDispatchError::InvalidJsonResponse { source, .. } => Some(source),
             PluginDispatchError::CommandNotFound { .. }
+            | PluginDispatchError::CommandAmbiguous { .. }
+            | PluginDispatchError::ProviderNotFound { .. }
             | PluginDispatchError::TimedOut { .. }
             | PluginDispatchError::NonZeroExit { .. }
             | PluginDispatchError::InvalidResponsePayload { .. } => None,
@@ -238,14 +269,29 @@ struct PluginState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderSelectionMode {
+    Override,
     Preference,
-    Precedence,
+    Unique,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ProviderSelection<'a> {
     plugin: &'a DiscoveredPlugin,
     mode: ProviderSelectionMode,
+}
+
+enum ProviderResolution<'a> {
+    Selected(ProviderSelection<'a>),
+    Ambiguous(Vec<&'a DiscoveredPlugin>),
+}
+
+#[derive(Debug)]
+enum ProviderResolutionError<'a> {
+    CommandNotFound,
+    RequestedProviderUnavailable {
+        requested_provider: String,
+        providers: Vec<&'a DiscoveredPlugin>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -355,30 +401,54 @@ impl PluginManager {
         let mut out = Vec::new();
 
         for command_name in command_names {
-            let selection = select_provider_for_command(&command_name, &active, &state)
-                .expect("active command name should resolve to a provider");
-            let selected_label = plugin_label(selection.plugin);
-            let spec = selection
-                .plugin
-                .command_specs
-                .iter()
-                .find(|spec| spec.name == command_name)
-                .expect("selected provider should include command spec");
             let providers = provider_index
                 .get(&command_name)
                 .cloned()
-                .unwrap_or_else(|| vec![selected_label.clone()]);
-            out.push(CommandCatalogEntry {
-                name: command_name,
-                about: spec.tooltip.clone().unwrap_or_default(),
-                subcommands: direct_subcommand_names(spec),
-                completion: spec.clone(),
-                provider: selection.plugin.plugin_id.clone(),
-                providers: providers.clone(),
-                conflicted: providers.len() > 1,
-                selected_explicitly: matches!(selection.mode, ProviderSelectionMode::Preference),
-                source: selection.plugin.source,
-            });
+                .unwrap_or_default();
+            match resolve_provider_for_command(&command_name, &active, &state, None)
+                .expect("active command name should resolve to one or more providers")
+            {
+                ProviderResolution::Selected(selection) => {
+                    let spec = selection
+                        .plugin
+                        .command_specs
+                        .iter()
+                        .find(|spec| spec.name == command_name)
+                        .expect("selected provider should include command spec");
+                    out.push(CommandCatalogEntry {
+                        name: command_name,
+                        about: spec.tooltip.clone().unwrap_or_default(),
+                        subcommands: direct_subcommand_names(spec),
+                        completion: spec.clone(),
+                        provider: Some(selection.plugin.plugin_id.clone()),
+                        providers: providers.clone(),
+                        conflicted: providers.len() > 1,
+                        requires_selection: false,
+                        selected_explicitly: matches!(
+                            selection.mode,
+                            ProviderSelectionMode::Override | ProviderSelectionMode::Preference
+                        ),
+                        source: Some(selection.plugin.source),
+                    });
+                }
+                ProviderResolution::Ambiguous(_) => {
+                    let about = format!(
+                        "provider selection required; use --plugin-provider <plugin-id> or `osp plugins select-provider {command_name} <plugin-id>`"
+                    );
+                    out.push(CommandCatalogEntry {
+                        name: command_name.clone(),
+                        about: about.clone(),
+                        subcommands: Vec::new(),
+                        completion: CommandSpec::new(command_name),
+                        provider: None,
+                        providers: providers.clone(),
+                        conflicted: true,
+                        requires_selection: true,
+                        selected_explicitly: false,
+                        source: None,
+                    });
+                }
+            }
         }
 
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -431,18 +501,29 @@ impl PluginManager {
             } else {
                 command.about.clone()
             };
-            let conflict = if command.conflicted {
-                format!(" conflicts: {}", command.providers.join(", "))
+            if command.requires_selection {
+                out.push_str(&format!(
+                    "  {name}{subs} - {about} (providers: {providers})\n",
+                    name = command.name,
+                    providers = command.providers.join(", "),
+                ));
             } else {
-                String::new()
-            };
-            out.push_str(&format!(
-                "  {name}{subs} - {about} ({provider}/{source}){conflict}\n",
-                name = command.name,
-                provider = command.provider,
-                source = command.source,
-                conflict = conflict,
-            ));
+                let conflict = if command.conflicted {
+                    format!(" conflicts: {}", command.providers.join(", "))
+                } else {
+                    String::new()
+                };
+                out.push_str(&format!(
+                    "  {name}{subs} - {about} ({provider}/{source}){conflict}\n",
+                    name = command.name,
+                    provider = command.provider.as_deref().unwrap_or("-"),
+                    source = command
+                        .source
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    conflict = conflict,
+                ));
+            }
         }
 
         Ok(out)
@@ -460,31 +541,14 @@ impl PluginManager {
         out
     }
 
-    pub fn conflict_warning(&self, command: &str) -> Option<String> {
-        let state = self.load_state().unwrap_or_default();
-        let discovered = self.discover();
-        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        let providers = provider_labels_for_command(command, &active);
-        if providers.len() <= 1 {
-            return None;
-        }
-        let selection = select_provider_for_command(command, &active, &state)?;
-        if matches!(selection.mode, ProviderSelectionMode::Preference) {
-            return None;
-        }
-        let selected = plugin_label(selection.plugin);
-        Some(format!(
-            "command `{command}` is provided by multiple plugins: {}. Using {selected}.",
-            providers.join(", ")
-        ))
-    }
-
     pub fn selected_provider_label(&self, command: &str) -> Option<String> {
         let state = self.load_state().unwrap_or_default();
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        select_provider_for_command(command, &active, &state)
-            .map(|selection| plugin_label(selection.plugin))
+        match resolve_provider_for_command(command, &active, &state, None).ok()? {
+            ProviderResolution::Selected(selection) => Some(plugin_label(selection.plugin)),
+            ProviderResolution::Ambiguous(_) => None,
+        }
     }
 
     pub fn doctor(&self) -> Result<DoctorReport> {
@@ -590,7 +654,7 @@ impl PluginManager {
         args: &[String],
         context: &PluginDispatchContext,
     ) -> std::result::Result<ResponseV1, PluginDispatchError> {
-        let provider = self.resolve_provider(command)?;
+        let provider = self.resolve_provider(command, context.provider_override.as_deref())?;
 
         let raw = run_provider(&provider, command, args, context, self.process_timeout)?;
         if raw.status_code != 0 {
@@ -643,36 +707,76 @@ impl PluginManager {
         args: &[String],
         context: &PluginDispatchContext,
     ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
-        let provider = self.resolve_provider(command)?;
+        let provider = self.resolve_provider(command, context.provider_override.as_deref())?;
         run_provider(&provider, command, args, context, self.process_timeout)
     }
 
     fn resolve_provider(
         &self,
         command: &str,
+        provider_override: Option<&str>,
     ) -> std::result::Result<DiscoveredPlugin, PluginDispatchError> {
         let state = self.load_state().unwrap_or_default();
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        let selection = select_provider_for_command(command, &active, &state);
-        if let Some(selection) = selection {
-            tracing::debug!(
-                command = %command,
-                active_providers = providers_for_command(command, &active).len(),
-                selected_provider = %selection.plugin.plugin_id,
-                selection_mode = ?selection.mode,
-                "resolved plugin provider"
-            );
-            Ok(selection.plugin.clone())
-        } else {
-            tracing::warn!(
-                command = %command,
-                active_plugins = active.len(),
-                "no plugin provider found for command"
-            );
-            Err(PluginDispatchError::CommandNotFound {
-                command: command.to_string(),
-            })
+        match resolve_provider_for_command(command, &active, &state, provider_override) {
+            Ok(ProviderResolution::Selected(selection)) => {
+                tracing::debug!(
+                    command = %command,
+                    active_providers = providers_for_command(command, &active).len(),
+                    selected_provider = %selection.plugin.plugin_id,
+                    selection_mode = ?selection.mode,
+                    "resolved plugin provider"
+                );
+                Ok(selection.plugin.clone())
+            }
+            Ok(ProviderResolution::Ambiguous(providers)) => {
+                let provider_labels = providers
+                    .iter()
+                    .copied()
+                    .map(plugin_label)
+                    .collect::<Vec<_>>();
+                tracing::warn!(
+                    command = %command,
+                    providers = provider_labels.join(", "),
+                    "plugin command requires explicit provider selection"
+                );
+                Err(PluginDispatchError::CommandAmbiguous {
+                    command: command.to_string(),
+                    providers: provider_labels,
+                })
+            }
+            Err(ProviderResolutionError::RequestedProviderUnavailable {
+                requested_provider,
+                providers,
+            }) => {
+                let provider_labels = providers
+                    .iter()
+                    .copied()
+                    .map(plugin_label)
+                    .collect::<Vec<_>>();
+                tracing::warn!(
+                    command = %command,
+                    requested_provider = %requested_provider,
+                    providers = provider_labels.join(", "),
+                    "requested plugin provider is not available for command"
+                );
+                Err(PluginDispatchError::ProviderNotFound {
+                    command: command.to_string(),
+                    requested_provider,
+                    providers: provider_labels,
+                })
+            }
+            Err(ProviderResolutionError::CommandNotFound) => {
+                tracing::warn!(
+                    command = %command,
+                    active_plugins = active.len(),
+                    "no plugin provider found for command"
+                );
+                Err(PluginDispatchError::CommandNotFound {
+                    command: command.to_string(),
+                })
+            }
         }
     }
 
@@ -1735,19 +1839,36 @@ fn providers_for_command<'a>(
         .collect()
 }
 
-fn provider_labels_for_command(command: &str, plugins: &[&DiscoveredPlugin]) -> Vec<String> {
-    providers_for_command(command, plugins)
-        .into_iter()
-        .map(plugin_label)
-        .collect()
-}
-
-fn select_provider_for_command<'a>(
+fn resolve_provider_for_command<'a>(
     command: &str,
     plugins: &[&'a DiscoveredPlugin],
     state: &PluginState,
-) -> Option<ProviderSelection<'a>> {
+    provider_override: Option<&str>,
+) -> std::result::Result<ProviderResolution<'a>, ProviderResolutionError<'a>> {
     let providers = providers_for_command(command, plugins);
+    if providers.is_empty() {
+        return Err(ProviderResolutionError::CommandNotFound);
+    }
+
+    if let Some(requested_provider) = provider_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(plugin) = providers
+            .iter()
+            .copied()
+            .find(|plugin| plugin.plugin_id == requested_provider)
+        {
+            return Ok(ProviderResolution::Selected(ProviderSelection {
+                plugin,
+                mode: ProviderSelectionMode::Override,
+            }));
+        }
+        return Err(ProviderResolutionError::RequestedProviderUnavailable {
+            requested_provider: requested_provider.to_string(),
+            providers,
+        });
+    }
 
     if let Some(preferred) = state.preferred_providers.get(command) {
         if let Some(plugin) = providers
@@ -1755,27 +1876,28 @@ fn select_provider_for_command<'a>(
             .copied()
             .find(|plugin| plugin.plugin_id == *preferred)
         {
-            return Some(ProviderSelection {
+            return Ok(ProviderResolution::Selected(ProviderSelection {
                 plugin,
                 mode: ProviderSelectionMode::Preference,
-            });
+            }));
         }
 
         tracing::trace!(
             command = %command,
             preferred_provider = %preferred,
             available_providers = providers.len(),
-            "preferred provider not available; falling back to precedence"
+            "preferred provider not available; reevaluating command provider"
         );
     }
 
-    providers
-        .into_iter()
-        .next()
-        .map(|plugin| ProviderSelection {
-            plugin,
-            mode: ProviderSelectionMode::Precedence,
-        })
+    if providers.len() == 1 {
+        return Ok(ProviderResolution::Selected(ProviderSelection {
+            plugin: providers[0],
+            mode: ProviderSelectionMode::Unique,
+        }));
+    }
+
+    Ok(ProviderResolution::Ambiguous(providers))
 }
 
 fn provider_labels_by_command(plugins: &[&DiscoveredPlugin]) -> HashMap<String, Vec<String>> {
@@ -1993,8 +2115,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn conflict_warning_reports_selected_provider() {
-        let root = make_temp_dir("osp-cli-plugin-manager-conflict-warning");
+    fn ambiguous_command_requires_explicit_selection() {
+        let root = make_temp_dir("osp-cli-plugin-manager-ambiguous-command");
         let plugins_dir = root.join("plugins");
         std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
 
@@ -2002,19 +2124,22 @@ mod tests {
         write_provider_test_plugin(&plugins_dir, "beta", "shared");
         let manager = PluginManager::new(vec![plugins_dir.clone()]);
 
-        let warning = manager
-            .conflict_warning("shared")
-            .expect("conflicted command should report warning");
-        assert!(warning.contains("multiple plugins"));
-        assert!(warning.contains("alpha (explicit)"));
-        assert!(warning.contains("beta (explicit)"));
+        let catalog = manager.command_catalog().expect("catalog should load");
+        let entry = catalog
+            .iter()
+            .find(|entry| entry.name == "shared")
+            .expect("shared command should exist");
+        assert_eq!(entry.provider, None);
+        assert!(entry.requires_selection);
+        assert!(!entry.selected_explicitly);
+        assert_eq!(manager.selected_provider_label("shared"), None);
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
     #[test]
-    fn preferred_provider_updates_catalog_and_suppresses_conflict_warning() {
+    fn preferred_provider_updates_catalog_and_resolves_command() {
         let root = make_temp_dir("osp-cli-plugin-manager-preferred-provider");
         let plugins_dir = root.join("plugins");
         let config_root = root.join("config");
@@ -2035,20 +2160,20 @@ mod tests {
             .iter()
             .find(|entry| entry.name == "shared")
             .expect("shared command should exist");
-        assert_eq!(entry.provider, "beta");
+        assert_eq!(entry.provider.as_deref(), Some("beta"));
+        assert!(!entry.requires_selection);
         assert!(entry.selected_explicitly);
         assert_eq!(
             manager.selected_provider_label("shared").as_deref(),
             Some("beta (explicit)")
         );
-        assert_eq!(manager.conflict_warning("shared"), None);
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
     #[test]
-    fn clearing_preferred_provider_restores_precedence() {
+    fn clearing_preferred_provider_requires_selection_again() {
         let root = make_temp_dir("osp-cli-plugin-manager-clear-preference");
         let plugins_dir = root.join("plugins");
         let config_root = root.join("config");
@@ -2074,14 +2199,10 @@ mod tests {
             .iter()
             .find(|entry| entry.name == "shared")
             .expect("shared command should exist");
-        assert_eq!(entry.provider, "alpha");
+        assert_eq!(entry.provider, None);
+        assert!(entry.requires_selection);
         assert!(!entry.selected_explicitly);
-        assert!(
-            manager
-                .conflict_warning("shared")
-                .expect("precedence fallback should warn")
-                .contains("Using alpha (explicit).")
-        );
+        assert_eq!(manager.selected_provider_label("shared"), None);
 
         let _ = std::fs::remove_dir_all(&root);
     }

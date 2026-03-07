@@ -44,12 +44,10 @@ This is non-negotiable for the MVP.
 
 ## What We Improve
 
-- Explicit `color` and `unicode` knobs (auto/on/off).
-- Remove ambiguous `AppInterfaceMode` values and replace with:
-  - `ui.render.mode` (plain/rich/auto)
-  - `ui.color.mode` (auto/always/never)
-  - `ui.unicode.mode` (auto/always/never)
-- Config schema includes all UI knobs (no hidden keys).
+- Explicit `mode`, `color`, and `unicode` knobs.
+- Presentation presets that seed a coherent UI profile without leaking preset
+  names into renderer logic.
+- Config schema includes all user-facing UI knobs.
 - Output choices are decided once in a central dispatcher, not in each command.
 
 ## Proposed IR (Rust)
@@ -111,15 +109,19 @@ No command-specific branches in UI selection.
 
 ## Config Knobs (Explicit)
 
-These are the core controls and should be part of schema:
+These are the core controls:
 
-- `ui.render.mode`: `auto | plain | rich`
+- `ui.mode`: `auto | plain | rich`
+- `ui.presentation`: `expressive | compact | austere`
 - `ui.color.mode`: `auto | always | never`
 - `ui.unicode.mode`: `auto | always | never`
 - `theme.name`: active theme preset name
-- `ui.ascii_borders`: legacy alias for `ui.unicode.mode = never`
 - `ui.width`: optional override for terminal width
 - `ui.format`: default output format
+- `ui.chrome.frame`: `none | top | bottom | top-bottom | square | round`
+- `ui.table.border`: `none | square | round`
+- `ui.help.layout`: `full | compact | minimal`
+- `ui.messages.layout`: `grouped | minimal`
 - `ui.short_list_max`, `ui.medium_list_max`, `ui.grid_padding`, `ui.grid_columns`
 - `ui.table.overflow`: `clip | ellipsis | wrap | none`
 
@@ -128,20 +130,78 @@ These are the core controls and should be part of schema:
 - If stdout is not a TTY, default to `plain`.
 - If `NO_COLOR` is set, colors are off.
 - If `TERM=dumb`, unicode is off.
-- If `ui.render.mode=plain`, color + unicode are disabled regardless of other settings.
+- If `ui.mode=plain`, color + unicode are disabled regardless of other settings.
+
+## Presentation Presets
+
+`ui.presentation` is a convenience preset, not a rendering backend.
+
+- `expressive`
+  - rich-friendly defaults
+  - stronger section chrome
+  - multiline prompt
+  - full help and intro density
+- `compact`
+  - simpler prompt
+  - lighter section chrome
+  - compact help
+  - grouped messages
+- `austere`
+  - plain rendering by default
+  - no section chrome
+  - square ASCII tables
+  - minimal help, intro, and messages
+
+The old `gammel-og-bitter` name is only a CLI compatibility alias. The
+canonical preset name is `austere`.
+
+## Override Precedence
+
+For user-visible UI behavior, think in this order:
+
+1. Invocation flags for one command:
+   `--json`, `--format`, `--mode`, `--color`, `--unicode`, `-v/-q`, `-d`,
+   `--plugin-provider`
+2. Session/bootstrap overrides:
+   `--presentation`, `--theme`, REPL session writes, launch context
+3. Stored config and environment
+4. `ui.presentation` seeded defaults for keys still at builtin default
+5. Builtin defaults
+
+Important rule:
+
+- explicit per-key UI settings beat the presentation preset
+- invocation flags never write back into config
+- `config explain` shows when a preset seeded the effective value
 
 ## Message Blocks
 
-Message groups on `stderr` now use themed section dividers with explicit
-message formatting modes:
+Message groups on `stderr` now use the same chrome system as other structured
+UI surfaces, with an explicit message layout knob:
 
-- `ui.messages.format`: `rules | groups | boxes` (default: `rules`)
-- `boxes` is accepted as a config alias and currently maps to `rules`
+- `ui.messages.layout`: `grouped | minimal`
+- grouped messages now use the same `ui.chrome.frame` section chrome as help,
+  intro, and command overviews
 - divider style follows unicode/ascii mode
 - divider width follows resolved output width
 
 This keeps user-facing diagnostics visually strong without mixing message
 chrome into data output.
+
+## Help Layout
+
+Help output has its own density knob:
+
+- `ui.help.layout`: `full | compact | minimal`
+- `ui.chrome.frame` still controls geometry
+- `ui.help.layout` controls spacing and body density
+
+This keeps help readable without overloading the chrome setting.
+
+Presentation presets are visible in `config explain` when they materially
+change an effective UI value. The raw config winner still stays visible, and
+the explain output adds a `presentation` section with the preset, its source,
+and the seeded effective value.
 
 ## Prompt Styling
 
@@ -152,24 +212,96 @@ REPL prompt visuals are config-seeded and theme-aware:
 - `repl.simple_prompt`
 - `repl.shell_indicator`
 - `repl.intro`
+- `repl.intro.style`
 - `color.prompt.text`
 - `color.prompt.command`
+- `color.text`
+- `color.key`
+- `color.value`
+- `color.message.error`
+- `color.message.warning`
+- `color.message.success`
+- `color.message.info`
+- `color.message.trace`
 
 If prompt color keys are unset, semantic theme tokens are used.
 
+Current presentation behavior:
+
+- `expressive` keeps the multiline prompt template and full intro chrome
+- `compact` uses the simple single-line prompt and minimal intro
+- `austere` uses the simple single-line prompt, minimal intro, minimal help,
+  and minimal message layout
+
 ## CLI Flags
 
-These map directly to in-memory session config overrides:
+These are invocation-local overrides:
 
 - `--format {json,table,mreg,value,md,auto}`
 - `--mode {plain,rich,auto}`
 - `--color {auto,always,never}` and `--no-color`
 - `--unicode {auto,always,never}` and `--ascii`
-- `--theme <name>`
+- `--theme <name>` remains a bootstrap/session concern
 
-Command-local flags are still more specific than the session default for that
-invocation. In config introspection these launch defaults may show up as
-`source=session`.
+Formatting flags do not write into config state. They override the effective
+render settings for the current invocation only.
+
+## Examples
+
+Logging-friendly plain output:
+
+```toml
+[default]
+ui.mode = "plain"
+ui.color.mode = "never"
+ui.unicode.mode = "never"
+ui.chrome.frame = "none"
+ui.table.border = "square"
+ui.messages.layout = "minimal"
+```
+
+Compact REPL:
+
+```toml
+[terminal.repl]
+ui.presentation = "compact"
+repl.simple_prompt = true
+ui.help.layout = "compact"
+```
+
+Austere operator profile:
+
+```toml
+[profile.ops]
+ui.presentation = "austere"
+ui.table.border = "square"
+ui.messages.layout = "minimal"
+repl.intro.style = "minimal"
+```
+
+One-shot override without changing defaults:
+
+```bash
+osp --presentation compact ldap user alice
+osp ldap user alice --json
+osp repl
+```
+
+## Benchmark Target
+
+There is now a small benchmark example for representative renderer workloads:
+
+```bash
+cargo run -p osp-ui --example render_bench --release -- 500
+```
+
+It measures:
+
+- rich table rendering
+- plain table rendering
+- rich JSON rendering
+- rich MREG rendering
+- grouped message rendering
 
 ## Clipboard
 

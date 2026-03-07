@@ -10,8 +10,12 @@ use osp_ui::theme::DEFAULT_THEME_NAME;
 
 use crate::cli::ConfigExplainArgs;
 use crate::state::{RuntimeContext, UiState};
+use crate::ui_presentation::explain_presentation_effect;
 
-use super::{CliCommandResult, DEFAULT_REPL_PROMPT, RuntimeConfigRequest};
+use super::{
+    CliCommandResult, DEFAULT_REPL_PROMPT, RuntimeConfigRequest, document_from_json,
+    document_from_text,
+};
 
 pub(crate) struct ConfigExplainContext<'a> {
     pub(crate) context: &'a RuntimeContext,
@@ -47,20 +51,17 @@ pub(crate) fn config_explain_result(
             messages,
             output: None,
             stderr_text: None,
+            failure_report: None,
         });
     }
 
     if matches!(context.ui.render_settings.format, OutputFormat::Json) {
-        let payload = config_explain_json(&explain, args.show_secrets);
-        return Ok(CliCommandResult::text(format!(
-            "{}\n",
-            serde_json::to_string_pretty(&payload).into_diagnostic()?
-        )));
+        let payload = config_explain_json(&explain, context.config, args.show_secrets);
+        return Ok(CliCommandResult::document(document_from_json(payload)));
     }
 
-    Ok(CliCommandResult::text(render_config_explain_text(
-        &explain,
-        args.show_secrets,
+    Ok(CliCommandResult::document(document_from_text(
+        &render_config_explain_text(&explain, context.config, args.show_secrets),
     )))
 }
 
@@ -115,7 +116,11 @@ pub(crate) fn explain_runtime_config(
         .wrap_err("config explain failed")
 }
 
-pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: bool) -> String {
+pub(crate) fn render_config_explain_text(
+    explain: &ConfigExplain,
+    config: &ResolvedConfig,
+    show_secrets: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("key: {}\n", explain.key));
     out.push_str(&format!(
@@ -143,6 +148,28 @@ pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: 
         ));
     } else {
         out.push_str("value: not set\n\n");
+    }
+
+    if let Some(effect) = explain_presentation_effect(config, &explain.key) {
+        out.push_str("presentation:\n");
+        out.push_str(&format!("  preset: {}\n", effect.preset.as_config_value()));
+        out.push_str(&format!("  preset_source: {}\n", effect.preset_source));
+        out.push_str(&format!(
+            "  preset_scope: {}\n",
+            format_scope(&effect.preset_scope)
+        ));
+        out.push_str(&format!(
+            "  preset_origin: {}\n",
+            effect.preset_origin.as_deref().unwrap_or("-")
+        ));
+        out.push_str(&format!(
+            "  effective_value: {} ({})\n",
+            display_value(&explain.key, &effect.effective_value, show_secrets),
+            config_value_type(&effect.effective_value)
+        ));
+        out.push_str(
+            "  note: key kept its builtin default, so ui.presentation seeds the effective UI value\n\n",
+        );
     }
 
     out.push_str("context:\n");
@@ -209,6 +236,7 @@ pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: 
 
 pub(crate) fn config_explain_json(
     explain: &ConfigExplain,
+    config: &ResolvedConfig,
     show_secrets: bool,
 ) -> serde_json::Value {
     let mut root = serde_json::Map::new();
@@ -326,6 +354,43 @@ pub(crate) fn config_explain_json(
         section.insert("steps".to_string(), serde_json::Value::Array(steps));
         root.insert(
             "interpolation".to_string(),
+            serde_json::Value::Object(section),
+        );
+    }
+
+    if let Some(effect) = explain_presentation_effect(config, &explain.key) {
+        let mut section = serde_json::Map::new();
+        section.insert("preset".to_string(), effect.preset.as_config_value().into());
+        section.insert(
+            "preset_source".to_string(),
+            effect.preset_source.to_string().into(),
+        );
+        section.insert(
+            "preset_scope".to_string(),
+            format_scope(&effect.preset_scope).into(),
+        );
+        section.insert(
+            "preset_origin".to_string(),
+            effect
+                .preset_origin
+                .map_or(serde_json::Value::Null, Into::into),
+        );
+        section.insert(
+            "effective_value".to_string(),
+            redact_value_json(&explain.key, &effect.effective_value, show_secrets),
+        );
+        section.insert(
+            "effective_value_type".to_string(),
+            config_value_type(&effect.effective_value)
+                .to_string()
+                .into(),
+        );
+        section.insert(
+            "note".to_string(),
+            "key kept its builtin default, so ui.presentation seeds the effective UI value".into(),
+        );
+        root.insert(
+            "presentation".to_string(),
             serde_json::Value::Object(section),
         );
     }
@@ -513,4 +578,89 @@ fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
     }
 
     prefix_matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+
+    fn resolved_config_and_explain(
+        key: &str,
+        defaults: &[(&str, &str)],
+        file: &[(&str, &str)],
+        session: &[(&str, &str)],
+    ) -> (ResolvedConfig, ConfigExplain) {
+        let mut resolver = ConfigResolver::default();
+
+        let mut defaults_layer = ConfigLayer::default();
+        defaults_layer.set("profile.default", "default");
+        for (entry_key, value) in defaults {
+            defaults_layer.set(*entry_key, *value);
+        }
+        resolver.set_defaults(defaults_layer);
+
+        let mut file_layer = ConfigLayer::default();
+        for (entry_key, value) in file {
+            file_layer.set(*entry_key, *value);
+        }
+        resolver.set_file(file_layer);
+
+        let mut session_layer = ConfigLayer::default();
+        for (entry_key, value) in session {
+            session_layer.set(*entry_key, *value);
+        }
+        resolver.set_session(session_layer);
+
+        let options = ResolveOptions::default().with_terminal("repl");
+        let config = resolver
+            .resolve(options.clone())
+            .expect("config should resolve");
+        let explain = resolver
+            .explain_key(key, options)
+            .expect("config explain should resolve");
+        (config, explain)
+    }
+
+    #[test]
+    fn config_explain_text_surfaces_presentation_effect_unit() {
+        let (config, explain) = resolved_config_and_explain(
+            "ui.help.layout",
+            &[
+                ("ui.presentation", "expressive"),
+                ("ui.help.layout", "full"),
+            ],
+            &[],
+            &[("ui.presentation", "austere")],
+        );
+
+        let rendered = render_config_explain_text(&explain, &config, false);
+
+        assert!(rendered.contains("value: full (string)"));
+        assert!(rendered.contains("presentation:"));
+        assert!(rendered.contains("preset: austere"));
+        assert!(rendered.contains("preset_source: session"));
+        assert!(rendered.contains("effective_value: minimal (string)"));
+    }
+
+    #[test]
+    fn config_explain_json_surfaces_presentation_effect_unit() {
+        let (config, explain) = resolved_config_and_explain(
+            "ui.help.layout",
+            &[
+                ("ui.presentation", "expressive"),
+                ("ui.help.layout", "full"),
+            ],
+            &[],
+            &[("ui.presentation", "austere")],
+        );
+
+        let payload = config_explain_json(&explain, &config, false);
+
+        assert_eq!(payload["value"], "full");
+        assert_eq!(payload["presentation"]["preset"], "austere");
+        assert_eq!(payload["presentation"]["preset_source"], "session");
+        assert_eq!(payload["presentation"]["effective_value"], "minimal");
+        assert_eq!(payload["presentation"]["effective_value_type"], "string");
+    }
 }

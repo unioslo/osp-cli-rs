@@ -18,9 +18,15 @@ pub(crate) fn history_command_spec() -> CommandSpec {
     CommandSpec::new(CMD_HISTORY)
         .tooltip("Inspect or prune REPL history")
         .subcommands([
-            CommandSpec::new(CMD_LIST).tooltip("List recent history"),
-            CommandSpec::new("prune").tooltip("Keep last N entries"),
-            CommandSpec::new("clear").tooltip("Clear history"),
+            CommandSpec::new(CMD_LIST)
+                .tooltip("List recent history")
+                .sort("10"),
+            CommandSpec::new("prune")
+                .tooltip("Keep last N entries")
+                .sort("11"),
+            CommandSpec::new("clear")
+                .tooltip("Clear history")
+                .sort("12"),
         ])
 }
 
@@ -97,6 +103,7 @@ pub(crate) fn run_history_repl_command(
     }
 
     let scope = repl_history_scope(session);
+    let scope_label = history_scope_label(session);
     match args.command {
         HistoryCommands::List => {
             let rows = history_entries_rows(history.list_entries_for(scope.as_deref()));
@@ -109,16 +116,24 @@ pub(crate) fn run_history_repl_command(
             let removed = history
                 .prune_for(keep, scope.as_deref())
                 .map_err(|err| miette!(err.to_string()))?;
-            Ok(ReplCommandOutput::Text(format!(
-                "Removed {removed} entr{}.\n",
-                if removed == 1 { "y" } else { "ies" }
-            )))
+            Ok(ReplCommandOutput::Text(if removed == 0 {
+                format!("No entries removed from {scope_label}.\n")
+            } else {
+                format!(
+                    "Removed {removed} entr{} from {scope_label}.\n",
+                    if removed == 1 { "y" } else { "ies" }
+                )
+            }))
         }
         HistoryCommands::Clear => {
-            history
+            let removed = history
                 .clear_for(scope.as_deref())
                 .map_err(|err| miette!(err.to_string()))?;
-            Ok(ReplCommandOutput::Text("History cleared.\n".to_string()))
+            Ok(ReplCommandOutput::Text(if removed == 0 {
+                format!("{scope_label} is already empty.\n")
+            } else {
+                format!("Cleared {scope_label}.\n")
+            }))
         }
     }
 }
@@ -176,9 +191,18 @@ fn repl_history_scope(session: &AppSession) -> Option<String> {
     }
 }
 
+fn history_scope_label(session: &AppSession) -> String {
+    session
+        .scope
+        .display_label()
+        .map(|label| format!("{label} shell history"))
+        .unwrap_or_else(|| "root history".to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::repl_history_exclude_patterns;
+    use super::{history_scope_label, repl_history_exclude_patterns};
+    use crate::state::AppSession;
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
 
     #[test]
@@ -220,5 +244,15 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn history_scope_label_tracks_current_shell_unit() {
+        let mut session = AppSession::with_cache_limit(8);
+        assert_eq!(history_scope_label(&session), "root history");
+
+        session.scope.enter("orch");
+        session.scope.enter("vm");
+        assert_eq!(history_scope_label(&session), "orch / vm shell history");
     }
 }

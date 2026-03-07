@@ -8,6 +8,9 @@ use osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 
 use crate::cli::Cli;
 use crate::theme_loader;
+use crate::ui_presentation::{
+    HelpLayout, UiPresentation, apply_presentation_preset, effective_help_layout,
+};
 
 use super::{
     RuntimeConfigRequest, build_render_runtime, normalize_profile_override,
@@ -18,10 +21,12 @@ use super::{
 pub(crate) struct HelpRenderOverrides {
     pub(crate) profile: Option<String>,
     pub(crate) theme: Option<String>,
+    pub(crate) presentation: Option<UiPresentation>,
     pub(crate) mode: Option<RenderMode>,
     pub(crate) color: Option<ColorMode>,
     pub(crate) unicode: Option<UnicodeMode>,
     pub(crate) ascii_legacy: bool,
+    pub(crate) gammel_og_bitter: bool,
     pub(crate) no_env: bool,
     pub(crate) no_config_file: bool,
 }
@@ -35,7 +40,12 @@ impl HelpRenderOverrides {
     }
 }
 
-pub(crate) fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
+pub(crate) struct HelpRenderContext {
+    pub(crate) settings: RenderSettings,
+    pub(crate) layout: HelpLayout,
+}
+
+pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
     let overrides = parse_help_render_overrides(args);
     let profile_override = normalize_profile_override(overrides.profile.clone());
     let config = resolve_runtime_config(
@@ -47,10 +57,12 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
 
     let default_cli = Cli::try_parse_from(["osp"]).expect("default cli parse should succeed");
     let mut settings = default_cli.render_settings();
+    let mut layout = HelpLayout::Full;
     settings.runtime = build_render_runtime(std::env::var("TERM").ok().as_deref());
     if let Some(config) = config.as_ref() {
         let loaded = theme_loader::load_theme_catalog(config);
         default_cli.seed_render_settings_from_config(&mut settings, config);
+        layout = effective_help_layout(config);
         settings.width = Some(resolve_default_render_width(config));
         let selected = default_cli.selected_theme_name(config);
         settings.theme_name = resolve_known_theme_name(selected.as_str(), &loaded)
@@ -59,6 +71,26 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
             .resolve(&settings.theme_name)
             .map(|entry| entry.theme.clone());
         catalog = Some(loaded);
+    }
+
+    if overrides.gammel_og_bitter {
+        apply_presentation_preset(
+            &mut settings,
+            UiPresentation::Austere,
+            true,
+            true,
+            true,
+            true,
+            true,
+        );
+        layout = HelpLayout::Minimal;
+    } else if let Some(presentation) = overrides.presentation {
+        apply_presentation_preset(&mut settings, presentation, true, true, true, true, true);
+        layout = match presentation {
+            UiPresentation::Expressive => HelpLayout::Full,
+            UiPresentation::Compact => HelpLayout::Compact,
+            UiPresentation::Austere => HelpLayout::Minimal,
+        };
     }
 
     if let Some(mode) = overrides.mode {
@@ -89,7 +121,7 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> RenderSettings {
         Some(osp_ui::theme::resolve_theme(&settings.theme_name))
     };
 
-    settings
+    HelpRenderContext { settings, layout }
 }
 
 pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverrides {
@@ -111,6 +143,10 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
             if !value.trim().is_empty() {
                 out.theme = Some(value.trim().to_string());
             }
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--presentation=") {
+            out.presentation = UiPresentation::parse(value);
             continue;
         }
         if let Some(value) = token.strip_prefix("--mode=") {
@@ -140,6 +176,15 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
                     && !value.starts_with('-')
                 {
                     out.theme = Some(value.to_string());
+                    iter.next();
+                }
+            }
+            "--presentation" => {
+                if let Some(value) = iter.peek().copied()
+                    && !value.starts_with('-')
+                    && let Some(parsed) = UiPresentation::parse(value)
+                {
+                    out.presentation = Some(parsed);
                     iter.next();
                 }
             }
@@ -173,6 +218,7 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
             "--no-env" => out.no_env = true,
             "--no-config" | "--no-config-file" => out.no_config_file = true,
             "--ascii" => out.ascii_legacy = true,
+            "--gammel-og-bitter" => out.gammel_og_bitter = true,
             _ => {}
         }
     }

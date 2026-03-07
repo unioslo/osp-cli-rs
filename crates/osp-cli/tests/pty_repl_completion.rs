@@ -31,7 +31,19 @@ fn make_temp_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
+fn write_repl_config(home: &PathBuf, config: &str) {
+    let config_dir = home.join(".config").join("osp");
+    std::fs::create_dir_all(&config_dir).expect("config dir should be created");
+    std::fs::write(config_dir.join("config.toml"), config).expect("config should be written");
+}
+
+#[cfg(unix)]
 fn spawn_repl(trace: bool) -> PtySession {
+    spawn_repl_with_config(trace, None)
+}
+
+#[cfg(unix)]
+fn spawn_repl_with_config(trace: bool, config: Option<&str>) -> PtySession {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -45,6 +57,10 @@ fn spawn_repl(trace: bool) -> PtySession {
     let home = make_temp_dir("osp-cli-pty-home");
     let plugins = make_temp_dir("osp-cli-pty-plugins");
     let bin = PathBuf::from(env!("CARGO_BIN_EXE_osp"));
+
+    if let Some(config) = config {
+        write_repl_config(&home, config);
+    }
 
     let mut cmd = CommandBuilder::new(bin);
     cmd.env("HOME", &home);
@@ -197,7 +213,7 @@ fn repl_tab_opens_menu_and_moves_selection() {
         wait_for_output_since(
             &session.output,
             start,
-            "\"buffer_after\":\"config\"",
+            "\"buffer_after\":\"help\"",
             Duration::from_secs(3)
         ),
         "expected buffer to update on cycle; output:\n{}",
@@ -284,6 +300,70 @@ fn repl_tab_accepts_single_visible_completion() {
             Duration::from_secs(3)
         ),
         "expected tab to accept visible single completion; output:\n{}",
+        output_snapshot(&session.output, 2000),
+    );
+
+    write_bytes(&mut session, b"\x03");
+    write_bytes(&mut session, b"exit\r\r");
+    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_completion_respects_leading_invocation_flags() {
+    let mut session = spawn_repl(true);
+
+    write_bytes(&mut session, b"--json he");
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\t");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\"buffer_after\":\"--json help\"",
+            Duration::from_secs(3)
+        ),
+        "expected completion to preserve invocation flag and complete command; output:\n{}",
+        output_snapshot(&session.output, 2000),
+    );
+
+    write_bytes(&mut session, b"\x03");
+    write_bytes(&mut session, b"exit\r\r");
+    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_completion_resolves_fixed_key_aliases_end_to_end() {
+    let mut session = spawn_repl_with_config(
+        true,
+        Some(
+            r#"
+[default]
+alias.pres = "config set ui.presentation"
+"#,
+        ),
+    );
+
+    write_bytes(&mut session, b"pres au");
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\t");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\"buffer_after\":\"pres austere \"",
+            Duration::from_secs(3)
+        ),
+        "expected fixed-key alias completion to resolve through alias context; output:\n{}",
         output_snapshot(&session.output, 2000),
     );
 

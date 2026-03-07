@@ -7,6 +7,7 @@ pub struct CommandSpec {
     /// Declarative command description used to build the plain completion tree.
     pub name: String,
     pub tooltip: Option<String>,
+    pub sort: Option<String>,
     pub args: Vec<ArgNode>,
     pub flags: BTreeMap<String, FlagNode>,
     pub subcommands: Vec<CommandSpec>,
@@ -22,6 +23,11 @@ impl CommandSpec {
 
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn sort(mut self, sort: impl Into<String>) -> Self {
+        self.sort = Some(sort.into());
         self
     }
 
@@ -126,6 +132,7 @@ impl CompletionTreeBuilder {
     fn node_from_spec(spec: &CommandSpec) -> CompletionNode {
         let mut node = CompletionNode {
             tooltip: spec.tooltip.clone(),
+            sort: spec.sort.clone(),
             args: spec.args.clone(),
             flags: spec.flags.clone(),
             ..CompletionNode::default()

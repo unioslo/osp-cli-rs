@@ -233,10 +233,16 @@ pub struct CompletionNode {
     /// A node can expose child commands, flags, positional arguments, or
     /// value-like leaves for config-style key completion.
     pub tooltip: Option<String>,
+    /// Optional suggestion-order hint for command/subcommand completion.
+    pub sort: Option<String>,
     /// This node expects the next token to be a key chosen from `children`.
     pub value_key: bool,
     /// This node is itself a terminal value that can be suggested/accepted.
     pub value_leaf: bool,
+    /// Hidden context flags injected when this node is matched.
+    pub prefilled_flags: BTreeMap<String, Vec<String>>,
+    /// Fixed positional values contributed before user-provided args.
+    pub prefilled_positionals: Vec<String>,
     pub children: BTreeMap<String, CompletionNode>,
     pub flags: BTreeMap<String, FlagNode>,
     pub args: Vec<ArgNode>,
@@ -244,6 +250,11 @@ pub struct CompletionNode {
 }
 
 impl CompletionNode {
+    pub fn sort(mut self, sort: impl Into<String>) -> Self {
+        self.sort = Some(sort.into());
+        self
+    }
+
     pub fn with_child(mut self, name: impl Into<String>, node: CompletionNode) -> Self {
         self.children.insert(name.into(), node);
         self
@@ -356,6 +367,19 @@ impl CommandLine {
             .entry(name.into())
             .or_default()
             .extend(values);
+    }
+
+    pub fn prepend_positional_values(&mut self, values: impl IntoIterator<Item = String>) {
+        let mut values = values
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .map(TailItem::Positional)
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            return;
+        }
+        values.extend(std::mem::take(&mut self.tail));
+        self.tail = values;
     }
 
     pub fn set_pipe(&mut self, pipes: Vec<String>) {

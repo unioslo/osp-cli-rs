@@ -93,7 +93,11 @@ The following must stay green:
 - Markdown renderer now supports alignment-aware separators and padded columns.
 - MREG grid layout now uses column-wise fill and list-threshold decisions from
   render settings.
-- Message rendering switched to `ui.messages.format` (`rules|groups|boxes`).
+- Message rendering now uses `ui.messages.layout` (`grouped|minimal`).
+- Grouped message sections share the same `ui.chrome.frame` renderer path as
+  help and intro surfaces.
+- Help rendering now uses `ui.help.layout` (`full|compact|minimal`) for
+  spacing/body density, separate from chrome geometry.
 - Line parts can carry style tokens and are rendered accordingly in rich mode.
 - Layout context now keys metrics by stable block id, not enumeration index, to
   avoid drift when block ordering changes.
@@ -110,8 +114,9 @@ The following must stay green:
 
 ### Remaining for the 80% -> 95% tranche
 
-- Add non-default table alignment metadata plumbing from grouped payloads to
-  markdown/grid renderers.
-- Add richer value-style mapping from config keys (`color.value.*`,
-  `color.panel.title`, etc.) instead of theme-only token mapping.
+- Keep alignment metadata flowing from `OutputMeta` into grouped and row-based
+  table documents for both markdown and grid renderers.
+- Keep expanding semantic style coverage only where genuinely needed, but
+  generic config keys should already flow through value/code/message surfaces
+  instead of being silently ignored.
 - Add doc/help panel formatting parity and richer code/JSON styling options.

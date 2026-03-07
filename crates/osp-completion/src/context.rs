@@ -47,7 +47,8 @@ impl<'a> TreeResolver<'a> {
     }
 
     pub(crate) fn resolve_flag_scope_path(&self, matched_path: &[String]) -> Vec<String> {
-        for i in (0..=matched_path.len()).rev() {
+        let floor = if matched_path.is_empty() { 0 } else { 1 };
+        for i in (floor..=matched_path.len()).rev() {
             let prefix = &matched_path[..i];
             let Some(node) = self.resolve_exact(prefix) else {
                 continue;
@@ -56,7 +57,11 @@ impl<'a> TreeResolver<'a> {
                 return prefix.to_vec();
             }
         }
-        Vec::new()
+        if matched_path.is_empty() {
+            Vec::new()
+        } else {
+            matched_path.to_vec()
+        }
     }
 
     pub(crate) fn resolve_context(&self, path: &[String]) -> (&'a CompletionNode, Vec<String>) {

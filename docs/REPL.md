@@ -44,24 +44,41 @@ No login flow is required in MVP.
 Prompt appearance is now config-seeded (with CLI color/unicode/mode overrides
 still respected):
 
+- `ui.presentation`
 - `repl.prompt`: multiline template (`{user}`, `{domain}`, `{profile}`,
   `{context}`, `{indicator}`)
 - `repl.simple_prompt`: one-line prompt mode (`<profile> >`)
 - `repl.shell_indicator`: template for shell stack display (`{shell}`)
 - `repl.intro`: show/hide startup intro banner
+- `repl.intro.style`: `full | minimal | none`
+- `ui.help.layout`: `full | compact | minimal`
+- `ui.messages.layout`: `grouped | minimal`
+- `ui.chrome.frame`
 - `color.prompt.text`: optional explicit style spec for prompt text
 - `color.prompt.command`: optional explicit style spec for profile/command part
 
+Current preset behavior:
+
+- `expressive` keeps the multiline prompt and full intro
+- `compact` prefers the simple prompt and minimal intro
+- `austere` prefers the simple prompt, minimal intro, and minimal help/message
+  density
+
 ## Scope
 
-Phase 1 focuses on:
+The REPL now supports:
 
-- prompt
-- history
-- Ctrl-D exit
-- basic completion of command names and flags
+- prompt and intro profiles
+- shell-scoped history
+- command/flag completion
+- invocation-local flags such as `--json`, `--mode`, `-q`, and `--cache`
+- inline help/error recovery for partial builtin commands
 
-Advanced features such as hot reload and deep completion can follow later.
+Config mutation behavior:
+
+- `config set` in REPL defaults to session scope
+- prompt/theme/presentation changes rebuild the REPL state on the next cycle
+- use `--save` when you want the change persisted
 
 ## Completion integration
 

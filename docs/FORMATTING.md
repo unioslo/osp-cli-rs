@@ -42,7 +42,7 @@ struct CommandResult {
 5. Render using plain or rich renderer.
 6. Copy if requested or `wants_copy` is set.
 
-## Output Flags (Rust CLI)
+## Output Flags (CLI and REPL)
 
 We keep the same user-facing flags:
 
@@ -52,21 +52,25 @@ We keep the same user-facing flags:
 - `--unicode {auto,always,never}` + `--ascii`
 - `--copy`
 
-Legacy flags (`--json`, `--table`, `--value`, `--md`, `--rich`, `--plain`) can
-be supported temporarily, but should not be advertised.
+Convenience aliases (`--json`, `--table`, `--value`, `--md`, `--mreg`,
+`--rich`, `--plain`) normalize immediately into the canonical settings above.
 
-## Current Session Semantics
+## Current Invocation Semantics
 
-The current Rust CLI uses one in-memory session layer for formatting defaults:
+Formatting and verbosity flags are invocation-local in both CLI and REPL:
 
-- launch `osp --json`, `osp --mode plain`, `osp --color never`, `osp --ascii`
-  seed session-scoped config values
-- REPL `config set --session ui.format ...` writes into that same layer
-- REPL reload rebuilds from that layer
-- command-local formatting flags stay ephemeral and do not persist
+- `osp ldap user alice --json`
+- `osp ldap user alice --format table`
+- `ldap user alice --json`
+- `ldap user alice -vv -d`
 
-This means config introspection may show launch formatting flags as
-`source=session`, which is intentional.
+Rules:
+
+- flags may appear anywhere before `--`
+- they affect only the current invocation
+- they do not seed the session config layer
+- persistent defaults still belong in config (`config set ui.format ...`)
+- `--` ends host-level scanning and passes remaining tokens through literally
 
 ## Caching (REPL)
 

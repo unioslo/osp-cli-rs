@@ -84,7 +84,8 @@ Rules:
   ],
   "meta": {
     "format_hint": "table",
-    "columns": ["uid", "cn"]
+    "columns": ["uid", "cn"],
+    "column_align": ["left", "default"]
   }
 }
 ```
@@ -95,6 +96,9 @@ Rules:
 - `ok=false` implies `error` is present.
 - `data` is always present (empty object/array is allowed).
 - `messages` is optional and defaults to an empty list.
+- `meta.columns` controls column order when the payload is rendered as a table.
+- `meta.column_align` is optional and follows `meta.columns` positionally.
+  Allowed values: `default | left | center | right`.
 
 Message levels:
 - `error`

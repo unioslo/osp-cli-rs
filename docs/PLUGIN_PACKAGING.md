@@ -11,7 +11,8 @@ This document defines how to ship `osp` with optional bundled plugins.
 
 ## Discovery Order
 
-Discovery is deterministic and stops on first provider for a command.
+Discovery order is deterministic, but command dispatch no longer auto-selects the
+first provider when multiple active plugins expose the same command.
 
 1. `--plugin-dir <dir>` (explicit CLI override)
 2. `OSP_PLUGIN_PATH` (colon-separated directories)
@@ -20,7 +21,13 @@ Discovery is deterministic and stops on first provider for a command.
 5. `PATH` (`osp-*` executables)
 
 Conflict rule:
-- First match wins.
+- If exactly one active plugin provides a command, dispatch uses it.
+- If multiple active plugins provide a command, dispatch requires either:
+  - a one-shot override via `osp <command> --plugin-provider <plugin-id> ...`
+    (`--plugin-provider` is accepted anywhere before `--`)
+  - or a persisted default via `osp plugins select-provider <command> <plugin-id>`
+- `osp plugins commands` and REPL help/completion surface unresolved conflicts
+  without inventing a merged grammar.
 - Conflicts are surfaced by `osp plugins doctor`.
 
 ## Bundled Layout (Suggested)
@@ -82,7 +89,10 @@ Example:
 ```json
 {
   "enabled": ["uio-ldap"],
-  "disabled": ["uio-mreg"]
+  "disabled": ["uio-mreg"],
+  "preferred_providers": {
+    "ldap": "uio-ldap"
+  }
 }
 ```
 
@@ -93,6 +103,9 @@ Backbone behavior:
 ## Operational Commands
 
 - `osp plugins list`
+- `osp plugins commands`
 - `osp plugins enable <plugin-id>`
 - `osp plugins disable <plugin-id>`
+- `osp plugins select-provider <command> <plugin-id>`
+- `osp plugins clear-provider <command>`
 - `osp plugins doctor`

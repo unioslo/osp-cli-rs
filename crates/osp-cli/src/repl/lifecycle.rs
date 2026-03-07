@@ -41,7 +41,7 @@ impl ReplLoopState {
             *session = next_session;
             *clients = next_clients;
         }
-        ReplCycle::prepare(runtime, session, clients)
+        ReplCycle::prepare(runtime, session, clients, self.show_intro)
     }
 
     pub(super) fn render_cycle_chrome(&mut self, view: ReplViewContext<'_>, help_text: &str) {
@@ -84,12 +84,17 @@ impl ReplCycle {
         runtime: &mut AppRuntime,
         session: &mut AppSession,
         clients: &AppClients,
+        include_help_text: bool,
     ) -> Result<Self> {
         let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
         let view = ReplViewContext::from_parts(runtime, session);
         let surface = surface::build_repl_surface(view, &catalog);
         let completion_tree = completion::build_repl_completion_tree(view, &surface);
-        let help_text = render_repl_command_overview(view, &surface);
+        let help_text = if include_help_text {
+            render_repl_command_overview(view, &surface)
+        } else {
+            String::new()
+        };
 
         Ok(Self {
             prompt: build_repl_prompt(view),

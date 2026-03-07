@@ -300,6 +300,115 @@ ui.mode = "plain"
 
 #[cfg(unix)]
 #[test]
+fn config_explain_json_stdout_is_machine_parseable_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-parseable");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+ui.mode = "plain"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "explain", "ui.mode"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let payload = parse_json_stdout(&output.stdout);
+    assert_eq!(payload["key"], "ui.mode");
+    assert_eq!(payload["value"], "plain");
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_explain_reports_presentation_seeded_effective_values_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-presentation");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "--presentation",
+        "austere",
+        "config",
+        "explain",
+        "ui.help.layout",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\": \"full\""))
+        .stdout(predicate::str::contains("\"presentation\""))
+        .stdout(predicate::str::contains("\"preset\": \"austere\""))
+        .stdout(predicate::str::contains("\"preset_source\": \"session\""))
+        .stdout(predicate::str::contains("\"effective_value\": \"minimal\""));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_set_explain_json_keeps_messages_off_stdout_contract() {
+    let home = make_temp_dir("osp-cli-config-set-explain-json");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--json",
+            "config",
+            "set",
+            "--session",
+            "ui.mode",
+            "plain",
+            "--explain",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let payload = parse_json_stdout(&output.stdout);
+    assert_eq!(payload["key"], "ui.mode");
+    assert_eq!(payload["value"], "plain");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("set value for ui.mode"),
+        "expected success message on stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn config_explain_profile_default_uses_bootstrap_view_contract() {
     let home = make_temp_dir("osp-cli-config-explain-default-profile");
     write_config(
@@ -649,7 +758,7 @@ ui.mode = "plain"
 
 #[cfg(unix)]
 #[test]
-fn launch_json_flag_seeds_session_format_contract() {
+fn launch_json_flag_formats_output_without_mutating_config_contract() {
     let home = make_temp_dir("osp-cli-config-launch-json");
     write_config(
         &home,
@@ -670,8 +779,8 @@ ui.format = "table"
     ]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("\"source\": \"session\""))
-        .stdout(predicate::str::contains("\"value\": \"json\""));
+        .stdout(predicate::str::contains("\"source\": \"file\""))
+        .stdout(predicate::str::contains("\"value\": \"table\""));
 
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -975,4 +1084,14 @@ fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
     dir.push(format!("{prefix}-{nonce}"));
     std::fs::create_dir_all(&dir).expect("temp dir should be created");
     dir
+}
+
+#[cfg(unix)]
+fn parse_json_stdout(stdout: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(stdout).unwrap_or_else(|err| {
+        panic!(
+            "stdout should be valid json: {err}\n{}",
+            String::from_utf8_lossy(stdout)
+        )
+    })
 }

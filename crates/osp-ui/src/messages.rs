@@ -1,7 +1,5 @@
 use crate::document::{Block, Document, LineBlock, LinePart};
-use crate::format::message::{
-    MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules,
-};
+use crate::inline::render_inline;
 use crate::renderer::render_document;
 use crate::style::{StyleOverrides, StyleToken, apply_style_with_theme_overrides};
 use crate::theme::ThemeDefinition;
@@ -47,16 +45,6 @@ impl MessageLevel {
         }
     }
 
-    fn as_kind(self) -> MessageKind {
-        match self {
-            MessageLevel::Error => MessageKind::Error,
-            MessageLevel::Warning => MessageKind::Warning,
-            MessageLevel::Success => MessageKind::Success,
-            MessageLevel::Info => MessageKind::Info,
-            MessageLevel::Trace => MessageKind::Trace,
-        }
-    }
-
     fn from_rank(rank: i8) -> Self {
         match rank {
             i8::MIN..=0 => MessageLevel::Error,
@@ -69,16 +57,41 @@ impl MessageLevel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageRenderFormat {
-    Groups,
-    Rules,
+pub enum MessageLayout {
+    Minimal,
+    Grouped,
 }
 
-impl MessageRenderFormat {
+impl MessageLayout {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "groups" | "grouped" | "plain" => Some(Self::Groups),
-            "rules" | "panel" | "boxes" | "boxed" => Some(Self::Rules),
+            "minimal" => Some(Self::Minimal),
+            "grouped" => Some(Self::Grouped),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SectionFrameStyle {
+    None,
+    #[default]
+    Top,
+    Bottom,
+    TopBottom,
+    Square,
+    Round,
+}
+
+impl SectionFrameStyle {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" | "plain" => Some(Self::None),
+            "top" | "rule-top" => Some(Self::Top),
+            "bottom" | "rule-bottom" => Some(Self::Bottom),
+            "top-bottom" | "both" | "rules" => Some(Self::TopBottom),
+            "square" | "box" | "boxed" => Some(Self::Square),
+            "round" | "rounded" => Some(Self::Round),
             _ => None,
         }
     }
@@ -102,7 +115,8 @@ pub struct GroupedRenderOptions<'a> {
     pub unicode: bool,
     pub width: Option<usize>,
     pub theme: &'a ThemeDefinition,
-    pub format: MessageRenderFormat,
+    pub layout: MessageLayout,
+    pub chrome_frame: SectionFrameStyle,
     pub style_overrides: StyleOverrides,
 }
 
@@ -146,7 +160,7 @@ impl MessageBuffer {
             false,
             None,
             &theme,
-            MessageRenderFormat::Rules,
+            MessageLayout::Grouped,
         )
     }
 
@@ -157,7 +171,7 @@ impl MessageBuffer {
         unicode: bool,
         width: Option<usize>,
         theme: &ThemeDefinition,
-        format: MessageRenderFormat,
+        layout: MessageLayout,
     ) -> String {
         self.render_grouped_with_options(GroupedRenderOptions {
             max_level,
@@ -165,13 +179,18 @@ impl MessageBuffer {
             unicode,
             width,
             theme,
-            format,
+            layout,
+            chrome_frame: default_message_chrome_frame(layout),
             style_overrides: StyleOverrides::default(),
         })
     }
 
     pub fn render_grouped_with_options(&self, options: GroupedRenderOptions<'_>) -> String {
-        let document = self.build_grouped_document(options.max_level, options.format);
+        if matches!(options.layout, MessageLayout::Grouped) {
+            return self.render_grouped_sections(&options);
+        }
+
+        let document = self.build_minimal_document(options.max_level);
         if document.blocks.is_empty() {
             return String::new();
         }
@@ -193,19 +212,17 @@ impl MessageBuffer {
             grid_columns: None,
             column_weight: 3,
             table_overflow: crate::TableOverflow::Clip,
+            table_border: crate::TableBorderStyle::Square,
             theme_name: options.theme.id.clone(),
             theme: options.theme.clone(),
             style_overrides: options.style_overrides,
+            chrome_frame: options.chrome_frame,
         };
         render_document(&document, resolved)
     }
 
-    fn build_grouped_document(
-        &self,
-        max_level: MessageLevel,
-        format: MessageRenderFormat,
-    ) -> Document {
-        let mut blocks = Vec::new();
+    fn render_grouped_sections(&self, options: &GroupedRenderOptions<'_>) -> String {
+        let mut sections = Vec::new();
 
         for level in [
             MessageLevel::Error,
@@ -214,7 +231,7 @@ impl MessageBuffer {
             MessageLevel::Info,
             MessageLevel::Trace,
         ] {
-            if level > max_level {
+            if level > options.max_level {
                 continue;
             }
 
@@ -230,44 +247,91 @@ impl MessageBuffer {
             let body = grouped
                 .iter()
                 .map(|entry| {
-                    Block::Line(LineBlock {
-                        parts: vec![LinePart {
-                            text: format!("- {}", entry.text),
-                            token: None,
-                        }],
-                    })
+                    render_inline(
+                        &format!("- {}", entry.text),
+                        options.color,
+                        options.theme,
+                        &options.style_overrides,
+                    )
                 })
-                .collect::<Vec<Block>>();
+                .collect::<Vec<_>>()
+                .join("\n");
 
-            if matches!(format, MessageRenderFormat::Rules) {
-                let rendered = MessageFormatter::build(
-                    MessageContent::Document(Document { blocks: body }),
-                    MessageOptions {
-                        rules: MessageRules::Both,
-                        kind: level.as_kind(),
-                        title: Some(level.title().to_string()),
-                    },
-                );
-                blocks.extend(rendered.blocks);
-            } else {
-                blocks.push(Block::Line(LineBlock {
-                    parts: vec![LinePart {
-                        text: format!("{}:", level.title()),
-                        token: None,
-                    }],
-                }));
-                blocks.extend(body);
+            sections.push(render_section_block_with_overrides(
+                level.title(),
+                &body,
+                options.chrome_frame,
+                options.unicode,
+                options.width,
+                options.color,
+                options.theme,
+                level.style_token(),
+                level.style_token(),
+                &options.style_overrides,
+            ));
+        }
+
+        if sections.is_empty() {
+            return String::new();
+        }
+
+        let mut out = sections.join("\n\n");
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out
+    }
+
+    fn build_minimal_document(&self, max_level: MessageLevel) -> Document {
+        let mut blocks = Vec::new();
+
+        for level in [
+            MessageLevel::Error,
+            MessageLevel::Warning,
+            MessageLevel::Success,
+            MessageLevel::Info,
+            MessageLevel::Trace,
+        ] {
+            if level > max_level {
+                continue;
             }
 
-            blocks.push(Block::Line(LineBlock {
-                parts: vec![LinePart {
-                    text: String::new(),
-                    token: None,
-                }],
-            }));
+            for entry in self.entries.iter().filter(|entry| entry.level == level) {
+                blocks.push(Block::Line(LineBlock {
+                    parts: vec![
+                        LinePart {
+                            text: format!("{}: ", level.as_env_str()),
+                            token: Some(level.style_token()),
+                        },
+                        LinePart {
+                            text: entry.text.clone(),
+                            token: None,
+                        },
+                    ],
+                }));
+            }
         }
 
         Document { blocks }
+    }
+}
+
+impl MessageLevel {
+    fn style_token(self) -> StyleToken {
+        match self {
+            MessageLevel::Error => StyleToken::MessageError,
+            MessageLevel::Warning => StyleToken::MessageWarning,
+            MessageLevel::Success => StyleToken::MessageSuccess,
+            MessageLevel::Info => StyleToken::MessageInfo,
+            MessageLevel::Trace => StyleToken::MessageTrace,
+        }
+    }
+}
+
+fn default_message_chrome_frame(layout: MessageLayout) -> SectionFrameStyle {
+    match layout {
+        MessageLayout::Minimal => SectionFrameStyle::None,
+        MessageLayout::Grouped => SectionFrameStyle::TopBottom,
     }
 }
 
@@ -366,6 +430,431 @@ pub fn render_section_divider_with_overrides(
     format!("{styled_prefix}{styled_title}{styled_suffix}")
 }
 
+pub fn render_section_block_with_overrides(
+    title: &str,
+    body: &str,
+    frame_style: SectionFrameStyle,
+    unicode: bool,
+    width: Option<usize>,
+    color: bool,
+    theme: &ThemeDefinition,
+    border_token: StyleToken,
+    title_token: StyleToken,
+    style_overrides: &StyleOverrides,
+) -> String {
+    match frame_style {
+        SectionFrameStyle::None => {
+            render_plain_section(title, body, color, theme, title_token, style_overrides)
+        }
+        SectionFrameStyle::Top => render_ruled_section(
+            title,
+            body,
+            true,
+            false,
+            unicode,
+            width,
+            color,
+            theme,
+            border_token,
+            title_token,
+            style_overrides,
+        ),
+        SectionFrameStyle::Bottom => render_ruled_section(
+            title,
+            body,
+            false,
+            true,
+            unicode,
+            width,
+            color,
+            theme,
+            border_token,
+            title_token,
+            style_overrides,
+        ),
+        SectionFrameStyle::TopBottom => render_ruled_section(
+            title,
+            body,
+            true,
+            true,
+            unicode,
+            width,
+            color,
+            theme,
+            border_token,
+            title_token,
+            style_overrides,
+        ),
+        SectionFrameStyle::Square => render_boxed_section(
+            title,
+            body,
+            unicode,
+            color,
+            theme,
+            border_token,
+            title_token,
+            style_overrides,
+            BoxFrameChars::square(unicode),
+        ),
+        SectionFrameStyle::Round => render_boxed_section(
+            title,
+            body,
+            unicode,
+            color,
+            theme,
+            border_token,
+            title_token,
+            style_overrides,
+            BoxFrameChars::round(unicode),
+        ),
+    }
+}
+
+fn render_plain_section(
+    title: &str,
+    body: &str,
+    color: bool,
+    theme: &ThemeDefinition,
+    title_token: StyleToken,
+    style_overrides: &StyleOverrides,
+) -> String {
+    let mut out = String::new();
+    let title = title.trim();
+    let body = body.trim_end_matches('\n');
+
+    if !title.is_empty() {
+        out.push_str(&render_section_title_with_overrides(
+            title,
+            color,
+            theme,
+            title_token,
+            style_overrides,
+        ));
+        if !body.is_empty() {
+            out.push('\n');
+        }
+    }
+    if !body.is_empty() {
+        out.push_str(body);
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_ruled_section(
+    title: &str,
+    body: &str,
+    top_rule: bool,
+    bottom_rule: bool,
+    unicode: bool,
+    width: Option<usize>,
+    color: bool,
+    theme: &ThemeDefinition,
+    border_token: StyleToken,
+    title_token: StyleToken,
+    style_overrides: &StyleOverrides,
+) -> String {
+    let mut out = String::new();
+    let body = body.trim_end_matches('\n');
+    let title = title.trim();
+
+    if top_rule {
+        out.push_str(&render_section_divider_with_overrides(
+            title,
+            unicode,
+            width,
+            color,
+            theme,
+            border_token,
+            style_overrides,
+        ));
+    } else if !title.is_empty() {
+        out.push_str(&render_section_title_with_overrides(
+            title,
+            color,
+            theme,
+            title_token,
+            style_overrides,
+        ));
+    }
+
+    if !body.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(body);
+    }
+
+    if bottom_rule {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&render_section_divider_with_overrides(
+            "",
+            unicode,
+            width,
+            color,
+            theme,
+            border_token,
+            style_overrides,
+        ));
+    }
+
+    out
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BoxFrameChars {
+    top_left: char,
+    top_right: char,
+    bottom_left: char,
+    bottom_right: char,
+    horizontal: char,
+    vertical: char,
+}
+
+impl BoxFrameChars {
+    fn square(unicode: bool) -> Self {
+        if unicode {
+            Self {
+                top_left: '┌',
+                top_right: '┐',
+                bottom_left: '└',
+                bottom_right: '┘',
+                horizontal: '─',
+                vertical: '│',
+            }
+        } else {
+            Self {
+                top_left: '+',
+                top_right: '+',
+                bottom_left: '+',
+                bottom_right: '+',
+                horizontal: '-',
+                vertical: '|',
+            }
+        }
+    }
+
+    fn round(unicode: bool) -> Self {
+        if unicode {
+            Self {
+                top_left: '╭',
+                top_right: '╮',
+                bottom_left: '╰',
+                bottom_right: '╯',
+                horizontal: '─',
+                vertical: '│',
+            }
+        } else {
+            Self::square(false)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_boxed_section(
+    title: &str,
+    body: &str,
+    _unicode: bool,
+    color: bool,
+    theme: &ThemeDefinition,
+    border_token: StyleToken,
+    title_token: StyleToken,
+    style_overrides: &StyleOverrides,
+    chars: BoxFrameChars,
+) -> String {
+    let lines = section_body_lines(body);
+    let title = title.trim();
+    let body_width = lines
+        .iter()
+        .map(|line| visible_width(line))
+        .max()
+        .unwrap_or(0);
+    let title_width = if title.is_empty() {
+        0
+    } else {
+        title.chars().count() + 2
+    };
+    let inner_width = body_width.max(title_width).max(8);
+
+    let mut out = String::new();
+    out.push_str(&render_box_top(
+        title,
+        inner_width,
+        chars,
+        color,
+        theme,
+        border_token,
+        title_token,
+        style_overrides,
+    ));
+
+    if !lines.is_empty() {
+        out.push('\n');
+    }
+
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        out.push_str(&render_box_body_line(
+            line,
+            inner_width,
+            chars,
+            color,
+            theme,
+            border_token,
+            style_overrides,
+        ));
+    }
+
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(&style_border_segment(
+        &format!(
+            "{}{}{}",
+            chars.bottom_left,
+            chars.horizontal.to_string().repeat(inner_width + 2),
+            chars.bottom_right
+        ),
+        color,
+        theme,
+        border_token,
+        style_overrides,
+    ));
+    out
+}
+
+fn render_box_top(
+    title: &str,
+    inner_width: usize,
+    chars: BoxFrameChars,
+    color: bool,
+    theme: &ThemeDefinition,
+    border_token: StyleToken,
+    title_token: StyleToken,
+    style_overrides: &StyleOverrides,
+) -> String {
+    if title.is_empty() {
+        return style_border_segment(
+            &format!(
+                "{}{}{}",
+                chars.top_left,
+                chars.horizontal.to_string().repeat(inner_width + 2),
+                chars.top_right
+            ),
+            color,
+            theme,
+            border_token,
+            style_overrides,
+        );
+    }
+
+    let title_width = title.chars().count();
+    let remaining = inner_width.saturating_sub(title_width);
+    let left = format!("{} ", chars.top_left);
+    let right = format!(
+        " {}{}",
+        chars.horizontal.to_string().repeat(remaining),
+        chars.top_right
+    );
+
+    format!(
+        "{}{}{}",
+        style_border_segment(&left, color, theme, border_token, style_overrides),
+        style_title_segment(title, color, theme, title_token, style_overrides),
+        style_border_segment(&right, color, theme, border_token, style_overrides),
+    )
+}
+
+fn render_box_body_line(
+    line: &str,
+    inner_width: usize,
+    chars: BoxFrameChars,
+    color: bool,
+    theme: &ThemeDefinition,
+    border_token: StyleToken,
+    style_overrides: &StyleOverrides,
+) -> String {
+    let padding = inner_width.saturating_sub(visible_width(line));
+    let left = format!("{} ", chars.vertical);
+    let right = format!("{} {}", " ".repeat(padding), chars.vertical);
+    format!(
+        "{}{}{}",
+        style_border_segment(&left, color, theme, border_token, style_overrides),
+        line,
+        style_border_segment(&right, color, theme, border_token, style_overrides),
+    )
+}
+
+fn render_section_title_with_overrides(
+    title: &str,
+    color: bool,
+    theme: &ThemeDefinition,
+    title_token: StyleToken,
+    style_overrides: &StyleOverrides,
+) -> String {
+    let raw = format!("{title}:");
+    style_title_segment(&raw, color, theme, title_token, style_overrides)
+}
+
+fn style_border_segment(
+    text: &str,
+    color: bool,
+    theme: &ThemeDefinition,
+    token: StyleToken,
+    style_overrides: &StyleOverrides,
+) -> String {
+    if color {
+        apply_style_with_theme_overrides(text, token, true, theme, style_overrides)
+    } else {
+        text.to_string()
+    }
+}
+
+fn style_title_segment(
+    text: &str,
+    color: bool,
+    theme: &ThemeDefinition,
+    token: StyleToken,
+    style_overrides: &StyleOverrides,
+) -> String {
+    if color {
+        apply_style_with_theme_overrides(text, token, true, theme, style_overrides)
+    } else {
+        text.to_string()
+    }
+}
+
+fn section_body_lines(body: &str) -> Vec<&str> {
+    body.trim_end_matches('\n')
+        .lines()
+        .map(str::trim_end)
+        .collect()
+}
+
+fn visible_width(text: &str) -> usize {
+    let mut width = 0usize;
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        width += 1;
+    }
+
+    width
+}
+
 pub fn adjust_verbosity(base: MessageLevel, verbose: u8, quiet: u8) -> MessageLevel {
     let rank = base.as_rank() + verbose as i8 - quiet as i8;
     MessageLevel::from_rank(rank)
@@ -374,7 +863,8 @@ pub fn adjust_verbosity(base: MessageLevel, verbose: u8, quiet: u8) -> MessageLe
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageBuffer, MessageLevel, MessageRenderFormat, adjust_verbosity, render_section_divider,
+        MessageBuffer, MessageLayout, MessageLevel, SectionFrameStyle, adjust_verbosity,
+        render_section_block_with_overrides, render_section_divider,
     };
     use std::sync::{Mutex, OnceLock};
 
@@ -411,7 +901,7 @@ mod tests {
             true,
             Some(24),
             &theme,
-            MessageRenderFormat::Rules,
+            MessageLayout::Grouped,
         );
         assert!(rendered.contains("─ Errors "));
         assert!(
@@ -433,7 +923,7 @@ mod tests {
             false,
             Some(28),
             &theme,
-            MessageRenderFormat::Rules,
+            MessageLayout::Grouped,
         );
         let colored = messages.render_grouped_styled(
             MessageLevel::Warning,
@@ -441,10 +931,78 @@ mod tests {
             false,
             Some(28),
             &theme,
-            MessageRenderFormat::Rules,
+            MessageLayout::Grouped,
         );
         assert!(!plain.contains("\x1b["));
         assert!(colored.contains("\x1b["));
+    }
+
+    #[test]
+    fn minimal_render_flattens_messages_with_level_prefixes_unit() {
+        let mut messages = MessageBuffer::default();
+        messages.error("bad");
+        messages.warning("careful");
+        messages.info("hint");
+        let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+
+        let rendered = messages.render_grouped_styled(
+            MessageLevel::Info,
+            false,
+            false,
+            Some(28),
+            &theme,
+            MessageLayout::Minimal,
+        );
+
+        assert!(rendered.contains("error: bad"));
+        assert!(rendered.contains("warning: careful"));
+        assert!(rendered.contains("info: hint"));
+        assert!(!rendered.contains("Errors"));
+        assert!(!rendered.contains("- bad"));
+    }
+
+    #[test]
+    fn minimal_render_matches_plain_snapshot_unit() {
+        let mut messages = MessageBuffer::default();
+        messages.error("bad");
+        messages.warning("careful");
+        messages.info("hint");
+        let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+
+        let rendered = messages.render_grouped_styled(
+            MessageLevel::Info,
+            false,
+            false,
+            Some(18),
+            &theme,
+            MessageLayout::Minimal,
+        );
+
+        assert_eq!(rendered, "error: bad\nwarning: careful\ninfo: hint\n");
+    }
+
+    #[test]
+    fn grouped_render_matches_ascii_rule_snapshot_unit() {
+        let mut messages = MessageBuffer::default();
+        messages.error("bad");
+        messages.warning("careful");
+        let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+
+        let rendered = messages.render_grouped_with_options(super::GroupedRenderOptions {
+            max_level: MessageLevel::Warning,
+            color: false,
+            unicode: false,
+            width: Some(18),
+            theme: &theme,
+            layout: MessageLayout::Grouped,
+            chrome_frame: SectionFrameStyle::TopBottom,
+            style_overrides: crate::style::StyleOverrides::default(),
+        });
+
+        assert_eq!(
+            rendered,
+            "- Errors ---------\n- bad\n------------------\n\n- Warnings -------\n- careful\n------------------\n"
+        );
     }
 
     #[test]
@@ -486,5 +1044,76 @@ mod tests {
         }
 
         assert_eq!(divider.len(), 12);
+    }
+
+    #[test]
+    fn section_frame_style_parses_expected_names_unit() {
+        assert_eq!(
+            SectionFrameStyle::parse("top"),
+            Some(SectionFrameStyle::Top)
+        );
+        assert_eq!(
+            SectionFrameStyle::parse("top-bottom"),
+            Some(SectionFrameStyle::TopBottom)
+        );
+        assert_eq!(
+            SectionFrameStyle::parse("round"),
+            Some(SectionFrameStyle::Round)
+        );
+        assert_eq!(
+            SectionFrameStyle::parse("square"),
+            Some(SectionFrameStyle::Square)
+        );
+        assert_eq!(
+            SectionFrameStyle::parse("none"),
+            Some(SectionFrameStyle::None)
+        );
+    }
+
+    #[test]
+    fn top_bottom_section_frame_wraps_body_with_rules_unit() {
+        let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+        let rendered = render_section_block_with_overrides(
+            "Commands",
+            "  show\n  delete",
+            SectionFrameStyle::TopBottom,
+            true,
+            Some(18),
+            false,
+            &theme,
+            crate::style::StyleToken::PanelBorder,
+            crate::style::StyleToken::PanelTitle,
+            &crate::style::StyleOverrides::default(),
+        );
+
+        assert!(rendered.contains("Commands"));
+        assert!(rendered.contains("show"));
+        assert!(
+            rendered
+                .lines()
+                .last()
+                .is_some_and(|line| line.contains('─'))
+        );
+    }
+
+    #[test]
+    fn square_section_frame_boxes_body_unit() {
+        let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+        let rendered = render_section_block_with_overrides(
+            "Usage",
+            "osp config show",
+            SectionFrameStyle::Square,
+            true,
+            None,
+            false,
+            &theme,
+            crate::style::StyleToken::PanelBorder,
+            crate::style::StyleToken::PanelTitle,
+            &crate::style::StyleOverrides::default(),
+        );
+
+        assert!(rendered.contains("┌"));
+        assert!(rendered.contains("│ osp config show"));
+        assert!(rendered.contains("┘"));
     }
 }

@@ -26,6 +26,10 @@ fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {
             continue;
         };
 
+        if value == "--" {
+            break;
+        }
+
         match value {
             "--verbose" => {
                 verbose = verbose.saturating_add(1);

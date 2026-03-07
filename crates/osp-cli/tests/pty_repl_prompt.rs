@@ -31,7 +31,7 @@ fn make_temp_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn spawn_repl_with_color() -> PtySession {
+fn spawn_repl_with_color(simple_prompt: bool) -> PtySession {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -55,7 +55,10 @@ fn spawn_repl_with_color() -> PtySession {
     cmd.env_remove("NO_COLOR");
     cmd.env("OSP__UI__COLOR__MODE", "always");
     cmd.env("OSP__REPL__INTRO", "false");
-    cmd.env("OSP__REPL__SIMPLE_PROMPT", "false");
+    cmd.env(
+        "OSP__REPL__SIMPLE_PROMPT",
+        if simple_prompt { "true" } else { "false" },
+    );
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
     cmd.env("OSP_PLUGIN_PATH", &plugins);
     cmd.env("OSP_BUNDLED_PLUGIN_DIR", &plugins);
@@ -164,7 +167,7 @@ fn wait_for_exit(child: &mut Box<dyn portable_pty::Child + Send>, timeout: Durat
 #[cfg(unix)]
 #[test]
 fn repl_prompt_prefix_uses_prompt_text_color() {
-    let mut session = spawn_repl_with_color();
+    let mut session = spawn_repl_with_color(false);
 
     let start = output_len(&session.output);
     let expected = "\x1b[38;2;224;222;244m╭─";

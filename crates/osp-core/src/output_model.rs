@@ -1,6 +1,15 @@
 use crate::row::Row;
 use std::collections::HashSet;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColumnAlignment {
+    #[default]
+    Default,
+    Left,
+    Center,
+    Right,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
     pub groups: Row,
@@ -11,6 +20,7 @@ pub struct Group {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OutputMeta {
     pub key_index: Vec<String>,
+    pub column_align: Vec<ColumnAlignment>,
     pub wants_copy: bool,
     pub grouped: bool,
 }
@@ -34,6 +44,7 @@ impl OutputResult {
             items: OutputItems::Rows(rows),
             meta: OutputMeta {
                 key_index,
+                column_align: Vec::new(),
                 wants_copy: false,
                 grouped: false,
             },

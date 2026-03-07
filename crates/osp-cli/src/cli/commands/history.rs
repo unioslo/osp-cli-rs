@@ -21,5 +21,7 @@ pub(crate) fn run_history_repl_command(
         exit_code: 0,
         messages: osp_ui::messages::MessageBuffer::default(),
         output: Some(output),
+        stderr_text: None,
+        failure_report: None,
     })
 }

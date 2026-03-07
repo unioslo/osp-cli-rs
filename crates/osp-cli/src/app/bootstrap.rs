@@ -58,7 +58,7 @@ pub(crate) fn build_cli_session_layer(
         Some(layer.clone())
     };
     let has_bootstrap_layer = bootstrap_layer.is_some();
-    let config = resolve_runtime_config(
+    let _config = resolve_runtime_config(
         RuntimeConfigRequest::new(
             profile_override.clone(),
             Some(terminal_kind.as_config_terminal()),
@@ -66,13 +66,10 @@ pub(crate) fn build_cli_session_layer(
         .with_runtime_load(runtime_load)
         .with_session_layer(bootstrap_layer),
     )?;
-    cli.append_derived_session_overrides(&mut layer, &config);
-    let total_override_count = layer.entries().len();
     tracing::debug!(
         profile_override = ?profile_override,
         terminal = %terminal_kind.as_config_terminal(),
         static_override_count,
-        derived_override_count = total_override_count.saturating_sub(static_override_count),
         has_bootstrap_layer,
         "built CLI session layer"
     );

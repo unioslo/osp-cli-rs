@@ -10,7 +10,7 @@ use crate::document::{
 };
 use crate::layout::{LayoutContext, MregEntryMetrics, MregMetrics, prepare_layout_context};
 use crate::style::{StyleToken, apply_style_spec, apply_style_with_theme_overrides};
-use crate::{RenderBackend, ResolvedRenderSettings, TableOverflow};
+use crate::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 
 pub fn render_document(document: &Document, settings: ResolvedRenderSettings) -> String {
     DocumentRenderer::new(document, &settings).render(document)
@@ -75,7 +75,10 @@ impl<'a> DocumentRenderer<'a> {
 
         values
             .iter()
-            .map(|value| format!("{}{}\n", " ".repeat(self.settings.margin), value))
+            .map(|value| {
+                let styled = self.style_token(value, StyleToken::Value);
+                format!("{}{}\n", " ".repeat(self.settings.margin), styled)
+            })
             .collect()
     }
 
@@ -425,10 +428,19 @@ impl<'a> DocumentRenderer<'a> {
 
         let mut table = Table::new();
         table.set_content_arrangement(ContentArrangement::Disabled);
-        if self.settings.unicode {
-            table.load_preset(presets::UTF8_FULL_CONDENSED);
-        } else {
-            table.load_preset(presets::ASCII_FULL_CONDENSED);
+        match (self.settings.unicode, self.settings.table_border) {
+            (true, TableBorderStyle::None) => {
+                table.load_preset(presets::UTF8_NO_BORDERS);
+            }
+            (false, TableBorderStyle::None) => {
+                table.load_preset(presets::ASCII_NO_BORDERS);
+            }
+            (true, TableBorderStyle::Square | TableBorderStyle::Round) => {
+                table.load_preset(presets::UTF8_FULL_CONDENSED);
+            }
+            (false, TableBorderStyle::Square | TableBorderStyle::Round) => {
+                table.load_preset(presets::ASCII_FULL_CONDENSED);
+            }
         }
 
         let header_cells = table_data
@@ -459,9 +471,9 @@ impl<'a> DocumentRenderer<'a> {
 
         let rendered = format!("{table}");
         let rendered = if self.settings.unicode {
-            normalize_rich_table_chrome(&rendered)
+            normalize_rich_table_chrome(&rendered, self.settings.table_border)
         } else {
-            normalize_ascii_table_chrome(&rendered)
+            normalize_ascii_table_chrome(&rendered, self.settings.table_border)
         };
         indent_lines(&rendered, margin)
     }
@@ -624,9 +636,9 @@ impl<'a> DocumentRenderer<'a> {
                 if let Some(token) = value_style_token_for_string(raw) {
                     return self.style_token(text, token);
                 }
-                text.to_string()
+                self.style_token(text, StyleToken::Value)
             }
-            _ => text.to_string(),
+            _ => self.style_token(text, StyleToken::Value),
         }
     }
 
@@ -693,7 +705,11 @@ fn section_style_token(kind: Option<&str>) -> Option<StyleToken> {
     }
 }
 
-fn normalize_rich_table_chrome(rendered: &str) -> String {
+fn normalize_rich_table_chrome(rendered: &str, border_style: TableBorderStyle) -> String {
+    if matches!(border_style, TableBorderStyle::None) {
+        return rendered.to_string();
+    }
+
     let mut out = String::new();
     let lines = rendered.lines().collect::<Vec<&str>>();
     for (index, line) in lines.iter().enumerate() {
@@ -718,10 +734,19 @@ fn normalize_rich_table_chrome(rendered: &str) -> String {
             out.push('\n');
         }
     }
-    out
+
+    if matches!(border_style, TableBorderStyle::Round) {
+        round_rich_table_outer_corners(&out)
+    } else {
+        out
+    }
 }
 
-fn normalize_ascii_table_chrome(rendered: &str) -> String {
+fn normalize_ascii_table_chrome(rendered: &str, border_style: TableBorderStyle) -> String {
+    if matches!(border_style, TableBorderStyle::None) {
+        return rendered.to_string();
+    }
+
     let mut out = String::new();
     let lines = rendered.lines().collect::<Vec<&str>>();
     for (index, line) in lines.iter().enumerate() {
@@ -747,6 +772,41 @@ fn normalize_ascii_table_chrome(rendered: &str) -> String {
         }
     }
     out
+}
+
+fn round_rich_table_outer_corners(rendered: &str) -> String {
+    let mut lines = rendered.lines().map(str::to_string).collect::<Vec<_>>();
+    if let Some(first) = lines.first_mut() {
+        replace_first_char_if(first, &['┏', '┌'], '╭');
+        replace_last_char_if(first, &['┓', '┐'], '╮');
+    }
+    if let Some(last) = lines.last_mut() {
+        replace_first_char_if(last, &['┗', '└'], '╰');
+        replace_last_char_if(last, &['┛', '┘'], '╯');
+    }
+
+    let mut out = lines.join("\n");
+    if rendered.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn replace_first_char_if(text: &mut String, expected: &[char], replacement: char) {
+    let mut chars = text.chars().collect::<Vec<_>>();
+    if chars.first().is_some_and(|value| expected.contains(value)) {
+        chars[0] = replacement;
+        *text = chars.into_iter().collect();
+    }
+}
+
+fn replace_last_char_if(text: &mut String, expected: &[char], replacement: char) {
+    let mut chars = text.chars().collect::<Vec<_>>();
+    if chars.last().is_some_and(|value| expected.contains(value)) {
+        let last_index = chars.len().saturating_sub(1);
+        chars[last_index] = replacement;
+        *text = chars.into_iter().collect();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1149,7 +1209,7 @@ mod tests {
     use crate::RenderBackend;
     use crate::document::{
         Block, Document, JsonBlock, MregBlock, MregEntry, MregRow, MregValue, PanelBlock,
-        TableBlock, TableStyle, ValueBlock,
+        TableAlign, TableBlock, TableStyle, ValueBlock,
     };
     use crate::format;
     use crate::{RenderRuntime, RenderSettings};
@@ -1171,9 +1231,11 @@ mod tests {
             grid_columns: None,
             column_weight: 3,
             table_overflow: TableOverflow::Clip,
+            table_border: crate::TableBorderStyle::Square,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
+            chrome_frame: crate::messages::SectionFrameStyle::Top,
         }
     }
 
@@ -1198,11 +1260,13 @@ mod tests {
             grid_columns: None,
             column_weight: 3,
             table_overflow: TableOverflow::Clip,
+            table_border: crate::TableBorderStyle::Square,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
+            chrome_frame: crate::messages::SectionFrameStyle::Top,
             runtime: RenderRuntime::default(),
         }
     }
@@ -1317,9 +1381,11 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
         assert_eq!(rendered, "members: alice\n");
@@ -1358,9 +1424,11 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
 
@@ -1413,12 +1481,22 @@ mod tests {
             })],
         };
 
-        let unicode = render_document(&document, settings(RenderBackend::Rich, false, true));
-        let ascii = render_document(&document, settings(RenderBackend::Plain, false, false));
+        let mut round = settings(RenderBackend::Rich, false, true);
+        round.table_border = crate::TableBorderStyle::Round;
+        let mut square = settings(RenderBackend::Plain, false, false);
+        square.table_border = crate::TableBorderStyle::Square;
+        let mut none = settings(RenderBackend::Rich, false, true);
+        none.table_border = crate::TableBorderStyle::None;
 
-        assert!(unicode.contains('┏'));
-        assert!(unicode.contains('│'));
+        let rounded = render_document(&document, round);
+        let ascii = render_document(&document, square);
+        let borderless = render_document(&document, none);
+
+        assert!(rounded.contains('╭'));
+        assert!(rounded.contains('│'));
         assert!(ascii.contains('+'));
+        assert!(!borderless.contains('│'));
+        assert!(!borderless.contains('┏'));
     }
 
     #[test]
@@ -1817,6 +1895,28 @@ mod tests {
     }
 
     #[test]
+    fn markdown_table_render_respects_column_alignment() {
+        let document = Document {
+            blocks: vec![Block::Table(TableBlock {
+                block_id: 1,
+                style: TableStyle::Markdown,
+                headers: vec!["name".to_string(), "count".to_string()],
+                rows: vec![vec![json!("alice"), json!(42)]],
+                header_pairs: Vec::new(),
+                align: Some(vec![TableAlign::Left, TableAlign::Right]),
+                shrink_to_fit: true,
+                depth: 0,
+            })],
+        };
+
+        let rendered = render_document(&document, settings(RenderBackend::Plain, false, false));
+        let separator = rendered.lines().nth(1).expect("markdown separator row");
+        let cells = separator.split('|').collect::<Vec<_>>();
+        assert!(cells[1].trim().starts_with(':'));
+        assert!(cells[2].trim().ends_with(':'));
+    }
+
+    #[test]
     fn width_limit_truncates_wide_cells() {
         let document = Document {
             blocks: vec![Block::Table(TableBlock {
@@ -1849,9 +1949,11 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
 
@@ -1890,9 +1992,11 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::None,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
 
@@ -1930,9 +2034,11 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::Ellipsis,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
 
@@ -1971,9 +2077,11 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::Wrap,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
 
@@ -2011,9 +2119,11 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: "plain".to_string(),
                 theme: crate::theme::resolve_theme("plain"),
                 style_overrides: crate::style::StyleOverrides::default(),
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
         assert!(!rendered.contains("\x1b["));
@@ -2049,9 +2159,11 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
 
@@ -2082,16 +2194,99 @@ mod tests {
                 grid_columns: None,
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
+                table_border: crate::TableBorderStyle::Square,
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides {
                     code: Some("#00ff00".to_string()),
                     ..Default::default()
                 },
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
             },
         );
 
         assert!(rendered.contains("\x1b[38;2;0;255;0m"));
         assert!(rendered.contains("let x = 1;"));
+    }
+
+    #[test]
+    fn value_block_honors_generic_text_override() {
+        let document = Document {
+            blocks: vec![Block::Value(ValueBlock {
+                values: vec!["alpha".to_string()],
+            })],
+        };
+
+        let rendered = render_document(
+            &document,
+            ResolvedRenderSettings {
+                backend: RenderBackend::Rich,
+                color: true,
+                unicode: true,
+                width: None,
+                margin: 0,
+                indent_size: 2,
+                short_list_max: 1,
+                medium_list_max: 5,
+                grid_padding: 4,
+                grid_columns: None,
+                column_weight: 3,
+                table_overflow: TableOverflow::Clip,
+                table_border: crate::TableBorderStyle::Square,
+                theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+                theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
+                style_overrides: crate::style::StyleOverrides {
+                    text: Some("#224466".to_string()),
+                    ..Default::default()
+                },
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
+            },
+        );
+
+        assert!(rendered.contains("\x1b[38;2;34;68;102malpha\x1b[0m"));
+    }
+
+    #[test]
+    fn grid_table_string_cells_honor_value_override() {
+        let document = Document {
+            blocks: vec![Block::Table(TableBlock {
+                block_id: 1,
+                style: TableStyle::Grid,
+                headers: vec!["name".to_string()],
+                rows: vec![vec![serde_json::json!("alice")]],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: false,
+                depth: 0,
+            })],
+        };
+
+        let rendered = render_document(
+            &document,
+            ResolvedRenderSettings {
+                backend: RenderBackend::Rich,
+                color: true,
+                unicode: false,
+                width: None,
+                margin: 0,
+                indent_size: 2,
+                short_list_max: 1,
+                medium_list_max: 5,
+                grid_padding: 4,
+                grid_columns: None,
+                column_weight: 3,
+                table_overflow: TableOverflow::Clip,
+                table_border: crate::TableBorderStyle::Square,
+                theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
+                theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
+                style_overrides: crate::style::StyleOverrides {
+                    value: Some("#cc5500".to_string()),
+                    ..Default::default()
+                },
+                chrome_frame: crate::messages::SectionFrameStyle::Top,
+            },
+        );
+
+        assert!(rendered.contains("\x1b[38;2;204;85;0malice\x1b[0m"));
     }
 }

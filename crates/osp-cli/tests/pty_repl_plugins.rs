@@ -198,7 +198,7 @@ JSON
 
 #[cfg(unix)]
 #[test]
-fn repl_warns_when_multiple_plugins_provide_the_same_command() {
+fn repl_requires_explicit_provider_selection_for_conflicted_commands() {
     let plugins = make_temp_dir("osp-cli-pty-conflict-plugins");
     let _alpha = write_provider_plugin(&plugins, "alpha-provider", "hello", "alpha");
     let _beta = write_provider_plugin(&plugins, "beta-provider", "hello", "beta");
@@ -216,30 +216,25 @@ fn repl_warns_when_multiple_plugins_provide_the_same_command() {
         wait_for_output_since(
             &session.output,
             start,
-            "command `hello` is provided by multiple plugins:",
+            "command `hello` is provided by multiple plugins",
             Duration::from_secs(3)
         ),
-        "expected conflict warning in repl output; output:\n{}",
+        "expected ambiguity error in repl output; output:\n{}",
         output_snapshot(&session.output, 4000),
     );
     assert!(
         wait_for_output_since(
             &session.output,
             start,
-            "Using alpha-provider (env).",
+            "--plugin-provider",
             Duration::from_secs(3)
         ),
-        "expected selected provider in repl warning; output:\n{}",
+        "expected provider-selection hint in repl output; output:\n{}",
         output_snapshot(&session.output, 4000),
     );
     assert!(
-        wait_for_output_since(
-            &session.output,
-            start,
-            "alpha-from-plugin",
-            Duration::from_secs(3)
-        ),
-        "expected selected provider output in repl session; output:\n{}",
+        !output_snapshot(&session.output, 4000).contains("alpha-from-plugin"),
+        "did not expect implicit provider execution; output:\n{}",
         output_snapshot(&session.output, 4000),
     );
 

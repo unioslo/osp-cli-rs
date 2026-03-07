@@ -189,7 +189,10 @@ fn command_catalog_rows(commands: &[CommandCatalogEntry]) -> Vec<Row> {
             crate::row! {
                 "name" => command.name.clone(),
                 "about" => command.about.clone(),
-                "provider" => command.provider.clone(),
+                "provider" => command
+                    .provider
+                    .clone()
+                    .map_or(serde_json::Value::Null, Into::into),
                 "providers" => serde_json::Value::Array(
                     command
                         .providers
@@ -198,8 +201,12 @@ fn command_catalog_rows(commands: &[CommandCatalogEntry]) -> Vec<Row> {
                         .collect(),
                 ),
                 "conflicted" => command.conflicted,
+                "requires_selection" => command.requires_selection,
                 "selected_explicitly" => command.selected_explicitly,
-                "source" => command.source.to_string(),
+                "source" => command
+                    .source
+                    .map(|value| value.to_string())
+                    .map_or(serde_json::Value::Null, Into::into),
                 "subcommands" => subcommands,
             }
         })

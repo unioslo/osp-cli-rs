@@ -272,7 +272,7 @@ impl SuggestionEngine {
                     meta: child_completion_meta(child),
                     display: None,
                     is_exact: score == 0,
-                    sort: None,
+                    sort: child.sort.clone(),
                     match_score: score,
                 })
             })
@@ -1128,5 +1128,20 @@ mod tests {
 
         let values = values(generate(&engine, cmd, ""));
         assert_eq!(values, vec!["v2".to_string(), "v10".to_string()]);
+    }
+
+    #[test]
+    fn subcommand_suggestions_honor_child_sort_after_match_score() {
+        let tree = CompletionTree {
+            root: CompletionNode::default()
+                .with_child("orch", CompletionNode::default().sort("20"))
+                .with_child("config", CompletionNode::default().sort("10")),
+            ..CompletionTree::default()
+        };
+        let engine = CompletionEngine::new(tree);
+
+        let output = values(generate(&engine, CommandLine::default(), ""));
+
+        assert_eq!(output[..2], ["config", "orch"]);
     }
 }

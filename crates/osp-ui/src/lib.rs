@@ -10,6 +10,7 @@ mod renderer;
 pub mod style;
 pub mod theme;
 
+use crate::messages::SectionFrameStyle;
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_core::output_model::{OutputItems, OutputResult};
 use osp_core::row::Row;
@@ -47,11 +48,13 @@ pub struct RenderSettings {
     pub grid_columns: Option<usize>,
     pub column_weight: usize,
     pub table_overflow: TableOverflow,
+    pub table_border: TableBorderStyle,
     pub mreg_stack_min_col_width: usize,
     pub mreg_stack_overflow_ratio: usize,
     pub theme_name: String,
     pub theme: Option<ThemeDefinition>,
     pub style_overrides: StyleOverrides,
+    pub chrome_frame: SectionFrameStyle,
     pub runtime: RenderRuntime,
 }
 
@@ -81,6 +84,25 @@ impl TableOverflow {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TableBorderStyle {
+    None,
+    #[default]
+    Square,
+    Round,
+}
+
+impl TableBorderStyle {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" | "plain" => Some(Self::None),
+            "square" | "box" | "boxed" => Some(Self::Square),
+            "round" | "rounded" => Some(Self::Round),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRenderSettings {
     pub backend: RenderBackend,
@@ -95,9 +117,11 @@ pub struct ResolvedRenderSettings {
     pub grid_columns: Option<usize>,
     pub column_weight: usize,
     pub table_overflow: TableOverflow,
+    pub table_border: TableBorderStyle,
     pub theme_name: String,
     pub theme: ThemeDefinition,
     pub style_overrides: StyleOverrides,
+    pub chrome_frame: SectionFrameStyle,
 }
 
 impl RenderSettings {
@@ -117,11 +141,13 @@ impl RenderSettings {
             grid_columns: None,
             column_weight: 3,
             table_overflow: TableOverflow::Clip,
+            table_border: TableBorderStyle::Square,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
+            chrome_frame: SectionFrameStyle::Top,
             runtime: RenderRuntime::default(),
         }
     }
@@ -190,9 +216,11 @@ impl RenderSettings {
                 grid_columns: self.grid_columns.filter(|value| *value > 0),
                 column_weight: self.column_weight.max(1),
                 table_overflow: self.table_overflow,
+                table_border: self.table_border,
                 theme_name,
                 theme: theme.clone(),
                 style_overrides: self.style_overrides.clone(),
+                chrome_frame: self.chrome_frame,
             },
             RenderBackend::Rich => ResolvedRenderSettings {
                 backend,
@@ -207,9 +235,11 @@ impl RenderSettings {
                 grid_columns: self.grid_columns.filter(|value| *value > 0),
                 column_weight: self.column_weight.max(1),
                 table_overflow: self.table_overflow,
+                table_border: self.table_border,
                 theme_name,
                 theme,
                 style_overrides: self.style_overrides.clone(),
+                chrome_frame: self.chrome_frame,
             },
         }
     }
@@ -236,11 +266,13 @@ impl RenderSettings {
             grid_columns: self.grid_columns,
             column_weight: self.column_weight,
             table_overflow: self.table_overflow,
+            table_border: self.table_border,
             mreg_stack_min_col_width: self.mreg_stack_min_col_width,
             mreg_stack_overflow_ratio: self.mreg_stack_overflow_ratio,
             theme_name: self.theme_name.clone(),
             theme: self.theme.clone(),
             style_overrides: self.style_overrides.clone(),
+            chrome_frame: self.chrome_frame,
             runtime: self.runtime.clone(),
         }
     }
@@ -257,9 +289,14 @@ pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
 }
 
 pub fn render_output(output: &OutputResult, settings: &RenderSettings) -> String {
-    let document = format::build_document_from_output(output, settings);
     let resolved = settings.resolve_render_settings();
+    let document = format::build_document_from_output_resolved(output, settings, &resolved);
     renderer::render_document(&document, resolved)
+}
+
+pub fn render_document(document: &Document, settings: &RenderSettings) -> String {
+    let resolved = settings.resolve_render_settings();
+    renderer::render_document(document, resolved)
 }
 
 pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {
@@ -274,8 +311,9 @@ pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {
 
 pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) -> String {
     let copy_settings = settings.plain_copy_settings();
-    let document = format::build_document_from_output(output, &copy_settings);
-    render_document_for_copy(&document, &copy_settings)
+    let resolved = copy_settings.resolve_render_settings();
+    let document = format::build_document_from_output_resolved(output, &copy_settings, &resolved);
+    renderer::render_document(&document, resolved)
 }
 
 pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) -> String {
@@ -305,13 +343,15 @@ pub fn copy_output_to_clipboard(
     clipboard: &clipboard::ClipboardService,
 ) -> Result<(), clipboard::ClipboardError> {
     let copy_settings = settings.plain_copy_settings();
-    let document = format::build_document_from_output(output, &copy_settings);
-    clipboard.copy_document(&document, &copy_settings)
+    let resolved = copy_settings.resolve_render_settings();
+    let document = format::build_document_from_output_resolved(output, &copy_settings, &resolved);
+    let text = renderer::render_document(&document, resolved);
+    clipboard.copy_text(&text)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderBackend, RenderSettings, format, render_rows_for_copy};
+    use super::{RenderBackend, RenderSettings, TableBorderStyle, format, render_rows_for_copy};
     use crate::document::{Block, MregValue, TableStyle};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_core::row::Row;
@@ -465,5 +505,21 @@ mod tests {
         assert!(!rendered.contains("\x1b["));
         assert!(!rendered.contains('┌'));
         assert!(rendered.contains('+'));
+    }
+
+    #[test]
+    fn table_border_style_parser_accepts_supported_names() {
+        assert_eq!(
+            TableBorderStyle::parse("none"),
+            Some(TableBorderStyle::None)
+        );
+        assert_eq!(
+            TableBorderStyle::parse("square"),
+            Some(TableBorderStyle::Square)
+        );
+        assert_eq!(
+            TableBorderStyle::parse("round"),
+            Some(TableBorderStyle::Round)
+        );
     }
 }

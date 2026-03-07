@@ -94,6 +94,18 @@ pub struct ResponseErrorV1 {
 pub struct ResponseMetaV1 {
     pub format_hint: Option<String>,
     pub columns: Option<Vec<String>>,
+    #[serde(default)]
+    pub column_align: Vec<ColumnAlignmentV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ColumnAlignmentV1 {
+    #[default]
+    Default,
+    Left,
+    Center,
+    Right,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

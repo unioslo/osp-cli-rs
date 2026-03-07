@@ -67,6 +67,11 @@ impl CompletionEngine {
         mut parsed: ParsedLine,
         cursor: CursorState,
     ) -> CompletionAnalysis {
+        let mut context =
+            self.resolve_completion_context(&parsed.cursor_cmd, cursor.token_stub.as_str());
+        self.merge_prefilled_values(&mut parsed.cursor_cmd, &context.matched_path);
+        context = self.resolve_completion_context(&parsed.cursor_cmd, cursor.token_stub.as_str());
+
         // Context-only flags can appear later in the line than the cursor.
         // Merge them before scope resolution so completion reflects the user's
         // effective command state, not just the prefix before the cursor.
@@ -77,9 +82,6 @@ impl CompletionEngine {
                 cursor.token_stub.as_str(),
             );
         }
-
-        let context =
-            self.resolve_completion_context(&parsed.cursor_cmd, cursor.token_stub.as_str());
 
         CompletionAnalysis {
             parsed,
@@ -144,6 +146,24 @@ impl CompletionEngine {
             }
             cursor_cmd.merge_flag_values(flag.name.clone(), flag.values.clone());
         }
+    }
+
+    fn merge_prefilled_values(&self, cursor_cmd: &mut CommandLine, matched_path: &[String]) {
+        let resolver = TreeResolver::new(&self.tree);
+        let mut prefilled_positionals = Vec::new();
+        for i in 0..=matched_path.len() {
+            let Some(node) = resolver.resolve_exact(&matched_path[..i]) else {
+                continue;
+            };
+            prefilled_positionals.extend(node.prefilled_positionals.iter().cloned());
+            for (flag, values) in &node.prefilled_flags {
+                if cursor_cmd.has_flag(flag) {
+                    continue;
+                }
+                cursor_cmd.merge_flag_values(flag.clone(), values.clone());
+            }
+        }
+        cursor_cmd.prepend_positional_values(prefilled_positionals);
     }
 
     fn resolve_completion_context(&self, cmd: &CommandLine, stub: &str) -> CompletionContext {
@@ -415,6 +435,31 @@ mod tests {
             .collect();
         assert!(values.contains(&"rhel".to_string()));
         assert!(values.contains(&"alma".to_string()));
+    }
+
+    #[test]
+    fn terminal_command_without_flags_does_not_inherit_root_flags() {
+        let mut root = CompletionNode::default();
+        root.flags
+            .insert("--json".to_string(), FlagNode::default().flag_only());
+        root.children
+            .insert("exit".to_string(), CompletionNode::default());
+        let engine = CompletionEngine::new(CompletionTree {
+            root,
+            ..CompletionTree::default()
+        });
+
+        let analysis = engine.analyze("exit ", 5);
+        assert_eq!(analysis.parsed.cursor_tokens, vec!["exit".to_string()]);
+        assert_eq!(analysis.parsed.cursor_cmd.head(), &["exit".to_string()]);
+        assert_eq!(analysis.context.matched_path, vec!["exit".to_string()]);
+        assert_eq!(analysis.context.flag_scope_path, vec!["exit".to_string()]);
+
+        let suggestions = engine.suggestions_for_analysis(&analysis);
+        assert!(
+            suggestions.is_empty(),
+            "expected no inherited flags, got {suggestions:?}"
+        );
     }
 
     #[test]

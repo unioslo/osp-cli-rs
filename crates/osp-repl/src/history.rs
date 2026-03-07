@@ -217,7 +217,7 @@ impl OspHistoryStore {
         self.records
             .iter()
             .filter_map(|record| {
-                self.record_view_if_allowed(record, shell_prefix.as_deref(), false)
+                self.record_view_if_allowed(record, shell_prefix.as_deref(), true)
                     .map(|_| record.command_line.clone())
             })
             .collect()

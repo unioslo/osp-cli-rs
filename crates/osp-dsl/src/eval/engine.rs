@@ -213,6 +213,7 @@ impl PipelineExecutor {
 
         OutputMeta {
             key_index,
+            column_align: Vec::new(),
             wants_copy: self.wants_copy,
             grouped: matches!(self.items, OutputItems::Groups(_)),
         }

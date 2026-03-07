@@ -21,6 +21,6 @@ pub use model::{
     ContextScope, CursorState, FlagNode, FlagOccurrence, MatchKind, ParsedLine, QuoteStyle,
     Suggestion, SuggestionEntry, SuggestionOutput, TailItem, ValueType,
 };
-pub use parse::CommandLineParser;
+pub use parse::{CommandLineParser, TokenSpan};
 pub use suggest::SuggestionEngine;
 pub use tree::{CommandSpec, CompletionTreeBuilder, ConfigKeySpec};

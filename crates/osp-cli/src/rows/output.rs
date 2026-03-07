@@ -1,7 +1,8 @@
 use osp_core::output_model::{
-    Group, OutputItems, OutputMeta, OutputResult, compute_key_index as core_compute_key_index,
+    ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult,
+    compute_key_index as core_compute_key_index,
 };
-use osp_core::plugin::ResponseMetaV1;
+use osp_core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
 use osp_core::row::Row;
 
 pub(crate) fn rows_to_output_result(rows: Vec<Row>) -> OutputResult {
@@ -40,9 +41,28 @@ pub(crate) fn plugin_data_to_output_result(
         items: OutputItems::Rows(rows),
         meta: OutputMeta {
             key_index,
+            column_align: meta
+                .map(|value| {
+                    value
+                        .column_align
+                        .iter()
+                        .copied()
+                        .map(column_alignment_from_plugin)
+                        .collect()
+                })
+                .unwrap_or_default(),
             wants_copy: false,
             grouped: false,
         },
+    }
+}
+
+fn column_alignment_from_plugin(value: ColumnAlignmentV1) -> ColumnAlignment {
+    match value {
+        ColumnAlignmentV1::Default => ColumnAlignment::Default,
+        ColumnAlignmentV1::Left => ColumnAlignment::Left,
+        ColumnAlignmentV1::Center => ColumnAlignment::Center,
+        ColumnAlignmentV1::Right => ColumnAlignment::Right,
     }
 }
 
@@ -84,4 +104,33 @@ fn merge_group_row(group: &Group, row: &Row) -> Row {
         merged.insert(key.clone(), value.clone());
     }
     merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plugin_data_to_output_result;
+    use osp_core::output_model::ColumnAlignment;
+    use osp_core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
+    use serde_json::json;
+
+    #[test]
+    fn plugin_meta_preserves_column_alignment_unit() {
+        let output = plugin_data_to_output_result(
+            json!([{ "name": "alice", "count": 2 }]),
+            Some(&ResponseMetaV1 {
+                format_hint: Some("table".to_string()),
+                columns: Some(vec!["name".to_string(), "count".to_string()]),
+                column_align: vec![ColumnAlignmentV1::Left, ColumnAlignmentV1::Right],
+            }),
+        );
+
+        assert_eq!(
+            output.meta.key_index,
+            vec!["name".to_string(), "count".to_string()]
+        );
+        assert_eq!(
+            output.meta.column_align,
+            vec![ColumnAlignment::Left, ColumnAlignment::Right]
+        );
+    }
 }

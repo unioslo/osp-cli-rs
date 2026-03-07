@@ -1,7 +1,8 @@
-use miette::{IntoDiagnostic, Result};
+use miette::Result;
 
 use crate::app::{
-    CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, ensure_builtin_visible_for,
+    CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, document_from_json, document_from_text,
+    ensure_builtin_visible_for,
 };
 use crate::cli::{DoctorArgs, DoctorCommands, PluginsArgs, PluginsCommands};
 use crate::rows::output::rows_to_output_result;
@@ -9,7 +10,8 @@ use crate::state::{AuthState, LastFailure, UiState};
 use crate::theme_loader::ThemeCatalog;
 use osp_core::output::OutputFormat;
 use osp_core::row::Row;
-use osp_ui::render_output;
+use osp_ui::document::{Block, Document, PanelBlock, PanelRules};
+use osp_ui::format::build_document_from_output;
 
 use super::{config as config_cmd, plugins as plugins_cmd};
 
@@ -45,7 +47,7 @@ pub(crate) fn run_doctor_command(
                 },
             )
         }
-        DoctorCommands::Last => Ok(CliCommandResult::text(render_last_failure(
+        DoctorCommands::Last => Ok(CliCommandResult::document(render_last_failure_document(
             context.ui,
             context.last_failure,
         ))),
@@ -91,23 +93,26 @@ fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult>
             root.insert(name.to_string(), serde_json::Value::Array(values));
         }
         let payload = serde_json::Value::Object(root);
-        return Ok(CliCommandResult::text(format!(
-            "{}\n",
-            serde_json::to_string_pretty(&payload).into_diagnostic()?
-        )));
+        return Ok(CliCommandResult::document(document_from_json(payload)));
     }
 
-    let mut rendered = String::new();
-    for (name, rows) in sections {
-        if !rendered.is_empty() {
-            rendered.push('\n');
-        }
-        rendered.push_str(&format!("{name}:\n"));
-        let output = rows_to_output_result(rows);
-        rendered.push_str(&render_output(&output, &context.ui.render_settings));
-    }
+    let blocks = sections
+        .into_iter()
+        .map(|(name, rows)| {
+            let output = rows_to_output_result(rows);
+            let body = build_document_from_output(&output, &context.ui.render_settings);
+            Block::Panel(PanelBlock {
+                title: Some(name.to_string()),
+                body,
+                rules: PanelRules::Top,
+                kind: None,
+                border_token: None,
+                title_token: None,
+            })
+        })
+        .collect();
 
-    Ok(CliCommandResult::text(rendered))
+    Ok(CliCommandResult::document(Document { blocks }))
 }
 
 fn theme_doctor_rows(themes: &ThemeCatalog) -> Vec<Row> {
@@ -133,9 +138,9 @@ fn theme_doctor_rows(themes: &ThemeCatalog) -> Vec<Row> {
         .collect()
 }
 
-fn render_last_failure(ui: &UiState, last_failure: Option<&LastFailure>) -> String {
+fn render_last_failure_document(ui: &UiState, last_failure: Option<&LastFailure>) -> Document {
     let Some(last) = last_failure else {
-        return "No recorded REPL failure in this session.\n".to_string();
+        return document_from_text("No recorded REPL failure in this session.\n");
     };
 
     if matches!(ui.render_settings.format, OutputFormat::Json) {
@@ -145,10 +150,7 @@ fn render_last_failure(ui: &UiState, last_failure: Option<&LastFailure>) -> Stri
             "summary": last.summary,
             "detail": last.detail,
         });
-        return format!(
-            "{}\n",
-            serde_json::to_string_pretty(&payload).expect("last failure json should serialize")
-        );
+        return document_from_json(payload);
     }
 
     let mut out = String::new();
@@ -164,5 +166,5 @@ fn render_last_failure(ui: &UiState, last_failure: Option<&LastFailure>) -> Stri
             out.push('\n');
         }
     }
-    out
+    document_from_text(&out)
 }

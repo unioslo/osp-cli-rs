@@ -391,6 +391,15 @@ impl ConfigSchema {
             SchemaEntry::string().with_allowed_values(["auto", "plain", "rich"]),
         );
         schema.insert(
+            "ui.presentation",
+            SchemaEntry::string().with_allowed_values([
+                "expressive",
+                "compact",
+                "austere",
+                "gammel-og-bitter",
+            ]),
+        );
+        schema.insert(
             "ui.color.mode",
             SchemaEntry::string().with_allowed_values(["auto", "always", "never"]),
         );
@@ -402,14 +411,33 @@ impl ConfigSchema {
         schema.insert("ui.margin", SchemaEntry::integer());
         schema.insert("ui.indent", SchemaEntry::integer());
         schema.insert(
-            "ui.messages.format",
-            SchemaEntry::string().with_allowed_values(["rules", "groups", "boxes"]),
+            "ui.help.layout",
+            SchemaEntry::string().with_allowed_values(["full", "compact", "minimal"]),
+        );
+        schema.insert(
+            "ui.messages.layout",
+            SchemaEntry::string().with_allowed_values(["grouped", "minimal"]),
+        );
+        schema.insert(
+            "ui.chrome.frame",
+            SchemaEntry::string().with_allowed_values([
+                "none",
+                "top",
+                "bottom",
+                "top-bottom",
+                "square",
+                "round",
+            ]),
         );
         schema.insert(
             "ui.table.overflow",
             SchemaEntry::string().with_allowed_values([
                 "clip", "hidden", "crop", "ellipsis", "truncate", "wrap", "none", "visible",
             ]),
+        );
+        schema.insert(
+            "ui.table.border",
+            SchemaEntry::string().with_allowed_values(["none", "square", "round"]),
         );
         schema.insert("ui.short_list_max", SchemaEntry::integer());
         schema.insert("ui.medium_list_max", SchemaEntry::integer());
@@ -427,9 +455,17 @@ impl ConfigSchema {
         schema.insert("ui.prompt.secrets", SchemaEntry::boolean());
         schema.insert("extensions.plugins.timeout_ms", SchemaEntry::integer());
         schema.insert("repl.prompt", SchemaEntry::string());
+        schema.insert(
+            "repl.input_mode",
+            SchemaEntry::string().with_allowed_values(["auto", "interactive", "basic"]),
+        );
         schema.insert("repl.simple_prompt", SchemaEntry::boolean());
         schema.insert("repl.shell_indicator", SchemaEntry::string());
         schema.insert("repl.intro", SchemaEntry::boolean());
+        schema.insert(
+            "repl.intro.style",
+            SchemaEntry::string().with_allowed_values(["full", "minimal", "none"]),
+        );
         schema.insert("repl.history.path", SchemaEntry::string());
         schema.insert("repl.history.max_entries", SchemaEntry::integer());
         schema.insert("repl.history.enabled", SchemaEntry::boolean());
@@ -459,6 +495,11 @@ impl ConfigSchema {
         schema.insert("color.panel.title", SchemaEntry::string());
         schema.insert("color.code", SchemaEntry::string());
         schema.insert("color.json.key", SchemaEntry::string());
+        schema.insert("color.message.error", SchemaEntry::string());
+        schema.insert("color.message.warning", SchemaEntry::string());
+        schema.insert("color.message.success", SchemaEntry::string());
+        schema.insert("color.message.info", SchemaEntry::string());
+        schema.insert("color.message.trace", SchemaEntry::string());
         schema.insert("auth.visible.builtins", SchemaEntry::string());
         schema.insert("auth.visible.plugins", SchemaEntry::string());
         schema.insert("debug.level", SchemaEntry::integer());

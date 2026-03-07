@@ -1,83 +1,29 @@
 pub(crate) mod commands;
 
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use osp_config::{ConfigLayer, ConfigValue, ResolvedConfig, RuntimeLoadOptions};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use osp_ui::messages::{MessageLevel, adjust_verbosity};
+use osp_ui::messages::SectionFrameStyle;
 use osp_ui::theme::DEFAULT_THEME_NAME;
-use osp_ui::{RenderRuntime, RenderSettings, StyleOverrides, TableOverflow};
+use osp_ui::{RenderRuntime, RenderSettings, StyleOverrides, TableBorderStyle, TableOverflow};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum OutputFormatArg {
-    Auto,
-    Json,
-    Table,
-    Md,
-    Mreg,
-    Value,
-}
+use crate::ui_presentation::{UiPresentation, apply_presentation_to_render_settings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum RenderModeArg {
-    Auto,
-    Plain,
-    Rich,
+enum PresentationArg {
+    Expressive,
+    Compact,
+    #[value(alias = "gammel-og-bitter")]
+    Austere,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum ColorModeArg {
-    Auto,
-    Always,
-    Never,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum UnicodeModeArg {
-    Auto,
-    Always,
-    Never,
-}
-
-impl From<OutputFormatArg> for OutputFormat {
-    fn from(value: OutputFormatArg) -> Self {
+impl From<PresentationArg> for UiPresentation {
+    fn from(value: PresentationArg) -> Self {
         match value {
-            OutputFormatArg::Auto => OutputFormat::Auto,
-            OutputFormatArg::Json => OutputFormat::Json,
-            OutputFormatArg::Table => OutputFormat::Table,
-            OutputFormatArg::Md => OutputFormat::Markdown,
-            OutputFormatArg::Mreg => OutputFormat::Mreg,
-            OutputFormatArg::Value => OutputFormat::Value,
-        }
-    }
-}
-
-impl From<RenderModeArg> for RenderMode {
-    fn from(value: RenderModeArg) -> Self {
-        match value {
-            RenderModeArg::Auto => RenderMode::Auto,
-            RenderModeArg::Plain => RenderMode::Plain,
-            RenderModeArg::Rich => RenderMode::Rich,
-        }
-    }
-}
-
-impl From<ColorModeArg> for ColorMode {
-    fn from(value: ColorModeArg) -> Self {
-        match value {
-            ColorModeArg::Auto => ColorMode::Auto,
-            ColorModeArg::Always => ColorMode::Always,
-            ColorModeArg::Never => ColorMode::Never,
-        }
-    }
-}
-
-impl From<UnicodeModeArg> for UnicodeMode {
-    fn from(value: UnicodeModeArg) -> Self {
-        match value {
-            UnicodeModeArg::Auto => UnicodeMode::Auto,
-            UnicodeModeArg::Always => UnicodeMode::Always,
-            UnicodeModeArg::Never => UnicodeMode::Never,
+            PresentationArg::Expressive => UiPresentation::Expressive,
+            PresentationArg::Compact => UiPresentation::Compact,
+            PresentationArg::Austere => UiPresentation::Austere,
         }
     }
 }
@@ -104,38 +50,21 @@ pub struct Cli {
     #[arg(long = "no-config-file", alias = "no-config", global = true)]
     pub no_config_file: bool,
 
-    #[arg(long = "format", default_value = "auto", global = true)]
-    format: OutputFormatArg,
-
-    #[arg(long = "mode", default_value = "auto", global = true)]
-    mode: RenderModeArg,
-
-    #[arg(long = "color", default_value = "auto", global = true)]
-    color: ColorModeArg,
-
-    #[arg(long = "unicode", default_value = "auto", global = true)]
-    unicode: UnicodeModeArg,
-
-    #[arg(long = "json", global = true)]
-    json_legacy: bool,
-
-    #[arg(long = "ascii", global = true)]
-    ascii_legacy: bool,
-
-    #[arg(short = 'v', long = "verbose", action = ArgAction::Count, global = true)]
-    pub verbose: u8,
-
-    #[arg(short = 'q', long = "quiet", action = ArgAction::Count, global = true)]
-    pub quiet: u8,
-
-    #[arg(short = 'd', long = "debug", action = ArgAction::Count, global = true)]
-    pub debug: u8,
-
     #[arg(long = "plugin-dir", global = true)]
     pub plugin_dirs: Vec<PathBuf>,
 
     #[arg(long = "theme", global = true)]
     pub theme: Option<String>,
+
+    #[arg(long = "presentation", global = true)]
+    presentation: Option<PresentationArg>,
+
+    #[arg(
+        long = "gammel-og-bitter",
+        conflicts_with = "presentation",
+        global = true
+    )]
+    gammel_og_bitter: bool,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -166,22 +95,6 @@ pub enum Commands {
 #[derive(Debug, Parser)]
 #[command(name = "osp", no_binary_name = true)]
 pub struct InlineCommandCli {
-    #[command(subcommand)]
-    pub command: Option<Commands>,
-}
-
-#[derive(Debug, Parser)]
-#[command(name = "osp", no_binary_name = true)]
-pub struct ReplCli {
-    #[arg(short = 'v', long = "verbose", action = ArgAction::Count)]
-    pub verbose: u8,
-
-    #[arg(short = 'q', long = "quiet", action = ArgAction::Count)]
-    pub quiet: u8,
-
-    #[arg(short = 'd', long = "debug", action = ArgAction::Count)]
-    pub debug: u8,
-
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -483,49 +396,14 @@ impl Cli {
         {
             layer.set("theme.name", theme);
         }
-
-        if self.json_legacy {
-            layer.set("ui.format", "json");
-        } else if !matches!(self.format, OutputFormatArg::Auto) {
-            layer.set("ui.format", output_format_arg_str(self.format));
+        if self.gammel_og_bitter {
+            layer.set("ui.presentation", UiPresentation::Austere.as_config_value());
+        } else if let Some(presentation) = self.presentation {
+            layer.set(
+                "ui.presentation",
+                UiPresentation::from(presentation).as_config_value(),
+            );
         }
-
-        if !matches!(self.mode, RenderModeArg::Auto) {
-            layer.set("ui.mode", render_mode_arg_str(self.mode));
-        }
-
-        if !matches!(self.color, ColorModeArg::Auto) {
-            layer.set("ui.color.mode", color_mode_arg_str(self.color));
-        }
-
-        if self.ascii_legacy {
-            layer.set("ui.unicode.mode", "never");
-        } else if !matches!(self.unicode, UnicodeModeArg::Auto) {
-            layer.set("ui.unicode.mode", unicode_mode_arg_str(self.unicode));
-        }
-
-        if self.debug > 0 {
-            layer.set("debug.level", i64::from(self.debug.min(3)));
-        }
-    }
-
-    pub(crate) fn append_derived_session_overrides(
-        &self,
-        layer: &mut ConfigLayer,
-        config: &ResolvedConfig,
-    ) {
-        if self.verbose == 0 && self.quiet == 0 {
-            return;
-        }
-
-        let base = config
-            .get_string("ui.verbosity.level")
-            .and_then(parse_message_level)
-            .unwrap_or(MessageLevel::Success);
-        layer.set(
-            "ui.verbosity.level",
-            adjust_verbosity(base, self.verbose, self.quiet).as_env_str(),
-        );
     }
 }
 
@@ -544,11 +422,13 @@ pub(crate) fn default_render_settings() -> RenderSettings {
         grid_columns: None,
         column_weight: 3,
         table_overflow: TableOverflow::Clip,
+        table_border: TableBorderStyle::Square,
         mreg_stack_min_col_width: 10,
         mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
         theme: None,
         style_overrides: StyleOverrides::default(),
+        chrome_frame: SectionFrameStyle::Top,
         runtime: RenderRuntime::default(),
     }
 }
@@ -557,6 +437,8 @@ pub(crate) fn apply_render_settings_from_config(
     settings: &mut RenderSettings,
     config: &ResolvedConfig,
 ) {
+    apply_presentation_to_render_settings(settings, config);
+
     if let Some(value) = config.get_string("ui.format")
         && let Some(parsed) = parse_output_format(value)
     {
@@ -581,6 +463,12 @@ pub(crate) fn apply_render_settings_from_config(
         settings.color = parsed;
     }
 
+    if let Some(value) = config.get_string("ui.chrome.frame")
+        && let Some(parsed) = SectionFrameStyle::parse(value)
+    {
+        settings.chrome_frame = parsed;
+    }
+
     if settings.width.is_none() {
         match config.get("ui.width").map(ConfigValue::reveal) {
             Some(ConfigValue::Integer(width)) if *width > 0 => {
@@ -598,17 +486,6 @@ pub(crate) fn apply_render_settings_from_config(
     }
 
     sync_render_settings_from_config(settings, config);
-}
-
-fn parse_message_level(value: &str) -> Option<MessageLevel> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "error" => Some(MessageLevel::Error),
-        "warning" | "warn" => Some(MessageLevel::Warning),
-        "success" => Some(MessageLevel::Success),
-        "info" => Some(MessageLevel::Info),
-        "trace" => Some(MessageLevel::Trace),
-        _ => None,
-    }
 }
 
 pub(crate) fn sync_render_settings_from_config(
@@ -677,7 +554,14 @@ pub(crate) fn sync_render_settings_from_config(
         settings.table_overflow = parsed;
     }
 
+    if let Some(value) = config.get_string("ui.table.border")
+        && let Some(parsed) = TableBorderStyle::parse(value)
+    {
+        settings.table_border = parsed;
+    }
+
     settings.style_overrides = StyleOverrides {
+        text: config_non_empty_string(config, "color.text"),
         key: config_non_empty_string(config, "color.key"),
         muted: config_non_empty_string(config, "color.text.muted"),
         table_header: config_non_empty_string(config, "color.table.header"),
@@ -694,6 +578,11 @@ pub(crate) fn sync_render_settings_from_config(
         panel_title: config_non_empty_string(config, "color.panel.title"),
         code: config_non_empty_string(config, "color.code"),
         json_key: config_non_empty_string(config, "color.json.key"),
+        message_error: config_non_empty_string(config, "color.message.error"),
+        message_warning: config_non_empty_string(config, "color.message.warning"),
+        message_success: config_non_empty_string(config, "color.message.success"),
+        message_info: config_non_empty_string(config, "color.message.info"),
+        message_trace: config_non_empty_string(config, "color.message.trace"),
     };
 }
 
@@ -752,45 +641,6 @@ fn config_non_empty_string(config: &ResolvedConfig, key: &str) -> Option<String>
         .map(ToOwned::to_owned)
 }
 
-fn output_format_arg_str(value: OutputFormatArg) -> &'static str {
-    match value {
-        OutputFormatArg::Auto => "auto",
-        OutputFormatArg::Json => "json",
-        OutputFormatArg::Table => "table",
-        OutputFormatArg::Md => "md",
-        OutputFormatArg::Mreg => "mreg",
-        OutputFormatArg::Value => "value",
-    }
-}
-
-fn render_mode_arg_str(value: RenderModeArg) -> &'static str {
-    match value {
-        RenderModeArg::Auto => "auto",
-        RenderModeArg::Plain => "plain",
-        RenderModeArg::Rich => "rich",
-    }
-}
-
-fn color_mode_arg_str(value: ColorModeArg) -> &'static str {
-    match value {
-        ColorModeArg::Auto => "auto",
-        ColorModeArg::Always => "always",
-        ColorModeArg::Never => "never",
-    }
-}
-
-fn unicode_mode_arg_str(value: UnicodeModeArg) -> &'static str {
-    match value {
-        UnicodeModeArg::Auto => "auto",
-        UnicodeModeArg::Always => "always",
-        UnicodeModeArg::Never => "never",
-    }
-}
-
 pub fn parse_inline_command_tokens(tokens: &[String]) -> Result<Option<Commands>, clap::Error> {
     InlineCommandCli::try_parse_from(tokens.iter().map(String::as_str)).map(|parsed| parsed.command)
-}
-
-pub fn parse_repl_tokens(tokens: &[String]) -> Result<ReplCli, clap::Error> {
-    ReplCli::try_parse_from(tokens.iter().map(String::as_str))
 }

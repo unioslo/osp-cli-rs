@@ -1,9 +1,9 @@
 use osp_core::output::OutputFormat;
-use osp_core::output_model::{Group, OutputItems, OutputResult};
+use osp_core::output_model::{ColumnAlignment, Group, OutputItems, OutputResult};
 use osp_core::row::Row;
 
 use crate::document::{Block, Document, JsonBlock, TableStyle};
-use crate::{RenderBackend, RenderSettings};
+use crate::{RenderBackend, RenderSettings, ResolvedRenderSettings};
 
 mod common;
 pub mod help;
@@ -26,6 +26,15 @@ pub fn build_document(rows: &[Row], settings: &RenderSettings) -> Document {
 }
 
 pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettings) -> Document {
+    let resolved = settings.resolve_render_settings();
+    build_document_from_output_resolved(output, settings, &resolved)
+}
+
+pub fn build_document_from_output_resolved(
+    output: &OutputResult,
+    settings: &RenderSettings,
+    resolved: &ResolvedRenderSettings,
+) -> Document {
     let format = resolve_output_format(output, settings.format);
     let mut next_block_id = 1u64;
     match format {
@@ -38,7 +47,6 @@ pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettin
         }
         OutputFormat::Mreg => {
             let rows = materialize_rows(output);
-            let resolved = settings.resolve_render_settings();
             let width_hint = resolved.width.unwrap_or(100).max(24);
             let prefer_stacked_object_lists = resolved.backend == RenderBackend::Rich;
             Document {
@@ -107,12 +115,20 @@ fn build_table_document(
 ) -> Document {
     match &output.items {
         OutputItems::Rows(rows) => Document {
-            blocks: vec![Block::Table(table::build_table_block(
-                rows,
-                style,
-                Some(&output.meta.key_index),
-                allocate_block_id(next_block_id),
-            ))],
+            blocks: vec![Block::Table({
+                let mut block = table::build_table_block(
+                    rows,
+                    style,
+                    Some(&output.meta.key_index),
+                    allocate_block_id(next_block_id),
+                );
+                block.align = table_alignments_for_headers(
+                    &block.headers,
+                    &output.meta.key_index,
+                    &output.meta.column_align,
+                );
+                block
+            })],
         },
         OutputItems::Groups(groups) => Document {
             blocks: groups
@@ -128,11 +144,61 @@ fn build_table_document(
                         Some(&output.meta.key_index),
                         allocate_block_id(next_block_id),
                     );
+                    block.align = table_alignments_for_headers(
+                        &block.headers,
+                        &output.meta.key_index,
+                        &output.meta.column_align,
+                    );
                     block.header_pairs = group_header_pairs(group, Some(&output.meta.key_index));
                     Block::Table(block)
                 })
                 .collect(),
         },
+    }
+}
+
+fn table_alignments_for_headers(
+    headers: &[String],
+    key_index: &[String],
+    column_align: &[ColumnAlignment],
+) -> Option<Vec<crate::document::TableAlign>> {
+    if key_index.is_empty() || column_align.is_empty() {
+        return None;
+    }
+
+    let align_by_key = key_index
+        .iter()
+        .cloned()
+        .zip(column_align.iter().copied())
+        .collect::<std::collections::BTreeMap<String, ColumnAlignment>>();
+
+    let out = headers
+        .iter()
+        .map(|header| {
+            align_by_key
+                .get(header)
+                .copied()
+                .map(table_align_from_output)
+                .unwrap_or(crate::document::TableAlign::Default)
+        })
+        .collect::<Vec<_>>();
+
+    if out
+        .iter()
+        .all(|align| matches!(align, crate::document::TableAlign::Default))
+    {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn table_align_from_output(value: ColumnAlignment) -> crate::document::TableAlign {
+    match value {
+        ColumnAlignment::Default => crate::document::TableAlign::Default,
+        ColumnAlignment::Left => crate::document::TableAlign::Left,
+        ColumnAlignment::Center => crate::document::TableAlign::Center,
+        ColumnAlignment::Right => crate::document::TableAlign::Right,
     }
 }
 
@@ -266,7 +332,7 @@ mod tests {
     use crate::RenderSettings;
     use crate::document::{Block, TableStyle};
     use osp_core::output::{OutputFormat, RenderMode};
-    use osp_core::output_model::{Group, OutputItems, OutputMeta, OutputResult};
+    use osp_core::output_model::{ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult};
     use osp_core::row::Row;
     use serde_json::json;
 
@@ -317,6 +383,7 @@ mod tests {
             }]),
             meta: OutputMeta {
                 key_index: vec!["group".to_string(), "count".to_string(), "uid".to_string()],
+                column_align: Vec::new(),
                 wants_copy: false,
                 grouped: true,
             },
@@ -359,5 +426,125 @@ mod tests {
         let first = payload.first().expect("first group");
         assert!(first.get("groups").is_some());
         assert!(first.get("rows").is_some());
+    }
+
+    #[test]
+    fn row_table_document_preserves_alignment_metadata() {
+        let mut row = Row::new();
+        row.insert("name".to_string(), json!("alice"));
+        row.insert("count".to_string(), json!(2));
+        let output = OutputResult {
+            items: OutputItems::Rows(vec![row]),
+            meta: OutputMeta {
+                key_index: vec!["name".to_string(), "count".to_string()],
+                column_align: vec![ColumnAlignment::Left, ColumnAlignment::Right],
+                wants_copy: false,
+                grouped: false,
+            },
+        };
+
+        let document = build_document_from_output(&output, &settings(OutputFormat::Table));
+        let Block::Table(table) = &document.blocks[0] else {
+            panic!("expected table block");
+        };
+        assert_eq!(
+            table.align,
+            Some(vec![
+                crate::document::TableAlign::Left,
+                crate::document::TableAlign::Right
+            ])
+        );
+    }
+
+    #[test]
+    fn grouped_table_document_preserves_alignment_metadata() {
+        let mut group_fields = Row::new();
+        group_fields.insert("group".to_string(), json!("ops"));
+        let mut row = Row::new();
+        row.insert("uid".to_string(), json!("alice"));
+        row.insert("count".to_string(), json!(2));
+        let output = OutputResult {
+            items: OutputItems::Groups(vec![Group {
+                groups: group_fields,
+                aggregates: Row::new(),
+                rows: vec![row],
+            }]),
+            meta: OutputMeta {
+                key_index: vec!["group".to_string(), "uid".to_string(), "count".to_string()],
+                column_align: vec![
+                    ColumnAlignment::Default,
+                    ColumnAlignment::Left,
+                    ColumnAlignment::Right,
+                ],
+                wants_copy: false,
+                grouped: true,
+            },
+        };
+
+        let document = build_document_from_output(&output, &settings(OutputFormat::Table));
+        let Block::Table(table) = &document.blocks[0] else {
+            panic!("expected table block");
+        };
+        assert_eq!(
+            table.align,
+            Some(vec![
+                crate::document::TableAlign::Left,
+                crate::document::TableAlign::Right
+            ])
+        );
+    }
+
+    #[test]
+    fn grouped_markdown_document_preserves_header_pairs_and_alignment() {
+        let mut group_fields = Row::new();
+        group_fields.insert("group".to_string(), json!("ops"));
+        let mut aggregates = Row::new();
+        aggregates.insert("count".to_string(), json!(2));
+        let mut row = Row::new();
+        row.insert("uid".to_string(), json!("alice"));
+        row.insert("score".to_string(), json!(42));
+        let output = OutputResult {
+            items: OutputItems::Groups(vec![Group {
+                groups: group_fields,
+                aggregates,
+                rows: vec![row],
+            }]),
+            meta: OutputMeta {
+                key_index: vec![
+                    "group".to_string(),
+                    "count".to_string(),
+                    "uid".to_string(),
+                    "score".to_string(),
+                ],
+                column_align: vec![
+                    ColumnAlignment::Default,
+                    ColumnAlignment::Default,
+                    ColumnAlignment::Left,
+                    ColumnAlignment::Right,
+                ],
+                wants_copy: false,
+                grouped: true,
+            },
+        };
+
+        let document = build_document_from_output(&output, &settings(OutputFormat::Markdown));
+        let Block::Table(table) = &document.blocks[0] else {
+            panic!("expected table block");
+        };
+        assert_eq!(table.style, TableStyle::Markdown);
+        assert_eq!(
+            table.header_pairs,
+            vec![
+                ("group".to_string(), json!("ops")),
+                ("count".to_string(), json!(2))
+            ]
+        );
+        assert_eq!(
+            table.align,
+            Some(vec![
+                crate::document::TableAlign::Left,
+                crate::document::TableAlign::Right
+            ])
+        );
     }
 }

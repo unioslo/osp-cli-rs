@@ -1,6 +1,13 @@
 use crate::model::{CommandLine, CursorState, FlagOccurrence, ParsedLine, QuoteStyle};
 use std::collections::BTreeMap;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenSpan {
+    pub value: String,
+    pub start: usize,
+    pub end: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LexState {
     Normal,
@@ -165,6 +172,12 @@ impl CommandLineParser {
             .unwrap_or_else(|| line.split_whitespace().map(str::to_string).collect())
     }
 
+    pub fn tokenize_with_spans(&self, line: &str) -> Vec<TokenSpan> {
+        self.tokenize_with_spans_inner(line)
+            .or_else(|| self.tokenize_with_spans_fallback(line))
+            .unwrap_or_default()
+    }
+
     /// Parse the full line and the cursor-local prefix from one lexical walk.
     ///
     /// The common case keeps completion analysis in one tokenization pass. If
@@ -267,6 +280,95 @@ impl CommandLineParser {
             }
             _ => None,
         }
+    }
+
+    fn tokenize_with_spans_inner(&self, line: &str) -> Option<Vec<TokenSpan>> {
+        let mut out = Vec::new();
+        let mut state = LexState::Normal;
+        let mut current = String::new();
+        let mut current_start = None;
+
+        for (idx, ch) in line.char_indices() {
+            match state {
+                LexState::Normal => {
+                    if ch.is_whitespace() {
+                        push_current_span(&mut out, &mut current, &mut current_start, idx);
+                    } else {
+                        match ch {
+                            '|' => {
+                                push_current_span(&mut out, &mut current, &mut current_start, idx);
+                                out.push(TokenSpan {
+                                    value: "|".to_string(),
+                                    start: idx,
+                                    end: idx + ch.len_utf8(),
+                                });
+                            }
+                            '\\' => {
+                                current_start.get_or_insert(idx);
+                                state = LexState::EscapeNormal;
+                            }
+                            '\'' => {
+                                current_start.get_or_insert(idx);
+                                state = LexState::SingleQuote;
+                            }
+                            '"' => {
+                                current_start.get_or_insert(idx);
+                                state = LexState::DoubleQuote;
+                            }
+                            _ => {
+                                current_start.get_or_insert(idx);
+                                current.push(ch);
+                            }
+                        }
+                    }
+                }
+                LexState::SingleQuote => {
+                    if ch == '\'' {
+                        state = LexState::Normal;
+                    } else {
+                        current.push(ch);
+                    }
+                }
+                LexState::DoubleQuote => match ch {
+                    '"' => state = LexState::Normal,
+                    '\\' => state = LexState::EscapeDouble,
+                    _ => current.push(ch),
+                },
+                LexState::EscapeNormal => {
+                    current.push(ch);
+                    state = LexState::Normal;
+                }
+                LexState::EscapeDouble => {
+                    current.push(ch);
+                    state = LexState::DoubleQuote;
+                }
+            }
+        }
+
+        match state {
+            LexState::Normal => {
+                push_current_span(&mut out, &mut current, &mut current_start, line.len());
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
+    fn tokenize_with_spans_fallback(&self, line: &str) -> Option<Vec<TokenSpan>> {
+        let mut out = Vec::new();
+        let mut search_from = 0usize;
+        for token in line.split_whitespace() {
+            let rel = line.get(search_from..)?.find(token)?;
+            let start = search_from + rel;
+            let end = start + token.len();
+            out.push(TokenSpan {
+                value: token.to_string(),
+                start,
+                end,
+            });
+            search_from = end;
+        }
+        Some(out)
     }
 
     pub fn parse(&self, tokens: &[String]) -> CommandLine {
@@ -460,6 +562,23 @@ fn split_inline_flag_value(token: &str) -> Option<(String, String)> {
 fn push_current(out: &mut Vec<String>, current: &mut String) {
     if !current.is_empty() {
         out.push(std::mem::take(current));
+    }
+}
+
+fn push_current_span(
+    out: &mut Vec<TokenSpan>,
+    current: &mut String,
+    current_start: &mut Option<usize>,
+    end: usize,
+) {
+    if !current.is_empty() {
+        out.push(TokenSpan {
+            value: std::mem::take(current),
+            start: current_start.take().unwrap_or(end),
+            end,
+        });
+    } else {
+        *current_start = None;
     }
 }
 

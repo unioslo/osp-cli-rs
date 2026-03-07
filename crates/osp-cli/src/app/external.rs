@@ -1,6 +1,7 @@
 use miette::{Result, miette};
 
 use crate::cli::{Commands, parse_inline_command_tokens};
+use crate::invocation::append_invocation_help;
 use crate::pipeline::parse_command_tokens_with_aliases;
 use crate::plugin_manager::PluginManager;
 use crate::repl::ReplViewContext;
@@ -8,11 +9,12 @@ use crate::repl::completion;
 use crate::repl::help as repl_help;
 use crate::state::{AppClients, AppRuntime, AppSession};
 use crate::state::{AuthState, RuntimeContext, UiState};
+use crate::ui_presentation::effective_help_layout;
 
 use super::{
-    CMD_HELP, CliCommandResult, CommandRenderRuntime, PreparedPluginResponse, ReplCommandOutput,
-    command_output::emit_messages_with_runtime, enrich_dispatch_error, ensure_plugin_visible_for,
-    plugin_dispatch_context_for, prepare_plugin_response, run_inline_builtin_command,
+    CMD_HELP, CliCommandResult, EffectiveInvocation, PreparedPluginResponse, ReplCommandOutput,
+    enrich_dispatch_error, ensure_plugin_visible_for, plugin_dispatch_context_for,
+    prepare_plugin_response, run_inline_builtin_command,
 };
 
 pub(super) struct ExternalCommandRuntime<'a> {
@@ -53,28 +55,64 @@ pub(super) fn run_external_command(
     session: &mut AppSession,
     clients: &AppClients,
     tokens: &[String],
+    invocation: &EffectiveInvocation,
 ) -> Result<CliCommandResult> {
-    let invocation = match parse_external_invocation(runtime, session, tokens)? {
+    let help_layout = effective_help_layout(runtime.config.resolved());
+    run_external_command_with_help_renderer(
+        runtime,
+        session,
+        clients,
+        tokens,
+        invocation,
+        |stdout| {
+            let resolved = invocation.ui.render_settings.resolve_render_settings();
+            repl_help::render_help_with_chrome(stdout, &resolved, help_layout)
+        },
+    )
+}
+
+pub(crate) fn run_external_command_with_help_renderer(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    tokens: &[String],
+    invocation: &EffectiveInvocation,
+    render_help: impl Fn(&str) -> String,
+) -> Result<CliCommandResult> {
+    let parsed = match parse_external_invocation(runtime, session, tokens)? {
         ExternalParse::Handled(result) => return Ok(result),
-        ExternalParse::Invocation(invocation) => invocation,
+        ExternalParse::Invocation(parsed) => parsed,
     };
 
-    if let Some(command) = invocation.inline_command
-        && let Some(result) =
-            run_inline_builtin_command(runtime, session, clients, command, &invocation.stages)?
+    if let Some(command) = parsed.inline_command
+        && let Some(result) = run_inline_builtin_command(
+            runtime,
+            session,
+            clients,
+            Some(invocation),
+            command,
+            &parsed.stages,
+        )?
     {
         return Ok(result);
     }
-    if !invocation.stages.is_empty() {
-        completion::validate_dsl_stages(&invocation.stages)?;
+    if !parsed.stages.is_empty() {
+        completion::validate_dsl_stages(&parsed.stages)?;
     }
 
-    let (command, args) = invocation
+    let (command, args) = parsed
         .tokens
         .split_first()
         .ok_or_else(|| miette!("missing external command"))?;
     let external_runtime = ExternalCommandRuntime::from_parts(runtime, clients);
-    run_external_plugin_command(&external_runtime, command, args, &invocation.stages)
+    run_external_plugin_command(
+        &external_runtime,
+        command,
+        args,
+        &parsed.stages,
+        invocation,
+        render_help,
+    )
 }
 
 fn parse_external_invocation(
@@ -100,8 +138,13 @@ fn parse_external_invocation(
                 || err.kind() == clap::error::ErrorKind::DisplayVersion
             {
                 let resolved = runtime.ui.render_settings.resolve_render_settings();
+                let help_layout = effective_help_layout(runtime.config.resolved());
                 return Ok(ExternalParse::Handled(CliCommandResult::text(
-                    repl_help::render_help_with_chrome(&err.to_string(), &resolved),
+                    repl_help::render_help_with_chrome(
+                        &append_invocation_help(&err.to_string()),
+                        &resolved,
+                        help_layout,
+                    ),
                 )));
             }
             return Err(miette!(err.to_string()));
@@ -115,28 +158,15 @@ fn parse_external_invocation(
     }))
 }
 
-fn emit_command_conflict_warning_for(
-    runtime: &ExternalCommandRuntime<'_>,
-    command: &str,
-    plugin_manager: &PluginManager,
-) {
-    let Some(message) = plugin_manager.conflict_warning(command) else {
-        return;
-    };
-    let mut messages = osp_ui::messages::MessageBuffer::default();
-    messages.warning(message);
-    let render_runtime = CommandRenderRuntime::new(runtime.config_state.resolved(), runtime.ui);
-    emit_messages_with_runtime(&render_runtime, &messages, runtime.ui.message_verbosity);
-}
-
 fn run_external_plugin_command(
     runtime: &ExternalCommandRuntime<'_>,
     command: &str,
     args: &[String],
     stages: &[String],
+    invocation: &EffectiveInvocation,
+    render_help: impl Fn(&str) -> String,
 ) -> Result<CliCommandResult> {
     ensure_plugin_visible_for(runtime.auth, command)?;
-    emit_command_conflict_warning_for(runtime, command, runtime.plugins);
 
     tracing::debug!(
         command = %command,
@@ -145,14 +175,14 @@ fn run_external_plugin_command(
     );
 
     if is_help_passthrough(args) {
-        let dispatch_context = plugin_dispatch_context_for(runtime, None);
+        let mut dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation));
+        dispatch_context.provider_override = invocation.plugin_provider.clone();
         let raw = runtime
             .plugins
             .dispatch_passthrough(command, args, &dispatch_context)
             .map_err(enrich_dispatch_error)?;
         let mut result = if !raw.stdout.is_empty() {
-            let resolved = runtime.ui.render_settings.resolve_render_settings();
-            CliCommandResult::text(repl_help::render_help_with_chrome(&raw.stdout, &resolved))
+            CliCommandResult::text(render_help(&raw.stdout))
         } else {
             CliCommandResult::exit(raw.status_code)
         };
@@ -163,7 +193,8 @@ fn run_external_plugin_command(
         return Ok(result);
     }
 
-    let dispatch_context = plugin_dispatch_context_for(runtime, None);
+    let mut dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation));
+    dispatch_context.provider_override = invocation.plugin_provider.clone();
     let response = runtime
         .plugins
         .dispatch(command, args, &dispatch_context)
@@ -182,6 +213,7 @@ fn render_external_plugin_response(
             messages: failure.messages,
             output: None,
             stderr_text: None,
+            failure_report: Some(failure.report),
         }),
         PreparedPluginResponse::Output(prepared) => Ok(CliCommandResult {
             exit_code: 0,
@@ -191,6 +223,7 @@ fn render_external_plugin_response(
                 format_hint: prepared.format_hint,
             }),
             stderr_text: None,
+            failure_report: None,
         }),
     }
 }
@@ -277,6 +310,7 @@ mod tests {
             meta: ResponseMetaV1 {
                 format_hint: Some("json".to_string()),
                 columns: None,
+                column_align: Vec::new(),
             },
         };
 

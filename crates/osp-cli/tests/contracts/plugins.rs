@@ -101,7 +101,7 @@ fn unknown_domain_command_shows_plugin_hint_contract() {
         .failure()
         .stderr(predicate::str::contains("no plugin provides command: ldap"))
         .stderr(predicate::str::contains(
-            "Hint: run `osp plugins list` and set --plugin-dir or OSP_PLUGIN_PATH",
+            "Hint: run osp plugins list and set --plugin-dir or OSP_PLUGIN_PATH",
         ));
 
     let _ = std::fs::remove_dir_all(&home);
@@ -668,6 +668,9 @@ fn conflicting_providers_are_visible_in_plugin_commands_contract() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains(r#""conflicted": true"#))
+        .stdout(predicate::str::contains(r#""requires_selection": true"#))
+        .stdout(predicate::str::contains(r#""provider": null"#))
+        .stdout(predicate::str::contains(r#""source": null"#))
         .stdout(predicate::str::contains("alpha-provider (env)"))
         .stdout(predicate::str::contains("beta-provider (env)"));
 
@@ -677,7 +680,7 @@ fn conflicting_providers_are_visible_in_plugin_commands_contract() {
 
 #[cfg(unix)]
 #[test]
-fn selected_provider_overrides_precedence_until_cleared_contract() {
+fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
     let dir = make_temp_dir("osp-cli-plugin-select-provider");
     let _alpha = write_provider_plugin(&dir, "alpha-provider", "shared", "alpha");
     let _beta = write_provider_plugin(&dir, "beta-provider", "shared", "beta");
@@ -690,9 +693,22 @@ fn selected_provider_overrides_precedence_until_cleared_contract() {
         .args(["shared"]);
     before
         .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "command shared is provided by multiple plugins",
+        ))
+        .stderr(predicate::str::contains("--plugin-provider"));
+
+    let mut oneshot = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    oneshot
+        .env("HOME", &home)
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--plugin-provider", "beta-provider", "shared"]);
+    oneshot
+        .assert()
         .success()
-        .stdout(predicate::str::contains("alpha-from-plugin"))
-        .stderr(predicate::str::contains("multiple plugins"));
+        .stdout(predicate::str::contains("beta-from-plugin"));
 
     let mut select = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     select
@@ -700,7 +716,7 @@ fn selected_provider_overrides_precedence_until_cleared_contract() {
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["plugins", "select-provider", "shared", "beta-provider"]);
     select.assert().success().stderr(predicate::str::contains(
-        "selected provider for command `shared`: beta-provider",
+        "selected provider for command shared: beta-provider",
     ));
 
     let mut commands = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -713,6 +729,7 @@ fn selected_provider_overrides_precedence_until_cleared_contract() {
         .success()
         .stdout(predicate::str::contains(r#""name": "shared""#))
         .stdout(predicate::str::contains(r#""provider": "beta-provider""#))
+        .stdout(predicate::str::contains(r#""requires_selection": false"#))
         .stdout(predicate::str::contains(r#""selected_explicitly": true"#));
 
     let mut after_select = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -724,7 +741,8 @@ fn selected_provider_overrides_precedence_until_cleared_contract() {
         .assert()
         .success()
         .stdout(predicate::str::contains("beta-from-plugin"))
-        .stderr(predicate::str::contains("multiple plugins").not());
+        .stderr(predicate::str::contains("multiple plugins").not())
+        .stderr(predicate::str::contains("--plugin-provider").not());
 
     let mut clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     clear.env("HOME", &home).env("OSP_PLUGIN_PATH", &dir).args([
@@ -733,7 +751,7 @@ fn selected_provider_overrides_precedence_until_cleared_contract() {
         "shared",
     ]);
     clear.assert().success().stderr(predicate::str::contains(
-        "cleared provider selection for command `shared`",
+        "cleared provider selection for command shared",
     ));
 
     let mut after_clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -743,9 +761,12 @@ fn selected_provider_overrides_precedence_until_cleared_contract() {
         .args(["shared"]);
     after_clear
         .assert()
-        .success()
-        .stdout(predicate::str::contains("alpha-from-plugin"))
-        .stderr(predicate::str::contains("multiple plugins"));
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "command shared is provided by multiple plugins",
+        ))
+        .stderr(predicate::str::contains("--plugin-provider"));
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -753,7 +774,7 @@ fn selected_provider_overrides_precedence_until_cleared_contract() {
 
 #[cfg(unix)]
 #[test]
-fn plugin_source_precedence_is_stable_contract() {
+fn plugin_provider_override_works_across_discovery_sources_contract() {
     let explicit_dir = make_temp_dir("osp-cli-plugin-precedence-explicit");
     let env_dir = make_temp_dir("osp-cli-plugin-precedence-env");
     let bundled_dir = make_temp_dir("osp-cli-plugin-precedence-bundled");
@@ -801,11 +822,10 @@ commands = ["ranked"]
         .assert()
         .success()
         .stdout(predicate::str::contains(r#""name": "ranked""#))
-        .stdout(predicate::str::contains(
-            r#""provider": "explicit-provider""#,
-        ))
-        .stdout(predicate::str::contains(r#""source": "explicit""#))
+        .stdout(predicate::str::contains(r#""provider": null"#))
+        .stdout(predicate::str::contains(r#""source": null"#))
         .stdout(predicate::str::contains(r#""conflicted": true"#))
+        .stdout(predicate::str::contains(r#""requires_selection": true"#))
         .stdout(predicate::str::contains("explicit-provider (explicit)"))
         .stdout(predicate::str::contains("env-provider (env)"))
         .stdout(predicate::str::contains("bundled-provider (bundled)"))
@@ -823,6 +843,8 @@ commands = ["ranked"]
             explicit_dir
                 .to_str()
                 .expect("explicit path should be utf-8"),
+            "--plugin-provider",
+            "explicit-provider",
             "ranked",
         ]);
     explicit
@@ -835,7 +857,7 @@ commands = ["ranked"]
         .env("OSP_PLUGIN_PATH", &env_dir)
         .env("OSP_BUNDLED_PLUGIN_DIR", &bundled_dir)
         .env("PATH", &path_env)
-        .args(["ranked"]);
+        .args(["--plugin-provider", "env-provider", "ranked"]);
     env.assert()
         .success()
         .stdout(predicate::str::contains("env-from-plugin"));
@@ -846,7 +868,7 @@ commands = ["ranked"]
         .env_remove("OSP_PLUGIN_PATH")
         .env("OSP_BUNDLED_PLUGIN_DIR", &bundled_dir)
         .env("PATH", &path_env)
-        .args(["ranked"]);
+        .args(["--plugin-provider", "bundled-provider", "ranked"]);
     bundled
         .assert()
         .success()
@@ -857,7 +879,7 @@ commands = ["ranked"]
         .env_remove("OSP_PLUGIN_PATH")
         .env_remove("OSP_BUNDLED_PLUGIN_DIR")
         .env("PATH", &path_env)
-        .args(["ranked"]);
+        .args(["--plugin-provider", "user-provider", "ranked"]);
     user.assert()
         .success()
         .stdout(predicate::str::contains("user-from-plugin"));
@@ -870,7 +892,7 @@ commands = ["ranked"]
         .env_remove("OSP_PLUGIN_PATH")
         .env_remove("OSP_BUNDLED_PLUGIN_DIR")
         .env("PATH", &path_env)
-        .args(["ranked"]);
+        .args(["--plugin-provider", "path-provider", "ranked"]);
     path.assert()
         .success()
         .stdout(predicate::str::contains("path-from-plugin"));

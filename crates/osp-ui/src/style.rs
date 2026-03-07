@@ -2,6 +2,7 @@ use crate::theme::{self, ThemeDefinition};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyleOverrides {
+    pub text: Option<String>,
     pub key: Option<String>,
     pub muted: Option<String>,
     pub table_header: Option<String>,
@@ -17,6 +18,11 @@ pub struct StyleOverrides {
     pub panel_title: Option<String>,
     pub code: Option<String>,
     pub json_key: Option<String>,
+    pub message_error: Option<String>,
+    pub message_warning: Option<String>,
+    pub message_success: Option<String>,
+    pub message_info: Option<String>,
+    pub message_trace: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,19 +141,27 @@ fn override_for_token(token: StyleToken, overrides: &StyleOverrides) -> Option<&
     match token {
         StyleToken::Key => overrides.key.as_deref(),
         StyleToken::Muted => overrides.muted.as_deref(),
-        StyleToken::TableHeader => overrides.table_header.as_deref(),
-        StyleToken::MregKey => overrides.mreg_key.as_deref(),
-        StyleToken::JsonKey => overrides.json_key.as_deref(),
-        StyleToken::Code => overrides.code.as_deref(),
+        StyleToken::TableHeader => overrides
+            .table_header
+            .as_deref()
+            .or(overrides.key.as_deref()),
+        StyleToken::MregKey => overrides.mreg_key.as_deref().or(overrides.key.as_deref()),
+        StyleToken::JsonKey => overrides.json_key.as_deref().or(overrides.key.as_deref()),
+        StyleToken::Code => overrides.code.as_deref().or(overrides.text.as_deref()),
         StyleToken::PanelBorder => overrides.panel_border.as_deref(),
         StyleToken::PanelTitle => overrides.panel_title.as_deref(),
-        StyleToken::Value => overrides.value.as_deref(),
+        StyleToken::Value => overrides.value.as_deref().or(overrides.text.as_deref()),
         StyleToken::Number => overrides.number.as_deref(),
         StyleToken::BoolTrue => overrides.bool_true.as_deref(),
         StyleToken::BoolFalse => overrides.bool_false.as_deref(),
         StyleToken::Null => overrides.null_value.as_deref(),
         StyleToken::Ipv4 => overrides.ipv4.as_deref(),
         StyleToken::Ipv6 => overrides.ipv6.as_deref(),
+        StyleToken::MessageError => overrides.message_error.as_deref(),
+        StyleToken::MessageWarning => overrides.message_warning.as_deref(),
+        StyleToken::MessageSuccess => overrides.message_success.as_deref(),
+        StyleToken::MessageInfo => overrides.message_info.as_deref(),
+        StyleToken::MessageTrace => overrides.message_trace.as_deref(),
         _ => None,
     }
 }
@@ -252,5 +266,51 @@ mod tests {
             },
         );
         assert!(out.starts_with("\x1b[38;2;255;0;0m"));
+    }
+
+    #[test]
+    fn generic_text_override_reaches_value_and_code_tokens_unit() {
+        let overrides = StyleOverrides {
+            text: Some("#112233".to_string()),
+            ..Default::default()
+        };
+        let value =
+            apply_style_with_overrides("hello", StyleToken::Value, true, "nord", &overrides);
+        let code =
+            apply_style_with_overrides("let x = 1;", StyleToken::Code, true, "nord", &overrides);
+
+        assert!(value.starts_with("\x1b[38;2;17;34;51m"));
+        assert!(code.starts_with("\x1b[38;2;17;34;51m"));
+    }
+
+    #[test]
+    fn generic_key_override_reaches_key_like_tokens_unit() {
+        let overrides = StyleOverrides {
+            key: Some("#abcdef".to_string()),
+            ..Default::default()
+        };
+        let table =
+            apply_style_with_overrides("host", StyleToken::TableHeader, true, "nord", &overrides);
+        let json =
+            apply_style_with_overrides("\"uid\"", StyleToken::JsonKey, true, "nord", &overrides);
+
+        assert!(table.starts_with("\x1b[38;2;171;205;239m"));
+        assert!(json.starts_with("\x1b[38;2;171;205;239m"));
+    }
+
+    #[test]
+    fn message_override_reaches_message_tokens_unit() {
+        let overrides = StyleOverrides {
+            message_warning: Some("#ffaa00".to_string()),
+            ..Default::default()
+        };
+        let out = apply_style_with_overrides(
+            "careful",
+            StyleToken::MessageWarning,
+            true,
+            "nord",
+            &overrides,
+        );
+        assert!(out.starts_with("\x1b[38;2;255;170;0m"));
     }
 }

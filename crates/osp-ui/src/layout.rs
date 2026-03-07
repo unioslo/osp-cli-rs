@@ -348,9 +348,11 @@ mod tests {
             grid_columns: None,
             column_weight: 3,
             table_overflow: crate::TableOverflow::Clip,
+            table_border: crate::TableBorderStyle::Square,
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: crate::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
+            chrome_frame: crate::messages::SectionFrameStyle::Top,
         }
     }
 
@@ -368,9 +370,11 @@ mod tests {
             grid_columns: None,
             column_weight: 3,
             table_overflow: crate::TableOverflow::Clip,
+            table_border: crate::TableBorderStyle::Square,
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: crate::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
+            chrome_frame: crate::messages::SectionFrameStyle::Top,
         }
     }
 

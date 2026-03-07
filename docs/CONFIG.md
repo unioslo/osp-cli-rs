@@ -68,13 +68,19 @@ This order is the public contract. Changing it is a breaking change.
 
 Notes:
 
-- Launch-time flags that map cleanly to config keys are seeded into the
-  in-memory session layer.
-  - examples: `--json`, `--mode`, `--color`, `--ascii`, `--theme`, `-u`,
-    `-v/-q`, `-d`
-- REPL `config set --session ...` writes into that same layer.
-- This means some launch flags may appear as `source=session` in
-  `config get --sources`, which is intentional.
+- REPL `config set --session ...` writes into the in-memory session layer.
+- Launch-time bootstrap flags like `--theme` and `-u` may still affect startup
+  state or session defaults.
+- Invocation flags like `--json`, `--format`, `--mode`, `--color`, `--ascii`,
+  `-v/-q`, `-d`, and `--plugin-provider` do not write into config state.
+- `config get --sources` therefore reflects stored defaults, not one-shot
+  invocation overrides.
+
+For UI keys, there is one more rule inside the resolved config:
+
+- explicit per-key values beat `ui.presentation`
+- `ui.presentation` only seeds keys still at builtin default
+- `config explain` shows that seeded effect when it matters
 
 ## Loader Abstraction
 
@@ -251,6 +257,16 @@ Minimum contract tests:
 
 These keys now drive REPL chrome and message rendering:
 
+- `ui.presentation`
+  - `expressive | compact | austere`
+- `ui.mode`
+- `ui.color.mode`
+- `ui.unicode.mode`
+- `ui.chrome.frame`
+  - `none | top | bottom | top-bottom | square | round`
+- `ui.table.border`
+  - `none | square | round`
+- `ui.table.overflow`
 - `theme.name`
 - `theme.path`
 - `user.name`
@@ -259,6 +275,44 @@ These keys now drive REPL chrome and message rendering:
 - `repl.simple_prompt`
 - `repl.shell_indicator`
 - `repl.intro`
+- `repl.intro.style`
+- `ui.help.layout`
+  - `full | compact | minimal`
 - `color.prompt.text`
 - `color.prompt.command`
-- `ui.messages.format`
+- `ui.messages.layout`
+  - `grouped | minimal`
+
+## UI Examples
+
+Compact REPL defaults:
+
+```toml
+[terminal.repl]
+ui.presentation = "compact"
+```
+
+Quiet, plain operator profile:
+
+```toml
+[profile.ops]
+ui.presentation = "austere"
+ui.mode = "plain"
+ui.color.mode = "never"
+ui.chrome.frame = "none"
+ui.messages.layout = "minimal"
+```
+
+Migration note:
+
+- if you used `gammel-og-bitter` before, use `ui.presentation = "austere"`
+- the old name remains a CLI alias, not the canonical config vocabulary
+
+## REPL Config Writes
+
+Store choice depends on where you run the command:
+
+- in one-shot CLI, `config set` defaults to the persistent config store
+- in the REPL, `config set` defaults to the session store
+- use `--save`, `--config`, or `--secrets` for persistence
+- use `--session` to force in-memory session behavior

@@ -17,7 +17,12 @@ pub const DEFAULT_LOG_FILE_LEVEL: &str = "warn";
 pub const DEFAULT_UI_WIDTH: i64 = 72;
 pub const DEFAULT_UI_MARGIN: i64 = 0;
 pub const DEFAULT_UI_INDENT: i64 = 2;
-pub const DEFAULT_UI_MESSAGES_FORMAT: &str = "rules";
+pub const DEFAULT_UI_PRESENTATION: &str = "expressive";
+pub const DEFAULT_UI_HELP_LAYOUT: &str = "full";
+pub const DEFAULT_UI_MESSAGES_LAYOUT: &str = "grouped";
+pub const DEFAULT_UI_CHROME_FRAME: &str = "top";
+pub const DEFAULT_UI_TABLE_BORDER: &str = "square";
+pub const DEFAULT_REPL_INTRO_STYLE: &str = "full";
 pub const DEFAULT_UI_SHORT_LIST_MAX: i64 = 1;
 pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
 pub const DEFAULT_UI_GRID_PADDING: i64 = 4;
@@ -124,9 +129,11 @@ impl RuntimeDefaults {
             "user.name" => env.user_name(),
             "domain" => env.domain_name(),
             "repl.prompt" => default_repl_prompt.to_string(),
+            "repl.input_mode" => "auto".to_string(),
             "repl.simple_prompt" => false,
             "repl.shell_indicator" => "[{shell}]".to_string(),
             "repl.intro" => true,
+            "repl.intro.style" => DEFAULT_REPL_INTRO_STYLE.to_string(),
             "repl.history.path" => env.repl_history_path(),
             "repl.history.max_entries" => DEFAULT_REPL_HISTORY_MAX_ENTRIES,
             "repl.history.enabled" => DEFAULT_REPL_HISTORY_ENABLED,
@@ -140,8 +147,12 @@ impl RuntimeDefaults {
             "ui.width" => DEFAULT_UI_WIDTH,
             "ui.margin" => DEFAULT_UI_MARGIN,
             "ui.indent" => DEFAULT_UI_INDENT,
-            "ui.messages.format" => DEFAULT_UI_MESSAGES_FORMAT.to_string(),
+            "ui.presentation" => DEFAULT_UI_PRESENTATION.to_string(),
+            "ui.help.layout" => DEFAULT_UI_HELP_LAYOUT.to_string(),
+            "ui.messages.layout" => DEFAULT_UI_MESSAGES_LAYOUT.to_string(),
+            "ui.chrome.frame" => DEFAULT_UI_CHROME_FRAME.to_string(),
             "ui.table.overflow" => DEFAULT_UI_TABLE_OVERFLOW.to_string(),
+            "ui.table.border" => DEFAULT_UI_TABLE_BORDER.to_string(),
             "ui.short_list_max" => DEFAULT_UI_SHORT_LIST_MAX,
             "ui.medium_list_max" => DEFAULT_UI_MEDIUM_LIST_MAX,
             "ui.grid_padding" => DEFAULT_UI_GRID_PADDING,
@@ -409,6 +420,12 @@ mod tests {
             Some(&ConfigValue::String("osp> ".to_string()))
         );
         assert_eq!(
+            find_value(&defaults, "repl.intro.style"),
+            Some(&ConfigValue::String(
+                super::DEFAULT_REPL_INTRO_STYLE.to_string()
+            ))
+        );
+        assert_eq!(
             find_value(&defaults, "repl.history.max_entries"),
             Some(&ConfigValue::Integer(
                 super::DEFAULT_REPL_HISTORY_MAX_ENTRIES
@@ -417,6 +434,36 @@ mod tests {
         assert_eq!(
             find_value(&defaults, "ui.width"),
             Some(&ConfigValue::Integer(super::DEFAULT_UI_WIDTH))
+        );
+        assert_eq!(
+            find_value(&defaults, "ui.presentation"),
+            Some(&ConfigValue::String(
+                super::DEFAULT_UI_PRESENTATION.to_string()
+            ))
+        );
+        assert_eq!(
+            find_value(&defaults, "ui.help.layout"),
+            Some(&ConfigValue::String(
+                super::DEFAULT_UI_HELP_LAYOUT.to_string()
+            ))
+        );
+        assert_eq!(
+            find_value(&defaults, "ui.messages.layout"),
+            Some(&ConfigValue::String(
+                super::DEFAULT_UI_MESSAGES_LAYOUT.to_string()
+            ))
+        );
+        assert_eq!(
+            find_value(&defaults, "ui.chrome.frame"),
+            Some(&ConfigValue::String(
+                super::DEFAULT_UI_CHROME_FRAME.to_string()
+            ))
+        );
+        assert_eq!(
+            find_value(&defaults, "ui.table.border"),
+            Some(&ConfigValue::String(
+                super::DEFAULT_UI_TABLE_BORDER.to_string()
+            ))
         );
         assert_eq!(
             find_value(&defaults, "color.prompt.text"),

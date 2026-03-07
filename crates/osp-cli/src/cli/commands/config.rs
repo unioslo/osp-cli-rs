@@ -1,7 +1,8 @@
 use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, ConfigExplainContext, ReplCommandOutput,
     RuntimeConfigRequest, config_explain_json, config_explain_result, config_value_to_json,
-    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
+    document_from_json, document_from_text, explain_runtime_config, format_scope, is_sensitive_key,
+    render_config_explain_text, resolve_runtime_config,
 };
 use crate::cli::{
     ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs, ConfigUnsetArgs,
@@ -108,12 +109,14 @@ fn run_config_get(context: ConfigReadContext<'_>, args: ConfigGetArgs) -> Result
                 format_hint: None,
             }),
             stderr_text: None,
+            failure_report: None,
         }),
         None => Ok(CliCommandResult {
             exit_code: 1,
             messages,
             output: None,
             stderr_text: None,
+            failure_report: None,
         }),
     }
 }
@@ -336,21 +339,21 @@ fn run_config_set(
     }
 
     let output = if args.explain {
-        let explain = explain_runtime_config(
-            RuntimeConfigRequest::new(
-                context.context.profile_override().map(str::to_owned),
-                Some(context.context.terminal_kind().as_config_terminal()),
-            )
-            .with_runtime_load(context.runtime_load)
-            .with_session_layer(Some(context.session_overrides.clone())),
-            &key,
-        )?;
+        let request = RuntimeConfigRequest::new(
+            context.context.profile_override().map(str::to_owned),
+            Some(context.context.terminal_kind().as_config_terminal()),
+        )
+        .with_runtime_load(context.runtime_load)
+        .with_session_layer(Some(context.session_overrides.clone()));
+        let explain = explain_runtime_config(request.clone(), &key)?;
+        let config = resolve_runtime_config(request)?;
         if matches!(context.ui.render_settings.format, OutputFormat::Json) {
-            let payload = config_explain_json(&explain, false);
-            let rendered = serde_json::to_string_pretty(&payload).into_diagnostic()?;
-            ReplCommandOutput::Text(format!("{rendered}\n"))
+            let payload = config_explain_json(&explain, &config, false);
+            ReplCommandOutput::Document(document_from_json(payload))
         } else {
-            ReplCommandOutput::Text(render_config_explain_text(&explain, false))
+            ReplCommandOutput::Document(document_from_text(&render_config_explain_text(
+                &explain, &config, false,
+            )))
         }
     } else {
         ReplCommandOutput::Output {
@@ -373,6 +376,7 @@ fn run_config_set(
         messages,
         output: Some(output),
         stderr_text: None,
+        failure_report: None,
     })
 }
 
@@ -492,6 +496,7 @@ fn run_config_unset(
             format_hint: None,
         }),
         stderr_text: None,
+        failure_report: None,
     })
 }
 
