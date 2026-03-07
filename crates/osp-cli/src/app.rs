@@ -729,5 +729,4 @@ pub(crate) fn resolve_effective_render_settings(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests;
