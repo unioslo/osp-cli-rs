@@ -177,7 +177,10 @@ fn resolve_default_profile(
             validate_bootstrap_value("profile.default", &value)?;
             match value.reveal() {
                 ConfigValue::String(profile) => Ok(normalize_identifier(profile)),
-                other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
+                other => Err(ConfigError::InvalidBootstrapValue {
+                    key: "profile.default".to_string(),
+                    reason: format!("expected string, got {other:?}"),
+                }),
             }
         }
     }

@@ -307,10 +307,7 @@ profile.default = "   "
 
     match err {
         ConfigError::LayerLoad { source, .. } => {
-            assert!(matches!(
-                *source,
-                ConfigError::InvalidDefaultProfileValue(_)
-            ));
+            assert!(matches!(*source, ConfigError::InvalidBootstrapValue { .. }));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -339,7 +336,7 @@ profile.default = "uio"
     )
     .expect_err("empty bootstrap value should fail before write");
 
-    assert!(matches!(err, ConfigError::InvalidDefaultProfileValue(_)));
+    assert!(matches!(err, ConfigError::InvalidBootstrapValue { .. }));
 }
 
 fn make_temp_dir(prefix: &str) -> std::path::PathBuf {

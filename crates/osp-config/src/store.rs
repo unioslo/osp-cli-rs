@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    normalize_scope, validate_bootstrap_value, validate_key_scope, with_path_context, ConfigError,
-    ConfigValue, Scope, TomlEditResult,
+    ConfigError, ConfigValue, Scope, TomlEditResult, normalize_scope, validate_bootstrap_value,
+    validate_key_scope, with_path_context,
 };
 
 pub fn set_scoped_value_in_toml(

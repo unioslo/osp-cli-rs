@@ -359,7 +359,7 @@ fn env_rejects_empty_bootstrap_default_profile_contract() {
         .expect_err("empty bootstrap env override should fail");
     assert!(matches!(
         err,
-        osp_config::ConfigError::InvalidDefaultProfileValue(_)
+        osp_config::ConfigError::InvalidBootstrapValue { .. }
     ));
 }
 
@@ -627,7 +627,7 @@ fn bootstrap_rejects_empty_default_profile_contract() {
         .expect_err("empty default profile should fail");
     assert!(matches!(
         err,
-        osp_config::ConfigError::InvalidDefaultProfileValue(_)
+        osp_config::ConfigError::InvalidBootstrapValue { .. }
     ));
 }
 
@@ -644,7 +644,7 @@ fn bootstrap_rejects_non_string_default_profile_contract() {
         .expect_err("non-string default profile should fail");
     assert!(matches!(
         err,
-        osp_config::ConfigError::InvalidDefaultProfileType(_)
+        osp_config::ConfigError::InvalidBootstrapValue { .. }
     ));
 }
 
@@ -663,7 +663,7 @@ fn programmatic_layer_rejects_invalid_bootstrap_value_during_prepare_contract() 
         .expect_err("invalid bootstrap value should fail during layer validation");
     assert!(matches!(
         err,
-        osp_config::ConfigError::InvalidDefaultProfileValue(_)
+        osp_config::ConfigError::InvalidBootstrapValue { .. }
     ));
 }
 

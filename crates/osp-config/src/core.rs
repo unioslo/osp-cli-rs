@@ -177,7 +177,7 @@ pub enum BootstrapValueRule {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapKeySpec {
-    pub key: String,
+    pub key: &'static str,
     pub phase: BootstrapPhase,
     pub runtime_visible: bool,
     pub scope_rule: BootstrapScopeRule,
@@ -194,6 +194,7 @@ impl BootstrapKeySpec {
 
 #[derive(Debug, Clone)]
 pub struct SchemaEntry {
+    canonical_key: Option<&'static str>,
     value_type: SchemaValueType,
     required: bool,
     allowed_values: Option<Vec<String>>,
@@ -206,6 +207,7 @@ pub struct SchemaEntry {
 impl SchemaEntry {
     pub fn string() -> Self {
         Self {
+            canonical_key: None,
             value_type: SchemaValueType::String,
             required: false,
             allowed_values: None,
@@ -218,6 +220,7 @@ impl SchemaEntry {
 
     pub fn boolean() -> Self {
         Self {
+            canonical_key: None,
             value_type: SchemaValueType::Bool,
             required: false,
             allowed_values: None,
@@ -230,6 +233,7 @@ impl SchemaEntry {
 
     pub fn integer() -> Self {
         Self {
+            canonical_key: None,
             value_type: SchemaValueType::Integer,
             required: false,
             allowed_values: None,
@@ -242,6 +246,7 @@ impl SchemaEntry {
 
     pub fn float() -> Self {
         Self {
+            canonical_key: None,
             value_type: SchemaValueType::Float,
             required: false,
             allowed_values: None,
@@ -254,6 +259,7 @@ impl SchemaEntry {
 
     pub fn string_list() -> Self {
         Self {
+            canonical_key: None,
             value_type: SchemaValueType::StringList,
             required: false,
             allowed_values: None,
@@ -307,23 +313,32 @@ impl SchemaEntry {
         self.runtime_visible
     }
 
-    fn bootstrap_spec(&self, key: &str) -> Option<BootstrapKeySpec> {
+    fn with_canonical_key(mut self, key: &'static str) -> Self {
+        self.canonical_key = Some(key);
+        self
+    }
+
+    fn bootstrap_spec(&self) -> Option<BootstrapKeySpec> {
         Some(BootstrapKeySpec {
-            key: key.to_string(),
+            key: self.canonical_key?,
             phase: self.bootstrap_phase?,
             runtime_visible: self.runtime_visible,
             scope_rule: self.bootstrap_scope_rule?,
         })
     }
 
-    fn validate_bootstrap_value(&self, _key: &str, value: &ConfigValue) -> Result<(), ConfigError> {
+    fn validate_bootstrap_value(&self, key: &str, value: &ConfigValue) -> Result<(), ConfigError> {
         match self.bootstrap_value_rule {
             Some(BootstrapValueRule::NonEmptyString) => match value.reveal() {
                 ConfigValue::String(current) if !current.trim().is_empty() => Ok(()),
-                ConfigValue::String(current) => Err(ConfigError::InvalidDefaultProfileValue(
-                    format!("{current:?}"),
-                )),
-                other => Err(ConfigError::InvalidDefaultProfileType(format!("{other:?}"))),
+                ConfigValue::String(current) => Err(ConfigError::InvalidBootstrapValue {
+                    key: key.to_string(),
+                    reason: format!("expected a non-empty string, got {current:?}"),
+                }),
+                other => Err(ConfigError::InvalidBootstrapValue {
+                    key: key.to_string(),
+                    reason: format!("expected string, got {other:?}"),
+                }),
             },
             None => Ok(()),
         }
@@ -460,8 +475,9 @@ impl ConfigSchema {
 }
 
 impl ConfigSchema {
-    pub fn insert(&mut self, key: &str, entry: SchemaEntry) {
-        self.entries.insert(key.to_string(), entry);
+    pub fn insert(&mut self, key: &'static str, entry: SchemaEntry) {
+        self.entries
+            .insert(key.to_string(), entry.with_canonical_key(key));
     }
 
     pub fn set_allow_extensions_namespace(&mut self, value: bool) {
@@ -483,7 +499,7 @@ impl ConfigSchema {
         let normalized = key.trim().to_ascii_lowercase();
         self.entries
             .get(&normalized)
-            .and_then(|entry| entry.bootstrap_spec(&normalized))
+            .and_then(SchemaEntry::bootstrap_spec)
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (&str, &SchemaEntry)> {
@@ -497,6 +513,12 @@ impl ConfigSchema {
     }
 
     pub fn parse_input_value(&self, key: &str, raw: &str) -> Result<ConfigValue, ConfigError> {
+        if !self.is_known_key(key) {
+            return Err(ConfigError::UnknownConfigKeys {
+                keys: vec![key.to_string()],
+            });
+        }
+
         let value = match self.expected_type(key) {
             Some(SchemaValueType::String) | None => ConfigValue::String(raw.to_string()),
             Some(SchemaValueType::Bool) => {
@@ -550,12 +572,6 @@ impl ConfigSchema {
             }
         }
 
-        if !self.is_known_key(key) {
-            return Err(ConfigError::UnknownConfigKeys {
-                keys: vec![key.to_string()],
-            });
-        }
-
         Ok(value)
     }
 
@@ -605,7 +621,7 @@ impl ConfigSchema {
             && !spec.allows_scope(&normalized_scope)
         {
             return Err(ConfigError::InvalidBootstrapScope {
-                key: spec.key,
+                key: spec.key.to_string(),
                 profile: normalized_scope.profile,
                 terminal: normalized_scope.terminal,
             });
@@ -1442,14 +1458,9 @@ pub(crate) fn parse_env_key(key: &str) -> Result<EnvKeySpec, ConfigError> {
         }
 
         if part.eq_ignore_ascii_case("PROFILE") {
-            // `profile.default` is a bootstrap key, not a profile scope. When
-            // PROFILE/DEFAULT is the entire remaining path, treat it as the
-            // key name so env can participate in bootstrap selection.
-            if parts[cursor..]
-                .iter()
-                .map(|segment| segment.to_ascii_lowercase())
-                .eq(["profile".to_string(), "default".to_string()])
-            {
+            // `profile.default` is a bootstrap key, not a profile scope. Keep
+            // the exception isolated here so the scope parser stays readable.
+            if remaining_parts_are_bootstrap_profile_default(&parts[cursor..]) {
                 break;
             }
             if profile.is_some() {
@@ -1491,6 +1502,12 @@ pub(crate) fn parse_env_key(key: &str) -> Result<EnvKeySpec, ConfigError> {
         key: dotted_key,
         scope: Scope { profile, terminal },
     })
+}
+
+fn remaining_parts_are_bootstrap_profile_default(parts: &[&str]) -> bool {
+    matches!(parts, [profile, default]
+        if profile.eq_ignore_ascii_case("PROFILE")
+            && default.eq_ignore_ascii_case("DEFAULT"))
 }
 
 pub(crate) fn normalize_scope(scope: Scope) -> Scope {

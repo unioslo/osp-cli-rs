@@ -45,8 +45,10 @@ pub enum ConfigError {
         terminal: Option<String>,
     },
     MissingDefaultProfile,
-    InvalidDefaultProfileType(String),
-    InvalidDefaultProfileValue(String),
+    InvalidBootstrapValue {
+        key: String,
+        reason: String,
+    },
     UnknownProfile {
         profile: String,
         known: Vec<String>,
@@ -143,14 +145,8 @@ impl Display for ConfigError {
             ConfigError::MissingDefaultProfile => {
                 write!(f, "missing profile.default and no fallback profile")
             }
-            ConfigError::InvalidDefaultProfileType(actual) => {
-                write!(f, "profile.default must be string, got {actual}")
-            }
-            ConfigError::InvalidDefaultProfileValue(actual) => {
-                write!(
-                    f,
-                    "profile.default must be a non-empty string, got {actual}"
-                )
+            ConfigError::InvalidBootstrapValue { key, reason } => {
+                write!(f, "invalid bootstrap value for {key}: {reason}")
             }
             ConfigError::UnknownProfile { profile, known } => {
                 write!(
