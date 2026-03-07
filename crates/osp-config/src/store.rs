@@ -126,54 +126,48 @@ fn scoped_table_mut<'a>(
     root: &'a mut toml::value::Table,
     scope: &Scope,
 ) -> Result<&'a mut toml::value::Table, ConfigError> {
-    match (scope.profile.as_deref(), scope.terminal.as_deref()) {
-        (None, None) => ensure_table(root, "default"),
-        (Some(profile), None) => {
-            let profiles = ensure_table(root, "profile")?;
-            ensure_table(profiles, profile)
-        }
-        (None, Some(terminal)) => {
-            let terminals = ensure_table(root, "terminal")?;
-            ensure_table(terminals, terminal)
-        }
-        (Some(profile), Some(terminal)) => {
-            let terminals = ensure_table(root, "terminal")?;
-            let terminal_table = ensure_table(terminals, terminal)?;
-            let profile_table = ensure_table(terminal_table, "profile")?;
-            ensure_table(profile_table, profile)
-        }
-    }
+    ensure_table_path(root, &scope_path(scope))
 }
 
 fn scoped_table<'a>(
     root: &'a toml::value::Table,
     scope: &Scope,
 ) -> Result<Option<&'a toml::value::Table>, ConfigError> {
+    get_table_path(root, &scope_path(scope))
+}
+
+fn scope_path(scope: &Scope) -> Vec<&str> {
     match (scope.profile.as_deref(), scope.terminal.as_deref()) {
-        (None, None) => get_table(root, "default"),
-        (Some(profile), None) => get_table(root, "profile").and_then(|profiles| match profiles {
-            Some(profiles) => get_table(profiles, profile),
-            None => Ok(None),
-        }),
-        (None, Some(terminal)) => {
-            get_table(root, "terminal").and_then(|terminals| match terminals {
-                Some(terminals) => get_table(terminals, terminal),
-                None => Ok(None),
-            })
-        }
-        (Some(profile), Some(terminal)) => {
-            let Some(terminals) = get_table(root, "terminal")? else {
-                return Ok(None);
-            };
-            let Some(terminal_table) = get_table(terminals, terminal)? else {
-                return Ok(None);
-            };
-            let Some(profile_table) = get_table(terminal_table, "profile")? else {
-                return Ok(None);
-            };
-            get_table(profile_table, profile)
-        }
+        (None, None) => vec!["default"],
+        (Some(profile), None) => vec!["profile", profile],
+        (None, Some(terminal)) => vec!["terminal", terminal],
+        (Some(profile), Some(terminal)) => vec!["terminal", terminal, "profile", profile],
     }
+}
+
+fn ensure_table_path<'a>(
+    table: &'a mut toml::value::Table,
+    path: &[&str],
+) -> Result<&'a mut toml::value::Table, ConfigError> {
+    let mut cursor = table;
+    for section in path {
+        cursor = ensure_table(cursor, section)?;
+    }
+    Ok(cursor)
+}
+
+fn get_table_path<'a>(
+    table: &'a toml::value::Table,
+    path: &[&str],
+) -> Result<Option<&'a toml::value::Table>, ConfigError> {
+    let mut cursor = table;
+    for section in path {
+        let Some(next) = get_table(cursor, section)? else {
+            return Ok(None);
+        };
+        cursor = next;
+    }
+    Ok(Some(cursor))
 }
 
 fn ensure_table<'a>(
@@ -272,23 +266,7 @@ fn remove_scoped_value(
     scope: &Scope,
     parts: &[&str],
 ) -> Result<bool, ConfigError> {
-    let table = match (scope.profile.as_deref(), scope.terminal.as_deref()) {
-        (None, None) => ensure_table(root, "default")?,
-        (Some(profile), None) => {
-            let profiles = ensure_table(root, "profile")?;
-            ensure_table(profiles, profile)?
-        }
-        (None, Some(terminal)) => {
-            let terminals = ensure_table(root, "terminal")?;
-            ensure_table(terminals, terminal)?
-        }
-        (Some(profile), Some(terminal)) => {
-            let terminals = ensure_table(root, "terminal")?;
-            let terminal_table = ensure_table(terminals, terminal)?;
-            let profile_table = ensure_table(terminal_table, "profile")?;
-            ensure_table(profile_table, profile)?
-        }
-    };
+    let table = ensure_table_path(root, &scope_path(scope))?;
 
     remove_dotted_value(table, parts)
 }
@@ -329,51 +307,32 @@ fn prune_empty_scope_tables(
     root: &mut toml::value::Table,
     scope: &Scope,
 ) -> Result<(), ConfigError> {
-    match (scope.profile.as_deref(), scope.terminal.as_deref()) {
-        (None, None) => {
-            remove_empty_table(root, "default");
-        }
-        (Some(profile), None) => {
-            if let Some(profiles) = root.get_mut("profile") {
-                let profiles = as_table_mut(profiles, "profile")?;
-                remove_empty_table(profiles, profile);
-                if profiles.is_empty() {
-                    root.remove("profile");
-                }
-            }
-        }
-        (None, Some(terminal)) => {
-            if let Some(terminals) = root.get_mut("terminal") {
-                let terminals = as_table_mut(terminals, "terminal")?;
-                remove_empty_table(terminals, terminal);
-                if terminals.is_empty() {
-                    root.remove("terminal");
-                }
-            }
-        }
-        (Some(profile), Some(terminal)) => {
-            if let Some(terminals) = root.get_mut("terminal") {
-                let terminals = as_table_mut(terminals, "terminal")?;
-                if let Some(terminal_value) = terminals.get_mut(terminal) {
-                    let terminal_table = as_table_mut(terminal_value, terminal)?;
-                    if let Some(profile_value) = terminal_table.get_mut("profile") {
-                        let profile_table = as_table_mut(profile_value, "profile")?;
-                        remove_empty_table(profile_table, profile);
-                        if profile_table.is_empty() {
-                            terminal_table.remove("profile");
-                        }
-                    }
-                    if terminal_table.is_empty() {
-                        terminals.remove(terminal);
-                    }
-                }
-                if terminals.is_empty() {
-                    root.remove("terminal");
-                }
-            }
-        }
+    prune_empty_table_path(root, &scope_path(scope))?;
+    Ok(())
+}
+
+fn prune_empty_table_path(
+    table: &mut toml::value::Table,
+    path: &[&str],
+) -> Result<(), ConfigError> {
+    let Some((head, tail)) = path.split_first() else {
+        return Ok(());
+    };
+    if tail.is_empty() {
+        remove_empty_table(table, head);
+        return Ok(());
     }
 
+    let should_remove = if let Some(value) = table.get_mut(*head) {
+        let child = as_table_mut(value, head)?;
+        prune_empty_table_path(child, tail)?;
+        child.is_empty()
+    } else {
+        false
+    };
+    if should_remove {
+        table.remove(*head);
+    }
     Ok(())
 }
 

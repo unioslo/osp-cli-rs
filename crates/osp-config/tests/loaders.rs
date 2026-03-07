@@ -1,7 +1,7 @@
 use osp_config::{
-    set_scoped_value_in_toml, unset_scoped_value_in_toml, ChainedLoader, ConfigError, ConfigLayer,
-    ConfigLoader, ConfigSource, EnvSecretsLoader, EnvVarLoader, LoaderPipeline, ResolveOptions,
-    Scope, SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
+    ChainedLoader, ConfigError, ConfigLayer, ConfigLoader, ConfigSource, EnvSecretsLoader,
+    EnvVarLoader, LoaderPipeline, ResolveOptions, Scope, SecretsTomlLoader, StaticLayerLoader,
+    TomlFileLoader, set_scoped_value_in_toml, unset_scoped_value_in_toml,
 };
 
 #[test]
@@ -69,10 +69,12 @@ ui.format = "table"
     let loader = TomlFileLoader::new(path.clone()).required();
     let layer = loader.load().expect("loader should parse");
     assert!(!layer.entries().is_empty());
-    assert!(layer
-        .entries()
-        .iter()
-        .all(|entry| entry.origin.as_deref() == Some(path.to_string_lossy().as_ref())));
+    assert!(
+        layer
+            .entries()
+            .iter()
+            .all(|entry| entry.origin.as_deref() == Some(path.to_string_lossy().as_ref()))
+    );
 }
 
 #[test]
