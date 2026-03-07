@@ -1,7 +1,7 @@
 use miette::{IntoDiagnostic, Result, WrapErr};
 use osp_config::{
     ConfigExplain, ConfigResolver, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths,
-    RuntimeDefaults, build_runtime_pipeline,
+    RuntimeDefaults, build_runtime_pipeline, is_bootstrap_only_key,
 };
 use osp_core::output::OutputFormat;
 use osp_ui::messages::MessageBuffer;
@@ -105,6 +105,14 @@ pub(crate) fn explain_runtime_config(
 pub(crate) fn render_config_explain_text(explain: &ConfigExplain, show_secrets: bool) -> String {
     let mut out = String::new();
     out.push_str(&format!("key: {}\n", explain.key));
+    out.push_str(&format!(
+        "phase: {}\n",
+        if is_bootstrap_only_key(&explain.key) {
+            "bootstrap"
+        } else {
+            "runtime"
+        }
+    ));
 
     if let Some(final_entry) = &explain.final_entry {
         let value_display = display_value(&explain.key, &final_entry.value, show_secrets);
@@ -181,6 +189,15 @@ pub(crate) fn config_explain_json(
 ) -> serde_json::Value {
     let mut root = serde_json::Map::new();
     root.insert("key".to_string(), explain.key.clone().into());
+    root.insert(
+        "phase".to_string(),
+        if is_bootstrap_only_key(&explain.key) {
+            "bootstrap"
+        } else {
+            "runtime"
+        }
+        .into(),
+    );
     root.insert(
         "active_profile".to_string(),
         explain.active_profile.clone().into(),

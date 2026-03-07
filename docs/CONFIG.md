@@ -224,6 +224,7 @@ The resolver should provide:
 - `config get <key>` and `config get <key> --sources`
 - `config explain <key>` for winner + precedence chain + interpolation trace
 - bootstrap-aware explain for bootstrap keys such as `profile.default`
+- explain output should label whether a key was resolved in bootstrap or runtime
 - `config diagnostics` summary
 
 Diagnostics must redact secrets and avoid logging token contents.
