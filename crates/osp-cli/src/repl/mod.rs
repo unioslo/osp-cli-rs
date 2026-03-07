@@ -44,10 +44,6 @@ pub(crate) struct ReplViewContext<'a> {
 }
 
 impl<'a> ReplViewContext<'a> {
-    pub(crate) fn from_state(state: &'a AppState) -> Self {
-        Self::from_parts(&state.runtime, &state.session)
-    }
-
     pub(crate) fn from_parts(runtime: &'a AppRuntime, session: &'a AppSession) -> Self {
         Self {
             config: runtime.config.resolved(),
@@ -74,7 +70,10 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     loop {
         let cycle =
             loop_state.prepare_cycle(&mut state.runtime, &mut state.session, &mut state.clients)?;
-        loop_state.render_cycle_chrome(ReplViewContext::from_state(state), &cycle.help_text);
+        loop_state.render_cycle_chrome(
+            ReplViewContext::from_parts(&state.runtime, &state.session),
+            &cycle.help_text,
+        );
         print!("Preparing prompt...\r");
 
         let result = run_repl(
