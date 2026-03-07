@@ -444,6 +444,13 @@ mod tests {
     }
 
     #[test]
+    fn split_pipeline_reports_trailing_escape() {
+        let input = "ldap user foo\\";
+        let error = split_pipeline(input).expect_err("trailing escape should fail");
+        assert_eq!(error, LexerError::TrailingEscape { index: input.len() });
+    }
+
+    #[test]
     fn tokenize_stage_splits_inline_operators() {
         let stage = StageSegment {
             raw: "F uid>=5".to_string(),
@@ -482,5 +489,16 @@ mod tests {
         assert_eq!(tokens[1].text, "cn");
         assert_eq!(tokens[2].kind, TokenKind::Op(Op::Eq));
         assert_eq!(tokens[3].text, "foo bar");
+    }
+
+    #[test]
+    fn tokenize_stage_reports_trailing_escape() {
+        let stage = StageSegment {
+            raw: "F path=C:\\Temp\\".to_string(),
+            span: Span { start: 7, end: 22 },
+        };
+
+        let error = tokenize_stage(&stage).expect_err("trailing escape should fail");
+        assert_eq!(error, LexerError::TrailingEscape { index: 22 });
     }
 }

@@ -139,6 +139,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_pipeline_rejects_trailing_escape() {
+        let err = parse_pipeline("ldap user foo\\").expect_err("trailing escape should fail");
+        assert!(matches!(err, LexerError::TrailingEscape { .. }));
+    }
+
+    #[test]
     fn parse_stage_extracts_verb_and_spec() {
         let parsed = parse_stage("F uid=oistes").expect("stage should parse");
         assert_eq!(parsed.kind, ParsedStageKind::Explicit);
@@ -167,5 +173,12 @@ mod tests {
         let err = parse_stage_list(&[r#"F note="oops"#.to_string()])
             .expect_err("invalid quotes should fail");
         assert!(matches!(err, LexerError::UnterminatedDoubleQuote { .. }));
+    }
+
+    #[test]
+    fn parse_stage_list_rejects_trailing_escape() {
+        let err = parse_stage_list(&["F path=C:\\Temp\\".to_string()])
+            .expect_err("trailing escape should fail");
+        assert!(matches!(err, LexerError::TrailingEscape { .. }));
     }
 }
