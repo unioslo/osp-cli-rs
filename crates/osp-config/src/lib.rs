@@ -1,6 +1,7 @@
 mod bootstrap;
 mod core;
 mod error;
+mod interpolate;
 mod loader;
 mod resolver;
 mod runtime;
