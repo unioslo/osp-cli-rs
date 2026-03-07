@@ -11,8 +11,8 @@ use crate::rows::output::rows_to_output_result;
 use crate::state::{AppState, TerminalKind};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
-    ConfigSchema, ResolvedValue, RuntimeConfigPaths, Scope, set_scoped_value_in_toml,
-    unset_scoped_value_in_toml, validate_key_scope,
+    ConfigSchema, ResolvedValue, RuntimeConfigPaths, Scope, is_bootstrap_only_key,
+    set_scoped_value_in_toml, unset_scoped_value_in_toml, validate_key_scope,
 };
 use osp_core::output::OutputFormat;
 use osp_core::row::Row;
@@ -61,15 +61,32 @@ fn config_show_rows(state: &AppState, args: ConfigShowArgs) -> Vec<Row> {
 }
 
 fn config_get_rows(state: &AppState, args: ConfigGetArgs) -> Result<Option<Vec<Row>>> {
-    let Some(entry) = state.config.resolved().get_value_entry(&args.key) else {
-        let mut messages = MessageBuffer::default();
-        messages.error(format!("config key not found: {}", args.key));
-        emit_messages(state, &messages);
-        return Ok(None);
-    };
+    if let Some(entry) = state.config.resolved().get_value_entry(&args.key) {
+        let row = config_entry_row(&args.key, entry, args.sources, args.raw);
+        return Ok(Some(vec![row]));
+    }
 
-    let row = config_entry_row(&args.key, entry, args.sources, args.raw);
-    Ok(Some(vec![row]))
+    if is_bootstrap_only_key(&args.key) {
+        let explain = explain_runtime_config(
+            RuntimeConfigRequest::new(
+                Some(state.config.resolved().active_profile().to_string()),
+                state.config.resolved().terminal(),
+            )
+            .with_runtime_load(state.launch.runtime_load)
+            .with_session_layer(Some(state.session.config_overrides.clone())),
+            &args.key,
+        )?;
+
+        if let Some(entry) = explain.final_entry {
+            let row = config_entry_row(&args.key, &entry, args.sources, args.raw);
+            return Ok(Some(vec![row]));
+        }
+    }
+
+    let mut messages = MessageBuffer::default();
+    messages.error(format!("config key not found: {}", args.key));
+    emit_messages(state, &messages);
+    Ok(None)
 }
 
 pub(crate) fn config_diagnostics_rows(state: &AppState) -> Vec<Row> {

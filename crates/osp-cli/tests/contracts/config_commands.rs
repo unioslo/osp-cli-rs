@@ -69,6 +69,38 @@ ui.mode = "plain"
 
 #[cfg(unix)]
 #[test]
+fn config_get_profile_default_uses_bootstrap_view_contract() {
+    let home = make_temp_dir("osp-cli-config-get-default-profile");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+
+[terminal.repl]
+profile.default = "tsd"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
+        "--json",
+        "config",
+        "get",
+        "profile.default",
+        "--sources",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"key\": \"profile.default\""))
+        .stdout(predicate::str::contains("\"value\": \"uio\""))
+        .stdout(predicate::str::contains("\"source\": \"file\""));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
 fn config_unset_persistent_contract() {
     let home = make_temp_dir("osp-cli-config-unset");
     write_config(
