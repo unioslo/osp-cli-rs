@@ -30,6 +30,8 @@ This works, but coupling is high and hard to test as the feature set grows.
 - No mutable globals for DSL pipeline/result cache.
 - No context/profile stabilization loops.
 - No auth/network logic inside config resolution.
+- Keep config bootstrap explicit and staged:
+  path bootstrap, profile bootstrap, then runtime resolution.
 
 ## Python Findings (Source of Truth)
 

@@ -17,6 +17,10 @@ The current system has strong ideas worth preserving:
 
 ## What We Do Differently
 
+- Config bootstrap is explicit:
+  - path bootstrap chooses which files to load
+  - profile bootstrap chooses the active profile
+  - runtime resolution handles ordinary keys after bootstrap is fixed
 - Profile is selected before config resolution. No resolver loops to “stabilize”
   a profile. This removes oscillation risk entirely.
 - Config values are static. No callables stored in config files or defaults.
@@ -96,17 +100,29 @@ without custom code in `osp-cli`:
   strings, booleans, integers, floats.
 - Enum-like string keys (for example `ui.format`) are validated against
   allowed values.
-- Required keys are enforced (`profile.default`, `profile.active`).
+- Required runtime keys are enforced (`profile.active`).
+- Bootstrap-only keys are validated during bootstrap, not treated as ordinary
+  runtime-resolved values.
 
 ## Resolution Pipeline
 
-1. Select profile from CLI or use `profile.default`.
-2. Load all sources and apply scope resolution inside each loader.
-3. Merge sources using the precedence list above.
-4. Interpolate placeholders in string values.
-5. Adapt types using the schema.
-6. Compute derived values in code, not in config.
-7. Validate required keys and freeze the result.
+1. Run path bootstrap from pre-file inputs:
+   CLI/env/session/bootstrap context/platform defaults.
+2. Load all configured layers.
+3. Run profile bootstrap:
+   CLI `--profile` override or `profile.default` from bootstrap-safe scopes.
+4. Merge runtime values using the precedence list above.
+5. Interpolate placeholders in string values.
+6. Adapt types using the schema.
+7. Compute derived values in code, not in config.
+8. Validate required runtime keys and freeze the result.
+
+Bootstrap is expressive by layer, but restricted by scope:
+
+- path bootstrap does not read config-file contents
+- profile bootstrap reads across loaded layers
+- profile bootstrap ignores profile-dependent scopes
+- runtime resolution never changes the active profile
 
 ## Placeholders
 
@@ -134,6 +150,7 @@ osp.url = "https://osp-orchestrator.uio.no"
 ui.format = "json"
 
 [terminal.repl]
+profile.default = "tsd"
 ui.prompt.secrets = true
 
 [terminal.repl.profile.tsd]
@@ -144,6 +161,10 @@ Notes:
 
 - The profile list is derived from the `[profile.*]` tables.
 - Unscoped keys live in `[default]`.
+- Bootstrap keys such as `profile.default` may be set in `[default]` and
+  `terminal.<term>`.
+- Bootstrap keys such as `profile.default` must not be set in `[profile.*]` or
+  `terminal.<term>.profile.<name>`.
 - Fully scoped values use `terminal.<term>.profile.<name>`.
 
 ## Environment Variable Mapping
@@ -190,15 +211,19 @@ Derived values are computed after resolution and are not configurable:
 Derived values must never depend on values that can change at runtime without
 rebuilding the config.
 
+`profile.default` is not a runtime-derived value. It is a bootstrap input and
+is not carried as an ordinary resolved runtime key.
+
 ## Validation and Diagnostics
 
 The resolver should provide:
 
-- `config show` for resolved values
+- `config show` for resolved runtime values
 - `config show --sources` to include source + scope
 - `config show --raw` for pre-interpolation values
 - `config get <key>` and `config get <key> --sources`
 - `config explain <key>` for winner + precedence chain + interpolation trace
+- bootstrap-aware explain for bootstrap keys such as `profile.default`
 - `config diagnostics` summary
 
 Diagnostics must redact secrets and avoid logging token contents.

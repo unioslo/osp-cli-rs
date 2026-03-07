@@ -24,7 +24,8 @@ crates/
   - Shared primitive types (`Row`) and output enums.
   - No project-internal dependencies.
 - `osp-config`
-  - Runtime/profile config model and loading (expanded later).
+  - Bootstrap + runtime config model and loading.
+  - Owns path bootstrap, profile bootstrap, runtime resolution, and explain.
 - `osp-dsl`
   - DSL tokenizer/parser/stage execution (`P`, `F`, `V`).
 - `osp-ports`
@@ -43,6 +44,8 @@ crates/
   - Binary entrypoint, clap tree, one-shot dispatch, REPL bootstrapping.
   - Owns executable plugin discovery/dispatch and plugin state commands.
   - Owns command ownership policy: domain verbs are plugin-owned.
+  - Internally split by concern under `crates/osp-cli/src/app/` and
+    `crates/osp-cli/src/repl/` so the top-level entrypoints stay orchestration-only.
 
 ## Allowed Crate Dependencies
 
@@ -86,6 +89,31 @@ crates/
 - `osp-cli` runtime state is split into:
   `RuntimeContext`, `ConfigState`, `UiState`, `ReplState`, `SessionState`,
   `ClientsState`.
+
+## Current osp-cli Flow
+
+For the current command path, start at `crates/osp-cli/src/app.rs`.
+
+- Startup/bootstrap details live in `crates/osp-cli/src/app/bootstrap.rs`.
+- One-shot dispatch planning lives in `crates/osp-cli/src/app/dispatch.rs`.
+- External command execution lives in `crates/osp-cli/src/app/external.rs`.
+- Command output rendering lives in `crates/osp-cli/src/app/command_output.rs`.
+- REPL rebuild/reload lives in `crates/osp-cli/src/app/repl_lifecycle.rs`.
+
+Config startup is intentionally staged:
+
+1. bootstrap discovers config/secrets paths
+2. loaders read the configured layers
+3. bootstrap selects the active profile
+4. runtime resolution produces the final config snapshot
+
+For the interactive path, start at `crates/osp-cli/src/repl/mod.rs`.
+
+- REPL loop lifecycle lives in `crates/osp-cli/src/repl/lifecycle.rs`.
+- REPL line dispatch lives in `crates/osp-cli/src/repl/dispatch.rs`.
+- REPL completion tree shaping lives in `crates/osp-cli/src/repl/completion.rs`.
+
+See `docs/COMMAND_FLOW.md` for a short "where do I read next?" guide.
 
 ## PR Gate Checklist
 
