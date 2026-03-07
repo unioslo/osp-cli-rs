@@ -33,6 +33,10 @@ impl StaticLayerLoader {
 
 impl ConfigLoader for StaticLayerLoader {
     fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        tracing::trace!(
+            entries = self.layer.entries().len(),
+            "loaded static config layer"
+        );
         Ok(self.layer.clone())
     }
 }
@@ -64,8 +68,14 @@ impl TomlFileLoader {
 
 impl ConfigLoader for TomlFileLoader {
     fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        tracing::debug!(
+            path = %self.path.display(),
+            missing_ok = self.missing_ok,
+            "loading TOML config layer"
+        );
         if !self.path.exists() {
             if self.missing_ok {
+                tracing::debug!(path = %self.path.display(), "optional TOML config file missing");
                 return Ok(ConfigLayer::default());
             }
             return Err(ConfigError::FileRead {
@@ -85,6 +95,11 @@ impl ConfigLoader for TomlFileLoader {
         for entry in &mut layer.entries {
             entry.origin = Some(origin.clone());
         }
+        tracing::debug!(
+            path = %self.path.display(),
+            entries = layer.entries().len(),
+            "loaded TOML config layer"
+        );
         Ok(layer)
     }
 }
@@ -127,7 +142,14 @@ where
 
 impl ConfigLoader for EnvVarLoader {
     fn load(&self) -> Result<ConfigLayer, ConfigError> {
-        ConfigLayer::from_env_iter(self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        let layer =
+            ConfigLayer::from_env_iter(self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())))?;
+        tracing::debug!(
+            input_vars = self.vars.len(),
+            entries = layer.entries().len(),
+            "loaded environment config layer"
+        );
+        Ok(layer)
     }
 }
 
@@ -165,8 +187,15 @@ impl SecretsTomlLoader {
 
 impl ConfigLoader for SecretsTomlLoader {
     fn load(&self) -> Result<ConfigLayer, ConfigError> {
+        tracing::debug!(
+            path = %self.path.display(),
+            missing_ok = self.missing_ok,
+            strict_permissions = self.strict_permissions,
+            "loading TOML secrets layer"
+        );
         if !self.path.exists() {
             if self.missing_ok {
+                tracing::debug!(path = %self.path.display(), "optional TOML secrets file missing");
                 return Ok(ConfigLayer::default());
             }
             return Err(ConfigError::FileRead {
@@ -189,6 +218,11 @@ impl ConfigLoader for SecretsTomlLoader {
             entry.origin = Some(origin.clone());
         }
         layer.mark_all_secret();
+        tracing::debug!(
+            path = %self.path.display(),
+            entries = layer.entries().len(),
+            "loaded TOML secrets layer"
+        );
         Ok(layer)
     }
 }
@@ -248,6 +282,11 @@ impl ConfigLoader for EnvSecretsLoader {
             );
         }
 
+        tracing::debug!(
+            input_vars = self.vars.len(),
+            entries = layer.entries().len(),
+            "loaded environment secrets layer"
+        );
         Ok(layer)
     }
 }
@@ -279,10 +318,18 @@ impl ChainedLoader {
 impl ConfigLoader for ChainedLoader {
     fn load(&self) -> Result<ConfigLayer, ConfigError> {
         let mut merged = ConfigLayer::default();
+        tracing::debug!(
+            loader_count = self.loaders.len(),
+            "loading chained config layer"
+        );
         for loader in &self.loaders {
             let layer = loader.load()?;
             merged.entries.extend(layer.entries);
         }
+        tracing::debug!(
+            entries = merged.entries().len(),
+            "loaded chained config layer"
+        );
         Ok(merged)
     }
 }
@@ -369,14 +416,25 @@ impl LoaderPipeline {
     }
 
     pub fn load_layers(&self) -> Result<LoadedLayers, ConfigError> {
-        Ok(LoadedLayers {
+        tracing::debug!("loading config layers");
+        let layers = LoadedLayers {
             defaults: self.defaults.load()?,
             file: load_optional_loader(self.file.as_deref())?,
             secrets: load_optional_loader(self.secrets.as_deref())?,
             env: load_optional_loader(self.env.as_deref())?,
             cli: load_optional_loader(self.cli.as_deref())?,
             session: load_optional_loader(self.session.as_deref())?,
-        })
+        };
+        tracing::debug!(
+            defaults = layers.defaults.entries().len(),
+            file = layers.file.entries().len(),
+            secrets = layers.secrets.entries().len(),
+            env = layers.env.entries().len(),
+            cli = layers.cli.entries().len(),
+            session = layers.session.entries().len(),
+            "loaded config layers"
+        );
+        Ok(layers)
     }
 
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {

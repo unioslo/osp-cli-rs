@@ -654,12 +654,26 @@ impl PluginManager {
         let state = self.load_state().unwrap_or_default();
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        select_provider_for_command(command, &active, &state)
-            .map(|selection| selection.plugin)
-            .cloned()
-            .ok_or_else(|| PluginDispatchError::CommandNotFound {
+        let selection = select_provider_for_command(command, &active, &state);
+        if let Some(selection) = selection {
+            tracing::debug!(
+                command = %command,
+                active_providers = providers_for_command(command, &active).len(),
+                selected_provider = %selection.plugin.plugin_id,
+                selection_mode = ?selection.mode,
+                "resolved plugin provider"
+            );
+            Ok(selection.plugin.clone())
+        } else {
+            tracing::warn!(
+                command = %command,
+                active_plugins = active.len(),
+                "no plugin provider found for command"
+            );
+            Err(PluginDispatchError::CommandNotFound {
                 command: command.to_string(),
             })
+        }
     }
 
     pub fn refresh(&self) {
@@ -731,7 +745,10 @@ impl PluginManager {
     }
 
     fn search_roots(&self) -> Vec<SearchRoot> {
-        existing_unique_search_roots(self.ordered_search_roots())
+        let ordered = self.ordered_search_roots();
+        let roots = existing_unique_search_roots(ordered);
+        tracing::debug!(search_roots = roots.len(), "resolved plugin search roots");
+        roots
     }
 
     fn ordered_search_roots(&self) -> Vec<SearchRoot> {
@@ -781,6 +798,10 @@ impl PluginManager {
             );
         }
 
+        tracing::trace!(
+            search_roots = ordered.len(),
+            "assembled ordered plugin search roots"
+        );
         ordered
     }
 
@@ -789,6 +810,7 @@ impl PluginManager {
             .plugin_state_path()
             .ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
         if !path.exists() {
+            tracing::debug!(path = %path.display(), "plugin state file missing; using defaults");
             return Ok(PluginState::default());
         }
 
@@ -796,6 +818,13 @@ impl PluginManager {
             .with_context(|| format!("failed to read plugin state from {}", path.display()))?;
         let state = serde_json::from_str::<PluginState>(&raw)
             .with_context(|| format!("failed to parse plugin state at {}", path.display()))?;
+        tracing::debug!(
+            path = %path.display(),
+            enabled = state.enabled.len(),
+            disabled = state.disabled.len(),
+            preferred = state.preferred_providers.len(),
+            "loaded plugin state"
+        );
         Ok(state)
     }
 
@@ -816,9 +845,11 @@ impl PluginManager {
 
     fn load_describe_cache(&self) -> Result<DescribeCacheFile> {
         let Some(path) = self.describe_cache_path() else {
+            tracing::debug!("describe cache path unavailable; using empty cache");
             return Ok(DescribeCacheFile::default());
         };
         if !path.exists() {
+            tracing::debug!(path = %path.display(), "describe cache missing; using empty cache");
             return Ok(DescribeCacheFile::default());
         }
 
@@ -826,6 +857,11 @@ impl PluginManager {
             .with_context(|| format!("failed to read describe cache {}", path.display()))?;
         let cache = serde_json::from_str::<DescribeCacheFile>(&raw)
             .with_context(|| format!("failed to parse describe cache {}", path.display()))?;
+        tracing::debug!(
+            path = %path.display(),
+            entries = cache.entries.len(),
+            "loaded describe cache"
+        );
         Ok(cache)
     }
 
@@ -1069,6 +1105,16 @@ fn assemble_discovered_plugin(
         }
         Err(err) => merge_issue(&mut plugin.issue, err.to_string()),
     }
+
+    tracing::debug!(
+        plugin_id = %plugin.plugin_id,
+        source = %plugin.source,
+        executable = %plugin.executable.display(),
+        healthy = plugin.issue.is_none(),
+        issue = ?plugin.issue,
+        command_count = plugin.commands.len(),
+        "assembled discovered plugin"
+    );
 
     plugin
 }
@@ -1512,8 +1558,11 @@ fn describe_with_cache(
     let (size, mtime_secs, mtime_nanos) = file_fingerprint(path)?;
 
     if let Some(entry) = find_cached_describe(cache, &key, size, mtime_secs, mtime_nanos) {
+        tracing::trace!(path = %path.display(), "describe cache hit");
         return Ok(entry.describe.clone());
     }
+
+    tracing::trace!(path = %path.display(), "describe cache miss");
 
     let describe = describe_plugin(path, process_timeout)?;
     upsert_cached_describe(cache, key, size, mtime_secs, mtime_nanos, describe.clone());
@@ -1698,18 +1747,29 @@ fn select_provider_for_command<'a>(
     plugins: &[&'a DiscoveredPlugin],
     state: &PluginState,
 ) -> Option<ProviderSelection<'a>> {
-    if let Some(preferred) = state.preferred_providers.get(command)
-        && let Some(plugin) = providers_for_command(command, plugins)
-            .into_iter()
+    let providers = providers_for_command(command, plugins);
+
+    if let Some(preferred) = state.preferred_providers.get(command) {
+        if let Some(plugin) = providers
+            .iter()
+            .copied()
             .find(|plugin| plugin.plugin_id == *preferred)
-    {
-        return Some(ProviderSelection {
-            plugin,
-            mode: ProviderSelectionMode::Preference,
-        });
+        {
+            return Some(ProviderSelection {
+                plugin,
+                mode: ProviderSelectionMode::Preference,
+            });
+        }
+
+        tracing::trace!(
+            command = %command,
+            preferred_provider = %preferred,
+            available_providers = providers.len(),
+            "preferred provider not available; falling back to precedence"
+        );
     }
 
-    providers_for_command(command, plugins)
+    providers
         .into_iter()
         .next()
         .map(|plugin| ProviderSelection {

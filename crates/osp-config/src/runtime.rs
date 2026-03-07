@@ -70,7 +70,13 @@ pub struct RuntimeConfigPaths {
 
 impl RuntimeConfigPaths {
     pub fn discover() -> Self {
-        Self::from_env(&RuntimeEnvironment::capture())
+        let paths = Self::from_env(&RuntimeEnvironment::capture());
+        tracing::debug!(
+            config_file = ?paths.config_file.as_ref().map(|path| path.display().to_string()),
+            secrets_file = ?paths.secrets_file.as_ref().map(|path| path.display().to_string()),
+            "discovered runtime config paths"
+        );
+        paths
     }
 
     fn from_env(env: &RuntimeEnvironment) -> Self {
@@ -200,6 +206,16 @@ pub fn build_runtime_pipeline(
     cli: Option<ConfigLayer>,
     session: Option<ConfigLayer>,
 ) -> LoaderPipeline {
+    tracing::debug!(
+        include_env = load.include_env,
+        include_config_file = load.include_config_file,
+        config_file = ?paths.config_file.as_ref().map(|path| path.display().to_string()),
+        secrets_file = ?paths.secrets_file.as_ref().map(|path| path.display().to_string()),
+        has_cli_layer = cli.is_some(),
+        has_session_layer = session.is_some(),
+        defaults_entries = defaults.entries().len(),
+        "building runtime loader pipeline"
+    );
     let mut pipeline = LoaderPipeline::new(StaticLayerLoader::new(defaults));
 
     if load.include_env {

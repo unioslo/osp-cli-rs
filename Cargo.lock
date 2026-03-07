@@ -947,6 +947,7 @@ name = "osp-config"
 version = "0.1.0"
 dependencies = [
  "toml",
+ "tracing",
 ]
 
 [[package]]

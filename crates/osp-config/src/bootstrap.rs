@@ -37,6 +37,14 @@ pub(crate) fn prepare_resolution(
         &known_profiles,
     )?;
 
+    tracing::debug!(
+        active_profile = %profile_selection.profile,
+        active_profile_source = %profile_selection.source.as_str(),
+        terminal = ?terminal,
+        known_profiles = known_profiles.len(),
+        "prepared config resolution frame"
+    );
+
     Ok(ResolutionFrame {
         active_profile: profile_selection.profile,
         active_profile_source: profile_selection.source,
@@ -131,6 +139,12 @@ fn resolve_active_profile(
     terminal: Option<&str>,
     known_profiles: &BTreeSet<String>,
 ) -> Result<ActiveProfileSelection, ConfigError> {
+    tracing::debug!(
+        explicit_profile = ?explicit,
+        terminal = ?terminal,
+        known_profiles = known_profiles.len(),
+        "resolving active profile"
+    );
     let selection = if let Some(profile) = explicit {
         ActiveProfileSelection {
             profile: normalize_identifier(profile),
@@ -148,11 +162,22 @@ fn resolve_active_profile(
     }
 
     if !known_profiles.is_empty() && !known_profiles.contains(&selection.profile) {
+        tracing::warn!(
+            active_profile = %selection.profile,
+            known_profiles = known_profiles.len(),
+            "resolved unknown active profile"
+        );
         return Err(ConfigError::UnknownProfile {
             profile: selection.profile,
             known: known_profiles.iter().cloned().collect::<Vec<String>>(),
         });
     }
+
+    tracing::debug!(
+        active_profile = %selection.profile,
+        active_profile_source = %selection.source.as_str(),
+        "resolved active profile"
+    );
 
     Ok(selection)
 }
@@ -173,11 +198,22 @@ fn resolve_default_profile(
     }
 
     match picked {
-        None => Ok("default".to_string()),
+        None => {
+            tracing::debug!(terminal = ?terminal, "using implicit default profile");
+            Ok("default".to_string())
+        }
         Some(value) => {
             validate_bootstrap_value("profile.default", &value)?;
             match value.reveal() {
-                ConfigValue::String(profile) => Ok(normalize_identifier(profile)),
+                ConfigValue::String(profile) => {
+                    let normalized = normalize_identifier(profile);
+                    tracing::debug!(
+                        terminal = ?terminal,
+                        selected_profile = %normalized,
+                        "resolved profile.default from loaded layers"
+                    );
+                    Ok(normalized)
+                }
                 other => Err(ConfigError::InvalidBootstrapValue {
                     key: "profile.default".to_string(),
                     reason: format!("expected string, got {other:?}"),

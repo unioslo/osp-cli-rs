@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 toml.workspace = true
+tracing.workspace = true

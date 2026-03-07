@@ -94,16 +94,28 @@ impl ConfigResolver {
     }
 
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
+        tracing::debug!(
+            profile_override = ?options.profile_override,
+            terminal = ?options.terminal,
+            "resolving config"
+        );
         let frame = prepare_resolution(self.layers(), options)?;
         let resolved = self.resolve_maps_for_frame(&frame)?;
-
-        Ok(ResolvedConfig {
+        let config = ResolvedConfig {
             active_profile: frame.active_profile,
             terminal: frame.terminal,
             known_profiles: frame.known_profiles,
             values: resolved.final_values,
             aliases: resolved.alias_values,
-        })
+        };
+        tracing::debug!(
+            active_profile = %config.active_profile(),
+            terminal = ?config.terminal(),
+            values = config.values().len(),
+            aliases = config.aliases().len(),
+            "resolved config"
+        );
+        Ok(config)
     }
 
     pub fn explain_key(
@@ -161,6 +173,11 @@ impl ConfigResolver {
     /// 1. select the winning raw value for each key
     /// 2. interpolate/adapt those winners into final values
     fn resolve_maps_for_frame(&self, frame: &ResolutionFrame) -> Result<ResolvedMaps, ConfigError> {
+        tracing::trace!(
+            active_profile = %frame.active_profile,
+            terminal = ?frame.terminal,
+            "resolving config maps for frame"
+        );
         let mut pre_interpolated = self.collect_selected_values_for_frame(frame);
         // Aliases are selected with the same precedence rules so explain can
         // still show their winning raw source, but they stay out of ordinary
@@ -173,6 +190,12 @@ impl ConfigResolver {
         interpolate_all(&mut final_values)?;
         self.schema.validate_and_adapt(&mut final_values)?;
 
+        tracing::trace!(
+            pre_interpolated = pre_interpolated.len(),
+            final_values = final_values.len(),
+            aliases = alias_values.len(),
+            "resolved config maps for frame"
+        );
         Ok(ResolvedMaps {
             pre_interpolated,
             final_values,
@@ -261,6 +284,14 @@ impl ConfigResolver {
         // intentionally overwrite earlier ones.
         for layer in self.layers() {
             if let Some(entry) = selector.select(layer, key) {
+                if let Some(previous) = &selected {
+                    tracing::trace!(
+                        key = %key,
+                        previous_source = ?previous.source,
+                        next_source = ?entry.source,
+                        "config key winner changed across layers"
+                    );
+                }
                 selected = Some(entry);
             }
         }
