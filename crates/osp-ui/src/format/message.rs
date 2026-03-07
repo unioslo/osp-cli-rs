@@ -208,7 +208,9 @@ fn kind_title_token(kind: MessageKind) -> StyleToken {
 #[cfg(test)]
 mod tests {
     use super::{MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules};
-    use crate::document::Block;
+    use crate::document::{Block, Document, LineBlock, LinePart, PanelRules};
+    use crate::style::StyleToken;
+    use serde_json::json;
 
     #[test]
     fn message_rules_none_yields_lines_without_panel() {
@@ -233,5 +235,138 @@ mod tests {
         );
 
         assert!(matches!(doc.blocks[0], Block::Panel(_)));
+    }
+
+    #[test]
+    fn flat_text_trims_blank_lines_and_uses_uppercase_title_prefix() {
+        let doc = MessageFormatter::build(
+            "\n\nhello\nworld\n\n",
+            MessageOptions {
+                rules: MessageRules::None,
+                kind: MessageKind::Warning,
+                title: Some("warning".to_string()),
+            },
+        );
+
+        let Block::Line(first) = &doc.blocks[0] else {
+            panic!("expected first block to be a line");
+        };
+        assert_eq!(first.parts[0].text, "WARNING: hello");
+        let Block::Line(second) = &doc.blocks[1] else {
+            panic!("expected second block to be a line");
+        };
+        assert_eq!(second.parts[0].text, "world");
+    }
+
+    #[test]
+    fn flat_message_preserves_json_code_and_document_blocks() {
+        let json_doc = MessageFormatter::build(
+            MessageContent::Json(json!({"ok": true})),
+            MessageOptions {
+                rules: MessageRules::None,
+                kind: MessageKind::Info,
+                title: None,
+            },
+        );
+        assert!(matches!(json_doc.blocks[0], Block::Json(_)));
+
+        let code_doc = MessageFormatter::build(
+            MessageContent::Code {
+                code: "ldap user oistes".to_string(),
+                language: Some("bash".to_string()),
+            },
+            MessageOptions {
+                rules: MessageRules::None,
+                kind: MessageKind::Trace,
+                title: None,
+            },
+        );
+        assert!(matches!(code_doc.blocks[0], Block::Code(_)));
+
+        let inner = Document {
+            blocks: vec![Block::Line(LineBlock {
+                parts: vec![LinePart {
+                    text: "nested".to_string(),
+                    token: None,
+                }],
+            })],
+        };
+        let nested = MessageFormatter::build(
+            MessageContent::Document(inner.clone()),
+            MessageOptions {
+                rules: MessageRules::None,
+                kind: MessageKind::Info,
+                title: None,
+            },
+        );
+        assert_eq!(nested.blocks.len(), inner.blocks.len());
+    }
+
+    #[test]
+    fn panel_message_uses_kind_tokens_and_default_title() {
+        let doc = MessageFormatter::build(
+            "failed",
+            MessageOptions {
+                rules: MessageRules::Top,
+                kind: MessageKind::Error,
+                title: None,
+            },
+        );
+
+        let Block::Panel(panel) = &doc.blocks[0] else {
+            panic!("expected panel block");
+        };
+        assert_eq!(panel.title.as_deref(), Some("ERROR"));
+        assert_eq!(panel.kind.as_deref(), Some("error"));
+        assert_eq!(panel.border_token, Some(StyleToken::MessageError));
+        assert_eq!(panel.title_token, Some(StyleToken::MessageError));
+    }
+
+    #[test]
+    fn message_kind_labels_and_rule_mapping_cover_all_variants() {
+        assert_eq!(MessageKind::Success.as_label(), "success");
+        assert_eq!(MessageKind::Trace.as_label(), "trace");
+
+        let top = MessageFormatter::build(
+            "hello",
+            MessageOptions {
+                rules: MessageRules::Top,
+                kind: MessageKind::Info,
+                title: Some("notice".to_string()),
+            },
+        );
+        let Block::Panel(top_panel) = &top.blocks[0] else {
+            panic!("expected panel block");
+        };
+        assert_eq!(top_panel.rules, PanelRules::Top);
+        assert_eq!(top_panel.title.as_deref(), Some("notice"));
+
+        let bottom = MessageFormatter::build(
+            "hello",
+            MessageOptions {
+                rules: MessageRules::Bottom,
+                kind: MessageKind::Success,
+                title: None,
+            },
+        );
+        let Block::Panel(bottom_panel) = &bottom.blocks[0] else {
+            panic!("expected panel block");
+        };
+        assert_eq!(bottom_panel.rules, PanelRules::Bottom);
+        assert_eq!(bottom_panel.title.as_deref(), Some("SUCCESS"));
+    }
+
+    #[test]
+    fn blank_text_normalizes_to_empty_document() {
+        let doc = MessageFormatter::build(
+            "\n \n\t\n",
+            MessageOptions {
+                rules: MessageRules::None,
+                kind: MessageKind::Info,
+                title: None,
+            },
+        );
+
+        assert!(doc.blocks.is_empty());
     }
 }

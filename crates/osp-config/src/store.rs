@@ -436,3 +436,6 @@ fn set_permissions_600(path: &Path) -> Result<(), ConfigError> {
 fn set_permissions_600(_path: &Path) -> Result<(), ConfigError> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

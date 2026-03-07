@@ -576,11 +576,46 @@ fn empty_palette() -> ThemePalette {
 #[cfg(test)]
 mod tests {
     use super::{
-        ThemePaletteFile, ThemeSpec, apply_theme_overrides, empty_theme, is_valid_color_spec,
-        parse_theme_spec, resolve_theme_spec,
+        ThemeCatalog, ThemePaletteFile, ThemeSource, ThemeSpec, apply_theme_overrides,
+        default_theme_paths, empty_theme, expand_theme_path, is_valid_color_spec,
+        load_theme_catalog, log_theme_issues, normalize_theme_paths, parse_theme_spec,
+        resolve_theme_spec,
     };
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use std::collections::BTreeMap;
     use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be valid")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{prefix}-{nonce}"));
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        dir
+    }
+
+    fn resolved_config_with_theme_paths(paths: Vec<String>) -> osp_config::ResolvedConfig {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut file = ConfigLayer::default();
+        file.set("theme.path", paths);
+
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        resolver.set_file(file);
+        resolver
+            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .expect("theme test config should resolve")
+    }
+
     #[test]
     fn theme_file_defaults_id_and_name_from_file_stem() {
         let dir = std::env::temp_dir().join("osp-theme-loader-test");
@@ -691,5 +726,198 @@ accent = "#123456"
     fn color_spec_validation_rejects_unknown_tokens() {
         assert!(!is_valid_color_spec("nope"));
         assert!(!is_valid_color_spec("#12345"));
+    }
+
+    #[test]
+    fn theme_catalog_resolve_normalizes_input_and_rejects_blank_unit() {
+        let mut catalog = ThemeCatalog::default();
+        catalog.entries.insert(
+            "rose-pine".to_string(),
+            super::ThemeEntry {
+                theme: empty_theme("rose-pine", "Rose Pine", None),
+                source: ThemeSource::Builtin,
+                origin: None,
+            },
+        );
+
+        assert!(catalog.resolve("  ").is_none());
+        assert!(catalog.resolve("Rose Pine").is_some());
+        assert_eq!(catalog.ids(), vec!["rose-pine".to_string()]);
+    }
+
+    #[test]
+    fn theme_path_helpers_expand_home_and_drop_blank_entries_unit() {
+        let original = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", "/tmp/theme-home") };
+
+        assert_eq!(expand_theme_path("   "), None);
+        assert_eq!(
+            expand_theme_path("~"),
+            Some(std::path::PathBuf::from("/tmp/theme-home"))
+        );
+        assert_eq!(
+            expand_theme_path("~/themes"),
+            Some(std::path::PathBuf::from("/tmp/theme-home/themes"))
+        );
+        assert_eq!(
+            normalize_theme_paths(vec![" ".to_string(), "~/themes".to_string()]),
+            vec![std::path::PathBuf::from("/tmp/theme-home/themes")]
+        );
+
+        match original {
+            Some(value) => unsafe { std::env::set_var("HOME", value) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+
+    #[test]
+    fn theme_catalog_load_reports_invalid_specs_and_preserves_custom_origins_unit() {
+        let root = unique_temp_dir("osp-theme-loader-catalog");
+        let themes_dir = root.join("themes");
+        let missing_dir = root.join("missing");
+        let dracula_path = themes_dir.join("dracula.toml");
+        let broken_path = themes_dir.join("broken.toml");
+        let cycle_a_path = themes_dir.join("cycle-a.toml");
+        let cycle_b_path = themes_dir.join("cycle-b.toml");
+        let dupe_a_path = themes_dir.join("dupe-a.toml");
+        let dupe_b_path = themes_dir.join("dupe-b.toml");
+        fs::create_dir_all(&themes_dir).expect("themes dir should be created");
+
+        fs::write(
+            &dracula_path,
+            r##"
+[palette]
+accent = "#123456"
+"##,
+        )
+        .expect("override theme should be written");
+        fs::write(&broken_path, "not = [valid").expect("broken theme writes");
+        fs::write(
+            &cycle_a_path,
+            r##"
+id = "cycle-a"
+base = "cycle-b"
+"##,
+        )
+        .expect("cycle a writes");
+        fs::write(
+            &cycle_b_path,
+            r##"
+id = "cycle-b"
+base = "cycle-a"
+"##,
+        )
+        .expect("cycle b writes");
+        fs::write(
+            &dupe_a_path,
+            r##"
+id = "dupe"
+[palette]
+text = "bogus"
+selection = "#111111"
+link = "#222222"
+bg = "#000000"
+bg_alt = "#010101"
+
+[overrides]
+value_number = "broken"
+repl_completion_text = "#eeeeee"
+repl_completion_background = "#111111"
+repl_completion_highlight = "bad"
+"##,
+        )
+        .expect("dupe a writes");
+        fs::write(
+            &dupe_b_path,
+            r##"
+id = "dupe"
+name = "Dupe Final"
+base = "none"
+[palette]
+text = "#ffffff"
+"##,
+        )
+        .expect("dupe b writes");
+
+        let config = resolved_config_with_theme_paths(vec![
+            missing_dir.display().to_string(),
+            themes_dir.display().to_string(),
+        ]);
+        let catalog = load_theme_catalog(&config);
+
+        let dracula = catalog
+            .resolve("dracula")
+            .expect("custom builtin override should resolve");
+        assert_eq!(dracula.source, ThemeSource::Custom);
+        assert_eq!(dracula.theme.palette.accent, "#123456");
+        assert_eq!(dracula.origin.as_deref(), Some(dracula_path.as_path()));
+
+        let dupe = catalog
+            .resolve("dupe")
+            .expect("latest duplicate should win");
+        assert_eq!(dupe.theme.name, "Dupe Final");
+        assert_eq!(dupe.origin.as_deref(), Some(dupe_b_path.as_path()));
+
+        let messages = catalog
+            .issues
+            .iter()
+            .map(|issue| issue.message.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("theme path is not a directory"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("custom theme overrides builtin: dracula"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("failed to parse toml"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("theme id collision: dupe overridden"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("theme base cycle detected"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("invalid color spec for palette.text"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("invalid color spec for overrides.value_number"))
+        );
+
+        log_theme_issues(&catalog.issues);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn default_theme_paths_tracks_home_config_root_unit() {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
+        let original_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", "/tmp/osp-theme-loader-home") };
+
+        assert_eq!(
+            default_theme_paths(),
+            vec![Path::new("/tmp/osp-theme-loader-home/.config/osp/themes").to_path_buf()]
+        );
+
+        match original_home {
+            Some(value) => unsafe { std::env::set_var("HOME", value) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
     }
 }

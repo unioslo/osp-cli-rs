@@ -328,9 +328,13 @@ fn group_header_pairs(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_document_from_output, resolve_output_format};
+    use super::{
+        build_document, build_document_from_output, build_document_from_output_resolved,
+        group_header_pairs, materialize_rows, resolve_format, resolve_output_format,
+        table_alignments_for_headers,
+    };
     use crate::RenderSettings;
-    use crate::document::{Block, TableStyle};
+    use crate::document::{Block, TableAlign, TableStyle};
     use osp_core::output::{OutputFormat, RenderMode};
     use osp_core::output_model::{ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult};
     use osp_core::row::Row;
@@ -546,5 +550,101 @@ mod tests {
                 crate::document::TableAlign::Right
             ])
         );
+    }
+
+    #[test]
+    fn build_document_wrapper_and_resolve_format_cover_value_and_explicit_modes() {
+        let rows = vec![json!({"value": 7}).as_object().cloned().expect("object")];
+
+        assert_eq!(
+            resolve_format(&rows, OutputFormat::Auto),
+            OutputFormat::Value
+        );
+        assert_eq!(
+            resolve_format(&rows, OutputFormat::Json),
+            OutputFormat::Json
+        );
+
+        let document = build_document(&rows, &settings(OutputFormat::Value));
+        assert!(matches!(document.blocks[0], Block::Value(_)));
+    }
+
+    #[test]
+    fn mreg_and_value_documents_materialize_group_rows_consistently() {
+        let group = Group {
+            groups: json!({"group": "ops"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+            rows: vec![],
+        };
+        let output = OutputResult {
+            items: OutputItems::Groups(vec![group.clone()]),
+            meta: OutputMeta {
+                key_index: vec!["group".to_string(), "count".to_string()],
+                ..OutputMeta::default()
+            },
+        };
+
+        let resolved = settings(OutputFormat::Mreg).resolve_render_settings();
+        let document =
+            build_document_from_output_resolved(&output, &settings(OutputFormat::Mreg), &resolved);
+        assert!(!document.blocks.is_empty());
+
+        let value_output = OutputResult {
+            items: OutputItems::Groups(vec![group]),
+            meta: OutputMeta::default(),
+        };
+        let value_document =
+            build_document_from_output(&value_output, &settings(OutputFormat::Value));
+        assert!(matches!(value_document.blocks[0], Block::Value(_)));
+
+        let rows = materialize_rows(&value_output);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("group"), Some(&json!("ops")));
+        assert_eq!(rows[0].get("count"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn header_pairs_and_alignments_skip_defaults_and_deduplicate_keys() {
+        let group = Group {
+            groups: json!({"group": "ops"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+            rows: vec![],
+        };
+
+        let pairs = group_header_pairs(
+            &group,
+            Some(&[
+                "count".to_string(),
+                "group".to_string(),
+                "group".to_string(),
+            ]),
+        );
+        assert_eq!(
+            pairs,
+            vec![
+                ("count".to_string(), json!(2)),
+                ("group".to_string(), json!("ops"))
+            ]
+        );
+
+        let align = table_alignments_for_headers(
+            &["group".to_string(), "count".to_string()],
+            &["group".to_string(), "count".to_string()],
+            &[ColumnAlignment::Default, ColumnAlignment::Default],
+        );
+        assert!(align.is_none());
+
+        let align = table_alignments_for_headers(
+            &["group".to_string(), "count".to_string()],
+            &["group".to_string(), "count".to_string()],
+            &[ColumnAlignment::Center, ColumnAlignment::Right],
+        );
+        assert_eq!(align, Some(vec![TableAlign::Center, TableAlign::Right]));
     }
 }

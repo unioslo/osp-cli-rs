@@ -351,7 +351,10 @@ pub fn copy_output_to_clipboard(
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderBackend, RenderSettings, TableBorderStyle, format, render_rows_for_copy};
+    use super::{
+        RenderBackend, RenderSettings, TableBorderStyle, TableOverflow, format, render_document,
+        render_document_for_copy, render_rows_for_copy,
+    };
     use crate::document::{Block, MregValue, TableStyle};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use osp_core::row::Row;
@@ -514,6 +517,10 @@ mod tests {
             Some(TableBorderStyle::None)
         );
         assert_eq!(
+            TableBorderStyle::parse("box"),
+            Some(TableBorderStyle::Square)
+        );
+        assert_eq!(
             TableBorderStyle::parse("square"),
             Some(TableBorderStyle::Square)
         );
@@ -521,5 +528,70 @@ mod tests {
             TableBorderStyle::parse("round"),
             Some(TableBorderStyle::Round)
         );
+        assert_eq!(
+            TableBorderStyle::parse("rounded"),
+            Some(TableBorderStyle::Round)
+        );
+        assert_eq!(TableBorderStyle::parse("mystery"), None);
+    }
+
+    #[test]
+    fn table_overflow_parser_accepts_aliases_unit() {
+        assert_eq!(TableOverflow::parse("visible"), Some(TableOverflow::None));
+        assert_eq!(TableOverflow::parse("crop"), Some(TableOverflow::Clip));
+        assert_eq!(
+            TableOverflow::parse("truncate"),
+            Some(TableOverflow::Ellipsis)
+        );
+        assert_eq!(TableOverflow::parse("wrapped"), Some(TableOverflow::Wrap));
+        assert_eq!(TableOverflow::parse("other"), None);
+    }
+
+    #[test]
+    fn auto_modes_respect_runtime_terminal_and_locale_unit() {
+        let settings = RenderSettings {
+            mode: RenderMode::Auto,
+            color: ColorMode::Auto,
+            unicode: UnicodeMode::Auto,
+            runtime: super::RenderRuntime {
+                stdout_is_tty: true,
+                terminal: Some("dumb".to_string()),
+                no_color: false,
+                width: Some(72),
+                locale_utf8: Some(false),
+            },
+            ..RenderSettings::test_plain(OutputFormat::Table)
+        };
+
+        let resolved = settings.resolve_render_settings();
+        assert_eq!(resolved.backend, RenderBackend::Plain);
+        assert!(!resolved.color);
+        assert!(!resolved.unicode);
+        assert_eq!(resolved.width, Some(72));
+    }
+
+    #[test]
+    fn render_document_helpers_force_plain_copy_mode_unit() {
+        let document = crate::Document {
+            blocks: vec![Block::Line(crate::LineBlock {
+                parts: vec![crate::LinePart {
+                    text: "hello".to_string(),
+                    token: None,
+                }],
+            })],
+        };
+        let settings = RenderSettings {
+            mode: RenderMode::Rich,
+            color: ColorMode::Always,
+            unicode: UnicodeMode::Always,
+            ..RenderSettings::test_plain(OutputFormat::Table)
+        };
+
+        let rich = render_document(&document, &settings);
+        let copied = render_document_for_copy(&document, &settings);
+
+        assert!(rich.contains("hello"));
+        assert!(copied.contains("hello"));
+        assert!(!copied.contains("\x1b["));
     }
 }

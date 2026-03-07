@@ -304,3 +304,92 @@ fn parse_template(key: &str, template: &str) -> Result<ParsedTemplate, ConfigErr
         placeholders,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{explain_interpolation, interpolate_all, parse_template};
+    use crate::{ConfigError, ConfigSource, ConfigValue, ResolvedValue, Scope};
+
+    fn resolved_value(value: ConfigValue) -> ResolvedValue {
+        ResolvedValue {
+            raw_value: value.clone(),
+            value,
+            source: ConfigSource::BuiltinDefaults,
+            scope: Scope::global(),
+            origin: None,
+        }
+    }
+
+    #[test]
+    fn parse_template_rejects_empty_placeholders_and_trims_names_unit() {
+        let parsed = parse_template("welcome", "hello ${ user.name }").expect("template parses");
+        assert_eq!(parsed.placeholders.len(), 1);
+        assert_eq!(parsed.placeholders[0].name, "user.name");
+
+        let err = parse_template("welcome", "hello ${   }").expect_err("empty placeholder fails");
+        assert!(matches!(err, ConfigError::InvalidPlaceholderSyntax { .. }));
+    }
+
+    #[test]
+    fn interpolate_all_expands_secret_placeholders_and_keeps_result_secret_unit() {
+        let mut values = BTreeMap::from([
+            (
+                "auth.user".to_string(),
+                resolved_value(ConfigValue::String("oistes".to_string())),
+            ),
+            (
+                "auth.token".to_string(),
+                resolved_value(ConfigValue::String("token-${auth.user}".to_string()).into_secret()),
+            ),
+        ]);
+
+        interpolate_all(&mut values).expect("interpolation should succeed");
+
+        let token = &values["auth.token"].value;
+        assert!(token.is_secret());
+        assert_eq!(
+            token.reveal(),
+            &ConfigValue::String("token-oistes".to_string())
+        );
+    }
+
+    #[test]
+    fn explain_interpolation_reports_recursive_steps_once_unit() {
+        let pre = BTreeMap::from([
+            (
+                "ui.prompt".to_string(),
+                resolved_value(ConfigValue::String("${ui.user}@${ui.host}".to_string())),
+            ),
+            (
+                "ui.user".to_string(),
+                resolved_value(ConfigValue::String("oistes".to_string())),
+            ),
+            (
+                "ui.host".to_string(),
+                resolved_value(ConfigValue::String("${net.host}".to_string())),
+            ),
+            (
+                "net.host".to_string(),
+                resolved_value(ConfigValue::String("uio.no".to_string())),
+            ),
+        ]);
+        let mut final_values = pre.clone();
+        interpolate_all(&mut final_values).expect("interpolation should succeed");
+
+        let explain = explain_interpolation("ui.prompt", &pre, &final_values)
+            .expect("explain should succeed")
+            .expect("template should be explained");
+
+        assert_eq!(explain.template, "${ui.user}@${ui.host}");
+        assert_eq!(
+            explain
+                .steps
+                .iter()
+                .map(|step| step.placeholder.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ui.user", "ui.host", "net.host"]
+        );
+    }
+}

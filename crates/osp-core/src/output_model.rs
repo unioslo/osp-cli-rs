@@ -83,7 +83,7 @@ pub fn compute_key_index(rows: &[Row]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::OutputResult;
+    use super::{Group, OutputItems, OutputMeta, OutputResult};
     use serde_json::json;
 
     #[test]
@@ -101,5 +101,39 @@ mod tests {
 
         let output = OutputResult::from_rows(rows);
         assert_eq!(output.meta.key_index, vec!["uid", "cn", "mail", "title"]);
+    }
+
+    #[test]
+    fn grouped_output_does_not_expose_rows_views() {
+        let output = OutputResult {
+            items: OutputItems::Groups(vec![Group {
+                groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
+                aggregates: json!({"count": 1}).as_object().cloned().expect("object"),
+                rows: vec![
+                    json!({"user": "alice"})
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
+                ],
+            }]),
+            meta: OutputMeta::default(),
+        };
+
+        assert_eq!(output.as_rows(), None);
+        assert_eq!(output.into_rows(), None);
+    }
+
+    #[test]
+    fn row_output_exposes_rows_views() {
+        let rows = vec![
+            json!({"uid": "alice"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+        let output = OutputResult::from_rows(rows.clone());
+
+        assert_eq!(output.as_rows(), Some(rows.as_slice()));
+        assert_eq!(output.into_rows(), Some(rows));
     }
 }

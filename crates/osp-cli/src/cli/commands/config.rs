@@ -667,3 +667,125 @@ fn validate_write_scopes(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConfigReadContext, ConfigStore, ConfigWriteTarget, config_store_name,
+        resolve_config_scopes, resolve_config_store, resolve_terminal_selector,
+    };
+    use crate::state::{RuntimeContext, TerminalKind, UiState};
+    use crate::theme_loader::ThemeCatalog;
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions, RuntimeLoadOptions, Scope};
+    use osp_core::output::OutputFormat;
+    use osp_ui::RenderSettings;
+    use osp_ui::messages::MessageLevel;
+
+    fn read_context(terminal: TerminalKind) -> ConfigReadContext<'static> {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        defaults.set("profile.active", "ops");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let resolved = Box::leak(Box::new(
+            resolver
+                .resolve(ResolveOptions::default().with_terminal(terminal.as_config_terminal()))
+                .expect("test config should resolve"),
+        ));
+        let context = Box::leak(Box::new(RuntimeContext::new(None, terminal, None)));
+        let ui = Box::leak(Box::new(UiState {
+            render_settings: RenderSettings::test_plain(OutputFormat::Table),
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+        }));
+        let themes = Box::leak(Box::new(ThemeCatalog::default()));
+        let session_layer = Box::leak(Box::new(ConfigLayer::default()));
+
+        ConfigReadContext {
+            context,
+            config: resolved,
+            ui,
+            themes,
+            session_layer,
+            runtime_load: RuntimeLoadOptions::default(),
+        }
+    }
+
+    #[test]
+    fn resolve_config_store_defaults_to_session_in_repl_and_config_in_cli() {
+        let args = ConfigWriteTarget {
+            global: false,
+            profile: None,
+            profile_all: false,
+            terminal: None,
+            session: false,
+            config_store: false,
+            secrets: false,
+            save: false,
+        };
+
+        assert!(matches!(
+            resolve_config_store(read_context(TerminalKind::Repl), &args),
+            ConfigStore::Session
+        ));
+        assert!(matches!(
+            resolve_config_store(read_context(TerminalKind::Cli), &args),
+            ConfigStore::Config
+        ));
+        assert_eq!(config_store_name(ConfigStore::Secrets), "secrets");
+    }
+
+    #[test]
+    fn resolve_terminal_selector_handles_current_sentinel_and_blank_values() {
+        let repl = read_context(TerminalKind::Repl);
+        assert_eq!(
+            resolve_terminal_selector(repl, Some(crate::app::CURRENT_TERMINAL_SENTINEL)),
+            Some("repl".to_string())
+        );
+        assert_eq!(resolve_terminal_selector(repl, Some("  ")), None);
+        assert_eq!(
+            resolve_terminal_selector(repl, Some("CLI")),
+            Some("cli".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_config_scopes_handles_profile_all_global_and_terminal_overrides() {
+        let cli = read_context(TerminalKind::Cli);
+
+        let global_scopes = resolve_config_scopes(
+            cli,
+            &ConfigWriteTarget {
+                global: true,
+                profile: None,
+                profile_all: false,
+                terminal: Some("cli".to_string()),
+                session: false,
+                config_store: false,
+                secrets: false,
+                save: false,
+            },
+        )
+        .expect("global scopes should resolve");
+        assert_eq!(global_scopes, vec![Scope::terminal("cli")]);
+
+        let all_profile_scopes = resolve_config_scopes(
+            cli,
+            &ConfigWriteTarget {
+                global: false,
+                profile: None,
+                profile_all: true,
+                terminal: Some("cli".to_string()),
+                session: false,
+                config_store: false,
+                secrets: false,
+                save: false,
+            },
+        )
+        .expect("profile-all scopes should resolve");
+        assert_eq!(
+            all_profile_scopes,
+            vec![Scope::profile_terminal("default", "cli")]
+        );
+    }
+}

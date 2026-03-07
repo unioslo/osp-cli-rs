@@ -116,7 +116,7 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
 mod tests {
     use serde_json::json;
 
-    use super::{Row, apply_filter_and_projection};
+    use super::{Row, apply_filter_and_projection, parse_attributes};
 
     fn user_row() -> Row {
         json!({
@@ -143,5 +143,60 @@ mod tests {
         let result = apply_filter_and_projection(rows, None, Some(&attrs));
         assert_eq!(result[0].len(), 1);
         assert!(result[0].contains_key("uid"));
+    }
+
+    #[test]
+    fn parse_attributes_trims_and_rejects_empty_lists() {
+        let attrs = parse_attributes(Some(" uid , cn ,, mail "))
+            .expect("attribute list should parse")
+            .expect("attribute list should be present");
+        assert_eq!(attrs, vec!["uid", "cn", "mail"]);
+
+        assert!(
+            parse_attributes(None)
+                .expect("missing list is allowed")
+                .is_none()
+        );
+
+        let err = parse_attributes(Some(" , ,, ")).expect_err("empty attribute list should fail");
+        assert!(
+            err.to_string()
+                .contains("--attributes must include at least one key")
+        );
+    }
+
+    #[test]
+    fn filter_supports_case_insensitive_substring_and_wildcard_matching() {
+        let rows = vec![user_row()];
+
+        let substring = apply_filter_and_projection(rows.clone(), Some("søvik"), None);
+        assert_eq!(substring.len(), 1);
+
+        let wildcard = apply_filter_and_projection(rows, Some("uid=*tes"), None);
+        assert_eq!(wildcard.len(), 1);
+    }
+
+    #[test]
+    fn filter_matches_arrays_and_missing_fields_fail_cleanly() {
+        let rows = vec![user_row()];
+
+        let array_match = apply_filter_and_projection(rows.clone(), Some("netgroups=usit"), None);
+        assert_eq!(array_match.len(), 1);
+
+        let missing = apply_filter_and_projection(rows, Some("mail=oistes@example.org"), None);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn projection_runs_after_filtering() {
+        let rows = vec![user_row()];
+        let attrs = vec!["uid".to_string()];
+        let result = apply_filter_and_projection(rows, Some("uid=oistes"), Some(&attrs));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 1);
+        assert_eq!(
+            result[0].get("uid").and_then(|value| value.as_str()),
+            Some("oistes")
+        );
     }
 }

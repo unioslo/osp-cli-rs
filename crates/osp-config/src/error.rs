@@ -209,3 +209,205 @@ pub(crate) fn with_path_context(path: String, error: ConfigError) -> ConfigError
         source: Box::new(error),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigError, with_path_context};
+    use crate::SchemaValueType;
+
+    #[test]
+    fn config_error_display_covers_user_facing_variants() {
+        let cases = [
+            (
+                ConfigError::FileRead {
+                    path: "/tmp/config.toml".to_string(),
+                    reason: "permission denied".to_string(),
+                },
+                "failed to read config file /tmp/config.toml: permission denied",
+            ),
+            (
+                ConfigError::FileWrite {
+                    path: "/tmp/config.toml".to_string(),
+                    reason: "disk full".to_string(),
+                },
+                "failed to write config file /tmp/config.toml: disk full",
+            ),
+            (
+                ConfigError::InsecureSecretsPermissions {
+                    path: "/tmp/secrets.toml".to_string(),
+                    mode: 0o644,
+                },
+                "expected 600",
+            ),
+            (
+                ConfigError::TomlParse("unexpected token".to_string()),
+                "failed to parse TOML: unexpected token",
+            ),
+            (
+                ConfigError::TomlRootMustBeTable,
+                "config root must be a TOML table",
+            ),
+            (
+                ConfigError::UnknownTopLevelSection("wat".to_string()),
+                "unknown top-level config section: wat",
+            ),
+            (
+                ConfigError::InvalidSection {
+                    section: "profile.default".to_string(),
+                    expected: "table".to_string(),
+                },
+                "invalid section profile.default: expected table",
+            ),
+            (
+                ConfigError::UnsupportedTomlValue {
+                    path: "ui.format".to_string(),
+                    kind: "array".to_string(),
+                },
+                "unsupported TOML value at ui.format: array",
+            ),
+            (
+                ConfigError::InvalidEnvOverride {
+                    key: "OSP_UI_FORMAT".to_string(),
+                    reason: "unknown enum".to_string(),
+                },
+                "invalid env override OSP_UI_FORMAT: unknown enum",
+            ),
+            (
+                ConfigError::InvalidConfigKey {
+                    key: "ui.wat".to_string(),
+                    reason: "unknown key".to_string(),
+                },
+                "invalid config key ui.wat: unknown key",
+            ),
+            (
+                ConfigError::InvalidBootstrapScope {
+                    key: "profile.default".to_string(),
+                    profile: Some("prod".to_string()),
+                    terminal: Some("repl".to_string()),
+                },
+                "profile=prod, terminal=repl",
+            ),
+            (
+                ConfigError::InvalidBootstrapScope {
+                    key: "profile.default".to_string(),
+                    profile: Some("prod".to_string()),
+                    terminal: None,
+                },
+                "scope profile=prod",
+            ),
+            (
+                ConfigError::InvalidBootstrapScope {
+                    key: "profile.default".to_string(),
+                    profile: None,
+                    terminal: Some("repl".to_string()),
+                },
+                "scope terminal=repl",
+            ),
+            (
+                ConfigError::InvalidBootstrapScope {
+                    key: "profile.default".to_string(),
+                    profile: None,
+                    terminal: None,
+                },
+                "scope global",
+            ),
+            (
+                ConfigError::MissingDefaultProfile,
+                "missing profile.default and no fallback profile",
+            ),
+            (
+                ConfigError::InvalidBootstrapValue {
+                    key: "profile.default".to_string(),
+                    reason: "cannot be empty".to_string(),
+                },
+                "invalid bootstrap value for profile.default: cannot be empty",
+            ),
+            (
+                ConfigError::UnknownProfile {
+                    profile: "prod".to_string(),
+                    known: vec!["default".to_string(), "dev".to_string()],
+                },
+                "unknown profile 'prod'. known profiles: default,dev",
+            ),
+            (
+                ConfigError::InvalidPlaceholderSyntax {
+                    key: "ui.format".to_string(),
+                    template: "${oops".to_string(),
+                },
+                "invalid placeholder syntax in key ui.format: ${oops",
+            ),
+            (
+                ConfigError::UnresolvedPlaceholder {
+                    key: "ldap.uri".to_string(),
+                    placeholder: "profile.current".to_string(),
+                },
+                "unresolved placeholder in key ldap.uri: profile.current",
+            ),
+            (
+                ConfigError::PlaceholderCycle {
+                    cycle: vec!["a".to_string(), "b".to_string(), "a".to_string()],
+                },
+                "placeholder cycle detected: a -> b -> a",
+            ),
+            (
+                ConfigError::NonScalarPlaceholder {
+                    key: "ldap.uri".to_string(),
+                    placeholder: "profiles".to_string(),
+                },
+                "placeholder profiles in key ldap.uri points to a non-scalar value",
+            ),
+            (
+                ConfigError::UnknownConfigKeys {
+                    keys: vec!["ui.wat".to_string(), "ldap.nope".to_string()],
+                },
+                "unknown config keys: ui.wat, ldap.nope",
+            ),
+            (
+                ConfigError::MissingRequiredKey {
+                    key: "ldap.uri".to_string(),
+                },
+                "missing required config key: ldap.uri",
+            ),
+            (
+                ConfigError::InvalidValueType {
+                    key: "ui.debug".to_string(),
+                    expected: SchemaValueType::Bool,
+                    actual: "string".to_string(),
+                },
+                "invalid type for key ui.debug: expected bool, got string",
+            ),
+            (
+                ConfigError::InvalidEnumValue {
+                    key: "ui.format".to_string(),
+                    value: "yaml".to_string(),
+                    allowed: vec!["json".to_string(), "table".to_string()],
+                },
+                "invalid value for key ui.format: yaml. allowed: json, table",
+            ),
+        ];
+
+        assert!(
+            cases
+                .into_iter()
+                .all(|(error, expected)| error.to_string().contains(expected))
+        );
+    }
+
+    #[test]
+    fn with_path_context_wraps_source_error() {
+        let wrapped = with_path_context(
+            "/tmp/config.toml".to_string(),
+            ConfigError::TomlParse("bad value".to_string()),
+        );
+
+        assert_eq!(
+            wrapped.to_string(),
+            "failed to parse TOML: bad value (path: /tmp/config.toml)"
+        );
+
+        if let ConfigError::LayerLoad { path, source } = wrapped {
+            assert_eq!(path, "/tmp/config.toml");
+            assert!(matches!(*source, ConfigError::TomlParse(_)));
+        }
+    }
+}

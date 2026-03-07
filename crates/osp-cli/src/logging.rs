@@ -263,8 +263,12 @@ fn scan_debug_count(args: &[OsString]) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_logging_config, map_debug_count, parse_level_filter, split_file_path};
+    use super::{
+        DynamicFileWriter, bootstrap_logging_config, map_debug_count, open_log_file,
+        parse_level_filter, split_file_path,
+    };
     use std::ffi::OsString;
+    use std::io::Write as _;
     use std::path::Path;
     use tracing_subscriber::filter::LevelFilter;
 
@@ -302,5 +306,124 @@ mod tests {
 
         assert_eq!(config.debug_count, 3);
         assert!(config.file.is_none());
+    }
+
+    #[test]
+    fn split_file_path_defaults_to_current_directory_for_bare_name() {
+        let (dir, file_name) =
+            split_file_path(Path::new("osp.log")).expect("bare file name should be accepted");
+
+        assert!(dir.as_os_str().is_empty());
+        assert_eq!(file_name, "osp.log");
+    }
+
+    #[test]
+    fn bootstrap_logging_config_stops_scanning_after_double_dash() {
+        let config = bootstrap_logging_config(&[
+            OsString::from("osp"),
+            OsString::from("-d"),
+            OsString::from("--"),
+            OsString::from("--debug"),
+            OsString::from("-dd"),
+        ]);
+
+        assert_eq!(config.debug_count, 1);
+    }
+
+    #[test]
+    fn bootstrap_logging_config_ignores_non_debug_short_flags() {
+        let config = bootstrap_logging_config(&[
+            OsString::from("osp"),
+            OsString::from("-vqdd"),
+            OsString::from("doctor"),
+        ]);
+
+        assert_eq!(config.debug_count, 2);
+    }
+
+    #[test]
+    fn parse_level_filter_recognizes_error_debug_and_trace_aliases() {
+        assert_eq!(parse_level_filter(" error "), Some(LevelFilter::ERROR));
+        assert_eq!(parse_level_filter("debug"), Some(LevelFilter::DEBUG));
+        assert_eq!(parse_level_filter("trace"), Some(LevelFilter::TRACE));
+    }
+
+    #[test]
+    fn open_log_file_creates_parent_directories() {
+        let dir = make_temp_dir("osp-cli-logging-open");
+        let path = dir.join("nested").join("osp.log");
+
+        let _file = open_log_file(&path).expect("log file should open");
+
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn dynamic_file_writer_can_toggle_between_sink_and_file() {
+        let dir = make_temp_dir("osp-cli-logging-writer");
+        let path = dir.join("writer.log");
+        let config = super::FileLoggingConfig {
+            path: path.clone(),
+            level: LevelFilter::INFO,
+        };
+        let mut writer = DynamicFileWriter::default();
+
+        assert_eq!(
+            writer
+                .configure(Some(&config))
+                .expect("file logging should configure"),
+            LevelFilter::INFO
+        );
+        writer.write_all(b"hello").expect("write should succeed");
+        writer.flush().expect("flush should succeed");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("log file should exist"),
+            "hello"
+        );
+
+        writer.clear();
+        writer
+            .write_all(b"discarded")
+            .expect("sink writes should succeed");
+        writer.flush().expect("sink flush should succeed");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("log file should still exist"),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn dynamic_file_writer_without_file_reports_off_and_discards_bytes() {
+        let mut writer = DynamicFileWriter::default();
+
+        assert_eq!(
+            writer
+                .configure(None)
+                .expect("sink configure should succeed"),
+            LevelFilter::OFF
+        );
+        writer
+            .write_all(b"discarded")
+            .expect("sink write should succeed");
+        writer.flush().expect("sink flush should succeed");
+    }
+
+    #[test]
+    fn split_file_path_preserves_nested_directory_and_name() {
+        let (dir, file_name) = split_file_path(Path::new("logs/osp.log"))
+            .expect("nested file path should be accepted");
+        assert_eq!(dir, Path::new("logs"));
+        assert_eq!(file_name, "osp.log");
+    }
+
+    fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be valid")
+            .as_nanos();
+        dir.push(format!("{prefix}-{nonce}"));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+        dir
     }
 }

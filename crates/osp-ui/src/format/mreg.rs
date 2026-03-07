@@ -124,9 +124,10 @@ impl<'a> MregBuilder<'a> {
         preferred_order: Option<&[String]>,
     ) {
         for key in ordered_keys(map, preferred_order) {
-            if let Some(value) = map.get(&key) {
-                self.visit_value(&key, value, depth);
-            }
+            let value = map
+                .get(&key)
+                .expect("ordered_keys must only return keys present in the source object");
+            self.visit_value(&key, value, depth);
         }
     }
 
@@ -177,9 +178,10 @@ impl<'a> MregBuilder<'a> {
                 }
 
                 if items.len() <= self.short_list_max {
-                    if let Some(first) = items.first() {
-                        self.push_scalar_entry(key_with_count, depth, first.clone());
-                    }
+                    let first = items
+                        .first()
+                        .expect("non-empty list branch must have a first item");
+                    self.push_scalar_entry(key_with_count, depth, first.clone());
                     return;
                 }
 
@@ -363,6 +365,10 @@ fn shrink_column_widths_to_fit(table: &TableBlock, available_width: usize) -> Ve
         .map(|header| display_width(header).max(min_width))
         .collect::<Vec<_>>();
 
+    if widths.is_empty() {
+        return widths;
+    }
+
     for row in &table.rows {
         for (index, cell) in row.iter().enumerate() {
             if let Some(width) = widths.get_mut(index) {
@@ -372,13 +378,11 @@ fn shrink_column_widths_to_fit(table: &TableBlock, available_width: usize) -> Ve
     }
 
     while widths.iter().sum::<usize>() + widths.len() * 3 + 1 > available_width {
-        let Some((index, width)) = widths
+        let (index, width) = widths
             .iter_mut()
             .enumerate()
             .max_by_key(|(_, width)| **width)
-        else {
-            break;
-        };
+            .expect("non-empty widths must have a widest column");
         if *width <= min_width {
             break;
         }
@@ -413,9 +417,26 @@ fn display_width(value: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{MregBuildOptions, build_mreg_blocks};
-    use crate::document::{Block, MregValue};
+    use super::{
+        MregBuildOptions, build_mreg_blocks, estimate_table_width, ordered_keys,
+        shrink_column_widths_to_fit, value_is_nested_structure,
+    };
+    use crate::document::{Block, MregBlock, MregValue, TableBlock};
     use serde_json::{Map, Value, json};
+
+    fn mreg_blocks<'a>(blocks: &'a [Block]) -> impl Iterator<Item = &'a MregBlock> {
+        blocks.iter().filter_map(|block| match block {
+            Block::Mreg(mreg) => Some(mreg),
+            _ => None,
+        })
+    }
+
+    fn table_blocks<'a>(blocks: &'a [Block]) -> impl Iterator<Item = &'a TableBlock> {
+        blocks.iter().filter_map(|block| match block {
+            Block::Table(table) => Some(table),
+            _ => None,
+        })
+    }
 
     fn sample_row() -> Map<String, Value> {
         let mut row = Map::new();
@@ -527,9 +548,7 @@ mod tests {
             &mut next_block_id,
         );
 
-        let Block::Mreg(mreg) = &blocks[0] else {
-            panic!("expected mreg block");
-        };
+        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
 
         assert!(
             mreg.rows[0]
@@ -589,13 +608,12 @@ mod tests {
             &mut next_block_id,
         );
         assert!(!blocks.iter().any(|block| matches!(block, Block::Table(_))));
-        let has_separator = blocks.iter().any(|block| match block {
-            Block::Mreg(mreg) => mreg.rows.iter().any(|row| {
+        let has_separator = mreg_blocks(&blocks).any(|mreg| {
+            mreg.rows.iter().any(|row| {
                 row.entries
                     .iter()
                     .any(|entry| matches!(entry.value, MregValue::Separator))
-            }),
-            _ => false,
+            })
         });
         assert!(has_separator);
     }
@@ -619,23 +637,364 @@ mod tests {
         );
 
         assert!(matches!(blocks.first(), Some(Block::Mreg(_))));
-        let has_separator = blocks.iter().any(|block| match block {
-            Block::Mreg(mreg) => mreg.rows.iter().any(|row| {
+        let has_separator = mreg_blocks(&blocks).any(|mreg| {
+            mreg.rows.iter().any(|row| {
                 row.entries
                     .iter()
                     .any(|entry| matches!(entry.value, MregValue::Separator))
-            }),
-            _ => false,
+            })
         });
         assert!(has_separator);
-        let has_communities_group = blocks.iter().any(|block| match block {
-            Block::Mreg(mreg) => mreg.rows.iter().any(|row| {
+        let has_communities_group = mreg_blocks(&blocks).any(|mreg| {
+            mreg.rows.iter().any(|row| {
                 row.entries
                     .iter()
                     .any(|entry| entry.key.starts_with("communities"))
-            }),
-            _ => false,
+            })
         });
         assert!(has_communities_group);
+    }
+
+    #[test]
+    fn nested_object_values_become_group_entries() {
+        let mut next_block_id = 1;
+        let mut row = Map::new();
+        row.insert(
+            "owner".to_string(),
+            json!({
+                "uid": "alice",
+                "mail": "alice@uio.no"
+            }),
+        );
+
+        let blocks = build_mreg_blocks(
+            &[row],
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 80,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+
+        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
+        let entries = &mreg.rows[0].entries;
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.key == "owner" && matches!(entry.value, MregValue::Group))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.key == "uid" && matches!(entry.value, MregValue::Scalar(_)))
+        );
+    }
+
+    #[test]
+    fn mixed_object_and_scalar_lists_keep_table_shape() {
+        let mut next_block_id = 1;
+        let mut row = Map::new();
+        row.insert(
+            "records".to_string(),
+            Value::Array(vec![json!({"name": "alpha", "count": 1}), json!("raw")]),
+        );
+
+        let blocks = build_mreg_blocks(
+            &[row],
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 80,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+
+        let table = table_blocks(&blocks).next().expect("table block");
+        assert_eq!(table.headers, vec!["name".to_string(), "count".to_string()]);
+        assert_eq!(table.rows[1], vec![json!("raw"), json!("raw")]);
+    }
+
+    #[test]
+    fn preferred_key_order_is_respected_for_scalar_entries() {
+        let mut next_block_id = 1;
+        let mut row = Map::new();
+        row.insert("uid".to_string(), json!("alice"));
+        row.insert("mail".to_string(), json!("alice@uio.no"));
+        row.insert("name".to_string(), json!("Alice"));
+        let preferred = vec!["name".to_string(), "uid".to_string()];
+
+        let blocks = build_mreg_blocks(
+            &[row],
+            MregBuildOptions {
+                key_order: Some(&preferred),
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 80,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+
+        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
+        let keys = mreg.rows[0]
+            .entries
+            .iter()
+            .map(|entry| entry.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["name", "uid", "mail"]);
+    }
+
+    #[test]
+    fn empty_object_lists_fall_back_to_vertical_lists() {
+        let mut next_block_id = 1;
+        let mut row = Map::new();
+        row.insert(
+            "records".to_string(),
+            Value::Array(vec![json!({}), json!({})]),
+        );
+
+        let blocks = build_mreg_blocks(
+            &[row],
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 80,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+
+        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
+        assert!(mreg.rows[0].entries.iter().any(|entry| {
+            entry.key == "records (2)"
+                && matches!(entry.value, MregValue::VerticalList(ref values) if values == &vec![json!({}), json!({})])
+        }));
+    }
+
+    #[test]
+    fn backend_bias_can_stack_width_constrained_object_tables() {
+        let mut next_block_id = 1;
+        let mut row = Map::new();
+        row.insert(
+            "records".to_string(),
+            Value::Array(vec![
+                json!({
+                    "name": "alpha-host-1",
+                    "description": "secondary login node",
+                }),
+                json!({
+                    "name": "beta-host-2",
+                    "description": "backup login node",
+                }),
+            ]),
+        );
+
+        let plain_blocks = build_mreg_blocks(
+            &[row.clone()],
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 36,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+        let stacked_blocks = build_mreg_blocks(
+            &[row],
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 36,
+                indent_size: 2,
+                prefer_stacked_object_lists: true,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+
+        assert!(table_blocks(&plain_blocks).next().is_some());
+        assert!(table_blocks(&stacked_blocks).next().is_none());
+        assert!(mreg_blocks(&stacked_blocks).any(|mreg| {
+            mreg.rows.iter().any(|row| {
+                row.entries
+                    .iter()
+                    .any(|entry| matches!(entry.value, MregValue::Separator))
+            })
+        }));
+    }
+
+    #[test]
+    fn single_item_lists_become_scalar_entries() {
+        let mut next_block_id = 1;
+        let mut row = Map::new();
+        row.insert("single".to_string(), json!(["a"]));
+
+        let blocks = build_mreg_blocks(
+            &[row],
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 80,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+
+        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
+        assert!(mreg.rows[0].entries.iter().any(|entry| {
+            entry.key == "single"
+                && matches!(entry.value, MregValue::Scalar(ref value) if value == &json!("a"))
+        }));
+    }
+
+    #[test]
+    fn stacked_object_lists_skip_non_object_items() {
+        let mut next_block_id = 1;
+        let mut row = Map::new();
+        row.insert(
+            "records".to_string(),
+            Value::Array(vec![
+                json!({
+                    "name": "alpha-host-1",
+                    "description": "secondary login node",
+                    "meta": { "type": "node" }
+                }),
+                json!("raw"),
+            ]),
+        );
+
+        let blocks = build_mreg_blocks(
+            &[row],
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 120,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+
+        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
+        assert!(
+            mreg.rows[0]
+                .entries
+                .iter()
+                .any(|entry| entry.key == "records (2)" && matches!(entry.value, MregValue::Group))
+        );
+        assert!(!mreg_blocks(&blocks).any(|mreg| {
+            mreg.rows.iter().any(|row| {
+                row.entries.iter().any(|entry| {
+                    matches!(entry.value, MregValue::Scalar(ref value) if value == &json!("raw"))
+                })
+            })
+        }));
+    }
+
+    #[test]
+    fn ordered_keys_deduplicates_preferred_entries() {
+        let mut map = Map::new();
+        map.insert("uid".to_string(), json!("alice"));
+        map.insert("mail".to_string(), json!("alice@uio.no"));
+
+        let keys = ordered_keys(
+            &map,
+            Some(&["mail".to_string(), "mail".to_string(), "uid".to_string()]),
+        );
+
+        assert_eq!(keys, vec!["mail".to_string(), "uid".to_string()]);
+    }
+
+    #[test]
+    fn nested_structure_helper_detects_objects_and_nested_arrays() {
+        assert!(value_is_nested_structure(&json!({"uid": "alice"})));
+        assert!(value_is_nested_structure(&json!([{"uid": "alice"}])));
+        assert!(!value_is_nested_structure(&json!(["alice", "bob"])));
+    }
+
+    #[test]
+    fn shrink_column_widths_stops_at_minimum_width() {
+        let table = TableBlock {
+            block_id: 1,
+            style: crate::document::TableStyle::Grid,
+            headers: vec!["a".to_string(), "b".to_string()],
+            rows: vec![vec![json!("x"), json!("y")]],
+            header_pairs: Vec::new(),
+            align: None,
+            shrink_to_fit: false,
+            depth: 0,
+        };
+
+        let widths = shrink_column_widths_to_fit(&table, 1);
+
+        assert_eq!(widths, vec![4, 4]);
+    }
+
+    #[test]
+    fn shrink_column_widths_handles_empty_tables() {
+        let table = TableBlock {
+            block_id: 1,
+            style: crate::document::TableStyle::Grid,
+            headers: Vec::new(),
+            rows: vec![Vec::new()],
+            header_pairs: Vec::new(),
+            align: None,
+            shrink_to_fit: false,
+            depth: 0,
+        };
+
+        let widths = shrink_column_widths_to_fit(&table, 10);
+
+        assert!(widths.is_empty());
+    }
+
+    #[test]
+    fn estimate_table_width_accounts_for_cell_content() {
+        let table = TableBlock {
+            block_id: 1,
+            style: crate::document::TableStyle::Grid,
+            headers: vec!["name".to_string(), "value".to_string()],
+            rows: vec![vec![
+                json!("alpha"),
+                json!("this is longer than the header"),
+            ]],
+            header_pairs: Vec::new(),
+            align: None,
+            shrink_to_fit: false,
+            depth: 0,
+        };
+
+        assert!(estimate_table_width(&table) > "name".len() + "value".len() + 7);
     }
 }

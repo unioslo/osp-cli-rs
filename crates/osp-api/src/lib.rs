@@ -110,11 +110,9 @@ impl LdapDirectory for MockLdapClient {
 
 fn wildcard_match(pattern: &str, value: &str) -> bool {
     let escaped = regex::escape(pattern).replace("\\*", ".*");
-    let re = regex::Regex::new(&format!("^{escaped}$"));
-    match re {
-        Ok(re) => re.is_match(value),
-        Err(_) => false,
-    }
+    let re = regex::Regex::new(&format!("^{escaped}$"))
+        .expect("escaped wildcard patterns must compile as regexes");
+    re.is_match(value)
 }
 
 #[cfg(test)]
@@ -130,5 +128,57 @@ mod tests {
             .user("oistes", Some("uid=oistes"), None)
             .expect("query should succeed");
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn wildcard_queries_match_users_and_netgroups() {
+        let ldap = MockLdapClient::default();
+
+        let users = ldap.user("oi*", None, None).expect("query should succeed");
+        assert_eq!(users.len(), 1);
+        assert_eq!(
+            users[0].get("uid").and_then(|value| value.as_str()),
+            Some("oistes")
+        );
+
+        let netgroups = ldap
+            .netgroup("u*", None, Some(&["cn".to_string()]))
+            .expect("query should succeed");
+        assert_eq!(netgroups.len(), 1);
+        assert_eq!(
+            netgroups[0].get("cn").and_then(|value| value.as_str()),
+            Some("ucore")
+        );
+        assert_eq!(netgroups[0].len(), 1);
+    }
+
+    #[test]
+    fn missing_entries_return_empty_results() {
+        let ldap = MockLdapClient::default();
+
+        let users = ldap
+            .user("does-not-exist", Some("uid=does-not-exist"), None)
+            .expect("query should succeed");
+        assert!(users.is_empty());
+
+        let netgroups = ldap
+            .netgroup("nope*", None, None)
+            .expect("query should succeed");
+        assert!(netgroups.is_empty());
+    }
+
+    #[test]
+    fn exact_netgroup_queries_return_single_match() {
+        let ldap = MockLdapClient::default();
+
+        let netgroups = ldap
+            .netgroup("ucore", None, Some(&["cn".to_string()]))
+            .expect("query should succeed");
+
+        assert_eq!(netgroups.len(), 1);
+        assert_eq!(
+            netgroups[0].get("cn").and_then(|value| value.as_str()),
+            Some("ucore")
+        );
     }
 }

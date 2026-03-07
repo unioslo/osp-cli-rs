@@ -115,8 +115,14 @@ fn visible_width(text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{TimingSummary, format_timing_badge};
+    use std::hint::black_box;
+
+    use super::{
+        TimingSummary, format_duration, format_timing_badge, right_align_timing_line, timing_style,
+        visible_width,
+    };
     use osp_ui::RenderSettings;
+    use osp_ui::style::StyleToken;
     use std::time::Duration;
 
     #[test]
@@ -138,5 +144,77 @@ mod tests {
         assert!(text.contains("p2.0ms"));
         assert!(text.contains("e180.0ms"));
         assert!(text.contains("r5.0ms"));
+    }
+
+    #[test]
+    fn debug_level_zero_and_empty_alignment_yield_no_output() {
+        let resolved = RenderSettings::test_plain(osp_core::output::OutputFormat::Table)
+            .resolve_render_settings();
+
+        assert!(black_box(format_timing_badge(TimingSummary::default(), 0, &resolved)).is_empty());
+        assert!(
+            black_box(right_align_timing_line(
+                TimingSummary::default(),
+                0,
+                &resolved
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn duration_and_style_helpers_cover_threshold_edges() {
+        assert_eq!(
+            black_box(format_duration(Duration::from_nanos(1), 1)),
+            "<1ms"
+        );
+        assert_eq!(
+            black_box(format_duration(Duration::from_millis(9), 1)),
+            "9ms"
+        );
+        assert_eq!(
+            black_box(format_duration(Duration::from_millis(9), 2)),
+            "9.0ms"
+        );
+        assert_eq!(
+            black_box(format_duration(Duration::from_millis(1_250), 1)),
+            "1.25s"
+        );
+        assert_eq!(
+            black_box(format_duration(Duration::from_millis(1_250), 2)),
+            "1.25s"
+        );
+
+        assert_eq!(
+            black_box(timing_style(Duration::from_millis(250))),
+            StyleToken::MessageSuccess
+        );
+        assert_eq!(
+            black_box(timing_style(Duration::from_millis(251))),
+            StyleToken::MessageWarning
+        );
+        assert_eq!(
+            black_box(timing_style(Duration::from_millis(1_001))),
+            StyleToken::MessageError
+        );
+    }
+
+    #[test]
+    fn visible_width_and_right_alignment_ignore_ansi_sequences() {
+        assert_eq!(black_box(visible_width("\u{1b}[31mwarn\u{1b}[0m")), 4);
+
+        let mut resolved = RenderSettings::test_plain(osp_core::output::OutputFormat::Table)
+            .resolve_render_settings();
+        resolved.width = Some(12);
+        let line = right_align_timing_line(
+            TimingSummary {
+                total: Duration::from_millis(9),
+                ..TimingSummary::default()
+            },
+            1,
+            &resolved,
+        );
+
+        assert_eq!(line, "         9ms\n");
     }
 }

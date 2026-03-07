@@ -371,7 +371,12 @@ pub fn is_known_theme(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_name_from_id, find_theme, resolve_theme};
+    use std::hint::black_box;
+
+    use super::{
+        DEFAULT_THEME_NAME, all_themes, available_theme_names, builtin_themes,
+        display_name_from_id, find_builtin_theme, find_theme, is_known_theme, resolve_theme,
+    };
 
     #[test]
     fn dracula_number_override_matches_python_theme_preset() {
@@ -394,5 +399,38 @@ mod tests {
     fn display_name_from_id_formats_title_case() {
         assert_eq!(display_name_from_id("rose-pine-moon"), "Rose Pine Moon");
         assert_eq!(display_name_from_id("solarized-dark"), "Solarized Dark");
+    }
+
+    #[test]
+    fn display_name_and_lookup_helpers_cover_normalization_edges() {
+        let rose = find_theme(" Rose_Pine Moon ").expect("theme lookup should normalize");
+        assert_eq!(black_box(rose.display_name()), "Rose Pine Moon");
+
+        let builtin =
+            black_box(find_builtin_theme(" TOKYONIGHT ")).expect("builtin theme should normalize");
+        assert_eq!(builtin.id, "tokyonight");
+
+        assert_eq!(black_box(display_name_from_id("--")), "");
+        assert_eq!(
+            black_box(display_name_from_id("-already-title-")),
+            "Already Title"
+        );
+        assert!(black_box(find_theme("   ")).is_none());
+        assert!(black_box(find_builtin_theme("   ")).is_none());
+    }
+
+    #[test]
+    fn theme_catalog_helpers_expose_defaults_and_fallbacks() {
+        let names = black_box(available_theme_names());
+        assert!(names.contains(&DEFAULT_THEME_NAME.to_string()));
+        assert_eq!(
+            black_box(all_themes()).len(),
+            black_box(builtin_themes()).len()
+        );
+        assert!(black_box(is_known_theme("nord")));
+        assert!(!black_box(is_known_theme("missing-theme")));
+
+        let fallback = black_box(resolve_theme("missing-theme"));
+        assert_eq!(fallback.id, DEFAULT_THEME_NAME);
     }
 }

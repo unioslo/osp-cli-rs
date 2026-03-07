@@ -244,4 +244,111 @@ mod tests {
         assert!(output_rows(&rows)[0].contains_key("uid"));
         assert!(output_rows(&rows)[0].contains_key("cn"));
     }
+
+    #[test]
+    fn parse_repl_command_rejects_empty_and_unknown_commands() {
+        let empty = parse_repl_command(&[]).expect_err("empty command should fail");
+        assert!(empty.to_string().contains("empty command"));
+
+        let unsupported = parse_repl_command(&["mreg".to_string()])
+            .expect_err("unsupported root command should fail");
+        assert!(unsupported.to_string().contains("unsupported command"));
+
+        let missing_subcommand = parse_repl_command(&["ldap".to_string()])
+            .expect_err("missing ldap subcommand should fail");
+        assert!(
+            missing_subcommand
+                .to_string()
+                .contains("missing ldap subcommand")
+        );
+    }
+
+    #[test]
+    fn parse_repl_command_supports_netgroup_and_short_attribute_flag() {
+        let cmd = parse_repl_command(&[
+            "ldap".to_string(),
+            "netgroup".to_string(),
+            "ops".to_string(),
+            "-a".to_string(),
+            "cn,description".to_string(),
+            "--filter".to_string(),
+            "ops".to_string(),
+        ])
+        .expect("netgroup command should parse");
+
+        assert_eq!(
+            cmd,
+            ParsedCommand::LdapNetgroup {
+                name: Some("ops".to_string()),
+                filter: Some("ops".to_string()),
+                attributes: Some("cn,description".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_repl_command_rejects_unknown_options_and_extra_positionals() {
+        let unknown =
+            parse_repl_command(&["ldap".to_string(), "user".to_string(), "--wat".to_string()])
+                .expect_err("unknown flag should fail");
+        assert!(unknown.to_string().contains("unknown option"));
+
+        let extra = parse_repl_command(&[
+            "ldap".to_string(),
+            "netgroup".to_string(),
+            "ops".to_string(),
+            "extra".to_string(),
+        ])
+        .expect_err("extra positional should fail");
+        assert!(
+            extra
+                .to_string()
+                .contains("ldap netgroup accepts one name positional argument")
+        );
+    }
+
+    #[test]
+    fn execute_command_requires_explicit_subject_when_defaults_are_missing() {
+        let ctx = ServiceContext::new(
+            None,
+            MockLdapClient::default(),
+            osp_config::RuntimeConfig::default(),
+        );
+        let err = execute_command(
+            &ctx,
+            &ParsedCommand::LdapUser {
+                uid: None,
+                filter: None,
+                attributes: None,
+            },
+        )
+        .expect_err("ldap user should require uid when global user is missing");
+        assert!(
+            err.to_string()
+                .contains("ldap user requires <uid> or -u/--user")
+        );
+
+        let err = execute_command(
+            &ctx,
+            &ParsedCommand::LdapNetgroup {
+                name: None,
+                filter: None,
+                attributes: None,
+            },
+        )
+        .expect_err("ldap netgroup should require a name");
+        assert!(err.to_string().contains("ldap netgroup requires <name>"));
+    }
+
+    #[test]
+    fn execute_line_handles_blank_and_shell_parse_errors() {
+        let ctx = test_ctx();
+
+        let blank = execute_line(&ctx, "   ").expect("blank line should be a no-op");
+        assert!(output_rows(&blank).is_empty());
+
+        let err = execute_line(&ctx, "ldap user \"unterminated")
+            .expect_err("invalid shell quoting should fail");
+        assert!(err.to_string().contains("unterminated"));
+    }
 }

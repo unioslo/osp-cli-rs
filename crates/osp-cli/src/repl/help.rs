@@ -16,13 +16,18 @@ pub(crate) fn render_help_with_chrome(
     resolved: &ResolvedRenderSettings,
     layout: HelpLayout,
 ) -> String {
-    let sections = parse_help_sections(help_text);
+    let (preamble, sections) = parse_help_sections(help_text);
     if sections.is_empty() {
         return help_text.to_string();
     }
 
     let theme = &resolved.theme;
     let mut out = String::new();
+
+    if !preamble.trim().is_empty() {
+        out.push_str(preamble.trim_end());
+        out.push_str(section_separator(layout));
+    }
 
     for (index, section) in sections.iter().enumerate() {
         if index > 0 {
@@ -103,7 +108,8 @@ struct HelpSection {
     body: String,
 }
 
-fn parse_help_sections(help_text: &str) -> Vec<HelpSection> {
+fn parse_help_sections(help_text: &str) -> (String, Vec<HelpSection>) {
+    let mut preamble = String::new();
     let mut sections = Vec::new();
     let mut current: Option<HelpSection> = None;
 
@@ -119,6 +125,10 @@ fn parse_help_sections(help_text: &str) -> Vec<HelpSection> {
         }
 
         let Some(section) = current.as_mut() else {
+            if !preamble.is_empty() {
+                preamble.push('\n');
+            }
+            preamble.push_str(line);
             continue;
         };
 
@@ -132,7 +142,7 @@ fn parse_help_sections(help_text: &str) -> Vec<HelpSection> {
         sections.push(section);
     }
 
-    sections
+    (preamble, sections)
 }
 
 fn parse_section_header(line: &str) -> Option<HelpSection> {
@@ -149,15 +159,18 @@ fn parse_section_header(line: &str) -> Option<HelpSection> {
     }
 
     let title = match line {
-        "Commands:" => "Commands",
-        "Options:" => "Options",
-        "Arguments:" => "Arguments",
-        "Common Invocation Options:" => "Common Invocation Options",
+        "Commands:" => "Commands".to_string(),
+        "Options:" => "Options".to_string(),
+        "Arguments:" => "Arguments".to_string(),
+        "Common Invocation Options:" => "Common Invocation Options".to_string(),
+        _ if !line.starts_with(' ') && line.ends_with(':') => {
+            line.trim_end_matches(':').trim().to_string()
+        }
         _ => return None,
     };
 
     Some(HelpSection {
-        title: title.to_string(),
+        title,
         body: String::new(),
     })
 }
@@ -215,5 +228,43 @@ mod tests {
             rendered,
             "Usage:\n  osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n"
         );
+    }
+
+    #[test]
+    fn help_chrome_preserves_preamble_before_known_sections_unit() {
+        let rendered = render_help_with_chrome(
+            "Custom plugin help\nwith two intro lines\n\nUsage: osp sample\n\nCommands:\n  run\n",
+            &resolved_settings(osp_ui::messages::SectionFrameStyle::None),
+            HelpLayout::Compact,
+        );
+
+        assert!(rendered.contains("Custom plugin help"));
+        assert!(rendered.contains("with two intro lines"));
+        assert!(rendered.contains("Usage:\n  osp sample"));
+        assert!(rendered.contains("Commands:\n  run"));
+    }
+
+    #[test]
+    fn help_chrome_preserves_custom_titled_sections_unit() {
+        let rendered = render_help_with_chrome(
+            "Usage: osp sample\n\nExamples:\n  osp sample run\n\nNotes:\n  extra detail\n",
+            &resolved_settings(osp_ui::messages::SectionFrameStyle::None),
+            HelpLayout::Compact,
+        );
+
+        assert!(rendered.contains("Examples:\n  osp sample run"));
+        assert!(rendered.contains("Notes:\n  extra detail"));
+    }
+
+    #[test]
+    fn minimal_help_layout_preserves_custom_titled_sections_unit() {
+        let rendered = render_help_with_chrome(
+            "Usage: osp sample\n\nExamples:\n  osp sample run\n\nNotes:\n  extra detail\n",
+            &resolved_settings(osp_ui::messages::SectionFrameStyle::None),
+            HelpLayout::Minimal,
+        );
+
+        assert!(rendered.contains("Examples:\n  osp sample run"));
+        assert!(rendered.contains("Notes:\n  extra detail"));
     }
 }

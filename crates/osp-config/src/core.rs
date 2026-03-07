@@ -1593,45 +1593,4 @@ pub(crate) fn normalize_identifier(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        BootstrapPhase, BootstrapScopeRule, ConfigSchema, Scope, bootstrap_key_spec,
-        is_bootstrap_only_key, validate_key_scope,
-    };
-
-    #[test]
-    fn bootstrap_key_registry_describes_profile_default() {
-        let spec = bootstrap_key_spec("profile.default").expect("spec should exist");
-        assert_eq!(spec.key, "profile.default");
-        assert_eq!(spec.phase, BootstrapPhase::Profile);
-        assert!(!spec.runtime_visible);
-        assert_eq!(spec.scope_rule, BootstrapScopeRule::GlobalOrTerminal);
-        assert!(is_bootstrap_only_key("profile.default"));
-    }
-
-    #[test]
-    fn bootstrap_key_registry_rejects_profile_scopes() {
-        let err = validate_key_scope("profile.default", &Scope::profile("work"))
-            .expect_err("profile scope should be rejected");
-        match err {
-            crate::ConfigError::InvalidBootstrapScope {
-                key,
-                profile,
-                terminal,
-            } => {
-                assert_eq!(key, "profile.default");
-                assert_eq!(profile.as_deref(), Some("work"));
-                assert_eq!(terminal, None);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn schema_marks_profile_default_bootstrap_only() {
-        let schema = ConfigSchema::default();
-        assert!(schema.is_known_key("profile.default"));
-        assert!(!schema.is_runtime_visible_key("profile.default"));
-        assert!(schema.is_runtime_visible_key("profile.active"));
-    }
-}
+mod tests;

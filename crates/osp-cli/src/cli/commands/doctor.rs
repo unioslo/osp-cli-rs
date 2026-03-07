@@ -168,3 +168,285 @@ fn render_last_failure_document(ui: &UiState, last_failure: Option<&LastFailure>
     }
     document_from_text(&out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DoctorCommandContext, render_last_failure_document, run_doctor_command, theme_doctor_rows,
+    };
+    use crate::app::ReplCommandOutput;
+    use crate::cli::commands::{config as config_cmd, plugins as plugins_cmd};
+    use crate::cli::{DoctorArgs, DoctorCommands};
+    use crate::plugin_manager::PluginManager;
+    use crate::state::{AuthState, LastFailure, RuntimeContext, TerminalKind, UiState};
+    use crate::theme_loader::{ThemeCatalog, ThemeLoadIssue};
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions, RuntimeLoadOptions};
+    use osp_core::output::OutputFormat;
+    use osp_ui::RenderSettings;
+    use osp_ui::document::{Block, LinePart};
+    use osp_ui::messages::MessageLevel;
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    fn ui_state(format: OutputFormat, debug_verbosity: u8) -> UiState {
+        UiState {
+            render_settings: RenderSettings::test_plain(format),
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity,
+        }
+    }
+
+    fn doctor_context(
+        format: OutputFormat,
+        builtins: Option<&str>,
+    ) -> DoctorCommandContext<'static> {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        if let Some(builtins) = builtins {
+            defaults.set("auth.visible.builtins", builtins);
+        }
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let resolved = Box::leak(Box::new(
+            resolver
+                .resolve(ResolveOptions::default().with_terminal("cli"))
+                .expect("test config should resolve"),
+        ));
+        let ui = Box::leak(Box::new(ui_state(format, 0)));
+        let themes = Box::leak(Box::new(ThemeCatalog::default()));
+        let auth = Box::leak(Box::new(AuthState::from_resolved(resolved)));
+        let session_layer = Box::leak(Box::new(ConfigLayer::default()));
+        let plugin_manager = Box::leak(Box::new(PluginManager::new(Vec::new())));
+        let context = Box::leak(Box::new(RuntimeContext::new(None, TerminalKind::Cli, None)));
+
+        DoctorCommandContext {
+            config: config_cmd::ConfigReadContext {
+                context,
+                config: resolved,
+                ui,
+                themes,
+                session_layer,
+                runtime_load: RuntimeLoadOptions::default(),
+            },
+            plugins: plugins_cmd::PluginsCommandContext {
+                config: resolved,
+                config_state: None,
+                auth,
+                clients: None,
+                plugin_manager,
+            },
+            ui,
+            auth,
+            themes,
+            last_failure: None,
+        }
+    }
+
+    #[test]
+    fn doctor_last_without_failure_returns_plain_notice_unit() {
+        let document = render_last_failure_document(&ui_state(OutputFormat::Table, 0), None);
+
+        let rendered = render_line_blocks(&document.blocks);
+        assert!(rendered.contains("No recorded REPL failure"));
+    }
+
+    #[test]
+    fn doctor_last_text_includes_detail_when_debug_is_enabled_unit() {
+        let failure = LastFailure {
+            command_line: "ldap user nope".to_string(),
+            summary: "request failed".to_string(),
+            detail: "request failed\nbackend said no".to_string(),
+        };
+
+        let document =
+            render_last_failure_document(&ui_state(OutputFormat::Table, 1), Some(&failure));
+
+        let rendered = render_line_blocks(&document.blocks);
+        assert!(rendered.contains("Command: ldap user nope"));
+        assert!(rendered.contains("Error:   request failed"));
+        assert!(rendered.contains("Detail:"));
+        assert!(rendered.contains("backend said no"));
+    }
+
+    #[test]
+    fn doctor_last_json_shape_is_stable_unit() {
+        let failure = LastFailure {
+            command_line: "plugins refresh".to_string(),
+            summary: "plugin failed".to_string(),
+            detail: "plugin failed".to_string(),
+        };
+
+        let document =
+            render_last_failure_document(&ui_state(OutputFormat::Json, 0), Some(&failure));
+
+        let Some(Block::Json(json)) = document.blocks.first() else {
+            panic!("expected json block");
+        };
+        assert_eq!(json.payload["status"], Value::String("error".to_string()));
+        assert_eq!(
+            json.payload["command"],
+            Value::String("plugins refresh".to_string())
+        );
+    }
+
+    #[test]
+    fn doctor_last_text_omits_detail_when_debug_is_disabled_unit() {
+        let failure = LastFailure {
+            command_line: "ldap user nope".to_string(),
+            summary: "request failed".to_string(),
+            detail: "request failed\nbackend said no".to_string(),
+        };
+
+        let document =
+            render_last_failure_document(&ui_state(OutputFormat::Table, 0), Some(&failure));
+
+        let rendered = render_line_blocks(&document.blocks);
+        assert!(rendered.contains("Error:   request failed"));
+        assert!(!rendered.contains("Detail:"));
+    }
+
+    #[test]
+    fn theme_doctor_rows_report_issues_and_empty_state_unit() {
+        let empty = theme_doctor_rows(&ThemeCatalog::default());
+        assert_eq!(
+            empty,
+            vec![crate::row! { "status" => "ok", "issue_count" => 0 }]
+        );
+
+        let catalog = ThemeCatalog {
+            entries: Default::default(),
+            issues: vec![ThemeLoadIssue {
+                path: PathBuf::from("/tmp/theme.toml"),
+                message: "broken palette".to_string(),
+            }],
+        };
+
+        let rows = theme_doctor_rows(&catalog);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["status"], Value::String("issue".to_string()));
+        assert_eq!(rows[0]["issue_count"], Value::from(1));
+        assert_eq!(
+            rows[0]["message"],
+            Value::String("broken palette".to_string())
+        );
+    }
+
+    #[test]
+    fn doctor_all_json_includes_visible_sections_unit() {
+        let result = run_doctor_command(
+            doctor_context(OutputFormat::Json, Some("config,plugins,theme")),
+            DoctorArgs {
+                command: Some(DoctorCommands::All),
+            },
+        )
+        .expect("doctor all should succeed");
+
+        let Some(ReplCommandOutput::Document(document)) = result.output else {
+            panic!("expected document output");
+        };
+        let Some(Block::Json(json)) = document.blocks.first() else {
+            panic!("expected json block");
+        };
+        assert!(json.payload.get("config").is_some());
+        assert!(json.payload.get("plugins").is_some());
+        assert!(json.payload.get("theme").is_some());
+    }
+
+    #[test]
+    fn doctor_all_respects_builtin_visibility_unit() {
+        let result = run_doctor_command(
+            doctor_context(OutputFormat::Json, Some("theme")),
+            DoctorArgs {
+                command: Some(DoctorCommands::All),
+            },
+        )
+        .expect("doctor all should succeed");
+
+        let Some(ReplCommandOutput::Document(document)) = result.output else {
+            panic!("expected document output");
+        };
+        let Some(Block::Json(json)) = document.blocks.first() else {
+            panic!("expected json block");
+        };
+        assert!(json.payload.get("theme").is_some());
+        assert!(json.payload.get("config").is_none());
+        assert!(json.payload.get("plugins").is_none());
+    }
+
+    #[test]
+    fn doctor_config_requires_builtin_visibility_unit() {
+        let err = run_doctor_command(
+            doctor_context(OutputFormat::Table, Some("theme")),
+            DoctorArgs {
+                command: Some(DoctorCommands::Config),
+            },
+        )
+        .expect_err("hidden config builtin should fail");
+
+        assert!(!err.to_string().trim().is_empty());
+    }
+
+    #[test]
+    fn doctor_theme_returns_output_rows_unit() {
+        let result = run_doctor_command(
+            doctor_context(OutputFormat::Table, Some("theme")),
+            DoctorArgs {
+                command: Some(DoctorCommands::Theme),
+            },
+        )
+        .expect("doctor theme should succeed");
+
+        assert!(result.output.is_some());
+        assert!(result.messages.is_empty());
+    }
+
+    #[test]
+    fn doctor_all_table_groups_sections_into_panels_unit() {
+        let result = run_doctor_command(
+            doctor_context(OutputFormat::Table, Some("config,theme")),
+            DoctorArgs {
+                command: Some(DoctorCommands::All),
+            },
+        )
+        .expect("doctor all should succeed");
+
+        let Some(ReplCommandOutput::Document(document)) = result.output else {
+            panic!("expected document output");
+        };
+        assert!(
+            document
+                .blocks
+                .iter()
+                .all(|block| matches!(block, Block::Panel(_)))
+        );
+    }
+
+    #[test]
+    fn doctor_theme_requires_builtin_visibility_unit() {
+        let err = run_doctor_command(
+            doctor_context(OutputFormat::Table, Some("config")),
+            DoctorArgs {
+                command: Some(DoctorCommands::Theme),
+            },
+        )
+        .expect_err("hidden theme builtin should fail");
+
+        assert!(!err.to_string().trim().is_empty());
+    }
+
+    fn render_line_blocks(blocks: &[Block]) -> String {
+        blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Line(line) => Some(
+                    line.parts
+                        .iter()
+                        .map(|LinePart { text, .. }| text.as_str())
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}

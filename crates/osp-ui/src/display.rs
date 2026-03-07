@@ -43,3 +43,27 @@ fn summarize_object(map: &Map<String, Value>, max_keys: usize) -> String {
     out.push('}');
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::value_to_display;
+    use serde_json::json;
+
+    #[test]
+    fn empty_objects_render_as_empty_braces() {
+        assert_eq!(value_to_display(&json!({})), "{}");
+    }
+
+    #[test]
+    fn object_preview_adds_ellipsis_when_keys_exceed_preview_limit() {
+        assert_eq!(
+            value_to_display(&json!({
+                "uid": "alice",
+                "mail": "alice@uio.no",
+                "title": "Engineer",
+                "group": "ops"
+            })),
+            "{group, mail, title, ...}"
+        );
+    }
+}

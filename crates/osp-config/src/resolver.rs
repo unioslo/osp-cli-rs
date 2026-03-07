@@ -330,3 +330,54 @@ impl ConfigResolver {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ConfigResolver;
+    use crate::{ConfigError, ConfigLayer, ResolveOptions};
+
+    #[test]
+    fn resolver_layer_mutators_and_setters_are_callable_unit() {
+        let mut resolver = ConfigResolver::default();
+        resolver.defaults_mut().set("profile.default", "default");
+        resolver.file_mut().set("theme.name", "file");
+        resolver.secrets_mut().set("profile.default", "default");
+        resolver.env_mut().set("theme.name", "env");
+        resolver.cli_mut().set("theme.name", "cli");
+        resolver.session_mut().set("theme.name", "session");
+
+        let resolved = resolver
+            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .expect("resolver should resolve");
+        assert_eq!(resolved.get_string("theme.name"), Some("session"));
+        assert_eq!(resolved.active_profile(), "default");
+
+        let mut replacement = ConfigLayer::default();
+        replacement.set("profile.default", "default");
+        replacement.set("theme.name", "replaced");
+        resolver.set_defaults(replacement);
+        resolver.set_file(ConfigLayer::default());
+        resolver.set_secrets(ConfigLayer::default());
+        resolver.set_env(ConfigLayer::default());
+        resolver.set_cli(ConfigLayer::default());
+        resolver.set_session(ConfigLayer::default());
+
+        let replaced = resolver
+            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .expect("replacement config should resolve");
+        assert_eq!(replaced.get_string("theme.name"), Some("replaced"));
+    }
+
+    #[test]
+    fn explain_bootstrap_key_rejects_non_bootstrap_keys_unit() {
+        let resolver = ConfigResolver::default();
+        let err = resolver
+            .explain_bootstrap_key("ui.theme", ResolveOptions::default())
+            .expect_err("non-bootstrap key should fail");
+
+        assert!(matches!(
+            err,
+            ConfigError::InvalidConfigKey { key, .. } if key == "ui.theme"
+        ));
+    }
+}

@@ -129,3 +129,154 @@ fn theme_show_rows(themes: &ThemeCatalog, name: &str) -> Result<Vec<Row>> {
         "bg_alt" => bg_alt,
     }])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ThemeCommandContext, run_theme_command, theme_list_rows, theme_show_rows};
+    use crate::app::CliCommandResult;
+    use crate::app::ReplCommandOutput;
+    use crate::cli::{ThemeArgs, ThemeCommands, ThemeShowArgs};
+    use crate::state::UiState;
+    use crate::theme_loader::{ThemeCatalog, ThemeEntry, ThemeSource};
+    use osp_config::ConfigLayer;
+    use osp_core::output::OutputFormat;
+    use osp_core::row::Row;
+    use osp_ui::RenderSettings;
+    use osp_ui::messages::MessageLevel;
+    use osp_ui::theme::find_builtin_theme;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    fn builtin_theme_catalog() -> ThemeCatalog {
+        let builtin = find_builtin_theme("nord").expect("builtin theme").clone();
+        let entry = ThemeEntry {
+            theme: builtin,
+            source: ThemeSource::Builtin,
+            origin: None,
+        };
+
+        ThemeCatalog {
+            entries: BTreeMap::from([("nord".to_string(), entry)]),
+            issues: Vec::new(),
+        }
+    }
+
+    fn custom_theme_catalog() -> ThemeCatalog {
+        let builtin = find_builtin_theme("nord").expect("builtin theme").clone();
+        let custom = ThemeEntry {
+            theme: builtin,
+            source: ThemeSource::Custom,
+            origin: Some(PathBuf::from("/tmp/themes/nord.toml")),
+        };
+
+        ThemeCatalog {
+            entries: BTreeMap::from([("nord".to_string(), custom)]),
+            issues: Vec::new(),
+        }
+    }
+
+    fn test_ui_state() -> UiState {
+        UiState {
+            render_settings: RenderSettings::test_plain(OutputFormat::Table),
+            message_verbosity: MessageLevel::Info,
+            debug_verbosity: 0,
+        }
+    }
+
+    fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
+        let output = match result.output? {
+            ReplCommandOutput::Output { output, .. } => output,
+            ReplCommandOutput::Document(_) | ReplCommandOutput::Text(_) => return None,
+        };
+        output.into_rows()
+    }
+
+    #[test]
+    fn theme_list_rows_marks_custom_theme_source_unit() {
+        let rows = theme_list_rows(&custom_theme_catalog(), "nord");
+        let row = &rows[0];
+
+        assert_eq!(
+            row.get("source").and_then(|value| value.as_str()),
+            Some("custom")
+        );
+        assert_eq!(
+            row.get("origin").and_then(|value| value.as_str()),
+            Some("/tmp/themes/nord.toml")
+        );
+    }
+
+    #[test]
+    fn run_theme_command_list_emits_builtin_theme_rows_unit() {
+        let ui = test_ui_state();
+        let themes = builtin_theme_catalog();
+        let mut overrides = ConfigLayer::default();
+
+        let result = run_theme_command(
+            &mut overrides,
+            ThemeCommandContext {
+                ui: &ui,
+                themes: &themes,
+            },
+            ThemeArgs {
+                command: ThemeCommands::List,
+            },
+        )
+        .expect("theme list should succeed");
+
+        let rows = extract_output_rows(result).expect("rows");
+        let row = &rows[0];
+        assert_eq!(
+            row.get("source").and_then(|value| value.as_str()),
+            Some("builtin")
+        );
+    }
+
+    #[test]
+    fn theme_show_rows_marks_custom_theme_source_unit() {
+        let rows = theme_show_rows(&custom_theme_catalog(), "nord").expect("theme should resolve");
+        let row = &rows[0];
+
+        assert_eq!(
+            row.get("source").and_then(|value| value.as_str()),
+            Some("custom")
+        );
+        assert_eq!(
+            row.get("origin").and_then(|value| value.as_str()),
+            Some("/tmp/themes/nord.toml")
+        );
+    }
+
+    #[test]
+    fn run_theme_command_show_uses_active_builtin_theme_when_name_is_omitted_unit() {
+        let mut ui = test_ui_state();
+        ui.render_settings.theme_name = "nord".to_string();
+        let themes = builtin_theme_catalog();
+        let mut overrides = ConfigLayer::default();
+
+        let result = run_theme_command(
+            &mut overrides,
+            ThemeCommandContext {
+                ui: &ui,
+                themes: &themes,
+            },
+            ThemeArgs {
+                command: ThemeCommands::Show(ThemeShowArgs { name: None }),
+            },
+        )
+        .expect("theme show should succeed");
+
+        let rows = extract_output_rows(result).expect("rows");
+        let row = &rows[0];
+        assert_eq!(row.get("id").and_then(|value| value.as_str()), Some("nord"));
+        assert_eq!(
+            row.get("source").and_then(|value| value.as_str()),
+            Some("builtin")
+        );
+    }
+
+    #[test]
+    fn extract_output_rows_returns_none_for_text_results_unit() {
+        assert!(extract_output_rows(CliCommandResult::text("hello")).is_none());
+    }
+}

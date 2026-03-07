@@ -1116,4 +1116,84 @@ mod tests {
         assert!(rendered.contains("│ osp config show"));
         assert!(rendered.contains("┘"));
     }
+
+    #[test]
+    fn message_level_helpers_cover_titles_env_and_rank_unit() {
+        assert_eq!(MessageLevel::Error.title(), "Errors");
+        assert_eq!(MessageLevel::Success.as_env_str(), "success");
+        assert_eq!(MessageLevel::from_rank(-1), MessageLevel::Error);
+        assert_eq!(MessageLevel::from_rank(1), MessageLevel::Warning);
+        assert_eq!(MessageLevel::from_rank(9), MessageLevel::Trace);
+    }
+
+    #[test]
+    fn message_layout_parser_and_buffer_helpers_cover_basic_paths_unit() {
+        assert_eq!(
+            MessageLayout::parse("grouped"),
+            Some(MessageLayout::Grouped)
+        );
+        assert_eq!(
+            MessageLayout::parse("minimal"),
+            Some(MessageLayout::Minimal)
+        );
+        assert_eq!(MessageLayout::parse("dense"), None);
+
+        let mut messages = MessageBuffer::default();
+        assert!(messages.is_empty());
+        messages.error("bad");
+        messages.success("ok");
+        messages.trace("trace");
+        assert!(!messages.is_empty());
+        assert!(
+            messages
+                .render_grouped(MessageLevel::Success)
+                .contains("Success")
+        );
+    }
+
+    #[test]
+    fn section_frame_styles_cover_none_bottom_and_round_unit() {
+        let theme = crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME);
+        let plain = render_section_block_with_overrides(
+            "Note",
+            "body",
+            SectionFrameStyle::None,
+            false,
+            Some(16),
+            false,
+            &theme,
+            crate::style::StyleToken::PanelBorder,
+            crate::style::StyleToken::PanelTitle,
+            &crate::style::StyleOverrides::default(),
+        );
+        let bottom = render_section_block_with_overrides(
+            "Note",
+            "body",
+            SectionFrameStyle::Bottom,
+            false,
+            Some(16),
+            false,
+            &theme,
+            crate::style::StyleToken::PanelBorder,
+            crate::style::StyleToken::PanelTitle,
+            &crate::style::StyleOverrides::default(),
+        );
+        let round = render_section_block_with_overrides(
+            "Note",
+            "body",
+            SectionFrameStyle::Round,
+            true,
+            Some(16),
+            false,
+            &theme,
+            crate::style::StyleToken::PanelBorder,
+            crate::style::StyleToken::PanelTitle,
+            &crate::style::StyleOverrides::default(),
+        );
+
+        assert!(plain.contains("Note:"));
+        assert!(bottom.lines().last().is_some_and(|line| line.contains('-')));
+        assert!(round.contains("╭"));
+        assert!(round.contains("╰"));
+    }
 }

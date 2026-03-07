@@ -104,4 +104,19 @@ mod tests {
         let table = build_table_block(&[row1, row2], TableStyle::Grid, Some(&preferred), 1);
         assert_eq!(table.rows[1][1], json!(""));
     }
+
+    #[test]
+    fn collects_headers_in_sorted_order_without_preferred_keys() {
+        let mut row = Row::new();
+        row.insert("uid".to_string(), json!("alice"));
+        row.insert("group".to_string(), json!("ops"));
+        row.insert("role".to_string(), json!("admin"));
+
+        let table = build_table_block(&[row], TableStyle::Grid, None, 1);
+
+        assert_eq!(
+            table.headers,
+            vec!["group".to_string(), "role".to_string(), "uid".to_string()]
+        );
+    }
 }

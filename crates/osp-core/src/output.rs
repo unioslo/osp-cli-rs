@@ -110,3 +110,57 @@ impl UnicodeMode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+
+    #[test]
+    fn output_format_round_trips_known_values_and_aliases() {
+        assert_eq!(OutputFormat::Auto.as_str(), "auto");
+        assert_eq!(OutputFormat::Json.as_str(), "json");
+        assert_eq!(OutputFormat::Markdown.as_str(), "md");
+        assert_eq!(OutputFormat::parse(" json "), Some(OutputFormat::Json));
+        assert_eq!(
+            OutputFormat::parse("markdown"),
+            Some(OutputFormat::Markdown)
+        );
+        assert_eq!(OutputFormat::parse("md"), Some(OutputFormat::Markdown));
+        assert_eq!(OutputFormat::parse("wat"), None);
+    }
+
+    #[test]
+    fn render_color_and_unicode_modes_parse_case_insensitively() {
+        assert_eq!(RenderMode::Auto.as_str(), "auto");
+        assert_eq!(RenderMode::parse("RICH"), Some(RenderMode::Rich));
+        assert_eq!(RenderMode::parse("wat"), None);
+
+        assert_eq!(ColorMode::Always.as_str(), "always");
+        assert_eq!(ColorMode::parse(" never "), Some(ColorMode::Never));
+        assert_eq!(ColorMode::parse("wat"), None);
+
+        assert_eq!(UnicodeMode::Always.as_str(), "always");
+        assert_eq!(UnicodeMode::parse("AUTO"), Some(UnicodeMode::Auto));
+        assert_eq!(UnicodeMode::parse("wat"), None);
+    }
+
+    #[test]
+    fn output_modes_cover_remaining_variants() {
+        assert_eq!(OutputFormat::Table.as_str(), "table");
+        assert_eq!(OutputFormat::Mreg.as_str(), "mreg");
+        assert_eq!(OutputFormat::Value.as_str(), "value");
+        assert_eq!(OutputFormat::parse("auto"), Some(OutputFormat::Auto));
+        assert_eq!(OutputFormat::parse("mreg"), Some(OutputFormat::Mreg));
+        assert_eq!(OutputFormat::parse(" value "), Some(OutputFormat::Value));
+
+        assert_eq!(RenderMode::Plain.as_str(), "plain");
+        assert_eq!(RenderMode::Rich.as_str(), "rich");
+        assert_eq!(RenderMode::parse("plain"), Some(RenderMode::Plain));
+
+        assert_eq!(ColorMode::Auto.as_str(), "auto");
+        assert_eq!(ColorMode::parse("always"), Some(ColorMode::Always));
+
+        assert_eq!(UnicodeMode::Never.as_str(), "never");
+        assert_eq!(UnicodeMode::parse("never"), Some(UnicodeMode::Never));
+    }
+}

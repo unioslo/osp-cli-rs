@@ -55,3 +55,40 @@ fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {
 
     adjust_verbosity(MessageLevel::Success, verbose, quiet)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::bootstrap_message_verbosity;
+    use osp_ui::messages::MessageLevel;
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn bootstrap_message_verbosity_counts_short_and_long_flags_until_double_dash() {
+        let args = vec![
+            OsString::from("osp"),
+            OsString::from("-vvq"),
+            OsString::from("--verbose"),
+            OsString::from("--"),
+            OsString::from("--quiet"),
+        ];
+
+        let level = bootstrap_message_verbosity(&args);
+        assert_eq!(level, MessageLevel::Trace);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bootstrap_message_verbosity_ignores_non_utf8_and_balances_quiet_flags() {
+        let args = vec![
+            OsString::from("osp"),
+            OsString::from("--quiet"),
+            OsString::from_vec(vec![0x66, 0x6f, 0x80]),
+            OsString::from("-q"),
+        ];
+
+        let level = bootstrap_message_verbosity(&args);
+        assert_eq!(level, MessageLevel::Error);
+    }
+}

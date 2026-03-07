@@ -221,10 +221,6 @@ fn next_shrink_step<'a>(
         .max()
         .unwrap_or(0);
 
-    if max_overflow == 0 {
-        return None;
-    }
-
     let rank_limited_amount = if selected_ties > 1 {
         1
     } else {
@@ -326,7 +322,10 @@ fn json_display_width(value: &Value) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::prepare_layout_context;
+    use super::{
+        TableDescriptor, compute_raw_table_widths, next_shrink_step, prepare_layout_context,
+        shrink_global_widths_to_fit, strip_count_suffix,
+    };
     use crate::document::{
         Block, Document, MregBlock, MregEntry, MregRow, MregValue, TableBlock, TableStyle,
     };
@@ -406,21 +405,13 @@ mod tests {
         };
 
         let context = prepare_layout_context(&document, &rich_settings(None));
-        let first_id = match &document.blocks[0] {
-            Block::Table(table) => table.block_id,
-            _ => 0,
-        };
-        let second_id = match &document.blocks[1] {
-            Block::Table(table) => table.block_id,
-            _ => 0,
-        };
         let first = context
             .table_column_widths
-            .get(&first_id)
+            .get(&1)
             .expect("first table widths should exist");
         let second = context
             .table_column_widths
-            .get(&second_id)
+            .get(&2)
             .expect("second table widths should exist");
 
         assert_eq!(first, second);
@@ -446,13 +437,9 @@ mod tests {
         };
 
         let context = prepare_layout_context(&document, &rich_settings(Some(36)));
-        let table_id = match &document.blocks[0] {
-            Block::Table(table) => table.block_id,
-            _ => 0,
-        };
         let widths = context
             .table_column_widths
-            .get(&table_id)
+            .get(&1)
             .expect("table widths should exist");
 
         let total: usize = widths.iter().sum::<usize>() + widths.len() * 3 + 1;
@@ -479,17 +466,13 @@ mod tests {
 
         let rich_context = prepare_layout_context(&document, &rich_settings(Some(36)));
         let plain_context = prepare_layout_context(&document, &plain_settings(Some(36)));
-        let table_id = match &document.blocks[0] {
-            Block::Table(table) => table.block_id,
-            _ => 0,
-        };
         let rich_widths = rich_context
             .table_column_widths
-            .get(&table_id)
+            .get(&1)
             .expect("rich table widths should exist");
         let plain_widths = plain_context
             .table_column_widths
-            .get(&table_id)
+            .get(&1)
             .expect("plain table widths should exist");
 
         let rich_total: usize = rich_widths.iter().sum::<usize>() + rich_widths.len() * 3 + 1;
@@ -514,13 +497,9 @@ mod tests {
         };
 
         let context = prepare_layout_context(&document, &rich_settings(Some(27)));
-        let table_id = match &document.blocks[0] {
-            Block::Table(table) => table.block_id,
-            _ => 0,
-        };
         let widths = context
             .table_column_widths
-            .get(&table_id)
+            .get(&1)
             .expect("table widths should exist");
 
         let total: usize = widths.iter().sum::<usize>() + widths.len() * 3 + 1;
@@ -551,13 +530,9 @@ mod tests {
         };
 
         let context = prepare_layout_context(&document, &rich_settings(Some(60)));
-        let mreg_id = match &document.blocks[0] {
-            Block::Mreg(mreg) => mreg.block_id,
-            _ => 0,
-        };
         let metrics = context
             .mreg_metrics
-            .get(&mreg_id)
+            .get(&1)
             .expect("mreg metrics should exist");
 
         assert_eq!(metrics.entry_metrics.len(), 2);
@@ -595,5 +570,125 @@ mod tests {
         assert_eq!(metrics.entry_metrics.len(), 2);
         assert!(metrics.entry_metrics[0].is_none());
         assert!(metrics.entry_metrics[1].is_some());
+    }
+
+    #[test]
+    fn leaves_empty_header_tables_with_empty_widths() {
+        let document = Document {
+            blocks: vec![Block::Table(TableBlock {
+                block_id: 7,
+                style: TableStyle::Grid,
+                headers: Vec::new(),
+                rows: vec![Vec::new()],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: true,
+                depth: 0,
+            })],
+        };
+
+        let context = prepare_layout_context(&document, &rich_settings(Some(8)));
+        let widths = context
+            .table_column_widths
+            .get(&7)
+            .expect("empty table widths should exist");
+
+        assert!(widths.is_empty());
+    }
+
+    #[test]
+    fn stops_shrinking_when_columns_have_hit_minimum_width() {
+        let document = Document {
+            blocks: vec![Block::Table(TableBlock {
+                block_id: 9,
+                style: TableStyle::Grid,
+                headers: vec!["a".to_string(), "b".to_string()],
+                rows: vec![vec![json!("x"), json!("y")]],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: true,
+                depth: 0,
+            })],
+        };
+
+        let context = prepare_layout_context(&document, &rich_settings(Some(10)));
+        let widths = context
+            .table_column_widths
+            .get(&9)
+            .expect("table widths should exist");
+
+        assert_eq!(widths, &vec![4, 4]);
+        assert!(widths.iter().sum::<usize>() + widths.len() * 3 + 1 > 10);
+    }
+
+    #[test]
+    fn strip_count_suffix_ignores_numeric_counts_only() {
+        assert_eq!(strip_count_suffix("hosts (12)"), "hosts");
+        assert_eq!(strip_count_suffix("hosts"), "hosts");
+        assert_eq!(strip_count_suffix("hosts (a)"), "hosts (a)");
+    }
+
+    #[test]
+    fn compute_raw_table_widths_expand_for_cell_content() {
+        let table = TableBlock {
+            block_id: 1,
+            style: TableStyle::Grid,
+            headers: vec!["name".to_string(), "value".to_string()],
+            rows: vec![vec![
+                json!("alice"),
+                json!("this is longer than the header"),
+            ]],
+            header_pairs: Vec::new(),
+            align: None,
+            shrink_to_fit: true,
+            depth: 0,
+        };
+
+        let widths = compute_raw_table_widths(&table, 4);
+
+        assert!(widths[1] > "value".len());
+    }
+
+    #[test]
+    fn next_shrink_step_uses_second_widest_column_gap() {
+        let tables = vec![TableDescriptor {
+            block_id: 1,
+            headers: vec![
+                "name".to_string(),
+                "description".to_string(),
+                "owner".to_string(),
+            ],
+            raw_widths: vec![12, 9, 6],
+            shrink_to_fit: true,
+        }];
+        let widths = std::collections::HashMap::from([
+            ("name".to_string(), 12usize),
+            ("description".to_string(), 9usize),
+            ("owner".to_string(), 6usize),
+        ]);
+
+        let (header, amount) =
+            next_shrink_step(24, 4, &[&tables[0]], &widths).expect("shrink step");
+
+        assert_eq!(header, "name");
+        assert_eq!(amount, 3);
+    }
+
+    #[test]
+    fn shrink_global_widths_updates_selected_header_width() {
+        let tables = vec![TableDescriptor {
+            block_id: 1,
+            headers: vec!["name".to_string(), "description".to_string()],
+            raw_widths: vec![12, 24],
+            shrink_to_fit: true,
+        }];
+        let mut widths = std::collections::HashMap::from([
+            ("name".to_string(), 12usize),
+            ("description".to_string(), 24usize),
+        ]);
+
+        shrink_global_widths_to_fit(28, 4, &tables, &mut widths);
+
+        assert!(widths["description"] < 24);
     }
 }

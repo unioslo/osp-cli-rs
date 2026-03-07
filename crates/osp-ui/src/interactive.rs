@@ -210,6 +210,18 @@ mod tests {
     }
 
     #[test]
+    fn runtime_blocks_live_output_without_stderr_tty() {
+        let runtime = InteractiveRuntime {
+            stdin_is_tty: true,
+            stderr_is_tty: false,
+            terminal: Some("xterm-256color".to_string()),
+        };
+
+        assert!(!runtime.allows_live_output());
+        assert!(!runtime.allows_prompting());
+    }
+
+    #[test]
     fn hidden_spinner_supports_full_lifecycle() {
         let spinner = Spinner::with_enabled(false, "Working");
         spinner.set_message("Still working");
@@ -217,6 +229,27 @@ mod tests {
         spinner.finish_success("Done");
         spinner.finish_failure("Failed");
         spinner.finish_and_clear();
+    }
+
+    #[test]
+    fn spinner_respects_runtime_policy_and_finish_alias() {
+        let live_runtime = InteractiveRuntime {
+            stdin_is_tty: true,
+            stderr_is_tty: true,
+            terminal: Some("xterm-256color".to_string()),
+        };
+        let muted_runtime = InteractiveRuntime {
+            stdin_is_tty: true,
+            stderr_is_tty: true,
+            terminal: Some("dumb".to_string()),
+        };
+
+        let live = Spinner::with_runtime(&live_runtime, "Working");
+        live.set_message("Still working");
+        live.finish_with_message("Done");
+
+        let muted = Spinner::with_runtime(&muted_runtime, "Muted");
+        muted.finish_with_message("Still muted");
     }
 
     #[test]
@@ -237,6 +270,19 @@ mod tests {
     }
 
     #[test]
+    fn interactive_runtime_accessor_and_spinner_follow_runtime() {
+        let runtime = InteractiveRuntime {
+            stdin_is_tty: true,
+            stderr_is_tty: true,
+            terminal: Some("xterm-256color".to_string()),
+        };
+        let interactive = Interactive::new(runtime.clone());
+
+        assert_eq!(interactive.runtime(), &runtime);
+        interactive.spinner("Working").finish_and_clear();
+    }
+
+    #[test]
     fn password_fails_fast_without_interactive_terminal() {
         let interactive = Interactive::new(InteractiveRuntime {
             stdin_is_tty: false,
@@ -251,5 +297,68 @@ mod tests {
             err.to_string().contains("interactive terminal"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn password_allow_empty_fails_fast_without_interactive_terminal() {
+        let interactive = Interactive::new(InteractiveRuntime {
+            stdin_is_tty: false,
+            stderr_is_tty: false,
+            terminal: None,
+        });
+
+        let err = interactive
+            .password_allow_empty("Password")
+            .expect_err("password prompt should still require a TTY");
+        assert!(
+            err.to_string().contains("interactive terminal"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn runtime_allows_live_output_when_term_is_missing_but_stderr_is_tty() {
+        let runtime = InteractiveRuntime {
+            stdin_is_tty: true,
+            stderr_is_tty: true,
+            terminal: None,
+        };
+
+        assert!(runtime.allows_prompting());
+        assert!(runtime.allows_live_output());
+    }
+
+    #[test]
+    fn spinner_new_and_detect_paths_are_callable() {
+        let interactive = Interactive::detect();
+        interactive.spinner("Working").finish_and_clear();
+        Spinner::new("Booting").finish_and_clear();
+    }
+
+    #[test]
+    fn default_interactive_matches_detected_runtime_shape() {
+        let detected = Interactive::detect();
+        let defaulted = Interactive::default();
+
+        assert_eq!(
+            defaulted.runtime().stdin_is_tty,
+            detected.runtime().stdin_is_tty
+        );
+        assert_eq!(
+            defaulted.runtime().stderr_is_tty,
+            detected.runtime().stderr_is_tty
+        );
+    }
+
+    #[test]
+    fn runtime_without_stdin_tty_can_still_allow_live_output() {
+        let runtime = InteractiveRuntime {
+            stdin_is_tty: false,
+            stderr_is_tty: true,
+            terminal: Some("xterm-256color".to_string()),
+        };
+
+        assert!(!runtime.allows_prompting());
+        assert!(runtime.allows_live_output());
     }
 }

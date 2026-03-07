@@ -583,7 +583,11 @@ fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_config::{
+        ActiveProfileSource, ConfigLayer, ConfigResolver, ConfigSource, ConfigValue,
+        ExplainInterpolation, ExplainInterpolationStep, ResolveOptions, ResolvedValue, Scope,
+    };
+    use std::collections::BTreeSet;
 
     fn resolved_config_and_explain(
         key: &str,
@@ -662,5 +666,68 @@ mod tests {
         assert_eq!(payload["presentation"]["preset_source"], "session");
         assert_eq!(payload["presentation"]["effective_value"], "minimal");
         assert_eq!(payload["presentation"]["effective_value_type"], "string");
+    }
+
+    #[test]
+    fn config_explain_redacts_sensitive_values_in_text_and_json_unit() {
+        let (config, _) = resolved_config_and_explain("ui.format", &[], &[], &[]);
+        let explain = ConfigExplain {
+            key: "auth.api_token".to_string(),
+            active_profile: "default".to_string(),
+            active_profile_source: ActiveProfileSource::DefaultProfile,
+            terminal: Some("repl".to_string()),
+            known_profiles: BTreeSet::from(["default".to_string()]),
+            layers: Vec::new(),
+            final_entry: Some(ResolvedValue {
+                raw_value: ConfigValue::String("secret-token".to_string()).into_secret(),
+                value: ConfigValue::String("secret-token".to_string()).into_secret(),
+                source: ConfigSource::Secrets,
+                scope: Scope::global(),
+                origin: Some("secrets.toml".to_string()),
+            }),
+            interpolation: Some(ExplainInterpolation {
+                template: "${auth.api_token}".to_string(),
+                steps: vec![ExplainInterpolationStep {
+                    placeholder: "auth.api_token".to_string(),
+                    raw_value: ConfigValue::String("secret-token".to_string()).into_secret(),
+                    value: ConfigValue::String("secret-token".to_string()).into_secret(),
+                    source: ConfigSource::Secrets,
+                    scope: Scope::global(),
+                    origin: Some("secrets.toml".to_string()),
+                }],
+            }),
+        };
+
+        let text = render_config_explain_text(&explain, &config, false);
+        let json = config_explain_json(&explain, &config, false);
+
+        assert!(text.contains("[REDACTED]"));
+        assert!(text.contains("note: some values are redacted"));
+        assert_eq!(json["value"], "[REDACTED]");
+        assert_eq!(json["interpolation"]["steps"][0]["value"], "[REDACTED]");
+    }
+
+    #[test]
+    fn config_explain_helpers_cover_scope_policy_and_key_suggestions_unit() {
+        let (config, _) = resolved_config_and_explain(
+            "ui.format",
+            &[("alias.lookup", "ldap user"), ("ui.format", "json")],
+            &[],
+            &[],
+        );
+
+        assert_eq!(format_scope(&Scope::global()), "global");
+        assert_eq!(
+            format_scope(&Scope::profile_terminal("ops", "repl")),
+            "profile:ops terminal:repl"
+        );
+        assert!(
+            bootstrap_scope_policy("profile.default")
+                .is_some_and(|value| value.contains("terminal-only"))
+        );
+        assert!(bootstrap_scope_policy("ui.format").is_none());
+
+        let suggestions = suggest_config_keys(&config, "ui.for");
+        assert!(suggestions.iter().any(|candidate| candidate == "ui.format"));
     }
 }

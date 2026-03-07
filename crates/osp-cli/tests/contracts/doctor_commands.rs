@@ -36,6 +36,30 @@ fn doctor_json_stdout_is_machine_parseable_contract() {
 }
 
 #[cfg(unix)]
+#[test]
+fn doctor_last_without_recorded_failure_is_human_text_contract() {
+    let home = make_temp_dir("osp-cli-doctor-last");
+    let empty_plugins = make_temp_dir("osp-cli-empty-plugins-doctor-last");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("OSP_PLUGIN_PATH", &empty_plugins)
+        .env("OSP_BUNDLED_PLUGIN_DIR", &empty_plugins)
+        .args(["doctor", "last"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "No recorded REPL failure in this session.",
+        ))
+        .stderr(predicates::str::is_empty());
+
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&empty_plugins);
+}
+
+#[cfg(unix)]
 fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
     let mut dir = std::env::temp_dir();
     let nonce = std::time::SystemTime::now()
