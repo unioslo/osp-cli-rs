@@ -1,0 +1,10 @@
+---
+source: crates/osp-cli/src/app/tests/presentation.rs
+expression: "render_table_snapshot(&[(\"ui.presentation\", \"expressive\")])"
+---
+╭━━━━━━━┳━━━━━━━╮
+┃ uid   ┃ count ┃
+┡━━━━━━━╇━━━━━━━┩
+│ alice │ 2     │
+│ bob   │ 15    │
+╰───────┴───────╯

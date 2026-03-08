@@ -1,0 +1,5 @@
+---
+source: crates/osp-cli/src/app/tests/presentation.rs
+expression: "render_prompt_snapshot(&[(\"ui.presentation\", \"compact\")])"
+---
+default>

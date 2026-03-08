@@ -1,0 +1,11 @@
+---
+source: crates/osp-cli/src/repl/help.rs
+expression: rendered
+---
+Usage:
+  osp [OPTIONS]
+Commands:
+  help
+Options:
+  -h, --help
+Use `osp plugins commands` to list plugin-provided commands.
