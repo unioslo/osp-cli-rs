@@ -11,19 +11,14 @@ pub const ENV_OSP_PROFILE: &str = "OSP_PROFILE";
 pub const ENV_OSP_TERMINAL: &str = "OSP_TERMINAL";
 pub const ENV_OSP_TERMINAL_KIND: &str = "OSP_TERMINAL_KIND";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum UiVerbosity {
     Error,
     Warning,
+    #[default]
     Success,
     Info,
     Trace,
-}
-
-impl Default for UiVerbosity {
-    fn default() -> Self {
-        Self::Success
-    }
 }
 
 impl UiVerbosity {
@@ -49,17 +44,12 @@ impl UiVerbosity {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RuntimeTerminalKind {
     Cli,
     Repl,
+    #[default]
     Unknown,
-}
-
-impl Default for RuntimeTerminalKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl RuntimeTerminalKind {
