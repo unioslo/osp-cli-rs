@@ -891,6 +891,12 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
     let ambiguous_help = manager.repl_help_text().expect("help should render");
     assert!(ambiguous_help.contains("shared - provider selection required"));
     assert!(ambiguous_help.contains("solo - solo plugin"));
+    let completion_words = manager
+        .completion_words()
+        .expect("completion words should render");
+    assert!(completion_words.contains(&"help".to_string()));
+    assert!(completion_words.contains(&"shared".to_string()));
+    assert!(completion_words.contains(&"solo".to_string()));
     assert_eq!(
         manager.command_providers("shared"),
         vec![
@@ -898,6 +904,16 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
             format!("beta ({})", PluginSource::Explicit)
         ]
     );
+    assert_eq!(manager.selected_provider_label("shared"), None);
+    assert_eq!(
+        manager.selected_provider_label("solo").as_deref(),
+        Some("solo (explicit)")
+    );
+
+    let doctor = manager.doctor().expect("doctor should render");
+    assert_eq!(doctor.conflicts.len(), 1);
+    assert_eq!(doctor.conflicts[0].command, "shared");
+    assert_eq!(doctor.plugins.len(), 3);
 
     manager
         .set_preferred_provider("shared", "beta")

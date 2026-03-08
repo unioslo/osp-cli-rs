@@ -1,4 +1,8 @@
-use super::{set_scoped_value_in_toml, unset_scoped_value_in_toml, validate_secrets_permissions};
+use super::{
+    config_value_to_toml, get_table_path, load_or_create_toml_root, prune_empty_table_path,
+    read_dotted_value, secret_file_mode, set_scoped_value_in_toml, unset_scoped_value_in_toml,
+    validate_secrets_permissions, write_text_atomic, write_toml_root,
+};
 use crate::{ConfigError, ConfigValue, Scope};
 
 #[test]
@@ -253,6 +257,41 @@ fn non_strict_secret_validation_allows_group_readable_files() {
     validate_secrets_permissions(&path, false).expect("non-strict validation should pass");
 }
 
+#[cfg(unix)]
+#[test]
+fn non_strict_secret_validation_ignores_missing_files() {
+    let dir = make_temp_dir("osp-config-store-missing-secret-nonstrict");
+    let path = dir.join("secrets.toml");
+    validate_secrets_permissions(&path, false).expect("non-strict validation should short-circuit");
+}
+
+#[test]
+fn empty_dotted_keys_are_rejected_for_set_and_unset() {
+    let dir = make_temp_dir("osp-config-store-empty-key");
+    let path = dir.join("config.toml");
+
+    let err = set_scoped_value_in_toml(
+        &path,
+        " .. ",
+        &ConfigValue::String("json".to_string()),
+        &Scope::global(),
+        true,
+        false,
+    )
+    .expect_err("empty key path should fail");
+    assert!(matches!(
+        err,
+        ConfigError::InvalidConfigKey { key, .. } if key == " .. "
+    ));
+
+    let err = unset_scoped_value_in_toml(&path, "   ", &Scope::global(), true, false)
+        .expect_err("empty key path should fail");
+    assert!(matches!(
+        err,
+        ConfigError::InvalidConfigKey { key, .. } if key == "   "
+    ));
+}
+
 #[test]
 fn set_returns_previous_value_when_overwriting_existing_entry() {
     let dir = make_temp_dir("osp-config-store-overwrite");
@@ -392,6 +431,146 @@ fn strict_secret_validation_reports_missing_file_as_read_error() {
     let err =
         validate_secrets_permissions(&path, true).expect_err("missing strict secrets file fails");
     assert!(matches!(err, ConfigError::FileRead { .. }));
+}
+
+#[test]
+fn config_value_to_toml_preserves_scalar_and_secret_variants_unit() {
+    let value = ConfigValue::List(vec![
+        ConfigValue::Integer(7),
+        ConfigValue::Float(2.5),
+        ConfigValue::String("plain".to_string()).into_secret(),
+    ]);
+
+    let toml = config_value_to_toml(&value);
+    assert_eq!(
+        toml,
+        toml::Value::Array(vec![
+            toml::Value::Integer(7),
+            toml::Value::Float(2.5),
+            toml::Value::String("plain".to_string()),
+        ])
+    );
+}
+
+#[test]
+fn read_dotted_value_returns_nested_scalars_and_none_for_missing_paths_unit() {
+    let root: toml::Value = r#"
+[default.ui]
+format = "json"
+"#
+    .parse()
+    .expect("fixture should parse");
+    let table = root.as_table().expect("root should be a table");
+
+    assert_eq!(
+        read_dotted_value(table, &["default", "ui", "format"]).and_then(toml::Value::as_str),
+        Some("json")
+    );
+    assert!(read_dotted_value(table, &["default", "ui", "missing"]).is_none());
+    assert!(read_dotted_value(table, &[]).is_none());
+}
+
+#[test]
+fn write_toml_root_persists_regular_payload_without_secret_mode_unit() {
+    let dir = make_temp_dir("osp-config-store-write-root");
+    let path = dir.join("config.toml");
+    let root: toml::Value = r#"
+[default.ui]
+format = "json"
+"#
+    .parse()
+    .expect("fixture should parse");
+
+    write_toml_root(&path, &root, false).expect("toml root should be written");
+
+    let payload = std::fs::read_to_string(&path).expect("written config should be readable");
+    assert!(payload.contains("format = \"json\""));
+}
+
+#[test]
+fn load_or_create_toml_root_reports_file_read_errors_unit() {
+    let dir = make_temp_dir("osp-config-store-read-dir");
+
+    let err = load_or_create_toml_root(&dir).expect_err("directory path should fail to read");
+    match err {
+        ConfigError::FileRead { path, reason } => {
+            assert!(path.contains("osp-config-store-read-dir"));
+            assert!(!reason.is_empty());
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn write_text_atomic_rejects_paths_without_file_name_unit() {
+    let err = write_text_atomic(std::path::Path::new("."), b"payload", false)
+        .expect_err("path without file name should fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(err.to_string().contains("path has no file name"));
+}
+
+#[cfg(unix)]
+#[test]
+fn secret_file_mode_reports_missing_files_unit() {
+    let dir = make_temp_dir("osp-config-store-secret-file-mode-missing");
+    let path = dir.join("missing.toml");
+
+    let err = secret_file_mode(&path).expect_err("missing file should fail");
+    match err {
+        ConfigError::FileRead { path, reason } => {
+            assert!(path.contains("missing.toml"));
+            assert!(!reason.is_empty());
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn table_path_helpers_cover_missing_invalid_and_pruned_sections_unit() {
+    let mut root = toml::value::Table::new();
+    root.insert(
+        "default".to_string(),
+        toml::Value::String("json".to_string()),
+    );
+
+    let err = get_table_path(&root, &["default", "ui"]).expect_err("scalar section should fail");
+    match err {
+        ConfigError::InvalidSection { section, expected } => {
+            assert_eq!(section, "default");
+            assert_eq!(expected, "table");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let empty = toml::value::Table::new();
+    let missing =
+        get_table_path(&empty, &["default", "ui"]).expect("missing branch should return none");
+    assert!(missing.is_none());
+
+    let mut nested = toml::value::Table::new();
+    nested.insert(
+        "default".to_string(),
+        toml::Value::String("json".to_string()),
+    );
+    let err = prune_empty_table_path(&mut nested, &["default", "ui"])
+        .expect_err("invalid child section should fail");
+    match err {
+        ConfigError::InvalidSection { section, expected } => {
+            assert_eq!(section, "default");
+            assert_eq!(expected, "table");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    prune_empty_table_path(&mut nested, &[]).expect("empty path should short-circuit");
+
+    let mut empty_root = toml::value::Table::new();
+    empty_root.insert(
+        "default".to_string(),
+        toml::Value::Table(toml::value::Table::new()),
+    );
+    prune_empty_table_path(&mut empty_root, &["default"]).expect("empty leaf table should prune");
+    assert!(empty_root.is_empty());
 }
 
 fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
