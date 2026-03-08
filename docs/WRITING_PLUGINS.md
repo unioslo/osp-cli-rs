@@ -71,6 +71,21 @@ Then:
 osp echo hello world
 ```
 
+## Best-effort helper scripts
+
+The repository includes two convenience scripts under `scripts/`:
+
+- `scripts/plugin_describe_from_argparse.py`
+- `scripts/plugin_describe_from_click.py`
+
+They can inspect a Python `argparse` parser or a Click/Typer command tree
+and emit a `DescribeV1`-shaped JSON skeleton.
+
+These scripts are a nice gesture, not a compatibility promise. They are
+best-effort helpers for bootstrapping plugin metadata, not something the
+project guarantees will stay current with every upstream Python framework
+change. If one of them falls behind, feel free to fix it and submit a PR.
+
 ## Protocol reference
 
 ### Describe (capability declaration)
@@ -174,6 +189,16 @@ Protocol rules:
 - `ok=false` is still a valid protocol response and must use exit code `0`
 - Use the `error` object and optional `messages` for application-level failures
 - Reserve non-zero exits for crashes, missing prerequisites, or transport/setup failures
+
+Author checklist:
+
+- `--describe` prints only `DescribeV1` JSON to stdout and exits `0`
+- normal execution prints only `ResponseV1` JSON to stdout and exits `0`
+- `ok=false` uses the `error` object instead of a non-zero exit
+- human diagnostics go to stderr, not stdout
+- delegated help may print plain text
+- command data lives in `data`; operator-facing commentary lives in `messages`
+- `messages[].text` is never empty
 
 For delegated help (`osp <plugin-command> --help` or `help`), `osp` passes
 the request through directly. In that mode, the plugin may print plain help
