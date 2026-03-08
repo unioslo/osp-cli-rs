@@ -104,8 +104,53 @@ def changed_source_files(repo_root: Path) -> list[str]:
             continue
         if "/src/" not in path:
             continue
+        if is_internal_test_module(path):
+            continue
         changed.append(path)
     return sorted(set(changed))
+
+
+def is_internal_test_module(path: str) -> bool:
+    if not path.endswith(".rs"):
+        return False
+    return path.endswith("/tests.rs") or "/tests/" in path
+
+
+def is_non_executable_module(path: Path) -> bool:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return False
+
+    allowed_prefixes = (
+        "pub mod ",
+        "mod ",
+        "pub use ",
+        "pub(crate) use ",
+        "pub(super) use ",
+        "use ",
+        "extern crate ",
+    )
+    in_use_block = False
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith(("//", "//!", "///", "#!", "#[", "/*", "*", "*/")):
+            continue
+        if in_use_block:
+            if line.endswith(";"):
+                in_use_block = False
+            continue
+        if line in {"{", "}", "};"}:
+            continue
+        if line.startswith(allowed_prefixes):
+            in_use_block = not line.endswith(";")
+            continue
+        return False
+
+    return True
 
 
 def parse_report(report_path: Path, repo_root: Path) -> tuple[float, dict[str, dict[str, float]]]:
@@ -187,6 +232,12 @@ def main() -> None:
     for path in changed_files:
         entry = files.get(path)
         if entry is None:
+            source_path = repo_root / path
+            if is_non_executable_module(source_path):
+                notes.append(
+                    f"skipping non-executable module coverage gate for {path}"
+                )
+                continue
             errors.append(f"no coverage entry found for changed source file: {path}")
             continue
         if entry["count"] < min_executable_lines:
