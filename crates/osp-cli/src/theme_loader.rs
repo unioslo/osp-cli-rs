@@ -697,6 +697,7 @@ accent = "#123456"
 
     #[test]
     fn theme_path_helpers_expand_home_and_drop_blank_entries_unit() {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
         let original = std::env::var("HOME").ok();
         unsafe { std::env::set_var("HOME", "/tmp/theme-home") };
 
@@ -858,16 +859,28 @@ text = "#ffffff"
     fn default_theme_paths_tracks_home_config_root_unit() {
         let _guard = env_lock().lock().expect("env lock should not be poisoned");
         let original_home = std::env::var("HOME").ok();
+        let original_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
         unsafe { std::env::set_var("HOME", "/tmp/osp-theme-loader-home") };
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
 
         assert_eq!(
             default_theme_paths(),
             vec![Path::new("/tmp/osp-theme-loader-home/.config/osp/themes").to_path_buf()]
         );
 
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/osp-theme-loader-xdg") };
+        assert_eq!(
+            default_theme_paths(),
+            vec![Path::new("/tmp/osp-theme-loader-xdg/osp/themes").to_path_buf()]
+        );
+
         match original_home {
             Some(value) => unsafe { std::env::set_var("HOME", value) },
             None => unsafe { std::env::remove_var("HOME") },
+        }
+        match original_xdg_config_home {
+            Some(value) => unsafe { std::env::set_var("XDG_CONFIG_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
         }
     }
 }

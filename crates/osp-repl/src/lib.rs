@@ -1300,7 +1300,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::io;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use super::{
         AutoCompleteEmacs, CompletionDebugOptions, DebugStep, HistoryConfig, HistoryShellContext,
@@ -1312,6 +1312,11 @@ mod tests {
         trace_completion_enabled,
     };
     use crate::LineProjection;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn completion_tree_with_config_show() -> CompletionTree {
         let mut config = CompletionNode::default();
@@ -1883,6 +1888,7 @@ mod tests {
 
     #[test]
     fn trace_completion_writes_jsonl_when_enabled_unit() {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
         let temp_dir = make_temp_dir("osp-repl-trace");
         let trace_path = temp_dir.join("trace.jsonl");
         let previous_enabled = std::env::var("OSP_REPL_TRACE_COMPLETION").ok();
@@ -1916,6 +1922,7 @@ mod tests {
 
     #[test]
     fn trace_completion_enabled_recognizes_falsey_values_unit() {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
         let previous = std::env::var("OSP_REPL_TRACE_COMPLETION").ok();
 
         set_env_var_for_test("OSP_REPL_TRACE_COMPLETION", "off");
@@ -1939,6 +1946,7 @@ mod tests {
 
     #[test]
     fn expand_home_and_prompt_renderers_behave_unit() {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
         let previous_home = std::env::var("HOME").ok();
         set_env_var_for_test("HOME", "/tmp/osp-home");
         assert_eq!(expand_home("~"), "/tmp/osp-home");
