@@ -5,6 +5,7 @@
 
 # osp-cli
 
+<img src="docs/assets/osp-cli.png" alt="osp-cli screenshot" width="960" />
 `osp-cli` is a batteries-included Rust CLI and interactive REPL for
 structured operational workflows.
 
