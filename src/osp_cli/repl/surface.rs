@@ -7,7 +7,7 @@ use crate::osp_cli::app::{
     CURRENT_TERMINAL_SENTINEL,
 };
 use crate::osp_cli::plugin_manager::CommandCatalogEntry;
-use crate::osp_cli::ui_presentation::{HelpLayout, effective_help_layout};
+use crate::osp_cli::ui_presentation::{HelpLayout, help_layout};
 
 use super::ReplViewContext;
 use super::history;
@@ -40,7 +40,7 @@ pub(crate) fn build_repl_surface(
 ) -> ReplSurface {
     let history_enabled = history::repl_history_enabled(view.config);
     let aliases = collect_alias_entries(view.config);
-    let help_layout = effective_help_layout(view.config);
+    let help_layout = help_layout(view.config);
 
     let mut root_words = catalog_completion_words(catalog);
     let mut specs = vec![
@@ -446,10 +446,7 @@ fn theme_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
 
     CommandSpec::new(CMD_THEME)
         .tooltip("Inspect and apply themes")
-        .sort(command_sort_key(
-            CMD_THEME,
-            effective_help_layout(view.config),
-        ))
+        .sort(command_sort_key(CMD_THEME, help_layout(view.config)))
         .subcommands([
             CommandSpec::new(CMD_LIST)
                 .tooltip("List available themes")
@@ -520,10 +517,7 @@ fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
 
     CommandSpec::new(CMD_CONFIG)
         .tooltip("Inspect and edit runtime config")
-        .sort(command_sort_key(
-            CMD_CONFIG,
-            effective_help_layout(view.config),
-        ))
+        .sort(command_sort_key(CMD_CONFIG, help_layout(view.config)))
         .subcommands([
             CommandSpec::new(CMD_SHOW)
                 .tooltip("Show current config")

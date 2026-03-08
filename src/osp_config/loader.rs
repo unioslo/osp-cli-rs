@@ -337,6 +337,7 @@ impl ConfigLoader for ChainedLoader {
 #[derive(Debug, Clone, Default)]
 pub struct LoadedLayers {
     pub defaults: ConfigLayer,
+    pub presentation: ConfigLayer,
     pub file: ConfigLayer,
     pub secrets: ConfigLayer,
     pub env: ConfigLayer,
@@ -346,6 +347,7 @@ pub struct LoadedLayers {
 
 pub struct LoaderPipeline {
     defaults: Box<dyn ConfigLoader>,
+    presentation: Option<Box<dyn ConfigLoader>>,
     file: Option<Box<dyn ConfigLoader>>,
     secrets: Option<Box<dyn ConfigLoader>>,
     env: Option<Box<dyn ConfigLoader>>,
@@ -361,6 +363,7 @@ impl LoaderPipeline {
     {
         Self {
             defaults: Box::new(defaults),
+            presentation: None,
             file: None,
             secrets: None,
             env: None,
@@ -375,6 +378,14 @@ impl LoaderPipeline {
         L: ConfigLoader + 'static,
     {
         self.file = Some(Box::new(loader));
+        self
+    }
+
+    pub fn with_presentation<L>(mut self, loader: L) -> Self
+    where
+        L: ConfigLoader + 'static,
+    {
+        self.presentation = Some(Box::new(loader));
         self
     }
 
@@ -419,6 +430,7 @@ impl LoaderPipeline {
         tracing::debug!("loading config layers");
         let layers = LoadedLayers {
             defaults: self.defaults.load()?,
+            presentation: load_optional_loader(self.presentation.as_deref())?,
             file: load_optional_loader(self.file.as_deref())?,
             secrets: load_optional_loader(self.secrets.as_deref())?,
             env: load_optional_loader(self.env.as_deref())?,
@@ -427,6 +439,7 @@ impl LoaderPipeline {
         };
         tracing::debug!(
             defaults = layers.defaults.entries().len(),
+            presentation = layers.presentation.entries().len(),
             file = layers.file.entries().len(),
             secrets = layers.secrets.entries().len(),
             env = layers.env.entries().len(),

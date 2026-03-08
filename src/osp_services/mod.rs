@@ -153,25 +153,25 @@ pub fn execute_command<L: LdapDirectory>(
             filter,
             attributes,
         } => {
-            let effective_uid = uid
+            let resolved_uid = uid
                 .clone()
                 .or_else(|| ctx.user.clone())
                 .ok_or_else(|| anyhow!("ldap user requires <uid> or -u/--user"))?;
             let attrs = parse_attributes(attributes.as_deref())?;
             ctx.ldap
-                .user(&effective_uid, filter.as_deref(), attrs.as_deref())
+                .user(&resolved_uid, filter.as_deref(), attrs.as_deref())
         }
         ParsedCommand::LdapNetgroup {
             name,
             filter,
             attributes,
         } => {
-            let effective_name = name
+            let resolved_name = name
                 .clone()
                 .ok_or_else(|| anyhow!("ldap netgroup requires <name>"))?;
             let attrs = parse_attributes(attributes.as_deref())?;
             ctx.ldap
-                .netgroup(&effective_name, filter.as_deref(), attrs.as_deref())
+                .netgroup(&resolved_name, filter.as_deref(), attrs.as_deref())
         }
     }
 }

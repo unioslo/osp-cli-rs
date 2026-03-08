@@ -401,22 +401,22 @@ impl AppClients {
         self.plugin_config_env.collect(config)
     }
 
-    pub(crate) fn effective_plugin_config_entries(
+    pub(crate) fn plugin_config_entries(
         &self,
         config: &ConfigState,
         plugin_id: &str,
     ) -> Vec<PluginConfigEntry> {
         let config_env = self.plugin_config_env(config);
-        let mut effective = std::collections::BTreeMap::new();
+        let mut merged = std::collections::BTreeMap::new();
         for entry in config_env.shared {
-            effective.insert(entry.env_key.clone(), entry);
+            merged.insert(entry.env_key.clone(), entry);
         }
         if let Some(entries) = config_env.by_plugin_id.get(plugin_id) {
             for entry in entries {
-                effective.insert(entry.env_key.clone(), entry.clone());
+                merged.insert(entry.env_key.clone(), entry.clone());
             }
         }
-        effective.into_values().collect()
+        merged.into_values().collect()
     }
 }
 

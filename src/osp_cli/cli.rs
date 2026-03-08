@@ -10,9 +10,7 @@ use crate::osp_ui::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-use crate::osp_cli::ui_presentation::{
-    UiPresentation, apply_presentation_to_render_settings, is_builtin_default,
-};
+use crate::osp_cli::ui_presentation::UiPresentation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum PresentationArg {
@@ -450,8 +448,6 @@ pub(crate) fn apply_render_settings_from_config(
     settings: &mut RenderSettings,
     config: &ResolvedConfig,
 ) {
-    apply_presentation_to_render_settings(settings, config);
-
     if let Some(value) = config.get_string("ui.format")
         && let Some(parsed) = parse_output_format(value)
     {
@@ -476,8 +472,7 @@ pub(crate) fn apply_render_settings_from_config(
         settings.color = parsed;
     }
 
-    if !is_builtin_default(config, "ui.chrome.frame")
-        && let Some(value) = config.get_string("ui.chrome.frame")
+    if let Some(value) = config.get_string("ui.chrome.frame")
         && let Some(parsed) = SectionFrameStyle::parse(value)
     {
         settings.chrome_frame = parsed;
@@ -568,8 +563,7 @@ pub(crate) fn sync_render_settings_from_config(
         settings.table_overflow = parsed;
     }
 
-    if !is_builtin_default(config, "ui.table.border")
-        && let Some(value) = config.get_string("ui.table.border")
+    if let Some(value) = config.get_string("ui.table.border")
         && let Some(parsed) = TableBorderStyle::parse(value)
     {
         settings.table_border = parsed;
@@ -668,6 +662,7 @@ mod tests {
         apply_render_settings_from_config, config_int, config_non_empty_string, parse_color_mode,
         parse_inline_command_tokens, parse_output_format, parse_render_mode, parse_unicode_mode,
     };
+    use crate::osp_cli::ui_presentation::build_presentation_defaults_layer;
     use crate::osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
     use crate::osp_ui::RenderSettings;
     use clap::Parser;
@@ -680,8 +675,13 @@ mod tests {
         }
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
+        let options = ResolveOptions::default().with_terminal("cli");
+        let base = resolver
+            .resolve(options.clone())
+            .expect("base test config should resolve");
+        resolver.set_presentation(build_presentation_defaults_layer(&base));
         resolver
-            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .resolve(options)
             .expect("test config should resolve")
     }
 
@@ -704,8 +704,13 @@ mod tests {
         }
         resolver.set_session(session);
 
+        let options = ResolveOptions::default().with_terminal("cli");
+        let base = resolver
+            .resolve(options.clone())
+            .expect("base test config should resolve");
+        resolver.set_presentation(build_presentation_defaults_layer(&base));
         resolver
-            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .resolve(options)
             .expect("test config should resolve")
     }
 

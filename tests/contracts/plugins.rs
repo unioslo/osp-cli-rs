@@ -327,7 +327,7 @@ fn plugin_messages_stay_on_stderr_when_data_is_json_contract() {
 
 #[cfg(unix)]
 #[test]
-fn plugins_config_reports_effective_projected_env_contract() {
+fn plugins_config_reports_projected_env_contract() {
     let home = make_temp_dir("osp-cli-plugin-config-view-home");
     write_config(
         &home,

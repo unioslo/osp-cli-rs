@@ -102,8 +102,12 @@ impl ReplCycle {
         let surface = surface::build_repl_surface(view, &catalog);
         let completion_tree = completion::build_repl_completion_tree(view, &surface);
         let help_text = if include_help_text
-            && repl_intro_includes_overview(runtime.config.resolved(), runtime.ui.message_verbosity)
-        {
+            && repl_intro_includes_overview(
+                crate::osp_cli::ui_presentation::intro_style_with_verbosity(
+                    crate::osp_cli::ui_presentation::intro_style(runtime.config.resolved()),
+                    runtime.ui.message_verbosity,
+                ),
+            ) {
             render_repl_command_overview(view, &surface)
         } else {
             String::new()

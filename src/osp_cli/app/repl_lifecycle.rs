@@ -2,7 +2,7 @@ use miette::{Result, WrapErr};
 
 use crate::osp_cli::app::{
     DEFAULT_THEME_NAME, RuntimeConfigRequest, build_app_state, build_logging_config,
-    effective_debug_verbosity, effective_message_verbosity, plugin_process_timeout,
+    debug_verbosity_from_config, message_verbosity_from_config, plugin_process_timeout,
     resolve_default_render_width, resolve_known_theme_name, resolve_runtime_config,
 };
 use crate::osp_cli::logging::init_developer_logging;
@@ -97,8 +97,8 @@ pub(crate) fn rebuild_repl_parts(
         .resolve(&render_settings.theme_name)
         .map(|entry| entry.theme.clone());
 
-    let message_verbosity = effective_message_verbosity(&config);
-    let debug_verbosity = effective_debug_verbosity(&config);
+    let message_verbosity = message_verbosity_from_config(&config);
+    let debug_verbosity = debug_verbosity_from_config(&config);
 
     init_developer_logging(build_logging_config(&config, debug_verbosity));
     theme_loader::log_theme_issues(&theme_catalog.issues);

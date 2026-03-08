@@ -461,8 +461,18 @@ mod tests {
             ],
         }];
 
-        let emptied = apply(OutputItems::Groups(groups.clone()), "empty")
-            .expect("empty jq output should keep group metadata");
+        let emptied = match apply(OutputItems::Groups(groups.clone()), "empty") {
+            Ok(emptied) => emptied,
+            Err(err)
+                if matches!(
+                    err.downcast_ref::<super::JqError>(),
+                    Some(super::JqError::ExecutableNotFound { .. })
+                ) =>
+            {
+                return;
+            }
+            Err(err) => panic!("empty jq output should keep group metadata: {err}"),
+        };
         let OutputItems::Groups(emptied_groups) = emptied else {
             panic!("expected grouped output");
         };

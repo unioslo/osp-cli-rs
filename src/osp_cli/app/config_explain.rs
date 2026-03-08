@@ -10,7 +10,9 @@ use miette::{IntoDiagnostic, Result, WrapErr};
 
 use crate::osp_cli::cli::ConfigExplainArgs;
 use crate::osp_cli::state::{RuntimeContext, UiState};
-use crate::osp_cli::ui_presentation::explain_presentation_effect;
+use crate::osp_cli::ui_presentation::{
+    build_presentation_defaults_layer, explain_presentation_effect,
+};
 
 use super::{
     CliCommandResult, DEFAULT_REPL_PROMPT, RuntimeConfigRequest, document_from_json,
@@ -91,8 +93,27 @@ pub(crate) fn explain_runtime_config(
 ) -> Result<ConfigExplain> {
     let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
     let paths = RuntimeConfigPaths::discover();
+    let base_pipeline = build_runtime_pipeline(
+        defaults.to_layer(),
+        None,
+        &paths,
+        request.runtime_load,
+        None,
+        request.session_layer.clone(),
+    );
+    // Explain mirrors the runtime bootstrap path. We resolve once to discover the selected
+    // presentation preset, synthesize that into a normal config layer, and then explain against
+    // the fully shaped config so `config explain` matches the runtime users actually get.
+    let base_config = base_pipeline
+        .resolve(ResolveOptions {
+            profile_override: request.profile_override.clone(),
+            terminal: request.terminal.clone(),
+        })
+        .into_diagnostic()
+        .wrap_err("failed to resolve config before explaining presentation defaults")?;
     let pipeline = build_runtime_pipeline(
         defaults.to_layer(),
+        Some(build_presentation_defaults_layer(&base_config)),
         &paths,
         request.runtime_load,
         None,
@@ -163,12 +184,12 @@ pub(crate) fn render_config_explain_text(
             effect.preset_origin.as_deref().unwrap_or("-")
         ));
         out.push_str(&format!(
-            "  effective_value: {} ({})\n",
-            display_value(&explain.key, &effect.effective_value, show_secrets),
-            config_value_type(&effect.effective_value)
+            "  seeded_value: {} ({})\n",
+            display_value(&explain.key, &effect.seeded_value, show_secrets),
+            config_value_type(&effect.seeded_value)
         ));
         out.push_str(
-            "  note: key kept its builtin default, so ui.presentation seeds the effective UI value\n\n",
+            "  note: key kept its builtin default, so ui.presentation seeds the resolved UI value\n\n",
         );
     }
 
@@ -189,7 +210,7 @@ pub(crate) fn render_config_explain_text(
         out.push_str(&format!("bootstrap_scope_policy: {policy}\n\n"));
     }
 
-    let precedence = effective_precedence_chain(explain);
+    let precedence = precedence_chain(explain);
     if !precedence.is_empty() {
         out.push_str("candidates (in priority order):\n");
         for (is_winner, source, scope, origin, value) in precedence {
@@ -299,7 +320,7 @@ pub(crate) fn config_explain_json(
     }
 
     let mut candidates = Vec::new();
-    for (is_winner, source, scope, origin, value) in effective_precedence_chain(explain) {
+    for (is_winner, source, scope, origin, value) in precedence_chain(explain) {
         let mut row = serde_json::Map::new();
         row.insert("winner".to_string(), is_winner.into());
         row.insert("source".to_string(), source.to_string().into());
@@ -376,18 +397,16 @@ pub(crate) fn config_explain_json(
                 .map_or(serde_json::Value::Null, Into::into),
         );
         section.insert(
-            "effective_value".to_string(),
-            redact_value_json(&explain.key, &effect.effective_value, show_secrets),
+            "seeded_value".to_string(),
+            redact_value_json(&explain.key, &effect.seeded_value, show_secrets),
         );
         section.insert(
-            "effective_value_type".to_string(),
-            config_value_type(&effect.effective_value)
-                .to_string()
-                .into(),
+            "seeded_value_type".to_string(),
+            config_value_type(&effect.seeded_value).to_string().into(),
         );
         section.insert(
             "note".to_string(),
-            "key kept its builtin default, so ui.presentation seeds the effective UI value".into(),
+            "key kept its builtin default, so ui.presentation seeds the resolved UI value".into(),
         );
         root.insert(
             "presentation".to_string(),
@@ -398,7 +417,7 @@ pub(crate) fn config_explain_json(
     serde_json::Value::Object(root)
 }
 
-fn effective_precedence_chain(
+fn precedence_chain(
     explain: &ConfigExplain,
 ) -> Vec<(bool, String, String, Option<String>, ConfigValue)> {
     let winner_source = explain.final_entry.as_ref().map(|entry| entry.source);
@@ -617,6 +636,10 @@ mod tests {
         resolver.set_session(session_layer);
 
         let options = ResolveOptions::default().with_terminal("repl");
+        let base = resolver
+            .resolve(options.clone())
+            .expect("base config should resolve");
+        resolver.set_presentation(build_presentation_defaults_layer(&base));
         let config = resolver
             .resolve(options.clone())
             .expect("config should resolve");
@@ -630,42 +653,36 @@ mod tests {
     fn config_explain_text_surfaces_presentation_effect_unit() {
         let (config, explain) = resolved_config_and_explain(
             "ui.help.layout",
-            &[
-                ("ui.presentation", "expressive"),
-                ("ui.help.layout", "full"),
-            ],
+            &[("ui.presentation", "expressive")],
             &[],
             &[("ui.presentation", "austere")],
         );
 
         let rendered = render_config_explain_text(&explain, &config, false);
 
-        assert!(rendered.contains("value: full (string)"));
+        assert!(rendered.contains("value: minimal (string)"));
         assert!(rendered.contains("presentation:"));
         assert!(rendered.contains("preset: austere"));
         assert!(rendered.contains("preset_source: session"));
-        assert!(rendered.contains("effective_value: minimal (string)"));
+        assert!(rendered.contains("seeded_value: minimal (string)"));
     }
 
     #[test]
     fn config_explain_json_surfaces_presentation_effect_unit() {
         let (config, explain) = resolved_config_and_explain(
             "ui.help.layout",
-            &[
-                ("ui.presentation", "expressive"),
-                ("ui.help.layout", "full"),
-            ],
+            &[("ui.presentation", "expressive")],
             &[],
             &[("ui.presentation", "austere")],
         );
 
         let payload = config_explain_json(&explain, &config, false);
 
-        assert_eq!(payload["value"], "full");
+        assert_eq!(payload["value"], "minimal");
         assert_eq!(payload["presentation"]["preset"], "austere");
         assert_eq!(payload["presentation"]["preset_source"], "session");
-        assert_eq!(payload["presentation"]["effective_value"], "minimal");
-        assert_eq!(payload["presentation"]["effective_value_type"], "string");
+        assert_eq!(payload["presentation"]["seeded_value"], "minimal");
+        assert_eq!(payload["presentation"]["seeded_value_type"], "string");
     }
 
     #[test]

@@ -9,10 +9,10 @@ use crate::osp_ui::messages::{MessageBuffer, MessageLevel};
 use crate::osp_ui::{copy_output_to_clipboard, render_document, render_output};
 use miette::Result;
 
-use crate::osp_cli::app::resolve_effective_render_settings;
+use crate::osp_cli::app::resolve_render_settings_with_hint;
 use crate::osp_cli::rows::output::plugin_data_to_output_result;
 use crate::osp_cli::state::UiState;
-use crate::osp_cli::ui_presentation::effective_message_layout;
+use crate::osp_cli::ui_presentation::message_layout;
 use crate::osp_cli::ui_sink::UiSink;
 
 #[derive(Debug, Clone)]
@@ -148,7 +148,7 @@ pub(crate) fn emit_messages_for_ui(
     sink: &mut dyn UiSink,
 ) {
     let resolved = ui.render_settings.resolve_render_settings();
-    let message_layout = effective_message_layout(config);
+    let message_layout = message_layout(config);
     let rendered =
         messages.render_grouped_with_options(crate::osp_ui::messages::GroupedRenderOptions {
             max_level: verbosity,
@@ -304,7 +304,7 @@ fn render_cli_output(
             format_hint,
         } => {
             let effective =
-                resolve_effective_render_settings(&runtime.ui().render_settings, format_hint);
+                resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
             sink.write_stdout(&render_output(&output, &effective));
             maybe_copy_output_with_runtime(runtime, &output, sink);
         }

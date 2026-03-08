@@ -112,7 +112,7 @@ pub(crate) fn collect_plugin_config_env(config: &ResolvedConfig) -> PluginConfig
     }
 }
 
-pub(crate) fn effective_plugin_config_entries(
+pub(crate) fn plugin_config_entries(
     config: &ResolvedConfig,
     plugin_id: &str,
 ) -> Vec<PluginConfigEntry> {
@@ -205,7 +205,7 @@ mod tests {
 
     use super::{
         PluginConfigEnvCache, PluginConfigScope, collect_plugin_config_env,
-        config_value_to_plugin_env, effective_plugin_config_entries, plugin_config_env_name,
+        config_value_to_plugin_env, plugin_config_entries, plugin_config_env_name,
     };
     use crate::osp_cli::state::ConfigState;
 
@@ -223,14 +223,14 @@ mod tests {
     }
 
     #[test]
-    fn effective_plugin_entries_merge_shared_and_plugin_specific_values() {
+    fn plugin_entries_merge_shared_and_plugin_specific_values() {
         let config = resolved_config(&[
             ("extensions.plugins.env.endpoint", "shared"),
             ("extensions.plugins.demo.env.endpoint", "plugin"),
             ("extensions.plugins.demo.env.api.token", "token-123"),
         ]);
 
-        let entries = effective_plugin_config_entries(&config, "demo");
+        let entries = plugin_config_entries(&config, "demo");
         let endpoint = entries
             .iter()
             .find(|entry| entry.env_key == "OSP_PLUGIN_CFG_ENDPOINT")

@@ -21,7 +21,7 @@ pub(crate) struct ResolutionFrame {
 }
 
 pub(crate) fn prepare_resolution(
-    layers: [LayerRef<'_>; 6],
+    layers: [LayerRef<'_>; 7],
     options: ResolveOptions,
 ) -> Result<ResolutionFrame, ConfigError> {
     validate_layers(layers)?;
@@ -54,14 +54,14 @@ pub(crate) fn prepare_resolution(
 }
 
 pub(crate) fn explain_default_profile_key(
-    layers: [LayerRef<'_>; 6],
+    layers: [LayerRef<'_>; 7],
     options: ResolveOptions,
 ) -> Result<ConfigExplain, ConfigError> {
     Ok(explain_default_profile_bootstrap(layers, options)?.into())
 }
 
 pub(crate) fn explain_default_profile_bootstrap(
-    layers: [LayerRef<'_>; 6],
+    layers: [LayerRef<'_>; 7],
     options: ResolveOptions,
 ) -> Result<BootstrapConfigExplain, ConfigError> {
     let frame = prepare_resolution(layers, options)?;
@@ -111,7 +111,7 @@ impl From<BootstrapConfigExplain> for ConfigExplain {
     }
 }
 
-fn validate_layers(layers: [LayerRef<'_>; 6]) -> Result<(), ConfigError> {
+fn validate_layers(layers: [LayerRef<'_>; 7]) -> Result<(), ConfigError> {
     for layer in layers {
         layer.layer.validate_entries()?;
     }
@@ -119,7 +119,7 @@ fn validate_layers(layers: [LayerRef<'_>; 6]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn collect_known_profiles(layers: [LayerRef<'_>; 6]) -> BTreeSet<String> {
+fn collect_known_profiles(layers: [LayerRef<'_>; 7]) -> BTreeSet<String> {
     let mut known = BTreeSet::new();
 
     for layer in layers {
@@ -134,7 +134,7 @@ fn collect_known_profiles(layers: [LayerRef<'_>; 6]) -> BTreeSet<String> {
 }
 
 fn resolve_active_profile(
-    layers: [LayerRef<'_>; 6],
+    layers: [LayerRef<'_>; 7],
     explicit: Option<&str>,
     terminal: Option<&str>,
     known_profiles: &BTreeSet<String>,
@@ -183,7 +183,7 @@ fn resolve_active_profile(
 }
 
 fn resolve_default_profile(
-    layers: [LayerRef<'_>; 6],
+    layers: [LayerRef<'_>; 7],
     terminal: Option<&str>,
 ) -> Result<String, ConfigError> {
     let mut picked: Option<ConfigValue> = None;
@@ -224,7 +224,7 @@ fn resolve_default_profile(
 }
 
 fn select_default_profile_across_layers<'a>(
-    layers: [LayerRef<'a>; 6],
+    layers: [LayerRef<'a>; 7],
     selector: ScopeSelector<'a>,
 ) -> Option<crate::osp_config::selector::SelectedLayerEntry<'a>> {
     let mut selected = None;

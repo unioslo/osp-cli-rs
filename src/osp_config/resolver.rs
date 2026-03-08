@@ -55,6 +55,10 @@ impl ConfigResolver {
         &mut self.layers.file
     }
 
+    pub fn presentation_mut(&mut self) -> &mut ConfigLayer {
+        &mut self.layers.presentation
+    }
+
     pub fn secrets_mut(&mut self) -> &mut ConfigLayer {
         &mut self.layers.secrets
     }
@@ -77,6 +81,10 @@ impl ConfigResolver {
 
     pub fn set_file(&mut self, layer: ConfigLayer) {
         self.layers.file = layer;
+    }
+
+    pub fn set_presentation(&mut self, layer: ConfigLayer) {
+        self.layers.presentation = layer;
     }
 
     pub fn set_secrets(&mut self, layer: ConfigLayer) {
@@ -301,13 +309,17 @@ impl ConfigResolver {
         selected
     }
 
-    fn layers(&self) -> [LayerRef<'_>; 6] {
+    fn layers(&self) -> [LayerRef<'_>; 7] {
         // Keep this order in ascending priority so later layers can override
         // earlier ones in `select_across_layers()`.
         [
             LayerRef {
                 source: ConfigSource::BuiltinDefaults,
                 layer: &self.layers.defaults,
+            },
+            LayerRef {
+                source: ConfigSource::PresentationDefaults,
+                layer: &self.layers.presentation,
             },
             LayerRef {
                 source: ConfigSource::ConfigFile,

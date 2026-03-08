@@ -22,7 +22,7 @@ use crate::osp_cli::app;
 use crate::osp_cli::app::{CliCommandResult, document_from_json};
 use crate::osp_cli::cli::{DebugCompleteArgs, DebugHighlightArgs, ReplArgs, ReplCommands};
 use crate::osp_cli::ui_presentation::{
-    ReplInputMode, effective_repl_input_mode, effective_repl_intro_style_for_verbosity,
+    ReplInputMode, intro_style, intro_style_with_verbosity, repl_input_mode,
 };
 use crate::osp_completion::CompletionTree;
 use crate::osp_ui::messages::MessageLevel;
@@ -88,9 +88,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
                 completion_tree: Some(cycle.completion_tree),
                 appearance: cycle.appearance,
                 history_config: cycle.history_config,
-                input_mode: map_repl_input_mode(effective_repl_input_mode(
-                    state.runtime.config.resolved(),
-                )),
+                input_mode: map_repl_input_mode(repl_input_mode(state.runtime.config.resolved())),
                 prompt_right: Some(build_repl_prompt_right_renderer(
                     ReplViewContext::from_parts(&state.runtime, &state.session),
                     state.session.prompt_timing.clone(),
@@ -127,7 +125,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
 
 fn should_show_repl_intro(config: &ResolvedConfig, verbosity: MessageLevel) -> bool {
     !matches!(
-        effective_repl_intro_style_for_verbosity(config, verbosity),
+        intro_style_with_verbosity(intro_style(config), verbosity),
         crate::osp_cli::ui_presentation::ReplIntroStyle::None
     )
 }

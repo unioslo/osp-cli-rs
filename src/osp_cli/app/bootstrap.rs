@@ -8,6 +8,7 @@ use miette::{Result, WrapErr};
 use crate::osp_cli::cli::Cli;
 use crate::osp_cli::logging::{DeveloperLoggingConfig, FileLoggingConfig, parse_level_filter};
 use crate::osp_cli::state::{AppState, AppStateInit, RuntimeContext, TerminalKind};
+use crate::osp_cli::ui_presentation::build_presentation_defaults_layer;
 
 use super::{DEFAULT_REPL_PROMPT, DEFAULT_THEME_NAME, report_std_error_with_context};
 
@@ -112,14 +113,14 @@ pub(crate) fn build_logging_config(
     }
 }
 
-pub(crate) fn effective_message_verbosity(config: &ResolvedConfig) -> MessageLevel {
+pub(crate) fn message_verbosity_from_config(config: &ResolvedConfig) -> MessageLevel {
     config
         .get_string("ui.verbosity.level")
         .and_then(parse_message_level)
         .unwrap_or(MessageLevel::Success)
 }
 
-pub(crate) fn effective_debug_verbosity(config: &ResolvedConfig) -> u8 {
+pub(crate) fn debug_verbosity_from_config(config: &ResolvedConfig) -> u8 {
     match config.get("debug.level").map(ConfigValue::reveal) {
         Some(ConfigValue::Integer(level)) => (*level).clamp(0, 3) as u8,
         Some(ConfigValue::String(raw)) => raw.trim().parse::<u8>().map_or(0, |level| level.min(3)),
@@ -137,12 +138,13 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
     );
     let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
     let paths = RuntimeConfigPaths::discover();
-    let pipeline = build_runtime_pipeline(
+    let base_pipeline = build_runtime_pipeline(
         defaults.to_layer(),
+        None,
         &paths,
         request.runtime_load,
         None,
-        request.session_layer,
+        request.session_layer.clone(),
     );
 
     let options = ResolveOptions {
@@ -150,9 +152,25 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
         terminal: request.terminal,
     };
 
-    let resolved = pipeline
-        .resolve(options)
+    // Presentation is compiled into a normal config layer instead of being interpreted later in
+    // the UI. We first resolve the base config to discover ui.presentation through the normal
+    // precedence rules, then synthesize one presentation-defaults layer, then resolve again so
+    // downstream code only reads canonical keys like repl.intro and ui.help.layout.
+    let base_resolved = base_pipeline
+        .resolve(options.clone())
         .map_err(|err| report_std_error_with_context(err, "config resolution failed"))?;
+
+    let presentation_layer = build_presentation_defaults_layer(&base_resolved);
+    let resolved = build_runtime_pipeline(
+        defaults.to_layer(),
+        Some(presentation_layer),
+        &paths,
+        request.runtime_load,
+        None,
+        request.session_layer,
+    )
+    .resolve(options)
+    .map_err(|err| report_std_error_with_context(err, "config resolution failed"))?;
 
     tracing::debug!(
         active_profile = %resolved.active_profile(),
@@ -178,7 +196,7 @@ fn parse_message_level(value: &str) -> Option<MessageLevel> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_logging_config, effective_debug_verbosity, effective_message_verbosity,
+        build_logging_config, debug_verbosity_from_config, message_verbosity_from_config,
         parse_message_level,
     };
     use crate::osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
@@ -206,12 +224,12 @@ mod tests {
     }
 
     #[test]
-    fn effective_debug_verbosity_clamps_string_and_integer_inputs_unit() {
+    fn debug_verbosity_from_config_clamps_string_and_integer_inputs_unit() {
         let string_config = resolved(&[("debug.level", "9")]);
         let integer_config = resolved(&[("debug.level", "-2")]);
 
-        assert_eq!(effective_debug_verbosity(&string_config), 3);
-        assert_eq!(effective_debug_verbosity(&integer_config), 0);
+        assert_eq!(debug_verbosity_from_config(&string_config), 3);
+        assert_eq!(debug_verbosity_from_config(&integer_config), 0);
     }
 
     #[test]
@@ -225,7 +243,10 @@ mod tests {
 
         let logging = build_logging_config(&config, 2);
         assert!(logging.file.is_none());
-        assert_eq!(effective_message_verbosity(&config), MessageLevel::Warning);
+        assert_eq!(
+            message_verbosity_from_config(&config),
+            MessageLevel::Warning
+        );
         assert_eq!(logging.debug_count, 2);
     }
 }

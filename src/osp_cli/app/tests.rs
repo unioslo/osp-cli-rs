@@ -6,7 +6,7 @@ use super::{
     build_dispatch_plan, classify_exit_code, collect_plugin_config_env, config_value_to_plugin_env,
     doctor_cmd, enrich_dispatch_error, is_sensitive_key, plugin_config_env_name,
     plugin_path_discovery_enabled, plugin_process_timeout, render_report_message,
-    resolve_effective_invocation, resolve_effective_render_settings, run_inline_builtin_command,
+    resolve_invocation_ui, resolve_render_settings_with_hint, run_inline_builtin_command,
 };
 use crate::osp_cli::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
 use crate::osp_cli::invocation::{InvocationOptions, scan_cli_argv};
@@ -17,6 +17,7 @@ use crate::osp_cli::plugin_manager::{
 use crate::osp_cli::repl;
 use crate::osp_cli::repl::{completion, dispatch as repl_dispatch, help as repl_help, surface};
 use crate::osp_cli::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
+use crate::osp_cli::ui_presentation::build_presentation_defaults_layer;
 use crate::osp_cli::ui_sink::BufferedUiSink;
 use crate::osp_config::{
     ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions,
@@ -67,8 +68,13 @@ fn make_completion_state_with_entries(
     }
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
+    let options = ResolveOptions::default().with_terminal("repl");
+    let base = resolver
+        .resolve(options.clone())
+        .expect("base test config should resolve");
+    resolver.set_presentation(build_presentation_defaults_layer(&base));
     let config = resolver
-        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .resolve(options)
         .expect("test config should resolve");
 
     let settings = RenderSettings::test_plain(OutputFormat::Json);
@@ -94,8 +100,13 @@ fn test_config(entries: &[(&str, &str)]) -> crate::osp_config::ResolvedConfig {
 
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
+    let options = ResolveOptions::default().with_terminal("cli");
+    let base = resolver
+        .resolve(options.clone())
+        .expect("base test config should resolve");
+    resolver.set_presentation(build_presentation_defaults_layer(&base));
     resolver
-        .resolve(ResolveOptions::default().with_terminal("cli"))
+        .resolve(options)
         .expect("test config should resolve")
 }
 
@@ -112,7 +123,7 @@ fn render_help_snapshot(entries: &[(&str, &str)]) -> String {
     repl_help::render_help_with_chrome(
         "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
         &settings.resolve_render_settings(),
-        crate::osp_cli::ui_presentation::effective_help_layout(&config),
+        crate::osp_cli::ui_presentation::help_layout(&config),
     )
 }
 
@@ -129,7 +140,7 @@ fn render_message_snapshot(entries: &[(&str, &str)]) -> String {
         unicode: resolved.unicode,
         width: resolved.width,
         theme: &resolved.theme,
-        layout: crate::osp_cli::ui_presentation::effective_message_layout(&config),
+        layout: crate::osp_cli::ui_presentation::message_layout(&config),
         chrome_frame: resolved.chrome_frame,
         style_overrides: resolved.style_overrides.clone(),
     })
@@ -620,7 +631,7 @@ fn cli_scan_extracts_invocation_flags_without_polluting_clap_unit() {
 }
 
 #[test]
-fn effective_invocation_overlays_runtime_defaults_per_command_unit() {
+fn invocation_ui_overlays_runtime_defaults_per_command_unit() {
     let ui = crate::osp_cli::state::UiState {
         render_settings: RenderSettings::test_plain(OutputFormat::Table),
         message_verbosity: MessageLevel::Success,
@@ -638,15 +649,15 @@ fn effective_invocation_overlays_runtime_defaults_per_command_unit() {
         plugin_provider: Some("beta".to_string()),
     };
 
-    let effective = resolve_effective_invocation(&ui, &invocation);
+    let resolved = resolve_invocation_ui(&ui, &invocation);
 
-    assert_eq!(effective.ui.render_settings.format, OutputFormat::Json);
-    assert_eq!(effective.ui.render_settings.mode, RenderMode::Rich);
-    assert_eq!(effective.ui.render_settings.color, ColorMode::Always);
-    assert_eq!(effective.ui.render_settings.unicode, UnicodeMode::Never);
-    assert_eq!(effective.ui.message_verbosity, MessageLevel::Info);
-    assert_eq!(effective.ui.debug_verbosity, 3);
-    assert_eq!(effective.plugin_provider.as_deref(), Some("beta"));
+    assert_eq!(resolved.ui.render_settings.format, OutputFormat::Json);
+    assert_eq!(resolved.ui.render_settings.mode, RenderMode::Rich);
+    assert_eq!(resolved.ui.render_settings.color, ColorMode::Always);
+    assert_eq!(resolved.ui.render_settings.unicode, UnicodeMode::Never);
+    assert_eq!(resolved.ui.message_verbosity, MessageLevel::Info);
+    assert_eq!(resolved.ui.debug_verbosity, 3);
+    assert_eq!(resolved.plugin_provider.as_deref(), Some("beta"));
 }
 
 #[test]
@@ -707,12 +718,12 @@ fn cli_runtime_load_options_follow_disable_flags_unit() {
 }
 
 #[test]
-fn effective_settings_use_plugin_hint_only_when_auto_unit() {
+fn render_settings_with_hint_use_plugin_hint_only_when_auto_unit() {
     let base = RenderSettings::test_plain(OutputFormat::Auto);
-    let hinted = resolve_effective_render_settings(&base, Some(OutputFormat::Table));
+    let hinted = resolve_render_settings_with_hint(&base, Some(OutputFormat::Table));
     assert_eq!(hinted.format, OutputFormat::Table);
 
-    let pinned = resolve_effective_render_settings(
+    let pinned = resolve_render_settings_with_hint(
         &RenderSettings {
             format: OutputFormat::Json,
             ..base

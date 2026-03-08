@@ -12,6 +12,7 @@ pub struct TomlEditResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConfigSource {
     BuiltinDefaults,
+    PresentationDefaults,
     ConfigFile,
     Secrets,
     Environment,
@@ -24,6 +25,7 @@ impl Display for ConfigSource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let value = match self {
             ConfigSource::BuiltinDefaults => "defaults",
+            ConfigSource::PresentationDefaults => "presentation",
             ConfigSource::ConfigFile => "file",
             ConfigSource::Secrets => "secrets",
             ConfigSource::Environment => "env",

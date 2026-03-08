@@ -3,7 +3,7 @@ use crate::osp_ui::{render_document, render_output};
 use miette::{Result, miette};
 
 use crate::osp_cli::app;
-use crate::osp_cli::app::{CMD_HELP, EffectiveInvocation};
+use crate::osp_cli::app::{CMD_HELP, ResolvedInvocation};
 use crate::osp_cli::state::{AppClients, AppRuntime, AppSession};
 
 use super::command::run_repl_external_command;
@@ -14,7 +14,7 @@ pub(super) fn maybe_handle_repl_shortcuts(
     session: &mut AppSession,
     clients: &AppClients,
     parsed: &input::ReplParsedLine,
-    base_invocation: &EffectiveInvocation,
+    base_invocation: &ResolvedInvocation,
 ) -> Result<Option<ReplLineResult>> {
     if parsed.requests_repl_help() {
         return repl_help_result(runtime, session, clients, base_invocation).map(Some);
@@ -40,7 +40,7 @@ fn maybe_handle_single_token_shortcut(
     session: &mut AppSession,
     clients: &AppClients,
     parsed: &input::ReplParsedLine,
-    base_invocation: &EffectiveInvocation,
+    base_invocation: &ResolvedInvocation,
 ) -> Result<Option<ReplLineResult>> {
     if parsed.dispatch_tokens.len() != 1 {
         return Ok(None);
@@ -57,7 +57,7 @@ fn repl_help_result(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
 ) -> Result<ReplLineResult> {
     Ok(ReplLineResult::Continue(repl_help_for_scope(
         runtime, session, clients, invocation,
@@ -97,7 +97,7 @@ pub(super) fn enter_repl_shell(
     session: &mut AppSession,
     clients: &AppClients,
     command: &str,
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
 ) -> Result<String> {
     app::ensure_plugin_visible_for(&runtime.auth, command)?;
     let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
@@ -117,7 +117,7 @@ pub(super) fn repl_help_for_scope(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
 ) -> Result<String> {
     if session.scope.is_root() {
         let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
@@ -137,7 +137,7 @@ pub(super) fn repl_help_for_scope(
             format_hint,
         }) => {
             let render_settings =
-                app::resolve_effective_render_settings(&invocation.ui.render_settings, format_hint);
+                app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
             Ok(render_output(&output, &render_settings))
         }
         None => Ok(String::new()),

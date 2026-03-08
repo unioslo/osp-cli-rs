@@ -373,7 +373,7 @@ impl<'a> DocumentRenderer<'a> {
             out.push_str(&header_pairs);
         }
 
-        let effective_margin = self.settings.margin
+        let layout_margin = self.settings.margin
             + if respect_depth {
                 block.depth * self.settings.indent_size
             } else {
@@ -381,10 +381,8 @@ impl<'a> DocumentRenderer<'a> {
             };
 
         let table_body = match block.style {
-            TableStyle::Grid => self.render_grid_table(block, effective_margin, column_widths),
-            TableStyle::Markdown => {
-                self.render_markdown_table(block, effective_margin, column_widths)
-            }
+            TableStyle::Grid => self.render_grid_table(block, layout_margin, column_widths),
+            TableStyle::Markdown => self.render_markdown_table(block, layout_margin, column_widths),
         };
 
         out.push_str(&table_body);

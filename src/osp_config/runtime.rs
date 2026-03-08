@@ -212,6 +212,7 @@ impl RuntimeDefaults {
 
 pub fn build_runtime_pipeline(
     defaults: ConfigLayer,
+    presentation: Option<ConfigLayer>,
     paths: &RuntimeConfigPaths,
     load: RuntimeLoadOptions,
     cli: Option<ConfigLayer>,
@@ -222,12 +223,17 @@ pub fn build_runtime_pipeline(
         include_config_file = load.include_config_file,
         config_file = ?paths.config_file.as_ref().map(|path| path.display().to_string()),
         secrets_file = ?paths.secrets_file.as_ref().map(|path| path.display().to_string()),
+        has_presentation_layer = presentation.is_some(),
         has_cli_layer = cli.is_some(),
         has_session_layer = session.is_some(),
         defaults_entries = defaults.entries().len(),
         "building runtime loader pipeline"
     );
     let mut pipeline = LoaderPipeline::new(StaticLayerLoader::new(defaults));
+
+    if let Some(presentation_layer) = presentation {
+        pipeline = pipeline.with_presentation(StaticLayerLoader::new(presentation_layer));
+    }
 
     if load.include_env {
         pipeline = pipeline.with_env(EnvVarLoader::from_process_env());

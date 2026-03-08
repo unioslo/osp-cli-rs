@@ -1,6 +1,5 @@
 use crate::osp_cli::app::{
-    CliCommandResult, PluginConfigScope, authorized_command_catalog_for,
-    effective_plugin_config_entries,
+    CliCommandResult, PluginConfigScope, authorized_command_catalog_for, plugin_config_entries,
 };
 use crate::osp_cli::cli::{
     PluginConfigArgs, PluginProviderClearArgs, PluginProviderSelectArgs, PluginToggleArgs,
@@ -125,9 +124,9 @@ fn projected_plugin_config_entries(
     plugin_id: &str,
 ) -> Vec<crate::osp_cli::app::PluginConfigEntry> {
     if let (Some(config_state), Some(clients)) = (context.config_state, context.clients) {
-        return clients.effective_plugin_config_entries(config_state, plugin_id);
+        return clients.plugin_config_entries(config_state, plugin_id);
     }
-    effective_plugin_config_entries(context.config, plugin_id)
+    plugin_config_entries(context.config, plugin_id)
 }
 
 fn plugin_list_rows(plugins: &[PluginSummary]) -> Vec<Row> {

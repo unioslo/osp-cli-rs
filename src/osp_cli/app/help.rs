@@ -9,7 +9,7 @@ use clap::Parser;
 use crate::osp_cli::cli::Cli;
 use crate::osp_cli::theme_loader;
 use crate::osp_cli::ui_presentation::{
-    HelpLayout, UiPresentation, apply_presentation_preset, effective_help_layout,
+    HelpLayout, UiPresentation, apply_presentation_preset, help_layout,
 };
 
 use super::{
@@ -62,7 +62,7 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
     if let Some(config) = config.as_ref() {
         let loaded = theme_loader::load_theme_catalog(config);
         default_cli.seed_render_settings_from_config(&mut settings, config);
-        layout = effective_help_layout(config);
+        layout = help_layout(config);
         settings.width = Some(resolve_default_render_width(config));
         let selected = default_cli.selected_theme_name(config);
         settings.theme_name = resolve_known_theme_name(selected.as_str(), &loaded)

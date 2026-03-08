@@ -316,7 +316,7 @@ ui.mode = "plain"
 
 #[cfg(unix)]
 #[test]
-fn config_explain_reports_presentation_seeded_effective_values_contract() {
+fn config_explain_reports_presentation_seeded_values_contract() {
     let home = make_temp_dir("osp-cli-config-explain-presentation");
     write_config(
         &home,
@@ -343,7 +343,7 @@ profile.default = "uio"
         .stdout(predicate::str::contains("\"presentation\""))
         .stdout(predicate::str::contains("\"preset\": \"austere\""))
         .stdout(predicate::str::contains("\"preset_source\": \"session\""))
-        .stdout(predicate::str::contains("\"effective_value\": \"minimal\""));
+        .stdout(predicate::str::contains("\"seeded_value\": \"minimal\""));
 
     let _ = std::fs::remove_dir_all(&home);
 }

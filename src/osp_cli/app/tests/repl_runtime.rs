@@ -201,7 +201,7 @@ fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
     };
     let cli_rendered = render_output(
         &prepared.output,
-        &super::super::resolve_effective_render_settings(
+        &super::super::resolve_render_settings_with_hint(
             &state.runtime.ui.render_settings,
             prepared.format_hint,
         ),

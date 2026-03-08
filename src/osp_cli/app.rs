@@ -44,7 +44,7 @@ mod repl_lifecycle;
 mod timing;
 
 pub(crate) use crate::osp_cli::plugin_config::{
-    PluginConfigEntry, PluginConfigScope, effective_plugin_config_entries,
+    PluginConfigEntry, PluginConfigScope, plugin_config_entries,
 };
 #[cfg(test)]
 pub(crate) use crate::osp_cli::plugin_config::{
@@ -54,7 +54,7 @@ use crate::osp_cli::repl::help as repl_help;
 use crate::osp_cli::theme_loader;
 pub(crate) use bootstrap::{
     RuntimeConfigRequest, build_app_state, build_cli_session_layer, build_logging_config,
-    build_runtime_context, effective_debug_verbosity, effective_message_verbosity,
+    build_runtime_context, debug_verbosity_from_config, message_verbosity_from_config,
     resolve_runtime_config,
 };
 pub(crate) use command_output::{
@@ -101,7 +101,7 @@ pub(crate) struct ReplCommandSpec {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct EffectiveInvocation {
+pub(crate) struct ResolvedInvocation {
     pub(crate) ui: UiState,
     pub(crate) plugin_provider: Option<String>,
     pub(crate) show_invocation_help: bool,
@@ -262,8 +262,8 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
     render_settings.theme = theme_catalog
         .resolve(&render_settings.theme_name)
         .map(|entry| entry.theme.clone());
-    let message_verbosity = effective_message_verbosity(&config);
-    let debug_verbosity = effective_debug_verbosity(&config);
+    let message_verbosity = message_verbosity_from_config(&config);
+    let debug_verbosity = debug_verbosity_from_config(&config);
 
     let plugin_manager = PluginManager::new(cli.plugin_dirs.clone())
         .with_process_timeout(plugin_process_timeout(&config))
@@ -283,14 +283,14 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
         state.session.config_overrides = layer;
     }
     ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
-    let effective_invocation = resolve_effective_invocation(&state.runtime.ui, &invocation);
+    let invocation_ui = resolve_invocation_ui(&state.runtime.ui, &invocation);
     init_developer_logging(build_logging_config(
         state.runtime.config.resolved(),
-        effective_invocation.ui.debug_verbosity,
+        invocation_ui.ui.debug_verbosity,
     ));
     theme_loader::log_theme_issues(&theme_catalog.issues);
     tracing::debug!(
-        debug_count = effective_invocation.ui.debug_verbosity,
+        debug_count = invocation_ui.ui.debug_verbosity,
         "developer logging initialized"
     );
 
@@ -307,14 +307,14 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
     let action = dispatch.action;
     let result = match action {
         RunAction::Repl => {
-            state.runtime.ui = effective_invocation.ui.clone();
+            state.runtime.ui = invocation_ui.ui.clone();
             repl::run_plugin_repl(&mut state)
         }
         RunAction::ReplCommand(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
-            &effective_invocation,
+            &invocation_ui,
             Commands::Repl(args),
             sink,
         ),
@@ -322,7 +322,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
             &mut state.runtime,
             &mut state.session,
             &state.clients,
-            &effective_invocation,
+            &invocation_ui,
             Commands::Plugins(args),
             sink,
         ),
@@ -330,7 +330,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
             &mut state.runtime,
             &mut state.session,
             &state.clients,
-            &effective_invocation,
+            &invocation_ui,
             Commands::Doctor(args),
             sink,
         ),
@@ -338,7 +338,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
             &mut state.runtime,
             &mut state.session,
             &state.clients,
-            &effective_invocation,
+            &invocation_ui,
             Commands::Theme(args),
             sink,
         ),
@@ -346,7 +346,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
             &mut state.runtime,
             &mut state.session,
             &state.clients,
-            &effective_invocation,
+            &invocation_ui,
             Commands::Config(args),
             sink,
         ),
@@ -354,7 +354,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
             &mut state.runtime,
             &mut state.session,
             &state.clients,
-            &effective_invocation,
+            &invocation_ui,
             Commands::History(args),
             sink,
         ),
@@ -363,44 +363,38 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
             &mut state.session,
             &state.clients,
             tokens,
-            &effective_invocation,
+            &invocation_ui,
         )
         .and_then(|result| {
             run_cli_command(
-                &CommandRenderRuntime::new(
-                    state.runtime.config.resolved(),
-                    &effective_invocation.ui,
-                ),
+                &CommandRenderRuntime::new(state.runtime.config.resolved(), &invocation_ui.ui),
                 result,
                 sink,
             )
         }),
     };
 
-    if !is_repl && effective_invocation.ui.debug_verbosity > 0 {
+    if !is_repl && invocation_ui.ui.debug_verbosity > 0 {
         let total = run_started.elapsed();
         let startup = action_started.saturating_duration_since(run_started);
         let command = total.saturating_sub(startup);
         let footer = right_align_timing_line(
             TimingSummary {
                 total,
-                parse: if effective_invocation.ui.debug_verbosity >= 3 {
+                parse: if invocation_ui.ui.debug_verbosity >= 3 {
                     Some(startup)
                 } else {
                     None
                 },
-                execute: if effective_invocation.ui.debug_verbosity >= 3 {
+                execute: if invocation_ui.ui.debug_verbosity >= 3 {
                     Some(command)
                 } else {
                     None
                 },
                 render: None,
             },
-            effective_invocation.ui.debug_verbosity,
-            &effective_invocation
-                .ui
-                .render_settings
-                .resolve_render_settings(),
+            invocation_ui.ui.debug_verbosity,
+            &invocation_ui.ui.render_settings.resolve_render_settings(),
         );
         if !footer.is_empty() {
             sink.write_stderr(&footer);
@@ -427,7 +421,7 @@ fn run_builtin_cli_command_parts(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
     command: Commands,
     sink: &mut dyn UiSink,
 ) -> Result<i32> {
@@ -445,7 +439,7 @@ fn run_inline_builtin_command(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
-    invocation: Option<&EffectiveInvocation>,
+    invocation: Option<&ResolvedInvocation>,
     command: Commands,
     stages: &[String],
 ) -> Result<Option<CliCommandResult>> {
@@ -463,10 +457,10 @@ pub(crate) fn dispatch_builtin_command_parts(
     session: &mut AppSession,
     clients: &AppClients,
     repl_history: Option<&SharedHistory>,
-    invocation: Option<&EffectiveInvocation>,
+    invocation: Option<&ResolvedInvocation>,
     command: Commands,
 ) -> Result<Option<CliCommandResult>> {
-    let effective_ui = effective_ui_state(&runtime.ui, invocation);
+    let invocation_ui = ui_state_for_invocation(&runtime.ui, invocation);
     match command {
         Commands::Plugins(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_PLUGINS)?;
@@ -476,14 +470,14 @@ pub(crate) fn dispatch_builtin_command_parts(
         Commands::Doctor(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_DOCTOR)?;
             doctor_cmd::run_doctor_command(
-                doctor_command_context(runtime, session, clients, &effective_ui),
+                doctor_command_context(runtime, session, clients, &invocation_ui),
                 args,
             )
             .map(Some)
         }
         Commands::Theme(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_THEME)?;
-            let ui = &effective_ui;
+            let ui = &invocation_ui;
             let themes = &runtime.themes;
             theme_cmd::run_theme_command(
                 &mut session.config_overrides,
@@ -495,7 +489,7 @@ pub(crate) fn dispatch_builtin_command_parts(
         Commands::Config(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_CONFIG)?;
             config_cmd::run_config_command(
-                config_command_context(runtime, session, &effective_ui),
+                config_command_context(runtime, session, &invocation_ui),
                 args,
             )
             .map(Some)
@@ -579,7 +573,7 @@ fn doctor_command_context<'a>(
     }
 }
 
-fn effective_ui_state(ui: &UiState, invocation: Option<&EffectiveInvocation>) -> UiState {
+fn ui_state_for_invocation(ui: &UiState, invocation: Option<&ResolvedInvocation>) -> UiState {
     let Some(invocation) = invocation else {
         return UiState {
             render_settings: ui.render_settings.clone(),
@@ -590,10 +584,10 @@ fn effective_ui_state(ui: &UiState, invocation: Option<&EffectiveInvocation>) ->
     invocation.ui.clone()
 }
 
-pub(crate) fn resolve_effective_invocation(
+pub(crate) fn resolve_invocation_ui(
     ui: &UiState,
     invocation: &InvocationOptions,
-) -> EffectiveInvocation {
+) -> ResolvedInvocation {
     let mut render_settings = ui.render_settings.clone();
     if let Some(format) = invocation.format {
         render_settings.format = format;
@@ -608,7 +602,7 @@ pub(crate) fn resolve_effective_invocation(
         render_settings.unicode = unicode;
     }
 
-    EffectiveInvocation {
+    ResolvedInvocation {
         ui: UiState {
             render_settings,
             message_verbosity: crate::osp_ui::messages::adjust_verbosity(
@@ -893,7 +887,7 @@ fn to_ui_verbosity(level: MessageLevel) -> UiVerbosity {
 pub(crate) fn plugin_dispatch_context_for_runtime(
     runtime: &crate::osp_cli::state::AppRuntime,
     clients: &AppClients,
-    invocation: Option<&EffectiveInvocation>,
+    invocation: Option<&ResolvedInvocation>,
 ) -> PluginDispatchContext {
     build_plugin_dispatch_context(
         &runtime.context,
@@ -905,7 +899,7 @@ pub(crate) fn plugin_dispatch_context_for_runtime(
 
 fn plugin_dispatch_context_for(
     runtime: &ExternalCommandRuntime<'_>,
-    invocation: Option<&EffectiveInvocation>,
+    invocation: Option<&ResolvedInvocation>,
 ) -> PluginDispatchContext {
     build_plugin_dispatch_context(
         runtime.context,
@@ -959,7 +953,7 @@ fn build_plugin_dispatch_context(
     }
 }
 
-pub(crate) fn resolve_effective_render_settings(
+pub(crate) fn resolve_render_settings_with_hint(
     settings: &RenderSettings,
     format_hint: Option<OutputFormat>,
 ) -> RenderSettings {

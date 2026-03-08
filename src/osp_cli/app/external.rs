@@ -9,10 +9,10 @@ use crate::osp_cli::repl::completion;
 use crate::osp_cli::repl::help as repl_help;
 use crate::osp_cli::state::{AppClients, AppRuntime, AppSession};
 use crate::osp_cli::state::{AuthState, RuntimeContext, UiState};
-use crate::osp_cli::ui_presentation::effective_help_layout;
+use crate::osp_cli::ui_presentation::help_layout;
 
 use super::{
-    CMD_HELP, CliCommandResult, EffectiveInvocation, PreparedPluginResponse, ReplCommandOutput,
+    CMD_HELP, CliCommandResult, PreparedPluginResponse, ReplCommandOutput, ResolvedInvocation,
     enrich_dispatch_error, ensure_plugin_visible_for, plugin_dispatch_context_for,
     prepare_plugin_response, run_inline_builtin_command,
 };
@@ -55,9 +55,9 @@ pub(super) fn run_external_command(
     session: &mut AppSession,
     clients: &AppClients,
     tokens: &[String],
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
 ) -> Result<CliCommandResult> {
-    let help_layout = effective_help_layout(runtime.config.resolved());
+    let help_layout = help_layout(runtime.config.resolved());
     run_external_command_with_help_renderer(
         runtime,
         session,
@@ -81,7 +81,7 @@ pub(crate) fn run_external_command_with_help_renderer(
     session: &mut AppSession,
     clients: &AppClients,
     tokens: &[String],
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
     render_help: impl Fn(&str) -> String,
 ) -> Result<CliCommandResult> {
     let help_invocation = InvocationOptions {
@@ -155,7 +155,7 @@ fn parse_external_invocation(
                 || err.kind() == clap::error::ErrorKind::DisplayVersion
             {
                 let resolved = runtime.ui.render_settings.resolve_render_settings();
-                let help_layout = effective_help_layout(runtime.config.resolved());
+                let help_layout = help_layout(runtime.config.resolved());
                 return Ok(ExternalParse::Handled(CliCommandResult::text(
                     repl_help::render_help_with_chrome(
                         &append_invocation_help_if_verbose(&err.to_string(), invocation),
@@ -180,7 +180,7 @@ fn run_external_plugin_command(
     command: &str,
     args: &[String],
     stages: &[String],
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
     render_help: impl Fn(&str) -> String,
 ) -> Result<CliCommandResult> {
     ensure_plugin_visible_for(runtime.auth, command)?;

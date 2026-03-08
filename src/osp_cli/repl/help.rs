@@ -5,11 +5,11 @@ use crate::osp_ui::chrome::{
 use crate::osp_ui::style::{StyleToken, apply_style_with_theme_overrides};
 
 use super::ReplViewContext;
-use crate::osp_cli::ui_presentation::{HelpLayout, effective_help_layout};
+use crate::osp_cli::ui_presentation::{HelpLayout, help_layout};
 
 pub(crate) fn render_repl_help_with_chrome(view: ReplViewContext<'_>, help_text: &str) -> String {
     let resolved = view.ui.render_settings.resolve_render_settings();
-    let layout = effective_help_layout(view.config);
+    let layout = help_layout(view.config);
     render_help_with_chrome(help_text, &resolved, layout)
 }
 

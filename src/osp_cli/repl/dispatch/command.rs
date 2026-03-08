@@ -6,8 +6,7 @@ use miette::{Result, miette};
 
 use crate::osp_cli::app;
 use crate::osp_cli::app::{
-    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, EffectiveInvocation,
-    ReplCommandSpec,
+    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, ReplCommandSpec, ResolvedInvocation,
 };
 use crate::osp_cli::cli::{
     Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands,
@@ -22,7 +21,7 @@ use crate::osp_cli::repl::{ReplViewContext, completion, help, input};
 
 pub(super) struct ParsedReplInvocation {
     pub(super) command: Commands,
-    pub(super) effective: EffectiveInvocation,
+    pub(super) effective: ResolvedInvocation,
     pub(super) stages: Vec<String>,
     pub(super) cache_key: Option<String>,
     pub(super) side_effects: CommandSideEffects,
@@ -31,7 +30,7 @@ pub(super) struct ParsedReplInvocation {
 pub(super) enum ParsedReplDispatch {
     Help {
         rendered: String,
-        effective: Box<EffectiveInvocation>,
+        effective: Box<ResolvedInvocation>,
     },
     Invocation(Box<ParsedReplInvocation>),
 }
@@ -64,10 +63,7 @@ pub(super) fn parse_repl_invocation(
                 ReplViewContext::from_parts(runtime, session),
                 input::help_alias_target_at(&scanned.tokens, command_index),
             ),
-            effective: Box::new(app::resolve_effective_invocation(
-                &runtime.ui,
-                &scanned.invocation,
-            )),
+            effective: Box::new(app::resolve_invocation_ui(&runtime.ui, &scanned.invocation)),
         });
     }
     let scoped_tokens = input::rewrite_help_alias_tokens_at(&scanned.tokens, command_index)
@@ -84,7 +80,7 @@ pub(super) fn parse_repl_invocation(
                 );
                 return Ok(ParsedReplDispatch::Help {
                     rendered,
-                    effective: Box::new(app::resolve_effective_invocation(
+                    effective: Box::new(app::resolve_invocation_ui(
                         &runtime.ui,
                         &scanned.invocation,
                     )),
@@ -102,7 +98,7 @@ pub(super) fn parse_repl_invocation(
     Ok(ParsedReplDispatch::Invocation(Box::new(
         ParsedReplInvocation {
             cache_key: repl_cache_key_for_command(runtime, &command, &scanned.invocation),
-            effective: app::resolve_effective_invocation(&runtime.ui, &scanned.invocation),
+            effective: app::resolve_invocation_ui(&runtime.ui, &scanned.invocation),
             side_effects: command_side_effects(&command),
             command,
             stages: parsed.stages.clone(),
@@ -268,7 +264,7 @@ pub(super) fn render_repl_command_output(
     line: &str,
     stages: &[String],
     result: crate::osp_cli::app::CliCommandResult,
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
     sink: &mut dyn UiSink,
 ) -> Result<String> {
     let crate::osp_cli::app::CliCommandResult {
@@ -305,7 +301,7 @@ pub(super) fn render_repl_command_output(
                 .map_err(|err| miette!("{err:#}"))?;
 
             let render_settings =
-                app::resolve_effective_render_settings(&invocation.ui.render_settings, format_hint);
+                app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
             let rendered = render_output(&output, &render_settings);
             session.record_result(line, output_to_rows(&output));
             app::maybe_copy_output_with_runtime(
@@ -361,7 +357,7 @@ pub(super) fn run_repl_command(
     session: &mut AppSession,
     clients: &AppClients,
     command: Commands,
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
     history: &SharedHistory,
     cache_key: Option<&str>,
 ) -> Result<crate::osp_cli::app::CliCommandResult> {
@@ -406,10 +402,10 @@ pub(super) fn run_repl_external_command(
     clients: &AppClients,
     session: &mut AppSession,
     tokens: Vec<String>,
-    invocation: &EffectiveInvocation,
+    invocation: &ResolvedInvocation,
 ) -> Result<crate::osp_cli::app::CliCommandResult> {
     let resolved = invocation.ui.render_settings.resolve_render_settings();
-    let layout = crate::osp_cli::ui_presentation::effective_help_layout(runtime.config.resolved());
+    let layout = crate::osp_cli::ui_presentation::help_layout(runtime.config.resolved());
     app::run_external_command_with_help_renderer(
         runtime,
         session,

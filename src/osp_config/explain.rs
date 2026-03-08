@@ -22,7 +22,7 @@ pub(crate) fn build_runtime_explain(
 }
 
 pub(crate) fn explain_layers_for_runtime_key(
-    layers: [LayerRef<'_>; 6],
+    layers: [LayerRef<'_>; 7],
     key: &str,
     frame: &ResolutionFrame,
 ) -> Vec<ExplainLayer> {

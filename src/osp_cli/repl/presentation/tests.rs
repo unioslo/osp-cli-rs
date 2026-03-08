@@ -11,6 +11,7 @@ use crate::osp_cli::state::{
     AppState, AppStateInit, DebugTimingBadge, DebugTimingState, LaunchContext, RuntimeContext,
     TerminalKind,
 };
+use crate::osp_cli::ui_presentation::build_presentation_defaults_layer;
 use crate::osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use crate::osp_core::output::OutputFormat;
 use crate::osp_ui::RenderSettings;
@@ -28,8 +29,13 @@ fn make_state(entries: &[(&str, &str)]) -> AppState {
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
     resolver.set_session(session);
+    let options = ResolveOptions::default().with_terminal("repl");
+    let base = resolver
+        .resolve(options.clone())
+        .expect("base test config should resolve");
+    resolver.set_presentation(build_presentation_defaults_layer(&base));
     let config = resolver
-        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .resolve(options)
         .expect("test config should resolve");
 
     AppState::new(AppStateInit {

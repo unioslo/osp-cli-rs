@@ -6,7 +6,7 @@ use crate::osp_repl::{ReplLineResult, SharedHistory};
 use miette::Result;
 use std::time::Instant;
 
-use crate::osp_cli::app::{EffectiveInvocation, resolve_effective_invocation};
+use crate::osp_cli::app::{ResolvedInvocation, resolve_invocation_ui};
 use crate::osp_cli::state::{AppClients, AppRuntime, AppSession};
 use crate::osp_cli::ui_sink::{StdIoUiSink, UiSink};
 
@@ -175,8 +175,8 @@ fn execute_repl_plugin_line_inner(
     ))
 }
 
-fn base_repl_invocation(runtime: &AppRuntime) -> EffectiveInvocation {
-    resolve_effective_invocation(&runtime.ui, &Default::default())
+fn base_repl_invocation(runtime: &AppRuntime) -> ResolvedInvocation {
+    resolve_invocation_ui(&runtime.ui, &Default::default())
 }
 
 #[cfg(test)]

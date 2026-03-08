@@ -39,7 +39,7 @@ pub(crate) struct PresentationEffect {
     pub(crate) preset_source: ConfigSource,
     pub(crate) preset_scope: Scope,
     pub(crate) preset_origin: Option<String>,
-    pub(crate) effective_value: ConfigValue,
+    pub(crate) seeded_value: ConfigValue,
 }
 
 impl ReplIntroStyle {
@@ -102,22 +102,6 @@ pub(crate) fn resolve_ui_presentation(config: &ResolvedConfig) -> UiPresentation
         .unwrap_or(UiPresentation::Expressive)
 }
 
-pub(crate) fn apply_presentation_to_render_settings(
-    settings: &mut RenderSettings,
-    config: &ResolvedConfig,
-) {
-    let presentation = resolve_ui_presentation(config);
-    apply_presentation_preset(
-        settings,
-        presentation,
-        is_builtin_default(config, "ui.mode"),
-        is_builtin_default(config, "ui.unicode.mode"),
-        is_builtin_default(config, "ui.color.mode"),
-        is_builtin_default(config, "ui.chrome.frame"),
-        is_builtin_default(config, "ui.table.border"),
-    );
-}
-
 pub(crate) fn apply_presentation_preset(
     settings: &mut RenderSettings,
     presentation: UiPresentation,
@@ -164,111 +148,63 @@ pub(crate) fn apply_presentation_preset(
     }
 }
 
-pub(crate) fn effective_message_layout(config: &ResolvedConfig) -> MessageLayout {
-    if !is_builtin_default(config, "ui.messages.layout") {
-        return config
-            .get_string("ui.messages.layout")
-            .and_then(MessageLayout::parse)
-            .unwrap_or(MessageLayout::Grouped);
+pub(crate) fn build_presentation_defaults_layer(
+    config: &ResolvedConfig,
+) -> crate::osp_config::ConfigLayer {
+    let mut layer = crate::osp_config::ConfigLayer::default();
+    let presentation = resolve_ui_presentation(config);
+    for key in PRESENTATION_KEYS {
+        // Presentation only seeds canonical keys that are still on builtin defaults. Once a
+        // concrete layer chose a value for the key, that concrete value wins and presentation no
+        // longer participates for that setting.
+        if config
+            .get_value_entry(key)
+            .map(|entry| matches!(entry.source, ConfigSource::BuiltinDefaults))
+            .unwrap_or(true)
+            && let Some(value) = presentation_seeded_value(presentation, key)
+        {
+            layer.set(*key, value);
+        }
     }
-
-    match resolve_ui_presentation(config) {
-        UiPresentation::Expressive | UiPresentation::Compact => MessageLayout::Grouped,
-        UiPresentation::Austere => MessageLayout::Minimal,
-    }
+    layer
 }
 
-pub(crate) fn effective_repl_simple_prompt(config: &ResolvedConfig) -> bool {
-    if !is_builtin_default(config, "repl.simple_prompt") {
-        return config.get_bool("repl.simple_prompt").unwrap_or(false);
-    }
-
-    match resolve_ui_presentation(config) {
-        UiPresentation::Expressive => false,
-        UiPresentation::Compact | UiPresentation::Austere => true,
-    }
+pub(crate) fn message_layout(config: &ResolvedConfig) -> MessageLayout {
+    config
+        .get_string("ui.messages.layout")
+        .and_then(MessageLayout::parse)
+        .unwrap_or(MessageLayout::Grouped)
 }
 
 #[cfg(test)]
-pub(crate) fn effective_section_frame(config: &ResolvedConfig) -> SectionFrameStyle {
-    if !is_builtin_default(config, "ui.chrome.frame") {
-        return config
-            .get_string("ui.chrome.frame")
-            .and_then(SectionFrameStyle::parse)
-            .unwrap_or(SectionFrameStyle::Top);
-    }
-
-    match resolve_ui_presentation(config) {
-        UiPresentation::Expressive => SectionFrameStyle::TopBottom,
-        UiPresentation::Compact => SectionFrameStyle::Top,
-        UiPresentation::Austere => SectionFrameStyle::None,
-    }
-}
-
-pub(crate) fn effective_repl_intro_style_for_verbosity(
-    config: &ResolvedConfig,
-    verbosity: MessageLevel,
-) -> ReplIntroStyle {
-    adjust_repl_intro_style_for_verbosity(effective_repl_intro_style(config), verbosity)
-}
-
-pub(crate) fn repl_intro_includes_overview(
-    config: &ResolvedConfig,
-    verbosity: MessageLevel,
-) -> bool {
-    matches!(
-        effective_repl_intro_style_for_verbosity(config, verbosity),
-        ReplIntroStyle::Compact | ReplIntroStyle::Full
-    )
-}
-
-pub(crate) fn effective_repl_input_mode(config: &ResolvedConfig) -> ReplInputMode {
+pub(crate) fn section_frame_style(config: &ResolvedConfig) -> SectionFrameStyle {
     config
-        .get_string("repl.input_mode")
-        .and_then(ReplInputMode::parse)
-        .unwrap_or(ReplInputMode::Auto)
+        .get_string("ui.chrome.frame")
+        .and_then(SectionFrameStyle::parse)
+        .unwrap_or(SectionFrameStyle::Top)
 }
 
-pub(crate) fn effective_help_layout(config: &ResolvedConfig) -> HelpLayout {
-    if !is_builtin_default(config, "ui.help.layout") {
-        return config
-            .get_string("ui.help.layout")
-            .and_then(HelpLayout::parse)
-            .unwrap_or(HelpLayout::Full);
-    }
-
-    match resolve_ui_presentation(config) {
-        UiPresentation::Expressive => HelpLayout::Full,
-        UiPresentation::Compact => HelpLayout::Compact,
-        UiPresentation::Austere => HelpLayout::Minimal,
-    }
+pub(crate) fn repl_simple_prompt(config: &ResolvedConfig) -> bool {
+    config.get_bool("repl.simple_prompt").unwrap_or(false)
 }
 
-pub(crate) fn effective_repl_intro_style(config: &ResolvedConfig) -> ReplIntroStyle {
-    if !is_builtin_default(config, "repl.intro") {
-        return config
-            .get_string("repl.intro")
-            .and_then(ReplIntroStyle::parse)
-            .or_else(|| {
-                config.get_bool("repl.intro").map(|enabled| {
-                    if enabled {
-                        ReplIntroStyle::Full
-                    } else {
-                        ReplIntroStyle::None
-                    }
-                })
+pub(crate) fn intro_style(config: &ResolvedConfig) -> ReplIntroStyle {
+    config
+        .get_string("repl.intro")
+        .and_then(ReplIntroStyle::parse)
+        .or_else(|| {
+            config.get_bool("repl.intro").map(|enabled| {
+                if enabled {
+                    ReplIntroStyle::Full
+                } else {
+                    ReplIntroStyle::None
+                }
             })
-            .unwrap_or(ReplIntroStyle::Full);
-    }
-
-    match resolve_ui_presentation(config) {
-        UiPresentation::Austere => ReplIntroStyle::Minimal,
-        UiPresentation::Compact => ReplIntroStyle::Compact,
-        UiPresentation::Expressive => ReplIntroStyle::Full,
-    }
+        })
+        .unwrap_or(ReplIntroStyle::Full)
 }
 
-fn adjust_repl_intro_style_for_verbosity(
+pub(crate) fn intro_style_with_verbosity(
     style: ReplIntroStyle,
     verbosity: MessageLevel,
 ) -> ReplIntroStyle {
@@ -293,11 +229,30 @@ fn adjust_repl_intro_style_for_verbosity(
     }
 }
 
+pub(crate) fn repl_intro_includes_overview(style: ReplIntroStyle) -> bool {
+    matches!(style, ReplIntroStyle::Compact | ReplIntroStyle::Full)
+}
+
+pub(crate) fn repl_input_mode(config: &ResolvedConfig) -> ReplInputMode {
+    config
+        .get_string("repl.input_mode")
+        .and_then(ReplInputMode::parse)
+        .unwrap_or(ReplInputMode::Auto)
+}
+
+pub(crate) fn help_layout(config: &ResolvedConfig) -> HelpLayout {
+    config
+        .get_string("ui.help.layout")
+        .and_then(HelpLayout::parse)
+        .unwrap_or(HelpLayout::Full)
+}
+
 pub(crate) fn explain_presentation_effect(
     config: &ResolvedConfig,
     key: &str,
 ) -> Option<PresentationEffect> {
-    if !is_builtin_default(config, key) {
+    let seeded_entry = config.get_value_entry(key)?;
+    if !matches!(seeded_entry.source, ConfigSource::PresentationDefaults) {
         return None;
     }
 
@@ -305,27 +260,28 @@ pub(crate) fn explain_presentation_effect(
     let preset = config
         .get_string("ui.presentation")
         .and_then(UiPresentation::parse)?;
-    let effective_value = presentation_seeded_value(preset, key)?;
-    let raw_value = config.get(key)?;
-    if raw_value.reveal() == effective_value.reveal() {
-        return None;
-    }
+    let seeded_value = presentation_seeded_value(preset, key)?;
 
     Some(PresentationEffect {
         preset,
         preset_source: preset_entry.source,
         preset_scope: preset_entry.scope.clone(),
         preset_origin: preset_entry.origin.clone(),
-        effective_value,
+        seeded_value,
     })
 }
 
-pub(crate) fn is_builtin_default(config: &ResolvedConfig, key: &str) -> bool {
-    config
-        .get_value_entry(key)
-        .map(|entry| matches!(entry.source, ConfigSource::BuiltinDefaults))
-        .unwrap_or(true)
-}
+const PRESENTATION_KEYS: &[&str] = &[
+    "ui.mode",
+    "ui.unicode.mode",
+    "ui.color.mode",
+    "ui.chrome.frame",
+    "ui.table.border",
+    "ui.messages.layout",
+    "repl.simple_prompt",
+    "ui.help.layout",
+    "repl.intro",
+];
 
 fn presentation_seeded_value(presentation: UiPresentation, key: &str) -> Option<ConfigValue> {
     match key {
@@ -404,6 +360,11 @@ mod tests {
         }
         resolver.set_session(session_layer);
 
+        let base = resolver
+            .resolve(ResolveOptions::default().with_terminal("repl"))
+            .expect("base config should resolve");
+        resolver.set_presentation(build_presentation_defaults_layer(&base));
+
         resolver
             .resolve(ResolveOptions::default().with_terminal("repl"))
             .expect("config should resolve")
@@ -424,7 +385,7 @@ mod tests {
         settings.mode = RenderMode::Auto;
         settings.unicode = UnicodeMode::Auto;
 
-        apply_presentation_to_render_settings(&mut settings, &config);
+        crate::osp_cli::cli::apply_render_settings_from_config(&mut settings, &config);
 
         assert_eq!(settings.mode, RenderMode::Plain);
         assert_eq!(settings.unicode, UnicodeMode::Never);
@@ -451,24 +412,21 @@ mod tests {
         settings.unicode = UnicodeMode::Auto;
         settings.color = ColorMode::Auto;
 
-        apply_presentation_to_render_settings(&mut settings, &config);
+        crate::osp_cli::cli::apply_render_settings_from_config(&mut settings, &config);
 
-        assert_eq!(settings.mode, RenderMode::Auto);
-        assert_eq!(settings.unicode, UnicodeMode::Auto);
-        assert_eq!(settings.color, ColorMode::Auto);
+        assert_eq!(settings.mode, RenderMode::Rich);
+        assert_eq!(settings.unicode, UnicodeMode::Always);
+        assert_eq!(settings.color, ColorMode::Always);
         assert_eq!(settings.chrome_frame, SectionFrameStyle::Top);
-        assert_eq!(settings.table_border, TableBorderStyle::Square);
+        assert_eq!(settings.table_border, TableBorderStyle::Round);
     }
 
     #[test]
     fn expressive_presentation_prefers_stronger_chrome_by_default_unit() {
         let config = resolved_config(&[("ui.presentation", "expressive")], &[], &[]);
-        assert_eq!(
-            effective_section_frame(&config),
-            SectionFrameStyle::TopBottom
-        );
+        assert_eq!(section_frame_style(&config), SectionFrameStyle::TopBottom);
         let mut settings = RenderSettings::test_plain(crate::osp_core::output::OutputFormat::Auto);
-        apply_presentation_to_render_settings(&mut settings, &config);
+        crate::osp_cli::cli::apply_render_settings_from_config(&mut settings, &config);
         assert_eq!(settings.table_border, TableBorderStyle::Round);
     }
 
@@ -478,10 +436,10 @@ mod tests {
         let mut settings = RenderSettings::test_plain(crate::osp_core::output::OutputFormat::Auto);
         settings.unicode = UnicodeMode::Auto;
 
-        apply_presentation_to_render_settings(&mut settings, &config);
+        crate::osp_cli::cli::apply_render_settings_from_config(&mut settings, &config);
 
-        assert!(effective_repl_simple_prompt(&config));
-        assert_eq!(effective_message_layout(&config), MessageLayout::Grouped);
+        assert!(repl_simple_prompt(&config));
+        assert_eq!(message_layout(&config), MessageLayout::Grouped);
         assert_eq!(settings.unicode, UnicodeMode::Never);
         assert_eq!(settings.table_border, TableBorderStyle::Square);
     }
@@ -490,7 +448,7 @@ mod tests {
     fn austere_presentation_prefers_minimal_messages_unit() {
         let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
 
-        assert_eq!(effective_message_layout(&config), MessageLayout::Minimal);
+        assert_eq!(message_layout(&config), MessageLayout::Minimal);
     }
 
     #[test]
@@ -504,14 +462,14 @@ mod tests {
             &[],
         );
 
-        assert!(!effective_repl_simple_prompt(&config));
-        assert_eq!(effective_message_layout(&config), MessageLayout::Minimal);
+        assert!(!repl_simple_prompt(&config));
+        assert_eq!(message_layout(&config), MessageLayout::Minimal);
     }
 
     #[test]
     fn austere_presentation_keeps_intro_by_default_unit() {
         let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Minimal);
+        assert_eq!(intro_style(&config), ReplIntroStyle::Minimal);
     }
 
     #[test]
@@ -521,70 +479,76 @@ mod tests {
             &[],
             &[("repl.intro", "full")],
         );
-        assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Full);
+        assert_eq!(intro_style(&config), ReplIntroStyle::Full);
     }
 
     #[test]
     fn explicit_intro_style_none_disables_intro_unit() {
         let config = resolved_config(&[], &[("repl.intro", "none")], &[]);
-        assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::None);
+        assert_eq!(intro_style(&config), ReplIntroStyle::None);
     }
 
     #[test]
     fn explicit_repl_input_mode_is_resolved_unit() {
         let config = resolved_config(&[], &[], &[]);
-        assert_eq!(effective_repl_input_mode(&config), ReplInputMode::Auto);
+        assert_eq!(repl_input_mode(&config), ReplInputMode::Auto);
 
         let config = resolved_config(&[], &[("repl.input_mode", "basic")], &[]);
-        assert_eq!(effective_repl_input_mode(&config), ReplInputMode::Basic);
+        assert_eq!(repl_input_mode(&config), ReplInputMode::Basic);
     }
 
     #[test]
     fn compact_presentation_prefers_compact_help_layout_unit() {
         let config = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
-        assert_eq!(effective_help_layout(&config), HelpLayout::Compact);
+        assert_eq!(help_layout(&config), HelpLayout::Compact);
     }
 
     #[test]
     fn austere_presentation_prefers_minimal_help_layout_unit() {
         let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert_eq!(effective_help_layout(&config), HelpLayout::Minimal);
+        assert_eq!(help_layout(&config), HelpLayout::Minimal);
     }
 
     #[test]
     fn compact_presentation_prefers_minimal_intro_style_unit() {
         let config = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
-        assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Compact);
-        assert!(repl_intro_includes_overview(&config, MessageLevel::Success));
+        assert_eq!(intro_style(&config), ReplIntroStyle::Compact);
+        assert!(repl_intro_includes_overview(intro_style_with_verbosity(
+            intro_style(&config),
+            MessageLevel::Success
+        )));
     }
 
     #[test]
     fn austere_presentation_hides_intro_overview_unit() {
         let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert!(!repl_intro_includes_overview(
-            &config,
+        assert!(!repl_intro_includes_overview(intro_style_with_verbosity(
+            intro_style(&config),
             MessageLevel::Success
-        ));
-        assert!(repl_intro_includes_overview(&config, MessageLevel::Info));
+        )));
+        assert!(repl_intro_includes_overview(intro_style_with_verbosity(
+            intro_style(&config),
+            MessageLevel::Info
+        )));
     }
 
     #[test]
     fn intro_verbosity_adjustment_bumps_and_suppresses_levels_unit() {
         let austere = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
         assert_eq!(
-            effective_repl_intro_style_for_verbosity(&austere, MessageLevel::Success),
+            intro_style_with_verbosity(intro_style(&austere), MessageLevel::Success),
             ReplIntroStyle::Minimal
         );
         assert_eq!(
-            effective_repl_intro_style_for_verbosity(&austere, MessageLevel::Info),
+            intro_style_with_verbosity(intro_style(&austere), MessageLevel::Info),
             ReplIntroStyle::Compact
         );
         assert_eq!(
-            effective_repl_intro_style_for_verbosity(&austere, MessageLevel::Trace),
+            intro_style_with_verbosity(intro_style(&austere), MessageLevel::Trace),
             ReplIntroStyle::Full
         );
         assert_eq!(
-            effective_repl_intro_style_for_verbosity(&austere, MessageLevel::Warning),
+            intro_style_with_verbosity(intro_style(&austere), MessageLevel::Warning),
             ReplIntroStyle::None
         );
     }
@@ -596,7 +560,7 @@ mod tests {
             &[("ui.help.layout", "full")],
             &[],
         );
-        assert_eq!(effective_help_layout(&config), HelpLayout::Full);
+        assert_eq!(help_layout(&config), HelpLayout::Full);
     }
 
     #[test]
@@ -609,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn explain_presentation_effect_reports_effective_help_layout_unit() {
+    fn explain_presentation_effect_reports_seeded_help_layout_unit() {
         let config = resolved_config(
             &[("ui.presentation", "austere"), ("ui.help.layout", "full")],
             &[],
@@ -621,16 +585,13 @@ mod tests {
         assert_eq!(effect.preset, UiPresentation::Austere);
         assert_eq!(effect.preset_source, ConfigSource::BuiltinDefaults);
         assert_eq!(effect.preset_scope, Scope::global());
-        assert_eq!(effect.effective_value, ConfigValue::from("minimal"));
+        assert_eq!(effect.seeded_value, ConfigValue::from("minimal"));
     }
 
     #[test]
-    fn explain_presentation_effect_hides_noop_seed_values_unit() {
+    fn explain_presentation_effect_reports_seeded_table_border_unit() {
         let config = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
-        assert_eq!(
-            explain_presentation_effect(&config, "ui.table.border"),
-            None
-        );
+        assert!(explain_presentation_effect(&config, "ui.table.border").is_some());
     }
 
     #[test]
