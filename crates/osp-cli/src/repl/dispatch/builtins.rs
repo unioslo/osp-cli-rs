@@ -187,3 +187,110 @@ fn render_bang_help() -> String {
 pub(super) fn is_repl_bang_request(raw: &str) -> bool {
     raw.trim_start().starts_with('!')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{BangCommand, maybe_execute_repl_builtin, parse_repl_builtin};
+    use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_core::output::OutputFormat;
+    use osp_repl::{HistoryConfig, ReplLineResult, SharedHistory};
+    use osp_ui::RenderSettings;
+    use osp_ui::messages::MessageLevel;
+
+    fn app_state() -> AppState {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let config = resolver
+            .resolve(ResolveOptions::default().with_terminal("repl"))
+            .expect("test config should resolve");
+
+        AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Repl, None),
+            config,
+            render_settings: RenderSettings::test_plain(OutputFormat::Json),
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+            plugins: crate::plugin_manager::PluginManager::new(Vec::new()),
+            themes: crate::theme_loader::ThemeCatalog::default(),
+            launch: LaunchContext::default(),
+        })
+    }
+
+    fn history() -> SharedHistory {
+        SharedHistory::new(HistoryConfig {
+            path: None,
+            max_entries: 20,
+            enabled: true,
+            dedupe: true,
+            profile_scoped: false,
+            exclude_patterns: Vec::new(),
+            profile: None,
+            terminal: None,
+            shell_context: Default::default(),
+        })
+        .expect("history should initialize")
+    }
+
+    #[test]
+    fn parse_repl_builtin_covers_none_help_exit_and_bang_unit() {
+        assert_eq!(parse_repl_builtin("   ").expect("blank"), None);
+        assert!(matches!(
+            parse_repl_builtin("--help").expect("help"),
+            Some(super::ReplBuiltin::Help)
+        ));
+        assert!(matches!(
+            parse_repl_builtin("quit").expect("exit"),
+            Some(super::ReplBuiltin::Exit)
+        ));
+        assert!(matches!(
+            parse_repl_builtin("!!").expect("bang"),
+            Some(super::ReplBuiltin::Bang(BangCommand::Last))
+        ));
+    }
+
+    #[test]
+    fn maybe_execute_repl_builtin_covers_none_exit_and_help_unit() {
+        let mut state = app_state();
+        let history = history();
+
+        assert_eq!(
+            maybe_execute_repl_builtin(
+                &mut state.runtime,
+                &mut state.session,
+                &state.clients,
+                &history,
+                "ldap user alice",
+            )
+            .expect("non-builtin should return none"),
+            None
+        );
+
+        assert!(matches!(
+            maybe_execute_repl_builtin(
+                &mut state.runtime,
+                &mut state.session,
+                &state.clients,
+                &history,
+                "exit",
+            )
+            .expect("exit should succeed"),
+            Some(ReplLineResult::Exit(0))
+        ));
+
+        let mut state = app_state();
+        assert!(matches!(
+            maybe_execute_repl_builtin(
+                &mut state.runtime,
+                &mut state.session,
+                &state.clients,
+                &history,
+                "help",
+            )
+            .expect("help should succeed"),
+            Some(ReplLineResult::Continue(text)) if text.contains("help") || text.contains("config")
+        ));
+    }
+}

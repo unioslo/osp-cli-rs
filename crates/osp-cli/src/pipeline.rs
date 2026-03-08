@@ -535,4 +535,35 @@ mod tests {
     fn truncate_display_respects_utf8_boundaries() {
         assert_eq!(truncate_display("  å🙂bcdef  ", 3), "å🙂b... (7 chars)");
     }
+
+    #[test]
+    fn parse_command_text_reports_pipeline_and_shell_split_errors_unit() {
+        let config = test_config(&[]);
+
+        let pipeline_err = parse_command_text_with_aliases("ldap user 'oops | P uid", &config)
+            .expect_err("invalid pipeline should fail");
+        assert!(
+            pipeline_err
+                .to_string()
+                .contains("failed to parse pipeline")
+        );
+    }
+
+    #[test]
+    fn alias_parsing_reports_expansion_and_placeholder_errors_unit() {
+        let config = test_config(&[("alias.demo", "ldap user 'oops | P uid")]);
+        let err = parse_command_tokens_with_aliases(&["demo".to_string()], &config)
+            .expect_err("broken alias command should fail");
+        assert!(
+            err.to_string()
+                .contains("failed to parse alias `demo` expansion")
+        );
+
+        let plain = test_config(&[]);
+        let err = expand_alias_template("loop", "echo ${next}", &[], &plain)
+            .expect_err("missing placeholder should fail");
+        let message = err.to_string();
+        assert!(message.contains("requires value for placeholder"));
+        assert!(message.contains("next"));
+    }
 }

@@ -242,7 +242,8 @@ mod tests {
 
     use super::{
         DispatchPlan, RunAction, build_dispatch_plan, ensure_builtin_visible_for,
-        ensure_dispatch_visibility, ensure_plugin_visible_for, normalize_profile_override,
+        ensure_dispatch_visibility, ensure_plugin_visible_for, normalize_cli_profile,
+        normalize_profile_override,
     };
     use crate::cli::Cli;
     use crate::state::{AuthState, TerminalKind};
@@ -390,5 +391,37 @@ mod tests {
         let external = RunAction::External(vec!["ldap".to_string(), "user".to_string()]);
         assert_eq!(external.terminal_kind(), TerminalKind::Cli);
         ensure_dispatch_visibility(&auth, &external).expect("visible plugin should pass");
+    }
+
+    #[test]
+    fn normalize_cli_profile_rewrites_cli_profile_in_place_unit() {
+        let mut cli = parse_cli(&["osp", "--profile", "  DEV  ", "theme", "list"]);
+
+        let normalized = normalize_cli_profile(&mut cli);
+
+        assert_eq!(normalized.as_deref(), Some("dev"));
+        assert_eq!(cli.profile.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn build_dispatch_plan_covers_repl_subcommand_and_shorthand_parse_errors_unit() {
+        let profiles = BTreeSet::from(["dev".to_string()]);
+
+        let mut repl_cli = parse_cli(&["osp", "repl", "debug-complete", "--line", "ldap"]);
+        let DispatchPlan {
+            action,
+            profile_override,
+        } = build_dispatch_plan(&mut repl_cli, &profiles).expect("repl subcommand should parse");
+        assert!(matches!(action, RunAction::ReplCommand(_)));
+        assert!(profile_override.is_none());
+
+        let mut bad_shorthand_cli = parse_cli(&["osp", "dev", "config", "set", "ui.format"]);
+        let err = build_dispatch_plan(&mut bad_shorthand_cli, &profiles)
+            .err()
+            .expect("invalid shorthand command should fail");
+        assert!(
+            err.to_string()
+                .contains("failed to parse command after profile shorthand `dev`")
+        );
     }
 }

@@ -1,13 +1,14 @@
+use super::dispatch::{describe_plugin, run_provider};
 use super::{
-    DescribeCacheEntry, DescribeCacheFile, DescribeV1, ManifestPlugin, ManifestState,
-    PluginDispatchContext, PluginDispatchError, PluginManager, PluginSource, PluginState,
-    SearchRoot, ValidatedBundledManifest, assemble_discovered_plugin, bundled_manifest_path,
-    collect_completion_words, direct_subcommand_names, discover_root_executables,
-    existing_unique_search_roots, file_fingerprint, file_sha256_hex, find_cached_describe,
-    has_valid_plugin_suffix, is_enabled, load_manifest_state, load_manifest_state_from_path,
-    merge_issue, min_osp_version_issue, normalize_checksum, prune_stale_describe_cache_entries,
-    to_arg_node, to_command_spec, to_flag_node, to_suggestion_entry, to_value_type,
-    upsert_cached_describe,
+    DescribeCacheEntry, DescribeCacheFile, DescribeV1, DiscoveredPlugin, ManifestPlugin,
+    ManifestState, PluginDispatchContext, PluginDispatchError, PluginManager, PluginSource,
+    PluginState, SearchRoot, ValidatedBundledManifest, assemble_discovered_plugin,
+    bundled_manifest_path, collect_completion_words, direct_subcommand_names,
+    discover_root_executables, existing_unique_search_roots, file_fingerprint, file_sha256_hex,
+    find_cached_describe, has_valid_plugin_suffix, is_enabled, load_manifest_state,
+    load_manifest_state_from_path, merge_issue, min_osp_version_issue, normalize_checksum,
+    prune_stale_describe_cache_entries, to_arg_node, to_command_spec, to_flag_node,
+    to_suggestion_entry, to_value_type, upsert_cached_describe,
 };
 use osp_core::plugin::{DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1};
 use std::collections::{BTreeMap, HashMap};
@@ -1054,6 +1055,89 @@ fn path_discovery_is_opt_in_unit() {
         Some(value) => unsafe { std::env::set_var("PATH", value) },
         None => unsafe { std::env::remove_var("PATH") },
     }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn describe_plugin_reports_missing_executable_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-missing-describe");
+    let missing = root.join("osp-missing");
+
+    let err = describe_plugin(&missing, Duration::from_millis(50))
+        .expect_err("missing executable should fail");
+    assert!(err.to_string().contains("failed to execute --describe"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn describe_plugin_and_run_provider_cover_direct_error_paths_unit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = make_temp_dir("osp-cli-plugin-manager-direct-dispatch-errors");
+    let nonzero = root.join("osp-nonzero");
+    let invalid_json = root.join("osp-invalid-json");
+    let invalid_payload = root.join("osp-invalid-payload");
+
+    std::fs::write(
+        &nonzero,
+        "#!/usr/bin/env bash\nif [ \"$1\" = \"--describe\" ]; then echo nope >&2; exit 7; fi\n",
+    )
+    .expect("fixture should be written");
+    std::fs::write(
+        &invalid_json,
+        "#!/usr/bin/env bash\nif [ \"$1\" = \"--describe\" ]; then printf 'not-json\\n'; exit 0; fi\n",
+    )
+    .expect("fixture should be written");
+    std::fs::write(
+        &invalid_payload,
+        "#!/usr/bin/env bash\nif [ \"$1\" = \"--describe\" ]; then cat <<'JSON'\n{\"protocol_version\":1,\"plugin_id\":\"\",\"plugin_version\":\"0.1.0\",\"commands\":[]}\nJSON\nexit 0\nfi\n",
+    )
+    .expect("fixture should be written");
+
+    for path in [&nonzero, &invalid_json, &invalid_payload] {
+        let mut perms = std::fs::metadata(path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).expect("chmod");
+    }
+
+    let err = describe_plugin(&nonzero, Duration::from_millis(50))
+        .expect_err("non-zero describe should fail");
+    assert!(err.to_string().contains("--describe failed with status"));
+    assert!(err.to_string().contains("nope"));
+
+    let err = describe_plugin(&invalid_json, Duration::from_millis(50))
+        .expect_err("invalid json should fail");
+    assert!(err.to_string().contains("invalid describe JSON"));
+
+    let err = describe_plugin(&invalid_payload, Duration::from_millis(50))
+        .expect_err("invalid payload should fail");
+    assert!(err.to_string().contains("invalid describe payload"));
+
+    let provider = DiscoveredPlugin {
+        plugin_id: "missing".to_string(),
+        plugin_version: None,
+        executable: root.join("osp-missing-run"),
+        source: PluginSource::Explicit,
+        commands: vec!["missing".to_string()],
+        command_specs: Vec::new(),
+        issue: None,
+        default_enabled: true,
+    };
+    let err = run_provider(
+        &provider,
+        "missing",
+        &[],
+        &PluginDispatchContext::default(),
+        Duration::from_millis(50),
+    )
+    .expect_err("missing executable should fail");
+    assert!(matches!(
+        err,
+        PluginDispatchError::ExecuteFailed { plugin_id, .. } if plugin_id == "missing"
+    ));
 
     let _ = std::fs::remove_dir_all(&root);
 }
