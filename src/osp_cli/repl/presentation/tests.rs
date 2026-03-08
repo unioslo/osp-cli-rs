@@ -48,6 +48,10 @@ fn repl_view<'a>(state: &'a AppState) -> ReplViewContext<'a> {
     ReplViewContext::from_parts(&state.runtime, &state.session)
 }
 
+fn intro_commands(commands: &[&str]) -> Vec<String> {
+    commands.iter().map(|value| (*value).to_string()).collect()
+}
+
 #[test]
 fn repl_intro_expressive_includes_sections_and_user_context() {
     let state = make_state(&[
@@ -57,7 +61,10 @@ fn repl_intro_expressive_includes_sections_and_user_context() {
         ("theme.name", "rose-pine-moon"),
     ]);
 
-    let rendered = render_repl_intro(repl_view(&state));
+    let rendered = render_repl_intro(
+        repl_view(&state),
+        &intro_commands(&["help", "config", "theme", "plugins"]),
+    );
     assert!(rendered.contains("OSP"));
     assert!(rendered.contains("Keybindings"));
     assert!(rendered.contains("Pipes"));
@@ -77,6 +84,7 @@ fn repl_overview_lists_invocation_options_for_expressive_surface() {
             CMD_THEME.to_string(),
             CMD_PLUGINS.to_string(),
         ],
+        intro_commands: intro_commands(&["help", "config", "theme", "plugins"]),
         specs: Vec::new(),
         aliases: Vec::new(),
         overview_entries: vec![
@@ -221,7 +229,10 @@ fn repl_intro_minimal_without_help_visibility_uses_completion_hint() {
         ("auth.visible.builtins", "config,theme,plugins"),
     ]);
 
-    let rendered = render_repl_intro(repl_view(&state));
+    let rendered = render_repl_intro(
+        repl_view(&state),
+        &intro_commands(&["config", "theme", "plugins"]),
+    );
     assert!(rendered.contains("Use completion to explore commands."));
     assert!(!rendered.contains("See `help`"));
 }

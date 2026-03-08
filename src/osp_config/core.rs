@@ -462,10 +462,9 @@ impl ConfigSchema {
         );
         schema.insert("repl.simple_prompt", SchemaEntry::boolean());
         schema.insert("repl.shell_indicator", SchemaEntry::string());
-        schema.insert("repl.intro", SchemaEntry::boolean());
         schema.insert(
-            "repl.intro.style",
-            SchemaEntry::string().with_allowed_values(["full", "minimal", "none"]),
+            "repl.intro",
+            SchemaEntry::string().with_allowed_values(["none", "minimal", "compact", "full"]),
         );
         schema.insert("repl.history.path", SchemaEntry::string());
         schema.insert("repl.history.max_entries", SchemaEntry::integer());

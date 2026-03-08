@@ -13,9 +13,10 @@ pub(crate) enum UiPresentation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReplIntroStyle {
-    Full,
-    Minimal,
     None,
+    Minimal,
+    Compact,
+    Full,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,9 +45,10 @@ pub(crate) struct PresentationEffect {
 impl ReplIntroStyle {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "full" => Some(Self::Full),
-            "minimal" | "compact" => Some(Self::Minimal),
             "none" | "off" => Some(Self::None),
+            "minimal" | "austere" => Some(Self::Minimal),
+            "compact" => Some(Self::Compact),
+            "full" => Some(Self::Full),
             _ => None,
         }
     }
@@ -204,11 +206,14 @@ pub(crate) fn effective_section_frame(config: &ResolvedConfig) -> SectionFrameSt
 }
 
 pub(crate) fn effective_repl_intro(config: &ResolvedConfig) -> bool {
-    if !is_builtin_default(config, "repl.intro") {
-        return config.get_bool("repl.intro").unwrap_or(true);
-    }
-
     !matches!(effective_repl_intro_style(config), ReplIntroStyle::None)
+}
+
+pub(crate) fn repl_intro_includes_overview(config: &ResolvedConfig) -> bool {
+    matches!(
+        effective_repl_intro_style(config),
+        ReplIntroStyle::Compact | ReplIntroStyle::Full
+    )
 }
 
 pub(crate) fn effective_repl_input_mode(config: &ResolvedConfig) -> ReplInputMode {
@@ -234,16 +239,25 @@ pub(crate) fn effective_help_layout(config: &ResolvedConfig) -> HelpLayout {
 }
 
 pub(crate) fn effective_repl_intro_style(config: &ResolvedConfig) -> ReplIntroStyle {
-    if !is_builtin_default(config, "repl.intro.style") {
+    if !is_builtin_default(config, "repl.intro") {
         return config
-            .get_string("repl.intro.style")
+            .get_string("repl.intro")
             .and_then(ReplIntroStyle::parse)
+            .or_else(|| {
+                config.get_bool("repl.intro").map(|enabled| {
+                    if enabled {
+                        ReplIntroStyle::Full
+                    } else {
+                        ReplIntroStyle::None
+                    }
+                })
+            })
             .unwrap_or(ReplIntroStyle::Full);
     }
 
     match resolve_ui_presentation(config) {
         UiPresentation::Austere => ReplIntroStyle::Minimal,
-        UiPresentation::Compact => ReplIntroStyle::Minimal,
+        UiPresentation::Compact => ReplIntroStyle::Compact,
         UiPresentation::Expressive => ReplIntroStyle::Full,
     }
 }
@@ -320,9 +334,10 @@ fn presentation_seeded_value(presentation: UiPresentation, key: &str) -> Option<
             UiPresentation::Compact => Some(ConfigValue::from("compact")),
             UiPresentation::Austere => Some(ConfigValue::from("minimal")),
         },
-        "repl.intro.style" => match presentation {
+        "repl.intro" => match presentation {
             UiPresentation::Austere => Some(ConfigValue::from("minimal")),
-            UiPresentation::Compact | UiPresentation::Expressive => Some(ConfigValue::from("full")),
+            UiPresentation::Compact => Some(ConfigValue::from("compact")),
+            UiPresentation::Expressive => Some(ConfigValue::from("full")),
         },
         _ => None,
     }
@@ -474,14 +489,15 @@ mod tests {
         let config = resolved_config(
             &[("ui.presentation", "austere")],
             &[],
-            &[("repl.intro", "true")],
+            &[("repl.intro", "full")],
         );
         assert!(effective_repl_intro(&config));
+        assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Full);
     }
 
     #[test]
     fn explicit_intro_style_none_disables_intro_unit() {
-        let config = resolved_config(&[], &[("repl.intro.style", "none")], &[]);
+        let config = resolved_config(&[], &[("repl.intro", "none")], &[]);
         assert!(!effective_repl_intro(&config));
         assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::None);
     }
@@ -511,7 +527,14 @@ mod tests {
     fn compact_presentation_prefers_minimal_intro_style_unit() {
         let config = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
         assert!(effective_repl_intro(&config));
-        assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Minimal);
+        assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Compact);
+        assert!(repl_intro_includes_overview(&config));
+    }
+
+    #[test]
+    fn austere_presentation_hides_intro_overview_unit() {
+        let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
+        assert!(!repl_intro_includes_overview(&config));
     }
 
     #[test]

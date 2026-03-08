@@ -639,8 +639,10 @@ fn repl_completion_tree_injects_config_set_schema_keys_unit() {
     assert!(ui_mode.children.contains_key("rich"));
 
     let repl_intro = &set_node.children["repl.intro"];
-    assert!(repl_intro.children.contains_key("true"));
-    assert!(repl_intro.children.contains_key("false"));
+    assert!(repl_intro.children.contains_key("none"));
+    assert!(repl_intro.children.contains_key("minimal"));
+    assert!(repl_intro.children.contains_key("compact"));
+    assert!(repl_intro.children.contains_key("full"));
 }
 
 #[test]

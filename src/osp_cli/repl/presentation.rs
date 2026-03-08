@@ -1,5 +1,5 @@
 use crate::osp_cli::app::format_timing_badge;
-use crate::osp_cli::app::{CMD_CONFIG, CMD_HELP, CMD_PLUGINS, CMD_THEME, DEFAULT_REPL_PROMPT};
+use crate::osp_cli::app::{CMD_HELP, DEFAULT_REPL_PROMPT};
 use crate::osp_cli::state::DebugTimingState;
 use crate::osp_repl::{ReplAppearance, ReplPrompt};
 use crate::osp_ui::chrome::{
@@ -18,7 +18,7 @@ use crate::osp_cli::ui_presentation::{
     ReplIntroStyle, effective_repl_intro_style, effective_repl_simple_prompt,
 };
 
-pub(crate) fn render_repl_intro(view: ReplViewContext<'_>) -> String {
+pub(crate) fn render_repl_intro(view: ReplViewContext<'_>, intro_commands: &[String]) -> String {
     let resolved = view.ui.render_settings.resolve_render_settings();
     let config = view.config;
 
@@ -36,10 +36,12 @@ pub(crate) fn render_repl_intro(view: ReplViewContext<'_>) -> String {
         return String::new();
     }
 
-    if matches!(intro_style, ReplIntroStyle::Minimal) {
-        let visible_commands = [CMD_HELP, CMD_CONFIG, CMD_THEME, CMD_PLUGINS]
-            .into_iter()
-            .filter(|command| view.auth.is_builtin_visible(command))
+    if matches!(
+        intro_style,
+        ReplIntroStyle::Minimal | ReplIntroStyle::Compact
+    ) {
+        let visible_commands = intro_commands
+            .iter()
             .map(|command| format!("`{command}`"))
             .collect::<Vec<_>>();
         let help_hint = if view.auth.is_builtin_visible(CMD_HELP) {

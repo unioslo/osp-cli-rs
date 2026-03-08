@@ -98,7 +98,7 @@ The REPL prompt is controlled by:
 - `repl.simple_prompt`
 - `repl.shell_indicator`
 - `repl.intro`
-- `repl.intro.style`
+  - `none | minimal | compact | full`
 - `color.prompt.text`
 - `color.prompt.command`
 

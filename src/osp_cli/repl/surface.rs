@@ -28,6 +28,7 @@ pub(crate) struct ReplAliasEntry {
 #[derive(Debug, Clone)]
 pub(crate) struct ReplSurface {
     pub(crate) root_words: Vec<String>,
+    pub(crate) intro_commands: Vec<String>,
     pub(crate) specs: Vec<CommandSpec>,
     pub(crate) aliases: Vec<ReplAliasEntry>,
     pub(crate) overview_entries: Vec<ReplOverviewEntry>,
@@ -143,9 +144,16 @@ pub(crate) fn build_repl_surface(
     root_words.extend(aliases.iter().map(|entry| entry.name.clone()));
     normalize_root_words(&mut root_words);
     order_root_words(&mut root_words, presentation);
+    let intro_commands = root_words
+        .iter()
+        .filter(|word| root_word_can_appear_in_intro(word))
+        .take(4)
+        .cloned()
+        .collect();
 
     ReplSurface {
         root_words,
+        intro_commands,
         specs,
         aliases,
         overview_entries,
@@ -192,6 +200,12 @@ fn root_word_priority(word: &str) -> (u8, u8) {
             }
         }
     }
+}
+
+fn root_word_can_appear_in_intro(word: &str) -> bool {
+    !matches!(word, "exit" | "quit")
+        && !word.starts_with('-')
+        && !matches!(word, "|" | "F" | "P" | "V")
 }
 
 fn command_sort_key(name: &str, presentation: UiPresentation) -> String {

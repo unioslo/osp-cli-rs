@@ -1,6 +1,10 @@
 use super::*;
 use insta::assert_snapshot;
 
+fn intro_commands(commands: &[&str]) -> Vec<String> {
+    commands.iter().map(|value| (*value).to_string()).collect()
+}
+
 #[test]
 fn theme_slug_is_rendered_as_title_case_display_name_unit() {
     assert_eq!(repl::theme_display_name("rose-pine-moon"), "Rose Pine Moon");
@@ -101,10 +105,10 @@ fn repl_help_chrome_passthrough_without_known_sections_unit() {
 #[test]
 fn austere_repl_intro_is_minimal_single_line_unit() {
     let state = make_completion_state_with_entries(None, &[("ui.presentation", "austere")]);
-    let rendered = crate::osp_cli::repl::presentation::render_repl_intro(repl_view(
-        &state.runtime,
-        &state.session,
-    ));
+    let rendered = crate::osp_cli::repl::presentation::render_repl_intro(
+        repl_view(&state.runtime, &state.session),
+        &intro_commands(&["help", "config", "theme", "plugins"]),
+    );
 
     assert_eq!(
         rendered,
@@ -118,10 +122,10 @@ fn austere_repl_intro_is_minimal_single_line_unit() {
 #[test]
 fn repl_intro_respects_builtin_visibility_unit() {
     let state = make_completion_state_with_entries(Some("help"), &[("ui.presentation", "compact")]);
-    let rendered = crate::osp_cli::repl::presentation::render_repl_intro(repl_view(
-        &state.runtime,
-        &state.session,
-    ));
+    let rendered = crate::osp_cli::repl::presentation::render_repl_intro(
+        repl_view(&state.runtime, &state.session),
+        &intro_commands(&["help"]),
+    );
 
     assert!(rendered.contains("Commands: help."), "{rendered:?}");
     assert!(!rendered.contains("config"));
@@ -132,10 +136,10 @@ fn repl_intro_respects_builtin_visibility_unit() {
 #[test]
 fn compact_repl_intro_is_minimal_single_line_unit() {
     let state = make_completion_state_with_entries(None, &[("ui.presentation", "compact")]);
-    let rendered = crate::osp_cli::repl::presentation::render_repl_intro(repl_view(
-        &state.runtime,
-        &state.session,
-    ));
+    let rendered = crate::osp_cli::repl::presentation::render_repl_intro(
+        repl_view(&state.runtime, &state.session),
+        &intro_commands(&["help", "config", "theme", "plugins"]),
+    );
 
     assert_eq!(
         rendered,

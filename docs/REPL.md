@@ -86,7 +86,7 @@ Useful REPL config keys:
 - `repl.simple_prompt`
 - `repl.shell_indicator`
 - `repl.intro`
-- `repl.intro.style`
+  - `none | minimal | compact | full`
 - `repl.input_mode`
 
 Presentation presets also affect the REPL:

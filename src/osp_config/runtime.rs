@@ -22,7 +22,7 @@ pub const DEFAULT_UI_HELP_LAYOUT: &str = "full";
 pub const DEFAULT_UI_MESSAGES_LAYOUT: &str = "grouped";
 pub const DEFAULT_UI_CHROME_FRAME: &str = "top";
 pub const DEFAULT_UI_TABLE_BORDER: &str = "square";
-pub const DEFAULT_REPL_INTRO_STYLE: &str = "full";
+pub const DEFAULT_REPL_INTRO: &str = "full";
 pub const DEFAULT_UI_SHORT_LIST_MAX: i64 = 1;
 pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
 pub const DEFAULT_UI_GRID_PADDING: i64 = 4;
@@ -132,8 +132,7 @@ impl RuntimeDefaults {
             "repl.input_mode" => "auto".to_string(),
             "repl.simple_prompt" => false,
             "repl.shell_indicator" => "[{shell}]".to_string(),
-            "repl.intro" => true,
-            "repl.intro.style" => DEFAULT_REPL_INTRO_STYLE.to_string(),
+            "repl.intro" => DEFAULT_REPL_INTRO.to_string(),
             "repl.history.path" => env.repl_history_path(),
             "repl.history.max_entries" => DEFAULT_REPL_HISTORY_MAX_ENTRIES,
             "repl.history.enabled" => DEFAULT_REPL_HISTORY_ENABLED,
@@ -421,10 +420,8 @@ mod tests {
             Some(&ConfigValue::String("osp> ".to_string()))
         );
         assert_eq!(
-            find_value(&defaults, "repl.intro.style"),
-            Some(&ConfigValue::String(
-                super::DEFAULT_REPL_INTRO_STYLE.to_string()
-            ))
+            find_value(&defaults, "repl.intro"),
+            Some(&ConfigValue::String(super::DEFAULT_REPL_INTRO.to_string()))
         );
         assert_eq!(
             find_value(&defaults, "repl.history.max_entries"),

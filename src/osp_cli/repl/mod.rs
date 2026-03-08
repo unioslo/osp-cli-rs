@@ -25,6 +25,7 @@ use crate::osp_cli::ui_presentation::{
     ReplInputMode, effective_repl_input_mode, effective_repl_intro,
 };
 use crate::osp_completion::CompletionTree;
+use crate::osp_ui::messages::MessageLevel;
 #[cfg(test)]
 pub(crate) use dispatch::apply_repl_shell_prefix;
 pub(crate) use dispatch::repl_command_spec;
@@ -65,8 +66,10 @@ impl<'a> ReplViewContext<'a> {
 // The REPL loop is intentionally boring at this level:
 // prepare one cycle, render the shell chrome, run the line editor, apply the result.
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
-    let mut loop_state =
-        lifecycle::ReplLoopState::new(effective_repl_intro(state.runtime.config.resolved()));
+    let mut loop_state = lifecycle::ReplLoopState::new(should_show_repl_intro(
+        state.runtime.config.resolved(),
+        state.runtime.ui.message_verbosity,
+    ));
     let mut sink = StdIoUiSink;
 
     loop {
@@ -120,6 +123,10 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             return Ok(code);
         }
     }
+}
+
+fn should_show_repl_intro(config: &ResolvedConfig, verbosity: MessageLevel) -> bool {
+    effective_repl_intro(config) && verbosity >= MessageLevel::Success
 }
 
 fn map_repl_input_mode(mode: ReplInputMode) -> crate::osp_repl::ReplInputMode {
@@ -246,7 +253,10 @@ fn build_repl_ui_line_projector(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_cycle_chrome_output, build_repl_ui_line_projector, map_repl_input_mode};
+    use super::{
+        build_cycle_chrome_output, build_repl_ui_line_projector, map_repl_input_mode,
+        should_show_repl_intro,
+    };
     use crate::osp_cli::state::{
         AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
     };
@@ -285,7 +295,7 @@ mod tests {
         let (runtime, session) = make_state();
         let output = build_cycle_chrome_output(
             super::ReplViewContext::from_parts(&runtime, &session),
-            "HELP\n",
+            "Welcome anonymous.\nHELP\n",
             true,
             "PENDING\n",
         );
@@ -328,6 +338,20 @@ mod tests {
             map_repl_input_mode(ReplInputMode::Basic),
             crate::osp_repl::ReplInputMode::Basic
         );
+    }
+
+    #[test]
+    fn quiet_verbosity_suppresses_repl_intro_unit() {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let config = resolver
+            .resolve(ResolveOptions::default().with_terminal("repl"))
+            .expect("config should resolve");
+
+        assert!(should_show_repl_intro(&config, MessageLevel::Success));
+        assert!(!should_show_repl_intro(&config, MessageLevel::Warning));
     }
 
     #[test]

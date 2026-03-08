@@ -13,6 +13,7 @@ use super::presentation::{
     build_repl_appearance, build_repl_prompt, render_repl_command_overview, render_repl_intro,
 };
 use super::surface;
+use crate::osp_cli::ui_presentation::repl_intro_includes_overview;
 
 pub(super) struct ReplLoopState {
     show_intro: bool,
@@ -100,8 +101,14 @@ impl ReplCycle {
         let view = ReplViewContext::from_parts(runtime, session);
         let surface = surface::build_repl_surface(view, &catalog);
         let completion_tree = completion::build_repl_completion_tree(view, &surface);
-        let help_text = if include_help_text {
-            render_repl_command_overview(view, &surface)
+        let help_text =
+            if include_help_text && repl_intro_includes_overview(runtime.config.resolved()) {
+                render_repl_command_overview(view, &surface)
+            } else {
+                String::new()
+            };
+        let intro_text = if include_help_text {
+            render_repl_intro(view, &surface.intro_commands)
         } else {
             String::new()
         };
@@ -112,13 +119,13 @@ impl ReplCycle {
             completion_tree,
             appearance: build_repl_appearance(view),
             history_config: history::build_history_config(runtime, session),
-            help_text,
+            help_text: format!("{intro_text}{help_text}"),
         })
     }
 }
 
 pub(crate) fn build_cycle_chrome_output(
-    view: ReplViewContext<'_>,
+    _view: ReplViewContext<'_>,
     help_text: &str,
     show_intro: bool,
     pending_output: &str,
@@ -126,7 +133,6 @@ pub(crate) fn build_cycle_chrome_output(
     let mut out = String::new();
     if show_intro {
         out.push_str("\x1b[2J\x1b[H");
-        out.push_str(&render_repl_intro(view));
         out.push_str(help_text);
     }
     out.push_str(pending_output);
