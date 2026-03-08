@@ -32,7 +32,7 @@ use crate::osp_cli::ui_sink::{StdIoUiSink, UiSink};
 
 use crate::osp_cli::repl;
 
-mod bootstrap;
+pub(crate) mod bootstrap;
 mod command_output;
 mod config_explain;
 mod dispatch;

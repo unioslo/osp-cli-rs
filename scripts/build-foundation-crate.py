@@ -307,11 +307,16 @@ def copy_crate_sources(out_src: Path, crates: list[CrateInfo], foundation_crate_
             dest = dest_root / relative
             rewritten = rewrite_source(source.read_text(), crate, crates)
             if crate.package_name == "osp-cli" and relative == Path("mod.rs"):
+                rewritten = rewritten.replace("mod app;", "pub(crate) mod app;", 1)
+                rewritten = rewritten.replace("mod cli;", "pub(crate) mod cli;", 1)
+                rewritten = rewritten.replace("mod invocation;", "pub(crate) mod invocation;", 1)
                 shim = "\npub use crate::row;\n"
                 if "\n#[cfg(test)]\nmod tests {" in rewritten:
                     rewritten = rewritten.replace("\n#[cfg(test)]\nmod tests {", f"{shim}\n#[cfg(test)]\nmod tests {{", 1)
                 else:
                     rewritten += shim
+            if crate.package_name == "osp-cli" and relative == Path("app.rs"):
+                rewritten = rewritten.replace("mod bootstrap;", "pub(crate) mod bootstrap;", 1)
             write_text(dest, rewritten)
 
 
@@ -367,14 +372,33 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
 
 def render_foundation_module(name: str) -> str:
     modules = {
-        "app.rs": textwrap.dedent(
+        "app/mod.rs": textwrap.dedent(
             """\
             //! Main host-facing entrypoints and stateful runtime surfaces.
+
+            pub(crate) mod bootstrap;
+            pub mod runtime;
 
             pub use crate::osp_cli::{
                 App, AppBuilder, AppRunner, BufferedUiSink, StdIoUiSink, UiSink, run_from,
                 run_process, run_process_with_sink,
             };
+            """
+        ),
+        "app/bootstrap.rs": textwrap.dedent(
+            """\
+            //! Bootstrap and startup helpers that still live in the host layer.
+
+            #![allow(unused_imports)]
+
+            pub(crate) use crate::osp_cli::app::bootstrap::*;
+            """
+        ),
+        "app/runtime.rs": textwrap.dedent(
+            """\
+            //! Runtime and session state kept under the staged app layer.
+
+            pub use crate::runtime::*;
             """
         ),
         "runtime.rs": textwrap.dedent(
@@ -607,11 +631,40 @@ def render_foundation_module(name: str) -> str:
             };
             """
         ),
-        "cli.rs": textwrap.dedent(
+        "cli/mod.rs": textwrap.dedent(
             """\
-            //! CLI-specific helpers still owned by the host layer.
+            //! CLI grammar and command-facing helpers still owned by the host layer.
 
-            pub use crate::osp_cli::{Cli, pipeline};
+            pub(crate) mod commands;
+            pub(crate) mod invocation;
+            pub mod pipeline;
+
+            pub use crate::osp_cli::Cli;
+            """
+        ),
+        "cli/commands.rs": textwrap.dedent(
+            """\
+            //! Builtin command adapters grouped under the staged CLI layer.
+
+            #![allow(unused_imports)]
+
+            pub(crate) use crate::osp_cli::cli::commands::*;
+            """
+        ),
+        "cli/invocation.rs": textwrap.dedent(
+            """\
+            //! One-shot invocation flag parsing for the staged CLI layer.
+
+            #![allow(unused_imports)]
+
+            pub(crate) use crate::osp_cli::invocation::*;
+            """
+        ),
+        "cli/pipeline.rs": textwrap.dedent(
+            """\
+            //! CLI-side command line and DSL pipeline parsing helpers.
+
+            pub use crate::osp_cli::pipeline::*;
             """
         ),
         "prelude.rs": textwrap.dedent(
@@ -788,7 +841,9 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
     copy_crate_sources(out_src, crates, package_name)
     write_text(out_src / "lib.rs", render_foundation_lib(crates))
     for module_name in (
-        "app.rs",
+        "app/mod.rs",
+        "app/bootstrap.rs",
+        "app/runtime.rs",
         "runtime.rs",
         "config.rs",
         "core.rs",
@@ -799,7 +854,10 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
         "ui.rs",
         "completion.rs",
         "repl.rs",
-        "cli.rs",
+        "cli/mod.rs",
+        "cli/commands.rs",
+        "cli/invocation.rs",
+        "cli/pipeline.rs",
         "prelude.rs",
         "tests.rs",
     ):

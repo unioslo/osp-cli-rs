@@ -1,6 +1,6 @@
-mod app;
-mod cli;
-mod invocation;
+pub(crate) mod app;
+pub(crate) mod cli;
+pub(crate) mod invocation;
 mod logging;
 pub mod pipeline;
 mod plugin_config;
