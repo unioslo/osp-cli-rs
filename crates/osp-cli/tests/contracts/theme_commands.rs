@@ -106,7 +106,7 @@ theme.name = "nord"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "--theme", "dracula", "theme", "show"]);
     cmd.assert()
@@ -130,7 +130,7 @@ theme.name = "nord"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "theme", "show"]);
     cmd.assert()
@@ -177,7 +177,7 @@ warning = "#abcdef"
     .expect("child theme should be written");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "theme", "show"]);
     cmd.assert()

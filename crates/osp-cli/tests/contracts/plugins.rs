@@ -38,7 +38,7 @@ fn plugins_enable_and_disable_contract() {
 
     let mut enable = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     enable
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .args(["plugins", "enable", "uio-ldap"]);
     enable
         .assert()
@@ -50,7 +50,7 @@ fn plugins_enable_and_disable_contract() {
 
     let mut disable = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     disable
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .args(["plugins", "disable", "uio-ldap"]);
     disable
         .assert()
@@ -70,7 +70,7 @@ fn quiet_hides_success_messages_contract() {
     home.push(format!("osp-cli-plugin-quiet-test-{nonce}"));
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .args(["-q", "plugins", "enable", "uio-ldap"]);
     cmd.assert().success().stderr(predicate::str::is_empty());
 
@@ -93,7 +93,7 @@ fn unknown_domain_command_shows_plugin_hint_contract() {
     let empty_plugins = make_temp_dir("osp-cli-empty-plugins");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .env("OSP_PLUGIN_PATH", &empty_plugins)
         .env("OSP_BUNDLED_PLUGIN_DIR", &empty_plugins)
@@ -116,7 +116,7 @@ fn errors_remain_visible_at_double_quiet_contract() {
     let empty_plugins = make_temp_dir("osp-cli-empty-plugins-quiet");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .env("OSP_PLUGIN_PATH", &empty_plugins)
         .env("OSP_BUNDLED_PLUGIN_DIR", &empty_plugins)
@@ -148,12 +148,9 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--profile",
-        "prod",
-        "plugins",
-        "list",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--profile", "prod", "plugins", "list"]);
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("unknown profile 'prod'"));
@@ -169,7 +166,7 @@ fn external_plugin_dispatch_contract() {
     let home = make_temp_dir("osp-cli-plugin-exec-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["hello"]);
     cmd.assert()
@@ -188,7 +185,7 @@ fn plugin_dispatch_propagates_runtime_hints_contract() {
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd.env("TERM", "xterm-256color")
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args([
             "--profile",
@@ -238,7 +235,7 @@ extensions.plugins.cfg.env.retries = 3
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["cfg"]);
     cmd.assert()
@@ -265,7 +262,7 @@ fn plugin_non_zero_exit_surfaces_stderr_contract() {
     let home = make_temp_dir("osp-cli-plugin-non-zero-exit-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["boom"]);
     let output = cmd.assert().failure().get_output().clone();
@@ -291,7 +288,7 @@ fn plugin_invalid_json_response_surfaces_contract() {
     let home = make_temp_dir("osp-cli-plugin-invalid-json-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["broken"]);
     cmd.assert()
@@ -313,7 +310,7 @@ fn plugin_messages_stay_on_stderr_when_data_is_json_contract() {
     let home = make_temp_dir("osp-cli-plugin-messages-json-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "messageful"]);
     let output = cmd.assert().success().get_output().clone();
@@ -345,7 +342,7 @@ extensions.plugins.cfg.env.retries = 3
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .args(["--json", "plugins", "config", "cfg"]);
     cmd.assert()
         .success()
@@ -377,7 +374,7 @@ fn multi_command_plugin_receives_selected_command_contract() {
     let home = make_temp_dir("osp-cli-plugin-multi-command-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["alpha", "run"]);
     cmd.assert()
@@ -398,7 +395,7 @@ fn external_plugin_help_is_passed_through_contract() {
     let home = make_temp_dir("osp-cli-plugin-help-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["hello", "--help"]);
     let help_flag = cmd.assert().success().get_output().clone();
@@ -408,7 +405,7 @@ fn external_plugin_help_is_passed_through_contract() {
 
     let mut cmd_help_subcommand = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd_help_subcommand
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["hello", "help"]);
     let help_subcommand = cmd_help_subcommand.assert().success().get_output().clone();
@@ -428,7 +425,7 @@ fn external_plugin_help_keeps_raw_stderr_contract() {
     let home = make_temp_dir("osp-cli-plugin-help-stderr-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["hello", "--help"]);
     let output = cmd.assert().success().get_output().clone();
@@ -475,7 +472,7 @@ fn bundled_plugin_requires_manifest_contract() {
     let home = make_temp_dir("osp-cli-plugin-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_BUNDLED_PLUGIN_DIR", &dir)
         .args(["plugins", "list"]);
     cmd.assert()
@@ -510,7 +507,7 @@ commands = ["hello"]
 
     let mut first = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     first
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_BUNDLED_PLUGIN_DIR", &dir)
         .args(["hello"]);
     first.assert().failure().stderr(predicate::str::contains(
@@ -519,7 +516,7 @@ commands = ["hello"]
 
     let mut enable = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     enable
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_BUNDLED_PLUGIN_DIR", &dir)
         .args(["plugins", "enable", "hello"]);
     enable
@@ -529,7 +526,7 @@ commands = ["hello"]
 
     let mut second = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     second
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_BUNDLED_PLUGIN_DIR", &dir)
         .args(["hello"]);
     second
@@ -551,7 +548,7 @@ fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins_contract()
 
     let mut enable = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     enable
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["plugins", "enable", "alpha"]);
     enable
@@ -560,7 +557,7 @@ fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins_contract()
         .stderr(predicate::str::contains("enabled plugin: alpha"));
 
     let mut beta = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    beta.env("HOME", &home)
+    beta.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["beta"]);
     beta.assert()
@@ -592,7 +589,7 @@ commands = ["ldap"]
     let home = make_temp_dir("osp-cli-plugin-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_BUNDLED_PLUGIN_DIR", &dir)
         .args(["plugins", "list"]);
     cmd.assert().success().stdout(predicate::str::contains(
@@ -624,7 +621,7 @@ commands = ["hello"]
     let home = make_temp_dir("osp-cli-plugin-bundled-id-mismatch-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_BUNDLED_PLUGIN_DIR", &dir)
         .args(["--json", "plugins", "list"]);
     cmd.assert()
@@ -646,7 +643,7 @@ fn plugin_min_osp_version_mismatch_marks_plugin_unhealthy_contract() {
     let home = make_temp_dir("osp-cli-plugin-min-osp-version-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "plugins", "list"]);
     cmd.assert()
@@ -668,7 +665,7 @@ fn conflicting_providers_are_visible_in_plugin_commands_contract() {
     let home = make_temp_dir("osp-cli-plugin-conflicts-home");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "plugins", "commands"]);
     cmd.assert()
@@ -694,7 +691,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
 
     let mut before = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     before
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["shared"]);
     let before_output = before.assert().failure().get_output().clone();
@@ -710,7 +707,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
 
     let mut oneshot = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     oneshot
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--plugin-provider", "beta-provider", "shared"]);
     oneshot
@@ -720,7 +717,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
 
     let mut select = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     select
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["plugins", "select-provider", "shared", "beta-provider"]);
     select.assert().success().stderr(predicate::str::contains(
@@ -729,7 +726,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
 
     let mut commands = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     commands
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "plugins", "commands"]);
     let commands_output = commands.assert().success().get_output().clone();
@@ -739,7 +736,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
 
     let mut after_select = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     after_select
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["shared"]);
     after_select
@@ -750,18 +747,17 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         .stderr(predicate::str::contains("--plugin-provider").not());
 
     let mut clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    clear.env("HOME", &home).env("OSP_PLUGIN_PATH", &dir).args([
-        "plugins",
-        "clear-provider",
-        "shared",
-    ]);
+    clear
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["plugins", "clear-provider", "shared"]);
     clear.assert().success().stderr(predicate::str::contains(
         "cleared provider selection for command shared",
     ));
 
     let mut after_clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     after_clear
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["shared"]);
     let after_clear_output = after_clear.assert().failure().get_output().clone();
@@ -819,7 +815,7 @@ commands = ["ranked"]
 
     let mut commands = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     commands
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &env_dir)
         .env("OSP_BUNDLED_PLUGIN_DIR", &bundled_dir)
         .env("PATH", &path_env)
@@ -842,7 +838,7 @@ commands = ["ranked"]
 
     let mut explicit = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     explicit
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &env_dir)
         .env("OSP_BUNDLED_PLUGIN_DIR", &bundled_dir)
         .env("PATH", &path_env)
@@ -861,7 +857,7 @@ commands = ["ranked"]
         .stdout(predicate::str::contains("explicit-from-plugin"));
 
     let mut env = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    env.env("HOME", &home)
+    env.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &env_dir)
         .env("OSP_BUNDLED_PLUGIN_DIR", &bundled_dir)
         .env("PATH", &path_env)
@@ -872,7 +868,7 @@ commands = ["ranked"]
 
     let mut bundled = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     bundled
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env_remove("OSP_PLUGIN_PATH")
         .env("OSP_BUNDLED_PLUGIN_DIR", &bundled_dir)
         .env("PATH", &path_env)
@@ -883,7 +879,7 @@ commands = ["ranked"]
         .stdout(predicate::str::contains("bundled-from-plugin"));
 
     let mut user = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    user.env("HOME", &home)
+    user.envs(crate::test_env::isolated_env(&home))
         .env_remove("OSP_PLUGIN_PATH")
         .env_remove("OSP_BUNDLED_PLUGIN_DIR")
         .env("PATH", &path_env)
@@ -896,7 +892,7 @@ commands = ["ranked"]
         .expect("user plugin should be removable");
 
     let mut path = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    path.env("HOME", &home)
+    path.envs(crate::test_env::isolated_env(&home))
         .env_remove("OSP_PLUGIN_PATH")
         .env_remove("OSP_BUNDLED_PLUGIN_DIR")
         .env("PATH", &path_env)
@@ -921,7 +917,7 @@ fn oneshot_dispatch_does_not_use_repl_session_cache_contract() {
 
     let mut first = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     first
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--unicode", "never", "counter"]);
     first
@@ -931,7 +927,7 @@ fn oneshot_dispatch_does_not_use_repl_session_cache_contract() {
 
     let mut second = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     second
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--unicode", "never", "counter"]);
     second
@@ -953,7 +949,7 @@ fn describe_cache_is_reused_and_invalidated_contract() {
 
     let mut first = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     first
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "plugins", "list"]);
     first
@@ -969,7 +965,7 @@ fn describe_cache_is_reused_and_invalidated_contract() {
 
     let mut second = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     second
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "plugins", "list"]);
     second
@@ -990,7 +986,7 @@ fn describe_cache_is_reused_and_invalidated_contract() {
 
     let mut third = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     third
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "plugins", "list"]);
     third

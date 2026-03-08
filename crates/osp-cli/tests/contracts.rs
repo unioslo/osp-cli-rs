@@ -30,3 +30,6 @@ mod version_commands;
 
 #[path = "contracts/snapshot_support.rs"]
 mod snapshot_support;
+
+#[path = "contracts/test_env.rs"]
+mod test_env;

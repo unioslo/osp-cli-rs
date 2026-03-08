@@ -23,7 +23,7 @@ ui.format = "json"
     write_hello_plugin(&plugin_dir);
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .env("OSP_PLUGIN_PATH", &plugin_dir)
         .args(["tsd", "hello"]);
@@ -54,7 +54,7 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["tsd", "plugins", "list"]);
     cmd.assert()
@@ -83,7 +83,7 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["prod", "plugins", "list"]);
     cmd.assert()
@@ -112,13 +112,9 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--profile",
-        "uio",
-        "tsd",
-        "plugins",
-        "list",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--profile", "uio", "tsd", "plugins", "list"]);
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("no plugin provides command: tsd"));

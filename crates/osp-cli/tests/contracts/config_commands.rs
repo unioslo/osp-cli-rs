@@ -26,7 +26,7 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "config", "show"]);
     cmd.assert()
@@ -53,13 +53,9 @@ ui.mode = "plain"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "get",
-        "ui.mode",
-        "--sources",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "get", "ui.mode", "--sources"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"source\": \"file\""))
@@ -84,13 +80,9 @@ profile.default = "tsd"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "get",
-        "profile.default",
-        "--sources",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "get", "profile.default", "--sources"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"key\": \"profile.default\""))
@@ -115,13 +107,9 @@ user.name = "tester"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "get",
-        "alias.me",
-        "--sources",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "get", "alias.me", "--sources"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"key\": \"alias.me\""))
@@ -150,7 +138,7 @@ ui.mode = "plain"
 
     let mut unset = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     unset
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "config", "unset", "ui.mode"]);
     unset
@@ -160,7 +148,7 @@ ui.mode = "plain"
         .stdout(predicate::str::contains("\"previous\": \"plain\""));
 
     let mut get = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    get.env("HOME", &home)
+    get.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "config", "get", "ui.mode"]);
     get.assert().failure();
@@ -191,7 +179,7 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "config", "doctor"]);
     cmd.assert()
@@ -221,13 +209,9 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "tsd",
-        "config",
-        "get",
-        "ui.format",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "tsd", "config", "get", "ui.format"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"value\": \"json\""));
@@ -254,13 +238,9 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "tsd",
-        "config",
-        "explain",
-        "ui.format",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "tsd", "config", "explain", "ui.format"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"active_profile\": \"tsd\""))
@@ -286,7 +266,7 @@ ui.mode = "plain"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .env("OSP__UI__MODE", "auto")
         .args(["--json", "config", "explain", "ui.mode"]);
@@ -314,7 +294,7 @@ ui.mode = "plain"
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     let output = cmd
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "config", "explain", "ui.mode"])
         .assert()
@@ -347,14 +327,16 @@ profile.default = "uio"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "--presentation",
-        "austere",
-        "config",
-        "explain",
-        "ui.help.layout",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--json",
+            "--presentation",
+            "austere",
+            "config",
+            "explain",
+            "ui.help.layout",
+        ]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"value\": \"full\""))
@@ -380,7 +362,7 @@ profile.default = "uio"
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     let output = cmd
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
             "--json",
@@ -424,12 +406,9 @@ profile.default = "tsd"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "explain",
-        "profile.default",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "explain", "profile.default"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"key\": \"profile.default\""))
@@ -464,13 +443,9 @@ ui.mode = "rich"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "tsd",
-        "config",
-        "explain",
-        "profile.default",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "tsd", "config", "explain", "profile.default"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"phase\": \"bootstrap\""))
@@ -499,12 +474,9 @@ ui.mode = "plain"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "explain",
-        "profile.active",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "explain", "profile.active"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"key\": \"profile.active\""))
@@ -531,7 +503,7 @@ ui.mode = "plain"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home)
+    cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .env("OSP__UI__MODE", "auto")
         .args(["--json", "--no-env", "config", "explain", "ui.mode"]);
@@ -560,13 +532,9 @@ ui.mode = "plain"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "--no-config-file",
-        "config",
-        "get",
-        "ui.mode",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "--no-config-file", "config", "get", "ui.mode"]);
     cmd.assert().failure();
 
     let _ = std::fs::remove_dir_all(&home);
@@ -590,12 +558,9 @@ extensions.uio.ldap.url = "ldaps://ldap.uio.no"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "explain",
-        "ui.prompt",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "explain", "ui.prompt"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"interpolation\""))
@@ -624,7 +589,7 @@ extensions.uio.ldap.bind_password = "file-secret"
 
     let mut redacted = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     redacted
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
             "--json",
@@ -639,13 +604,16 @@ extensions.uio.ldap.bind_password = "file-secret"
         .stdout(predicate::str::contains("\"value_type\": \"string\""));
 
     let mut clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    clear.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "explain",
-        "extensions.uio.ldap.bind_password",
-        "--show-secrets",
-    ]);
+    clear
+        .envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--json",
+            "config",
+            "explain",
+            "extensions.uio.ldap.bind_password",
+            "--show-secrets",
+        ]);
     clear
         .assert()
         .success()
@@ -675,7 +643,7 @@ extensions.demo.potato = "sekrit"
 
     let mut redacted = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     redacted
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "config", "explain", "extensions.demo.potato"]);
     redacted
@@ -684,13 +652,16 @@ extensions.demo.potato = "sekrit"
         .stdout(predicate::str::contains("[REDACTED]"));
 
     let mut clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    clear.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "explain",
-        "extensions.demo.potato",
-        "--show-secrets",
-    ]);
+    clear
+        .envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--json",
+            "config",
+            "explain",
+            "extensions.demo.potato",
+            "--show-secrets",
+        ]);
     clear
         .assert()
         .success()
@@ -698,7 +669,7 @@ extensions.demo.potato = "sekrit"
 
     let mut get_redacted = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     get_redacted
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "config", "get", "extensions.demo.potato"]);
     get_redacted
@@ -732,7 +703,7 @@ ui.mode = "plain"
 
     let mut positional = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     let positional_out = positional
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "tsd", "config", "get", "ui.mode"])
         .assert()
@@ -743,7 +714,7 @@ ui.mode = "plain"
 
     let mut explicit = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     let explicit_out = explicit
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args(["--json", "--profile", "tsd", "config", "get", "ui.mode"])
         .assert()
@@ -771,13 +742,9 @@ ui.format = "table"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "get",
-        "ui.format",
-        "--sources",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "get", "ui.format", "--sources"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"source\": \"file\""))
@@ -799,17 +766,19 @@ profile.default = "uio"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--mode",
-        "rich",
-        "--color",
-        "never",
-        "--unicode",
-        "never",
-        "config",
-        "get",
-        "missing.key",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--mode",
+            "rich",
+            "--color",
+            "never",
+            "--unicode",
+            "never",
+            "config",
+            "get",
+            "missing.key",
+        ]);
     let output = cmd.assert().failure().get_output().clone();
     assert!(
         output.stdout.is_empty(),
@@ -838,17 +807,19 @@ ui.mode = "plain"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--mode",
-        "rich",
-        "--color",
-        "never",
-        "--unicode",
-        "never",
-        "config",
-        "explain",
-        "ui.m",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--mode",
+            "rich",
+            "--color",
+            "never",
+            "--unicode",
+            "never",
+            "config",
+            "explain",
+            "ui.m",
+        ]);
     let output = cmd.assert().failure().get_output().clone();
     assert!(
         output.stdout.is_empty(),
@@ -881,7 +852,7 @@ ui.mode = "plain"
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     let output = cmd
-        .env("HOME", &home)
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
             "--mode",
@@ -927,17 +898,19 @@ ui.format = "json"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--mode",
-        "rich",
-        "--color",
-        "never",
-        "--unicode",
-        "never",
-        "config",
-        "explain",
-        "ui.formt",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--mode",
+            "rich",
+            "--color",
+            "never",
+            "--unicode",
+            "never",
+            "config",
+            "explain",
+            "ui.formt",
+        ]);
     cmd.assert()
         .failure()
         .stdout(predicate::str::is_empty())
@@ -959,14 +932,16 @@ profile.default = "uio"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "config",
-        "set",
-        "--profile",
-        "work",
-        "profile.default",
-        "personal",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "config",
+            "set",
+            "--profile",
+            "work",
+            "profile.default",
+            "personal",
+        ]);
     cmd.assert().failure().stderr(predicate::str::contains(
         "bootstrap-only key profile.default is not allowed",
     ));
@@ -987,16 +962,18 @@ profile.default = "uio"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "config",
-        "set",
-        "--profile",
-        "work",
-        "--terminal",
-        "repl",
-        "profile.default",
-        "personal",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "config",
+            "set",
+            "--profile",
+            "work",
+            "--terminal",
+            "repl",
+            "profile.default",
+            "personal",
+        ]);
     cmd.assert().failure().stderr(predicate::str::contains(
         "bootstrap-only key profile.default is not allowed",
     ));
@@ -1017,16 +994,18 @@ profile.default = "uio"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "set",
-        "--global",
-        "--terminal",
-        "repl",
-        "profile.default",
-        "tsd",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--json",
+            "config",
+            "set",
+            "--global",
+            "--terminal",
+            "repl",
+            "profile.default",
+            "tsd",
+        ]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"changed\": true"))
@@ -1058,15 +1037,17 @@ profile.default = "tsd"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--json",
-        "config",
-        "unset",
-        "--global",
-        "--terminal",
-        "repl",
-        "profile.default",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--json",
+            "config",
+            "unset",
+            "--global",
+            "--terminal",
+            "repl",
+            "profile.default",
+        ]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"changed\": true"))
@@ -1092,17 +1073,19 @@ profile.default = "uio"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).env("PATH", "/usr/bin:/bin").args([
-        "--mode",
-        "rich",
-        "--color",
-        "always",
-        "--unicode",
-        "always",
-        "config",
-        "get",
-        "missing.key",
-    ]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--mode",
+            "rich",
+            "--color",
+            "always",
+            "--unicode",
+            "always",
+            "config",
+            "get",
+            "missing.key",
+        ]);
     cmd.assert()
         .failure()
         .stdout(predicate::str::is_empty())

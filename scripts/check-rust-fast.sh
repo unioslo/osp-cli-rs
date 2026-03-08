@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+./scripts/check-contract-env.sh
+
 cargo fmt --all --check
 
 cargo clippy \

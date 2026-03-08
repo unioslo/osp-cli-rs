@@ -7,7 +7,8 @@ fn history_command_is_rejected_outside_repl_contract() {
     let home = make_temp_dir("osp-cli-history-contract");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("HOME", &home).args(["history", "list"]);
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .args(["history", "list"]);
 
     cmd.assert()
         .failure()
