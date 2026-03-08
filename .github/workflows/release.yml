@@ -19,12 +19,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
-
       - name: Resolve release tag
         id: release_tag
         shell: bash
@@ -34,6 +28,21 @@ jobs:
           else
             echo "value=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
           fi
+
+      - name: Validate requested tag exists
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
+        shell: bash
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
       - name: Validate tag matches package version
         env:
@@ -79,6 +88,7 @@ jobs:
           cargo check --all-features --locked
           cargo clippy --all-features --all-targets -- -D warnings
           cargo test --all-features --locked
+          cargo publish --dry-run --locked
 
       - name: Run workspace compatibility tests
         run: cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
@@ -143,11 +153,14 @@ jobs:
           mkdir -p "${stage_dir}"
           cp "target/release/${BIN_NAME}" "${stage_dir}/"
           cp README.md LICENSE "${stage_dir}/"
-          tar -C dist -czf "dist/${artifact_base}.tar.gz" "${artifact_base}"
+          archive_path="dist/${artifact_base}.tar.gz"
+          tar -C dist -czf "${archive_path}" "${artifact_base}"
+          export ARCHIVE_PATH="${archive_path}"
           python3 - <<'PY'
+          import os
           import hashlib
           from pathlib import Path
-          archive = next(Path("dist").glob("*.tar.gz"))
+          archive = Path(os.environ["ARCHIVE_PATH"])
           digest = hashlib.sha256(archive.read_bytes()).hexdigest()
           Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n")
           PY
@@ -169,12 +182,14 @@ jobs:
           $archivePath = Join-Path "dist" "$artifactBase.zip"
           Compress-Archive -Path "$stageDir/*" -DestinationPath $archivePath -Force
           $pythonScript = @'
+          import os
           import hashlib
           from pathlib import Path
-          archive = next(Path("dist").glob("*.zip"))
+          archive = Path(os.environ["ARCHIVE_PATH"])
           digest = hashlib.sha256(archive.read_bytes()).hexdigest()
           Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n")
           '@
+          $env:ARCHIVE_PATH = $archivePath
           python -c $pythonScript
 
       - name: Upload packaged artifact
