@@ -12,9 +12,11 @@ use crate::rows::output::rows_to_output_result;
 use crate::state::{RuntimeContext, TerminalKind, UiState};
 use crate::theme_loader::ThemeCatalog;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
+#[cfg(unix)]
+use osp_config::secret_file_mode;
 use osp_config::{
     ConfigLayer, ConfigSchema, ResolvedConfig, ResolvedValue, RuntimeConfigPaths,
-    RuntimeLoadOptions, Scope, is_bootstrap_only_key, secret_file_mode, set_scoped_value_in_toml,
+    RuntimeLoadOptions, Scope, is_bootstrap_only_key, set_scoped_value_in_toml,
     unset_scoped_value_in_toml, validate_bootstrap_value, validate_key_scope,
 };
 use osp_core::output::OutputFormat;
