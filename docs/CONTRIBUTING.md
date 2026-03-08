@@ -166,6 +166,12 @@ Run it manually with:
 just cov-gate
 ```
 
+For the local pre-push approximation, run:
+
+```bash
+just cov-gate-fast
+```
+
 Or get the raw workspace summary with:
 
 ```bash
@@ -190,8 +196,14 @@ Why this runs on `pre-push` instead of `pre-commit`:
 So the pragmatic policy is:
 
 - keep `pre-commit` fast
-- enforce full coverage on `pre-push`
-- use CI for the authoritative shared check when we wire it in
+- enforce a changed-package coverage approximation on `pre-push`
+- enforce full coverage in CI and release checks
+
+The local `pre-push` path is intentionally approximate:
+
+- it only runs `cargo llvm-cov` for the changed package set when the diff is narrow
+- it falls back to full workspace coverage for broader changes
+- it enforces the changed-file floor, but leaves the full-workspace baseline check to CI
 
 ## Updating The Baseline
 

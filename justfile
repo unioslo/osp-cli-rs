@@ -21,6 +21,9 @@ cov:
 cov-gate:
     ./scripts/check-coverage-gate.py
 
+cov-gate-fast:
+    ./scripts/check-coverage-gate.py --fast
+
 cov-baseline:
     ./scripts/update-coverage-baseline.py
 

@@ -3,4 +3,4 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 
-"$repo_root/scripts/check-coverage-gate.py"
+"$repo_root/scripts/check-coverage-gate.py" --fast
