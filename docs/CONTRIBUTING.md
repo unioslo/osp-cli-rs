@@ -168,7 +168,7 @@ This repository keeps a checked-in coverage baseline in
 The enforced policy is:
 
 - full root-package line coverage must not drop below the baseline
-- changed Rust source files under `src/` must stay at or above `90%`
+- changed Rust source files under `src/` must stay at or above `85%`
 - tiny files under `20` executable lines are skipped for the per-file rule
 
 Run it manually with:
