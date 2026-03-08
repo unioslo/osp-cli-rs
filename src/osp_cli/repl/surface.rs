@@ -7,7 +7,7 @@ use crate::osp_cli::app::{
     CURRENT_TERMINAL_SENTINEL,
 };
 use crate::osp_cli::plugin_manager::CommandCatalogEntry;
-use crate::osp_cli::ui_presentation::{UiPresentation, resolve_ui_presentation};
+use crate::osp_cli::ui_presentation::{HelpLayout, effective_help_layout};
 
 use super::ReplViewContext;
 use super::history;
@@ -40,19 +40,19 @@ pub(crate) fn build_repl_surface(
 ) -> ReplSurface {
     let history_enabled = history::repl_history_enabled(view.config);
     let aliases = collect_alias_entries(view.config);
-    let presentation = resolve_ui_presentation(view.config);
+    let help_layout = effective_help_layout(view.config);
 
     let mut root_words = catalog_completion_words(catalog);
     let mut specs = vec![
         CommandSpec::new("help")
             .tooltip("Show REPL help")
-            .sort(command_sort_key("help", presentation)),
+            .sort(command_sort_key("help", help_layout)),
         CommandSpec::new("exit")
             .tooltip("Exit REPL")
-            .sort(command_sort_key("exit", presentation)),
+            .sort(command_sort_key("exit", help_layout)),
         CommandSpec::new("quit")
             .tooltip("Exit REPL")
-            .sort(command_sort_key("quit", presentation)),
+            .sort(command_sort_key("quit", help_layout)),
     ];
     let mut overview_entries = vec![
         ReplOverviewEntry {
@@ -64,7 +64,7 @@ pub(crate) fn build_repl_surface(
             summary: "Show this command overview.".to_string(),
         },
     ];
-    if shows_invocation_options_overview(presentation) {
+    if shows_invocation_options_overview(help_layout) {
         overview_entries.push(ReplOverviewEntry {
             name: "options".to_string(),
             summary: "per invocation: --format/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --cache, --plugin-provider".to_string(),
@@ -80,7 +80,7 @@ pub(crate) fn build_repl_surface(
 
     if view.auth.is_builtin_visible(CMD_PLUGINS) {
         root_words.extend([CMD_PLUGINS.to_string(), CMD_LIST.to_string()]);
-        specs.push(plugins_command_spec(catalog, presentation));
+        specs.push(plugins_command_spec(catalog, help_layout));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_PLUGINS.to_string(),
             summary: "subcommands: list, commands, enable, disable, doctor".to_string(),
@@ -88,7 +88,7 @@ pub(crate) fn build_repl_surface(
     }
     if view.auth.is_builtin_visible(CMD_DOCTOR) {
         root_words.push(CMD_DOCTOR.to_string());
-        specs.push(doctor_command_spec(presentation));
+        specs.push(doctor_command_spec(help_layout));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_DOCTOR.to_string(),
             summary: "subcommands: all, config, last, plugins, theme".to_string(),
@@ -129,9 +129,8 @@ pub(crate) fn build_repl_surface(
             "prune".to_string(),
             "clear".to_string(),
         ]);
-        specs.push(
-            history::history_command_spec().sort(command_sort_key(CMD_HISTORY, presentation)),
-        );
+        specs
+            .push(history::history_command_spec().sort(command_sort_key(CMD_HISTORY, help_layout)));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_HISTORY.to_string(),
             summary: "subcommands: list, prune, clear".to_string(),
@@ -143,7 +142,7 @@ pub(crate) fn build_repl_surface(
     root_words.extend(view.themes.ids());
     root_words.extend(aliases.iter().map(|entry| entry.name.clone()));
     normalize_root_words(&mut root_words);
-    order_root_words(&mut root_words, presentation);
+    order_root_words(&mut root_words, help_layout);
     let intro_commands = root_words
         .iter()
         .filter(|word| root_word_can_appear_in_intro(word))
@@ -160,8 +159,8 @@ pub(crate) fn build_repl_surface(
     }
 }
 
-fn shows_invocation_options_overview(presentation: UiPresentation) -> bool {
-    matches!(presentation, UiPresentation::Expressive)
+fn shows_invocation_options_overview(help_layout: HelpLayout) -> bool {
+    matches!(help_layout, HelpLayout::Full)
 }
 
 fn normalize_root_words(root_words: &mut Vec<String>) {
@@ -169,8 +168,8 @@ fn normalize_root_words(root_words: &mut Vec<String>) {
     root_words.dedup();
 }
 
-fn order_root_words(root_words: &mut [String], presentation: UiPresentation) {
-    if matches!(presentation, UiPresentation::Expressive) {
+fn order_root_words(root_words: &mut [String], help_layout: HelpLayout) {
+    if matches!(help_layout, HelpLayout::Full) {
         return;
     }
 
@@ -208,8 +207,8 @@ fn root_word_can_appear_in_intro(word: &str) -> bool {
         && !matches!(word, "|" | "F" | "P" | "V")
 }
 
-fn command_sort_key(name: &str, presentation: UiPresentation) -> String {
-    let (tier, order) = if matches!(presentation, UiPresentation::Expressive) {
+fn command_sort_key(name: &str, help_layout: HelpLayout) -> String {
+    let (tier, order) = if matches!(help_layout, HelpLayout::Full) {
         expressive_command_priority(name)
     } else {
         compact_command_priority(name)
@@ -374,10 +373,7 @@ fn spec_completion_words(spec: &CommandSpec) -> Vec<String> {
     words
 }
 
-fn plugins_command_spec(
-    catalog: &[CommandCatalogEntry],
-    presentation: UiPresentation,
-) -> CommandSpec {
+fn plugins_command_spec(catalog: &[CommandCatalogEntry], help_layout: HelpLayout) -> CommandSpec {
     let plugin_ids = catalog
         .iter()
         .flat_map(|entry| {
@@ -402,7 +398,7 @@ fn plugins_command_spec(
 
     CommandSpec::new(CMD_PLUGINS)
         .tooltip("Inspect and manage plugin providers")
-        .sort(command_sort_key(CMD_PLUGINS, presentation))
+        .sort(command_sort_key(CMD_PLUGINS, help_layout))
         .subcommands([
             CommandSpec::new(CMD_LIST)
                 .tooltip("List available plugins")
@@ -452,7 +448,7 @@ fn theme_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
         .tooltip("Inspect and apply themes")
         .sort(command_sort_key(
             CMD_THEME,
-            resolve_ui_presentation(view.config),
+            effective_help_layout(view.config),
         ))
         .subcommands([
             CommandSpec::new(CMD_LIST)
@@ -526,7 +522,7 @@ fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
         .tooltip("Inspect and edit runtime config")
         .sort(command_sort_key(
             CMD_CONFIG,
-            resolve_ui_presentation(view.config),
+            effective_help_layout(view.config),
         ))
         .subcommands([
             CommandSpec::new(CMD_SHOW)
@@ -553,10 +549,10 @@ fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
         ])
 }
 
-fn doctor_command_spec(presentation: UiPresentation) -> CommandSpec {
+fn doctor_command_spec(help_layout: HelpLayout) -> CommandSpec {
     CommandSpec::new(CMD_DOCTOR)
         .tooltip("Run diagnostics checks")
-        .sort(command_sort_key(CMD_DOCTOR, presentation))
+        .sort(command_sort_key(CMD_DOCTOR, help_layout))
         .subcommands([
             CommandSpec::new("all").sort("10"),
             CommandSpec::new(CMD_CONFIG).sort("11"),
