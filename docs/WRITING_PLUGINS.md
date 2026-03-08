@@ -8,11 +8,13 @@ and package it for distribution.
 A plugin is an executable that:
 
 1. Responds to `--describe` with a JSON capability declaration
-2. Receives commands as arguments and writes JSON responses to stdout
+2. Receives commands as arguments and writes protocol JSON to stdout
 3. Is discovered by osp via filesystem search or manifest
 
 The protocol is subprocess-based. Any language works as long as the
-binary handles stdin/stdout JSON correctly.
+binary handles stdin/stdout JSON correctly. For normal execution,
+stdout is reserved for protocol payloads. Human diagnostics belong on
+stderr.
 
 ## Minimal example
 
@@ -74,7 +76,8 @@ osp echo hello world
 ### Describe (capability declaration)
 
 When invoked with `--describe`, a plugin must print a `DescribeV1` JSON
-object to stdout and exit 0.
+object to stdout and exit 0. Stdout must contain only that JSON
+payload.
 
 ```json
 {
@@ -161,8 +164,20 @@ For normal command execution, the plugin receives:
   For example: `osp-my-plugin mycommand alice --verbose` arrives as
   `argv = ["osp-my-plugin", "mycommand", "alice", "--verbose"]`
 - **stdin**: not used (reserved for future protocol extensions)
-- **stdout**: must write a `ResponseV1` JSON object
-- **stderr**: free-form diagnostic output (shown to user on failure)
+- **stdout**: must write exactly one `ResponseV1` JSON object and nothing else
+- **stderr**: human diagnostics only
+
+Protocol rules:
+
+- Exit code `0` means `osp` should parse stdout as `ResponseV1`
+- Non-zero exit means process-level failure, even if stdout contains JSON
+- `ok=false` is still a valid protocol response and must use exit code `0`
+- Use the `error` object and optional `messages` for application-level failures
+- Reserve non-zero exits for crashes, missing prerequisites, or transport/setup failures
+
+For delegated help (`osp <plugin-command> --help` or `help`), `osp` passes
+the request through directly. In that mode, the plugin may print plain help
+text instead of `ResponseV1`.
 
 #### ResponseV1
 
@@ -231,6 +246,10 @@ Messages are shown to the user alongside the output:
 | `info` | Neutral information |
 | `trace` | Debug-level detail (shown with `-v`) |
 
+`osp` renders plugin `messages` on stderr using the same grouping and
+verbosity rules as built-in commands. Keep table/JSON/value data in
+`data`; keep human commentary in `messages`.
+
 #### Meta fields
 
 | Field | Type | Notes |
@@ -250,8 +269,9 @@ Messages are shown to the user alongside the output:
 | 30 | Upstream API failure |
 | 40 | Internal error |
 
-Non-zero exit with no valid JSON on stdout is treated as a plugin
-crash. The stderr output is shown to the user.
+Any non-zero exit is treated as a plugin failure. `osp` does not try to
+recover protocol JSON from stdout in that case. The stderr output is
+shown to the user.
 
 ## Environment variables
 

@@ -19,6 +19,8 @@ Plugins are separate binaries discovered at runtime (Option B).
 
 - `--describe`
   - Prints `DescribeV1` JSON to stdout.
+  - Stdout must contain only that JSON payload.
+  - Human diagnostics belong on stderr.
   - Exit code 0 on success.
 - Normal execution
   - Backbone resolves the plugin from the selected top-level command and then
@@ -28,14 +30,19 @@ Plugins are separate binaries discovered at runtime (Option B).
   - Backbone also sets `OSP_COMMAND=<selected-top-level-command>`.
   - `OSP_COMMAND` and `argv[1]` carry the same selected command on purpose.
     Plugins may use either, but they should agree.
-  - Prints `ResponseV1` JSON to stdout.
-  - Uses non-zero exit for process-level failure.
+  - Stdout must contain exactly one `ResponseV1` JSON payload and nothing else.
+  - Exit code 0 means backbone should parse stdout as protocol output.
+  - Non-zero exit always means process-level failure, even if stdout contains
+    JSON-like data.
 
 ## Help Delegation
 
 - `osp <plugin-command> --help` and `osp <plugin-command> help` are passed
   through directly to the plugin process.
 - For delegated help, backbone does not require `ResponseV1` JSON.
+- Plugins may print plain help text to stdout and stderr in this mode.
+- Exit code 0 is preferred for normal help output; exit code 2 is acceptable
+  for usage-style failures.
 
 ## Describe Caching (Backbone Behavior)
 
@@ -111,6 +118,11 @@ Backbone behavior:
 - plugin `messages` are rendered by `osp-ui` on stderr using the same
   grouping/theme/verbosity rules as built-in commands.
 - plugin data remains on stdout.
+- `ok=false` is still a protocol-level response and must use exit code 0.
+- Plugins should use `error` plus optional `messages` for application-level
+  failures they want backbone to render cleanly.
+- Plugins should reserve non-zero exits for process-level failures such as
+  crashes, missing prerequisites, or transport/setup errors.
 
 ## Error Shape
 
