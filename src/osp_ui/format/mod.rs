@@ -15,6 +15,7 @@ mod value;
 pub use help::build_help_document;
 pub use message::{MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules};
 
+#[cfg(test)]
 pub fn build_document(rows: &[Row], settings: &RenderSettings) -> Document {
     build_document_from_output(
         &OutputResult {
@@ -76,6 +77,7 @@ pub fn build_document_from_output_resolved(
     }
 }
 
+#[cfg(test)]
 pub fn resolve_format(rows: &[Row], format: OutputFormat) -> OutputFormat {
     resolve_output_format(
         &OutputResult {

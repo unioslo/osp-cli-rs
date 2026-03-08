@@ -61,7 +61,7 @@ pub struct Cli {
     #[arg(long = "theme", global = true)]
     pub theme: Option<String>,
 
-    #[arg(long = "presentation", global = true)]
+    #[arg(long = "presentation", alias = "app-style", global = true)]
     presentation: Option<PresentationArg>,
 
     #[arg(
@@ -668,7 +668,7 @@ mod tests {
         apply_render_settings_from_config, config_int, config_non_empty_string, parse_color_mode,
         parse_inline_command_tokens, parse_output_format, parse_render_mode, parse_unicode_mode,
     };
-    use crate::osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use crate::osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
     use crate::osp_ui::RenderSettings;
     use clap::Parser;
 
@@ -809,5 +809,20 @@ mod tests {
         let inline = InlineCommandCli::try_parse_from(["theme", "list"])
             .expect("inline command should parse");
         assert!(matches!(inline.command, Some(Commands::Theme(_))));
+    }
+
+    #[test]
+    fn app_style_alias_maps_to_presentation_unit() {
+        let cli = Cli::parse_from(["osp", "--app-style", "austere"]);
+        let mut layer = ConfigLayer::default();
+        cli.append_static_session_overrides(&mut layer);
+        assert_eq!(
+            layer
+                .entries()
+                .iter()
+                .find(|entry| entry.key == "ui.presentation")
+                .map(|entry| &entry.value),
+            Some(&ConfigValue::from("austere"))
+        );
     }
 }

@@ -1,8 +1,0 @@
----
-source: crates/osp-cli/src/app/tests/repl_runtime.rs
-expression: text
----
-unrecognized subcommand 'sho'
-
-- Usage ----
-  config <COMMAND>
