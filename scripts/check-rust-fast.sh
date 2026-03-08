@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 ./scripts/check-contract-env.sh
+python3 ./scripts/check-foundation-sync.py
 
 cargo fmt --all --check
 
@@ -29,3 +30,5 @@ cargo clippy \
   -D clippy::question_mark \
   -D clippy::redundant_closure \
   -D clippy::unnecessary_lazy_evaluations
+
+cargo test -p osp-cli --test architecture_import_limits --locked

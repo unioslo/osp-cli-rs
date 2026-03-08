@@ -200,6 +200,49 @@ fn non_test_source_imports_follow_logical_layer_matrix() {
     );
 }
 
+#[test]
+fn foundation_prototype_imports_follow_logical_layer_matrix() {
+    let root = workspace_root().join("foundation").join("src");
+    let mut failures = Vec::new();
+
+    for component in all_components() {
+        let src_root = root.join(component.rust_module_name());
+        let mut files = Vec::new();
+        collect_rust_files(&src_root, &mut files);
+
+        for file in files {
+            let source = fs::read_to_string(&file)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", file.display()));
+            let syntax = syn::parse_file(&source)
+                .unwrap_or_else(|err| panic!("failed to parse {}: {err}", file.display()));
+            let imports = non_test_workspace_imports(&syntax);
+            let allowed = component
+                .runtime_allowed()
+                .into_iter()
+                .map(Component::rust_module_name)
+                .collect::<BTreeSet<_>>();
+
+            let disallowed = imports
+                .difference(&allowed)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            if !disallowed.is_empty() {
+                failures.push(format!(
+                    "{} imports disallowed foundation modules: {}",
+                    relative_to_workspace(&file),
+                    disallowed.into_iter().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "foundation prototype imports drifted from the logical layer matrix:\n{}",
+        failures.join("\n")
+    );
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -270,13 +313,22 @@ struct WorkspaceImportVisitor {
 
 impl WorkspaceImportVisitor {
     fn record_path(&mut self, path: &syn::Path) {
-        let Some(first) = path.segments.first() else {
+        let mut segments = path.segments.iter();
+        let Some(first) = segments.next() else {
+            return;
+        };
+        let candidate = if first.ident == "crate" {
+            segments.next().map(|segment| &segment.ident)
+        } else {
+            Some(&first.ident)
+        };
+        let Some(candidate) = candidate else {
             return;
         };
         if let Some(hit) = WORKSPACE_CRATES
             .iter()
             .copied()
-            .find(|candidate| first.ident == *candidate)
+            .find(|hit| candidate == *hit)
         {
             self.hits.insert(hit);
         }
