@@ -25,7 +25,7 @@ pub struct NativeCommandContext<'a> {
 
 pub enum NativeCommandOutcome {
     Help(String),
-    Response(ResponseV1),
+    Response(Box<ResponseV1>),
     Exit(i32),
 }
 
@@ -162,14 +162,14 @@ mod tests {
             args: &[String],
             _context: &NativeCommandContext<'_>,
         ) -> anyhow::Result<NativeCommandOutcome> {
-            Ok(NativeCommandOutcome::Response(ResponseV1 {
+            Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
                 protocol_version: PLUGIN_PROTOCOL_V1,
                 ok: true,
                 data: json!([{ "args": args }]),
                 error: None,
                 messages: Vec::new(),
                 meta: ResponseMetaV1::default(),
-            }))
+            })))
         }
     }
 

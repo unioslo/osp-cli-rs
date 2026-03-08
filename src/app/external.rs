@@ -162,7 +162,7 @@ fn run_native_command(
     {
         NativeCommandOutcome::Help(text) => Ok(CliCommandResult::text(render_help(&text))),
         NativeCommandOutcome::Exit(code) => Ok(CliCommandResult::exit(code)),
-        NativeCommandOutcome::Response(response) => render_native_response(response, stages),
+        NativeCommandOutcome::Response(response) => render_native_response(*response, stages),
     }
 }
 
@@ -381,21 +381,23 @@ mod tests {
                     args.join(" ")
                 )),
                 NativeOutcomeKind::Exit => NativeCommandOutcome::Exit(7),
-                NativeOutcomeKind::Response => NativeCommandOutcome::Response(ResponseV1 {
-                    protocol_version: PLUGIN_PROTOCOL_V1,
-                    ok: true,
-                    data: serde_json::json!([{ "command": "ldap", "args": args }]),
-                    error: None,
-                    messages: vec![ResponseMessageV1 {
-                        level: ResponseMessageLevelV1::Info,
-                        text: "native ok".to_string(),
-                    }],
-                    meta: ResponseMetaV1 {
-                        format_hint: Some("json".to_string()),
-                        columns: None,
-                        column_align: Vec::new(),
-                    },
-                }),
+                NativeOutcomeKind::Response => {
+                    NativeCommandOutcome::Response(Box::new(ResponseV1 {
+                        protocol_version: PLUGIN_PROTOCOL_V1,
+                        ok: true,
+                        data: serde_json::json!([{ "command": "ldap", "args": args }]),
+                        error: None,
+                        messages: vec![ResponseMessageV1 {
+                            level: ResponseMessageLevelV1::Info,
+                            text: "native ok".to_string(),
+                        }],
+                        meta: ResponseMetaV1 {
+                            format_hint: Some("json".to_string()),
+                            columns: None,
+                            column_align: Vec::new(),
+                        },
+                    }))
+                }
             })
         }
     }

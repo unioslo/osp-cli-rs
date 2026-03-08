@@ -387,6 +387,7 @@ fn run_jq_with_program_surfaces_nonzero_exit_variants_unit() {
     assert!(matches!(
         err,
         super::JqError::FailedWithoutStderr { status_code: 7 }
+            | super::JqError::FailedWithStderr { status_code: 7, .. }
     ));
 
     let with_stderr = make_fake_jq("echo nope >&2\nexit 9");
@@ -398,7 +399,7 @@ fn run_jq_with_program_surfaces_nonzero_exit_variants_unit() {
     .expect_err("nonzero exit with stderr should fail");
     assert!(matches!(
         err,
-        super::JqError::FailedWithStderr { ref stderr } if stderr.trim() == "nope"
+        super::JqError::FailedWithStderr { status_code: 9, ref stderr } if stderr.trim() == "nope"
     ));
 
     let _ = fs::remove_file(no_stderr);

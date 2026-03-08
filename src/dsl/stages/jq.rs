@@ -27,8 +27,8 @@ pub enum JqError {
     StdinWriterPanicked,
     #[error("jq failed with status {status_code}")]
     FailedWithoutStderr { status_code: i32 },
-    #[error("jq failed: {stderr}")]
-    FailedWithStderr { stderr: String },
+    #[error("jq failed with status {status_code}: {stderr}")]
+    FailedWithStderr { status_code: i32, stderr: String },
     #[error("jq output is not valid JSON")]
     InvalidJsonOutput {
         #[source]
@@ -211,7 +211,10 @@ fn run_jq_with_program(
                 status_code: output.status.code().unwrap_or(-1),
             });
         }
-        return Err(JqError::FailedWithStderr { stderr });
+        return Err(JqError::FailedWithStderr {
+            status_code: output.status.code().unwrap_or(-1),
+            stderr,
+        });
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

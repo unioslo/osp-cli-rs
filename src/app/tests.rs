@@ -151,7 +151,7 @@ impl NativeCommand for TestNativeCommand {
             ));
         }
 
-        Ok(NativeCommandOutcome::Response(ResponseV1 {
+        Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
             protocol_version: PLUGIN_PROTOCOL_V1,
             ok: true,
             data: json!([{ "command": "ldap", "args": args }]),
@@ -162,7 +162,7 @@ impl NativeCommand for TestNativeCommand {
                 columns: Some(vec!["command".to_string(), "args".to_string()]),
                 column_align: Vec::new(),
             },
-        }))
+        })))
     }
 }
 
