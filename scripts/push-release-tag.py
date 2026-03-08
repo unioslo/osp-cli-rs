@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tomllib
@@ -32,9 +33,13 @@ def tag_exists(root: Path, tag: str) -> bool:
     if local.returncode == 0:
         return True
 
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
     remote = subprocess.run(
         ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"],
         cwd=root,
+        env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

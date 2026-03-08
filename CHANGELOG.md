@@ -11,7 +11,8 @@ matching `docs/releases/vX.Y.Z.md` file before a tag can be published.
 - Ships the rebuilt UI and REPL model with explicit `expressive`, `compact`, and `austere` presentation profiles.
 - Enforces release verification, coverage gating, versioned release notes, and changelog-backed tagging.
 
-## [1.4.6] - YYYY-MM-DD
+## [1.4.6] - 2026-03-08
 
-- TODO: summarize the release in 1-3 bullets.
-
+- Promoted the root package to the canonical single-crate implementation and removed the mirrored `osp_*` modules from the active build.
+- Compiled presentation presets into canonical config/UI keys so REPL and help behavior stop relying on ad hoc fallback logic.
+- Finished the crates.io release path with trusted publishing while keeping cross-platform GitHub release artifacts.
