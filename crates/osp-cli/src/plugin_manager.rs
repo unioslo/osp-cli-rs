@@ -13,7 +13,7 @@ use std::error::Error as StdError;
 use std::fmt::{Display, Formatter, Write as FmtWrite};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -325,6 +325,11 @@ enum ManifestState {
     Valid(ValidatedBundledManifest),
 }
 
+enum DescribeEligibility {
+    Allowed,
+    Skip,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct DescribeCacheFile {
     #[serde(default)]
@@ -346,6 +351,7 @@ pub struct PluginManager {
     config_root: Option<PathBuf>,
     cache_root: Option<PathBuf>,
     process_timeout: Duration,
+    allow_path_discovery: bool,
 }
 
 impl PluginManager {
@@ -356,6 +362,7 @@ impl PluginManager {
             config_root: None,
             cache_root: None,
             process_timeout: Duration::from_millis(DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as u64),
+            allow_path_discovery: false,
         }
     }
 
@@ -367,6 +374,11 @@ impl PluginManager {
 
     pub fn with_process_timeout(mut self, timeout: Duration) -> Self {
         self.process_timeout = timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    pub fn with_path_discovery(mut self, allow_path_discovery: bool) -> Self {
+        self.allow_path_discovery = allow_path_discovery;
         self
     }
 
@@ -891,7 +903,9 @@ impl PluginManager {
             });
         }
 
-        if let Ok(raw) = std::env::var("PATH") {
+        if self.allow_path_discovery
+            && let Ok(raw) = std::env::var("PATH")
+        {
             ordered.extend(
                 std::env::split_paths(&raw)
                     .map(|path| SearchRoot {
@@ -1197,16 +1211,20 @@ fn assemble_discovered_plugin(
 
     apply_manifest_discovery_issue(&mut plugin.issue, manifest_state, manifest_entry.as_ref());
 
-    match describe_with_cache(
-        &executable,
-        describe_cache,
-        seen_describe_paths,
-        cache_dirty,
-        process_timeout,
-    ) {
-        Ok(describe) => {
-            apply_describe_metadata(&mut plugin, &describe, manifest_entry.as_ref(), &executable)
-        }
+    match describe_eligibility(source, manifest_state, manifest_entry.as_ref(), &executable) {
+        Ok(DescribeEligibility::Allowed) => match describe_with_cache(
+            &executable,
+            describe_cache,
+            seen_describe_paths,
+            cache_dirty,
+            process_timeout,
+        ) {
+            Ok(describe) => {
+                apply_describe_metadata(&mut plugin, &describe, manifest_entry.as_ref())
+            }
+            Err(err) => merge_issue(&mut plugin.issue, err.to_string()),
+        },
+        Ok(DescribeEligibility::Skip) => {}
         Err(err) => merge_issue(&mut plugin.issue, err.to_string()),
     }
 
@@ -1279,6 +1297,31 @@ fn apply_manifest_discovery_issue(
     }
 }
 
+fn describe_eligibility(
+    source: PluginSource,
+    manifest_state: &ManifestState,
+    manifest_entry: Option<&ManifestPlugin>,
+    executable: &Path,
+) -> Result<DescribeEligibility> {
+    if source != PluginSource::Bundled {
+        return Ok(DescribeEligibility::Allowed);
+    }
+
+    match manifest_state {
+        ManifestState::Missing | ManifestState::Invalid(_) => return Ok(DescribeEligibility::Skip),
+        ManifestState::Valid(_) if manifest_entry.is_none() => {
+            return Ok(DescribeEligibility::Skip);
+        }
+        ManifestState::NotBundled | ManifestState::Valid(_) => {}
+    }
+
+    if let Some(entry) = manifest_entry {
+        validate_manifest_checksum(entry, executable)?;
+    }
+
+    Ok(DescribeEligibility::Allowed)
+}
+
 fn manifest_discovery_issue(
     manifest_state: &ManifestState,
     manifest_entry: Option<&ManifestPlugin>,
@@ -1297,11 +1340,10 @@ fn apply_describe_metadata(
     plugin: &mut DiscoveredPlugin,
     describe: &DescribeV1,
     manifest_entry: Option<&ManifestPlugin>,
-    executable: &Path,
 ) {
     if let Some(entry) = manifest_entry {
         plugin.default_enabled = entry.enabled_by_default;
-        if let Err(err) = validate_manifest_entry(entry, describe, executable) {
+        if let Err(err) = validate_manifest_describe(entry, describe) {
             merge_issue(&mut plugin.issue, err.to_string());
             return;
         }
@@ -1431,11 +1473,7 @@ fn insert_manifest_plugin(
     Ok(())
 }
 
-fn validate_manifest_entry(
-    entry: &ManifestPlugin,
-    describe: &DescribeV1,
-    path: &Path,
-) -> Result<()> {
+fn validate_manifest_describe(entry: &ManifestPlugin, describe: &DescribeV1) -> Result<()> {
     if entry.id != describe.plugin_id {
         return Err(anyhow!(
             "manifest id mismatch: expected {}, got {}",
@@ -1474,19 +1512,23 @@ fn validate_manifest_entry(
         ));
     }
 
-    if let Some(expected_checksum) = entry.checksum_sha256.as_deref() {
-        let expected_checksum = normalize_checksum(expected_checksum)?;
-        let actual_checksum = file_sha256_hex(path)?;
-        if expected_checksum != actual_checksum {
-            return Err(anyhow!(
-                "checksum mismatch for {}: expected {}, got {}",
-                entry.id,
-                expected_checksum,
-                actual_checksum
-            ));
-        }
-    }
+    Ok(())
+}
 
+fn validate_manifest_checksum(entry: &ManifestPlugin, path: &Path) -> Result<()> {
+    let Some(expected_checksum) = entry.checksum_sha256.as_deref() else {
+        return Ok(());
+    };
+    let expected_checksum = normalize_checksum(expected_checksum)?;
+    let actual_checksum = file_sha256_hex(path)?;
+    if expected_checksum != actual_checksum {
+        return Err(anyhow!(
+            "checksum mismatch for {}: expected {}, got {}",
+            entry.id,
+            expected_checksum,
+            actual_checksum
+        ));
+    }
     Ok(())
 }
 
@@ -1679,6 +1721,7 @@ fn run_command_with_timeout(
     mut command: Command,
     timeout: Duration,
 ) -> Result<Output, CommandRunError> {
+    configure_command_process_group(&mut command);
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -1693,7 +1736,7 @@ fn run_command_with_timeout(
                 thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
             }
             Ok(None) => {
-                let _ = child.kill();
+                terminate_timed_out_child(&mut child);
                 let output = child.wait_with_output().map_err(CommandRunError::Execute)?;
                 return Err(CommandRunError::TimedOut {
                     timeout,
@@ -1702,6 +1745,59 @@ fn run_command_with_timeout(
             }
             Err(source) => return Err(CommandRunError::Execute(source)),
         }
+    }
+}
+
+#[cfg(unix)]
+fn configure_command_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_command_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_timed_out_child(child: &mut Child) {
+    let process_group = child.id() as i32;
+    let _ = signal_process_group(process_group, SIGTERM);
+    let grace_deadline = Instant::now() + Duration::from_millis(50);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < grace_deadline => {
+                thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
+            }
+            Ok(None) | Err(_) => break,
+        }
+    }
+
+    let _ = signal_process_group(process_group, SIGKILL);
+}
+
+#[cfg(not(unix))]
+fn terminate_timed_out_child(child: &mut Child) {
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+const SIGTERM: i32 = 15;
+#[cfg(unix)]
+const SIGKILL: i32 = 9;
+
+#[cfg(unix)]
+fn signal_process_group(process_group: i32, signal: i32) -> std::io::Result<()> {
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+
+    let result = unsafe { kill(-process_group, signal) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
@@ -2060,634 +2156,4 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        DescribeV1, PluginDispatchContext, PluginDispatchError, PluginManager, PluginSource,
-        PluginState, collect_completion_words, is_enabled, min_osp_version_issue,
-    };
-    use std::collections::BTreeMap;
-    use std::error::Error as _;
-    use std::time::Duration;
-
-    #[test]
-    fn explicit_enable_overrides_default_disabled() {
-        let state = PluginState {
-            enabled: vec!["hello".to_string()],
-            disabled: Vec::new(),
-            preferred_providers: BTreeMap::new(),
-        };
-
-        assert!(is_enabled(&state, "hello", false));
-    }
-
-    #[test]
-    fn explicit_disable_overrides_default_enabled() {
-        let state = PluginState {
-            enabled: Vec::new(),
-            disabled: vec!["hello".to_string()],
-            preferred_providers: BTreeMap::new(),
-        };
-
-        assert!(!is_enabled(&state, "hello", true));
-    }
-
-    #[test]
-    fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins() {
-        let state = PluginState {
-            enabled: vec!["alpha".to_string()],
-            disabled: Vec::new(),
-            preferred_providers: BTreeMap::new(),
-        };
-
-        assert!(is_enabled(&state, "alpha", true));
-        assert!(is_enabled(&state, "beta", true));
-    }
-
-    #[test]
-    fn explicit_enable_wins_if_state_file_contains_conflicting_entries() {
-        let state = PluginState {
-            enabled: vec!["hello".to_string()],
-            disabled: vec!["hello".to_string()],
-            preferred_providers: BTreeMap::new(),
-        };
-
-        assert!(is_enabled(&state, "hello", false));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ambiguous_command_requires_explicit_selection() {
-        let root = make_temp_dir("osp-cli-plugin-manager-ambiguous-command");
-        let plugins_dir = root.join("plugins");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
-        write_provider_test_plugin(&plugins_dir, "beta", "shared");
-        let manager = PluginManager::new(vec![plugins_dir.clone()]);
-
-        let catalog = manager.command_catalog().expect("catalog should load");
-        let entry = catalog
-            .iter()
-            .find(|entry| entry.name == "shared")
-            .expect("shared command should exist");
-        assert_eq!(entry.provider, None);
-        assert!(entry.requires_selection);
-        assert!(!entry.selected_explicitly);
-        assert_eq!(manager.selected_provider_label("shared"), None);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn preferred_provider_updates_catalog_and_resolves_command() {
-        let root = make_temp_dir("osp-cli-plugin-manager-preferred-provider");
-        let plugins_dir = root.join("plugins");
-        let config_root = root.join("config");
-        let cache_root = root.join("cache");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
-        write_provider_test_plugin(&plugins_dir, "beta", "shared");
-        let manager = PluginManager::new(vec![plugins_dir.clone()])
-            .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
-
-        manager
-            .set_preferred_provider("shared", "beta")
-            .expect("preferred provider should be saved");
-
-        let catalog = manager.command_catalog().expect("catalog should load");
-        let entry = catalog
-            .iter()
-            .find(|entry| entry.name == "shared")
-            .expect("shared command should exist");
-        assert_eq!(entry.provider.as_deref(), Some("beta"));
-        assert!(!entry.requires_selection);
-        assert!(entry.selected_explicitly);
-        assert_eq!(
-            manager.selected_provider_label("shared").as_deref(),
-            Some("beta (explicit)")
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn clearing_preferred_provider_requires_selection_again() {
-        let root = make_temp_dir("osp-cli-plugin-manager-clear-preference");
-        let plugins_dir = root.join("plugins");
-        let config_root = root.join("config");
-        let cache_root = root.join("cache");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
-        write_provider_test_plugin(&plugins_dir, "beta", "shared");
-        let manager = PluginManager::new(vec![plugins_dir.clone()])
-            .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
-
-        manager
-            .set_preferred_provider("shared", "beta")
-            .expect("preferred provider should be saved");
-        assert!(
-            manager
-                .clear_preferred_provider("shared")
-                .expect("clearing preferred provider should succeed")
-        );
-
-        let catalog = manager.command_catalog().expect("catalog should load");
-        let entry = catalog
-            .iter()
-            .find(|entry| entry.name == "shared")
-            .expect("shared command should exist");
-        assert_eq!(entry.provider, None);
-        assert!(entry.requires_selection);
-        assert!(!entry.selected_explicitly);
-        assert_eq!(manager.selected_provider_label("shared"), None);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn compatible_min_osp_version_has_no_issue() {
-        let describe = DescribeV1 {
-            protocol_version: 1,
-            plugin_id: "hello".to_string(),
-            plugin_version: "0.1.0".to_string(),
-            min_osp_version: Some("0.1.0".to_string()),
-            commands: Vec::new(),
-        };
-
-        assert_eq!(min_osp_version_issue(&describe), None);
-    }
-
-    #[test]
-    fn invalid_min_osp_version_reports_issue() {
-        let describe = DescribeV1 {
-            protocol_version: 1,
-            plugin_id: "hello".to_string(),
-            plugin_version: "0.1.0".to_string(),
-            min_osp_version: Some("not-a-version".to_string()),
-            commands: Vec::new(),
-        };
-
-        let issue = min_osp_version_issue(&describe).expect("invalid version should report issue");
-        assert!(issue.contains("invalid min_osp_version"));
-        assert!(issue.contains("hello"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn refresh_picks_up_filesystem_changes_and_prunes_stale_cache() {
-        let root = make_temp_dir("osp-cli-plugin-manager-refresh");
-        let plugins_dir = root.join("plugins");
-        let config_root = root.join("config");
-        let cache_root = root.join("cache");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        let alpha_path = write_named_test_plugin(&plugins_dir, "alpha");
-        let manager = PluginManager::new(vec![plugins_dir.clone()])
-            .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
-
-        let first = manager.list_plugins().expect("plugins should list");
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].plugin_id, "alpha");
-
-        std::fs::remove_file(&alpha_path).expect("alpha plugin should be removable");
-        write_named_test_plugin(&plugins_dir, "beta");
-
-        let cached = manager.list_plugins().expect("cached plugins should list");
-        assert_eq!(cached.len(), 1);
-        assert_eq!(cached[0].plugin_id, "alpha");
-
-        manager.refresh();
-        let refreshed = manager
-            .list_plugins()
-            .expect("refreshed plugins should list");
-        assert_eq!(refreshed.len(), 1);
-        assert_eq!(refreshed[0].plugin_id, "beta");
-
-        let cache_path = cache_root.join("describe-v1.json");
-        let cache_raw =
-            std::fs::read_to_string(&cache_path).expect("describe cache should be written");
-        assert!(cache_raw.contains("osp-beta"));
-        assert!(!cache_raw.contains("osp-alpha"));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn incompatible_min_osp_version_marks_plugin_unhealthy() {
-        let root = make_temp_dir("osp-cli-plugin-manager-min-version");
-        let plugins_dir = root.join("plugins");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        write_named_test_plugin_with_min_version(&plugins_dir, "future", "9.9.9");
-        let manager = PluginManager::new(vec![plugins_dir.clone()]);
-
-        let plugins = manager.list_plugins().expect("plugins should list");
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].plugin_id, "future");
-        assert!(!plugins[0].healthy);
-        assert!(
-            plugins[0]
-                .issue
-                .as_deref()
-                .expect("issue should be present")
-                .contains("requires osp >=")
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn dispatch_times_out_hung_plugin() {
-        let root = make_temp_dir("osp-cli-plugin-manager-dispatch-timeout");
-        let plugins_dir = root.join("plugins");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        write_sleepy_test_plugin(&plugins_dir, "hang", false);
-        let manager = PluginManager::new(vec![plugins_dir.clone()])
-            .with_process_timeout(Duration::from_millis(50));
-
-        let err = manager
-            .dispatch("hang", &[], &PluginDispatchContext::default())
-            .expect_err("hung plugin should time out");
-
-        match err {
-            PluginDispatchError::TimedOut {
-                plugin_id, timeout, ..
-            } => {
-                assert_eq!(plugin_id, "hang");
-                assert_eq!(timeout, Duration::from_millis(50));
-            }
-            other => panic!("expected timeout error, got {other}"),
-        }
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn hung_describe_marks_plugin_unhealthy() {
-        let root = make_temp_dir("osp-cli-plugin-manager-describe-timeout");
-        let plugins_dir = root.join("plugins");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        write_sleepy_test_plugin(&plugins_dir, "hang-describe", true);
-        let manager = PluginManager::new(vec![plugins_dir.clone()])
-            .with_process_timeout(Duration::from_millis(50));
-
-        let plugins = manager.list_plugins().expect("plugins should list");
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].plugin_id, "hang-describe");
-        assert!(!plugins[0].healthy);
-        assert!(
-            plugins[0]
-                .issue
-                .as_deref()
-                .expect("issue should be present")
-                .contains("timed out after 50 ms")
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn preferred_provider_rejects_unknown_command_and_provider_unit() {
-        let root = make_temp_dir("osp-cli-plugin-manager-invalid-provider");
-        let plugins_dir = root.join("plugins");
-        let config_root = root.join("config");
-        let cache_root = root.join("cache");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
-        let manager = PluginManager::new(vec![plugins_dir.clone()])
-            .with_roots(Some(config_root), Some(cache_root));
-
-        let err = manager
-            .set_preferred_provider("missing", "alpha")
-            .expect_err("unknown command should fail");
-        assert!(
-            err.to_string()
-                .contains("no active plugin provides command")
-        );
-
-        let err = manager
-            .set_preferred_provider("shared", "beta")
-            .expect_err("unknown provider should fail");
-        assert!(err.to_string().contains("does not provide active command"));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn clear_preferred_provider_rejects_empty_command_unit() {
-        let manager = PluginManager::new(Vec::new());
-        let err = manager
-            .clear_preferred_provider("   ")
-            .expect_err("empty command should fail");
-        assert!(err.to_string().contains("command must not be empty"));
-    }
-
-    #[test]
-    fn plugin_dispatch_context_merges_shared_and_plugin_env_pairs_unit() {
-        let context = PluginDispatchContext {
-            shared_env: vec![("OSP_FORMAT".to_string(), "json".to_string())],
-            plugin_env: std::collections::HashMap::from([(
-                "alpha".to_string(),
-                vec![("OSP_PLUGIN_FLAG".to_string(), "1".to_string())],
-            )]),
-            ..PluginDispatchContext::default()
-        };
-
-        let pairs = context.env_pairs_for("alpha").collect::<Vec<_>>();
-        assert_eq!(
-            pairs,
-            vec![("OSP_FORMAT", "json"), ("OSP_PLUGIN_FLAG", "1")]
-        );
-        assert_eq!(
-            context.env_pairs_for("missing").collect::<Vec<_>>(),
-            vec![("OSP_FORMAT", "json")]
-        );
-    }
-
-    #[test]
-    fn plugin_dispatch_error_formats_cover_terminal_variants_unit() {
-        let timeout_plain = PluginDispatchError::TimedOut {
-            plugin_id: "alpha".to_string(),
-            timeout: Duration::from_millis(25),
-            stderr: String::new(),
-        };
-        assert!(
-            timeout_plain
-                .to_string()
-                .contains("plugin alpha timed out after 25 ms")
-        );
-
-        let timeout_stderr = PluginDispatchError::TimedOut {
-            plugin_id: "alpha".to_string(),
-            timeout: Duration::from_millis(25),
-            stderr: "stuck".to_string(),
-        };
-        assert!(timeout_stderr.to_string().contains("stuck"));
-
-        let nonzero_plain = PluginDispatchError::NonZeroExit {
-            plugin_id: "beta".to_string(),
-            status_code: 9,
-            stderr: String::new(),
-        };
-        assert_eq!(
-            nonzero_plain.to_string(),
-            "plugin beta exited with status 9"
-        );
-
-        let nonzero_stderr = PluginDispatchError::NonZeroExit {
-            plugin_id: "beta".to_string(),
-            status_code: 9,
-            stderr: "boom".to_string(),
-        };
-        assert!(nonzero_stderr.to_string().contains("boom"));
-
-        let ambiguous = PluginDispatchError::CommandAmbiguous {
-            command: "shared".to_string(),
-            providers: vec!["alpha".to_string(), "beta".to_string()],
-        };
-        assert!(ambiguous.to_string().contains("multiple plugins"));
-
-        let provider_missing = PluginDispatchError::ProviderNotFound {
-            command: "shared".to_string(),
-            requested_provider: "gamma".to_string(),
-            providers: vec!["alpha".to_string(), "beta".to_string()],
-        };
-        assert!(provider_missing.to_string().contains("available providers"));
-
-        let execute_failed = PluginDispatchError::ExecuteFailed {
-            plugin_id: "alpha".to_string(),
-            source: std::io::Error::other("spawn failed"),
-        };
-        assert_eq!(
-            execute_failed.source().map(|err| err.to_string()),
-            Some("spawn failed".to_string())
-        );
-
-        let invalid_json = PluginDispatchError::InvalidJsonResponse {
-            plugin_id: "alpha".to_string(),
-            source: serde_json::from_str::<serde_json::Value>("not-json").expect_err("invalid"),
-        };
-        assert!(invalid_json.to_string().contains("invalid JSON response"));
-        assert!(invalid_json.source().is_some());
-
-        let invalid_payload = PluginDispatchError::InvalidResponsePayload {
-            plugin_id: "alpha".to_string(),
-            reason: "missing data".to_string(),
-        };
-        assert!(invalid_payload.to_string().contains("missing data"));
-        assert!(invalid_payload.source().is_none());
-    }
-
-    #[test]
-    fn completion_words_collect_flags_and_backbone_commands_unit() {
-        let spec = osp_completion::CommandSpec::new("ldap")
-            .flag("--json", osp_completion::FlagNode::new())
-            .subcommand(
-                osp_completion::CommandSpec::new("user")
-                    .subcommand(osp_completion::CommandSpec::new("show")),
-            );
-
-        let words = collect_completion_words(&spec);
-        assert!(words.contains(&"ldap".to_string()));
-        assert!(words.contains(&"--json".to_string()));
-        assert!(words.contains(&"user".to_string()));
-        assert!(words.contains(&"show".to_string()));
-
-        let manager = PluginManager::new(Vec::new());
-        assert_eq!(
-            manager
-                .completion_words()
-                .expect("backbone completion words should render"),
-            vec![
-                "F".to_string(),
-                "P".to_string(),
-                "V".to_string(),
-                "exit".to_string(),
-                "help".to_string(),
-                "quit".to_string(),
-                "|".to_string(),
-            ]
-        );
-        assert!(
-            manager
-                .repl_help_text()
-                .expect("empty help should render")
-                .contains("No plugin commands available.")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() {
-        let root = make_temp_dir("osp-cli-plugin-manager-help");
-        let plugins_dir = root.join("plugins");
-        let config_root = root.join("config");
-        let cache_root = root.join("cache");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
-        write_provider_test_plugin(&plugins_dir, "beta", "shared");
-        write_named_test_plugin(&plugins_dir, "solo");
-
-        let manager = PluginManager::new(vec![plugins_dir.clone()])
-            .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
-
-        let ambiguous_help = manager.repl_help_text().expect("help should render");
-        assert!(ambiguous_help.contains("shared - provider selection required"));
-        assert!(ambiguous_help.contains("solo - solo plugin"));
-        assert_eq!(
-            manager.command_providers("shared"),
-            vec![
-                format!("alpha ({})", PluginSource::Explicit),
-                format!("beta ({})", PluginSource::Explicit)
-            ]
-        );
-
-        manager
-            .set_preferred_provider("shared", "beta")
-            .expect("preferred provider should save");
-        let preferred_help = manager
-            .repl_help_text()
-            .expect("preferred provider help should render");
-        assert!(preferred_help.contains("shared - beta plugin (beta/explicit)"));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[cfg(unix)]
-    fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
-        let mut dir = std::env::temp_dir();
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time should be valid")
-            .as_nanos();
-        dir.push(format!("{prefix}-{nonce}"));
-        std::fs::create_dir_all(&dir).expect("temp dir should be created");
-        dir
-    }
-
-    #[cfg(unix)]
-    fn write_named_test_plugin(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-        write_named_test_plugin_with_min_version(dir, name, "0.1.0")
-    }
-
-    #[cfg(unix)]
-    fn write_named_test_plugin_with_min_version(
-        dir: &std::path::Path,
-        name: &str,
-        min_osp_version: &str,
-    ) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
-        let plugin_path = dir.join(format!("osp-{name}"));
-        let script = format!(
-            r#"#!/usr/bin/env bash
-if [ "$1" = "--describe" ]; then
-  cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"{min_osp_version}","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
-JSON
-  exit 0
-fi
-
-cat <<'JSON'
-{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
-JSON
-"#,
-            name = name,
-            min_osp_version = min_osp_version
-        );
-
-        std::fs::write(&plugin_path, script).expect("plugin should be written");
-        let mut perms = std::fs::metadata(&plugin_path)
-            .expect("metadata should be readable")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
-        plugin_path
-    }
-
-    #[cfg(unix)]
-    fn write_provider_test_plugin(
-        dir: &std::path::Path,
-        plugin_id: &str,
-        command_name: &str,
-    ) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
-        let plugin_path = dir.join(format!("osp-{plugin_id}"));
-        let script = format!(
-            r#"#!/usr/bin/env bash
-if [ "$1" = "--describe" ]; then
-  cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
-JSON
-  exit 0
-fi
-
-cat <<'JSON'
-{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
-JSON
-"#,
-            plugin_id = plugin_id,
-            command_name = command_name
-        );
-
-        std::fs::write(&plugin_path, script).expect("plugin should be written");
-        let mut perms = std::fs::metadata(&plugin_path)
-            .expect("metadata should be readable")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
-        plugin_path
-    }
-
-    #[cfg(unix)]
-    fn write_sleepy_test_plugin(
-        dir: &std::path::Path,
-        name: &str,
-        sleep_on_describe: bool,
-    ) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
-        let plugin_path = dir.join(format!("osp-{name}"));
-        let script = format!(
-            r#"#!/usr/bin/env bash
-if [ "$1" = "--describe" ]; then
-  if [ "{sleep_on_describe}" = "true" ]; then
-    sleep 1
-  fi
-  cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
-JSON
-  exit 0
-fi
-
-sleep 1
-cat <<'JSON'
-{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
-JSON
-"#,
-            name = name,
-            sleep_on_describe = if sleep_on_describe { "true" } else { "false" }
-        );
-
-        std::fs::write(&plugin_path, script).expect("plugin should be written");
-        let mut perms = std::fs::metadata(&plugin_path)
-            .expect("metadata should be readable")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
-        plugin_path
-    }
-}
+mod tests;

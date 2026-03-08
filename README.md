@@ -186,9 +186,12 @@ picture.
 
 ## Plugins
 
-External commands are discovered as `osp-*` executables and communicate
-via a JSON-over-stdin/stdout protocol. Plugins declare their commands
-with `--describe` and receive invocations as subprocess calls.
+External commands are discovered from explicit plugin directories,
+`OSP_PLUGIN_PATH`, bundled locations, and the user plugin directory by
+default. `PATH` discovery is opt-in via
+`extensions.plugins.discovery.path = true`. Plugins communicate via a
+JSON-over-stdin/stdout protocol, declare their commands with
+`--describe`, and receive invocations as subprocess calls.
 
 See [docs/WRITING_PLUGINS.md](docs/WRITING_PLUGINS.md) for a guide to
 writing and packaging plugins.

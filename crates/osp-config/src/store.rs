@@ -1,4 +1,6 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     ConfigError, ConfigValue, Scope, TomlEditResult, normalize_scope, validate_bootstrap_value,
@@ -110,16 +112,93 @@ fn write_toml_root(
 
     let payload =
         toml::to_string_pretty(root).map_err(|err| ConfigError::TomlParse(err.to_string()))?;
-    std::fs::write(path, payload).map_err(|err| ConfigError::FileWrite {
+    write_text_atomic(path, payload.as_bytes(), strict_secret_permissions).map_err(|err| {
+        ConfigError::FileWrite {
+            path: path.display().to_string(),
+            reason: err.to_string(),
+        }
+    })?;
+
+    Ok(())
+}
+
+fn write_text_atomic(
+    path: &Path,
+    payload: &[u8],
+    strict_secret_permissions: bool,
+) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("path has no file name: {}", path.display()),
+        )
+    })?;
+    let pid = std::process::id();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    for attempt in 0..16u8 {
+        let temp_name = format!(
+            ".{}.tmp-{pid}-{nonce}-{attempt}",
+            file_name.to_string_lossy()
+        );
+        let temp_path = parent.join(temp_name);
+        match create_temp_file(&temp_path, strict_secret_permissions) {
+            Ok(mut file) => {
+                file.write_all(payload)?;
+                file.sync_all()?;
+                drop(file);
+                std::fs::rename(&temp_path, path)?;
+                return Ok(());
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("failed to allocate temp file for {}", path.display()),
+    ))
+}
+
+#[cfg(unix)]
+fn create_temp_file(
+    path: &Path,
+    strict_secret_permissions: bool,
+) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    if strict_secret_permissions {
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+#[cfg(not(unix))]
+fn create_temp_file(
+    path: &Path,
+    _strict_secret_permissions: bool,
+) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    options.open(path)
+}
+
+#[cfg(unix)]
+pub fn secret_file_mode(path: &Path) -> Result<u32, ConfigError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = std::fs::metadata(path).map_err(|err| ConfigError::FileRead {
         path: path.display().to_string(),
         reason: err.to_string(),
     })?;
-
-    if strict_secret_permissions {
-        set_permissions_600(path)?;
-    }
-
-    Ok(())
+    Ok(metadata.permissions().mode() & 0o777)
 }
 
 fn scoped_table_mut<'a>(
@@ -412,28 +491,6 @@ pub(crate) fn validate_secrets_permissions(
     _path: &PathBuf,
     _strict: bool,
 ) -> Result<(), ConfigError> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_permissions_600(path: &Path) -> Result<(), ConfigError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut perms = std::fs::metadata(path)
-        .map_err(|err| ConfigError::FileWrite {
-            path: path.display().to_string(),
-            reason: err.to_string(),
-        })?
-        .permissions();
-    perms.set_mode(0o600);
-    std::fs::set_permissions(path, perms).map_err(|err| ConfigError::FileWrite {
-        path: path.display().to_string(),
-        reason: err.to_string(),
-    })
-}
-
-#[cfg(not(unix))]
-fn set_permissions_600(_path: &Path) -> Result<(), ConfigError> {
     Ok(())
 }
 

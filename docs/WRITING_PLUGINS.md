@@ -307,10 +307,12 @@ osp searches for plugins in this order:
    - `<osp-binary-dir>/plugins`
    - `<osp-binary-dir>/../lib/osp/plugins`
 4. `~/.config/osp/plugins/` (user plugin directory)
-5. `PATH` (searches for `osp-*` executables)
+5. `PATH` (searches for `osp-*` executables) only when
+   `extensions.plugins.discovery.path = true`
 
 The simplest way to make a plugin available: name it `osp-<something>`,
-make it executable, and put it in your PATH.
+make it executable, and put it in an explicit plugin directory, in
+`OSP_PLUGIN_PATH`, or in `PATH` after enabling path discovery.
 
 ### Discovery caching
 
@@ -357,9 +359,10 @@ commands = ["mycommand"]
 ### Validation
 
 When a manifest is present:
+- If `checksum_sha256` is set, the executable's SHA-256 must match
+  before `osp` runs `--describe`
 - The executable's `--describe` output must match the manifest's `id`,
   `version`, and command list
-- If `checksum_sha256` is set, the executable's SHA-256 must match
 - IDs and executable names must be unique within a manifest
 
 ### Bundled layout

@@ -18,7 +18,8 @@ first provider when multiple active plugins expose the same command.
 2. `OSP_PLUGIN_PATH` (colon-separated directories)
 3. Bundled plugins dir (package-owned)
 4. `~/.config/osp/plugins`
-5. `PATH` (`osp-*` executables)
+5. `PATH` (`osp-*` executables) only when
+   `extensions.plugins.discovery.path = true`
 
 Conflict rule:
 - If exactly one active plugin provides a command, dispatch uses it.
@@ -74,8 +75,10 @@ When a bundled plugin directory is used, `osp` validates each plugin against
 - `plugin.id`, `plugin.exe`, `plugin.version` must be non-empty.
 - `plugin.commands` must not be empty.
 - `plugin.id` and `plugin.exe` must be unique in the manifest.
-- Plugin `--describe` output must match manifest `id`, `version`, and command list.
-- If `checksum_sha256` is set, executable SHA-256 must match.
+- If `checksum_sha256` is set, executable SHA-256 must match before
+  `osp` runs the plugin for `--describe`.
+- Plugin `--describe` output must then match manifest `id`, `version`,
+  and command list.
 
 On mismatch, plugin is marked unhealthy and excluded from command dispatch.
 

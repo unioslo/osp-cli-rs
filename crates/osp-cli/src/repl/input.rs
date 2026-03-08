@@ -1,6 +1,7 @@
-use miette::Result;
+use miette::{IntoDiagnostic, Result, WrapErr};
 use osp_completion::CommandLineParser;
 use osp_config::ResolvedConfig;
+use osp_dsl::parse::lexer::split_pipeline;
 use osp_repl::LineProjection;
 use std::collections::BTreeSet;
 
@@ -87,6 +88,9 @@ pub(crate) fn rewrite_help_alias_tokens_at(
 
 pub(crate) fn project_repl_ui_line(line: &str, config: &ResolvedConfig) -> Result<LineProjection> {
     let _ = config;
+    split_pipeline(line)
+        .into_diagnostic()
+        .wrap_err("failed to parse REPL line")?;
     let parser = CommandLineParser;
     let spans = parser.tokenize_with_spans(line);
     if spans.is_empty() {

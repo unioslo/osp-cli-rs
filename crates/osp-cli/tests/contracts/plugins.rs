@@ -782,6 +782,13 @@ fn plugin_provider_override_works_across_discovery_sources_contract() {
     let home = make_temp_dir("osp-cli-plugin-precedence-home");
     let user_dir = home.join(".config").join("osp").join("plugins");
     std::fs::create_dir_all(&user_dir).expect("user plugin dir should be created");
+    write_config(
+        &home,
+        r#"
+[default]
+extensions.plugins.discovery.path = true
+"#,
+    );
 
     let _explicit = write_provider_plugin(&explicit_dir, "explicit-provider", "ranked", "explicit");
     let _env = write_provider_plugin(&env_dir, "env-provider", "ranked", "env");

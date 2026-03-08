@@ -14,7 +14,7 @@ use crate::theme_loader::ThemeCatalog;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{
     ConfigLayer, ConfigSchema, ResolvedConfig, ResolvedValue, RuntimeConfigPaths,
-    RuntimeLoadOptions, Scope, is_bootstrap_only_key, set_scoped_value_in_toml,
+    RuntimeLoadOptions, Scope, is_bootstrap_only_key, secret_file_mode, set_scoped_value_in_toml,
     unset_scoped_value_in_toml, validate_bootstrap_value, validate_key_scope,
 };
 use osp_core::output::OutputFormat;
@@ -163,6 +163,7 @@ fn config_get_rows(
 }
 
 pub(crate) fn config_diagnostics_rows(context: ConfigReadContext<'_>) -> Vec<Row> {
+    let secrets = secrets_permissions_diagnostic(RuntimeConfigPaths::discover().secrets_file);
     let known_profiles = serde_json::Value::Array(
         context
             .config
@@ -192,7 +193,89 @@ pub(crate) fn config_diagnostics_rows(context: ConfigReadContext<'_>) -> Vec<Row
             + context.config.aliases().len()) as i64,
         "theme_issue_count" => context.themes.issues.len() as i64,
         "theme_issues" => theme_issues,
+        "secrets_file" => secrets.path,
+        "secrets_permissions_status" => secrets.status,
+        "secrets_permissions_mode" => secrets.mode,
+        "secrets_permissions_message" => secrets.message,
     }]
+}
+
+struct SecretsPermissionsDiagnostic {
+    path: serde_json::Value,
+    status: &'static str,
+    mode: serde_json::Value,
+    message: String,
+}
+
+fn secrets_permissions_diagnostic(
+    path: Option<std::path::PathBuf>,
+) -> SecretsPermissionsDiagnostic {
+    let Some(path) = path else {
+        return SecretsPermissionsDiagnostic {
+            path: serde_json::Value::Null,
+            status: "unavailable",
+            mode: serde_json::Value::Null,
+            message: "secrets path unavailable".to_string(),
+        };
+    };
+
+    let display = serde_json::Value::String(path.display().to_string());
+    if !path.exists() {
+        return SecretsPermissionsDiagnostic {
+            path: display,
+            status: "missing",
+            mode: serde_json::Value::Null,
+            message: "secrets file does not exist".to_string(),
+        };
+    }
+
+    #[cfg(unix)]
+    {
+        match secret_file_mode(&path) {
+            Ok(mode) => {
+                let status = if mode == 0o600 {
+                    "ok"
+                } else if mode & 0o077 == 0 {
+                    "warning"
+                } else {
+                    "issue"
+                };
+                let message = match status {
+                    "ok" => "secrets file permissions are 0600".to_string(),
+                    "warning" => format!(
+                        "secrets file mode is {:o}; 0600 is recommended so `config set --secrets` stays predictable",
+                        mode
+                    ),
+                    _ => format!(
+                        "secrets file mode is {:o}; owner-only permissions are required",
+                        mode
+                    ),
+                };
+                SecretsPermissionsDiagnostic {
+                    path: display,
+                    status,
+                    mode: serde_json::Value::String(format!("{mode:o}")),
+                    message,
+                }
+            }
+            Err(err) => SecretsPermissionsDiagnostic {
+                path: display,
+                status: "error",
+                mode: serde_json::Value::Null,
+                message: err.to_string(),
+            },
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        SecretsPermissionsDiagnostic {
+            path: display,
+            status: "unavailable",
+            mode: serde_json::Value::Null,
+            message: "secrets permission diagnostics are unavailable on this platform".to_string(),
+        }
+    }
 }
 
 fn config_entry_row(
@@ -671,14 +754,16 @@ fn validate_write_scopes(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigReadContext, ConfigStore, ConfigWriteTarget, config_store_name,
+        ConfigReadContext, ConfigStore, ConfigWriteTarget, config_get_rows, config_store_name,
         resolve_config_scopes, resolve_config_store, resolve_terminal_selector,
+        secrets_permissions_diagnostic,
     };
     use crate::state::{RuntimeContext, TerminalKind, UiState};
     use crate::theme_loader::ThemeCatalog;
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions, RuntimeLoadOptions, Scope};
     use osp_core::output::OutputFormat;
     use osp_ui::RenderSettings;
+    use osp_ui::messages::MessageBuffer;
     use osp_ui::messages::MessageLevel;
 
     fn read_context(terminal: TerminalKind) -> ConfigReadContext<'static> {
@@ -787,5 +872,137 @@ mod tests {
             all_profile_scopes,
             vec![Scope::profile_terminal("default", "cli")]
         );
+    }
+
+    #[test]
+    fn resolve_config_store_honors_explicit_targets_over_defaults_unit() {
+        let repl = read_context(TerminalKind::Repl);
+
+        assert!(matches!(
+            resolve_config_store(
+                repl,
+                &ConfigWriteTarget {
+                    session: true,
+                    config_store: true,
+                    secrets: true,
+                    save: true,
+                    global: false,
+                    profile: None,
+                    profile_all: false,
+                    terminal: None,
+                }
+            ),
+            ConfigStore::Session
+        ));
+        assert!(matches!(
+            resolve_config_store(
+                repl,
+                &ConfigWriteTarget {
+                    session: false,
+                    config_store: false,
+                    secrets: true,
+                    save: true,
+                    global: false,
+                    profile: None,
+                    profile_all: false,
+                    terminal: None,
+                }
+            ),
+            ConfigStore::Secrets
+        ));
+        assert!(matches!(
+            resolve_config_store(
+                repl,
+                &ConfigWriteTarget {
+                    session: false,
+                    config_store: false,
+                    secrets: false,
+                    save: true,
+                    global: false,
+                    profile: None,
+                    profile_all: false,
+                    terminal: None,
+                }
+            ),
+            ConfigStore::Config
+        ));
+        assert_eq!(config_store_name(ConfigStore::Session), "session");
+        assert_eq!(config_store_name(ConfigStore::Config), "config");
+    }
+
+    #[test]
+    fn resolve_config_scopes_uses_explicit_profile_without_terminal_unit() {
+        let scopes = resolve_config_scopes(
+            read_context(TerminalKind::Cli),
+            &ConfigWriteTarget {
+                global: false,
+                profile: Some("Work".to_string()),
+                profile_all: false,
+                terminal: None,
+                session: false,
+                config_store: false,
+                secrets: false,
+                save: false,
+            },
+        )
+        .expect("profile scope should resolve");
+
+        assert_eq!(scopes, vec![Scope::profile("Work")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secrets_permissions_diagnostic_warns_for_owner_only_non_600_modes_unit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "osp-cli-config-secrets-diagnostic-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir should exist");
+        let path = dir.join("secrets.toml");
+        std::fs::write(&path, "token = 'secret'\n").expect("fixture should be written");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
+            .expect("permissions should be set");
+
+        let diagnostic = secrets_permissions_diagnostic(Some(path.clone()));
+        assert_eq!(diagnostic.status, "warning");
+        assert_eq!(
+            diagnostic.mode,
+            serde_json::Value::String("400".to_string())
+        );
+        assert!(diagnostic.message.contains("0600 is recommended"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_get_rows_resolves_bootstrap_only_keys_through_runtime_explain_unit() {
+        let mut messages = MessageBuffer::default();
+        let rows = config_get_rows(
+            read_context(TerminalKind::Cli),
+            &crate::cli::ConfigGetArgs {
+                key: "profile.default".to_string(),
+                sources: true,
+                raw: false,
+            },
+            &mut messages,
+        )
+        .expect("bootstrap-only get should resolve")
+        .expect("bootstrap-only key should produce a row");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("key").and_then(|value| value.as_str()),
+            Some("profile.default")
+        );
+        assert_eq!(
+            rows[0].get("source").and_then(|value| value.as_str()),
+            Some("derived")
+        );
+        assert!(messages.is_empty());
     }
 }

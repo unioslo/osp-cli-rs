@@ -239,7 +239,8 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
     let debug_verbosity = effective_debug_verbosity(&config);
 
     let plugin_manager = PluginManager::new(cli.plugin_dirs.clone())
-        .with_process_timeout(plugin_process_timeout(&config));
+        .with_process_timeout(plugin_process_timeout(&config))
+        .with_path_discovery(plugin_path_discovery_enabled(&config));
 
     let mut state = build_app_state(crate::state::AppStateInit {
         context: runtime_context,
@@ -684,6 +685,12 @@ pub(crate) fn plugin_process_timeout(config: &ResolvedConfig) -> std::time::Dura
         "extensions.plugins.timeout_ms",
         DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
     ) as u64)
+}
+
+pub(crate) fn plugin_path_discovery_enabled(config: &ResolvedConfig) -> bool {
+    config
+        .get_bool("extensions.plugins.discovery.path")
+        .unwrap_or(false)
 }
 
 fn known_error_hint(err: &miette::Report) -> Option<&'static str> {

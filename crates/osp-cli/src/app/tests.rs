@@ -5,8 +5,8 @@ use super::{
     ReplCommandOutput, RunAction, RuntimeConfigRequest, build_cli_session_layer,
     build_dispatch_plan, classify_exit_code, collect_plugin_config_env, config_value_to_plugin_env,
     doctor_cmd, enrich_dispatch_error, is_sensitive_key, plugin_config_env_name,
-    plugin_process_timeout, render_report_message, resolve_effective_invocation,
-    resolve_effective_render_settings, run_inline_builtin_command,
+    plugin_path_discovery_enabled, plugin_process_timeout, render_report_message,
+    resolve_effective_invocation, resolve_effective_render_settings, run_inline_builtin_command,
 };
 use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
 use crate::invocation::{InvocationOptions, scan_cli_argv};
@@ -367,6 +367,15 @@ fn plugin_process_timeout_reads_config_override_unit() {
         plugin_process_timeout(&fallback),
         std::time::Duration::from_millis(DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as u64)
     );
+}
+
+#[test]
+fn plugin_path_discovery_defaults_off_and_respects_config_unit() {
+    assert!(!plugin_path_discovery_enabled(&test_config(&[])));
+    assert!(plugin_path_discovery_enabled(&test_config(&[(
+        "extensions.plugins.discovery.path",
+        "true",
+    )])));
 }
 
 #[test]

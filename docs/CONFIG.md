@@ -90,6 +90,8 @@ without custom code in `osp-cli`:
   `osp plugins config <plugin-id>`. See `docs/PLUGIN_PROTOCOL.md`.
 - `extensions.plugins.timeout_ms` bounds plugin discovery (`--describe`) and
   command execution. Default: `10000`.
+- `extensions.plugins.discovery.path` enables discovery of `osp-*` executables
+  from ambient `PATH`. Default: `false`.
 - Values are adapted to schema type after merge/interpolation:
   strings, booleans, integers, floats.
 - Enum-like string keys (for example `ui.format`) are validated against

@@ -28,7 +28,8 @@ osp plugins disable uio-ldap
 2. `OSP_PLUGIN_PATH`
 3. bundled plugin directory
 4. `~/.config/osp/plugins`
-5. `PATH` (`osp-*` executables)
+5. `PATH` (`osp-*` executables) only when
+   `extensions.plugins.discovery.path = true`
 
 ## Provider Conflicts
 
@@ -69,6 +70,13 @@ user alice --plugin-provider uio-ldap
 
 Plugin discovery and execution are bounded by
 `extensions.plugins.timeout_ms`. Default: `10000`.
+
+Ambient `PATH` discovery is disabled by default. Turn it on explicitly if
+you want `osp` to discover `osp-*` executables from your shell path:
+
+```bash
+osp config set extensions.plugins.discovery.path true
+```
 
 If a plugin times out:
 
