@@ -286,7 +286,6 @@ fn foundation_public_facade_stays_curated() {
         "osp_ports",
         "osp_api",
         "osp_services",
-        "osp_ui",
         "osp_completion",
         "osp_repl",
         "osp_cli",

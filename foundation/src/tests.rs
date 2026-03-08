@@ -22,7 +22,7 @@ fn stable_top_level_surface_exposes_primary_entrypoints_and_types_unit() {
 
 #[test]
 fn legacy_osp_namespaces_still_exist_during_transition_unit() {
-    let _settings = crate::osp_ui::RenderSettings::test_plain(OutputFormat::Table);
+    let _settings = crate::ui::RenderSettings::test_plain(OutputFormat::Table);
     let _format = crate::osp_core::output::OutputFormat::Json;
     let _cli_type: Option<crate::osp_cli::Cli> = None;
 }
