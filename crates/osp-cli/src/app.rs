@@ -652,11 +652,12 @@ pub(crate) fn enrich_dispatch_error(err: PluginDispatchError) -> miette::Report 
 }
 
 pub fn classify_exit_code(err: &miette::Report) -> i32 {
-    if find_error_in_chain::<clap::Error>(err).is_some() {
+    let known = KnownErrorChain::inspect(err);
+    if known.clap.is_some() {
         EXIT_CODE_USAGE
-    } else if find_error_in_chain::<osp_config::ConfigError>(err).is_some() {
+    } else if known.config.is_some() {
         EXIT_CODE_CONFIG
-    } else if find_error_in_chain::<PluginDispatchError>(err).is_some() {
+    } else if known.plugin.is_some() {
         EXIT_CODE_PLUGIN
     } else {
         EXIT_CODE_ERROR
@@ -668,7 +669,8 @@ pub fn render_report_message(err: &miette::Report, verbosity: MessageLevel) -> S
         return format!("{err:?}");
     }
 
-    let mut message = base_error_message(err);
+    let known = KnownErrorChain::inspect(err);
+    let mut message = base_error_message(err, &known);
 
     if verbosity >= MessageLevel::Info {
         let mut next: Option<&(dyn std::error::Error + 'static)> = Some(err.as_ref());
@@ -683,7 +685,7 @@ pub fn render_report_message(err: &miette::Report, verbosity: MessageLevel) -> S
     }
 
     if verbosity >= MessageLevel::Success
-        && let Some(hint) = known_error_hint(err)
+        && let Some(hint) = known_error_hint(&known)
         && !message.contains(hint)
     {
         message.push_str("\nHint: ");
@@ -720,8 +722,8 @@ pub(crate) fn plugin_path_discovery_enabled(config: &ResolvedConfig) -> bool {
         .unwrap_or(false)
 }
 
-fn known_error_hint(err: &miette::Report) -> Option<&'static str> {
-    if let Some(plugin_err) = find_error_in_chain::<PluginDispatchError>(err) {
+fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
+    if let Some(plugin_err) = known.plugin {
         return Some(match plugin_err {
             PluginDispatchError::CommandNotFound { .. } => {
                 "run `osp plugins list` and set --plugin-dir or OSP_PLUGIN_PATH"
@@ -748,7 +750,7 @@ fn known_error_hint(err: &miette::Report) -> Option<&'static str> {
         });
     }
 
-    if let Some(config_err) = find_error_in_chain::<osp_config::ConfigError>(err) {
+    if let Some(config_err) = known.config {
         return Some(match config_err {
             osp_config::ConfigError::UnknownProfile { .. } => {
                 "run `osp config explain profile.default` or choose a known profile"
@@ -760,23 +762,23 @@ fn known_error_hint(err: &miette::Report) -> Option<&'static str> {
         });
     }
 
-    if find_error_in_chain::<clap::Error>(err).is_some() {
+    if known.clap.is_some() {
         return Some("use --help to inspect accepted flags and subcommands");
     }
 
     None
 }
 
-fn base_error_message(err: &miette::Report) -> String {
-    if let Some(plugin_err) = find_error_in_chain::<PluginDispatchError>(err) {
+fn base_error_message(err: &miette::Report, known: &KnownErrorChain<'_>) -> String {
+    if let Some(plugin_err) = known.plugin {
         return plugin_err.to_string();
     }
 
-    if let Some(config_err) = find_error_in_chain::<osp_config::ConfigError>(err) {
+    if let Some(config_err) = known.config {
         return config_err.to_string();
     }
 
-    if let Some(clap_err) = find_error_in_chain::<clap::Error>(err) {
+    if let Some(clap_err) = known.clap {
         return clap_err.to_string();
     }
 
