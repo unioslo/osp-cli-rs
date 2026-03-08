@@ -20,6 +20,7 @@ edition = "2024"
 [workspace.dependencies]
 anyhow = "1.0"
 assert_cmd = "2.0"
+insta = "1.43"
 clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context", "suggestions", "color"] }
 comfy-table = { version = "7.1", default-features = false, features = ["custom_styling"] }
 chrono = "0.4"

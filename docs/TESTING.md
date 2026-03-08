@@ -56,6 +56,8 @@ Per-crate internal unit tests may also exist in `src/lib.rs` modules
 - CLI contracts only: `cargo test -p osp-cli --test contracts`
 - DSL crate only: `cargo test -p osp-dsl`
 - Services crate only: `cargo test -p osp-services`
+- Review snapshots: `cargo insta review`
+- Re-record snapshots during a focused run: `cargo insta test -p osp-cli`
 
 ## Coverage and Hooks
 
@@ -68,6 +70,7 @@ In short:
 - keep `pre-commit` fast
 - coverage is enforced on `pre-push`
 - run `just cov` or `just cov-gate` when you need the full coverage check
+- use `cargo insta review` to accept intentional output snapshot changes
 
 ## Current Coverage (LDAP Mock + DSL + REPL)
 

@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use insta::assert_snapshot;
 
 #[cfg(unix)]
 fn fixture_config(path: &std::path::Path) {
@@ -408,6 +409,7 @@ fn command_help_hides_common_invocation_options_without_verbose_contract() {
 
     assert!(plain.contains("history"));
     assert!(!plain.contains("Common Invocation Options"));
+    assert_snapshot!("history_help_default", plain);
 
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -424,6 +426,7 @@ fn command_help_shows_common_invocation_options_with_verbose_contract() {
 
     assert!(plain.contains("history"));
     assert!(plain.contains("Common Invocation Options"));
+    assert_snapshot!("history_help_verbose", plain);
 
     let _ = std::fs::remove_dir_all(&home);
 }

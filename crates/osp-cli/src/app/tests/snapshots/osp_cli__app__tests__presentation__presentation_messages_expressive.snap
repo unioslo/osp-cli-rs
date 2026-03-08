@@ -1,0 +1,11 @@
+---
+source: crates/osp-cli/src/app/tests/presentation.rs
+expression: "render_message_snapshot(&[(\"ui.presentation\", \"expressive\")])"
+---
+- Errors ---------
+- bad
+------------------
+
+- Warnings -------
+- careful
+------------------

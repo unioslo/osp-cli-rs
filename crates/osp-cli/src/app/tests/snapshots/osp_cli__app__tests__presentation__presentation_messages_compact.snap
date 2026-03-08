@@ -1,0 +1,9 @@
+---
+source: crates/osp-cli/src/app/tests/presentation.rs
+expression: "render_message_snapshot(&[(\"ui.presentation\", \"compact\")])"
+---
+- Errors ---------
+- bad
+
+- Warnings -------
+- careful

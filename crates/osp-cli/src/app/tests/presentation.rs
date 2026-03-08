@@ -1,4 +1,5 @@
 use super::*;
+use insta::assert_snapshot;
 
 #[test]
 fn theme_slug_is_rendered_as_title_case_display_name_unit() {
@@ -139,65 +140,65 @@ fn compact_repl_intro_is_minimal_single_line_unit() {
 
 #[test]
 fn presentation_profiles_shape_help_output_snapshot_unit() {
-    assert_eq!(
-        render_help_snapshot(&[("ui.presentation", "expressive")]),
-        "- Usage ----------\n  osp [OPTIONS]\n------------------\n\n- Commands -------\n  help\n------------------\n\n- Options --------\n  -h, --help\n------------------\n"
+    assert_snapshot!(
+        "presentation_help_expressive",
+        render_help_snapshot(&[("ui.presentation", "expressive")])
     );
-    assert_eq!(
-        render_help_snapshot(&[("ui.presentation", "compact")]),
-        "- Usage ----------\n  osp [OPTIONS]\n\n- Commands -------\n  help\n\n- Options --------\n  -h, --help\n"
+    assert_snapshot!(
+        "presentation_help_compact",
+        render_help_snapshot(&[("ui.presentation", "compact")])
     );
-    assert_eq!(
-        render_help_snapshot(&[("ui.presentation", "austere")]),
-        "Usage:\n  osp [OPTIONS]\nCommands:\n  help\nOptions:\n  -h, --help\n"
+    assert_snapshot!(
+        "presentation_help_austere",
+        render_help_snapshot(&[("ui.presentation", "austere")])
     );
 }
 
 #[test]
 fn presentation_profiles_shape_message_output_snapshot_unit() {
-    assert_eq!(
-        render_message_snapshot(&[("ui.presentation", "expressive")]),
-        "- Errors ---------\n- bad\n------------------\n\n- Warnings -------\n- careful\n------------------\n"
+    assert_snapshot!(
+        "presentation_messages_expressive",
+        render_message_snapshot(&[("ui.presentation", "expressive")])
     );
-    assert_eq!(
-        render_message_snapshot(&[("ui.presentation", "compact")]),
-        "- Errors ---------\n- bad\n\n- Warnings -------\n- careful\n"
+    assert_snapshot!(
+        "presentation_messages_compact",
+        render_message_snapshot(&[("ui.presentation", "compact")])
     );
-    assert_eq!(
-        render_message_snapshot(&[("ui.presentation", "austere")]),
-        "error: bad\nwarning: careful\n"
+    assert_snapshot!(
+        "presentation_messages_austere",
+        render_message_snapshot(&[("ui.presentation", "austere")])
     );
 }
 
 #[test]
 fn presentation_profiles_shape_prompt_output_snapshot_unit() {
-    assert_eq!(
-        render_prompt_snapshot(&[("ui.presentation", "expressive")]),
-        "╭─anonymous@local \n╰─default> "
+    assert_snapshot!(
+        "presentation_prompt_expressive",
+        render_prompt_snapshot(&[("ui.presentation", "expressive")])
     );
-    assert_eq!(
-        render_prompt_snapshot(&[("ui.presentation", "compact")]),
-        "default> "
+    assert_snapshot!(
+        "presentation_prompt_compact",
+        render_prompt_snapshot(&[("ui.presentation", "compact")])
     );
-    assert_eq!(
-        render_prompt_snapshot(&[("ui.presentation", "austere")]),
-        "default> "
+    assert_snapshot!(
+        "presentation_prompt_austere",
+        render_prompt_snapshot(&[("ui.presentation", "austere")])
     );
 }
 
 #[test]
 fn presentation_profiles_shape_table_output_snapshot_unit() {
-    assert_eq!(
-        render_table_snapshot(&[("ui.presentation", "expressive")]),
-        "╭━━━━━━━┳━━━━━━━╮\n┃ uid   ┃ count ┃\n┡━━━━━━━╇━━━━━━━┩\n│ alice │ 2     │\n│ bob   │ 15    │\n╰───────┴───────╯\n"
+    assert_snapshot!(
+        "presentation_table_expressive",
+        render_table_snapshot(&[("ui.presentation", "expressive")])
     );
-    assert_eq!(
-        render_table_snapshot(&[("ui.presentation", "compact")]),
-        "+--------+--------+\n| uid    | count  |\n+--------+--------+\n| alice  | 2      |\n| bob    | 15     |\n+--------+--------+\n"
+    assert_snapshot!(
+        "presentation_table_compact",
+        render_table_snapshot(&[("ui.presentation", "compact")])
     );
-    assert_eq!(
-        render_table_snapshot(&[("ui.presentation", "austere")]),
-        "+--------+--------+\n| uid    | count  |\n+--------+--------+\n| alice  | 2      |\n| bob    | 15     |\n+--------+--------+\n"
+    assert_snapshot!(
+        "presentation_table_austere",
+        render_table_snapshot(&[("ui.presentation", "austere")])
     );
 }
 

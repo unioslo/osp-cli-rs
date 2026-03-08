@@ -1,0 +1,26 @@
+---
+source: crates/osp-cli/tests/contracts/help_commands.rs
+expression: plain
+---
+- Usage ----------------------------------------------------------------
+  osp history [OPTIONS] <COMMAND>
+------------------------------------------------------------------------
+
+- Commands -------------------------------------------------------------
+  list
+  prune
+  clear
+  help   Print this message or the help of the given subcommand(s)
+------------------------------------------------------------------------
+
+- Options --------------------------------------------------------------
+  -i, --incognito
+      --profile <PROFILE>
+      --no-env
+      --no-config-file
+      --plugin-dir <PLUGIN_DIRS>
+      --theme <THEME>
+      --presentation <PRESENTATION>  [possible values: expressive, compact, austere]
+      --gammel-og-bitter
+  -h, --help                         Print help
+------------------------------------------------------------------------
