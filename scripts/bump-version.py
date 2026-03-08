@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -102,20 +101,7 @@ def tag_exists(root: Path, tag: str) -> bool:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    if local.returncode == 0:
-        return True
-
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
-    remote = subprocess.run(
-        ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"],
-        cwd=root,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return remote.returncode == 0
+    return local.returncode == 0
 
 
 def replace_lock_versions(lockfile: Path, package_names: list[str], new_version: str) -> None:
