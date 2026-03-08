@@ -13,13 +13,13 @@ clippy:
     ./scripts/check-rust-fast.sh
 
 test:
-    cargo test --manifest-path foundation/Cargo.toml --all-features --locked
+    cargo test --all-features --locked
 
 workspace-test:
-    cargo test --workspace --all-features --locked
+    cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
 
 cov:
-    cargo llvm-cov --workspace --all-features --summary-only
+    cargo llvm-cov --all-features --summary-only
 
 cov-gate:
     ./scripts/check-coverage-gate.py
@@ -32,13 +32,7 @@ cov-baseline:
 
 check:
     ./scripts/check-rust-fast.sh
-    cargo test --manifest-path foundation/Cargo.toml --all-features --locked
-
-foundation-check:
-    python3 ./scripts/check-foundation-sync.py
-    cargo check --manifest-path foundation/Cargo.toml --all-features --locked
-    cargo clippy --manifest-path foundation/Cargo.toml --all-features --all-targets -- -D warnings
-    cargo test --manifest-path foundation/Cargo.toml --all-features --locked
+    cargo test --all-features --locked
 
 precommit:
     ./scripts/check-rust-fast.sh
@@ -77,13 +71,17 @@ release-sign *args:
 
 verify-full:
     ./scripts/check-rust-fast.sh
-    just foundation-check
-    cargo test --workspace --all-features --locked
+    cargo check --all-features --locked
+    cargo clippy --all-features --all-targets -- -D warnings
+    cargo test --all-features --locked
+    cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
     ./scripts/check-coverage-gate.py
 
 release-check:
     python3 ./scripts/check-release-readiness.py
     ./scripts/check-rust-fast.sh
-    just foundation-check
-    cargo test --workspace --all-features --locked
+    cargo check --all-features --locked
+    cargo clippy --all-features --all-targets -- -D warnings
+    cargo test --all-features --locked
+    cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
     ./scripts/check-coverage-gate.py

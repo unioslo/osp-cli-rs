@@ -117,11 +117,15 @@ def changed_source_files(repo_root: Path) -> list[str]:
         path = raw.strip()
         if not path.endswith(".rs"):
             continue
-        if not path.startswith("crates/"):
+        if not (path.startswith("src/") or path.startswith("workspace/crates/")):
             continue
-        if "/src/" not in path:
+        if path.startswith("workspace/crates/") and "/src/" not in path:
+            continue
+        if path.startswith("src/") and "/src/" in path:
             continue
         if is_internal_test_module(path):
+            continue
+        if path.startswith("workspace/crates/"):
             continue
         changed.append(path)
     return sorted(set(changed))
@@ -230,9 +234,9 @@ def has_broad_coverage_change(repo_root: Path) -> bool:
             return True
         if path.startswith("scripts/"):
             return True
-        if path.startswith("crates/") and "/tests/" in path:
+        if path.startswith("tests/"):
             return True
-        if path.startswith("crates/") and path.endswith("/tests.rs"):
+        if path.startswith("src/") and is_internal_test_module(path):
             return True
     return False
 
@@ -282,7 +286,7 @@ def run_coverage(
             print("No changed Rust source files; skipping local coverage run.")
             return False
         if has_broad_coverage_change(repo_root) or len(packages) > 2:
-            print("Fast coverage fell back to full workspace coverage.")
+            print("Fast coverage fell back to full root-package coverage.")
         else:
             print(
                 "Running fast changed-package coverage for: "
@@ -300,12 +304,11 @@ def run_coverage(
             subprocess.run(command, cwd=repo_root, check=True)
             return True
 
-    print("Running full workspace coverage...")
+    print("Running full root-package coverage...")
     subprocess.run(
         [
             "cargo",
             "llvm-cov",
-            "--workspace",
             "--all-features",
             "--json",
             f"--output-path={report_path}",

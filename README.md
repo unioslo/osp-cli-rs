@@ -13,16 +13,16 @@ required).
 ## Quick start
 
 ```bash
-cargo run --manifest-path foundation/Cargo.toml -- --help
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice --format json
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice | P uid cn mail
+cargo run -- --help
+cargo run -- ldap user alice
+cargo run -- ldap user alice --format json
+cargo run -- ldap user alice | P uid cn mail
 ```
 
 Start the REPL:
 
 ```bash
-cargo run --manifest-path foundation/Cargo.toml
+cargo run
 ```
 
 ## Features
@@ -43,8 +43,8 @@ cargo run --manifest-path foundation/Cargo.toml
 ### From source
 
 ```bash
-cargo build --manifest-path foundation/Cargo.toml --release
-cp foundation/target/release/osp ~/.local/bin/
+cargo build --release
+cp target/release/osp ~/.local/bin/
 ```
 
 Bundled plugins (if present) go alongside the binary:
@@ -63,28 +63,28 @@ Bundled plugins (if present) go alongside the binary:
 
 ```bash
 # Query LDAP
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice
-cargo run --manifest-path foundation/Cargo.toml -- ldap group staff
+cargo run -- ldap user alice
+cargo run -- ldap group staff
 
 # Pipeline: filter, project, sort
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice | P uid cn mail
-cargo run --manifest-path foundation/Cargo.toml -- ldap users --group staff | F uid=oistes | P uid cn
+cargo run -- ldap user alice | P uid cn mail
+cargo run -- ldap users --group staff | F uid=oistes | P uid cn
 
 # Output formats
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice --format json
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice --format table
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice --format value
+cargo run -- ldap user alice --format json
+cargo run -- ldap user alice --format table
+cargo run -- ldap user alice --format value
 
 # Config management
-cargo run --manifest-path foundation/Cargo.toml -- config show
-cargo run --manifest-path foundation/Cargo.toml -- config get ui.color.mode
-cargo run --manifest-path foundation/Cargo.toml -- config set ui.color.mode always
-cargo run --manifest-path foundation/Cargo.toml -- config explain ui.color.mode
+cargo run -- config show
+cargo run -- config get ui.color.mode
+cargo run -- config set ui.color.mode always
+cargo run -- config explain ui.color.mode
 
 # Plugins
-cargo run --manifest-path foundation/Cargo.toml -- plugins list
-cargo run --manifest-path foundation/Cargo.toml -- plugins commands
-cargo run --manifest-path foundation/Cargo.toml -- doctor
+cargo run -- plugins list
+cargo run -- plugins commands
+cargo run -- doctor
 ```
 
 ### REPL
@@ -92,7 +92,7 @@ cargo run --manifest-path foundation/Cargo.toml -- doctor
 When started without a command, `osp` drops into an interactive REPL:
 
 ```
-$ cargo run --manifest-path foundation/Cargo.toml
+$ cargo run
 osp> ldap user alice
 osp> ldap user alice | P uid cn mail
 osp> config show
@@ -164,9 +164,11 @@ See [docs/CONFIG.md](docs/CONFIG.md) for details.
 
 ## Architecture
 
-The default package candidate is now [foundation/](/home/oistes/git/github.uio.no/osp/osp-cli-rust/foundation). It is validated in CI, used for the release build, and is the intended path toward the final root `src/` layout. The old workspace still exists as a compatibility/source mirror during the transition.
+The root package is now the canonical single-crate implementation. The old
+multi-crate layout lives under [workspace/](/home/oistes/git/github.uio.no/osp/osp-cli-rust/workspace)
+as a compatibility/source mirror during the transition.
 
-The old workspace still contains ten crates with a strict downward dependency graph:
+The legacy workspace still contains ten crates with a strict downward dependency graph:
 
 ```
 osp-cli          Binary, app wiring, dispatch, plugin manager
@@ -203,31 +205,23 @@ writing and packaging plugins.
 
 ```bash
 ./scripts/check-rust-fast.sh
-cargo test --manifest-path foundation/Cargo.toml --all-features --locked
+cargo test --all-features --locked
 ```
 
 ### Run locally
 
 ```bash
-cargo run --manifest-path foundation/Cargo.toml                    # Start REPL
-cargo run --manifest-path foundation/Cargo.toml -- ldap user alice # Single command
-cargo run --manifest-path foundation/Cargo.toml -- --debug ldap user x
+cargo run                         # Start REPL
+cargo run -- ldap user alice      # Single command
+cargo run -- --debug ldap user x
 ```
 
 ### Project layout
 
 ```
-crates/
-  osp-cli/         Binary crate, app wiring, tests
-  osp-core/        Domain types (OutputFormat, Row, RuntimeHints)
-  osp-config/      Config resolution, interpolation, secrets
-  osp-dsl/         Pipeline DSL parser and evaluator
-  osp-ports/       Service trait definitions
-  osp-api/         Mock service implementations
-  osp-services/    Business logic orchestration
-  osp-ui/          Output formatting (table, JSON, markdown)
-  osp-completion/  Tab completion engine
-  osp-repl/        REPL shell mechanics
+src/              Canonical single-crate implementation
+tests/            Root package integration/contract/e2e tests
+workspace/        Legacy multi-crate compatibility mirror
 docs/              Architecture docs, specs, plans
 ```
 

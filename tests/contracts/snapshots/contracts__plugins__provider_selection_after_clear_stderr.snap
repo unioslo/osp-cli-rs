@@ -1,0 +1,10 @@
+---
+source: tests/contracts/plugins.rs
+assertion_line: 769
+expression: sanitized
+---
+<TIMESTAMP>Z  WARN osp_cli::osp_cli::plugin_manager::state: plugin command requires explicit provider selection command=shared providers="alpha-provider (env), beta-provider (env)"
+- Errors ---
+- command shared is provided by multiple plugins: alpha-provider (env), beta-provider (env)
+Hint: rerun with --plugin-provider <plugin-id> or persist a default with osp plugins select-provider <command> <plugin-id>
+------------

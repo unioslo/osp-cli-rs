@@ -1,0 +1,6 @@
+---
+source: src/osp_cli/app/tests/presentation.rs
+assertion_line: 191
+expression: "render_prompt_snapshot(&[(\"ui.presentation\", \"austere\")])"
+---
+default>

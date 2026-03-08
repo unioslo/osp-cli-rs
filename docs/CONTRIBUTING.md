@@ -69,7 +69,7 @@ GitHub Actions runs two separate lanes:
   Runs on `pull_request` and pushes to `main`.
   It enforces:
   - `./scripts/check-rust-fast.sh`
-  - foundation package checks
+  - root package checks
   - workspace compatibility tests
   - the coverage gate
 
@@ -81,13 +81,12 @@ GitHub Actions runs two separate lanes:
   - Windows `x86_64-pc-windows-msvc`
 
 The release workflow publishes GitHub release assets, not `crates.io` packages.
-Release artifacts are currently built from `foundation/Cargo.toml`, while the old
+Release artifacts are built from the root single-crate package, while the old
 workspace remains the compatibility lane in CI.
 
-Release tags are expected to match the workspace version exactly. The generated
-foundation crate inherits that version, so the tag still follows the root
-`Cargo.toml` workspace version. For example, if `Cargo.toml` says `0.1.0`, the
-release tag must be `v0.1.0`.
+Release tags are expected to match the root package version exactly. The legacy
+workspace mirror follows that same version. For example, if `Cargo.toml` says
+`0.1.0`, the release tag must be `v0.1.0`.
 
 Typical release flow:
 
@@ -102,7 +101,7 @@ just release-sign
 
 ## Version Bumps
 
-Use the bump helper to advance the workspace version and create the next release
+Use the bump helper to advance the package version and create the next release
 notes stub:
 
 ```bash
@@ -116,8 +115,9 @@ just bump-dry patch "Preview the next release"
 
 This updates:
 
-- `Cargo.toml` workspace version
-- workspace package entries in `Cargo.lock`
+- root `Cargo.toml` package version
+- legacy `workspace/Cargo.toml` mirror version
+- legacy workspace package entries in `workspace/Cargo.lock`
 - `docs/releases/vX.Y.Z.md` if it does not already exist
 - `CHANGELOG.md` with a matching version section if it does not already exist
 
@@ -135,10 +135,10 @@ just release-check
 
 That enforces the same release prerequisites locally:
 
-- release notes exist for the current workspace version
-- `CHANGELOG.md` has a finished section for the current workspace version
+- release notes exist for the current package version
+- `CHANGELOG.md` has a finished section for the current package version
 - fast fmt/clippy checks pass
-- foundation package checks pass
+- root package checks pass
 - workspace compatibility tests pass
 - the coverage gate passes
 
@@ -162,8 +162,8 @@ This repository keeps a checked-in coverage baseline in
 
 The enforced policy is:
 
-- full workspace line coverage must not drop below the baseline
-- changed Rust source files under `crates/*/src/` must stay at or above `90%`
+- full root-package line coverage must not drop below the baseline
+- changed Rust source files under `src/` must stay at or above `90%`
 - tiny files under `20` executable lines are skipped for the per-file rule
 
 Run it manually with:
@@ -208,7 +208,7 @@ So the pragmatic policy is:
 The local `pre-push` path is intentionally approximate:
 
 - it only runs `cargo llvm-cov` for the changed package set when the diff is narrow
-- it falls back to full workspace coverage for broader changes
+- it falls back to full root-package coverage for broader changes
 - it enforces the changed-file floor, but leaves the full-workspace baseline check to CI
 
 ## Updating The Baseline

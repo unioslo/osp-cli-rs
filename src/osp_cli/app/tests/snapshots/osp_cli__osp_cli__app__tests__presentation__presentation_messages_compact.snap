@@ -1,0 +1,10 @@
+---
+source: src/osp_cli/app/tests/presentation.rs
+assertion_line: 171
+expression: "render_message_snapshot(&[(\"ui.presentation\", \"compact\")])"
+---
+- Errors ---------
+- bad
+
+- Warnings -------
+- careful

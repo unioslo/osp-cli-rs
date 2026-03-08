@@ -1,0 +1,12 @@
+---
+source: src/osp_cli/app/tests/presentation.rs
+assertion_line: 167
+expression: "render_message_snapshot(&[(\"ui.presentation\", \"expressive\")])"
+---
+- Errors ---------
+- bad
+------------------
+
+- Warnings -------
+- careful
+------------------

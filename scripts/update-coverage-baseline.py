@@ -56,12 +56,11 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="osp-cov-baseline-") as tmp_dir:
         report_path = Path(tmp_dir) / "coverage.json"
-        print("Running full workspace coverage for baseline update...")
+        print("Running full root-package coverage for baseline update...")
         subprocess.run(
             [
                 "cargo",
                 "llvm-cov",
-                "--workspace",
                 "--all-features",
                 "--json",
                 f"--output-path={report_path}",

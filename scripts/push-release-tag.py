@@ -17,9 +17,9 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def workspace_version(root: Path) -> str:
+def package_version(root: Path) -> str:
     cargo = tomllib.loads((root / "Cargo.toml").read_text())
-    return cargo["workspace"]["package"]["version"]
+    return cargo["package"]["version"]
 
 
 def tag_exists(root: Path, tag: str) -> bool:
@@ -72,7 +72,7 @@ def main() -> None:
     parser.add_argument(
         "tag",
         nargs="?",
-        help="Release tag to create, for example v0.1.0. Defaults to the workspace version.",
+        help="Release tag to create, for example v0.1.0. Defaults to the root package version.",
     )
     parser.add_argument(
         "--sign",
@@ -87,7 +87,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = repo_root()
-    tag = args.tag or f"v{workspace_version(root)}"
+    tag = args.tag or f"v{package_version(root)}"
     if not tag.startswith("v"):
         fail(f"release tag must start with 'v': {tag}")
 

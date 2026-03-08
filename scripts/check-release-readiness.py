@@ -17,9 +17,9 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def workspace_version(root: Path) -> str:
+def package_version(root: Path) -> str:
     cargo = tomllib.loads((root / "Cargo.toml").read_text())
-    return cargo["workspace"]["package"]["version"]
+    return cargo["package"]["version"]
 
 
 def normalize_version(value: str) -> str:
@@ -80,16 +80,16 @@ def main() -> None:
     parser.add_argument(
         "version",
         nargs="?",
-        help="Version or tag to validate, for example 0.1.0 or v0.1.0. Defaults to workspace version.",
+        help="Version or tag to validate, for example 0.1.0 or v0.1.0. Defaults to the root package version.",
     )
     args = parser.parse_args()
 
     root = repo_root()
-    expected = workspace_version(root)
+    expected = package_version(root)
     requested = validate_version(args.version or expected)
     if requested != expected:
         fail(
-            f"release notes version {requested} does not match workspace version {expected}"
+            f"release notes version {requested} does not match package version {expected}"
         )
 
     notes = release_notes_path(root, requested)

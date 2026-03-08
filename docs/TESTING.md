@@ -5,10 +5,10 @@ This mirrors `osprov-cli`: `unit`, `integration`, `contracts`, `e2e`.
 
 ## Test Layout
 
-Workspace tests are currently anchored in `crates/osp-cli/tests/`:
+Root package tests are currently anchored in `tests/`:
 
 ```text
-crates/osp-cli/tests/
+tests/
   unit.rs
   integration.rs
   contracts.rs
@@ -52,10 +52,11 @@ Per-crate internal unit tests may also exist in `src/lib.rs` modules
 
 ## Commands
 
-- Full workspace: `cargo test`
-- CLI contracts only: `cargo test -p osp-cli --test contracts`
-- DSL crate only: `cargo test -p osp-dsl`
-- Services crate only: `cargo test -p osp-services`
+- Root package: `cargo test`
+- CLI contracts only: `cargo test --test contracts`
+- Legacy workspace CLI contracts: `cargo test --manifest-path workspace/Cargo.toml -p osp-cli --test contracts`
+- Legacy workspace DSL crate only: `cargo test --manifest-path workspace/Cargo.toml -p osp-dsl`
+- Legacy workspace services crate only: `cargo test --manifest-path workspace/Cargo.toml -p osp-services`
 - Review snapshots: `cargo insta review`
 - Re-record snapshots during a focused run: `cargo insta test -p osp-cli`
 
@@ -107,4 +108,4 @@ In short:
 - [ ] Contract test covers user-facing behavior.
 - [ ] Integration test covers cross-crate flow.
 - [ ] Unit tests only where risk justifies them.
-- [ ] `cargo test` passes at workspace root.
+- [ ] `cargo test` passes at repo root.

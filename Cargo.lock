@@ -300,7 +300,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "958c5d6ecf1f214b4c2bbbbf6ab9523a864bd136dcf71a7e8904799acfe1ad47"
 dependencies = [
  "ansi-str",
- "console 0.16.0",
+ "console 0.16.2",
  "crossterm 0.29.0",
  "unicode-segmentation",
  "unicode-width 0.2.2",
@@ -321,15 +321,15 @@ dependencies = [
 
 [[package]]
 name = "console"
-version = "0.16.0"
+version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e09ced7ebbccb63b4c65413d821f2e00ce54c5ca4514ddc6b3c892fdbcbc69d"
+checksum = "03e45a4a8926227e4197636ba97a9fc9b00477e9f4bd711395687c5f0734bec4"
 dependencies = [
  "encode_unicode",
  "libc",
  "once_cell",
  "unicode-width 0.2.2",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -722,9 +722,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
-version = "0.2.182"
+version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
+checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 
 [[package]]
 name = "linux-raw-sys"
@@ -910,36 +910,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "osp-api"
-version = "1.4.5"
-dependencies = [
- "anyhow",
- "osp-core",
- "osp-ports",
- "regex",
- "serde_json",
-]
-
-[[package]]
 name = "osp-cli"
 version = "1.4.5"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "chrono",
  "clap",
+ "comfy-table",
+ "dialoguer",
+ "fuzzy-matcher",
+ "indicatif",
  "insta",
  "miette",
- "osp-api",
- "osp-completion",
- "osp-config",
- "osp-core",
- "osp-dsl",
- "osp-ports",
- "osp-repl",
- "osp-ui",
+ "nu-ansi-term",
  "portable-pty",
  "predicates",
+ "proptest",
  "quote",
+ "reedline",
+ "regex",
  "semver",
  "serde",
  "serde_json",
@@ -947,96 +937,10 @@ dependencies = [
  "shell-words",
  "syn",
  "terminal_size",
+ "thiserror 2.0.18",
  "toml",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "osp-completion"
-version = "1.4.5"
-dependencies = [
- "fuzzy-matcher",
-]
-
-[[package]]
-name = "osp-config"
-version = "1.4.5"
-dependencies = [
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "osp-core"
-version = "1.4.5"
-dependencies = [
- "clap",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "osp-dsl"
-version = "1.4.5"
-dependencies = [
- "anyhow",
- "osp-core",
- "proptest",
- "regex",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "osp-ports"
-version = "1.4.5"
-dependencies = [
- "anyhow",
- "osp-core",
- "regex",
- "serde_json",
-]
-
-[[package]]
-name = "osp-repl"
-version = "1.4.5"
-dependencies = [
- "anyhow",
- "chrono",
- "fuzzy-matcher",
- "nu-ansi-term",
- "osp-completion",
- "reedline",
- "serde",
- "serde_json",
- "unicode-width 0.2.2",
-]
-
-[[package]]
-name = "osp-services"
-version = "1.4.5"
-dependencies = [
- "anyhow",
- "osp-api",
- "osp-config",
- "osp-core",
- "osp-dsl",
- "osp-ports",
- "shell-words",
-]
-
-[[package]]
-name = "osp-ui"
-version = "1.4.5"
-dependencies = [
- "comfy-table",
- "dialoguer",
- "indicatif",
- "nu-ansi-term",
- "osp-core",
- "serde_json",
- "terminal_size",
  "unicode-width 0.2.2",
 ]
 
@@ -2305,9 +2209,9 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winnow"
-version = "0.7.14"
+version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"
+checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
 ]
