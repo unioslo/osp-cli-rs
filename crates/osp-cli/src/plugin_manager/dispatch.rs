@@ -5,6 +5,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const ETXTBSY_RETRY_COUNT: usize = 5;
+const ETXTBSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 enum CommandRunError {
     Execute(std::io::Error),
@@ -236,7 +238,7 @@ fn run_command_with_timeout(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
-    let mut child = command.spawn().map_err(CommandRunError::Execute)?;
+    let mut child = spawn_command_with_retry(&mut command).map_err(CommandRunError::Execute)?;
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
 
     loop {
@@ -256,6 +258,24 @@ fn run_command_with_timeout(
             Err(source) => return Err(CommandRunError::Execute(source)),
         }
     }
+}
+
+fn spawn_command_with_retry(command: &mut Command) -> std::io::Result<Child> {
+    for attempt in 0..=ETXTBSY_RETRY_COUNT {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(err) if is_text_file_busy(&err) && attempt < ETXTBSY_RETRY_COUNT => {
+                thread::sleep(ETXTBSY_RETRY_DELAY);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    unreachable!("retry loop should always return or error");
+}
+
+fn is_text_file_busy(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(26)
 }
 
 #[cfg(unix)]
