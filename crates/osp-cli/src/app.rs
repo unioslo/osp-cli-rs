@@ -28,6 +28,7 @@ use crate::plugin_manager::{
 use crate::state::{
     AppClients, AppRuntime, AppSession, AuthState, LaunchContext, TerminalKind, UiState,
 };
+use crate::ui_sink::{StdIoUiSink, UiSink};
 
 use crate::repl;
 
@@ -138,12 +139,21 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
+    let mut sink = StdIoUiSink;
+    run_from_with_sink(args, &mut sink)
+}
+
+pub(crate) fn run_from_with_sink<I, T>(args: I, sink: &mut dyn UiSink) -> Result<i32>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
     let argv = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
     init_developer_logging(bootstrap_logging_config(&argv));
     let scanned = scan_cli_argv(&argv)?;
     match Cli::try_parse_from(scanned.argv.iter().cloned()) {
-        Ok(cli) => run(cli, scanned.invocation),
-        Err(err) => handle_clap_parse_error(&argv, &scanned.invocation, err),
+        Ok(cli) => run(cli, scanned.invocation, sink),
+        Err(err) => handle_clap_parse_error(&argv, &scanned.invocation, err, sink),
     }
 }
 
@@ -151,6 +161,7 @@ fn handle_clap_parse_error(
     args: &[OsString],
     invocation: &InvocationOptions,
     err: clap::Error,
+    sink: &mut dyn UiSink,
 ) -> Result<i32> {
     match err.kind() {
         clap::error::ErrorKind::DisplayHelp => {
@@ -160,11 +171,11 @@ fn handle_clap_parse_error(
                 &help_context.settings.resolve_render_settings(),
                 help_context.layout,
             );
-            print!("{rendered}");
+            sink.write_stdout(&rendered);
             Ok(0)
         }
         clap::error::ErrorKind::DisplayVersion => {
-            print!("{err}");
+            sink.write_stdout(&err.to_string());
             Ok(0)
         }
         _ => Err(report_std_error_with_context(
@@ -176,7 +187,7 @@ fn handle_clap_parse_error(
 
 // Keep the top-level CLI entrypoint readable as a table of contents:
 // normalize input -> bootstrap runtime state -> hand off to the selected mode.
-fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
+fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Result<i32> {
     let run_started = Instant::now();
     if invocation.cache {
         return Err(miette!(
@@ -289,6 +300,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
             &state.clients,
             &effective_invocation,
             Commands::Repl(args),
+            sink,
         ),
         RunAction::Plugins(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
@@ -296,6 +308,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
             &state.clients,
             &effective_invocation,
             Commands::Plugins(args),
+            sink,
         ),
         RunAction::Doctor(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
@@ -303,6 +316,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
             &state.clients,
             &effective_invocation,
             Commands::Doctor(args),
+            sink,
         ),
         RunAction::Theme(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
@@ -310,6 +324,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
             &state.clients,
             &effective_invocation,
             Commands::Theme(args),
+            sink,
         ),
         RunAction::Config(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
@@ -317,6 +332,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
             &state.clients,
             &effective_invocation,
             Commands::Config(args),
+            sink,
         ),
         RunAction::History(args) => run_builtin_cli_command_parts(
             &mut state.runtime,
@@ -324,6 +340,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
             &state.clients,
             &effective_invocation,
             Commands::History(args),
+            sink,
         ),
         RunAction::External(ref tokens) => run_external_command(
             &mut state.runtime,
@@ -339,6 +356,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
                     &effective_invocation.ui,
                 ),
                 result,
+                sink,
             )
         }),
     };
@@ -369,7 +387,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions) -> Result<i32> {
                 .resolve_render_settings(),
         );
         if !footer.is_empty() {
-            eprint!("{footer}");
+            sink.write_stderr(&footer);
         }
     }
 
@@ -395,6 +413,7 @@ fn run_builtin_cli_command_parts(
     clients: &AppClients,
     invocation: &EffectiveInvocation,
     command: Commands,
+    sink: &mut dyn UiSink,
 ) -> Result<i32> {
     let result = dispatch_builtin_command_parts(
         runtime,
@@ -408,6 +427,7 @@ fn run_builtin_cli_command_parts(
     run_cli_command(
         &CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
         result,
+        sink,
     )
 }
 

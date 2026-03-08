@@ -16,6 +16,7 @@ use std::sync::Arc;
 use crate::state::{AppRuntime, AppSession, AppState};
 use crate::state::{AuthState, ReplScopeStack, UiState};
 use crate::theme_loader::ThemeCatalog;
+use crate::ui_sink::StdIoUiSink;
 
 use crate::app;
 use crate::app::{CliCommandResult, document_from_json};
@@ -64,11 +65,13 @@ impl<'a> ReplViewContext<'a> {
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     let mut loop_state =
         lifecycle::ReplLoopState::new(effective_repl_intro(state.runtime.config.resolved()));
+    let mut sink = StdIoUiSink;
 
     loop {
         let cycle =
             loop_state.prepare_cycle(&mut state.runtime, &mut state.session, &mut state.clients)?;
         loop_state.render_cycle_chrome(
+            &mut sink,
             ReplViewContext::from_parts(&state.runtime, &state.session),
             &cycle.help_text,
         );
@@ -108,7 +111,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             },
         )
         .map_err(|err| miette!("{err:#}"))?;
-        if let Some(code) = loop_state.apply_run_result(result) {
+        if let Some(code) = loop_state.apply_run_result(&mut sink, result) {
             return Ok(code);
         }
     }

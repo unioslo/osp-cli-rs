@@ -4,6 +4,7 @@ use osp_repl::{HistoryConfig, ReplAppearance, ReplPrompt, ReplReloadKind, ReplRu
 
 use crate::app;
 use crate::state::{AppClients, AppRuntime, AppSession};
+use crate::ui_sink::UiSink;
 
 use super::ReplViewContext;
 use super::completion;
@@ -44,16 +45,25 @@ impl ReplLoopState {
         ReplCycle::prepare(runtime, session, clients, self.show_intro)
     }
 
-    pub(super) fn render_cycle_chrome(&mut self, view: ReplViewContext<'_>, help_text: &str) {
+    pub(super) fn render_cycle_chrome(
+        &mut self,
+        sink: &mut dyn UiSink,
+        view: ReplViewContext<'_>,
+        help_text: &str,
+    ) {
         let output =
             build_cycle_chrome_output(view, help_text, self.show_intro, &self.pending_output);
         if !output.is_empty() {
-            print!("{output}");
+            sink.write_stdout(&output);
         }
         self.pending_output.clear();
     }
 
-    pub(super) fn apply_run_result(&mut self, result: ReplRunResult) -> Option<i32> {
+    pub(super) fn apply_run_result(
+        &mut self,
+        sink: &mut dyn UiSink,
+        result: ReplRunResult,
+    ) -> Option<i32> {
         match result {
             ReplRunResult::Exit(code) => Some(code),
             ReplRunResult::Restart { output, reload } => {
@@ -62,7 +72,7 @@ impl ReplLoopState {
                 if self.show_intro {
                     self.pending_output = output;
                 } else if !output.is_empty() {
-                    print!("{output}");
+                    sink.write_stdout(&output);
                 }
                 None
             }
@@ -129,6 +139,7 @@ mod tests {
     use crate::repl::ReplViewContext;
     use crate::state::{AuthState, ReplScopeStack, UiState};
     use crate::theme_loader::ThemeCatalog;
+    use crate::ui_sink::BufferedUiSink;
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use osp_core::output::OutputFormat;
     use osp_repl::{ReplReloadKind, ReplRunResult};
@@ -138,31 +149,45 @@ mod tests {
     #[test]
     fn apply_run_result_handles_exit_and_restart_modes() {
         let mut loop_state = ReplLoopState::new(true);
-        assert_eq!(loop_state.apply_run_result(ReplRunResult::Exit(7)), Some(7));
+        let mut sink = BufferedUiSink::default();
+        assert_eq!(
+            loop_state.apply_run_result(&mut sink, ReplRunResult::Exit(7)),
+            Some(7)
+        );
 
         let mut loop_state = ReplLoopState::new(false);
+        let mut sink = BufferedUiSink::default();
         assert_eq!(
-            loop_state.apply_run_result(ReplRunResult::Restart {
-                output: "hello".to_string(),
-                reload: ReplReloadKind::WithIntro,
-            }),
+            loop_state.apply_run_result(
+                &mut sink,
+                ReplRunResult::Restart {
+                    output: "hello".to_string(),
+                    reload: ReplReloadKind::WithIntro,
+                }
+            ),
             None
         );
         assert!(loop_state.pending_reload);
         assert!(loop_state.show_intro);
         assert_eq!(loop_state.pending_output, "hello");
+        assert!(sink.stdout.is_empty());
 
         let mut loop_state = ReplLoopState::new(true);
+        let mut sink = BufferedUiSink::default();
         assert_eq!(
-            loop_state.apply_run_result(ReplRunResult::Restart {
-                output: "ignored".to_string(),
-                reload: ReplReloadKind::Default,
-            }),
+            loop_state.apply_run_result(
+                &mut sink,
+                ReplRunResult::Restart {
+                    output: "ignored".to_string(),
+                    reload: ReplReloadKind::Default,
+                }
+            ),
             None
         );
         assert!(loop_state.pending_reload);
         assert!(!loop_state.show_intro);
         assert!(loop_state.pending_output.is_empty());
+        assert_eq!(sink.stdout, "ignored");
     }
 
     #[test]

@@ -17,6 +17,7 @@ use crate::plugin_manager::{
 use crate::repl;
 use crate::repl::{completion, dispatch as repl_dispatch, help as repl_help, surface};
 use crate::state::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
+use crate::ui_sink::BufferedUiSink;
 use clap::Parser;
 use osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
@@ -164,6 +165,50 @@ fn default_plugin_error_render_preserves_primary_detail_unit() {
 
     assert!(rendered.contains("plugin ldap exited with status 7: backend exploded"));
     assert!(rendered.contains("Hint:"));
+}
+
+#[test]
+fn run_from_with_sink_routes_help_to_stdout_unit() {
+    let mut sink = BufferedUiSink::default();
+
+    let exit = super::run_from_with_sink(["osp", "--help"], &mut sink).expect("help should render");
+
+    assert_eq!(exit, 0);
+    assert!(!sink.stdout.is_empty());
+    assert!(sink.stdout.contains("osp [OPTIONS]"));
+    assert!(sink.stderr.is_empty());
+}
+
+#[test]
+fn run_cli_command_routes_messages_stdout_and_stderr_through_sink_unit() {
+    let config = test_config(&[]);
+    let ui = crate::state::UiState {
+        render_settings: RenderSettings::test_plain(OutputFormat::Value),
+        message_verbosity: MessageLevel::Success,
+        debug_verbosity: 0,
+    };
+    let runtime = super::CommandRenderRuntime::new(&config, &ui);
+    let mut sink = BufferedUiSink::default();
+    let mut messages = MessageBuffer::default();
+    messages.success("done");
+
+    let exit = super::run_cli_command(
+        &runtime,
+        super::CliCommandResult {
+            exit_code: 7,
+            messages,
+            output: Some(super::ReplCommandOutput::Text("payload\n".to_string())),
+            stderr_text: Some("warn\n".to_string()),
+            failure_report: None,
+        },
+        &mut sink,
+    )
+    .expect("command output should render");
+
+    assert_eq!(exit, 7);
+    assert_eq!(sink.stdout, "payload\n");
+    assert!(sink.stderr.contains("done"));
+    assert!(sink.stderr.contains("warn"));
 }
 
 #[test]

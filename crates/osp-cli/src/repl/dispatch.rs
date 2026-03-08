@@ -16,6 +16,7 @@ use crate::cli::{
 use crate::invocation::{append_invocation_help_if_verbose, scan_command_tokens};
 use crate::rows::output::output_to_rows;
 use crate::state::{AppClients, AppRuntime, AppSession};
+use crate::ui_sink::{StdIoUiSink, UiSink};
 
 use super::{ReplViewContext, completion, help, input, presentation, surface};
 
@@ -43,7 +44,8 @@ pub(crate) fn execute_repl_plugin_line(
     line: &str,
 ) -> Result<ReplLineResult> {
     let started = Instant::now();
-    match execute_repl_plugin_line_inner(runtime, session, clients, history, line) {
+    let mut sink = StdIoUiSink;
+    match execute_repl_plugin_line_inner(runtime, session, clients, history, line, &mut sink) {
         Ok(result) => Ok(result),
         Err(err) => {
             if runtime.ui.debug_verbosity > 0 {
@@ -71,6 +73,7 @@ fn execute_repl_plugin_line_inner(
     clients: &AppClients,
     history: &SharedHistory,
     line: &str,
+    sink: &mut dyn UiSink,
 ) -> Result<ReplLineResult> {
     let started = Instant::now();
     let raw = line.trim();
@@ -153,6 +156,7 @@ fn execute_repl_plugin_line_inner(
         &invocation.stages,
         output,
         &invocation.effective,
+        sink,
     )?;
     let finished = Instant::now();
     session.record_prompt_timing(
@@ -436,6 +440,7 @@ fn render_repl_command_output(
     stages: &[String],
     result: crate::app::CliCommandResult,
     invocation: &EffectiveInvocation,
+    sink: &mut dyn UiSink,
 ) -> Result<String> {
     let crate::app::CliCommandResult {
         exit_code,
@@ -458,10 +463,11 @@ fn render_repl_command_output(
             &invocation.ui,
             &messages,
             invocation.ui.message_verbosity,
+            sink,
         );
     }
 
-    let mut rendered = match output {
+    let rendered = match output {
         Some(crate::app::ReplCommandOutput::Output {
             output,
             format_hint,
@@ -476,6 +482,7 @@ fn render_repl_command_output(
             app::maybe_copy_output_with_runtime(
                 &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
                 &output,
+                sink,
             );
             rendered
         }
@@ -489,7 +496,7 @@ fn render_repl_command_output(
     if let Some(stderr_text) = stderr_text
         && !stderr_text.is_empty()
     {
-        rendered.push_str(&stderr_text);
+        sink.write_stderr(&stderr_text);
     }
 
     Ok(rendered)
@@ -1285,9 +1292,12 @@ For more information, try '--help'.\n";
 
     #[test]
     fn render_repl_command_output_handles_text_none_and_stderr_unit() {
+        use crate::ui_sink::BufferedUiSink;
+
         let mut state =
             make_state_with_plugins(crate::plugin_manager::PluginManager::new(Vec::new()));
         let invocation = super::base_repl_invocation(&state.runtime);
+        let mut sink = BufferedUiSink::default();
 
         let rendered = render_repl_command_output(
             &state.runtime,
@@ -1302,9 +1312,11 @@ For more information, try '--help'.\n";
                 failure_report: None,
             },
             &invocation,
+            &mut sink,
         )
         .expect("text output should render");
-        assert_eq!(rendered, "hello\nwarn\n");
+        assert_eq!(rendered, "hello");
+        assert_eq!(sink.stderr, "\nwarn\n");
 
         let empty = render_repl_command_output(
             &state.runtime,
@@ -1313,6 +1325,7 @@ For more information, try '--help'.\n";
             &[],
             CliCommandResult::exit(0),
             &invocation,
+            &mut sink,
         )
         .expect("empty result should render");
         assert!(empty.is_empty());

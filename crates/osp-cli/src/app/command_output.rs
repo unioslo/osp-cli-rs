@@ -13,6 +13,7 @@ use crate::app::resolve_effective_render_settings;
 use crate::rows::output::plugin_data_to_output_result;
 use crate::state::UiState;
 use crate::ui_presentation::effective_message_layout;
+use crate::ui_sink::UiSink;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ReplCommandOutput {
@@ -118,17 +119,23 @@ impl<'a> CommandRenderRuntime<'a> {
 pub(crate) fn run_cli_command(
     runtime: &CommandRenderRuntime<'_>,
     result: CliCommandResult,
+    sink: &mut dyn UiSink,
 ) -> Result<i32> {
     if !result.messages.is_empty() {
-        emit_messages_with_runtime(runtime, &result.messages, runtime.ui().message_verbosity);
+        emit_messages_with_runtime(
+            runtime,
+            &result.messages,
+            runtime.ui().message_verbosity,
+            sink,
+        );
     }
     if let Some(output) = result.output {
-        render_cli_output(runtime, output);
+        render_cli_output(runtime, output, sink);
     }
     if let Some(stderr_text) = result.stderr_text
         && !stderr_text.is_empty()
     {
-        eprint!("{stderr_text}");
+        sink.write_stderr(&stderr_text);
     }
     Ok(result.exit_code)
 }
@@ -138,6 +145,7 @@ pub(crate) fn emit_messages_for_ui(
     ui: &UiState,
     messages: &MessageBuffer,
     verbosity: MessageLevel,
+    sink: &mut dyn UiSink,
 ) {
     let resolved = ui.render_settings.resolve_render_settings();
     let message_layout = effective_message_layout(config);
@@ -152,7 +160,7 @@ pub(crate) fn emit_messages_for_ui(
         style_overrides: resolved.style_overrides.clone(),
     });
     if !rendered.is_empty() {
-        eprint!("{rendered}");
+        sink.write_stderr(&rendered);
     }
 }
 
@@ -160,13 +168,15 @@ pub(crate) fn emit_messages_with_runtime(
     runtime: &CommandRenderRuntime<'_>,
     messages: &MessageBuffer,
     verbosity: MessageLevel,
+    sink: &mut dyn UiSink,
 ) {
-    emit_messages_for_ui(runtime.config(), runtime.ui(), messages, verbosity);
+    emit_messages_for_ui(runtime.config(), runtime.ui(), messages, verbosity, sink);
 }
 
 pub(crate) fn maybe_copy_output_with_runtime(
     runtime: &CommandRenderRuntime<'_>,
     output: &OutputResult,
+    sink: &mut dyn UiSink,
 ) {
     if !output.meta.wants_copy {
         return;
@@ -175,7 +185,7 @@ pub(crate) fn maybe_copy_output_with_runtime(
     if let Err(err) = copy_output_to_clipboard(output, &runtime.ui().render_settings, &clipboard) {
         let mut messages = MessageBuffer::default();
         messages.warning(format!("clipboard copy failed: {err}"));
-        emit_messages_with_runtime(runtime, &messages, runtime.ui().message_verbosity);
+        emit_messages_with_runtime(runtime, &messages, runtime.ui().message_verbosity, sink);
     }
 }
 
@@ -281,7 +291,11 @@ pub(crate) fn document_from_json(payload: serde_json::Value) -> Document {
     }
 }
 
-fn render_cli_output(runtime: &CommandRenderRuntime<'_>, output: ReplCommandOutput) {
+fn render_cli_output(
+    runtime: &CommandRenderRuntime<'_>,
+    output: ReplCommandOutput,
+    sink: &mut dyn UiSink,
+) {
     match output {
         ReplCommandOutput::Output {
             output,
@@ -289,17 +303,14 @@ fn render_cli_output(runtime: &CommandRenderRuntime<'_>, output: ReplCommandOutp
         } => {
             let effective =
                 resolve_effective_render_settings(&runtime.ui().render_settings, format_hint);
-            print!("{}", render_output(&output, &effective));
-            maybe_copy_output_with_runtime(runtime, &output);
+            sink.write_stdout(&render_output(&output, &effective));
+            maybe_copy_output_with_runtime(runtime, &output, sink);
         }
         ReplCommandOutput::Document(document) => {
-            print!(
-                "{}",
-                render_document(&document, &runtime.ui().render_settings)
-            );
+            sink.write_stdout(&render_document(&document, &runtime.ui().render_settings));
         }
         ReplCommandOutput::Text(text) => {
-            print!("{text}");
+            sink.write_stdout(&text);
         }
     }
 }

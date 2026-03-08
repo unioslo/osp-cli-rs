@@ -10,6 +10,7 @@ mod rows;
 pub mod state;
 mod theme_loader;
 mod ui_presentation;
+mod ui_sink;
 
 pub use app::{classify_exit_code, render_report_message, run_from};
 pub use cli::Cli;
