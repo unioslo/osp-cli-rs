@@ -214,6 +214,7 @@ mod tests {
             message_verbosity: MessageLevel::Success,
             debug_verbosity: 0,
             plugins: crate::plugin::PluginManager::new(Vec::new()),
+            native_commands: crate::native::NativeCommandRegistry::default(),
             themes: crate::ui::theme_loader::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         })

@@ -1,6 +1,7 @@
 use crate::config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
 use crate::core::output::OutputFormat;
 use crate::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
+use crate::native::{NativeCommandCatalogEntry, NativeCommandRegistry};
 use crate::repl::{self, SharedHistory, help as repl_help};
 use clap::Parser;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -145,12 +146,24 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
+    run_from_with_sink_and_native(args, sink, &NativeCommandRegistry::default())
+}
+
+pub(crate) fn run_from_with_sink_and_native<I, T>(
+    args: I,
+    sink: &mut dyn UiSink,
+    native_commands: &NativeCommandRegistry,
+) -> Result<i32>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
     let argv = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
     init_developer_logging(bootstrap_logging_config(&argv));
     let scanned = scan_cli_argv(&argv)?;
     match Cli::try_parse_from(scanned.argv.iter().cloned()) {
-        Ok(cli) => run(cli, scanned.invocation, sink),
-        Err(err) => handle_clap_parse_error(&argv, &scanned.invocation, err, sink),
+        Ok(cli) => run(cli, scanned.invocation, sink, native_commands),
+        Err(err) => handle_clap_parse_error(&argv, &scanned.invocation, err, sink, native_commands),
     }
 }
 
@@ -159,12 +172,15 @@ fn handle_clap_parse_error(
     invocation: &InvocationOptions,
     err: clap::Error,
     sink: &mut dyn UiSink,
+    native_commands: &NativeCommandRegistry,
 ) -> Result<i32> {
     match err.kind() {
         clap::error::ErrorKind::DisplayHelp => {
             let help_context = help::render_settings_for_help(args);
+            let body = append_invocation_help_if_verbose(&err.to_string(), invocation);
+            let body = append_native_command_help(body, native_commands);
             let rendered = repl_help::render_help_with_chrome(
-                &append_invocation_help_if_verbose(&err.to_string(), invocation),
+                &body,
                 &help_context.settings.resolve_render_settings(),
                 help_context.layout,
             );
@@ -184,7 +200,12 @@ fn handle_clap_parse_error(
 
 // Keep the top-level CLI entrypoint readable as a table of contents:
 // normalize input -> bootstrap runtime state -> hand off to the selected mode.
-fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Result<i32> {
+fn run(
+    mut cli: Cli,
+    invocation: InvocationOptions,
+    sink: &mut dyn UiSink,
+    native_commands: &NativeCommandRegistry,
+) -> Result<i32> {
     let run_started = Instant::now();
     if invocation.cache {
         return Err(miette!(
@@ -259,6 +280,7 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
         message_verbosity,
         debug_verbosity,
         plugins: plugin_manager,
+        native_commands: native_commands.clone(),
         themes: theme_catalog.clone(),
         launch: launch_context,
     });
@@ -389,14 +411,23 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
 
 pub(crate) fn authorized_command_catalog_for(
     auth: &AuthState,
-    plugins: &PluginManager,
+    clients: &AppClients,
 ) -> Result<Vec<CommandCatalogEntry>> {
-    let all = plugins
+    let mut all = clients
+        .plugins
         .command_catalog()
         .map_err(|err| miette!("{err:#}"))?;
+    all.extend(
+        clients
+            .native_commands
+            .catalog()
+            .into_iter()
+            .map(native_catalog_entry_to_command_catalog_entry),
+    );
+    all.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(all
         .into_iter()
-        .filter(|entry| auth.is_plugin_command_visible(&entry.name))
+        .filter(|entry| auth.is_external_command_visible(&entry.name))
         .collect())
 }
 
@@ -899,10 +930,6 @@ fn build_plugin_dispatch_context(
     ui: &crate::app::UiState,
 ) -> PluginDispatchContext {
     let config_env = clients.plugin_config_env(config);
-    let terminal_kind = match context.terminal_kind() {
-        TerminalKind::Cli => RuntimeTerminalKind::Cli,
-        TerminalKind::Repl => RuntimeTerminalKind::Repl,
-    };
     PluginDispatchContext {
         runtime_hints: RuntimeHints {
             ui_verbosity: to_ui_verbosity(ui.message_verbosity),
@@ -912,7 +939,10 @@ fn build_plugin_dispatch_context(
             unicode: ui.render_settings.unicode,
             profile: Some(config.resolved().active_profile().to_string()),
             terminal: context.terminal_env().map(ToOwned::to_owned),
-            terminal_kind,
+            terminal_kind: match context.terminal_kind() {
+                TerminalKind::Cli => RuntimeTerminalKind::Cli,
+                TerminalKind::Repl => RuntimeTerminalKind::Repl,
+            },
         },
         shared_env: config_env
             .shared
@@ -934,6 +964,58 @@ fn build_plugin_dispatch_context(
             .collect(),
         provider_override: None,
     }
+}
+
+pub(crate) fn runtime_hints_for_runtime(runtime: &crate::app::AppRuntime) -> RuntimeHints {
+    RuntimeHints {
+        ui_verbosity: to_ui_verbosity(runtime.ui.message_verbosity),
+        debug_level: runtime.ui.debug_verbosity.min(3),
+        format: runtime.ui.render_settings.format,
+        color: runtime.ui.render_settings.color,
+        unicode: runtime.ui.render_settings.unicode,
+        profile: Some(runtime.config.resolved().active_profile().to_string()),
+        terminal: runtime.context.terminal_env().map(ToOwned::to_owned),
+        terminal_kind: match runtime.context.terminal_kind() {
+            TerminalKind::Cli => RuntimeTerminalKind::Cli,
+            TerminalKind::Repl => RuntimeTerminalKind::Repl,
+        },
+    }
+}
+
+fn native_catalog_entry_to_command_catalog_entry(
+    entry: NativeCommandCatalogEntry,
+) -> CommandCatalogEntry {
+    CommandCatalogEntry {
+        name: entry.name,
+        about: entry.about,
+        auth: entry.auth,
+        subcommands: entry.subcommands,
+        completion: entry.completion,
+        provider: None,
+        providers: Vec::new(),
+        conflicted: false,
+        requires_selection: false,
+        selected_explicitly: false,
+        source: None,
+    }
+}
+
+fn append_native_command_help(body: String, native_commands: &NativeCommandRegistry) -> String {
+    let catalog = native_commands.catalog();
+    if catalog.is_empty() {
+        return body;
+    }
+
+    let mut out = body.trim_end().to_string();
+    out.push_str("\n\nNative integrations:\n");
+    for entry in catalog {
+        if entry.about.trim().is_empty() {
+            out.push_str(&format!("  {}\n", entry.name));
+        } else {
+            out.push_str(&format!("  {:<12} {}\n", entry.name, entry.about.trim()));
+        }
+    }
+    out
 }
 
 pub(crate) fn resolve_render_settings_with_hint(

@@ -507,6 +507,7 @@ For more information, try '--help'.\n";
             message_verbosity: MessageLevel::Success,
             debug_verbosity: 0,
             plugins,
+            native_commands: crate::native::NativeCommandRegistry::default(),
             themes: crate::ui::theme_loader::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         })

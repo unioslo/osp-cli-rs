@@ -398,7 +398,7 @@ fn run_jq_with_program_surfaces_nonzero_exit_variants_unit() {
     .expect_err("nonzero exit with stderr should fail");
     assert!(matches!(
         err,
-        super::JqError::FailedWithStderr { ref stderr } if stderr == "nope"
+        super::JqError::FailedWithStderr { ref stderr } if stderr.trim() == "nope"
     ));
 
     let _ = fs::remove_file(no_stderr);

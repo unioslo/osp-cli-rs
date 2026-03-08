@@ -1,5 +1,6 @@
 //! Main host-facing entrypoints plus bootstrap/runtime state.
 
+use crate::native::NativeCommandRegistry;
 use crate::ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity};
 use std::ffi::OsString;
 
@@ -34,12 +35,21 @@ pub use session::{
 };
 pub use sink::{BufferedUiSink, StdIoUiSink, UiSink};
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct App;
+#[derive(Clone, Default)]
+pub struct App {
+    native_commands: NativeCommandRegistry,
+}
 
 impl App {
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            native_commands: NativeCommandRegistry::default(),
+        }
+    }
+
+    pub fn with_native_commands(mut self, native_commands: NativeCommandRegistry) -> Self {
+        self.native_commands = native_commands;
+        self
     }
 
     pub fn run_from<I, T>(&self, args: I) -> miette::Result<i32>
@@ -47,7 +57,7 @@ impl App {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        run_from(args)
+        host::run_from_with_sink_and_native(args, &mut StdIoUiSink, &self.native_commands)
     }
 
     pub fn with_sink<'a>(self, sink: &'a mut dyn UiSink) -> AppRunner<'a> {
@@ -59,7 +69,7 @@ impl App {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        host::run_from_with_sink(args, sink)
+        host::run_from_with_sink_and_native(args, sink, &self.native_commands)
     }
 
     pub fn run_process<I, T>(&self, args: I) -> i32
@@ -67,7 +77,8 @@ impl App {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        run_process(args)
+        let mut sink = StdIoUiSink;
+        self.run_process_with_sink(args, &mut sink)
     }
 
     pub fn run_process_with_sink<I, T>(&self, args: I, sink: &mut dyn UiSink) -> i32
@@ -75,7 +86,18 @@ impl App {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        run_process_with_sink(args, sink)
+        let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+        let message_verbosity = bootstrap_message_verbosity(&args);
+
+        match host::run_from_with_sink_and_native(args, sink, &self.native_commands) {
+            Ok(code) => code,
+            Err(err) => {
+                let mut messages = MessageBuffer::default();
+                messages.error(render_report_message(&err, message_verbosity));
+                sink.write_stderr(&messages.render_grouped(message_verbosity));
+                classify_exit_code(&err)
+            }
+        }
     }
 }
 
@@ -102,16 +124,25 @@ impl<'a> AppRunner<'a> {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct AppBuilder;
+#[derive(Clone, Default)]
+pub struct AppBuilder {
+    native_commands: NativeCommandRegistry,
+}
 
 impl AppBuilder {
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            native_commands: NativeCommandRegistry::default(),
+        }
+    }
+
+    pub fn with_native_commands(mut self, native_commands: NativeCommandRegistry) -> Self {
+        self.native_commands = native_commands;
+        self
     }
 
     pub fn build(self) -> App {
-        App::new()
+        App::new().with_native_commands(self.native_commands)
     }
 
     pub fn build_with_sink<'a>(self, sink: &'a mut dyn UiSink) -> AppRunner<'a> {

@@ -922,6 +922,7 @@ dependencies = [
  "fuzzy-matcher",
  "indicatif",
  "insta",
+ "libc",
  "miette",
  "nu-ansi-term",
  "portable-pty",

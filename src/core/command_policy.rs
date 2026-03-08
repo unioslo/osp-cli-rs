@@ -302,6 +302,10 @@ impl CommandPolicyRegistry {
     pub fn contains(&self, path: &CommandPath) -> bool {
         self.entries.contains_key(path)
     }
+
+    pub fn entries(&self) -> impl Iterator<Item = &CommandPolicy> {
+        self.entries.values()
+    }
 }
 
 pub fn evaluate_policy(policy: &CommandPolicy, context: &CommandPolicyContext) -> CommandAccess {

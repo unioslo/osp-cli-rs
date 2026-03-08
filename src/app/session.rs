@@ -5,7 +5,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::config::{ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS};
+use crate::core::command_policy::CommandPolicyRegistry;
 use crate::core::row::Row;
+use crate::native::NativeCommandRegistry;
 use crate::repl::HistoryShellContext;
 
 use super::command_output::CliCommandResult;
@@ -282,6 +284,7 @@ pub(crate) struct AppStateInit {
     pub message_verbosity: crate::ui::messages::MessageLevel,
     pub debug_verbosity: u8,
     pub plugins: crate::plugin::PluginManager,
+    pub native_commands: NativeCommandRegistry,
     pub themes: crate::ui::theme_loader::ThemeCatalog,
     pub launch: LaunchContext,
 }
@@ -301,9 +304,13 @@ impl AppState {
             .command_policy_registry()
             .unwrap_or_else(|err| {
                 tracing::warn!(error = %err, "failed to build plugin command policy registry");
-                crate::core::command_policy::CommandPolicyRegistry::default()
+                CommandPolicyRegistry::default()
             });
-        auth_state.replace_plugin_policy(plugin_policy);
+        let external_policy = merge_policy_registries(
+            plugin_policy,
+            init.native_commands.command_policy_registry(),
+        );
+        auth_state.replace_external_policy(external_policy);
         let session_cache_max_results = crate::app::host::config_usize(
             config_state.resolved(),
             "session.cache.max_results",
@@ -324,7 +331,7 @@ impl AppState {
                 launch: init.launch,
             },
             session: AppSession::with_cache_limit(session_cache_max_results),
-            clients: AppClients::new(init.plugins),
+            clients: AppClients::new(init.plugins, init.native_commands),
         }
     }
 
@@ -366,4 +373,14 @@ impl AppState {
     pub fn repl_cache_size(&self) -> usize {
         self.session.result_cache.len()
     }
+}
+
+fn merge_policy_registries(
+    mut left: CommandPolicyRegistry,
+    right: CommandPolicyRegistry,
+) -> CommandPolicyRegistry {
+    for policy in right.entries() {
+        left.register(policy.clone());
+    }
+    left
 }

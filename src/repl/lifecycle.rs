@@ -38,7 +38,7 @@ impl ReplLoopState {
     ) -> Result<ReplCycle> {
         if std::mem::take(&mut self.pending_reload) {
             let (next_runtime, next_session, next_clients) =
-                app::rebuild_repl_parts(runtime, session)?;
+                app::rebuild_repl_parts(runtime, session, clients)?;
             *runtime = next_runtime;
             *session = next_session;
             *clients = next_clients;
@@ -97,7 +97,7 @@ impl ReplCycle {
         clients: &AppClients,
         include_help_text: bool,
     ) -> Result<Self> {
-        let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
+        let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
         let view = ReplViewContext::from_parts(runtime, session);
         let surface = surface::build_repl_surface(view, &catalog);
         let completion_tree = completion::build_repl_completion_tree(view, &surface);
@@ -146,7 +146,10 @@ pub(crate) fn build_cycle_chrome_output(
 mod tests {
     use super::{ReplLoopState, build_cycle_chrome_output};
     use crate::app::sink::BufferedUiSink;
-    use crate::app::{AuthState, ReplScopeStack, UiState};
+    use crate::app::{
+        AppState, AppStateInit, AuthState, LaunchContext, ReplScopeStack, RuntimeContext,
+        TerminalKind, UiState,
+    };
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
     use crate::repl::ReplViewContext;
@@ -257,5 +260,48 @@ mod tests {
 
         let rendered = build_cycle_chrome_output(view, "Commands\n", false, "Queued\n");
         assert_eq!(rendered, "Queued\n");
+    }
+
+    #[test]
+    fn prepare_cycle_handles_reload_and_builds_surface_unit() {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let config = resolver
+            .resolve(ResolveOptions::default().with_terminal("repl"))
+            .expect("config should resolve");
+
+        let mut state = AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Repl, None),
+            config,
+            render_settings: RenderSettings::test_plain(OutputFormat::Table),
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+            plugins: crate::plugin::PluginManager::new(Vec::new()),
+            native_commands: crate::native::NativeCommandRegistry::default(),
+            themes: ThemeCatalog::default(),
+            launch: LaunchContext::default(),
+        });
+
+        let mut loop_state = ReplLoopState::new(true);
+        let first = loop_state
+            .prepare_cycle(&mut state.runtime, &mut state.session, &mut state.clients)
+            .expect("initial cycle should build");
+        assert!(!first.root_words.is_empty());
+        assert!(first.help_text.contains("help") || first.help_text.contains("config"));
+
+        loop_state.apply_run_result(
+            &mut BufferedUiSink::default(),
+            ReplRunResult::Restart {
+                output: String::new(),
+                reload: ReplReloadKind::Default,
+            },
+        );
+
+        let second = loop_state
+            .prepare_cycle(&mut state.runtime, &mut state.session, &mut state.clients)
+            .expect("reloaded cycle should build");
+        assert!(!second.root_words.is_empty());
     }
 }

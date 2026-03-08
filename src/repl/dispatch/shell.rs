@@ -100,7 +100,7 @@ pub(super) fn enter_repl_shell(
     invocation: &ResolvedInvocation,
 ) -> Result<String> {
     app::ensure_plugin_visible_for(&runtime.auth, command)?;
-    let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
+    let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
     if !catalog.iter().any(|entry| entry.name == command) {
         return Err(miette!("no plugin provides command: {command}"));
     }
@@ -120,7 +120,7 @@ pub(super) fn repl_help_for_scope(
     invocation: &ResolvedInvocation,
 ) -> Result<String> {
     if session.scope.is_root() {
-        let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
+        let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
         let view = ReplViewContext::from_parts(runtime, session);
         let surface = surface::build_repl_surface(view, &catalog);
         return Ok(presentation::render_repl_command_overview(view, &surface));
@@ -153,13 +153,64 @@ mod tests {
     use crate::app::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
+    use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1};
+    use crate::native::{
+        NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
+    };
     use crate::repl::ReplLineResult;
     use crate::repl::dispatch::base_repl_invocation;
     use crate::repl::input::ReplParsedLine;
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
+    use std::collections::BTreeMap;
+
+    struct NativeLdapHelpCommand;
+
+    impl NativeCommand for NativeLdapHelpCommand {
+        fn describe(&self) -> DescribeCommandV1 {
+            DescribeCommandV1 {
+                name: "ldap".to_string(),
+                about: "Directory lookup".to_string(),
+                auth: Some(DescribeCommandAuthV1 {
+                    visibility: Some(DescribeVisibilityModeV1::Public),
+                    required_capabilities: Vec::new(),
+                    feature_flags: Vec::new(),
+                }),
+                args: Vec::new(),
+                flags: BTreeMap::new(),
+                subcommands: vec![DescribeCommandV1 {
+                    name: "user".to_string(),
+                    about: "Look up a user".to_string(),
+                    auth: None,
+                    args: Vec::new(),
+                    flags: BTreeMap::new(),
+                    subcommands: Vec::new(),
+                }],
+            }
+        }
+
+        fn execute(
+            &self,
+            args: &[String],
+            _context: &NativeCommandContext<'_>,
+        ) -> anyhow::Result<NativeCommandOutcome> {
+            let text = if args
+                .first()
+                .is_some_and(|value| value == "help" || value == "--help")
+            {
+                "LDAP HELP\n".to_string()
+            } else {
+                format!("ldap ran: {}\n", args.join(" "))
+            };
+            Ok(NativeCommandOutcome::Help(text))
+        }
+    }
 
     fn app_state() -> AppState {
+        app_state_with_native(NativeCommandRegistry::default())
+    }
+
+    fn app_state_with_native(native_commands: NativeCommandRegistry) -> AppState {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         let mut resolver = ConfigResolver::default();
@@ -175,6 +226,7 @@ mod tests {
             message_verbosity: MessageLevel::Success,
             debug_verbosity: 0,
             plugins: crate::plugin::PluginManager::new(Vec::new()),
+            native_commands,
             themes: crate::ui::theme_loader::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         })
@@ -267,5 +319,32 @@ mod tests {
         )
         .expect_err("direct shell entry should also fail");
         assert!(err.to_string().contains("no plugin provides command: ldap"));
+    }
+
+    #[test]
+    fn native_shell_entry_and_scoped_help_render_unit() {
+        let native = NativeCommandRegistry::new().with_command(NativeLdapHelpCommand);
+        let mut state = app_state_with_native(native);
+        let invocation = base_repl_invocation(&state.runtime);
+
+        let entered = enter_repl_shell(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            "ldap",
+            &invocation,
+        )
+        .expect("native ldap shell should enter");
+        assert!(entered.contains("Entering ldap shell"));
+        assert!(state.session.scope.commands().last().is_some());
+
+        let scoped_help = repl_help_for_scope(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &invocation,
+        )
+        .expect("scoped help should render");
+        assert!(scoped_help.contains("LDAP HELP"));
     }
 }

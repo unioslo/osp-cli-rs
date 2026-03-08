@@ -1,7 +1,5 @@
 use crate::app::{AppClients, AuthState, ConfigState};
-use crate::app::{
-    CliCommandResult, PluginConfigScope, authorized_command_catalog_for, plugin_config_entries,
-};
+use crate::app::{CliCommandResult, PluginConfigScope, plugin_config_entries};
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{
     PluginConfigArgs, PluginProviderClearArgs, PluginProviderSelectArgs, PluginToggleArgs,
@@ -38,8 +36,13 @@ pub(crate) fn run_plugins_command(
             ))
         }
         PluginsCommands::Commands => {
-            let mut commands =
-                authorized_command_catalog_for(context.auth, context.plugin_manager)?;
+            let mut commands = context
+                .plugin_manager
+                .command_catalog()
+                .map_err(|err| miette::miette!("{err:#}"))?
+                .into_iter()
+                .filter(|entry| context.auth.is_plugin_command_visible(&entry.name))
+                .collect::<Vec<_>>();
             commands.sort_by(|a, b| a.name.cmp(&b.name));
             Ok(CliCommandResult::output(
                 rows_to_output_result(command_catalog_rows(&commands)),

@@ -17,6 +17,7 @@ use crate::config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, Ru
 use crate::core::command_policy::{CommandPath, VisibilityMode};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::plugin::{
+    DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, PLUGIN_PROTOCOL_V1,
     ResponseErrorV1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
 };
 use crate::plugin::{
@@ -30,7 +31,9 @@ use crate::ui::document::Block;
 use crate::ui::messages::{MessageBuffer, MessageLevel};
 use crate::ui::presentation::build_presentation_defaults_layer;
 use crate::ui::{RenderSettings, render_output};
+use crate::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
 use clap::Parser;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 
@@ -51,12 +54,28 @@ fn repl_view<'a>(
 }
 
 fn make_completion_state(auth_visible_builtins: Option<&str>) -> AppState {
-    make_completion_state_with_entries(auth_visible_builtins, &[])
+    make_completion_state_with_entries_and_native(
+        auth_visible_builtins,
+        &[],
+        NativeCommandRegistry::default(),
+    )
 }
 
 fn make_completion_state_with_entries(
     auth_visible_builtins: Option<&str>,
     entries: &[(&str, &str)],
+) -> AppState {
+    make_completion_state_with_entries_and_native(
+        auth_visible_builtins,
+        entries,
+        NativeCommandRegistry::default(),
+    )
+}
+
+fn make_completion_state_with_entries_and_native(
+    auth_visible_builtins: Option<&str>,
+    entries: &[(&str, &str)],
+    native_commands: NativeCommandRegistry,
 ) -> AppState {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
@@ -86,9 +105,69 @@ fn make_completion_state_with_entries(
         message_verbosity: MessageLevel::Success,
         debug_verbosity: 0,
         plugins: PluginManager::new(Vec::new()),
+        native_commands,
         themes: crate::ui::theme_loader::ThemeCatalog::default(),
         launch: LaunchContext::default(),
     })
+}
+
+struct TestNativeCommand;
+
+impl NativeCommand for TestNativeCommand {
+    fn describe(&self) -> DescribeCommandV1 {
+        DescribeCommandV1 {
+            name: "ldap".to_string(),
+            about: "Directory lookup".to_string(),
+            auth: Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::Public),
+                required_capabilities: Vec::new(),
+                feature_flags: Vec::new(),
+            }),
+            args: Vec::new(),
+            flags: BTreeMap::new(),
+            subcommands: vec![DescribeCommandV1 {
+                name: "user".to_string(),
+                about: "Look up a user".to_string(),
+                auth: Some(DescribeCommandAuthV1 {
+                    visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+                    required_capabilities: vec!["ldap.user.read".to_string()],
+                    feature_flags: Vec::new(),
+                }),
+                args: Vec::new(),
+                flags: BTreeMap::new(),
+                subcommands: Vec::new(),
+            }],
+        }
+    }
+
+    fn execute(
+        &self,
+        args: &[String],
+        _context: &NativeCommandContext<'_>,
+    ) -> anyhow::Result<NativeCommandOutcome> {
+        if args.iter().any(|arg| arg == "--help") {
+            return Ok(NativeCommandOutcome::Help(
+                "Usage: osp ldap [COMMAND]\n\nCommands:\n  user  Look up a user\n".to_string(),
+            ));
+        }
+
+        Ok(NativeCommandOutcome::Response(ResponseV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            ok: true,
+            data: json!([{ "command": "ldap", "args": args }]),
+            error: None,
+            messages: Vec::new(),
+            meta: ResponseMetaV1 {
+                format_hint: Some("table".to_string()),
+                columns: Some(vec!["command".to_string(), "args".to_string()]),
+                column_align: Vec::new(),
+            },
+        }))
+    }
+}
+
+fn test_native_registry() -> NativeCommandRegistry {
+    NativeCommandRegistry::new().with_command(TestNativeCommand)
 }
 
 fn test_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
@@ -197,6 +276,80 @@ fn app_builder_and_runner_delegate_to_host_paths_unit() {
         0
     );
     assert_eq!(runner.run_process(["osp", "--help"]), 0);
+}
+
+#[test]
+fn app_help_includes_registered_native_commands_unit() {
+    let app = crate::app::AppBuilder::new()
+        .with_native_commands(test_native_registry())
+        .build();
+    let mut sink = BufferedUiSink::default();
+
+    assert_eq!(
+        app.run_with_sink(["osp", "--help"], &mut sink)
+            .expect("help should render"),
+        0
+    );
+    assert!(
+        sink.stdout.contains("Native integrations"),
+        "help output did not include native section:\n{}",
+        sink.stdout
+    );
+    assert!(
+        sink.stdout.contains("ldap"),
+        "help output:\n{}",
+        sink.stdout
+    );
+    assert!(
+        sink.stdout.contains("Directory lookup"),
+        "help output:\n{}",
+        sink.stdout
+    );
+}
+
+#[test]
+fn app_dispatches_top_level_native_commands_unit() {
+    let app = crate::app::AppBuilder::new()
+        .with_native_commands(test_native_registry())
+        .build();
+    let mut sink = BufferedUiSink::default();
+
+    assert_eq!(
+        app.run_with_sink(["osp", "ldap"], &mut sink)
+            .expect("native command should run"),
+        0
+    );
+    assert!(sink.stdout.contains("ldap"));
+}
+
+#[test]
+fn repl_surface_and_policy_include_registered_native_commands_unit() {
+    let state = make_completion_state_with_entries_and_native(
+        None,
+        &[("auth.visible.plugins", "ldap")],
+        test_native_registry(),
+    );
+
+    let catalog = super::authorized_command_catalog_for(&state.runtime.auth, &state.clients)
+        .expect("catalog should render");
+    assert!(catalog.iter().any(|entry| entry.name == "ldap"));
+    assert!(
+        state
+            .runtime
+            .auth
+            .external_command_access("ldap")
+            .is_visible()
+    );
+
+    let repl_surface =
+        surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    assert!(repl_surface.root_words.iter().any(|word| word == "ldap"));
+    assert!(
+        repl_surface
+            .overview_entries
+            .iter()
+            .any(|entry| entry.name == "ldap" && entry.summary.contains("Directory lookup"))
+    );
 }
 
 #[test]
@@ -1138,6 +1291,7 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
         message_verbosity: MessageLevel::Success,
         debug_verbosity: 0,
         plugins: PluginManager::new(plugin_dirs).with_roots(Some(config_root), Some(cache_root)),
+        native_commands: crate::native::NativeCommandRegistry::default(),
         themes: crate::ui::theme_loader::ThemeCatalog::default(),
         launch,
     })

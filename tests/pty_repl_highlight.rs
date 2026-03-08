@@ -57,6 +57,10 @@ fn spawn_repl_with_color() -> PtySession {
     cmd.env("OSP__REPL__INTRO", "none");
     cmd.env("OSP__REPL__SIMPLE_PROMPT", "true");
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
+    // These PTY tests verify highlight rendering, not cursor-probe
+    // auto-detection. Force interactive mode so the harness reliably reaches
+    // the rich REPL path.
+    cmd.env("OSP__REPL__INPUT_MODE", "interactive");
     cmd.env("OSP_PLUGIN_PATH", &plugins);
     cmd.env("OSP_BUNDLED_PLUGIN_DIR", &plugins);
     cmd.env("COLUMNS", "80");

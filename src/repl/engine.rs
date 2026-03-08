@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 use super::highlight::ReplHighlighter;
 pub use super::highlight::{HighlightDebugSpan, debug_highlight};
@@ -594,12 +596,17 @@ where
     };
     let prompt = OspPrompt::new(prompt.left, prompt.indicator, prompt_right);
 
-    if matches!(input_mode, ReplInputMode::Basic)
-        || !io::stdin().is_terminal()
-        || !io::stdout().is_terminal()
-    {
-        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-            eprintln!("Warning: Input is not a terminal (fd=0).");
+    if let Some(reason) = basic_input_reason(input_mode) {
+        match reason {
+            BasicInputReason::NotATerminal => {
+                eprintln!("Warning: Input is not a terminal (fd=0).");
+            }
+            BasicInputReason::CursorProbeUnsupported => {
+                eprintln!(
+                    "Warning: terminal does not support cursor position requests; using basic input mode."
+                );
+            }
+            BasicInputReason::Explicit => {}
         }
         run_repl_basic(&prompt, &mut submission)?;
         return Ok(ReplRunResult::Exit(0));
@@ -700,6 +707,143 @@ fn is_cursor_position_error(err: &io::Error) -> bool {
     message.contains("cursor position could not be read")
         || message.contains("no such device or address")
         || message.contains("inappropriate ioctl")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BasicInputReason {
+    Explicit,
+    NotATerminal,
+    CursorProbeUnsupported,
+}
+
+fn basic_input_reason(input_mode: ReplInputMode) -> Option<BasicInputReason> {
+    if matches!(input_mode, ReplInputMode::Basic) {
+        return Some(BasicInputReason::Explicit);
+    }
+
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Some(BasicInputReason::NotATerminal);
+    }
+
+    if matches!(input_mode, ReplInputMode::Auto) && !cursor_position_reports_supported() {
+        return Some(BasicInputReason::CursorProbeUnsupported);
+    }
+
+    None
+}
+
+#[cfg(not(unix))]
+fn cursor_position_reports_supported() -> bool {
+    true
+}
+
+#[cfg(unix)]
+fn cursor_position_reports_supported() -> bool {
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsRawFd;
+
+    const CURSOR_PROBE_TIMEOUT: Duration = Duration::from_millis(75);
+
+    struct RawModeGuard {
+        fd: i32,
+        original: libc::termios,
+        active: bool,
+    }
+
+    impl Drop for RawModeGuard {
+        fn drop(&mut self) {
+            if self.active {
+                unsafe {
+                    libc::tcsetattr(self.fd, libc::TCSANOW, &self.original);
+                }
+            }
+        }
+    }
+
+    let stdin = io::stdin();
+    let fd = stdin.as_raw_fd();
+    let mut original = MaybeUninit::<libc::termios>::uninit();
+    if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
+        return true;
+    }
+    let original = unsafe { original.assume_init() };
+    let mut raw = original;
+    unsafe {
+        libc::cfmakeraw(&mut raw);
+    }
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+        return true;
+    }
+    let _guard = RawModeGuard {
+        fd,
+        original,
+        active: true,
+    };
+
+    let mut stdout = io::stdout();
+    if stdout.write_all(b"\x1b[6n").is_err() || stdout.flush().is_err() {
+        return true;
+    }
+
+    let start = Instant::now();
+    let mut buffer = Vec::with_capacity(32);
+    while start.elapsed() < CURSOR_PROBE_TIMEOUT {
+        let remaining = CURSOR_PROBE_TIMEOUT
+            .saturating_sub(start.elapsed())
+            .as_millis()
+            .min(i32::MAX as u128) as i32;
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut pollfd, 1, remaining) };
+        if ready <= 0 {
+            break;
+        }
+        let mut chunk = [0u8; 64];
+        let read = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+        if read <= 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read as usize]);
+        if contains_cursor_position_report(&buffer) {
+            return true;
+        }
+        if buffer.len() >= 256 {
+            break;
+        }
+    }
+
+    false
+}
+
+fn contains_cursor_position_report(bytes: &[u8]) -> bool {
+    bytes.windows(2).enumerate().any(|(start, window)| {
+        window == b"\x1b[" && parse_cursor_position_report(&bytes[start..]).is_some()
+    })
+}
+
+fn parse_cursor_position_report(bytes: &[u8]) -> Option<(u16, u16)> {
+    let rest = bytes.strip_prefix(b"\x1b[")?;
+    let row_end = rest.iter().position(|byte| !byte.is_ascii_digit())?;
+    if row_end == 0 || *rest.get(row_end)? != b';' {
+        return None;
+    }
+    let row = std::str::from_utf8(&rest[..row_end])
+        .ok()?
+        .parse::<u16>()
+        .ok()?;
+    let col_rest = &rest[row_end + 1..];
+    let col_end = col_rest.iter().position(|byte| !byte.is_ascii_digit())?;
+    if col_end == 0 || *col_rest.get(col_end)? != b'R' {
+        return None;
+    }
+    let col = std::str::from_utf8(&col_rest[..col_end])
+        .ok()?
+        .parse::<u16>()
+        .ok()?;
+    Some((col, row))
 }
 
 fn run_repl_basic<F>(prompt: &OspPrompt, submission: &mut SubmissionContext<'_, F>) -> Result<()>
@@ -1299,13 +1443,14 @@ mod tests {
     use std::sync::{Arc, Mutex, OnceLock};
 
     use super::{
-        AutoCompleteEmacs, CompletionDebugOptions, DebugStep, HistoryConfig, HistoryShellContext,
-        OspPrompt, PromptRightRenderer, ReplAppearance, ReplCompleter, ReplLineResult, ReplPrompt,
-        ReplReloadKind, ReplRunResult, SharedHistory, SubmissionContext, SubmissionResult,
-        build_repl_highlighter, color_from_style_spec, debug_completion, debug_completion_steps,
-        default_pipe_verbs, expand_history, expand_home, is_cursor_position_error,
-        path_suggestions, process_submission, split_path_stub, trace_completion,
-        trace_completion_enabled,
+        AutoCompleteEmacs, BasicInputReason, CompletionDebugOptions, DebugStep, HistoryConfig,
+        HistoryShellContext, OspPrompt, PromptRightRenderer, ReplAppearance, ReplCompleter,
+        ReplInputMode, ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunResult, SharedHistory,
+        SubmissionContext, SubmissionResult, basic_input_reason, build_repl_highlighter,
+        color_from_style_spec, contains_cursor_position_report, debug_completion,
+        debug_completion_steps, default_pipe_verbs, expand_history, expand_home,
+        is_cursor_position_error, parse_cursor_position_report, path_suggestions,
+        process_submission, split_path_stub, trace_completion, trace_completion_enabled,
     };
     use crate::repl::LineProjection;
 
@@ -1938,6 +2083,32 @@ mod tests {
         assert!(!is_cursor_position_error(&io::Error::other(
             "permission denied"
         )));
+    }
+
+    #[test]
+    fn cursor_position_report_parser_accepts_valid_sequences_unit() {
+        assert_eq!(parse_cursor_position_report(b"\x1b[12;34R"), Some((34, 12)));
+        assert_eq!(
+            parse_cursor_position_report(b"\x1b[1;200R trailing"),
+            Some((200, 1))
+        );
+        assert!(contains_cursor_position_report(b"noise\x1b[22;7R"));
+    }
+
+    #[test]
+    fn cursor_position_report_parser_rejects_invalid_sequences_unit() {
+        assert_eq!(parse_cursor_position_report(b"\x1b[;34R"), None);
+        assert_eq!(parse_cursor_position_report(b"\x1b[12;R"), None);
+        assert_eq!(parse_cursor_position_report(b"\x1b[12;34"), None);
+        assert!(!contains_cursor_position_report(b"\x1b[bad"));
+    }
+
+    #[test]
+    fn explicit_basic_input_mode_short_circuits_unit() {
+        assert_eq!(
+            basic_input_reason(ReplInputMode::Basic),
+            Some(BasicInputReason::Explicit)
+        );
     }
 
     #[test]

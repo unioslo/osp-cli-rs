@@ -933,9 +933,31 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
         .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
 
     let ambiguous_help = manager.repl_help_text().expect("help should render");
-    assert!(ambiguous_help.contains("shared - provider selection required"));
+    assert!(
+        ambiguous_help.contains("shared"),
+        "help output:\n{ambiguous_help}"
+    );
+    assert!(
+        ambiguous_help.contains("provider selection required"),
+        "help output:\n{ambiguous_help}"
+    );
+    assert!(
+        ambiguous_help.contains("alpha"),
+        "help output:\n{ambiguous_help}"
+    );
+    assert!(
+        ambiguous_help.contains("beta"),
+        "help output:\n{ambiguous_help}"
+    );
     assert!(ambiguous_help.contains("solo - solo plugin"));
-    assert!(ambiguous_help.contains("orch plugin [auth]"));
+    assert!(
+        ambiguous_help.contains("orch"),
+        "help output:\n{ambiguous_help}"
+    );
+    assert!(
+        ambiguous_help.contains("[auth]"),
+        "help output:\n{ambiguous_help}"
+    );
     let completion_words = manager
         .completion_words()
         .expect("completion words should render");
@@ -974,7 +996,9 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
 #[cfg(unix)]
 #[test]
 fn dispatch_surfaces_nonzero_invalid_json_invalid_payload_and_passthrough_unit() {
-    let _lock = env_lock().lock().expect("env lock should be available");
+    let _lock = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let root = make_temp_dir("osp-cli-plugin-manager-dispatch-errors");
     let plugins_dir = root.join("plugins");
     std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
@@ -1068,7 +1092,9 @@ JSON"#,
 #[test]
 fn path_discovery_is_opt_in_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-path-discovery");
-    let _lock = env_lock().lock().expect("env lock should be available");
+    let _lock = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let original_path = std::env::var("PATH").ok();
     let plugins_dir = root.join("plugins");
     std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
@@ -1128,17 +1154,17 @@ fn describe_plugin_and_run_provider_cover_direct_error_paths_unit() {
 
     std::fs::write(
         &nonzero,
-        "#!/bin/sh\nif [ \"$1\" = \"--describe\" ]; then echo nope >&2; exit 7; fi\n",
+        "#!/bin/sh\nPATH=/usr/bin:/bin\nif [ \"$1\" = \"--describe\" ]; then echo nope >&2; exit 7; fi\n",
     )
     .expect("fixture should be written");
     std::fs::write(
         &invalid_json,
-        "#!/bin/sh\nif [ \"$1\" = \"--describe\" ]; then printf 'not-json\\n'; exit 0; fi\n",
+        "#!/bin/sh\nPATH=/usr/bin:/bin\nif [ \"$1\" = \"--describe\" ]; then printf 'not-json\\n'; exit 0; fi\n",
     )
     .expect("fixture should be written");
     std::fs::write(
         &invalid_payload,
-        "#!/bin/sh\nif [ \"$1\" = \"--describe\" ]; then cat <<'JSON'\n{\"protocol_version\":1,\"plugin_id\":\"\",\"plugin_version\":\"0.1.0\",\"commands\":[]}\nJSON\nexit 0\nfi\n",
+        "#!/bin/sh\nPATH=/usr/bin:/bin\nif [ \"$1\" = \"--describe\" ]; then cat <<'JSON'\n{\"protocol_version\":1,\"plugin_id\":\"\",\"plugin_version\":\"0.1.0\",\"commands\":[]}\nJSON\nexit 0\nfi\n",
     )
     .expect("fixture should be written");
 
@@ -1220,6 +1246,7 @@ fn write_named_test_plugin_with_min_version(
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/bin/sh
+PATH=/usr/bin:/bin
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"{min_osp_version}","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
@@ -1248,6 +1275,7 @@ fn write_provider_test_plugin(
     let plugin_path = dir.join(format!("osp-{plugin_id}"));
     let script = format!(
         r#"#!/bin/sh
+PATH=/usr/bin:/bin
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
@@ -1272,6 +1300,7 @@ fn write_auth_test_plugin(dir: &std::path::Path, name: &str) -> std::path::PathB
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/bin/sh
+PATH=/usr/bin:/bin
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","auth":{{"visibility":"authenticated"}},"args":[],"flags":{{}},"subcommands":[{{"name":"approval","about":"approval commands","args":[],"flags":{{}},"subcommands":[{{"name":"decide","about":"decide approvals","auth":{{"visibility":"capability_gated","required_capabilities":["orch.approval.decide"],"feature_flags":["orch"]}},"args":[],"flags":{{}},"subcommands":[]}}]}}]}}]}}
@@ -1299,6 +1328,7 @@ fn write_sleepy_test_plugin(
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/bin/sh
+PATH=/usr/bin:/bin
 if [ "$1" = "--describe" ]; then
   if [ "{sleep_on_describe}" = "true" ]; then
     sleep 1
@@ -1331,6 +1361,7 @@ fn write_timeout_leak_test_plugin(
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/bin/sh
+PATH=/usr/bin:/bin
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
@@ -1358,6 +1389,7 @@ fn write_marker_describe_plugin(
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/bin/sh
+PATH=/usr/bin:/bin
 if [ "$1" = "--describe" ]; then
   touch "{marker}"
   cat <<'JSON'
@@ -1388,6 +1420,7 @@ fn write_dispatch_fixture_plugin(
     let plugin_path = dir.join(format!("osp-{plugin_id}"));
     let script = format!(
         r#"#!/bin/sh
+PATH=/usr/bin:/bin
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}

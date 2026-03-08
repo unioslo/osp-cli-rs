@@ -8,6 +8,7 @@ use crate::core::command_policy::{
     AccessReason, CommandAccess, CommandPolicy, CommandPolicyContext, CommandPolicyRegistry,
     VisibilityMode,
 };
+use crate::native::NativeCommandRegistry;
 use crate::plugin::PluginManager;
 use crate::plugin::config::{PluginConfigEntry, PluginConfigEnv, PluginConfigEnvCache};
 use crate::ui::RenderSettings;
@@ -122,13 +123,15 @@ pub struct LaunchContext {
 
 pub struct AppClients {
     pub plugins: PluginManager,
+    pub native_commands: NativeCommandRegistry,
     plugin_config_env: PluginConfigEnvCache,
 }
 
 impl AppClients {
-    pub fn new(plugins: PluginManager) -> Self {
+    pub fn new(plugins: PluginManager, native_commands: NativeCommandRegistry) -> Self {
         Self {
             plugins,
+            native_commands,
             plugin_config_env: PluginConfigEnvCache::default(),
         }
     }
@@ -167,20 +170,24 @@ pub struct AppRuntime {
 
 pub struct AuthState {
     builtins_allowlist: Option<HashSet<String>>,
-    plugins_allowlist: Option<HashSet<String>>,
+    external_allowlist: Option<HashSet<String>>,
     policy_context: CommandPolicyContext,
     builtin_policy: CommandPolicyRegistry,
-    plugin_policy: CommandPolicyRegistry,
+    external_policy: CommandPolicyRegistry,
 }
 
 impl AuthState {
     pub fn from_resolved(config: &ResolvedConfig) -> Self {
         Self {
             builtins_allowlist: parse_allowlist(config.get_string("auth.visible.builtins")),
-            plugins_allowlist: parse_allowlist(config.get_string("auth.visible.plugins")),
+            // Non-builtin top-level commands currently still use the historical
+            // `auth.visible.plugins` key. That surface now covers both external
+            // plugins and native registered integrations dispatched via the
+            // generic external command path.
+            external_allowlist: parse_allowlist(config.get_string("auth.visible.plugins")),
             policy_context: CommandPolicyContext::default(),
             builtin_policy: CommandPolicyRegistry::default(),
-            plugin_policy: CommandPolicyRegistry::default(),
+            external_policy: CommandPolicyRegistry::default(),
         }
     }
 
@@ -200,16 +207,16 @@ impl AuthState {
         &mut self.builtin_policy
     }
 
-    pub fn plugin_policy(&self) -> &CommandPolicyRegistry {
-        &self.plugin_policy
+    pub fn external_policy(&self) -> &CommandPolicyRegistry {
+        &self.external_policy
     }
 
-    pub fn plugin_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
-        &mut self.plugin_policy
+    pub fn external_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
+        &mut self.external_policy
     }
 
-    pub fn replace_plugin_policy(&mut self, registry: CommandPolicyRegistry) {
-        self.plugin_policy = registry;
+    pub fn replace_external_policy(&mut self, registry: CommandPolicyRegistry) {
+        self.external_policy = registry;
     }
 
     pub fn builtin_access(&self, command: &str) -> CommandAccess {
@@ -221,11 +228,11 @@ impl AuthState {
         )
     }
 
-    pub fn plugin_command_access(&self, command: &str) -> CommandAccess {
+    pub fn external_command_access(&self, command: &str) -> CommandAccess {
         command_access_for(
             command,
-            &self.plugins_allowlist,
-            &self.plugin_policy,
+            &self.external_allowlist,
+            &self.external_policy,
             &self.policy_context,
         )
     }
@@ -234,8 +241,28 @@ impl AuthState {
         self.builtin_access(command).is_visible()
     }
 
+    pub fn is_external_command_visible(&self, command: &str) -> bool {
+        self.external_command_access(command).is_visible()
+    }
+
+    pub fn plugin_policy(&self) -> &CommandPolicyRegistry {
+        self.external_policy()
+    }
+
+    pub fn plugin_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
+        self.external_policy_mut()
+    }
+
+    pub fn replace_plugin_policy(&mut self, registry: CommandPolicyRegistry) {
+        self.replace_external_policy(registry);
+    }
+
+    pub fn plugin_command_access(&self, command: &str) -> CommandAccess {
+        self.external_command_access(command)
+    }
+
     pub fn is_plugin_command_visible(&self, command: &str) -> bool {
-        self.plugin_command_access(command).is_visible()
+        self.is_external_command_visible(command)
     }
 }
 

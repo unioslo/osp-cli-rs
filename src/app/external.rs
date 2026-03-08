@@ -5,6 +5,7 @@ use crate::app::{AuthState, RuntimeContext, UiState};
 use crate::cli::invocation::{InvocationOptions, append_invocation_help_if_verbose};
 use crate::cli::pipeline::parse_command_tokens_with_aliases;
 use crate::cli::{Commands, parse_inline_command_tokens};
+use crate::native::{NativeCommandContext, NativeCommandOutcome};
 use crate::plugin::PluginManager;
 use crate::repl::ReplViewContext;
 use crate::repl::completion;
@@ -14,7 +15,7 @@ use crate::ui::presentation::help_layout;
 use super::{
     CMD_HELP, CliCommandResult, PreparedPluginResponse, ReplCommandOutput, ResolvedInvocation,
     enrich_dispatch_error, ensure_plugin_visible_for, plugin_dispatch_context_for,
-    prepare_plugin_response, run_inline_builtin_command,
+    prepare_plugin_response, run_inline_builtin_command, runtime_hints_for_runtime,
 };
 
 pub(super) struct ExternalCommandRuntime<'a> {
@@ -121,6 +122,18 @@ pub(crate) fn run_external_command_with_help_renderer(
         .split_first()
         .ok_or_else(|| miette!("missing external command"))?;
     let external_runtime = ExternalCommandRuntime::from_parts(runtime, clients);
+
+    if let Some(native_command) = clients.native_commands.command(command) {
+        ensure_plugin_visible_for(&runtime.auth, command)?;
+        return run_native_command(
+            native_command.as_ref(),
+            runtime,
+            args,
+            &parsed.stages,
+            render_help,
+        );
+    }
+
     run_external_plugin_command(
         &external_runtime,
         command,
@@ -129,6 +142,53 @@ pub(crate) fn run_external_command_with_help_renderer(
         invocation,
         render_help,
     )
+}
+
+fn run_native_command(
+    command: &dyn crate::native::NativeCommand,
+    runtime: &mut AppRuntime,
+    args: &[String],
+    stages: &[String],
+    render_help: impl Fn(&str) -> String,
+) -> Result<CliCommandResult> {
+    let context = NativeCommandContext {
+        config: runtime.config.resolved(),
+        runtime_hints: runtime_hints_for_runtime(runtime),
+    };
+
+    match command
+        .execute(args, &context)
+        .map_err(|err| miette!("{err:#}"))?
+    {
+        NativeCommandOutcome::Help(text) => Ok(CliCommandResult::text(render_help(&text))),
+        NativeCommandOutcome::Exit(code) => Ok(CliCommandResult::exit(code)),
+        NativeCommandOutcome::Response(response) => render_native_response(response, stages),
+    }
+}
+
+fn render_native_response(
+    response: crate::core::plugin::ResponseV1,
+    stages: &[String],
+) -> Result<CliCommandResult> {
+    match prepare_plugin_response(response, stages).map_err(|err| miette!("{err:#}"))? {
+        PreparedPluginResponse::Failure(failure) => Ok(CliCommandResult {
+            exit_code: 1,
+            messages: failure.messages,
+            output: None,
+            stderr_text: None,
+            failure_report: Some(failure.report),
+        }),
+        PreparedPluginResponse::Output(prepared) => Ok(CliCommandResult {
+            exit_code: 0,
+            messages: prepared.messages,
+            output: Some(ReplCommandOutput::Output {
+                output: prepared.output,
+                format_hint: prepared.format_hint,
+            }),
+            stderr_text: None,
+            failure_report: None,
+        }),
+    }
 }
 
 fn parse_external_invocation(
@@ -259,21 +319,90 @@ pub(crate) fn is_help_passthrough(args: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExternalParse, parse_external_invocation, render_external_plugin_response};
+    use super::{
+        ExternalParse, is_help_passthrough, parse_external_invocation,
+        render_external_plugin_response, run_external_command_with_help_renderer,
+    };
     use crate::app::{
-        AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
+        AppClients, AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext,
+        TerminalKind, resolve_invocation_ui,
     };
     use crate::app::{CliCommandResult, ReplCommandOutput};
+    use crate::cli::invocation::InvocationOptions;
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
     use crate::core::plugin::{
+        DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, PLUGIN_PROTOCOL_V1,
         ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
+    };
+    use crate::native::{
+        NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
     };
     use crate::plugin::PluginManager;
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
+    use std::collections::BTreeMap;
 
-    fn make_test_state() -> (AppRuntime, AppSession) {
+    #[derive(Clone, Copy)]
+    enum NativeOutcomeKind {
+        Help,
+        Exit,
+        Response,
+    }
+
+    struct TestNativeCommand {
+        kind: NativeOutcomeKind,
+    }
+
+    impl NativeCommand for TestNativeCommand {
+        fn describe(&self) -> DescribeCommandV1 {
+            DescribeCommandV1 {
+                name: "ldap".to_string(),
+                about: "Directory lookup".to_string(),
+                auth: Some(DescribeCommandAuthV1 {
+                    visibility: Some(DescribeVisibilityModeV1::Public),
+                    required_capabilities: Vec::new(),
+                    feature_flags: Vec::new(),
+                }),
+                args: Vec::new(),
+                flags: BTreeMap::new(),
+                subcommands: Vec::new(),
+            }
+        }
+
+        fn execute(
+            &self,
+            args: &[String],
+            _context: &NativeCommandContext<'_>,
+        ) -> anyhow::Result<NativeCommandOutcome> {
+            Ok(match self.kind {
+                NativeOutcomeKind::Help => NativeCommandOutcome::Help(format!(
+                    "Usage: osp ldap\n\nArgs: {}\n",
+                    args.join(" ")
+                )),
+                NativeOutcomeKind::Exit => NativeCommandOutcome::Exit(7),
+                NativeOutcomeKind::Response => NativeCommandOutcome::Response(ResponseV1 {
+                    protocol_version: PLUGIN_PROTOCOL_V1,
+                    ok: true,
+                    data: serde_json::json!([{ "command": "ldap", "args": args }]),
+                    error: None,
+                    messages: vec![ResponseMessageV1 {
+                        level: ResponseMessageLevelV1::Info,
+                        text: "native ok".to_string(),
+                    }],
+                    meta: ResponseMetaV1 {
+                        format_hint: Some("json".to_string()),
+                        columns: None,
+                        column_align: Vec::new(),
+                    },
+                }),
+            })
+        }
+    }
+
+    fn make_test_state_with_native(
+        kind: Option<NativeOutcomeKind>,
+    ) -> (AppRuntime, AppSession, AppClients) {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         let mut resolver = ConfigResolver::default();
@@ -289,15 +418,18 @@ mod tests {
             message_verbosity: MessageLevel::Success,
             debug_verbosity: 0,
             plugins: PluginManager::new(Vec::new()),
+            native_commands: kind
+                .map(|kind| NativeCommandRegistry::new().with_command(TestNativeCommand { kind }))
+                .unwrap_or_default(),
             themes: crate::ui::theme_loader::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         });
-        (state.runtime, state.session)
+        (state.runtime, state.session, state.clients)
     }
 
     #[test]
     fn external_builtin_help_passthrough_is_handled_unit() {
-        let (runtime, session) = make_test_state();
+        let (runtime, session, _) = make_test_state_with_native(None);
         let tokens = ["config", "--help"]
             .into_iter()
             .map(str::to_string)
@@ -336,5 +468,62 @@ mod tests {
         let result =
             render_external_plugin_response(response, &[]).expect("response should prepare");
         assert!(!result.messages.is_empty());
+    }
+
+    #[test]
+    fn help_passthrough_detection_covers_flags_and_help_subcommand_unit() {
+        assert!(!is_help_passthrough(&[]));
+        assert!(is_help_passthrough(&["--help".to_string()]));
+        assert!(is_help_passthrough(&[
+            "topic".to_string(),
+            "-h".to_string()
+        ]));
+        assert!(is_help_passthrough(&["help".to_string()]));
+        assert!(!is_help_passthrough(&[
+            "ldap".to_string(),
+            "user".to_string()
+        ]));
+    }
+
+    #[test]
+    fn external_native_command_help_exit_and_response_paths_unit() {
+        for kind in [
+            NativeOutcomeKind::Help,
+            NativeOutcomeKind::Exit,
+            NativeOutcomeKind::Response,
+        ] {
+            let (mut runtime, mut session, clients) = make_test_state_with_native(Some(kind));
+            let invocation = resolve_invocation_ui(&runtime.ui, &InvocationOptions::default());
+            let result = run_external_command_with_help_renderer(
+                &mut runtime,
+                &mut session,
+                &clients,
+                &["ldap".to_string(), "user".to_string()],
+                &invocation,
+                |text| format!("HELP::{text}"),
+            )
+            .expect("native command should dispatch");
+
+            match kind {
+                NativeOutcomeKind::Help => {
+                    assert!(matches!(
+                        result.output,
+                        Some(ReplCommandOutput::Text(text)) if text.contains("HELP::Usage: osp ldap")
+                    ));
+                }
+                NativeOutcomeKind::Exit => {
+                    assert_eq!(result.exit_code, 7);
+                    assert!(result.output.is_none());
+                }
+                NativeOutcomeKind::Response => {
+                    assert_eq!(result.exit_code, 0);
+                    assert!(!result.messages.is_empty());
+                    assert!(matches!(
+                        result.output,
+                        Some(ReplCommandOutput::Output { .. })
+                    ));
+                }
+            }
+        }
     }
 }

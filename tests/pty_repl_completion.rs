@@ -72,6 +72,10 @@ fn spawn_repl_with_config(trace: bool, config: Option<&str>) -> PtySession {
     cmd.env("OSP__REPL__INTRO", "none");
     cmd.env("OSP__REPL__SIMPLE_PROMPT", "true");
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
+    // These PTY tests exercise completion behavior, not auto-detection of
+    // cursor-position support. Force interactive mode so completion stays
+    // deterministic even when the PTY harness races the CPR probe.
+    cmd.env("OSP__REPL__INPUT_MODE", "interactive");
     cmd.env("OSP_PLUGIN_PATH", &plugins);
     cmd.env("OSP_BUNDLED_PLUGIN_DIR", &plugins);
     cmd.env("COLUMNS", "80");

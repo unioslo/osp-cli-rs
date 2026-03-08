@@ -26,10 +26,11 @@ struct ReplSessionSnapshot {
     last_failure: Option<crate::app::LastFailure>,
     session_overrides: crate::config::ConfigLayer,
     launch: crate::app::LaunchContext,
+    native_commands: crate::native::NativeCommandRegistry,
 }
 
 impl ReplSessionSnapshot {
-    fn capture(runtime: &AppRuntime, session: &AppSession) -> Self {
+    fn capture(runtime: &AppRuntime, session: &AppSession, clients: &AppClients) -> Self {
         Self {
             context: runtime.context.clone(),
             scope: session.scope.clone(),
@@ -43,6 +44,7 @@ impl ReplSessionSnapshot {
             last_failure: session.last_failure.clone(),
             session_overrides: session.config_overrides.clone(),
             launch: runtime.launch.clone(),
+            native_commands: clients.native_commands.clone(),
         }
     }
 
@@ -68,8 +70,9 @@ impl ReplSessionSnapshot {
 pub(crate) fn rebuild_repl_parts(
     runtime: &AppRuntime,
     session: &AppSession,
+    clients: &AppClients,
 ) -> Result<(AppRuntime, AppSession, AppClients)> {
-    let snapshot = ReplSessionSnapshot::capture(runtime, session);
+    let snapshot = ReplSessionSnapshot::capture(runtime, session, clients);
     tracing::debug!(
         profile_override = ?snapshot.context.profile_override(),
         scoped = !snapshot.scope.is_root(),
@@ -116,6 +119,7 @@ pub(crate) fn rebuild_repl_parts(
         message_verbosity,
         debug_verbosity,
         plugins: plugin_manager,
+        native_commands: snapshot.native_commands.clone(),
         themes: theme_catalog,
         launch,
     });
@@ -125,7 +129,8 @@ pub(crate) fn rebuild_repl_parts(
 
 #[cfg(test)]
 pub(crate) fn rebuild_repl_state(current: &AppState) -> Result<AppState> {
-    let (runtime, session, clients) = rebuild_repl_parts(&current.runtime, &current.session)?;
+    let (runtime, session, clients) =
+        rebuild_repl_parts(&current.runtime, &current.session, &current.clients)?;
     Ok(AppState {
         runtime,
         session,

@@ -1,7 +1,7 @@
 use crate::completion::{ArgNode, CommandSpec, FlagNode, SuggestionEntry, ValueType};
 use crate::core::plugin::{DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1};
 
-pub(super) fn to_command_spec(command: &DescribeCommandV1) -> CommandSpec {
+pub(crate) fn to_command_spec(command: &DescribeCommandV1) -> CommandSpec {
     let spec = CommandSpec::new(&command.name)
         .args(command.args.iter().map(to_arg_node))
         .flags(
@@ -70,7 +70,7 @@ pub(super) fn to_value_type(
     }
 }
 
-pub(super) fn direct_subcommand_names(spec: &CommandSpec) -> Vec<String> {
+pub(crate) fn direct_subcommand_names(spec: &CommandSpec) -> Vec<String> {
     spec.subcommands
         .iter()
         .map(|subcommand| subcommand.name.clone())

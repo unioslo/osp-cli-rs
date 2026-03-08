@@ -30,6 +30,12 @@ pub mod ui;
 
 pub use crate::app::{App, AppBuilder, AppRunner, run_from, run_process};
 pub use crate::core::command_policy;
+pub use crate::native::{
+    NativeCommand, NativeCommandCatalogEntry, NativeCommandContext, NativeCommandOutcome,
+    NativeCommandRegistry,
+};
+
+mod native;
 
 #[cfg(test)]
 mod tests;

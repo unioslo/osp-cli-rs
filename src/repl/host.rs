@@ -137,7 +137,7 @@ fn run_repl_debug_complete(
     clients: &crate::app::AppClients,
     args: DebugCompleteArgs,
 ) -> Result<CliCommandResult> {
-    let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
+    let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
     let view = ReplViewContext::from_parts(runtime, session);
     let surface = surface::build_repl_surface(view, &catalog);
     let completion_tree = build_repl_completion_tree(view, &surface);
@@ -186,7 +186,7 @@ fn run_repl_debug_highlight(
     clients: &crate::app::AppClients,
     args: DebugHighlightArgs,
 ) -> Result<CliCommandResult> {
-    let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
+    let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
     let view = ReplViewContext::from_parts(runtime, session);
     let surface = surface::build_repl_surface(view, &catalog);
     let completion_tree = build_repl_completion_tree(view, &surface);
@@ -231,10 +231,15 @@ fn build_repl_ui_line_projector(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_repl_ui_line_projector, map_repl_input_mode, should_show_repl_intro};
-    use crate::app::{
-        AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
+    use super::{
+        build_repl_ui_line_projector, map_repl_input_mode, run_repl_debug_command_for,
+        should_show_repl_intro,
     };
+    use crate::app::{
+        AppClients, AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext,
+        TerminalKind,
+    };
+    use crate::cli::{DebugCompleteArgs, DebugHighlightArgs, ReplArgs, ReplCommands};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
     use crate::repl::lifecycle::build_cycle_chrome_output;
@@ -242,7 +247,7 @@ mod tests {
     use crate::ui::messages::MessageLevel;
     use crate::ui::presentation::ReplInputMode;
 
-    fn make_state() -> (AppRuntime, AppSession) {
+    fn make_state() -> (AppRuntime, AppSession, AppClients) {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         let mut resolver = ConfigResolver::default();
@@ -260,15 +265,16 @@ mod tests {
             message_verbosity: MessageLevel::Success,
             debug_verbosity: 0,
             plugins: crate::plugin::PluginManager::new(Vec::new()),
+            native_commands: crate::native::NativeCommandRegistry::default(),
             themes: crate::ui::theme_loader::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         });
-        (state.runtime, state.session)
+        (state.runtime, state.session, state.clients)
     }
 
     #[test]
     fn cycle_chrome_renders_intro_then_help_then_pending_output() {
-        let (runtime, session) = make_state();
+        let (runtime, session, _) = make_state();
         let output = build_cycle_chrome_output(
             super::ReplViewContext::from_parts(&runtime, &session),
             "Welcome anonymous.\nHELP\n",
@@ -289,7 +295,7 @@ mod tests {
 
     #[test]
     fn cycle_chrome_without_intro_keeps_pending_output_only() {
-        let (runtime, session) = make_state();
+        let (runtime, session, _) = make_state();
         let output = build_cycle_chrome_output(
             super::ReplViewContext::from_parts(&runtime, &session),
             "HELP\n",
@@ -332,10 +338,53 @@ mod tests {
 
     #[test]
     fn repl_ui_line_projector_falls_back_to_passthrough_on_parse_error_unit() {
-        let (runtime, _) = make_state();
+        let (runtime, _, _) = make_state();
         let projector = build_repl_ui_line_projector(runtime.config.resolved());
         let projected = projector("config \"unterminated");
 
         assert_eq!(projected.line, "config \"unterminated");
+    }
+
+    #[test]
+    fn repl_debug_commands_return_documents_unit() {
+        let (runtime, session, clients) = make_state();
+
+        let complete = run_repl_debug_command_for(
+            &runtime,
+            &session,
+            &clients,
+            ReplArgs {
+                command: ReplCommands::DebugComplete(DebugCompleteArgs {
+                    line: "co".to_string(),
+                    cursor: None,
+                    width: 80,
+                    height: 8,
+                    menu_ansi: false,
+                    menu_unicode: false,
+                    steps: Vec::new(),
+                }),
+            },
+        )
+        .expect("debug complete should succeed");
+        assert!(matches!(
+            complete.output,
+            Some(crate::app::ReplCommandOutput::Document(_))
+        ));
+
+        let highlight = run_repl_debug_command_for(
+            &runtime,
+            &session,
+            &clients,
+            ReplArgs {
+                command: ReplCommands::DebugHighlight(DebugHighlightArgs {
+                    line: "help history".to_string(),
+                }),
+            },
+        )
+        .expect("debug highlight should succeed");
+        assert!(matches!(
+            highlight.output,
+            Some(crate::app::ReplCommandOutput::Document(_))
+        ));
     }
 }
