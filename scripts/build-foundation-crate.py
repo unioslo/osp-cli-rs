@@ -340,7 +340,10 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
             //! Main host-facing entrypoints and stateful runtime surfaces.
 
             pub use crate::osp_cli::state;
-            pub use crate::osp_cli::{{Cli, classify_exit_code, render_report_message, run_from, run_process}};
+            pub use crate::osp_cli::{{
+                App, AppBuilder, BufferedUiSink, Cli, StdIoUiSink, UiSink, classify_exit_code,
+                render_report_message, run_from, run_process, run_process_with_sink,
+            }};
         }}
 
         pub mod config {{
@@ -406,12 +409,12 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
         pub mod prelude {{
             //! Small convenience surface for embedding the app without importing the full module tree.
 
-            pub use crate::app::{{Cli, run_from, run_process}};
+            pub use crate::app::{{App, AppBuilder, Cli, run_from, run_process}};
             pub use crate::core::output::{{ColorMode, OutputFormat, RenderMode, UnicodeMode}};
             pub use crate::ui::RenderSettings;
         }}
 
-        pub use crate::app::{{Cli, run_from, run_process}};
+        pub use crate::app::{{App, AppBuilder, Cli, run_from, run_process}};
 
         #[cfg(test)]
         mod tests {{
@@ -422,6 +425,7 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
                 let _run_from = |args: Vec<&str>| crate::app::run_from::<Vec<&str>, &str>(args);
                 let _run_process =
                     |args: Vec<&str>| crate::app::run_process::<Vec<&str>, &str>(args);
+                let _builder = crate::app::AppBuilder::new().build();
                 let _cli_type: Option<crate::app::Cli> = None;
                 let _format = OutputFormat::Json;
                 let _settings = crate::ui::RenderSettings::test_plain(OutputFormat::Table);
@@ -531,6 +535,11 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
         source = REPO_ROOT / doc_name
         if source.exists():
             shutil.copy2(source, out_dir / doc_name)
+
+    run(
+        ["cargo", "generate-lockfile", "--manifest-path", str(out_dir / "Cargo.toml")],
+        cwd=out_dir,
+    )
 
 
 def main() -> None:

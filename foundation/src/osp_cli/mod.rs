@@ -17,6 +17,63 @@ use std::ffi::OsString;
 
 pub use app::{classify_exit_code, render_report_message, run_from};
 pub use cli::Cli;
+pub use ui_sink::{BufferedUiSink, StdIoUiSink, UiSink};
+
+/// Minimal host application object for embedding or composing the CLI.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct App;
+
+impl App {
+    pub const fn new() -> Self {
+        Self
+    }
+
+    pub fn run_from<I, T>(&self, args: I) -> miette::Result<i32>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        run_from(args)
+    }
+
+    pub fn run_with_sink<I, T>(&self, args: I, sink: &mut dyn UiSink) -> miette::Result<i32>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        app::run_from_with_sink(args, sink)
+    }
+
+    pub fn run_process<I, T>(&self, args: I) -> i32
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        run_process(args)
+    }
+
+    pub fn run_process_with_sink<I, T>(&self, args: I, sink: &mut dyn UiSink) -> i32
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        run_process_with_sink(args, sink)
+    }
+}
+
+/// Staged composition surface for the future single-crate foundation.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AppBuilder;
+
+impl AppBuilder {
+    pub const fn new() -> Self {
+        Self
+    }
+
+    pub fn build(self) -> App {
+        App::new()
+    }
+}
 
 pub fn run_process<I, T>(args: I) -> i32
 where
@@ -27,7 +84,7 @@ where
     run_process_with_sink(args, &mut sink)
 }
 
-pub(crate) fn run_process_with_sink<I, T>(args: I, sink: &mut dyn ui_sink::UiSink) -> i32
+pub fn run_process_with_sink<I, T>(args: I, sink: &mut dyn UiSink) -> i32
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -87,8 +144,8 @@ fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_message_verbosity, run_process_with_sink};
-    use crate::osp_cli::ui_sink::BufferedUiSink;
+    use super::{App, AppBuilder, bootstrap_message_verbosity, run_process_with_sink};
+    use crate::osp_cli::BufferedUiSink;
     use crate::osp_ui::messages::MessageLevel;
     use std::ffi::OsString;
     #[cfg(unix)]
@@ -134,6 +191,23 @@ mod tests {
         assert_eq!(exit_code, 1);
         assert!(sink.stdout.is_empty());
         assert!(sink.stderr.contains("unknown theme"));
+    }
+
+    #[test]
+    fn app_builder_exposes_stable_host_surface_unit() {
+        let app = AppBuilder::new().build();
+        let direct = App::new();
+        let mut sink = BufferedUiSink::default();
+
+        let exit_code = app.run_process_with_sink(
+            ["osp", "--theme", "missing-theme", "config", "show"],
+            &mut sink,
+        );
+
+        assert_eq!(exit_code, 1);
+        assert!(sink.stderr.contains("unknown theme"));
+
+        let _ = direct;
     }
 }
 
