@@ -11,12 +11,28 @@ use crate::{
     stages::common::parse_stage_words,
 };
 
+pub(crate) struct FilterPlan {
+    parsed: ParsedFilterSpec,
+}
+
+impl FilterPlan {
+    pub(crate) fn matches(&self, row: &Row) -> bool {
+        evaluate_row(row, &self.parsed)
+    }
+}
+
+pub(crate) fn compile(spec: &str) -> Result<FilterPlan> {
+    Ok(FilterPlan {
+        parsed: parse_filter_spec(spec)?,
+    })
+}
+
 pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
-    let parsed = parse_filter_spec(spec)?;
+    let plan = compile(spec)?;
     let mut out = Vec::new();
 
     for row in rows {
-        if evaluate_row(&row, &parsed) {
+        if plan.matches(&row) {
             out.push(row);
         }
     }
@@ -25,16 +41,16 @@ pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
 }
 
 pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
-    let parsed = parse_filter_spec(spec)?;
+    let plan = compile(spec)?;
     let mut out = Vec::new();
 
     for mut group in groups {
-        if evaluate_row(&group.groups, &parsed) || evaluate_row(&group.aggregates, &parsed) {
+        if plan.matches(&group.groups) || plan.matches(&group.aggregates) {
             out.push(group);
             continue;
         }
 
-        group.rows.retain(|row| evaluate_row(row, &parsed));
+        group.rows.retain(|row| plan.matches(row));
         if !group.rows.is_empty() {
             out.push(group);
         }

@@ -22,30 +22,44 @@ struct Pattern {
     dotted: bool,
 }
 
-pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
+pub(crate) struct ProjectPlan {
+    keepers: Vec<Pattern>,
+    droppers: Vec<Pattern>,
+}
+
+impl ProjectPlan {
+    pub(crate) fn project_row(&self, row: &Row) -> Vec<Row> {
+        project_single_row(row, &self.keepers, &self.droppers)
+    }
+}
+
+pub(crate) fn compile(spec: &str) -> Result<ProjectPlan> {
     let (keepers, droppers) = parse_patterns(spec)?;
     if keepers.is_empty() && droppers.is_empty() {
         return Err(anyhow!("P requires one or more keys"));
     }
 
+    Ok(ProjectPlan { keepers, droppers })
+}
+
+pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
+    let plan = compile(spec)?;
+
     let mut out = Vec::new();
     for row in rows {
-        out.extend(project_single_row(&row, &keepers, &droppers));
+        out.extend(plan.project_row(&row));
     }
     Ok(out)
 }
 
 pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
-    let (keepers, droppers) = parse_patterns(spec)?;
-    if keepers.is_empty() && droppers.is_empty() {
-        return Err(anyhow!("P requires one or more keys"));
-    }
+    let plan = compile(spec)?;
 
     let mut out = Vec::with_capacity(groups.len());
     for group in groups {
         let mut projected_rows = Vec::new();
         for row in &group.rows {
-            projected_rows.extend(project_single_row(row, &keepers, &droppers));
+            projected_rows.extend(plan.project_row(row));
         }
 
         if !projected_rows.is_empty() || !group.aggregates.is_empty() {

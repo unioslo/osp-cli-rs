@@ -1,4 +1,5 @@
 use crate::model::{ParsedPipeline, ParsedStage, ParsedStageKind};
+use crate::verbs::is_registered_explicit_verb;
 
 use super::lexer::{LexerError, StageSegment, split_pipeline, tokenize_stage};
 
@@ -28,11 +29,6 @@ pub fn parse_pipeline(line: &str) -> Result<Pipeline, LexerError> {
 
     Ok(Pipeline { command, stages })
 }
-
-/// Verbs that are always interpreted as explicit DSL stages.
-const REGISTERED_EXPLICIT_STAGE_VERBS: &[&str] = &[
-    "P", "V", "K", "VAL", "VALUE", "F", "G", "A", "S", "L", "Z", "C", "Y", "U", "?", "JQ",
-];
 
 /// Parse a raw stage string into the structured form the evaluator consumes.
 ///
@@ -98,7 +94,7 @@ fn stage_spec_after_first_token(segment: &StageSegment, token_end: usize) -> Str
 }
 
 fn classify_stage_kind(verb: &str) -> ParsedStageKind {
-    if REGISTERED_EXPLICIT_STAGE_VERBS.contains(&verb) {
+    if is_registered_explicit_verb(verb) {
         return ParsedStageKind::Explicit;
     }
 

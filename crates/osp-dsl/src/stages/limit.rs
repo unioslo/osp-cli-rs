@@ -1,6 +1,18 @@
 use anyhow::{Result, anyhow};
 
-pub fn apply<T>(items: Vec<T>, spec: &str) -> Result<Vec<T>> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LimitSpec {
+    pub(crate) count: i64,
+    pub(crate) offset: i64,
+}
+
+impl LimitSpec {
+    pub(crate) fn is_head_only(self) -> bool {
+        self.count >= 0 && self.offset >= 0
+    }
+}
+
+pub(crate) fn parse_limit_spec(spec: &str) -> Result<LimitSpec> {
     let parts: Vec<&str> = spec.split_whitespace().collect();
     if !(1..=2).contains(&parts.len()) {
         return Err(anyhow!("L expects 1 or 2 integers (limit [offset])"));
@@ -16,6 +28,14 @@ pub fn apply<T>(items: Vec<T>, spec: &str) -> Result<Vec<T>> {
     } else {
         0
     };
+
+    Ok(LimitSpec { count, offset })
+}
+
+pub fn apply<T>(items: Vec<T>, spec: &str) -> Result<Vec<T>> {
+    let spec = parse_limit_spec(spec)?;
+    let count = spec.count;
+    let offset = spec.offset;
 
     if count == 0 {
         return Ok(Vec::new());

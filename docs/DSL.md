@@ -91,6 +91,33 @@ silently treated as searches.
 The DSL runs before final formatting. That means the same command can be
 rendered differently after the data has already been filtered or projected.
 
+## Streaming
+
+The DSL now keeps flat row pipelines on a streaming path where the stage
+semantics allow it.
+
+Stages that typically stream:
+
+- `F`
+- `P`
+- `VAL` / `VALUE`
+- `Y`
+- `U`
+- `L` when used as a normal head limit such as `| L 20`
+
+Stages that materialize the current payload:
+
+- `S`
+- `G`
+- `A`
+- `C`
+- `Z`
+- `JQ`
+- quick-search style stages such as bare search text, `V`, and `K`
+
+Use `| H` in the REPL to see the current verb list and `| H <verb>` for per-verb
+streaming notes.
+
 ## Clipboard
 
 The `Y` stage marks the final output for clipboard copy behavior when supported

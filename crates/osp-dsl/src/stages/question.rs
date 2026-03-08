@@ -41,7 +41,7 @@ fn clean_rows(rows: Vec<Row>) -> Vec<Row> {
     rows.into_iter().filter_map(clean_row).collect()
 }
 
-fn clean_row(row: Row) -> Option<Row> {
+pub(crate) fn clean_row(row: Row) -> Option<Row> {
     let cleaned = row
         .into_iter()
         .filter(|(_, value)| !is_empty_value(value))

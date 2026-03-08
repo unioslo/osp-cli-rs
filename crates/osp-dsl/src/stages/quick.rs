@@ -32,11 +32,27 @@ struct MatchResult {
     synthetic: Row,
 }
 
-pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
+#[derive(Debug, Clone)]
+pub(crate) struct QuickPlan {
+    spec: crate::parse::quick::QuickSpec,
+}
+
+impl QuickPlan {
+    fn apply_row(&self, row: Row, mode: MatchMode) -> Vec<Row> {
+        apply_row_with_mode(row, &self.spec, mode)
+    }
+}
+
+pub(crate) fn compile(raw_stage: &str) -> Result<QuickPlan> {
     let spec = parse_quick_spec(raw_stage);
     if spec.key_spec.token.trim().is_empty() {
         return Err(anyhow!("quick stage requires a search token"));
     }
+    Ok(QuickPlan { spec })
+}
+
+pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
+    let plan = compile(raw_stage)?;
 
     // Quick mode is intentionally dual-purpose:
     // - multi-row input acts like a row filter
@@ -49,52 +65,101 @@ pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
 
     let mut out = Vec::new();
     for row in rows {
-        if spec.key_spec.existence {
-            let found = resolve_values_truthy(&row, &spec.key_spec.token, spec.key_spec.exact);
-            let matched = if spec.key_spec.negated { !found } else { found };
-            if matched {
-                out.push(row);
-            }
-            continue;
-        }
-
-        let flat = flatten_row(&row);
-        let (pairs, _) = resolve_pairs(&flat, &spec.key_spec.token);
-        let synthetic = build_synthetic_map(&pairs, &flat);
-        let mut result = match_row(&flat, &pairs, &synthetic, &spec);
-
-        let keep = match spec.scope {
-            QuickScope::KeyOnly => {
-                if matches!(mode, MatchMode::Multi) {
-                    result.matched
-                } else {
-                    spec.key_spec.negated || result.matched
-                }
-            }
-            QuickScope::ValueOnly | QuickScope::KeyOrValue => {
-                if matches!(mode, MatchMode::Multi) {
-                    result.matched
-                } else {
-                    result.matched || spec.key_spec.negated
-                }
-            }
-        };
-
-        if !keep {
-            continue;
-        }
-
-        if matches!(mode, MatchMode::Multi) && !result.is_projection {
-            out.push(row);
-            continue;
-        }
-
-        if let Some(rows) = transform_row(&flat, &mut result, &spec) {
-            out.extend(rows);
-        }
+        out.extend(plan.apply_row(row, mode));
     }
 
     Ok(out)
+}
+
+pub(crate) fn stream_rows_with_plan<I>(
+    rows: I,
+    plan: QuickPlan,
+) -> impl Iterator<Item = Result<Row>>
+where
+    I: IntoIterator<Item = Result<Row>>,
+{
+    let mut iter = rows.into_iter();
+    let first = iter.next();
+    let second = iter.next();
+
+    // Quick semantics depend on whether the current payload is a single row or
+    // a multi-row set. A two-row lookahead preserves that "magic" while still
+    // allowing the common multi-row path to continue as a stream.
+    let mode = if second.is_some() {
+        MatchMode::Multi
+    } else {
+        MatchMode::Single
+    };
+
+    let mut seed = Vec::new();
+    if let Some(row) = first {
+        match row {
+            Ok(row) => seed.extend(plan.apply_row(row, mode).into_iter().map(Ok)),
+            Err(err) => seed.push(Err(err)),
+        }
+    }
+    if let Some(row) = second {
+        match row {
+            Ok(row) => seed.extend(plan.apply_row(row, mode).into_iter().map(Ok)),
+            Err(err) => seed.push(Err(err)),
+        }
+    }
+
+    seed.into_iter().chain(iter.flat_map(move |row| {
+        match row {
+            Ok(row) => plan
+                .apply_row(row, mode)
+                .into_iter()
+                .map(Ok)
+                .collect::<Vec<_>>()
+                .into_iter(),
+            Err(err) => vec![Err(err)].into_iter(),
+        }
+    }))
+}
+
+fn apply_row_with_mode(
+    row: Row,
+    spec: &crate::parse::quick::QuickSpec,
+    mode: MatchMode,
+) -> Vec<Row> {
+    if spec.key_spec.existence {
+        let found = resolve_values_truthy(&row, &spec.key_spec.token, spec.key_spec.exact);
+        let matched = if spec.key_spec.negated { !found } else { found };
+        return if matched { vec![row] } else { Vec::new() };
+    }
+
+    let flat = flatten_row(&row);
+    let (pairs, _) = resolve_pairs(&flat, &spec.key_spec.token);
+    let synthetic = build_synthetic_map(&pairs, &flat);
+    let mut result = match_row(&flat, &pairs, &synthetic, spec);
+
+    let keep = match spec.scope {
+        QuickScope::KeyOnly => {
+            if matches!(mode, MatchMode::Multi) {
+                result.matched
+            } else {
+                spec.key_spec.negated || result.matched
+            }
+        }
+        QuickScope::ValueOnly | QuickScope::KeyOrValue => {
+            if matches!(mode, MatchMode::Multi) {
+                result.matched
+            } else {
+                result.matched || spec.key_spec.negated
+            }
+        }
+    };
+
+    if !keep {
+        return Vec::new();
+    }
+
+    if matches!(mode, MatchMode::Multi) && !result.is_projection {
+        return vec![row];
+    }
+
+    transform_row(&flat, &mut result, spec).unwrap_or_default()
 }
 
 fn match_row(

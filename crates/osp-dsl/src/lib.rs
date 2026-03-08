@@ -13,6 +13,13 @@ pub mod eval;
 pub mod model;
 pub mod parse;
 pub mod stages;
+pub mod verbs;
 
-pub use eval::engine::{apply_output_pipeline, apply_pipeline, execute_pipeline};
+pub use eval::engine::{
+    apply_output_pipeline, apply_pipeline, execute_pipeline, execute_pipeline_streaming,
+};
 pub use parse::pipeline::{Pipeline, parse_pipeline};
+pub use verbs::{
+    VerbInfo, VerbStreaming, is_registered_explicit_verb, registered_verbs, render_streaming_badge,
+    verb_info,
+};

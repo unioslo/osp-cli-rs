@@ -7,6 +7,7 @@ use osp_completion::{
     ContextScope, FlagNode, SuggestionEntry,
 };
 use osp_dsl::parse::pipeline::parse_stage;
+use osp_dsl::{VerbStreaming, registered_verbs, render_streaming_badge, verb_info};
 use osp_repl::default_pipe_verbs;
 use osp_ui::messages::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
@@ -485,18 +486,30 @@ fn render_dsl_help(view: ReplViewContext<'_>, spec: &str) -> String {
     let theme = &resolved.theme;
     let mut lines = Vec::new();
 
-    let verbs = default_pipe_verbs();
     let target = spec.split_whitespace().next().unwrap_or("").trim();
     if target.is_empty() {
-        for (verb, desc) in verbs {
-            lines.push(format!("  {verb:<5} {desc}"));
+        for info in registered_verbs() {
+            let mut line = format!("  {:<5} {}", info.verb, info.summary);
+            if let Some(badge) = render_streaming_badge(info.streaming) {
+                line.push(' ');
+                line.push_str(badge);
+            }
+            lines.push(line);
         }
         lines.push(String::new());
         lines.push("  Use | H <verb> for details.".to_string());
     } else {
         let lookup = target.to_ascii_uppercase();
-        if let Some(desc) = verbs.get(&lookup) {
-            lines.push(format!("  {lookup}  {desc}"));
+        if let Some(info) = verb_info(&lookup) {
+            lines.push(format!("  {}  {}", info.verb, info.summary));
+            let streaming = match info.streaming {
+                VerbStreaming::Streamable => "yes".to_string(),
+                VerbStreaming::Conditional => "conditional".to_string(),
+                VerbStreaming::Materializes => "no".to_string(),
+                VerbStreaming::Meta => "n/a".to_string(),
+            };
+            lines.push(format!("  Streaming: {streaming}"));
+            lines.push(format!("  Note: {}", info.streaming_note));
         } else {
             lines.push(format!("  Unknown DSL verb: {target}"));
             lines.push("  Use | H to list available verbs.".to_string());
@@ -529,12 +542,41 @@ pub(crate) fn validate_dsl_stages(stages: &[String]) -> Result<()> {
 mod tests {
     use super::{
         ALIAS_PLACEHOLDER_TOKEN, alias_completion_command, alias_completion_node,
-        inject_alias_nodes, inject_invocation_flags, mark_context_only_flags,
+        inject_alias_nodes, inject_invocation_flags, mark_context_only_flags, render_dsl_help,
         sanitize_alias_template_for_completion, scope_completion_tree,
     };
+    use crate::plugin_manager::PluginManager;
+    use crate::repl::ReplViewContext;
     use crate::repl::surface::ReplAliasEntry;
-    use crate::state::ReplScopeStack;
+    use crate::state::{
+        AppState, AppStateInit, LaunchContext, ReplScopeStack, RuntimeContext, TerminalKind,
+    };
     use osp_completion::{CompletionNode, CompletionTree, ContextScope, FlagNode};
+    use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use osp_core::output::OutputFormat;
+    use osp_ui::RenderSettings;
+    use osp_ui::messages::MessageLevel;
+
+    fn test_app_state() -> AppState {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+        let config = resolver
+            .resolve(ResolveOptions::default().with_terminal("repl"))
+            .expect("test config should resolve");
+
+        AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Repl, None),
+            config,
+            render_settings: RenderSettings::test_plain(OutputFormat::Json),
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+            plugins: PluginManager::new(Vec::new()),
+            themes: crate::theme_loader::ThemeCatalog::default(),
+            launch: LaunchContext::default(),
+        })
+    }
 
     #[test]
     fn marks_context_only_flags_recursively() {
@@ -701,5 +743,34 @@ mod tests {
 
         assert!(root.children.contains_key("lookup"));
         assert_eq!(root.children.len(), 1);
+    }
+
+    #[test]
+    fn dsl_help_marks_materializing_verbs_in_listing_unit() {
+        let state = test_app_state();
+        let rendered = render_dsl_help(
+            ReplViewContext::from_parts(&state.runtime, &state.session),
+            "",
+        );
+
+        assert!(rendered.contains("A") && rendered.contains("[materializes]"));
+        assert!(rendered.contains("JQ") && rendered.contains("[materializes]"));
+    }
+
+    #[test]
+    fn dsl_help_shows_streaming_details_for_target_verb_unit() {
+        let state = test_app_state();
+        let aggregate = render_dsl_help(
+            ReplViewContext::from_parts(&state.runtime, &state.session),
+            "A",
+        );
+        assert!(aggregate.contains("Streaming: no"));
+        assert!(aggregate.contains("aggregation needs the full input"));
+
+        let filter = render_dsl_help(
+            ReplViewContext::from_parts(&state.runtime, &state.session),
+            "F",
+        );
+        assert!(filter.contains("Streaming: yes"));
     }
 }

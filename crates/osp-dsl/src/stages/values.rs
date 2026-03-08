@@ -4,23 +4,44 @@ use serde_json::{Map, Value};
 
 use super::common::parse_terms;
 
-pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
-    let keys = parse_terms(spec);
-    let mut out: Vec<Row> = Vec::new();
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ValuesPlan {
+    keys: Vec<String>,
+}
 
-    for row in rows {
-        if keys.is_empty() {
+impl ValuesPlan {
+    pub(crate) fn extract_row(&self, row: &Row) -> Vec<Row> {
+        let mut out = Vec::new();
+
+        if self.keys.is_empty() {
             for value in row.values() {
                 emit_value_rows(&mut out, value);
             }
-            continue;
+            return out;
         }
 
-        for key in &keys {
+        for key in &self.keys {
             if let Some(value) = row.get(key) {
                 emit_value_rows(&mut out, value);
             }
         }
+
+        out
+    }
+}
+
+pub(crate) fn compile(spec: &str) -> ValuesPlan {
+    ValuesPlan {
+        keys: parse_terms(spec),
+    }
+}
+
+pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
+    let plan = compile(spec);
+    let mut out: Vec<Row> = Vec::new();
+
+    for row in rows {
+        out.extend(plan.extract_row(&row));
     }
 
     Ok(out)
