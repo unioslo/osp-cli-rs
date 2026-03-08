@@ -16,6 +16,12 @@ mod doctor_commands;
 #[path = "contracts/history_commands.rs"]
 mod history_commands;
 
+#[path = "contracts/help_commands.rs"]
+mod help_commands;
+
+#[path = "contracts/repl_debug.rs"]
+mod repl_debug;
+
 #[path = "contracts/theme_commands.rs"]
 mod theme_commands;
 

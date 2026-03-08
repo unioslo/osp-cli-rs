@@ -19,7 +19,7 @@ use crate::theme_loader::ThemeCatalog;
 
 use crate::app;
 use crate::app::{CliCommandResult, document_from_json};
-use crate::cli::{DebugCompleteArgs, ReplArgs, ReplCommands};
+use crate::cli::{DebugCompleteArgs, DebugHighlightArgs, ReplArgs, ReplCommands};
 use crate::ui_presentation::{ReplInputMode, effective_repl_input_mode, effective_repl_intro};
 #[cfg(test)]
 pub(crate) use dispatch::apply_repl_shell_prefix;
@@ -132,6 +132,9 @@ pub(crate) fn run_repl_debug_command_for(
         ReplCommands::DebugComplete(args) => {
             run_repl_debug_complete(runtime, session, clients, args)
         }
+        ReplCommands::DebugHighlight(args) => {
+            run_repl_debug_highlight(runtime, session, clients, args)
+        }
     }
 }
 
@@ -158,7 +161,7 @@ fn run_repl_debug_complete(
         let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
         let debug = osp_repl::debug_completion(
             &completion_tree,
-            &projected_line,
+            &projected_line.line,
             cursor,
             osp_repl::CompletionDebugOptions::new(args.width, args.height)
                 .ansi(args.menu_ansi)
@@ -170,7 +173,7 @@ fn run_repl_debug_complete(
         let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
         let frames = osp_repl::debug_completion_steps(
             &completion_tree,
-            &projected_line,
+            &projected_line.line,
             cursor,
             osp_repl::CompletionDebugOptions::new(args.width, args.height)
                 .ansi(args.menu_ansi)
@@ -184,16 +187,52 @@ fn run_repl_debug_complete(
     Ok(CliCommandResult::document(document_from_json(payload)))
 }
 
+fn run_repl_debug_highlight(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    clients: &crate::state::AppClients,
+    args: DebugHighlightArgs,
+) -> Result<CliCommandResult> {
+    let catalog = app::authorized_command_catalog_for(&runtime.auth, &clients.plugins)?;
+    let view = ReplViewContext::from_parts(runtime, session);
+    let surface = surface::build_repl_surface(view, &catalog);
+    let completion_tree = build_repl_completion_tree(view, &surface);
+    let appearance = build_repl_appearance(view);
+    let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
+    let command_color = appearance
+        .command_highlight_style
+        .as_deref()
+        .and_then(osp_repl::color_from_style_spec)
+        .unwrap_or_else(|| {
+            osp_repl::color_from_style_spec("green")
+                .expect("known fallback REPL command highlight color should parse")
+        });
+    let spans = osp_repl::debug_highlight(
+        &completion_tree,
+        &args.line,
+        command_color,
+        Some(build_repl_ui_line_projector(runtime.config.resolved())),
+    );
+    let payload = serde_json::json!({
+        "line": args.line,
+        "projected_line": projected_line.line,
+        "hidden_suggestions": projected_line.hidden_suggestions,
+        "spans": spans,
+    });
+    Ok(CliCommandResult::document(document_from_json(payload)))
+}
+
 fn build_repl_completion_tree(view: ReplViewContext<'_>, surface: &ReplSurface) -> CompletionTree {
     completion::build_repl_completion_tree(view, surface)
 }
 
 fn build_repl_ui_line_projector(
     config: &ResolvedConfig,
-) -> Arc<dyn Fn(&str) -> String + Send + Sync> {
+) -> Arc<dyn Fn(&str) -> osp_repl::LineProjection + Send + Sync> {
     let config = config.clone();
     Arc::new(move |line| {
-        input::project_repl_ui_line(line, &config).unwrap_or_else(|_| line.to_string())
+        input::project_repl_ui_line(line, &config)
+            .unwrap_or_else(|_| osp_repl::LineProjection::passthrough(line))
     })
 }
 

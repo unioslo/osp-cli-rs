@@ -8,7 +8,9 @@ use osp_ui::theme::DEFAULT_THEME_NAME;
 use osp_ui::{RenderRuntime, RenderSettings, StyleOverrides, TableBorderStyle, TableOverflow};
 use std::path::PathBuf;
 
-use crate::ui_presentation::{UiPresentation, apply_presentation_to_render_settings};
+use crate::ui_presentation::{
+    UiPresentation, apply_presentation_to_render_settings, is_builtin_default,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum PresentationArg {
@@ -110,6 +112,8 @@ pub struct ReplArgs {
 pub enum ReplCommands {
     #[command(name = "debug-complete", hide = true)]
     DebugComplete(DebugCompleteArgs),
+    #[command(name = "debug-highlight", hide = true)]
+    DebugHighlight(DebugHighlightArgs),
 }
 
 #[derive(Debug, Args)]
@@ -134,6 +138,12 @@ pub struct DebugCompleteArgs {
 
     #[arg(long = "menu-unicode", default_value_t = false)]
     pub menu_unicode: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DebugHighlightArgs {
+    #[arg(long)]
+    pub line: String,
 }
 
 #[derive(Debug, Args)]
@@ -464,7 +474,8 @@ pub(crate) fn apply_render_settings_from_config(
         settings.color = parsed;
     }
 
-    if let Some(value) = config.get_string("ui.chrome.frame")
+    if !is_builtin_default(config, "ui.chrome.frame")
+        && let Some(value) = config.get_string("ui.chrome.frame")
         && let Some(parsed) = SectionFrameStyle::parse(value)
     {
         settings.chrome_frame = parsed;
@@ -555,7 +566,8 @@ pub(crate) fn sync_render_settings_from_config(
         settings.table_overflow = parsed;
     }
 
-    if let Some(value) = config.get_string("ui.table.border")
+    if !is_builtin_default(config, "ui.table.border")
+        && let Some(value) = config.get_string("ui.table.border")
         && let Some(parsed) = TableBorderStyle::parse(value)
     {
         settings.table_border = parsed;
@@ -671,6 +683,30 @@ mod tests {
             .expect("test config should resolve")
     }
 
+    fn resolved_with_session(
+        defaults_entries: &[(&str, &str)],
+        session_entries: &[(&str, &str)],
+    ) -> osp_config::ResolvedConfig {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "default");
+        for (key, value) in defaults_entries {
+            defaults.set(*key, *value);
+        }
+
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(defaults);
+
+        let mut session = ConfigLayer::default();
+        for (key, value) in session_entries {
+            session.set(*key, *value);
+        }
+        resolver.set_session(session);
+
+        resolver
+            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .expect("test config should resolve")
+    }
+
     #[test]
     fn parse_mode_helpers_accept_aliases_and_trim_input_unit() {
         assert_eq!(
@@ -698,12 +734,14 @@ mod tests {
 
     #[test]
     fn render_settings_apply_low_level_ui_overrides_unit() {
-        let config = resolved(&[
-            ("ui.width", "88"),
-            ("ui.chrome.frame", "round"),
-            ("ui.table.border", "square"),
-            ("ui.table.overflow", "wrap"),
-        ]);
+        let config = resolved_with_session(
+            &[("ui.width", "88")],
+            &[
+                ("ui.chrome.frame", "round"),
+                ("ui.table.border", "square"),
+                ("ui.table.overflow", "wrap"),
+            ],
+        );
         let mut settings = RenderSettings::test_plain(OutputFormat::Table);
 
         apply_render_settings_from_config(&mut settings, &config);
@@ -712,6 +750,31 @@ mod tests {
         assert_eq!(settings.chrome_frame, SectionFrameStyle::Round);
         assert_eq!(settings.table_border, TableBorderStyle::Square);
         assert_eq!(settings.table_overflow, TableOverflow::Wrap);
+    }
+
+    #[test]
+    fn presentation_seeds_runtime_chrome_and_table_defaults_unit() {
+        let config = resolved(&[("ui.presentation", "expressive")]);
+        let mut settings = RenderSettings::test_plain(OutputFormat::Table);
+
+        apply_render_settings_from_config(&mut settings, &config);
+
+        assert_eq!(settings.chrome_frame, SectionFrameStyle::TopBottom);
+        assert_eq!(settings.table_border, TableBorderStyle::Round);
+    }
+
+    #[test]
+    fn explicit_low_level_overrides_beat_presentation_defaults_unit() {
+        let config = resolved_with_session(
+            &[("ui.presentation", "expressive")],
+            &[("ui.chrome.frame", "square"), ("ui.table.border", "none")],
+        );
+        let mut settings = RenderSettings::test_plain(OutputFormat::Table);
+
+        apply_render_settings_from_config(&mut settings, &config);
+
+        assert_eq!(settings.chrome_frame, SectionFrameStyle::Square);
+        assert_eq!(settings.table_border, TableBorderStyle::None);
     }
 
     #[test]

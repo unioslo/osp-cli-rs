@@ -1,13 +1,16 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
+mod highlight;
 mod history;
 mod menu;
 mod menu_core;
+use highlight::ReplHighlighter;
+pub use highlight::{HighlightDebugSpan, debug_highlight};
 pub use history::{
     HistoryConfig, HistoryEntry, HistoryShellContext, OspHistoryStore, SharedHistory,
     expand_history,
@@ -18,10 +21,10 @@ use osp_completion::{
     ArgNode, CompletionEngine, CompletionNode, CompletionTree, SuggestionEntry, SuggestionOutput,
 };
 use reedline::{
-    Completer, EditCommand, EditMode, Editor, Emacs, Highlighter, KeyCode, KeyModifiers, Menu,
-    MenuEvent, Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline,
-    ReedlineEvent, ReedlineMenu, ReedlineRawEvent, Signal, Span, StyledText, Suggestion,
-    UndoBehavior, default_emacs_keybindings,
+    Completer, EditCommand, EditMode, Editor, Emacs, KeyCode, KeyModifiers, Menu, MenuEvent,
+    Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline,
+    ReedlineEvent, ReedlineMenu, ReedlineRawEvent, Signal, Span, Suggestion, UndoBehavior,
+    default_emacs_keybindings,
 };
 use serde::Serialize;
 
@@ -32,7 +35,28 @@ pub struct ReplPrompt {
 }
 
 pub type PromptRightRenderer = Arc<dyn Fn() -> String + Send + Sync>;
-pub type LineProjector = Arc<dyn Fn(&str) -> String + Send + Sync>;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LineProjection {
+    pub line: String,
+    pub hidden_suggestions: BTreeSet<String>,
+}
+
+impl LineProjection {
+    pub fn passthrough(line: impl Into<String>) -> Self {
+        Self {
+            line: line.into(),
+            hidden_suggestions: BTreeSet::new(),
+        }
+    }
+
+    pub fn with_hidden_suggestions(mut self, hidden_suggestions: BTreeSet<String>) -> Self {
+        self.hidden_suggestions = hidden_suggestions;
+        self
+    }
+}
+
+pub type LineProjector = Arc<dyn Fn(&str) -> LineProjection + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplInputMode {
@@ -321,7 +345,7 @@ fn apply_debug_step(
         }
         DebugStep::Accept => {
             if menu.is_active() {
-                menu.replace_in_buffer(editor);
+                menu.accept_selection_in_buffer(editor);
                 dispatch_menu_event(menu, editor, completer, MenuEvent::Deactivate);
             }
         }
@@ -596,6 +620,11 @@ where
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
         KeyModifiers::NONE,
+        KeyCode::Enter,
+        ReedlineEvent::Multiple(vec![ReedlineEvent::Esc, ReedlineEvent::Submit]),
+    );
+    keybindings.add_binding(
+        KeyModifiers::NONE,
         KeyCode::Tab,
         ReedlineEvent::UntilFound(vec![
             ReedlineEvent::Menu("completion_menu".to_string()),
@@ -741,8 +770,8 @@ impl Completer for ReplCompleter {
             .line_projector
             .as_ref()
             .map(|project| project(line))
-            .unwrap_or_else(|| line.to_string());
-        let (cursor_state, outputs) = self.engine.complete(&projected, pos);
+            .unwrap_or_else(|| LineProjection::passthrough(line));
+        let (cursor_state, outputs) = self.engine.complete(&projected.line, pos);
         let span = Span {
             start: cursor_state.replace_range.start,
             end: cursor_state.replace_range.end,
@@ -759,6 +788,7 @@ impl Completer for ReplCompleter {
 
         let mut suggestions = ranked
             .into_iter()
+            .filter(|item| !projected.hidden_suggestions.contains(&item.text))
             .map(|item| Suggestion {
                 value: item.text,
                 description: item.meta,
@@ -876,103 +906,7 @@ fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
     style
 }
 
-struct ReplHighlighter {
-    engine: CompletionEngine,
-    command_color: Color,
-    line_projector: Option<LineProjector>,
-}
-
-impl ReplHighlighter {
-    fn new(
-        tree: CompletionTree,
-        command_color: Color,
-        line_projector: Option<LineProjector>,
-    ) -> Self {
-        Self {
-            engine: CompletionEngine::new(tree),
-            command_color,
-            line_projector,
-        }
-    }
-}
-
-impl Highlighter for ReplHighlighter {
-    fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
-        let mut styled = StyledText::new();
-        if line.is_empty() {
-            return styled;
-        }
-
-        let projected = self
-            .line_projector
-            .as_ref()
-            .map(|project| project(line))
-            .unwrap_or_else(|| line.to_string());
-        let tokens = self.engine.tokenize(&projected);
-        if tokens.is_empty() {
-            styled.push((Style::new(), line.to_string()));
-            return styled;
-        }
-
-        let matched_len = self.engine.matched_command_len_tokens(&tokens);
-        let mut pos = 0usize;
-
-        for (index, token) in tokens.iter().enumerate() {
-            if token.is_empty() {
-                continue;
-            }
-            let Some(rel_idx) = line[pos..].find(token) else {
-                styled.push((Style::new(), line[pos..].to_string()));
-                return styled;
-            };
-            let idx = pos + rel_idx;
-            if idx > pos {
-                styled.push((Style::new(), line[pos..idx].to_string()));
-            }
-
-            let style = if index < matched_len {
-                Style::new().fg(self.command_color)
-            } else if let Some(color) = parse_hex_color_token(token) {
-                Style::new().fg(color)
-            } else {
-                Style::new()
-            };
-
-            styled.push((style, line[idx..idx + token.len()].to_string()));
-            pos = idx + token.len();
-        }
-
-        if pos < line.len() {
-            styled.push((Style::new(), line[pos..].to_string()));
-        }
-
-        styled
-    }
-}
-
-fn parse_hex_color_token(token: &str) -> Option<Color> {
-    let normalized = token.trim();
-    let hex = normalized.strip_prefix('#')?;
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        return Some(Color::Rgb(r, g, b));
-    }
-    if hex.len() == 3 {
-        let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
-        let g = u8::from_str_radix(&hex[1..2], 16).ok()?;
-        let b = u8::from_str_radix(&hex[2..3], 16).ok()?;
-        return Some(Color::Rgb(
-            r.saturating_mul(17),
-            g.saturating_mul(17),
-            b.saturating_mul(17),
-        ));
-    }
-    None
-}
-
-fn color_from_style_spec(spec: &str) -> Option<Color> {
+pub fn color_from_style_spec(spec: &str) -> Option<Color> {
     let token = extract_color_token(spec)?;
     parse_color_token(token)
 }
@@ -1358,46 +1292,26 @@ impl Prompt for OspPrompt {
 #[cfg(test)]
 mod tests {
     use nu_ansi_term::Color;
-    use osp_completion::{CompletionNode, CompletionTree};
+    use osp_completion::{CompletionNode, CompletionTree, FlagNode};
     use reedline::{
-        Completer, EditCommand, Highlighter, Prompt, PromptEditMode, PromptHistorySearch,
-        PromptHistorySearchStatus, StyledText,
+        Completer, EditCommand, Prompt, PromptEditMode, PromptHistorySearch,
+        PromptHistorySearchStatus,
     };
+    use std::collections::BTreeSet;
     use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use super::{
         AutoCompleteEmacs, CompletionDebugOptions, DebugStep, HistoryConfig, HistoryShellContext,
-        OspPrompt, PromptRightRenderer, ReplAppearance, ReplCompleter, ReplHighlighter,
-        ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunResult, SharedHistory,
-        SubmissionContext, SubmissionResult, build_repl_highlighter, color_from_style_spec,
-        debug_completion, debug_completion_steps, default_pipe_verbs, expand_history, expand_home,
-        is_cursor_position_error, path_suggestions, process_submission, split_path_stub,
-        trace_completion, trace_completion_enabled,
+        OspPrompt, PromptRightRenderer, ReplAppearance, ReplCompleter, ReplLineResult, ReplPrompt,
+        ReplReloadKind, ReplRunResult, SharedHistory, SubmissionContext, SubmissionResult,
+        build_repl_highlighter, color_from_style_spec, debug_completion, debug_completion_steps,
+        default_pipe_verbs, expand_history, expand_home, is_cursor_position_error,
+        path_suggestions, process_submission, split_path_stub, trace_completion,
+        trace_completion_enabled,
     };
-
-    fn token_styles(styled: &StyledText) -> Vec<(String, Option<Color>)> {
-        styled
-            .buffer
-            .iter()
-            .filter_map(|(style, text)| {
-                if text.chars().all(|ch| ch.is_whitespace()) {
-                    None
-                } else {
-                    Some((text.clone(), style.foreground))
-                }
-            })
-            .collect()
-    }
-
-    fn styled_text_to_plain(styled: &StyledText) -> String {
-        styled
-            .buffer
-            .iter()
-            .map(|(_, text)| text.as_str())
-            .collect()
-    }
+    use crate::LineProjection;
 
     fn completion_tree_with_config_show() -> CompletionTree {
         let mut config = CompletionNode::default();
@@ -1576,7 +1490,9 @@ mod tests {
     #[test]
     fn completer_can_use_projected_line_for_host_flags_unit() {
         let tree = completion_tree_with_config_show();
-        let projector = Arc::new(|line: &str| line.replacen("--json", "      ", 1));
+        let projector = Arc::new(|line: &str| {
+            LineProjection::passthrough(line.replacen("--json", "      ", 1))
+        });
         let mut completer = ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
 
         let completions = completer.complete("--json config sh", "--json config sh".len());
@@ -1586,6 +1502,37 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(values.contains(&"show".to_string()));
+    }
+
+    #[test]
+    fn completer_hides_suggestions_requested_by_projection_unit() {
+        let mut root = CompletionNode::default();
+        root.flags
+            .insert("--json".to_string(), FlagNode::new().flag_only());
+        root.flags
+            .insert("--debug".to_string(), FlagNode::new().flag_only());
+        let tree = CompletionTree {
+            root,
+            ..CompletionTree::default()
+        };
+        let projector = Arc::new(|line: &str| {
+            let mut hidden = BTreeSet::new();
+            hidden.insert("--json".to_string());
+            LineProjection {
+                line: line.to_string(),
+                hidden_suggestions: hidden,
+            }
+        });
+        let mut completer = ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
+
+        let values = completer
+            .complete("-", 1)
+            .into_iter()
+            .map(|suggestion| suggestion.value)
+            .collect::<Vec<_>>();
+
+        assert!(!values.contains(&"--json".to_string()));
+        assert!(values.contains(&"--debug".to_string()));
     }
 
     #[test]
@@ -1635,82 +1582,6 @@ mod tests {
             Some(Color::Rgb(80, 250, 123))
         );
         assert!(color_from_style_spec("not-a-color").is_none());
-    }
-
-    #[test]
-    fn highlighter_colors_full_command_chain_only() {
-        let tree = completion_tree_with_config_show();
-        let highlighter = ReplHighlighter::new(tree, Color::Green, None);
-
-        let styled = highlighter.highlight("config show", 0);
-        let tokens = token_styles(&styled);
-        assert_eq!(
-            tokens,
-            vec![
-                ("config".to_string(), Some(Color::Green)),
-                ("show".to_string(), Some(Color::Green)),
-            ]
-        );
-    }
-
-    #[test]
-    fn highlighter_skips_partial_subcommand_and_flags() {
-        let tree = completion_tree_with_config_show();
-        let highlighter = ReplHighlighter::new(tree, Color::Green, None);
-
-        let styled = highlighter.highlight("config sho", 0);
-        let tokens = token_styles(&styled);
-        assert_eq!(
-            tokens,
-            vec![
-                ("config".to_string(), Some(Color::Green)),
-                ("sho".to_string(), None),
-            ]
-        );
-
-        let styled = highlighter.highlight("config --flag", 0);
-        let tokens = token_styles(&styled);
-        assert_eq!(
-            tokens,
-            vec![
-                ("config".to_string(), Some(Color::Green)),
-                ("--flag".to_string(), None),
-            ]
-        );
-    }
-
-    #[test]
-    fn highlighter_can_use_projected_line_for_help_alias_unit() {
-        let mut ldap = CompletionNode::default();
-        ldap.children
-            .insert("user".to_string(), CompletionNode::default());
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("ldap", ldap),
-            ..CompletionTree::default()
-        };
-        let projector = Arc::new(|line: &str| line.replacen("help", "    ", 1));
-        let highlighter = ReplHighlighter::new(tree, Color::Green, Some(projector));
-
-        let styled = highlighter.highlight("help ldap user", 0);
-        let tokens = token_styles(&styled);
-        assert_eq!(
-            tokens,
-            vec![
-                ("help ".to_string(), None),
-                ("ldap".to_string(), Some(Color::Green)),
-                ("user".to_string(), Some(Color::Green)),
-            ]
-        );
-    }
-
-    #[test]
-    fn highlighter_fallback_keeps_remaining_text_once() {
-        let tree = completion_tree_with_config_show();
-        let highlighter = ReplHighlighter::new(tree, Color::Green, None);
-        let line = r#"config "say \"hi\"""#;
-
-        let styled = highlighter.highlight(line, 0);
-        assert_eq!(styled_text_to_plain(&styled), line);
     }
 
     #[test]
