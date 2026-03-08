@@ -1,6 +1,0 @@
----
-source: crates/osp-cli/src/app/tests/presentation.rs
-expression: "render_message_snapshot(&[(\"ui.presentation\", \"austere\")])"
----
-error: bad
-warning: careful

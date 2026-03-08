@@ -15,9 +15,6 @@ clippy:
 test:
     cargo test --all-features --locked
 
-workspace-test:
-    cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
-
 cov:
     cargo llvm-cov --all-features --summary-only
 
@@ -74,7 +71,6 @@ verify-full:
     cargo check --all-features --locked
     cargo clippy --all-features --all-targets -- -D warnings
     cargo test --all-features --locked
-    cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
     ./scripts/check-coverage-gate.py
 
 release-check:
@@ -83,5 +79,4 @@ release-check:
     cargo check --all-features --locked
     cargo clippy --all-features --all-targets -- -D warnings
     cargo test --all-features --locked
-    cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
     ./scripts/check-coverage-gate.py

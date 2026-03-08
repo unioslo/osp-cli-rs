@@ -1,8 +1,0 @@
-[package]
-name = "osp-config"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-toml.workspace = true
-tracing.workspace = true

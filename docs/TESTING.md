@@ -54,9 +54,6 @@ Per-crate internal unit tests may also exist in `src/lib.rs` modules
 
 - Root package: `cargo test`
 - CLI contracts only: `cargo test --test contracts`
-- Legacy workspace CLI contracts: `cargo test --manifest-path workspace/Cargo.toml -p osp-cli --test contracts`
-- Legacy workspace DSL crate only: `cargo test --manifest-path workspace/Cargo.toml -p osp-dsl`
-- Legacy workspace services crate only: `cargo test --manifest-path workspace/Cargo.toml -p osp-services`
 - Review snapshots: `cargo insta review`
 - Re-record snapshots during a focused run: `cargo insta test -p osp-cli`
 

@@ -85,12 +85,10 @@ The release workflow publishes both:
 - the `osp-cli` crate to crates.io through trusted publishing
 - GitHub release assets for Linux, macOS, and Windows
 
-Release artifacts are built from the root single-crate package, while the old
-workspace remains the compatibility lane in CI.
+Release artifacts are built from the root single-crate package.
 
-Release tags are expected to match the root package version exactly. The legacy
-workspace mirror follows that same version. For example, if `Cargo.toml` says
-`0.1.0`, the release tag must be `v0.1.0`.
+Release tags are expected to match the root package version exactly. For
+example, if `Cargo.toml` says `0.1.0`, the release tag must be `v0.1.0`.
 
 Typical release flow:
 
@@ -111,7 +109,7 @@ notes stub:
 ```bash
 just bump patch
 just bump patch "Summarize the release"
-just bump 1.4.6 "Summarize the release"
+just bump 1.4.8 "Summarize the release"
 just bump minor
 just bump major
 just bump-dry patch "Preview the next release"
@@ -120,9 +118,7 @@ just bump-dry patch "Preview the next release"
 This updates:
 
 - root `Cargo.toml` package version
-- legacy `workspace/Cargo.toml` mirror version
 - root package entries in `Cargo.lock`
-- legacy workspace package entries in `workspace/Cargo.lock`
 - `docs/releases/vX.Y.Z.md` if it does not already exist
 - `CHANGELOG.md` with a matching version section if it does not already exist
 
@@ -144,7 +140,6 @@ That enforces the same release prerequisites locally:
 - `CHANGELOG.md` has a finished section for the current package version
 - fast fmt/clippy checks pass
 - root package checks pass
-- workspace compatibility tests pass
 - the coverage gate passes
 
 To create and push the release tag safely, use:
@@ -197,12 +192,12 @@ just cov-baseline
 
 Why this runs on `pre-push` instead of `pre-commit`:
 
-- a warm full-workspace `cargo llvm-cov --workspace --all-features` run was about
-  one minute locally on March 7, 2026
+- a warm full release-path `cargo llvm-cov --all-features` run was about one
+  minute locally on March 7, 2026
 - even a package-scoped run for a small `osp-cli` + `osp-repl` change set was
   about `35s`
-- package-scoped coverage is also only an approximation in a shared workspace,
-  because downstream crate tests may contribute meaningful coverage
+- package-scoped coverage is still only an approximation, because narrow local
+  diffs may be covered indirectly by broader test suites
 
 So the pragmatic policy is:
 
@@ -214,7 +209,7 @@ The local `pre-push` path is intentionally approximate:
 
 - it only runs `cargo llvm-cov` for the changed package set when the diff is narrow
 - it falls back to full root-package coverage for broader changes
-- it enforces the changed-file floor, but leaves the full-workspace baseline check to CI
+- it enforces the changed-file floor, but leaves the full baseline check to CI
 
 ## Updating The Baseline
 

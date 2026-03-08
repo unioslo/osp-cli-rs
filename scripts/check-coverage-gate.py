@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
         "--fast",
         action="store_true",
         help=(
-            "Use a changed-package approximation instead of full-workspace coverage. "
+            "Use a changed-package approximation instead of the full release-path coverage run. "
             "Intended for local pre-push use."
         ),
     )
@@ -117,15 +117,11 @@ def changed_source_files(repo_root: Path) -> list[str]:
         path = raw.strip()
         if not path.endswith(".rs"):
             continue
-        if not (path.startswith("src/") or path.startswith("workspace/crates/")):
-            continue
-        if path.startswith("workspace/crates/") and "/src/" not in path:
+        if not path.startswith("src/"):
             continue
         if path.startswith("src/") and "/src/" in path:
             continue
         if is_internal_test_module(path):
-            continue
-        if path.startswith("workspace/crates/"):
             continue
         changed.append(path)
     return sorted(set(changed))

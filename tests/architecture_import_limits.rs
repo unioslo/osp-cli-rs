@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use quote::ToTokens;
 use syn::visit::{self, Visit};
 
-// This test intentionally encodes logical component boundaries rather than
-// the legacy crate layout, so the same policy survives the root single-crate
-// package plus the compatibility workspace mirror.
+// This test intentionally encodes logical component boundaries rather than a
+// particular file layout, so the same policy survives refactors within the
+// current single-crate package.
 const WORKSPACE_CRATES: &[&str] = &[
     "osp_api",
     "osp_cli",
@@ -36,21 +36,6 @@ enum Component {
 }
 
 impl Component {
-    fn crate_name(self) -> &'static str {
-        match self {
-            Self::Api => "osp-api",
-            Self::Cli => "osp-cli",
-            Self::Completion => "osp-completion",
-            Self::Config => "osp-config",
-            Self::Core => "osp-core",
-            Self::Dsl => "osp-dsl",
-            Self::Ports => "osp-ports",
-            Self::Repl => "osp-repl",
-            Self::Services => "osp-services",
-            Self::Ui => "osp-ui",
-        }
-    }
-
     fn rust_module_name(self) -> &'static str {
         match self {
             Self::Api => "osp_api",
@@ -110,67 +95,6 @@ impl Component {
         };
         values.iter().copied().collect()
     }
-
-    fn dev_allowed(self) -> BTreeSet<Component> {
-        let mut allowed = self.runtime_allowed();
-        match self {
-            Self::Cli => {
-                allowed.extend([Self::Api, Self::Ports]);
-            }
-            Self::Services => {
-                allowed.insert(Self::Api);
-            }
-            _ => {}
-        }
-        allowed
-    }
-}
-
-#[test]
-fn cargo_manifests_follow_runtime_and_dev_dependency_matrix() {
-    for component in all_components() {
-        let manifest_path = workspace_root()
-            .join("workspace")
-            .join("crates")
-            .join(component.crate_name())
-            .join("Cargo.toml");
-        let manifest = fs::read_to_string(&manifest_path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
-        let parsed: toml::Value = toml::from_str(&manifest)
-            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
-
-        let runtime = internal_deps_from_table(parsed.get("dependencies"));
-        let expected_runtime = component
-            .runtime_allowed()
-            .into_iter()
-            .filter(|candidate| *candidate != component)
-            .map(|candidate| candidate.crate_name().to_string())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            runtime,
-            expected_runtime,
-            "runtime internal dependencies drifted for {}",
-            component.crate_name()
-        );
-
-        let dev = internal_deps_from_table(parsed.get("dev-dependencies"));
-        let allowed_dev = component
-            .dev_allowed()
-            .into_iter()
-            .filter(|candidate| *candidate != component)
-            .map(|candidate| candidate.crate_name().to_string())
-            .collect::<BTreeSet<_>>();
-        let disallowed_dev = dev
-            .difference(&allowed_dev)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        assert!(
-            disallowed_dev.is_empty(),
-            "dev internal dependencies drifted for {}: disallowed entries = {:?}",
-            component.crate_name(),
-            disallowed_dev
-        );
-    }
 }
 
 #[test]
@@ -213,49 +137,6 @@ fn root_single_crate_imports_follow_logical_layer_matrix() {
     assert!(
         failures.is_empty(),
         "root single-crate imports drifted from the logical layer matrix:\n{}",
-        failures.join("\n")
-    );
-}
-
-#[test]
-fn legacy_workspace_source_imports_follow_logical_layer_matrix() {
-    let root = workspace_root().join("workspace").join("crates");
-    let mut failures = Vec::new();
-
-    for component in all_components() {
-        let src_root = root.join(component.crate_name()).join("src");
-        let mut files = Vec::new();
-        collect_rust_files(&src_root, &mut files);
-
-        for file in files {
-            let source = fs::read_to_string(&file)
-                .unwrap_or_else(|err| panic!("failed to read {}: {err}", file.display()));
-            let syntax = syn::parse_file(&source)
-                .unwrap_or_else(|err| panic!("failed to parse {}: {err}", file.display()));
-            let imports = non_test_workspace_imports(&syntax);
-            let allowed = component
-                .runtime_allowed()
-                .into_iter()
-                .map(Component::rust_module_name)
-                .collect::<BTreeSet<_>>();
-
-            let disallowed = imports
-                .difference(&allowed)
-                .copied()
-                .collect::<BTreeSet<_>>();
-            if !disallowed.is_empty() {
-                failures.push(format!(
-                    "{} imports disallowed legacy workspace modules: {}",
-                    relative_to_workspace(&file),
-                    disallowed.into_iter().collect::<Vec<_>>().join(", ")
-                ));
-            }
-        }
-    }
-
-    assert!(
-        failures.is_empty(),
-        "legacy workspace imports drifted from the logical layer matrix:\n{}",
         failures.join("\n")
     );
 }
@@ -338,16 +219,6 @@ fn all_components() -> [Component; 10] {
         Component::Services,
         Component::Ui,
     ]
-}
-
-fn internal_deps_from_table(section: Option<&toml::Value>) -> BTreeSet<String> {
-    section
-        .and_then(toml::Value::as_table)
-        .into_iter()
-        .flat_map(|table| table.keys())
-        .filter(|name| name.starts_with("osp-"))
-        .cloned()
-        .collect()
 }
 
 fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {

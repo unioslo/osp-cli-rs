@@ -4,6 +4,8 @@ Each tagged release must have a matching release notes file:
 
 - `docs/releases/v1.4.5.md`
 - `docs/releases/v1.4.6.md`
+- `docs/releases/v1.4.7.md`
+- `docs/releases/v1.4.8.md`
 
 The release workflow uses that file as the GitHub release body.
 It also publishes the crate to crates.io through the

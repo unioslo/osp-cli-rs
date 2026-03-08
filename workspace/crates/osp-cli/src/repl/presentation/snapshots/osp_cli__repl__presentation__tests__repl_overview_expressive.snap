@@ -1,9 +1,0 @@
----
-source: crates/osp-cli/src/repl/presentation/tests.rs
-expression: rendered
----
- Usage:  [INVOCATION_OPTIONS] COMMAND [ARGS]...
-
-- Commands -
-  options     per invocation: --format json
-  config      show config
