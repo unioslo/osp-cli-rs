@@ -132,7 +132,7 @@ fn apply_row_with_mode(
     let flat = flatten_row(&row);
     let (pairs, _) = resolve_pairs(&flat, &spec.key_spec.token);
     let synthetic = build_synthetic_map(&pairs, &flat);
-    let mut result = match_row(&flat, &pairs, &synthetic, spec);
+    let mut result = match_row(&flat, &pairs, synthetic, spec);
 
     let keep = match spec.scope {
         QuickScope::KeyOnly => {
@@ -165,7 +165,7 @@ fn apply_row_with_mode(
 fn match_row(
     flat: &Row,
     pairs: &[(String, Value)],
-    synthetic: &Row,
+    synthetic: Row,
     spec: &crate::parse::quick::QuickSpec,
 ) -> MatchResult {
     let matches = match_row_keys_detailed(flat, &spec.key_spec.token, spec.key_spec.exact);
@@ -174,15 +174,13 @@ fn match_row(
     let mut seen_values = HashSet::new();
 
     for (key, value) in pairs {
-        let values = match value {
-            Value::Array(items) => items.iter().collect::<Vec<_>>(),
-            scalar => vec![scalar],
+        let matched = match value {
+            Value::Array(items) => items
+                .iter()
+                .any(|item| value_matches_token(item, &spec.key_spec.token, spec.key_spec.exact)),
+            scalar => value_matches_token(scalar, &spec.key_spec.token, spec.key_spec.exact),
         };
-        if values
-            .iter()
-            .any(|item| value_matches_token(item, &spec.key_spec.token, spec.key_spec.exact))
-            && seen_values.insert(key.clone())
-        {
+        if matched && seen_values.insert(key.as_str()) {
             value_hits.push(key.clone());
         }
     }
@@ -211,17 +209,8 @@ fn match_row(
         QuickScope::KeyOnly => false,
     };
 
-    if !key_hits.is_empty() {
-        let last_segments = key_hits
-            .iter()
-            .filter_map(|key| last_segment_name(key))
-            .map(|name| name.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
-        if last_segments.len() == 1
-            && last_segments.contains(&spec.key_spec.token.to_ascii_lowercase())
-        {
-            is_projection = true;
-        }
+    if key_hits_match_projection_token(&key_hits, &spec.key_spec.token) {
+        is_projection = true;
     }
 
     if is_projection && !synthetic.is_empty() && matches!(spec.scope, QuickScope::KeyOrValue) {
@@ -233,7 +222,7 @@ fn match_row(
         key_hits,
         value_hits,
         is_projection,
-        synthetic: synthetic.clone(),
+        synthetic,
     }
 }
 
@@ -395,6 +384,19 @@ fn prefer_exact_keys(matches: &KeyMatches, _exact: ExactMode) -> Vec<String> {
     } else {
         matches.partial.clone()
     }
+}
+
+fn key_hits_match_projection_token(key_hits: &[String], token: &str) -> bool {
+    let mut names = key_hits.iter().filter_map(|key| last_segment_name(key));
+    let Some(first) = names.next() else {
+        return false;
+    };
+
+    if !first.eq_ignore_ascii_case(token) {
+        return false;
+    }
+
+    names.all(|name| name.eq_ignore_ascii_case(&first))
 }
 
 fn extend_unique(out: &mut Vec<String>, seen: &mut HashSet<String>, keys: &[String]) {

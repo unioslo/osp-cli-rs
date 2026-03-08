@@ -104,6 +104,7 @@ Stages that typically stream:
 - `Y`
 - `U`
 - `L` when used as a normal head limit such as `| L 20`
+- flat-row quick-search stages such as bare search text, `V`, and `K`
 
 Stages that materialize the current payload:
 
@@ -113,7 +114,30 @@ Stages that materialize the current payload:
 - `C`
 - `Z`
 - `JQ`
-- quick-search style stages such as bare search text, `V`, and `K`
+
+Quick-search stages keep flat rows on a streaming path, but they use a
+two-row lookahead to preserve the single-row "projection" behavior. That peek
+is measurable on large multi-row quick searches, but it is not the main cost
+of the stage.
+
+Streaming here only changes DSL execution. The CLI still renders the final
+`OutputResult` into one complete buffer before printing it. In measured release
+benchmarks of `DSL -> render -> one write`, that meant:
+
+- streamable stages did not make the first terminal output appear earlier
+- time to first output and time to all output were effectively the same
+- end-to-end wins were workload-dependent rather than universal
+
+On the current plain-table benchmark harness:
+
+- `25` input rows were effectively tied
+- `500` input rows were about `9%` faster on the streaming path
+- `20,000` input rows were effectively tied once final rendering dominated
+
+The reproducible harnesses live in:
+
+- `crates/osp-dsl/src/stages/quick/tests.rs`
+- `crates/osp-cli/examples/dsl_e2e_bench.rs`
 
 Use `| H` in the REPL to see the current verb list and `| H <verb>` for per-verb
 streaming notes.

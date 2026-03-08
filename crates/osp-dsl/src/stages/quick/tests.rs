@@ -391,7 +391,7 @@ fn quick_match_and_transform_helpers_cover_scalar_negated_and_filtered_paths_uni
     let scalar_match = match_row(
         &flat,
         &scalar_pairs,
-        &osp_core::row::Row::new(),
+        osp_core::row::Row::new(),
         &scalar_spec,
     );
     assert!(scalar_match.matched);
@@ -509,7 +509,7 @@ fn quick_filter_helpers_cover_array_pair_matches_and_empty_results_unit() {
     let pair_match = match_row(
         &flat,
         &[("groups".to_string(), json!(["ops", "eng"]))],
-        &osp_core::row::Row::new(),
+        osp_core::row::Row::new(),
         &spec,
     );
     assert!(pair_match.matched);
