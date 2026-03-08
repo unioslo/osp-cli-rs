@@ -222,7 +222,8 @@ impl PluginManager {
             })?;
         }
 
-        let payload = serde_json::to_string_pretty(cache)?;
+        let payload = serde_json::to_string_pretty(cache)
+            .context("failed to serialize describe cache to JSON")?;
         super::state::write_text_atomic(&path, &payload)
             .with_context(|| format!("failed to write describe cache {}", path.display()))
     }

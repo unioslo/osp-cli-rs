@@ -227,6 +227,7 @@ pub(crate) fn apply_output_stages(
     format_hint: Option<OutputFormat>,
 ) -> anyhow::Result<(OutputResult, Option<OutputFormat>)> {
     if !stages.is_empty() {
+        tracing::trace!(stage_count = stages.len(), "applying DSL output pipeline");
         output = apply_output_pipeline(output, stages)?;
         // Once a DSL pipeline runs, the transformed output should use the
         // caller's format settings rather than the producer's original hint.

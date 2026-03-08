@@ -1,4 +1,4 @@
-use miette::{Result, miette};
+use miette::{Result, WrapErr, miette};
 
 use crate::cli::{Commands, parse_inline_command_tokens};
 use crate::invocation::{InvocationOptions, append_invocation_help_if_verbose};
@@ -88,7 +88,13 @@ pub(crate) fn run_external_command_with_help_renderer(
         verbose: u8::from(invocation.show_invocation_help),
         ..InvocationOptions::default()
     };
-    let parsed = match parse_external_invocation(runtime, session, tokens, &help_invocation)? {
+    let parsed = match parse_external_invocation(runtime, session, tokens, &help_invocation)
+        .wrap_err_with(|| {
+            format!(
+                "failed to parse external command invocation for `{}`",
+                tokens.first().map(String::as_str).unwrap_or("external")
+            )
+        })? {
         ExternalParse::Handled(result) => return Ok(result),
         ExternalParse::Invocation(parsed) => parsed,
     };
@@ -106,7 +112,8 @@ pub(crate) fn run_external_command_with_help_renderer(
         return Ok(result);
     }
     if !parsed.stages.is_empty() {
-        completion::validate_dsl_stages(&parsed.stages)?;
+        completion::validate_dsl_stages(&parsed.stages)
+            .wrap_err("failed to validate DSL pipeline stages")?;
     }
 
     let (command, args) = parsed

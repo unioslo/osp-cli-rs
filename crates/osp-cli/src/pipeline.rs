@@ -10,6 +10,21 @@ use crate::app::is_sensitive_key;
 
 const MAX_ALIAS_EXPANSION_DEPTH: usize = 100;
 
+pub(crate) fn truncate_display(s: &str, max_len: usize) -> String {
+    let trimmed = s.trim();
+    let char_count = trimmed.chars().count();
+    if char_count <= max_len {
+        trimmed.to_string()
+    } else {
+        let end = trimmed
+            .char_indices()
+            .nth(max_len)
+            .map(|(index, _)| index)
+            .unwrap_or(trimmed.len());
+        format!("{}... ({} chars)", &trimmed[..end], char_count)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCommandLine {
     pub tokens: Vec<String>,
@@ -22,10 +37,15 @@ pub fn parse_command_text_with_aliases(
 ) -> Result<ParsedCommandLine> {
     let parsed = parse_pipeline(text)
         .into_diagnostic()
-        .wrap_err("failed to parse pipeline")?;
+        .wrap_err_with(|| format!("failed to parse pipeline: {}", truncate_display(text, 60)))?;
     let command_tokens = shell_words::split(&parsed.command)
         .into_diagnostic()
-        .wrap_err("failed to parse command")?;
+        .wrap_err_with(|| {
+            format!(
+                "failed to parse command tokens: {}",
+                truncate_display(&parsed.command, 60)
+            )
+        })?;
     finalize_command_with_aliases(command_tokens, parsed.stages, config)
 }
 
@@ -54,7 +74,8 @@ fn maybe_expand_alias(
     };
 
     let template = value.raw_value.to_string();
-    let expanded = expand_alias_template(candidate, &template, positional_args, config)?;
+    let expanded = expand_alias_template(candidate, &template, positional_args, config)
+        .wrap_err_with(|| format!("failed to expand alias `{candidate}`"))?;
     Ok(Some(expanded))
 }
 
@@ -70,13 +91,23 @@ fn finalize_command_with_aliases(
         });
     }
 
-    if let Some(expanded) = maybe_expand_alias(&command_tokens[0], &command_tokens[1..], config)? {
+    let alias_name = &command_tokens[0];
+    if let Some(expanded) = maybe_expand_alias(alias_name, &command_tokens[1..], config)? {
+        tracing::trace!(
+            alias = %alias_name,
+            "alias expanded"
+        );
         let alias_parsed = parse_pipeline(&expanded)
             .into_diagnostic()
-            .wrap_err("failed to parse alias pipeline")?;
+            .wrap_err_with(|| {
+                format!(
+                    "failed to parse alias `{alias_name}` expansion: {}",
+                    truncate_display(&expanded, 60)
+                )
+            })?;
         let alias_tokens = shell_words::split(&alias_parsed.command)
             .into_diagnostic()
-            .wrap_err("failed to parse alias command")?;
+            .wrap_err_with(|| format!("failed to parse alias `{alias_name}` command tokens"))?;
         if alias_tokens.is_empty() {
             return Ok(ParsedCommandLine {
                 tokens: Vec::new(),
@@ -131,9 +162,9 @@ fn merge_orch_os_tokens(tokens: Vec<String>) -> Vec<String> {
 
 pub fn validate_cli_dsl_stages(stages: &[String]) -> Result<()> {
     for raw in stages {
-        let parsed = parse_stage(raw)
-            .into_diagnostic()
-            .wrap_err("failed to parse DSL stage")?;
+        let parsed = parse_stage(raw).into_diagnostic().wrap_err_with(|| {
+            format!("failed to parse DSL stage: {}", truncate_display(raw, 80))
+        })?;
         if parsed.verb.is_empty() {
             continue;
         }
@@ -363,7 +394,7 @@ fn quote_token(token: &str) -> String {
 mod tests {
     use super::{
         expand_alias_template, parse_command_text_with_aliases, parse_command_tokens_with_aliases,
-        validate_cli_dsl_stages,
+        truncate_display, validate_cli_dsl_stages,
     };
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
 
@@ -498,5 +529,10 @@ mod tests {
     #[test]
     fn validate_cli_dsl_stages_allows_help_stage() {
         validate_cli_dsl_stages(&["H sort".to_string()]).expect("help stage should be allowed");
+    }
+
+    #[test]
+    fn truncate_display_respects_utf8_boundaries() {
+        assert_eq!(truncate_display("  å🙂bcdef  ", 3), "å🙂b... (7 chars)");
     }
 }

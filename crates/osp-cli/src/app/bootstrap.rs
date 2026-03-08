@@ -1,4 +1,4 @@
-use miette::Result;
+use miette::{Result, WrapErr};
 use osp_config::{
     ConfigLayer, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults,
     RuntimeLoadOptions, build_runtime_pipeline,
@@ -62,7 +62,8 @@ pub(crate) fn build_cli_session_layer(
         )
         .with_runtime_load(runtime_load)
         .with_session_layer(bootstrap_layer),
-    )?;
+    )
+    .wrap_err("failed to resolve config for CLI session layer")?;
     tracing::debug!(
         profile_override = ?profile_override,
         terminal = %terminal_kind.as_config_terminal(),

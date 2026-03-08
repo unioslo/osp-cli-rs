@@ -19,7 +19,12 @@ pub(crate) struct ReplParsedLine {
 
 impl ReplParsedLine {
     pub(crate) fn parse(line: &str, config: &ResolvedConfig) -> Result<Self> {
-        let parsed = parse_command_text_with_aliases(line, config)?;
+        let parsed = parse_command_text_with_aliases(line, config).wrap_err_with(|| {
+            format!(
+                "failed to parse REPL line: {}",
+                crate::pipeline::truncate_display(line, 60)
+            )
+        })?;
         Ok(Self::from_parsed(parsed))
     }
 
@@ -88,9 +93,12 @@ pub(crate) fn rewrite_help_alias_tokens_at(
 
 pub(crate) fn project_repl_ui_line(line: &str, config: &ResolvedConfig) -> Result<LineProjection> {
     let _ = config;
-    split_pipeline(line)
-        .into_diagnostic()
-        .wrap_err("failed to parse REPL line")?;
+    split_pipeline(line).into_diagnostic().wrap_err_with(|| {
+        format!(
+            "failed to parse REPL line: {}",
+            crate::pipeline::truncate_display(line, 60)
+        )
+    })?;
     let parser = CommandLineParser;
     let spans = parser.tokenize_with_spans(line);
     if spans.is_empty() {

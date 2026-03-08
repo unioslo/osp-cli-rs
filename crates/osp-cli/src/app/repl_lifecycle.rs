@@ -1,4 +1,4 @@
-use miette::Result;
+use miette::{Result, WrapErr};
 
 use crate::app::{
     DEFAULT_THEME_NAME, RuntimeConfigRequest, build_app_state, build_logging_config,
@@ -69,6 +69,11 @@ pub(crate) fn rebuild_repl_parts(
     session: &AppSession,
 ) -> Result<(AppRuntime, AppSession, AppClients)> {
     let snapshot = ReplSessionSnapshot::capture(runtime, session);
+    tracing::debug!(
+        profile_override = ?snapshot.context.profile_override(),
+        scoped = !snapshot.scope.is_root(),
+        "rebuilding REPL state after config/theme change"
+    );
     let config = resolve_runtime_config(
         RuntimeConfigRequest::new(
             snapshot.context.profile_override().map(ToOwned::to_owned),
@@ -76,7 +81,8 @@ pub(crate) fn rebuild_repl_parts(
         )
         .with_runtime_load(snapshot.launch.runtime_load)
         .with_session_layer(snapshot.session_layer()),
-    )?;
+    )
+    .wrap_err("failed to resolve config for REPL rebuild")?;
     let theme_catalog = theme_loader::load_theme_catalog(&config);
     let mut render_settings = crate::cli::default_render_settings();
     crate::cli::apply_render_settings_from_config(&mut render_settings, &config);

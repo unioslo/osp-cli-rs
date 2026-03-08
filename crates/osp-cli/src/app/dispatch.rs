@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use miette::{Result, miette};
+use miette::{Result, WrapErr, miette};
 
 use crate::cli::{
     Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, PluginsArgs, ReplArgs, ThemeArgs,
@@ -33,6 +33,19 @@ impl RunAction {
             | RunAction::History(_)
             | RunAction::External(_) => TerminalKind::Cli,
         }
+    }
+}
+
+fn run_action_name(action: &RunAction) -> &'static str {
+    match action {
+        RunAction::Repl => "repl",
+        RunAction::ReplCommand(_) => "repl-command",
+        RunAction::Plugins(_) => "plugins",
+        RunAction::Doctor(_) => "doctor",
+        RunAction::Theme(_) => "theme",
+        RunAction::Config(_) => "config",
+        RunAction::History(_) => "history",
+        RunAction::External(_) => "external",
     }
 }
 
@@ -185,14 +198,26 @@ fn profile_prefixed_external_plan(
 
     let remaining = tokens[1..].to_vec();
     if remaining.is_empty() {
+        tracing::debug!(profile = %normalized, "profile shorthand: no command, entering REPL");
         return Ok(Some(DispatchPlan::repl(Some(normalized))));
     }
 
-    let parsed = parse_inline_command_tokens(&remaining).map_err(|err| miette!(err.to_string()))?;
-    Ok(Some(DispatchPlan::new(
-        inline_run_action(parsed),
-        Some(normalized),
-    )))
+    let parsed = parse_inline_command_tokens(&remaining)
+        .map_err(|err| miette!(err.to_string()))
+        .wrap_err_with(|| {
+            format!("failed to parse command after profile shorthand `{normalized}`")
+        })?;
+    let action = inline_run_action(parsed);
+    tracing::debug!(
+        profile = %normalized,
+        action = %run_action_name(&action),
+        command = %remaining
+            .first()
+            .map(String::as_str)
+            .unwrap_or("repl"),
+        "profile shorthand: routing to command"
+    );
+    Ok(Some(DispatchPlan::new(action, Some(normalized))))
 }
 
 fn inline_run_action(parsed: Option<Commands>) -> RunAction {

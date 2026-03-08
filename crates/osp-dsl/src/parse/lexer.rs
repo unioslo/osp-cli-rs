@@ -70,66 +70,115 @@ enum State {
     EscapeDouble,
 }
 
-/// Split a full `command | stage | stage` string while respecting quotes.
-pub fn split_pipeline(input: &str) -> Result<Vec<StageSegment>, LexerError> {
-    let mut out = Vec::new();
-    let mut state = State::Normal;
-    let mut segment_start = 0usize;
-    let mut single_quote_start = 0usize;
-    let mut double_quote_start = 0usize;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScanTransition {
+    Structural,
+    NormalChar(char),
+    QuotedChar(char),
+    EscapedChar(char),
+}
 
-    for (index, ch) in input.char_indices() {
-        match state {
+#[derive(Debug, Clone, Copy)]
+struct QuoteScanner {
+    state: State,
+    base_offset: usize,
+    single_quote_start: usize,
+    double_quote_start: usize,
+}
+
+impl QuoteScanner {
+    fn new(base_offset: usize) -> Self {
+        Self {
+            state: State::Normal,
+            base_offset,
+            single_quote_start: 0,
+            double_quote_start: 0,
+        }
+    }
+
+    fn is_normal(&self) -> bool {
+        matches!(self.state, State::Normal)
+    }
+
+    fn advance(&mut self, index: usize, ch: char) -> ScanTransition {
+        match self.state {
             State::Normal => match ch {
-                '\\' => state = State::EscapeNormal,
+                '\\' => {
+                    self.state = State::EscapeNormal;
+                    ScanTransition::Structural
+                }
                 '\'' => {
-                    single_quote_start = index;
-                    state = State::SingleQuote;
+                    self.single_quote_start = self.base_offset + index;
+                    self.state = State::SingleQuote;
+                    ScanTransition::Structural
                 }
                 '"' => {
-                    double_quote_start = index;
-                    state = State::DoubleQuote;
+                    self.double_quote_start = self.base_offset + index;
+                    self.state = State::DoubleQuote;
+                    ScanTransition::Structural
                 }
-                '|' => {
-                    push_segment(input, segment_start, index, &mut out);
-                    segment_start = index + ch.len_utf8();
-                }
-                _ => {}
+                _ => ScanTransition::NormalChar(ch),
             },
             State::SingleQuote => {
                 if ch == '\'' {
-                    state = State::Normal;
+                    self.state = State::Normal;
+                    ScanTransition::Structural
+                } else {
+                    ScanTransition::QuotedChar(ch)
                 }
             }
             State::DoubleQuote => {
                 if ch == '"' {
-                    state = State::Normal;
+                    self.state = State::Normal;
+                    ScanTransition::Structural
                 } else if ch == '\\' {
-                    state = State::EscapeDouble;
+                    self.state = State::EscapeDouble;
+                    ScanTransition::Structural
+                } else {
+                    ScanTransition::QuotedChar(ch)
                 }
             }
-            State::EscapeNormal => state = State::Normal,
-            State::EscapeDouble => state = State::DoubleQuote,
+            State::EscapeNormal => {
+                self.state = State::Normal;
+                ScanTransition::EscapedChar(ch)
+            }
+            State::EscapeDouble => {
+                self.state = State::DoubleQuote;
+                ScanTransition::EscapedChar(ch)
+            }
         }
     }
 
-    match state {
-        State::Normal => {}
-        State::SingleQuote => {
-            return Err(LexerError::UnterminatedSingleQuote {
-                start: single_quote_start,
-            });
+    fn finish(&self, input_len: usize) -> Result<(), LexerError> {
+        match self.state {
+            State::Normal => Ok(()),
+            State::SingleQuote => Err(LexerError::UnterminatedSingleQuote {
+                start: self.single_quote_start,
+            }),
+            State::DoubleQuote => Err(LexerError::UnterminatedDoubleQuote {
+                start: self.double_quote_start,
+            }),
+            State::EscapeNormal | State::EscapeDouble => Err(LexerError::TrailingEscape {
+                index: self.base_offset + input_len,
+            }),
         }
-        State::DoubleQuote => {
-            return Err(LexerError::UnterminatedDoubleQuote {
-                start: double_quote_start,
-            });
-        }
-        State::EscapeNormal | State::EscapeDouble => {
-            return Err(LexerError::TrailingEscape { index: input.len() });
+    }
+}
+
+/// Split a full `command | stage | stage` string while respecting quotes.
+pub fn split_pipeline(input: &str) -> Result<Vec<StageSegment>, LexerError> {
+    let mut out = Vec::new();
+    let mut scanner = QuoteScanner::new(0);
+    let mut segment_start = 0usize;
+
+    for (index, ch) in input.char_indices() {
+        if matches!(scanner.advance(index, ch), ScanTransition::NormalChar('|')) {
+            push_segment(input, segment_start, index, &mut out);
+            segment_start = index + ch.len_utf8();
         }
     }
 
+    scanner.finish(input.len())?;
     push_segment(input, segment_start, input.len(), &mut out);
     Ok(out)
 }
@@ -145,90 +194,38 @@ pub fn tokenize_stage(segment: &StageSegment) -> Result<Vec<Token>, LexerError> 
 }
 
 fn tokenize_words(input: &str, base_offset: usize) -> Result<Vec<Token>, LexerError> {
-    let mut state = State::Normal;
+    let mut scanner = QuoteScanner::new(base_offset);
     let mut words = Vec::new();
     let mut current = String::new();
     let mut token_start: Option<usize> = None;
-    let mut single_quote_start = 0usize;
-    let mut double_quote_start = 0usize;
 
     for (index, ch) in input.char_indices() {
-        match state {
-            State::Normal => {
-                if ch.is_whitespace() {
-                    finish_word(
-                        &mut words,
-                        &mut current,
-                        &mut token_start,
-                        index,
-                        base_offset,
-                    );
-                    continue;
-                }
+        if scanner.is_normal() && ch.is_whitespace() {
+            finish_word(
+                &mut words,
+                &mut current,
+                &mut token_start,
+                index,
+                base_offset,
+            );
+            continue;
+        }
 
-                if token_start.is_none() {
-                    token_start = Some(index);
-                }
+        if scanner.is_normal() && token_start.is_none() {
+            token_start = Some(index);
+        }
 
-                match ch {
-                    '\\' => state = State::EscapeNormal,
-                    '\'' => {
-                        single_quote_start = base_offset + index;
-                        state = State::SingleQuote;
-                    }
-                    '"' => {
-                        double_quote_start = base_offset + index;
-                        state = State::DoubleQuote;
-                    }
-                    _ => current.push(ch),
-                }
-            }
-            State::SingleQuote => {
-                if ch == '\'' {
-                    state = State::Normal;
-                } else {
-                    current.push(ch);
-                }
-            }
-            State::DoubleQuote => {
-                if ch == '"' {
-                    state = State::Normal;
-                } else if ch == '\\' {
-                    state = State::EscapeDouble;
-                } else {
-                    current.push(ch);
-                }
-            }
-            State::EscapeNormal => {
+        match scanner.advance(index, ch) {
+            ScanTransition::NormalChar(ch)
+            | ScanTransition::QuotedChar(ch)
+            | ScanTransition::EscapedChar(ch) => {
                 current.push(ch);
-                state = State::Normal;
             }
-            State::EscapeDouble => {
-                current.push(ch);
-                state = State::DoubleQuote;
-            }
+            ScanTransition::Structural => {}
         }
     }
 
-    match state {
-        State::Normal => {}
-        State::SingleQuote => {
-            return Err(LexerError::UnterminatedSingleQuote {
-                start: single_quote_start,
-            });
-        }
-        State::DoubleQuote => {
-            return Err(LexerError::UnterminatedDoubleQuote {
-                start: double_quote_start,
-            });
-        }
-        State::EscapeNormal | State::EscapeDouble => {
-            return Err(LexerError::TrailingEscape {
-                index: base_offset + input.len(),
-            });
-        }
-    }
-
+    scanner.finish(input.len())?;
     finish_word(
         &mut words,
         &mut current,

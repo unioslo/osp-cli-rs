@@ -102,7 +102,7 @@ pub(crate) fn explain_runtime_config(
     let layers = pipeline
         .load_layers()
         .into_diagnostic()
-        .wrap_err("config layer loading failed")?;
+        .wrap_err("failed to load config layers (file, env, secrets)")?;
     let resolver = ConfigResolver::from_loaded_layers(layers);
     resolver
         .explain_key(
@@ -113,7 +113,7 @@ pub(crate) fn explain_runtime_config(
             },
         )
         .into_diagnostic()
-        .wrap_err("config explain failed")
+        .wrap_err_with(|| format!("failed to explain config key `{key}`"))
 }
 
 pub(crate) fn render_config_explain_text(

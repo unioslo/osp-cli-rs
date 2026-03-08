@@ -1,5 +1,5 @@
 use clap::Parser;
-use miette::{IntoDiagnostic, Result, miette};
+use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use osp_config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
 use osp_core::output::OutputFormat;
 use osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
@@ -216,7 +216,8 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
     let initial_config = resolve_runtime_config(
         RuntimeConfigRequest::new(normalized_profile.clone(), Some("cli"))
             .with_runtime_load(runtime_load),
-    )?;
+    )
+    .wrap_err("failed to resolve initial config for startup")?;
     let known_profiles = initial_config.known_profiles().clone();
     let dispatch = build_dispatch_plan(&mut cli, &known_profiles)?;
     tracing::debug!(
@@ -248,7 +249,8 @@ fn run(mut cli: Cli, invocation: InvocationOptions, sink: &mut dyn UiSink) -> Re
         )
         .with_runtime_load(launch_context.runtime_load)
         .with_session_layer(session_layer.clone()),
-    )?;
+    )
+    .wrap_err("failed to resolve config with session layer")?;
     let theme_catalog = theme_loader::load_theme_catalog(&config);
     let mut render_settings = cli.render_settings();
     render_settings.runtime = build_render_runtime(runtime_context.terminal_env());
@@ -472,14 +474,7 @@ pub(crate) fn dispatch_builtin_command_parts(
         Commands::Doctor(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_DOCTOR)?;
             doctor_cmd::run_doctor_command(
-                doctor_cmd::DoctorCommandContext {
-                    config: config_read_context(runtime, session, &effective_ui),
-                    plugins: plugins_command_context(runtime, clients),
-                    ui: &effective_ui,
-                    auth: &runtime.auth,
-                    themes: &runtime.themes,
-                    last_failure: session.last_failure.as_ref(),
-                },
+                doctor_command_context(runtime, session, clients, &effective_ui),
                 args,
             )
             .map(Some)
@@ -563,6 +558,22 @@ fn config_command_context<'a>(
         themes: &runtime.themes,
         config_overrides: &mut session.config_overrides,
         runtime_load: runtime.launch.runtime_load,
+    }
+}
+
+fn doctor_command_context<'a>(
+    runtime: &'a AppRuntime,
+    session: &'a AppSession,
+    clients: &'a AppClients,
+    ui: &'a UiState,
+) -> doctor_cmd::DoctorCommandContext<'a> {
+    doctor_cmd::DoctorCommandContext {
+        config: config_read_context(runtime, session, ui),
+        plugins: plugins_command_context(runtime, clients),
+        ui,
+        auth: &runtime.auth,
+        themes: &runtime.themes,
+        last_failure: session.last_failure.as_ref(),
     }
 }
 

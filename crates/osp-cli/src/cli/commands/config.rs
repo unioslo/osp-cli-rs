@@ -150,7 +150,8 @@ fn config_get_rows(
             .with_runtime_load(context.runtime_load)
             .with_session_layer(Some(context.config_overrides.clone())),
             &args.key,
-        )?;
+        )
+        .wrap_err_with(|| format!("failed to resolve bootstrap key `{}`", args.key))?;
 
         if let Some(entry) = explain.final_entry {
             let row = config_entry_row(&args.key, &entry, args.sources, args.raw);
@@ -341,8 +342,18 @@ fn run_config_set(
     let target = ConfigWriteTarget::from_set_args(&args);
     let read = context.read();
     let store = resolve_config_store(read, &target);
-    let scopes = resolve_config_scopes(read, &target)?;
+    let scopes = resolve_config_scopes(read, &target)
+        .wrap_err_with(|| format!("failed to resolve config scopes for key `{key}`"))?;
     validate_write_scopes(&key, &scopes).into_diagnostic()?;
+
+    tracing::debug!(
+        key = %key,
+        store = %config_store_name(store),
+        scope_count = scopes.len(),
+        dry_run = args.dry_run,
+        explain = args.explain,
+        "config set"
+    );
 
     let mut rows = Vec::new();
     let mut messages = MessageBuffer::default();
@@ -386,6 +397,14 @@ fn run_config_set(
                         config_store_name(store)
                     )
                 })?;
+                tracing::trace!(
+                    key = %key,
+                    scope = %format_scope(scope),
+                    store = %config_store_name(store),
+                    path = %target_path.display(),
+                    dry_run = args.dry_run,
+                    "persisting config set"
+                );
 
                 let set_result = set_scoped_value_in_toml(
                     target_path,
@@ -396,7 +415,12 @@ fn run_config_set(
                     matches!(store, ConfigStore::Secrets),
                 )
                 .into_diagnostic()
-                .wrap_err("failed to persist config change")?;
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to persist config set for key `{key}` at {}",
+                        target_path.display()
+                    )
+                })?;
 
                 row.insert("path", target_path.display().to_string());
                 row.insert("changed", set_result.previous.as_ref() != Some(&value));
@@ -428,8 +452,10 @@ fn run_config_set(
         )
         .with_runtime_load(context.runtime_load)
         .with_session_layer(Some(context.config_overrides.clone()));
-        let explain = explain_runtime_config(request.clone(), &key)?;
-        let config = resolve_runtime_config(request)?;
+        let explain = explain_runtime_config(request.clone(), &key)
+            .wrap_err_with(|| format!("failed to explain config for key `{key}` after set"))?;
+        let config = resolve_runtime_config(request)
+            .wrap_err_with(|| format!("failed to resolve config for key `{key}` after set"))?;
         if matches!(context.ui.render_settings.format, OutputFormat::Json) {
             let payload = config_explain_json(&explain, &config, false);
             ReplCommandOutput::Document(document_from_json(payload))
@@ -471,8 +497,17 @@ fn run_config_unset(
     let target = ConfigWriteTarget::from_unset_args(&args);
     let read = context.read();
     let store = resolve_config_store(read, &target);
-    let scopes = resolve_config_scopes(read, &target)?;
+    let scopes = resolve_config_scopes(read, &target)
+        .wrap_err_with(|| format!("failed to resolve config scopes for key `{key}`"))?;
     validate_write_scopes(&key, &scopes).into_diagnostic()?;
+
+    tracing::debug!(
+        key = %key,
+        store = %config_store_name(store),
+        scope_count = scopes.len(),
+        dry_run = args.dry_run,
+        "config unset"
+    );
 
     let mut rows = Vec::new();
     let mut messages = MessageBuffer::default();
@@ -513,6 +548,14 @@ fn run_config_unset(
                         config_store_name(store)
                     )
                 })?;
+                tracing::trace!(
+                    key = %key,
+                    scope = %format_scope(scope),
+                    store = %config_store_name(store),
+                    path = %target_path.display(),
+                    dry_run = args.dry_run,
+                    "persisting config unset"
+                );
 
                 let edit_result = unset_scoped_value_in_toml(
                     target_path,
@@ -522,7 +565,12 @@ fn run_config_unset(
                     matches!(store, ConfigStore::Secrets),
                 )
                 .into_diagnostic()
-                .wrap_err("failed to persist config change")?;
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to persist config unset for key `{key}` at {}",
+                        target_path.display()
+                    )
+                })?;
 
                 row.insert("path", target_path.display().to_string());
                 row.insert("changed", edit_result.previous.is_some());
@@ -604,61 +652,57 @@ enum ConfigStore {
 
 #[derive(Debug, Clone)]
 struct ConfigWriteTarget {
-    global: bool,
-    profile: Option<String>,
-    profile_all: bool,
+    scope: ConfigScopeTarget,
     terminal: Option<String>,
-    session: bool,
-    config_store: bool,
-    secrets: bool,
-    save: bool,
+    store: ConfigStoreTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigScopeTarget {
+    ActiveProfile,
+    Global,
+    Profile(String),
+    AllProfiles,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigStoreTarget {
+    Default,
+    Session,
+    Config,
+    Secrets,
 }
 
 impl ConfigWriteTarget {
     fn from_set_args(args: &ConfigSetArgs) -> Self {
         Self {
-            global: args.global,
-            profile: args.profile.clone(),
-            profile_all: args.profile_all,
+            scope: resolve_scope_target(args.global, args.profile.clone(), args.profile_all),
             terminal: args.terminal.clone(),
-            session: args.session,
-            config_store: args.config_store,
-            secrets: args.secrets,
-            save: args.save,
+            store: resolve_store_target(args.session, args.config_store, args.secrets, args.save),
         }
     }
 
     fn from_unset_args(args: &ConfigUnsetArgs) -> Self {
         Self {
-            global: args.global,
-            profile: args.profile.clone(),
-            profile_all: args.profile_all,
+            scope: resolve_scope_target(args.global, args.profile.clone(), args.profile_all),
             terminal: args.terminal.clone(),
-            session: args.session,
-            config_store: args.config_store,
-            secrets: args.secrets,
-            save: args.save,
+            store: resolve_store_target(args.session, args.config_store, args.secrets, args.save),
         }
     }
 }
 
 fn resolve_config_store(context: ConfigReadContext<'_>, args: &ConfigWriteTarget) -> ConfigStore {
-    if args.session {
-        return ConfigStore::Session;
-    }
-    if args.config_store {
-        return ConfigStore::Config;
-    }
-    if args.secrets {
-        return ConfigStore::Secrets;
-    }
-    if args.save {
-        return ConfigStore::Config;
-    }
-    if matches!(context.context.terminal_kind(), TerminalKind::Repl) {
-        ConfigStore::Session
-    } else {
-        ConfigStore::Config
+    match args.store {
+        ConfigStoreTarget::Session => ConfigStore::Session,
+        ConfigStoreTarget::Config => ConfigStore::Config,
+        ConfigStoreTarget::Secrets => ConfigStore::Secrets,
+        ConfigStoreTarget::Default => {
+            if matches!(context.context.terminal_kind(), TerminalKind::Repl) {
+                ConfigStore::Session
+            } else {
+                ConfigStore::Config
+            }
+        }
     }
 }
 
@@ -676,46 +720,81 @@ fn resolve_config_scopes(
 ) -> Result<Vec<Scope>> {
     let terminal = resolve_terminal_selector(context, args.terminal.as_deref());
 
-    if args.profile_all {
-        let profiles = if context.config.known_profiles().is_empty() {
-            vec![context.config.active_profile().to_string()]
-        } else {
-            context
-                .config
-                .known_profiles()
-                .iter()
-                .cloned()
-                .collect::<Vec<String>>()
-        };
+    match &args.scope {
+        ConfigScopeTarget::AllProfiles => {
+            let profiles = if context.config.known_profiles().is_empty() {
+                vec![context.config.active_profile().to_string()]
+            } else {
+                context
+                    .config
+                    .known_profiles()
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<String>>()
+            };
 
-        let scopes = profiles
-            .into_iter()
-            .map(|profile| {
-                terminal.as_deref().map_or_else(
-                    || Scope::profile(&profile),
-                    |current| Scope::profile_terminal(&profile, current),
-                )
-            })
-            .collect::<Vec<Scope>>();
-        return Ok(scopes);
-    }
-
-    if args.global {
-        return Ok(vec![
+            Ok(profiles
+                .into_iter()
+                .map(|profile| {
+                    terminal.as_deref().map_or_else(
+                        || Scope::profile(&profile),
+                        |current| Scope::profile_terminal(&profile, current),
+                    )
+                })
+                .collect())
+        }
+        ConfigScopeTarget::Global => Ok(vec![
             terminal
                 .as_deref()
                 .map_or_else(Scope::global, Scope::terminal),
-        ]);
+        ]),
+        ConfigScopeTarget::Profile(profile) => Ok(vec![terminal.as_deref().map_or_else(
+            || Scope::profile(profile),
+            |current| Scope::profile_terminal(profile, current),
+        )]),
+        ConfigScopeTarget::ActiveProfile => {
+            let profile = context.config.active_profile();
+            Ok(vec![terminal.as_deref().map_or_else(
+                || Scope::profile(profile),
+                |current| Scope::profile_terminal(profile, current),
+            )])
+        }
     }
+}
 
-    let profile = args
-        .profile
-        .as_deref()
-        .unwrap_or_else(|| context.config.active_profile());
-    Ok(vec![terminal.as_deref().map_or_else(
-        || Scope::profile(profile),
-        |current| Scope::profile_terminal(profile, current),
-    )])
+fn resolve_scope_target(
+    global: bool,
+    profile: Option<String>,
+    profile_all: bool,
+) -> ConfigScopeTarget {
+    if profile_all {
+        ConfigScopeTarget::AllProfiles
+    } else if global {
+        ConfigScopeTarget::Global
+    } else if let Some(profile) = profile {
+        ConfigScopeTarget::Profile(profile)
+    } else {
+        ConfigScopeTarget::ActiveProfile
+    }
+}
+
+fn resolve_store_target(
+    session: bool,
+    config_store: bool,
+    secrets: bool,
+    save: bool,
+) -> ConfigStoreTarget {
+    if session {
+        ConfigStoreTarget::Session
+    } else if config_store {
+        ConfigStoreTarget::Config
+    } else if secrets {
+        ConfigStoreTarget::Secrets
+    } else if save {
+        ConfigStoreTarget::Config
+    } else {
+        ConfigStoreTarget::Default
+    }
 }
 
 fn resolve_terminal_selector(
@@ -754,9 +833,9 @@ fn validate_write_scopes(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigReadContext, ConfigStore, ConfigWriteTarget, config_get_rows, config_store_name,
-        resolve_config_scopes, resolve_config_store, resolve_terminal_selector,
-        secrets_permissions_diagnostic,
+        ConfigReadContext, ConfigScopeTarget, ConfigStore, ConfigStoreTarget, ConfigWriteTarget,
+        config_get_rows, config_store_name, resolve_config_scopes, resolve_config_store,
+        resolve_terminal_selector, secrets_permissions_diagnostic,
     };
     use crate::state::{RuntimeContext, TerminalKind, UiState};
     use crate::theme_loader::ThemeCatalog;
@@ -796,18 +875,17 @@ mod tests {
         }
     }
 
+    fn write_target(scope: ConfigScopeTarget) -> ConfigWriteTarget {
+        ConfigWriteTarget {
+            scope,
+            terminal: None,
+            store: ConfigStoreTarget::Default,
+        }
+    }
+
     #[test]
     fn resolve_config_store_defaults_to_session_in_repl_and_config_in_cli() {
-        let args = ConfigWriteTarget {
-            global: false,
-            profile: None,
-            profile_all: false,
-            terminal: None,
-            session: false,
-            config_store: false,
-            secrets: false,
-            save: false,
-        };
+        let args = write_target(ConfigScopeTarget::ActiveProfile);
 
         assert!(matches!(
             resolve_config_store(read_context(TerminalKind::Repl), &args),
@@ -841,14 +919,9 @@ mod tests {
         let global_scopes = resolve_config_scopes(
             cli,
             &ConfigWriteTarget {
-                global: true,
-                profile: None,
-                profile_all: false,
+                scope: ConfigScopeTarget::Global,
                 terminal: Some("cli".to_string()),
-                session: false,
-                config_store: false,
-                secrets: false,
-                save: false,
+                store: ConfigStoreTarget::Default,
             },
         )
         .expect("global scopes should resolve");
@@ -857,14 +930,9 @@ mod tests {
         let all_profile_scopes = resolve_config_scopes(
             cli,
             &ConfigWriteTarget {
-                global: false,
-                profile: None,
-                profile_all: true,
+                scope: ConfigScopeTarget::AllProfiles,
                 terminal: Some("cli".to_string()),
-                session: false,
-                config_store: false,
-                secrets: false,
-                save: false,
+                store: ConfigStoreTarget::Default,
             },
         )
         .expect("profile-all scopes should resolve");
@@ -882,14 +950,9 @@ mod tests {
             resolve_config_store(
                 repl,
                 &ConfigWriteTarget {
-                    session: true,
-                    config_store: true,
-                    secrets: true,
-                    save: true,
-                    global: false,
-                    profile: None,
-                    profile_all: false,
+                    scope: ConfigScopeTarget::ActiveProfile,
                     terminal: None,
+                    store: ConfigStoreTarget::Session,
                 }
             ),
             ConfigStore::Session
@@ -898,14 +961,9 @@ mod tests {
             resolve_config_store(
                 repl,
                 &ConfigWriteTarget {
-                    session: false,
-                    config_store: false,
-                    secrets: true,
-                    save: true,
-                    global: false,
-                    profile: None,
-                    profile_all: false,
+                    scope: ConfigScopeTarget::ActiveProfile,
                     terminal: None,
+                    store: ConfigStoreTarget::Secrets,
                 }
             ),
             ConfigStore::Secrets
@@ -914,14 +972,9 @@ mod tests {
             resolve_config_store(
                 repl,
                 &ConfigWriteTarget {
-                    session: false,
-                    config_store: false,
-                    secrets: false,
-                    save: true,
-                    global: false,
-                    profile: None,
-                    profile_all: false,
+                    scope: ConfigScopeTarget::ActiveProfile,
                     terminal: None,
+                    store: ConfigStoreTarget::Config,
                 }
             ),
             ConfigStore::Config
@@ -935,14 +988,9 @@ mod tests {
         let scopes = resolve_config_scopes(
             read_context(TerminalKind::Cli),
             &ConfigWriteTarget {
-                global: false,
-                profile: Some("Work".to_string()),
-                profile_all: false,
+                scope: ConfigScopeTarget::Profile("Work".to_string()),
                 terminal: None,
-                session: false,
-                config_store: false,
-                secrets: false,
-                save: false,
+                store: ConfigStoreTarget::Default,
             },
         )
         .expect("profile scope should resolve");
