@@ -74,14 +74,14 @@ jobs:
       - name: Run fast checks
         run: ./scripts/check-rust-fast.sh
 
-      - name: Run workspace tests
-        run: cargo test --workspace --all-features --locked
-
-      - name: Run foundation candidate checks
+      - name: Run foundation checks
         run: |
           cargo check --manifest-path foundation/Cargo.toml --all-features --locked
           cargo clippy --manifest-path foundation/Cargo.toml --all-features --all-targets -- -D warnings
           cargo test --manifest-path foundation/Cargo.toml --all-features --locked
+
+      - name: Run workspace compatibility tests
+        run: cargo test --workspace --all-features --locked
 
       - name: Enforce coverage gate
         run: ./scripts/check-coverage-gate.py
@@ -127,7 +127,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --locked -p osp-cli
+        run: cargo build --manifest-path foundation/Cargo.toml --release --locked
 
       - name: Package Unix artifact
         if: runner.os != 'Windows'
@@ -141,7 +141,7 @@ jobs:
           artifact_base="osp-${RELEASE_TAG}-${TARGET_TRIPLE}"
           stage_dir="dist/${artifact_base}"
           mkdir -p "${stage_dir}"
-          cp "target/release/${BIN_NAME}" "${stage_dir}/"
+          cp "foundation/target/release/${BIN_NAME}" "${stage_dir}/"
           cp README.md LICENSE "${stage_dir}/"
           tar -C dist -czf "dist/${artifact_base}.tar.gz" "${artifact_base}"
           python3 - <<'PY'
@@ -163,7 +163,7 @@ jobs:
           $artifactBase = "osp-$env:RELEASE_TAG-$env:TARGET_TRIPLE"
           $stageDir = Join-Path "dist" $artifactBase
           New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
-          Copy-Item "target/release/$env:BIN_NAME" $stageDir
+          Copy-Item "foundation/target/release/$env:BIN_NAME" $stageDir
           Copy-Item "README.md" $stageDir
           Copy-Item "LICENSE" $stageDir
           $archivePath = Join-Path "dist" "$artifactBase.zip"

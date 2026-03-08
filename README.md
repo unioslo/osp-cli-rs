@@ -13,17 +13,16 @@ required).
 ## Quick start
 
 ```bash
-cargo build
-cargo run -- --help
-cargo run -- ldap user alice
-cargo run -- ldap user alice --format json
-cargo run -- ldap user alice | P uid cn mail
+cargo run --manifest-path foundation/Cargo.toml -- --help
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice --format json
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice | P uid cn mail
 ```
 
 Start the REPL:
 
 ```bash
-cargo run
+cargo run --manifest-path foundation/Cargo.toml
 ```
 
 ## Features
@@ -44,8 +43,8 @@ cargo run
 ### From source
 
 ```bash
-cargo build --release
-cp target/release/osp ~/.local/bin/
+cargo build --manifest-path foundation/Cargo.toml --release
+cp foundation/target/release/osp ~/.local/bin/
 ```
 
 Bundled plugins (if present) go alongside the binary:
@@ -64,28 +63,28 @@ Bundled plugins (if present) go alongside the binary:
 
 ```bash
 # Query LDAP
-osp ldap user alice
-osp ldap group staff
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice
+cargo run --manifest-path foundation/Cargo.toml -- ldap group staff
 
 # Pipeline: filter, project, sort
-osp ldap user alice | P uid cn mail
-osp ldap users --group staff | F uid=oistes | P uid cn
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice | P uid cn mail
+cargo run --manifest-path foundation/Cargo.toml -- ldap users --group staff | F uid=oistes | P uid cn
 
 # Output formats
-osp ldap user alice --format json
-osp ldap user alice --format table
-osp ldap user alice --format value
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice --format json
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice --format table
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice --format value
 
 # Config management
-osp config show
-osp config get ui.color.mode
-osp config set ui.color.mode always
-osp config explain ui.color.mode
+cargo run --manifest-path foundation/Cargo.toml -- config show
+cargo run --manifest-path foundation/Cargo.toml -- config get ui.color.mode
+cargo run --manifest-path foundation/Cargo.toml -- config set ui.color.mode always
+cargo run --manifest-path foundation/Cargo.toml -- config explain ui.color.mode
 
 # Plugins
-osp plugins list
-osp plugins commands
-osp doctor
+cargo run --manifest-path foundation/Cargo.toml -- plugins list
+cargo run --manifest-path foundation/Cargo.toml -- plugins commands
+cargo run --manifest-path foundation/Cargo.toml -- doctor
 ```
 
 ### REPL
@@ -93,7 +92,7 @@ osp doctor
 When started without a command, `osp` drops into an interactive REPL:
 
 ```
-$ osp
+$ cargo run --manifest-path foundation/Cargo.toml
 osp> ldap user alice
 osp> ldap user alice | P uid cn mail
 osp> config show
@@ -165,7 +164,9 @@ See [docs/CONFIG.md](docs/CONFIG.md) for details.
 
 ## Architecture
 
-Ten workspace crates with a strict downward dependency graph:
+The default package candidate is now [foundation/](/home/oistes/git/github.uio.no/osp/osp-cli-rust/foundation). It is validated in CI, used for the release build, and is the intended path toward the final root `src/` layout. The old workspace still exists as a compatibility/source mirror during the transition.
+
+The old workspace still contains ten crates with a strict downward dependency graph:
 
 ```
 osp-cli          Binary, app wiring, dispatch, plugin manager
@@ -201,17 +202,16 @@ writing and packaging plugins.
 ### Build and test
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
+./scripts/check-rust-fast.sh
+cargo test --manifest-path foundation/Cargo.toml --all-features --locked
 ```
 
 ### Run locally
 
 ```bash
-cargo run                         # Start REPL
-cargo run -- ldap user alice      # Single command
-cargo run -- --debug ldap user x  # With debug output
+cargo run --manifest-path foundation/Cargo.toml                    # Start REPL
+cargo run --manifest-path foundation/Cargo.toml -- ldap user alice # Single command
+cargo run --manifest-path foundation/Cargo.toml -- --debug ldap user x
 ```
 
 ### Project layout

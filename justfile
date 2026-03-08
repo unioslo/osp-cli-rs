@@ -13,7 +13,10 @@ clippy:
     ./scripts/check-rust-fast.sh
 
 test:
-    cargo test
+    cargo test --manifest-path foundation/Cargo.toml --all-features --locked
+
+workspace-test:
+    cargo test --workspace --all-features --locked
 
 cov:
     cargo llvm-cov --workspace --all-features --summary-only
@@ -29,7 +32,7 @@ cov-baseline:
 
 check:
     ./scripts/check-rust-fast.sh
-    cargo test
+    cargo test --manifest-path foundation/Cargo.toml --all-features --locked
 
 foundation-check:
     python3 ./scripts/check-foundation-sync.py
@@ -74,13 +77,13 @@ release-sign *args:
 
 verify-full:
     ./scripts/check-rust-fast.sh
-    cargo test --workspace --all-features --locked
     just foundation-check
+    cargo test --workspace --all-features --locked
     ./scripts/check-coverage-gate.py
 
 release-check:
     python3 ./scripts/check-release-readiness.py
     ./scripts/check-rust-fast.sh
-    cargo test --workspace --all-features --locked
     just foundation-check
+    cargo test --workspace --all-features --locked
     ./scripts/check-coverage-gate.py

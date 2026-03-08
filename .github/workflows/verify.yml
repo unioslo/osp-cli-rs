@@ -31,14 +31,14 @@ jobs:
       - name: Run fast checks
         run: ./scripts/check-rust-fast.sh
 
-      - name: Run workspace tests
-        run: cargo test --workspace --all-features --locked
-
-      - name: Run foundation candidate checks
+      - name: Run foundation checks
         run: |
           cargo check --manifest-path foundation/Cargo.toml --all-features --locked
           cargo clippy --manifest-path foundation/Cargo.toml --all-features --all-targets -- -D warnings
           cargo test --manifest-path foundation/Cargo.toml --all-features --locked
+
+      - name: Run workspace compatibility tests
+        run: cargo test --workspace --all-features --locked
 
       - name: Enforce coverage gate
         run: ./scripts/check-coverage-gate.py

@@ -69,7 +69,8 @@ GitHub Actions runs two separate lanes:
   Runs on `pull_request` and pushes to `main`.
   It enforces:
   - `./scripts/check-rust-fast.sh`
-  - full workspace tests
+  - foundation package checks
+  - workspace compatibility tests
   - the coverage gate
 
 - `Release`
@@ -80,9 +81,13 @@ GitHub Actions runs two separate lanes:
   - Windows `x86_64-pc-windows-msvc`
 
 The release workflow publishes GitHub release assets, not `crates.io` packages.
+Release artifacts are currently built from `foundation/Cargo.toml`, while the old
+workspace remains the compatibility lane in CI.
 
-Release tags are expected to match the workspace version exactly. For example, if
-`Cargo.toml` says `0.1.0`, the release tag must be `v0.1.0`.
+Release tags are expected to match the workspace version exactly. The generated
+foundation crate inherits that version, so the tag still follows the root
+`Cargo.toml` workspace version. For example, if `Cargo.toml` says `0.1.0`, the
+release tag must be `v0.1.0`.
 
 Typical release flow:
 
@@ -133,7 +138,8 @@ That enforces the same release prerequisites locally:
 - release notes exist for the current workspace version
 - `CHANGELOG.md` has a finished section for the current workspace version
 - fast fmt/clippy checks pass
-- workspace tests pass
+- foundation package checks pass
+- workspace compatibility tests pass
 - the coverage gate passes
 
 To create and push the release tag safely, use:

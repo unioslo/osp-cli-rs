@@ -9,12 +9,8 @@ python3 ./scripts/check-foundation-sync.py
 cargo fmt --all --check
 
 cargo clippy \
-  -p osp-cli \
-  -p osp-completion \
-  -p osp-config \
-  -p osp-dsl \
-  -p osp-repl \
-  -p osp-ui \
+  --manifest-path foundation/Cargo.toml \
+  --all-features \
   --all-targets \
   -- \
   -D clippy::collapsible_else_if \
