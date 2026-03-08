@@ -125,10 +125,12 @@ pub fn registered_verbs() -> &'static [VerbInfo] {
     VERBS
 }
 
-pub fn registered_explicit_verbs() -> &'static [&'static str] {
-    &[
-        "P", "V", "K", "VAL", "VALUE", "F", "G", "A", "S", "L", "Z", "C", "Y", "U", "?", "JQ",
-    ]
+pub fn registered_explicit_verbs() -> Vec<&'static str> {
+    VERBS
+        .iter()
+        .filter(|info| !matches!(info.streaming, VerbStreaming::Meta))
+        .map(|info| info.verb)
+        .collect()
 }
 
 pub fn verb_info(verb: &str) -> Option<&'static VerbInfo> {
@@ -138,9 +140,10 @@ pub fn verb_info(verb: &str) -> Option<&'static VerbInfo> {
 }
 
 pub fn is_registered_explicit_verb(verb: &str) -> bool {
-    registered_explicit_verbs()
+    VERBS
         .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(verb))
+        .filter(|info| !matches!(info.streaming, VerbStreaming::Meta))
+        .any(|info| info.verb.eq_ignore_ascii_case(verb))
 }
 
 pub fn render_streaming_badge(streaming: VerbStreaming) -> Option<&'static str> {
@@ -172,7 +175,10 @@ pub(crate) fn stage_can_stream_rows(stage: &ParsedStage) -> bool {
 mod tests {
     use crate::{
         model::{ParsedStage, ParsedStageKind},
-        verbs::{VerbStreaming, render_streaming_badge, stage_can_stream_rows, verb_info},
+        verbs::{
+            VerbStreaming, is_registered_explicit_verb, registered_explicit_verbs,
+            render_streaming_badge, stage_can_stream_rows, verb_info,
+        },
     };
 
     #[test]
@@ -221,5 +227,15 @@ mod tests {
         let filter = verb_info("F").expect("filter verb should exist");
         assert_eq!(filter.streaming, VerbStreaming::Streamable);
         assert_eq!(render_streaming_badge(filter.streaming), None);
+    }
+
+    #[test]
+    fn explicit_verb_registration_is_derived_from_metadata_unit() {
+        let verbs = registered_explicit_verbs();
+        assert!(verbs.contains(&"F"));
+        assert!(verbs.contains(&"JQ"));
+        assert!(!verbs.contains(&"H"));
+        assert!(is_registered_explicit_verb("val"));
+        assert!(!is_registered_explicit_verb("h"));
     }
 }

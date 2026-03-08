@@ -55,6 +55,38 @@ fn repl_ui_projection_supports_flag_prefixed_help_and_completion_unit() {
 }
 
 #[test]
+fn repl_scoped_help_alias_uses_relative_target_completion_unit() {
+    let mut state = make_completion_state(None);
+    state.session.scope.enter("orch");
+    let catalog = sample_catalog_with_provision_context();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let projected = crate::repl::input::project_repl_ui_line(
+        "help provision --p",
+        state.runtime.config.resolved(),
+    )
+    .expect("projection should succeed");
+
+    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item)
+                if !projected.hidden_suggestions.contains(&item.text) =>
+            {
+                Some(item.text)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(values.contains(&"--provider".to_string()));
+}
+
+#[test]
 fn repl_shellable_commands_include_ldap_unit() {
     assert!(repl::is_repl_shellable_command("ldap"));
     assert!(repl::is_repl_shellable_command("LDAP"));

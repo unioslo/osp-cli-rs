@@ -76,7 +76,7 @@ impl ReplHighlighter {
 
         let mut command_ranges =
             command_token_ranges(&self.tree.root, &self.parser, &projected.line);
-        if let Some(range) = help_alias_keyword_range(&raw_spans, &projected.line) {
+        if let Some(range) = blanked_help_keyword_range(&raw_spans, &projected.line) {
             command_ranges.insert(range);
         }
 
@@ -189,7 +189,9 @@ fn command_token_ranges(
     ranges
 }
 
-fn help_alias_keyword_range(
+// `help <command>` is projected to a blanked keyword plus the target path.
+// Preserve highlighting for the hidden keyword itself when that projection applies.
+fn blanked_help_keyword_range(
     raw_spans: &[TokenSpan],
     projected_line: &str,
 ) -> Option<(usize, usize)> {
@@ -251,7 +253,7 @@ fn debug_kind_rgb(kind: HighlightTokenKind) -> Option<[u8; 3]> {
         Color::Magenta => [128, 0, 128],
         Color::Cyan => [0, 128, 128],
         Color::White => [192, 192, 192],
-        Color::Fixed(_) => [0, 0, 0],
+        Color::Fixed(_) => return None,
         Color::LightRed => [255, 0, 0],
         Color::LightGreen => [0, 255, 0],
         Color::LightYellow => [255, 255, 0],
@@ -261,7 +263,7 @@ fn debug_kind_rgb(kind: HighlightTokenKind) -> Option<[u8; 3]> {
         Color::LightCyan => [0, 255, 255],
         Color::LightGray => [255, 255, 255],
         Color::Rgb(r, g, b) => [r, g, b],
-        Color::Default => [0, 0, 0],
+        Color::Default => return None,
     };
     Some(rgb)
 }

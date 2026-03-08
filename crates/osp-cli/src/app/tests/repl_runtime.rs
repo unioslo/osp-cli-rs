@@ -913,6 +913,12 @@ fn repl_help_alias_keeps_colored_help_chrome_and_subcommands_unit() {
     state.runtime.ui.render_settings.color = ColorMode::Always;
     state.runtime.ui.render_settings.unicode = UnicodeMode::Always;
     state.runtime.ui.render_settings.runtime.stdout_is_tty = true;
+    state.runtime.ui.render_settings.style_overrides = osp_ui::style::StyleOverrides {
+        panel_title: Some("green".to_string()),
+        key: Some("red".to_string()),
+        value: Some("blue".to_string()),
+        ..osp_ui::style::StyleOverrides::default()
+    };
     let history = make_test_history(&mut state);
 
     let rendered = repl_dispatch::execute_repl_plugin_line(
@@ -926,10 +932,10 @@ fn repl_help_alias_keeps_colored_help_chrome_and_subcommands_unit() {
 
     match rendered {
         osp_repl::ReplLineResult::Continue(text) => {
-            assert!(text.contains("\u{1b}[38;2;232;223;246mUsage\u{1b}[0m"));
-            assert!(text.contains("\u{1b}[38;2;196;167;231mlist\u{1b}[0m"));
-            assert!(text.contains("\u{1b}[38;2;196;167;231mprune\u{1b}[0m"));
-            assert!(text.contains("\u{1b}[38;2;196;167;231mclear\u{1b}[0m"));
+            assert!(text.contains("\u{1b}[32mUsage\u{1b}[0m"));
+            assert!(text.contains("\u{1b}[31mlist\u{1b}[0m"));
+            assert!(text.contains("\u{1b}[31mprune\u{1b}[0m"));
+            assert!(text.contains("\u{1b}[31mclear\u{1b}[0m"));
         }
         other => panic!("unexpected repl result: {other:?}"),
     }

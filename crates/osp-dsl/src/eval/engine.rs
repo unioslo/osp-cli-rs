@@ -34,8 +34,8 @@ pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<
 ///
 /// This is the lower-level row entrypoint used by tests and internal helpers.
 /// Like `apply_pipeline`, it starts with `wants_copy = false`.
-pub fn execute_pipeline(mut rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
-    execute_pipeline_streaming(std::mem::take(&mut rows), stages)
+pub fn execute_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
+    execute_pipeline_streaming(rows, stages)
 }
 
 /// Execute a pipeline from any row iterator.
@@ -145,6 +145,10 @@ impl PipelineExecutor {
         ) {
             PipelineItems::RowStream(stream) => stream,
             PipelineItems::Materialized(items) => {
+                debug_assert!(
+                    false,
+                    "apply_stream_stage called after pipeline had already materialized"
+                );
                 self.items = PipelineItems::Materialized(items);
                 return Ok(());
             }
@@ -165,31 +169,11 @@ impl PipelineExecutor {
             }
             "P" => {
                 let plan = project::compile(&stage.spec)?;
-                Box::new(stream.flat_map(move |row| {
-                    match row {
-                        Ok(row) => plan
-                            .project_row(&row)
-                            .into_iter()
-                            .map(Ok)
-                            .collect::<Vec<_>>()
-                            .into_iter(),
-                        Err(err) => vec![Err(err)].into_iter(),
-                    }
-                }))
+                stream_row_fanout(stream, move |row| plan.project_row(&row))
             }
             "VAL" | "VALUE" => {
                 let plan = values::compile(&stage.spec);
-                Box::new(stream.flat_map(move |row| {
-                    match row {
-                        Ok(row) => plan
-                            .extract_row(&row)
-                            .into_iter()
-                            .map(Ok)
-                            .collect::<Vec<_>>()
-                            .into_iter(),
-                        Err(err) => vec![Err(err)].into_iter(),
-                    }
-                }))
+                stream_row_fanout(stream, move |row| plan.extract_row(&row))
             }
             "L" => {
                 let spec = limit::parse_limit_spec(&stage.spec)?;
@@ -219,17 +203,7 @@ impl PipelineExecutor {
                     return Err(anyhow!("U: missing field name to unroll"));
                 }
                 let plan = project::compile(&format!("{field}[]"))?;
-                Box::new(stream.flat_map(move |row| {
-                    match row {
-                        Ok(row) => plan
-                            .project_row(&row)
-                            .into_iter()
-                            .map(Ok)
-                            .collect::<Vec<_>>()
-                            .into_iter(),
-                        Err(err) => vec![Err(err)].into_iter(),
-                    }
-                }))
+                stream_row_fanout(stream, move |row| plan.project_row(&row))
             }
             "?" => {
                 if stage.spec.trim().is_empty() {
@@ -367,9 +341,7 @@ impl PipelineExecutor {
     }
 
     fn finish_items(&mut self) -> Result<OutputItems> {
-        let items = self.materialize_items()?;
-        self.items = PipelineItems::Materialized(items.clone());
-        Ok(items)
+        self.materialize_items()
     }
 
     fn build_output_meta(&self, items: &OutputItems) -> OutputMeta {
@@ -392,6 +364,23 @@ impl PipelineExecutor {
 
 fn materialize_row_stream(stream: RowStream) -> Result<Vec<Row>> {
     stream.collect()
+}
+
+fn stream_row_fanout<I, F>(stream: RowStream, fanout: F) -> RowStream
+where
+    I: IntoIterator<Item = Row>,
+    F: Fn(Row) -> I + 'static,
+{
+    Box::new(stream.flat_map(move |row| {
+        match row {
+            Ok(row) => fanout(row)
+                .into_iter()
+                .map(Ok)
+                .collect::<Vec<_>>()
+                .into_iter(),
+            Err(err) => vec![Err(err)].into_iter(),
+        }
+    }))
 }
 
 fn merged_group_header(group: &osp_core::output_model::Group) -> Row {
@@ -581,8 +570,8 @@ mod tests {
         ];
 
         let eager = apply_pipeline(rows.clone(), &stages).expect("eager pipeline should pass");
-        let streaming = execute_pipeline_streaming(rows.into_iter(), &stages)
-            .expect("streaming pipeline should pass");
+        let streaming =
+            execute_pipeline_streaming(rows, &stages).expect("streaming pipeline should pass");
 
         assert_eq!(streaming, eager);
     }
@@ -606,8 +595,8 @@ mod tests {
         let stages = vec!["alice".to_string()];
 
         let eager = apply_pipeline(rows.clone(), &stages).expect("eager pipeline should pass");
-        let streaming = execute_pipeline_streaming(rows.into_iter(), &stages)
-            .expect("streaming pipeline should pass");
+        let streaming =
+            execute_pipeline_streaming(rows, &stages).expect("streaming pipeline should pass");
 
         assert_eq!(streaming, eager);
     }
@@ -623,8 +612,8 @@ mod tests {
         let stages = vec!["members".to_string()];
 
         let eager = apply_pipeline(rows.clone(), &stages).expect("eager pipeline should pass");
-        let streaming = execute_pipeline_streaming(rows.into_iter(), &stages)
-            .expect("streaming pipeline should pass");
+        let streaming =
+            execute_pipeline_streaming(rows, &stages).expect("streaming pipeline should pass");
 
         assert_eq!(streaming, eager);
         assert_eq!(output_rows(&streaming).len(), 1);
@@ -639,11 +628,9 @@ mod tests {
                 .expect("object"),
         ];
 
-        let output = execute_pipeline_streaming(
-            rows.into_iter(),
-            &["Y".to_string(), "VALUE roles".to_string()],
-        )
-        .expect("streaming pipeline should pass");
+        let output =
+            execute_pipeline_streaming(rows, &["Y".to_string(), "VALUE roles".to_string()])
+                .expect("streaming pipeline should pass");
 
         assert!(output.meta.wants_copy);
         assert_eq!(output_rows(&output).len(), 2);

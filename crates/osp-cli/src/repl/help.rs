@@ -84,16 +84,20 @@ fn style_help_line(title: &str, line: &str, resolved: &ResolvedRenderSettings) -
 
     match title {
         "Commands" | "Options" | "Arguments" | "Common Invocation Options" => {
-            style_help_keyed_line(line, resolved)
+            style_help_keyed_line(title, line, resolved)
         }
         _ => style_help_text(line, resolved),
     }
 }
 
-fn style_help_keyed_line(line: &str, resolved: &ResolvedRenderSettings) -> String {
+fn style_help_keyed_line(
+    section_title: &str,
+    line: &str,
+    resolved: &ResolvedRenderSettings,
+) -> String {
     let indent_len = line.len().saturating_sub(line.trim_start().len());
     let (indent, rest) = line.split_at(indent_len);
-    let split = help_description_split(rest).unwrap_or(rest.len());
+    let split = help_description_split(section_title, rest).unwrap_or(rest.len());
     let (head, tail) = rest.split_at(split);
 
     let mut out = String::new();
@@ -105,7 +109,7 @@ fn style_help_keyed_line(line: &str, resolved: &ResolvedRenderSettings) -> Strin
     out
 }
 
-fn help_description_split(line: &str) -> Option<usize> {
+fn help_description_split(section_title: &str, line: &str) -> Option<usize> {
     let mut saw_non_whitespace = false;
     let mut run_start = None;
     let mut run_len = 0usize;
@@ -126,6 +130,10 @@ fn help_description_split(line: &str) -> Option<usize> {
         saw_non_whitespace = true;
         run_start = None;
         run_len = 0;
+    }
+
+    if matches!(section_title, "Commands" | "Arguments") {
+        return line.find(char::is_whitespace);
     }
 
     None
@@ -267,6 +275,7 @@ fn parse_section_header(line: &str) -> Option<HelpSection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use osp_ui::style::StyleOverrides;
     use osp_ui::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 
     fn resolved_settings(frame: osp_ui::messages::SectionFrameStyle) -> ResolvedRenderSettings {
@@ -286,8 +295,17 @@ mod tests {
             table_border: TableBorderStyle::Square,
             theme_name: osp_ui::theme::DEFAULT_THEME_NAME.to_string(),
             theme: osp_ui::theme::resolve_theme(osp_ui::theme::DEFAULT_THEME_NAME),
-            style_overrides: osp_ui::style::StyleOverrides::default(),
+            style_overrides: StyleOverrides::default(),
             chrome_frame: frame,
+        }
+    }
+
+    fn help_test_overrides() -> StyleOverrides {
+        StyleOverrides {
+            panel_title: Some("green".to_string()),
+            key: Some("red".to_string()),
+            value: Some("blue".to_string()),
+            ..StyleOverrides::default()
         }
     }
 
@@ -361,7 +379,7 @@ mod tests {
     fn help_chrome_colors_help_body_keys_and_text_unit() {
         let mut resolved = resolved_settings(osp_ui::messages::SectionFrameStyle::TopBottom);
         resolved.color = true;
-        resolved.theme = osp_ui::theme::resolve_theme("rose-pine-moon");
+        resolved.style_overrides = help_test_overrides();
 
         let rendered = render_help_with_chrome(
             "Usage: osp history <COMMAND>\n\nCommands:\n  list   List stored history entries\n",
@@ -369,11 +387,25 @@ mod tests {
             HelpLayout::Compact,
         );
 
-        assert!(rendered.contains("\u{1b}[38;2;232;223;246mUsage\u{1b}[0m"));
-        assert!(rendered.contains("\u{1b}[38;2;196;167;231mlist\u{1b}[0m"));
-        assert!(
-            rendered.contains("\u{1b}[38;2;224;222;244m   List stored history entries\u{1b}[0m")
+        assert!(rendered.contains("\u{1b}[32mUsage\u{1b}[0m"));
+        assert!(rendered.contains("\u{1b}[31mlist\u{1b}[0m"));
+        assert!(rendered.contains("\u{1b}[34m   List stored history entries\u{1b}[0m"));
+        assert!(rendered.contains("\u{1b}[34m  osp history <COMMAND>\u{1b}[0m"));
+    }
+
+    #[test]
+    fn help_chrome_splits_single_space_command_descriptions_unit() {
+        let mut resolved = resolved_settings(osp_ui::messages::SectionFrameStyle::None);
+        resolved.color = true;
+        resolved.style_overrides = help_test_overrides();
+
+        let rendered = render_help_with_chrome(
+            "Commands:\n  list List stored history entries\n",
+            &resolved,
+            HelpLayout::Compact,
         );
-        assert!(rendered.contains("\u{1b}[38;2;224;222;244m  osp history <COMMAND>\u{1b}[0m"));
+
+        assert!(rendered.contains("\u{1b}[31mlist\u{1b}[0m"));
+        assert!(rendered.contains("\u{1b}[34m List stored history entries\u{1b}[0m"));
     }
 }
