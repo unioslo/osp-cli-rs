@@ -1,16 +1,14 @@
 use std::ffi::OsString;
 
-use crate::osp_config::RuntimeLoadOptions;
+use crate::osp_config::{ConfigLayer, RuntimeLoadOptions};
 use crate::osp_core::output::{ColorMode, RenderMode, UnicodeMode};
 use crate::osp_ui::RenderSettings;
-use crate::osp_ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
+use crate::osp_ui::theme::DEFAULT_THEME_NAME;
 use clap::Parser;
 
 use crate::osp_cli::cli::Cli;
 use crate::osp_cli::theme_loader;
-use crate::osp_cli::ui_presentation::{
-    HelpLayout, UiPresentation, apply_presentation_preset, help_layout,
-};
+use crate::osp_cli::ui_presentation::{HelpLayout, UiPresentation, help_layout};
 
 use super::{
     RuntimeConfigRequest, build_render_runtime, normalize_profile_override,
@@ -48,13 +46,15 @@ pub(crate) struct HelpRenderContext {
 pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
     let overrides = parse_help_render_overrides(args);
     let profile_override = normalize_profile_override(overrides.profile.clone());
+    let help_override_layer = build_help_override_layer(&overrides);
     let config = resolve_runtime_config(
         RuntimeConfigRequest::new(profile_override, Some("cli"))
-            .with_runtime_load(overrides.runtime_load_options()),
+            .with_runtime_load(overrides.runtime_load_options())
+            .with_session_layer(
+                (!help_override_layer.entries().is_empty()).then_some(help_override_layer),
+            ),
     )
     .ok();
-    let mut catalog: Option<theme_loader::ThemeCatalog> = None;
-
     let default_cli = Cli::try_parse_from(["osp"]).expect("default cli parse should succeed");
     let mut settings = default_cli.render_settings();
     let mut layout = HelpLayout::Full;
@@ -70,58 +70,60 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
         settings.theme = loaded
             .resolve(&settings.theme_name)
             .map(|entry| entry.theme.clone());
-        catalog = Some(loaded);
+    }
+
+    HelpRenderContext { settings, layout }
+}
+
+fn build_help_override_layer(overrides: &HelpRenderOverrides) -> ConfigLayer {
+    let mut layer = ConfigLayer::default();
+
+    if let Some(theme) = overrides.theme.as_deref() {
+        layer.set("theme.name", theme.trim());
     }
 
     if overrides.gammel_og_bitter {
-        apply_presentation_preset(
-            &mut settings,
-            UiPresentation::Austere,
-            true,
-            true,
-            true,
-            true,
-            true,
-        );
-        layout = HelpLayout::Minimal;
+        layer.set("ui.presentation", UiPresentation::Austere.as_config_value());
     } else if let Some(presentation) = overrides.presentation {
-        apply_presentation_preset(&mut settings, presentation, true, true, true, true, true);
-        layout = match presentation {
-            UiPresentation::Expressive => HelpLayout::Full,
-            UiPresentation::Compact => HelpLayout::Compact,
-            UiPresentation::Austere => HelpLayout::Minimal,
-        };
+        layer.set("ui.presentation", presentation.as_config_value());
     }
 
     if let Some(mode) = overrides.mode {
-        settings.mode = mode;
+        layer.set(
+            "ui.mode",
+            match mode {
+                RenderMode::Auto => "auto",
+                RenderMode::Plain => "plain",
+                RenderMode::Rich => "rich",
+            },
+        );
     }
-    if let Some(color) = overrides.color {
-        settings.color = color;
-    }
-    if let Some(unicode) = overrides.unicode {
-        settings.unicode = unicode;
-    }
-    if overrides.ascii_legacy {
-        settings.unicode = UnicodeMode::Never;
-    }
-    if let Some(theme) = overrides.theme.as_deref() {
-        settings.theme_name = if let Some(catalog) = catalog.as_ref() {
-            resolve_known_theme_name(theme, catalog)
-                .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string())
-        } else {
-            normalize_theme_name(theme)
-        };
-    }
-    settings.theme = if let Some(catalog) = catalog.as_ref() {
-        catalog
-            .resolve(&settings.theme_name)
-            .map(|entry| entry.theme.clone())
-    } else {
-        Some(crate::osp_ui::theme::resolve_theme(&settings.theme_name))
-    };
 
-    HelpRenderContext { settings, layout }
+    if let Some(color) = overrides.color {
+        layer.set(
+            "ui.color.mode",
+            match color {
+                ColorMode::Auto => "auto",
+                ColorMode::Always => "always",
+                ColorMode::Never => "never",
+            },
+        );
+    }
+
+    if overrides.ascii_legacy {
+        layer.set("ui.unicode.mode", "never");
+    } else if let Some(unicode) = overrides.unicode {
+        layer.set(
+            "ui.unicode.mode",
+            match unicode {
+                UnicodeMode::Auto => "auto",
+                UnicodeMode::Always => "always",
+                UnicodeMode::Never => "never",
+            },
+        );
+    }
+
+    layer
 }
 
 pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverrides {

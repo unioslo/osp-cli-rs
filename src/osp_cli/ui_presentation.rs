@@ -1,7 +1,10 @@
 use crate::osp_config::{ConfigSource, ConfigValue, ResolvedConfig, Scope};
+#[cfg(test)]
 use crate::osp_core::output::{ColorMode, RenderMode, UnicodeMode};
+#[cfg(test)]
 use crate::osp_ui::chrome::SectionFrameStyle;
 use crate::osp_ui::messages::{MessageLayout, MessageLevel};
+#[cfg(test)]
 use crate::osp_ui::{RenderSettings, TableBorderStyle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,52 +103,6 @@ pub(crate) fn resolve_ui_presentation(config: &ResolvedConfig) -> UiPresentation
         .get_string("ui.presentation")
         .and_then(UiPresentation::parse)
         .unwrap_or(UiPresentation::Expressive)
-}
-
-pub(crate) fn apply_presentation_preset(
-    settings: &mut RenderSettings,
-    presentation: UiPresentation,
-    mode_is_default: bool,
-    unicode_is_default: bool,
-    color_is_default: bool,
-    chrome_frame_is_default: bool,
-    table_border_is_default: bool,
-) {
-    match presentation {
-        UiPresentation::Austere => {
-            if mode_is_default {
-                settings.mode = RenderMode::Plain;
-            }
-            if unicode_is_default {
-                settings.unicode = UnicodeMode::Never;
-            }
-            if color_is_default {
-                settings.color = ColorMode::Never;
-            }
-        }
-        UiPresentation::Compact => {
-            if unicode_is_default {
-                settings.unicode = UnicodeMode::Never;
-            }
-        }
-        UiPresentation::Expressive => {}
-    }
-
-    if chrome_frame_is_default {
-        settings.chrome_frame = match presentation {
-            UiPresentation::Expressive => SectionFrameStyle::TopBottom,
-            UiPresentation::Compact => SectionFrameStyle::Top,
-            UiPresentation::Austere => SectionFrameStyle::None,
-        };
-    }
-
-    if table_border_is_default {
-        settings.table_border = match presentation {
-            UiPresentation::Expressive => TableBorderStyle::Round,
-            UiPresentation::Compact => TableBorderStyle::Square,
-            UiPresentation::Austere => TableBorderStyle::Square,
-        };
-    }
 }
 
 pub(crate) fn build_presentation_defaults_layer(
