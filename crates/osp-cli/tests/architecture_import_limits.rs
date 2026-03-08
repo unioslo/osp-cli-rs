@@ -243,6 +243,70 @@ fn foundation_prototype_imports_follow_logical_layer_matrix() {
     );
 }
 
+#[test]
+fn foundation_public_facade_stays_curated() {
+    let lib_path = workspace_root()
+        .join("foundation")
+        .join("src")
+        .join("lib.rs");
+    let source = fs::read_to_string(&lib_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", lib_path.display()));
+    let syntax = syn::parse_file(&source)
+        .unwrap_or_else(|err| panic!("failed to parse {}: {err}", lib_path.display()));
+
+    let public_modules = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Mod(item_mod) if matches!(item_mod.vis, syn::Visibility::Public(_)) => {
+                Some(item_mod.ident.to_string())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+
+    let expected_modules = [
+        "app",
+        "runtime",
+        "config",
+        "core",
+        "dsl",
+        "ports",
+        "api",
+        "services",
+        "ui",
+        "completion",
+        "repl",
+        "cli",
+        "prelude",
+        "osp_core",
+        "osp_config",
+        "osp_dsl",
+        "osp_ports",
+        "osp_api",
+        "osp_services",
+        "osp_ui",
+        "osp_completion",
+        "osp_repl",
+        "osp_cli",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        public_modules, expected_modules,
+        "foundation/src/lib.rs top-level public modules drifted"
+    );
+
+    assert!(
+        !source.contains("classify_exit_code")
+            && !source.contains("render_report_message")
+            && !source.contains("pub use crate::app::{App, AppBuilder, Cli"),
+        "foundation public facade leaked internal diagnostics or raw state exports"
+    );
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

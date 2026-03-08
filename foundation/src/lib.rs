@@ -45,8 +45,8 @@ pub mod osp_cli;
             //! Main host-facing entrypoints and stateful runtime surfaces.
 
             pub use crate::osp_cli::{
-                App, AppBuilder, BufferedUiSink, Cli, StdIoUiSink, UiSink, classify_exit_code,
-                render_report_message, run_from, run_process, run_process_with_sink,
+                App, AppBuilder, AppRunner, BufferedUiSink, StdIoUiSink, UiSink, run_from,
+                run_process, run_process_with_sink,
             };
         }
 
@@ -273,19 +273,19 @@ pub mod osp_cli;
         pub mod cli {
             //! CLI-specific helpers still owned by the host layer.
 
-            pub use crate::osp_cli::pipeline;
+            pub use crate::osp_cli::{Cli, pipeline};
         }
 
         pub mod prelude {
             //! Small convenience surface for embedding the app without importing the full module tree.
 
-            pub use crate::app::{App, AppBuilder, Cli, run_from, run_process};
+            pub use crate::app::{App, AppBuilder, AppRunner, run_from, run_process};
             pub use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
             pub use crate::runtime::{AppState, RuntimeContext, UiState};
             pub use crate::ui::RenderSettings;
         }
 
-        pub use crate::app::{App, AppBuilder, Cli, run_from, run_process};
+        pub use crate::app::{App, AppBuilder, AppRunner, run_from, run_process};
 
         #[cfg(test)]
         mod tests {
@@ -296,8 +296,10 @@ pub mod osp_cli;
                 let _run_from = |args: Vec<&str>| crate::app::run_from::<Vec<&str>, &str>(args);
                 let _run_process =
                     |args: Vec<&str>| crate::app::run_process::<Vec<&str>, &str>(args);
+                let mut sink = crate::app::BufferedUiSink::default();
                 let _builder = crate::app::AppBuilder::new().build();
-                let _cli_type: Option<crate::app::Cli> = None;
+                let _runner = crate::app::AppBuilder::new().build_with_sink(&mut sink);
+                let _cli_type: Option<crate::cli::Cli> = None;
                 let _row: crate::core::Row = Default::default();
                 let _resolver: Option<crate::config::resolve::ConfigResolver> = None;
                 let _completion: Option<crate::completion::CompletionEngine> = None;

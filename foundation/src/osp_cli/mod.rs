@@ -36,6 +36,10 @@ impl App {
         run_from(args)
     }
 
+    pub fn with_sink<'a>(self, sink: &'a mut dyn UiSink) -> AppRunner<'a> {
+        AppRunner { app: self, sink }
+    }
+
     pub fn run_with_sink<I, T>(&self, args: I, sink: &mut dyn UiSink) -> miette::Result<i32>
     where
         I: IntoIterator<Item = T>,
@@ -61,6 +65,30 @@ impl App {
     }
 }
 
+/// Bound application handle that runs commands through one caller-owned sink.
+pub struct AppRunner<'a> {
+    app: App,
+    sink: &'a mut dyn UiSink,
+}
+
+impl<'a> AppRunner<'a> {
+    pub fn run_from<I, T>(&mut self, args: I) -> miette::Result<i32>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        self.app.run_with_sink(args, self.sink)
+    }
+
+    pub fn run_process<I, T>(&mut self, args: I) -> i32
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        self.app.run_process_with_sink(args, self.sink)
+    }
+}
+
 /// Staged composition surface for the future single-crate foundation.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AppBuilder;
@@ -72,6 +100,10 @@ impl AppBuilder {
 
     pub fn build(self) -> App {
         App::new()
+    }
+
+    pub fn build_with_sink<'a>(self, sink: &'a mut dyn UiSink) -> AppRunner<'a> {
+        self.build().with_sink(sink)
     }
 }
 
@@ -144,7 +176,7 @@ fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, AppBuilder, bootstrap_message_verbosity, run_process_with_sink};
+    use super::{App, AppBuilder, AppRunner, bootstrap_message_verbosity, run_process_with_sink};
     use crate::osp_cli::BufferedUiSink;
     use crate::osp_ui::messages::MessageLevel;
     use std::ffi::OsString;
@@ -208,6 +240,17 @@ mod tests {
         assert!(sink.stderr.contains("unknown theme"));
 
         let _ = direct;
+    }
+
+    #[test]
+    fn app_runner_reuses_one_sink_across_invocations_unit() {
+        let mut sink = BufferedUiSink::default();
+        let mut runner: AppRunner<'_> = AppBuilder::new().build_with_sink(&mut sink);
+
+        let exit_code = runner.run_process(["osp", "--theme", "missing-theme", "config", "show"]);
+
+        assert_eq!(exit_code, 1);
+        assert!(sink.stderr.contains("unknown theme"));
     }
 }
 
