@@ -200,7 +200,9 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs:
+      - verify
+      - build
     runs-on: ubuntu-latest
     environment: crates-io-release
     permissions:
@@ -274,16 +276,6 @@ jobs:
         run: |
           echo "${{ steps.crates_io_state.outputs.name }} ${{ steps.crates_io_state.outputs.version }} is already published on crates.io; skipping publish."
 
-      - name: Fail if GitHub release already exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
-        run: |
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "GitHub release already exists for ${RELEASE_TAG}" >&2
-            exit 1
-          fi
-
       - name: Download packaged artifacts
         uses: actions/download-artifact@v4
         with:
@@ -302,3 +294,4 @@ jobs:
           tag_name: ${{ steps.release_tag.outputs.value }}
           body_path: release-assets/release-notes.md
           files: release-assets/*
+          overwrite_files: true
