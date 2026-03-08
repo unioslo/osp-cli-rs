@@ -65,3 +65,15 @@ predicates = "3.1"
 proptest = "1.6"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "visit"] }
+
+[profile.dev]
+debug = 1
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+debug = 1
+
+[profile.test.package."*"]
+debug = 0
