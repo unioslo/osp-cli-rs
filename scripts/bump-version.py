@@ -73,27 +73,6 @@ def replace_root_version(cargo_toml: Path, old: str, new: str) -> None:
     cargo_toml.write_text(replaced)
 
 
-def replace_workspace_mirror_version(cargo_toml: Path, new: str) -> None:
-    text = cargo_toml.read_text()
-    pattern = re.compile(
-        r'(?ms)^(\[workspace\.package\]\n(?:.*\n)*?version = ")([^"]+)(")'
-    )
-    replaced, count = pattern.subn(rf"\g<1>{new}\g<3>", text, count=1)
-    if count != 1:
-        fail("failed to update workspace.package.version in workspace/Cargo.toml")
-    cargo_toml.write_text(replaced)
-
-
-def workspace_package_names(root: Path) -> list[str]:
-    cargo_toml = tomllib.loads((root / "workspace" / "Cargo.toml").read_text())
-    members = cargo_toml["workspace"]["members"]
-    names: list[str] = []
-    for member in members:
-        manifest = tomllib.loads((root / "workspace" / member / "Cargo.toml").read_text())
-        names.append(manifest["package"]["name"])
-    return names
-
-
 def tag_exists(root: Path, tag: str) -> bool:
     local = subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"],
@@ -214,14 +193,6 @@ def run_lock_refresh(root: Path, dry_run: bool) -> None:
         check=True,
         stdout=subprocess.DEVNULL,
     )
-    subprocess.run(
-        ["cargo", "metadata", "--manifest-path", "workspace/Cargo.toml", "--format-version", "1"],
-        cwd=root,
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Bump the root package version.")
     parser.add_argument(
@@ -244,9 +215,7 @@ def main() -> None:
 
     root = repo_root()
     cargo_toml = root / "Cargo.toml"
-    workspace_cargo_toml = root / "workspace" / "Cargo.toml"
     root_lockfile = root / "Cargo.lock"
-    workspace_lockfile = root / "workspace" / "Cargo.lock"
 
     current = load_root_version(cargo_toml)
     next_version = resolve_target_version(current, args.target)
@@ -270,10 +239,8 @@ def main() -> None:
         return
 
     replace_root_version(cargo_toml, current, next_version)
-    replace_workspace_mirror_version(workspace_cargo_toml, next_version)
-    package_names = workspace_package_names(root)
+    package_names = [tomllib.loads(cargo_toml.read_text())["package"]["name"]]
     replace_lock_versions(root_lockfile, package_names, next_version)
-    replace_lock_versions(workspace_lockfile, package_names, next_version)
     run_lock_refresh(root, dry_run=False)
 
     print(f"bumped version: {current} -> {next_version}")
