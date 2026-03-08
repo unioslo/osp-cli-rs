@@ -1,7 +1,7 @@
-//! Host runtime, session, and launch-state types used to embed the CLI/REPL.
+//! Compatibility shim for runtime types while callers move under [`crate::app`].
 
-pub use crate::osp_cli::state::{
-    AppClients, AppRuntime, AppSession, AppState, AuthState, ConfigState,
-    DebugTimingBadge, DebugTimingState, LastFailure, LaunchContext, ReplScopeFrame,
-    ReplScopeStack, RuntimeContext, TerminalKind, UiState,
+pub use crate::app::runtime::*;
+pub use crate::app::session::{
+    AppSession, DebugTimingBadge, DebugTimingState, LastFailure, ReplScopeFrame,
+    ReplScopeStack,
 };

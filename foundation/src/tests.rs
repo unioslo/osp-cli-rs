@@ -14,6 +14,7 @@ fn stable_top_level_surface_exposes_primary_entrypoints_and_types_unit() {
     let _prompt: Option<crate::repl::ReplPrompt> = None;
     let _plugins: Option<crate::plugin::PluginManager> = None;
     let _ldap: Option<crate::api::MockLdapClient> = None;
+    let _app_runtime: Option<crate::app::AppRuntime> = None;
     let _runtime: Option<crate::runtime::AppRuntime> = None;
     let _format = OutputFormat::Json;
     let _settings = crate::ui::RenderSettings::test_plain(OutputFormat::Table);

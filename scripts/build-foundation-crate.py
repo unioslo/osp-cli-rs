@@ -377,14 +377,23 @@ def render_foundation_module(name: str) -> str:
     modules = {
         "app/mod.rs": textwrap.dedent(
             """\
-            //! Main host-facing entrypoints and stateful runtime surfaces.
+            //! Main host-facing entrypoints plus bootstrap/runtime state.
 
             pub(crate) mod bootstrap;
             pub mod runtime;
+            pub mod session;
 
             pub use crate::osp_cli::{
                 App, AppBuilder, AppRunner, BufferedUiSink, StdIoUiSink, UiSink, run_from,
                 run_process, run_process_with_sink,
+            };
+            pub use runtime::{
+                AppClients, AppRuntime, AppState, AuthState, ConfigState, LaunchContext,
+                RuntimeContext, TerminalKind, UiState,
+            };
+            pub use session::{
+                AppSession, DebugTimingBadge, DebugTimingState, LastFailure, ReplScopeFrame,
+                ReplScopeStack,
             };
             """
         ),
@@ -399,19 +408,32 @@ def render_foundation_module(name: str) -> str:
         ),
         "app/runtime.rs": textwrap.dedent(
             """\
-            //! Runtime and session state kept under the staged app layer.
+            //! Runtime and launch-state types kept under the staged app layer.
 
-            pub use crate::runtime::*;
+            pub use crate::osp_cli::state::{
+                AppClients, AppRuntime, AppState, AuthState, ConfigState, LaunchContext,
+                RuntimeContext, TerminalKind, UiState,
+            };
+            """
+        ),
+        "app/session.rs": textwrap.dedent(
+            """\
+            //! Session and REPL-scoped state kept under the staged app layer.
+
+            pub use crate::osp_cli::state::{
+                AppSession, DebugTimingBadge, DebugTimingState, LastFailure, ReplScopeFrame,
+                ReplScopeStack,
+            };
             """
         ),
         "runtime.rs": textwrap.dedent(
             """\
-            //! Host runtime, session, and launch-state types used to embed the CLI/REPL.
+            //! Compatibility shim for runtime types while callers move under [`crate::app`].
 
-            pub use crate::osp_cli::state::{
-                AppClients, AppRuntime, AppSession, AppState, AuthState, ConfigState,
-                DebugTimingBadge, DebugTimingState, LastFailure, LaunchContext, ReplScopeFrame,
-                ReplScopeStack, RuntimeContext, TerminalKind, UiState,
+            pub use crate::app::runtime::*;
+            pub use crate::app::session::{
+                AppSession, DebugTimingBadge, DebugTimingState, LastFailure, ReplScopeFrame,
+                ReplScopeStack,
             };
             """
         ),
@@ -699,8 +721,8 @@ def render_foundation_module(name: str) -> str:
             //! Small convenience surface for embedding the app without importing the full module tree.
 
             pub use crate::app::{App, AppBuilder, AppRunner, run_from, run_process};
+            pub use crate::app::{AppState, RuntimeContext, UiState};
             pub use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-            pub use crate::runtime::{AppState, RuntimeContext, UiState};
             pub use crate::ui::RenderSettings;
             """
         ),
@@ -722,6 +744,7 @@ def render_foundation_module(name: str) -> str:
                 let _prompt: Option<crate::repl::ReplPrompt> = None;
                 let _plugins: Option<crate::plugin::PluginManager> = None;
                 let _ldap: Option<crate::api::MockLdapClient> = None;
+                let _app_runtime: Option<crate::app::AppRuntime> = None;
                 let _runtime: Option<crate::runtime::AppRuntime> = None;
                 let _format = OutputFormat::Json;
                 let _settings = crate::ui::RenderSettings::test_plain(OutputFormat::Table);
@@ -872,6 +895,7 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
         "app/mod.rs",
         "app/bootstrap.rs",
         "app/runtime.rs",
+        "app/session.rs",
         "runtime.rs",
         "config.rs",
         "core.rs",
