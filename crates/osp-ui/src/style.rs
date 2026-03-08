@@ -157,7 +157,7 @@ impl StyleOverrides {
 }
 
 impl StyleToken {
-    fn theme_spec<'a>(self, theme: &'a ThemeDefinition) -> &'a str {
+    fn theme_spec(self, theme: &ThemeDefinition) -> &str {
         match self {
             StyleToken::None => "",
             StyleToken::Key

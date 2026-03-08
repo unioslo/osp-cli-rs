@@ -70,30 +70,12 @@ pub fn render_section_divider(
         title,
         unicode,
         width,
-        color,
-        theme,
-        token,
-        token,
-        &StyleOverrides::default(),
-    )
-}
-
-fn render_section_divider_with_context(
-    title: &str,
-    unicode: bool,
-    width: Option<usize>,
-    render: SectionRenderContext<'_>,
-    tokens: SectionStyleTokens,
-) -> String {
-    render_section_divider_with_overrides(
-        title,
-        unicode,
-        width,
-        render.color,
-        render.theme,
-        tokens.border,
-        tokens.title,
-        render.style_overrides,
+        SectionRenderContext {
+            color,
+            theme,
+            style_overrides: &StyleOverrides::default(),
+        },
+        SectionStyleTokens::same(token),
     )
 }
 
@@ -101,12 +83,11 @@ pub fn render_section_divider_with_overrides(
     title: &str,
     unicode: bool,
     width: Option<usize>,
-    color: bool,
-    theme: &ThemeDefinition,
-    border_token: StyleToken,
-    title_token: StyleToken,
-    style_overrides: &StyleOverrides,
+    render: SectionRenderContext<'_>,
+    tokens: SectionStyleTokens,
 ) -> String {
+    let border_token = tokens.border;
+    let title_token = tokens.title;
     let fill_char = if unicode { '─' } else { '-' };
     let target_width = width.unwrap_or(12).max(12);
     let title = title.trim();
@@ -130,15 +111,10 @@ pub fn render_section_divider_with_overrides(
         }
     };
 
-    if !color {
+    if !render.color {
         return raw;
     }
 
-    let render = SectionRenderContext {
-        color,
-        theme,
-        style_overrides,
-    };
     if title.is_empty() || title_token == border_token {
         return render.style(&raw, border_token);
     }
@@ -239,7 +215,7 @@ fn render_ruled_section(
     let title = title.trim();
 
     if top_rule {
-        out.push_str(&render_section_divider_with_context(
+        out.push_str(&render_section_divider_with_overrides(
             title, unicode, width, render, tokens,
         ));
     } else if !title.is_empty() {
@@ -258,7 +234,7 @@ fn render_ruled_section(
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&render_section_divider_with_context(
+        out.push_str(&render_section_divider_with_overrides(
             "",
             unicode,
             width,
@@ -515,11 +491,15 @@ mod tests {
             "Info",
             true,
             Some(20),
-            true,
-            &theme,
-            crate::style::StyleToken::PanelBorder,
-            crate::style::StyleToken::PanelTitle,
-            &overrides,
+            SectionRenderContext {
+                color: true,
+                theme: &theme,
+                style_overrides: &overrides,
+            },
+            SectionStyleTokens {
+                border: crate::style::StyleToken::PanelBorder,
+                title: crate::style::StyleToken::PanelTitle,
+            },
         );
 
         assert!(divider.starts_with("\x1b[38;2;17;34;51m"));

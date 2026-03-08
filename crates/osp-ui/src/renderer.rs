@@ -4,7 +4,9 @@ use comfy_table::{
 use serde_json::Value;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::chrome::render_section_divider_with_overrides;
+use crate::chrome::{
+    SectionRenderContext, SectionStyleTokens, render_section_divider_with_overrides,
+};
 use crate::display::value_to_display;
 use crate::document::{
     Block, Document, MregBlock, MregValue, PanelRules, TableAlign, TableBlock, TableStyle,
@@ -230,21 +232,29 @@ impl<'a> DocumentRenderer<'a> {
             block.title.as_deref().unwrap_or(""),
             self.settings.unicode,
             divider_width,
-            self.settings.color,
-            &self.settings.theme,
-            border_token,
-            title_token,
-            &self.settings.style_overrides,
+            SectionRenderContext {
+                color: self.settings.color,
+                theme: &self.settings.theme,
+                style_overrides: &self.settings.style_overrides,
+            },
+            SectionStyleTokens {
+                border: border_token,
+                title: title_token,
+            },
         );
         let trailing_divider = render_section_divider_with_overrides(
             "",
             self.settings.unicode,
             divider_width,
-            self.settings.color,
-            &self.settings.theme,
-            border_token,
-            title_token,
-            &self.settings.style_overrides,
+            SectionRenderContext {
+                color: self.settings.color,
+                theme: &self.settings.theme,
+                style_overrides: &self.settings.style_overrides,
+            },
+            SectionStyleTokens {
+                border: border_token,
+                title: title_token,
+            },
         );
         let inner = DocumentRenderer::new(&block.body, self.settings).render(&block.body);
 
