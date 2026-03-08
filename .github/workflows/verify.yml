@@ -34,8 +34,11 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace --all-features --locked
 
-      - name: Run foundation prototype tests
-        run: cargo test --manifest-path foundation/Cargo.toml --lib --all-features --locked
+      - name: Run foundation candidate checks
+        run: |
+          cargo check --manifest-path foundation/Cargo.toml --all-features --locked
+          cargo clippy --manifest-path foundation/Cargo.toml --all-features --all-targets -- -D warnings
+          cargo test --manifest-path foundation/Cargo.toml --all-features --locked
 
       - name: Enforce coverage gate
         run: ./scripts/check-coverage-gate.py

@@ -174,6 +174,8 @@ fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {
     adjust_verbosity(MessageLevel::Success, verbose, quiet)
 }
 
+pub use crate::row;
+
 #[cfg(test)]
 mod tests {
     use super::{App, AppBuilder, AppRunner, bootstrap_message_verbosity, run_process_with_sink};
@@ -253,6 +255,3 @@ mod tests {
         assert!(sink.stderr.contains("unknown theme"));
     }
 }
-
-
-pub use crate::row;

@@ -101,6 +101,13 @@ def run_capture(command: list[str], cwd: Path) -> str:
     return result.stdout.strip()
 
 
+def run_with_fallback(primary: list[str], fallback: list[str], cwd: Path) -> None:
+    result = subprocess.run(primary, cwd=cwd)
+    if result.returncode == 0:
+        return
+    subprocess.run(fallback, cwd=cwd, check=True)
+
+
 def load_toml(path: Path) -> dict[str, Any]:
     with path.open("rb") as handle:
         return tomllib.load(handle)
@@ -299,13 +306,13 @@ def copy_crate_sources(out_src: Path, crates: list[CrateInfo], foundation_crate_
                 relative = relative.with_name("mod.rs")
             dest = dest_root / relative
             rewritten = rewrite_source(source.read_text(), crate, crates)
+            if crate.package_name == "osp-cli" and relative == Path("mod.rs"):
+                shim = "\npub use crate::row;\n"
+                if "\n#[cfg(test)]\nmod tests {" in rewritten:
+                    rewritten = rewritten.replace("\n#[cfg(test)]\nmod tests {", f"{shim}\n#[cfg(test)]\nmod tests {{", 1)
+                else:
+                    rewritten += shim
             write_text(dest, rewritten)
-
-        if crate.package_name == "osp-cli":
-            mod_path = dest_root / "mod.rs"
-            mod_path.write_text(
-                mod_path.read_text() + "\n\npub use crate::row;\n"
-            )
 
 
 def render_foundation_lib(crates: list[CrateInfo]) -> str:
@@ -662,6 +669,57 @@ def render_binary(crate_name: str) -> str:
     )
 
 
+def render_foundation_readme() -> str:
+    return textwrap.dedent(
+        """\
+        # osp-cli-foundation
+
+        `osp-cli-foundation` is the staged single-crate foundation for the future
+        `osp-cli-rust` package layout.
+
+        It currently mirrors the multi-crate workspace, but with a curated public
+        surface under top-level modules like:
+
+        - `app`
+        - `runtime`
+        - `config`
+        - `core`
+        - `dsl`
+        - `ui`
+        - `repl`
+        - `completion`
+
+        The internal `osp_*` modules still exist as transition shims while the
+        single-crate layout is being cleaned up.
+
+        This crate is generated from the workspace by
+        `scripts/build-foundation-crate.py`, and is currently used as the transition
+        staging area for eventually making the single-crate architecture canonical.
+
+        ## Current status
+
+        - buildable as a standalone crate
+        - tested in CI
+        - kept in sync with the workspace by parity checks
+
+        ## Running it locally
+
+        ```bash
+        cargo run --manifest-path foundation/Cargo.toml -- --help
+        cargo run --manifest-path foundation/Cargo.toml
+        ```
+
+        ## Verifying the foundation crate
+
+        ```bash
+        cargo check --manifest-path foundation/Cargo.toml --all-features --locked
+        cargo clippy --manifest-path foundation/Cargo.toml --all-features --all-targets -- -D warnings
+        cargo test --manifest-path foundation/Cargo.toml --all-features --locked
+        ```
+        """
+    )
+
+
 def render_cargo_toml(
     package_name: str,
     version: str,
@@ -757,12 +815,19 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
     )
     write_text(out_dir / "Cargo.toml", cargo_toml)
 
-    for doc_name in ("README.md", "LICENSE"):
-        source = REPO_ROOT / doc_name
-        if source.exists():
-            shutil.copy2(source, out_dir / doc_name)
+    write_text(out_dir / "README.md", render_foundation_readme())
+    license_path = REPO_ROOT / "LICENSE"
+    if license_path.exists():
+        shutil.copy2(license_path, out_dir / "LICENSE")
 
-    run(
+    run_with_fallback(
+        [
+            "cargo",
+            "generate-lockfile",
+            "--offline",
+            "--manifest-path",
+            str(out_dir / "Cargo.toml"),
+        ],
         ["cargo", "generate-lockfile", "--manifest-path", str(out_dir / "Cargo.toml")],
         cwd=out_dir,
     )

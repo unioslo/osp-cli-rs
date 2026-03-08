@@ -33,7 +33,9 @@ check:
 
 foundation-check:
     python3 ./scripts/check-foundation-sync.py
-    cargo test --manifest-path foundation/Cargo.toml --lib --all-features --locked
+    cargo check --manifest-path foundation/Cargo.toml --all-features --locked
+    cargo clippy --manifest-path foundation/Cargo.toml --all-features --all-targets -- -D warnings
+    cargo test --manifest-path foundation/Cargo.toml --all-features --locked
 
 precommit:
     ./scripts/check-rust-fast.sh
@@ -73,12 +75,12 @@ release-sign *args:
 verify-full:
     ./scripts/check-rust-fast.sh
     cargo test --workspace --all-features --locked
-    cargo test --manifest-path foundation/Cargo.toml --lib --all-features --locked
+    just foundation-check
     ./scripts/check-coverage-gate.py
 
 release-check:
     python3 ./scripts/check-release-readiness.py
     ./scripts/check-rust-fast.sh
     cargo test --workspace --all-features --locked
-    cargo test --manifest-path foundation/Cargo.toml --lib --all-features --locked
+    just foundation-check
     ./scripts/check-coverage-gate.py
