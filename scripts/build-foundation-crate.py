@@ -382,10 +382,10 @@ def render_foundation_module(name: str) -> str:
             pub(crate) mod bootstrap;
             pub mod runtime;
             pub mod session;
+            pub mod sink;
 
             pub use crate::osp_cli::{
-                App, AppBuilder, AppRunner, BufferedUiSink, StdIoUiSink, UiSink, run_from,
-                run_process, run_process_with_sink,
+                App, AppBuilder, AppRunner, run_from, run_process, run_process_with_sink,
             };
             pub use runtime::{
                 AppClients, AppRuntime, AppState, AuthState, ConfigState, LaunchContext,
@@ -395,6 +395,7 @@ def render_foundation_module(name: str) -> str:
                 AppSession, DebugTimingBadge, DebugTimingState, LastFailure, ReplScopeFrame,
                 ReplScopeStack,
             };
+            pub use sink::{BufferedUiSink, StdIoUiSink, UiSink};
             """
         ),
         "app/bootstrap.rs": textwrap.dedent(
@@ -424,6 +425,13 @@ def render_foundation_module(name: str) -> str:
                 AppSession, DebugTimingBadge, DebugTimingState, LastFailure, ReplScopeFrame,
                 ReplScopeStack,
             };
+            """
+        ),
+        "app/sink.rs": textwrap.dedent(
+            """\
+            //! Terminal-facing sink types used by the host layer.
+
+            pub use crate::osp_cli::{BufferedUiSink, StdIoUiSink, UiSink};
             """
         ),
         "runtime.rs": textwrap.dedent(
@@ -660,12 +668,34 @@ def render_foundation_module(name: str) -> str:
             """\
             //! Plugin discovery, dispatch, and catalog management.
 
+            pub mod discovery;
+            pub mod dispatch;
             pub mod manager;
 
-            pub use manager::{
-                CommandCatalogEntry, DiscoveredPlugin, DoctorReport, PluginDispatchContext,
-                PluginDispatchError, PluginManager, PluginSource, PluginSummary,
-                DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
+            pub use discovery::{
+                CommandCatalogEntry, DiscoveredPlugin, DoctorReport, PluginSource, PluginSummary,
+            };
+            pub use dispatch::{
+                PluginDispatchContext, PluginDispatchError, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
+            };
+            pub use manager::PluginManager;
+            """
+        ),
+        "plugin/discovery.rs": textwrap.dedent(
+            """\
+            //! Discovery and catalog-facing plugin types.
+
+            pub use crate::osp_cli::plugin_manager::{
+                CommandCatalogEntry, DiscoveredPlugin, DoctorReport, PluginSource, PluginSummary,
+            };
+            """
+        ),
+        "plugin/dispatch.rs": textwrap.dedent(
+            """\
+            //! Dispatch-facing plugin types.
+
+            pub use crate::osp_cli::plugin_manager::{
+                PluginDispatchContext, PluginDispatchError, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
             };
             """
         ),
@@ -896,6 +926,7 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
         "app/bootstrap.rs",
         "app/runtime.rs",
         "app/session.rs",
+        "app/sink.rs",
         "runtime.rs",
         "config.rs",
         "core.rs",
@@ -911,6 +942,8 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
         "cli/invocation.rs",
         "cli/pipeline.rs",
         "plugin/mod.rs",
+        "plugin/discovery.rs",
+        "plugin/dispatch.rs",
         "plugin/manager.rs",
         "prelude.rs",
         "tests.rs",
