@@ -1,6 +1,6 @@
 [package]
 name = "osp-cli"
-version = "1.4.5"
+version = "1.4.6"
 edition = "2024"
 rust-version = "1.85"
 description = "CLI and REPL for querying and managing OSP infrastructure data"

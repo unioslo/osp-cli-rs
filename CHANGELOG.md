@@ -10,3 +10,8 @@ matching `docs/releases/vX.Y.Z.md` file before a tag can be published.
 - First real public binary release of the Rust `osp` CLI, aligned to the current `osprov-cli` version line.
 - Ships the rebuilt UI and REPL model with explicit `expressive`, `compact`, and `austere` presentation profiles.
 - Enforces release verification, coverage gating, versioned release notes, and changelog-backed tagging.
+
+## [1.4.6] - YYYY-MM-DD
+
+- TODO: summarize the release in 1-3 bullets.
+

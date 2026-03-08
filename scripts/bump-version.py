@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -104,9 +105,13 @@ def tag_exists(root: Path, tag: str) -> bool:
     if local.returncode == 0:
         return True
 
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env.setdefault("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
     remote = subprocess.run(
         ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"],
         cwd=root,
+        env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -254,7 +259,8 @@ def main() -> None:
     root = repo_root()
     cargo_toml = root / "Cargo.toml"
     workspace_cargo_toml = root / "workspace" / "Cargo.toml"
-    lockfile = root / "workspace" / "Cargo.lock"
+    root_lockfile = root / "Cargo.lock"
+    workspace_lockfile = root / "workspace" / "Cargo.lock"
 
     current = load_root_version(cargo_toml)
     next_version = resolve_target_version(current, args.target)
@@ -279,7 +285,9 @@ def main() -> None:
 
     replace_root_version(cargo_toml, current, next_version)
     replace_workspace_mirror_version(workspace_cargo_toml, next_version)
-    replace_lock_versions(lockfile, workspace_package_names(root), next_version)
+    package_names = workspace_package_names(root)
+    replace_lock_versions(root_lockfile, package_names, next_version)
+    replace_lock_versions(workspace_lockfile, package_names, next_version)
     run_lock_refresh(root, dry_run=False)
 
     print(f"bumped version: {current} -> {next_version}")

@@ -911,7 +911,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "osp-api"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "anyhow",
  "osp-core",
@@ -922,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "osp-cli"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -954,14 +954,14 @@ dependencies = [
 
 [[package]]
 name = "osp-completion"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "fuzzy-matcher",
 ]
 
 [[package]]
 name = "osp-config"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "toml",
  "tracing",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "osp-core"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "clap",
  "serde",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "osp-dsl"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "anyhow",
  "osp-core",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "osp-ports"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "anyhow",
  "osp-core",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "osp-repl"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "osp-services"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "anyhow",
  "osp-api",
@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "osp-ui"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "comfy-table",
  "dialoguer",

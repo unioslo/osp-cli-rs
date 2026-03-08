@@ -80,7 +80,11 @@ GitHub Actions runs two separate lanes:
   - macOS `x86_64-apple-darwin`
   - Windows `x86_64-pc-windows-msvc`
 
-The release workflow publishes GitHub release assets, not `crates.io` packages.
+The release workflow publishes both:
+
+- the `osp-cli` crate to crates.io through trusted publishing
+- GitHub release assets for Linux, macOS, and Windows
+
 Release artifacts are built from the root single-crate package, while the old
 workspace remains the compatibility lane in CI.
 
@@ -92,7 +96,7 @@ Typical release flow:
 
 ```bash
 just bump patch "Summarize the release"
-git commit -am "chore(release): Prepare v1.4.5"
+git commit -am "chore(release): Prepare v1.4.6"
 git push origin main
 just release-check
 just release-dry
@@ -107,7 +111,7 @@ notes stub:
 ```bash
 just bump patch
 just bump patch "Summarize the release"
-just bump 1.4.5 "Summarize the release"
+just bump 1.4.6 "Summarize the release"
 just bump minor
 just bump major
 just bump-dry patch "Preview the next release"
@@ -117,6 +121,7 @@ This updates:
 
 - root `Cargo.toml` package version
 - legacy `workspace/Cargo.toml` mirror version
+- root package entries in `Cargo.lock`
 - legacy workspace package entries in `workspace/Cargo.lock`
 - `docs/releases/vX.Y.Z.md` if it does not already exist
 - `CHANGELOG.md` with a matching version section if it does not already exist
