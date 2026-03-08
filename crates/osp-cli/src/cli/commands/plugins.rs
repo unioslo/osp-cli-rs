@@ -272,3 +272,123 @@ pub(crate) fn doctor_rows(report: &DoctorReport) -> Vec<Row> {
 
     rows
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{command_catalog_rows, doctor_rows, plugin_config_rows, plugin_list_rows};
+    use crate::app::PluginConfigEntry;
+    use crate::plugin_manager::{
+        CommandCatalogEntry, CommandConflict, DoctorReport, PluginSource, PluginSummary,
+    };
+    use osp_core::row::Row;
+    use std::path::PathBuf;
+
+    fn row_str<'a>(row: &'a Row, key: &str) -> Option<&'a str> {
+        row.get(key).and_then(serde_json::Value::as_str)
+    }
+
+    #[test]
+    fn plugin_rows_render_empty_states_unit() {
+        let list = plugin_list_rows(&[]);
+        assert_eq!(row_str(&list[0], "status"), Some("empty"));
+        assert_eq!(row_str(&list[0], "message"), Some("No plugins discovered."));
+
+        let commands = command_catalog_rows(&[]);
+        assert_eq!(row_str(&commands[0], "status"), Some("empty"));
+        assert_eq!(
+            row_str(&commands[0], "message"),
+            Some("No plugin commands discovered.")
+        );
+
+        let config = plugin_config_rows("demo", &[]);
+        assert_eq!(row_str(&config[0], "status"), Some("empty"));
+        assert_eq!(row_str(&config[0], "plugin_id"), Some("demo"));
+    }
+
+    #[test]
+    fn plugin_rows_render_real_metadata_and_scopes_unit() {
+        let plugins = plugin_list_rows(&[PluginSummary {
+            plugin_id: "demo".to_string(),
+            enabled: true,
+            healthy: false,
+            source: PluginSource::Explicit,
+            plugin_version: Some("1.2.3".to_string()),
+            executable: PathBuf::from("/tmp/osp-demo"),
+            commands: vec!["ldap".to_string(), "mreg".to_string()],
+            issue: Some("broken".to_string()),
+        }]);
+        assert_eq!(row_str(&plugins[0], "plugin_id"), Some("demo"));
+        assert_eq!(plugins[0].get("enabled"), Some(&serde_json::json!(true)));
+        assert_eq!(plugins[0].get("healthy"), Some(&serde_json::json!(false)));
+        assert_eq!(row_str(&plugins[0], "source"), Some("explicit"));
+        assert_eq!(row_str(&plugins[0], "plugin_version"), Some("1.2.3"));
+
+        let commands = command_catalog_rows(&[CommandCatalogEntry {
+            name: "shared".to_string(),
+            about: "shared command".to_string(),
+            completion: osp_completion::CommandSpec::new("shared"),
+            provider: Some("beta".to_string()),
+            providers: vec!["alpha".to_string(), "beta".to_string()],
+            conflicted: true,
+            requires_selection: false,
+            selected_explicitly: true,
+            source: Some(PluginSource::Explicit),
+            subcommands: vec!["show".to_string()],
+        }]);
+        assert_eq!(row_str(&commands[0], "name"), Some("shared"));
+        assert_eq!(row_str(&commands[0], "provider"), Some("beta"));
+        assert_eq!(
+            commands[0].get("conflicted"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            commands[0].get("providers"),
+            Some(&serde_json::json!(["alpha", "beta"]))
+        );
+
+        let config = plugin_config_rows(
+            "demo",
+            &[
+                PluginConfigEntry {
+                    env_key: "OSP_SHARED_TOKEN".to_string(),
+                    value: "1".to_string(),
+                    config_key: "extensions.demo.token".to_string(),
+                    scope: crate::app::PluginConfigScope::Shared,
+                },
+                PluginConfigEntry {
+                    env_key: "OSP_PLUGIN_FLAG".to_string(),
+                    value: "2".to_string(),
+                    config_key: "extensions.plugins.demo.flag".to_string(),
+                    scope: crate::app::PluginConfigScope::Plugin,
+                },
+            ],
+        );
+        assert_eq!(row_str(&config[0], "scope"), Some("shared"));
+        assert_eq!(row_str(&config[1], "scope"), Some("plugin"));
+    }
+
+    #[test]
+    fn doctor_rows_include_summary_and_conflicts_unit() {
+        let rows = doctor_rows(&DoctorReport {
+            plugins: vec![PluginSummary {
+                plugin_id: "demo".to_string(),
+                enabled: true,
+                healthy: false,
+                source: PluginSource::Explicit,
+                plugin_version: None,
+                executable: PathBuf::from("/tmp/osp-demo"),
+                commands: vec!["shared".to_string()],
+                issue: Some("broken".to_string()),
+            }],
+            conflicts: vec![CommandConflict {
+                command: "shared".to_string(),
+                providers: vec!["alpha".to_string(), "beta".to_string()],
+            }],
+        });
+
+        assert_eq!(row_str(&rows[0], "kind"), Some("summary"));
+        assert_eq!(rows[0].get("broken_enabled"), Some(&serde_json::json!(1)));
+        assert_eq!(row_str(&rows[1], "kind"), Some("conflict"));
+        assert_eq!(row_str(&rows[1], "command"), Some("shared"));
+    }
+}
