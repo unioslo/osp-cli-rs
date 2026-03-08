@@ -1,7 +1,7 @@
 use crate::osp_config::{ConfigSource, ConfigValue, ResolvedConfig, Scope};
 use crate::osp_core::output::{ColorMode, RenderMode, UnicodeMode};
 use crate::osp_ui::chrome::SectionFrameStyle;
-use crate::osp_ui::messages::MessageLayout;
+use crate::osp_ui::messages::{MessageLayout, MessageLevel};
 use crate::osp_ui::{RenderSettings, TableBorderStyle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,13 +205,19 @@ pub(crate) fn effective_section_frame(config: &ResolvedConfig) -> SectionFrameSt
     }
 }
 
-pub(crate) fn effective_repl_intro(config: &ResolvedConfig) -> bool {
-    !matches!(effective_repl_intro_style(config), ReplIntroStyle::None)
+pub(crate) fn effective_repl_intro_style_for_verbosity(
+    config: &ResolvedConfig,
+    verbosity: MessageLevel,
+) -> ReplIntroStyle {
+    adjust_repl_intro_style_for_verbosity(effective_repl_intro_style(config), verbosity)
 }
 
-pub(crate) fn repl_intro_includes_overview(config: &ResolvedConfig) -> bool {
+pub(crate) fn repl_intro_includes_overview(
+    config: &ResolvedConfig,
+    verbosity: MessageLevel,
+) -> bool {
     matches!(
-        effective_repl_intro_style(config),
+        effective_repl_intro_style_for_verbosity(config, verbosity),
         ReplIntroStyle::Compact | ReplIntroStyle::Full
     )
 }
@@ -259,6 +265,31 @@ pub(crate) fn effective_repl_intro_style(config: &ResolvedConfig) -> ReplIntroSt
         UiPresentation::Austere => ReplIntroStyle::Minimal,
         UiPresentation::Compact => ReplIntroStyle::Compact,
         UiPresentation::Expressive => ReplIntroStyle::Full,
+    }
+}
+
+fn adjust_repl_intro_style_for_verbosity(
+    style: ReplIntroStyle,
+    verbosity: MessageLevel,
+) -> ReplIntroStyle {
+    let mut rank = match style {
+        ReplIntroStyle::None => 0_i8,
+        ReplIntroStyle::Minimal => 1,
+        ReplIntroStyle::Compact => 2,
+        ReplIntroStyle::Full => 3,
+    };
+    let delta = match verbosity {
+        MessageLevel::Error | MessageLevel::Warning => -3,
+        MessageLevel::Success => 0,
+        MessageLevel::Info => 1,
+        MessageLevel::Trace => 2,
+    };
+    rank = (rank + delta).clamp(0, 3);
+    match rank {
+        0 => ReplIntroStyle::None,
+        1 => ReplIntroStyle::Minimal,
+        2 => ReplIntroStyle::Compact,
+        _ => ReplIntroStyle::Full,
     }
 }
 
@@ -480,7 +511,6 @@ mod tests {
     #[test]
     fn austere_presentation_keeps_intro_by_default_unit() {
         let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert!(effective_repl_intro(&config));
         assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Minimal);
     }
 
@@ -491,14 +521,12 @@ mod tests {
             &[],
             &[("repl.intro", "full")],
         );
-        assert!(effective_repl_intro(&config));
         assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Full);
     }
 
     #[test]
     fn explicit_intro_style_none_disables_intro_unit() {
         let config = resolved_config(&[], &[("repl.intro", "none")], &[]);
-        assert!(!effective_repl_intro(&config));
         assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::None);
     }
 
@@ -526,15 +554,39 @@ mod tests {
     #[test]
     fn compact_presentation_prefers_minimal_intro_style_unit() {
         let config = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
-        assert!(effective_repl_intro(&config));
         assert_eq!(effective_repl_intro_style(&config), ReplIntroStyle::Compact);
-        assert!(repl_intro_includes_overview(&config));
+        assert!(repl_intro_includes_overview(&config, MessageLevel::Success));
     }
 
     #[test]
     fn austere_presentation_hides_intro_overview_unit() {
         let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert!(!repl_intro_includes_overview(&config));
+        assert!(!repl_intro_includes_overview(
+            &config,
+            MessageLevel::Success
+        ));
+        assert!(repl_intro_includes_overview(&config, MessageLevel::Info));
+    }
+
+    #[test]
+    fn intro_verbosity_adjustment_bumps_and_suppresses_levels_unit() {
+        let austere = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
+        assert_eq!(
+            effective_repl_intro_style_for_verbosity(&austere, MessageLevel::Success),
+            ReplIntroStyle::Minimal
+        );
+        assert_eq!(
+            effective_repl_intro_style_for_verbosity(&austere, MessageLevel::Info),
+            ReplIntroStyle::Compact
+        );
+        assert_eq!(
+            effective_repl_intro_style_for_verbosity(&austere, MessageLevel::Trace),
+            ReplIntroStyle::Full
+        );
+        assert_eq!(
+            effective_repl_intro_style_for_verbosity(&austere, MessageLevel::Warning),
+            ReplIntroStyle::None
+        );
     }
 
     #[test]

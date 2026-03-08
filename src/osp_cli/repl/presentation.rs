@@ -15,7 +15,7 @@ use super::ReplViewContext;
 use super::history;
 use super::surface::ReplSurface;
 use crate::osp_cli::ui_presentation::{
-    ReplIntroStyle, effective_repl_intro_style, effective_repl_simple_prompt,
+    ReplIntroStyle, effective_repl_intro_style_for_verbosity, effective_repl_simple_prompt,
 };
 
 pub(crate) fn render_repl_intro(view: ReplViewContext<'_>, intro_commands: &[String]) -> String {
@@ -30,7 +30,7 @@ pub(crate) fn render_repl_intro(view: ReplViewContext<'_>, intro_commands: &[Str
     let theme_id = view.ui.render_settings.theme_name.clone();
     let version = env!("CARGO_PKG_VERSION");
     let theme_display = theme_display_name(&theme_id);
-    let intro_style = effective_repl_intro_style(config);
+    let intro_style = effective_repl_intro_style_for_verbosity(config, view.ui.message_verbosity);
 
     if matches!(intro_style, ReplIntroStyle::None) {
         return String::new();

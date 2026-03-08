@@ -22,7 +22,7 @@ use crate::osp_cli::app;
 use crate::osp_cli::app::{CliCommandResult, document_from_json};
 use crate::osp_cli::cli::{DebugCompleteArgs, DebugHighlightArgs, ReplArgs, ReplCommands};
 use crate::osp_cli::ui_presentation::{
-    ReplInputMode, effective_repl_input_mode, effective_repl_intro,
+    ReplInputMode, effective_repl_input_mode, effective_repl_intro_style_for_verbosity,
 };
 use crate::osp_completion::CompletionTree;
 use crate::osp_ui::messages::MessageLevel;
@@ -126,7 +126,10 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
 }
 
 fn should_show_repl_intro(config: &ResolvedConfig, verbosity: MessageLevel) -> bool {
-    effective_repl_intro(config) && verbosity >= MessageLevel::Success
+    !matches!(
+        effective_repl_intro_style_for_verbosity(config, verbosity),
+        crate::osp_cli::ui_presentation::ReplIntroStyle::None
+    )
 }
 
 fn map_repl_input_mode(mode: ReplInputMode) -> crate::osp_repl::ReplInputMode {

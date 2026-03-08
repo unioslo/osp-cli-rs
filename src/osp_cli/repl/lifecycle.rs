@@ -101,12 +101,13 @@ impl ReplCycle {
         let view = ReplViewContext::from_parts(runtime, session);
         let surface = surface::build_repl_surface(view, &catalog);
         let completion_tree = completion::build_repl_completion_tree(view, &surface);
-        let help_text =
-            if include_help_text && repl_intro_includes_overview(runtime.config.resolved()) {
-                render_repl_command_overview(view, &surface)
-            } else {
-                String::new()
-            };
+        let help_text = if include_help_text
+            && repl_intro_includes_overview(runtime.config.resolved(), runtime.ui.message_verbosity)
+        {
+            render_repl_command_overview(view, &surface)
+        } else {
+            String::new()
+        };
         let intro_text = if include_help_text {
             render_repl_intro(view, &surface.intro_commands)
         } else {
