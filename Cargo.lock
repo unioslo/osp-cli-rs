@@ -1031,6 +1031,7 @@ dependencies = [
  "comfy-table",
  "dialoguer",
  "indicatif",
+ "nu-ansi-term",
  "osp-core",
  "serde_json",
  "terminal_size",

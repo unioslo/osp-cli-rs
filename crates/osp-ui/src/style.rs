@@ -1,3 +1,5 @@
+use nu_ansi_term::{Color, Style};
+
 use crate::theme::{self, ThemeDefinition};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -95,10 +97,14 @@ pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
     if !color {
         return text.to_string();
     }
-    let Some(prefix) = style_prefix(spec) else {
+    let Some(style) = parse_style_spec(spec) else {
         return text.to_string();
     };
-    format!("{prefix}{text}\x1b[0m")
+    let prefix = style.prefix().to_string();
+    if prefix.is_empty() {
+        return text.to_string();
+    }
+    format!("{prefix}{text}{}", style.suffix())
 }
 
 fn style_spec_for_token(
@@ -166,44 +172,64 @@ fn override_for_token(token: StyleToken, overrides: &StyleOverrides) -> Option<&
     }
 }
 
-fn style_prefix(spec: &str) -> Option<String> {
-    let mut codes: Vec<String> = Vec::new();
+fn parse_style_spec(spec: &str) -> Option<Style> {
+    let mut style = Style::new();
+    let mut changed = false;
 
     for raw in spec.split_whitespace() {
         let token = raw.trim().to_ascii_lowercase();
+        if token.is_empty() {
+            continue;
+        }
+
         match token.as_str() {
-            "bold" => codes.push("1".to_string()),
-            "dim" => codes.push("2".to_string()),
-            "italic" => codes.push("3".to_string()),
-            "underline" => codes.push("4".to_string()),
-            "black" => codes.push("30".to_string()),
-            "red" => codes.push("31".to_string()),
-            "green" => codes.push("32".to_string()),
-            "yellow" => codes.push("33".to_string()),
-            "blue" => codes.push("34".to_string()),
-            "magenta" => codes.push("35".to_string()),
-            "cyan" => codes.push("36".to_string()),
-            "white" => codes.push("37".to_string()),
-            "bright-black" => codes.push("90".to_string()),
-            "bright-red" => codes.push("91".to_string()),
-            "bright-green" => codes.push("92".to_string()),
-            "bright-yellow" => codes.push("93".to_string()),
-            "bright-blue" => codes.push("94".to_string()),
-            "bright-magenta" => codes.push("95".to_string()),
-            "bright-cyan" => codes.push("96".to_string()),
-            "bright-white" => codes.push("97".to_string()),
+            "bold" => {
+                style = style.bold();
+                changed = true;
+            }
+            "dim" => {
+                style = style.dimmed();
+                changed = true;
+            }
+            "italic" => {
+                style = style.italic();
+                changed = true;
+            }
+            "underline" => {
+                style = style.underline();
+                changed = true;
+            }
             _ => {
-                if let Some((r, g, b)) = parse_hex_rgb(&token) {
-                    codes.push(format!("38;2;{r};{g};{b}"));
+                if let Some(color) = parse_color_token(&token) {
+                    style = style.fg(color);
+                    changed = true;
                 }
             }
         }
     }
 
-    if codes.is_empty() {
-        None
-    } else {
-        Some(format!("\x1b[{}m", codes.join(";")))
+    changed.then_some(style)
+}
+
+fn parse_color_token(token: &str) -> Option<Color> {
+    match token {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "purple" | "magenta" => Some(Color::Purple),
+        "cyan" => Some(Color::Cyan),
+        "white" => Some(Color::White),
+        "bright-black" => Some(Color::DarkGray),
+        "bright-red" => Some(Color::LightRed),
+        "bright-green" => Some(Color::LightGreen),
+        "bright-yellow" => Some(Color::LightYellow),
+        "bright-blue" => Some(Color::LightBlue),
+        "bright-purple" | "bright-magenta" => Some(Color::LightPurple),
+        "bright-cyan" => Some(Color::LightCyan),
+        "bright-white" => Some(Color::LightGray),
+        _ => parse_hex_rgb(token).map(|(r, g, b)| Color::Rgb(r, g, b)),
     }
 }
 

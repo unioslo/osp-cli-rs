@@ -9,7 +9,9 @@ use crate::document::{
     Block, Document, MregBlock, MregValue, PanelRules, TableAlign, TableBlock, TableStyle,
 };
 use crate::layout::{LayoutContext, MregEntryMetrics, MregMetrics, prepare_layout_context};
+use crate::messages::render_section_divider_with_overrides;
 use crate::style::{StyleToken, apply_style_spec, apply_style_with_theme_overrides};
+use crate::width::{display_width, mreg_alignment_key_width};
 use crate::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 
 pub fn render_document(document: &Document, settings: ResolvedRenderSettings) -> String {
@@ -223,12 +225,27 @@ impl<'a> DocumentRenderer<'a> {
             section_style_token(block.kind.as_deref()).unwrap_or(StyleToken::PanelBorder);
         let border_token = block.border_token.unwrap_or(fallback);
         let title_token = block.title_token.unwrap_or(StyleToken::PanelTitle);
-        let titled_divider = self.section_divider(
+        let divider_width = Some(self.settings.width.unwrap_or(24).max(12));
+        let titled_divider = render_section_divider_with_overrides(
             block.title.as_deref().unwrap_or(""),
+            self.settings.unicode,
+            divider_width,
+            self.settings.color,
+            &self.settings.theme,
             border_token,
             title_token,
+            &self.settings.style_overrides,
         );
-        let trailing_divider = self.section_divider("", border_token, title_token);
+        let trailing_divider = render_section_divider_with_overrides(
+            "",
+            self.settings.unicode,
+            divider_width,
+            self.settings.color,
+            &self.settings.theme,
+            border_token,
+            title_token,
+            &self.settings.style_overrides,
+        );
         let inner = DocumentRenderer::new(&block.body, self.settings).render(&block.body);
 
         match block.rules {
@@ -642,47 +659,6 @@ impl<'a> DocumentRenderer<'a> {
         }
     }
 
-    fn section_divider(
-        &self,
-        title: &str,
-        border_token: StyleToken,
-        title_token: StyleToken,
-    ) -> String {
-        let fill_char = if self.settings.unicode { '─' } else { '-' };
-        let target_width = self.settings.width.unwrap_or(24).max(12);
-        let title = title.trim();
-
-        if title.is_empty() {
-            let raw = fill_char.to_string().repeat(target_width);
-            if self.settings.color {
-                return self.style_token(&raw, StyleToken::PanelBorder);
-            }
-            return raw;
-        }
-
-        let left = if self.settings.unicode { "─ " } else { "- " };
-        let prefix_width = left.chars().count() + title.chars().count() + 1;
-        let suffix = if prefix_width >= target_width {
-            String::new()
-        } else {
-            fill_char.to_string().repeat(target_width - prefix_width)
-        };
-        let raw = format!("{left}{title} {suffix}");
-
-        if !self.settings.color {
-            return raw;
-        }
-
-        if title_token == border_token {
-            return self.style_token(&raw, border_token);
-        }
-
-        let border = self.style_token(left, border_token);
-        let title = self.style_token(title, title_token);
-        let trailing = self.style_token(&format!(" {suffix}"), border_token);
-        format!("{border}{title}{trailing}")
-    }
-
     fn style_token(&self, text: &str, token: StyleToken) -> String {
         apply_style_with_theme_overrides(
             text,
@@ -905,27 +881,6 @@ fn is_hex_color(value: &str) -> bool {
         .iter()
         .skip(1)
         .all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn mreg_alignment_key_width(key: &str) -> usize {
-    display_width(strip_count_suffix(key))
-}
-
-fn strip_count_suffix(key: &str) -> &str {
-    if let Some(prefix_end) = key.rfind(" (") {
-        let suffix = &key[prefix_end + 2..];
-        if let Some(count) = suffix.strip_suffix(')')
-            && !count.is_empty()
-            && count.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return &key[..prefix_end];
-        }
-    }
-    key
-}
-
-fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
 }
 
 fn pad_display_width(value: &str, target_width: usize) -> String {

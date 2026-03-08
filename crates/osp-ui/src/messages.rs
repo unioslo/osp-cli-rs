@@ -367,6 +367,7 @@ pub fn render_section_divider(
         color,
         theme,
         token,
+        token,
         &StyleOverrides::default(),
     )
 }
@@ -377,7 +378,8 @@ pub fn render_section_divider_with_overrides(
     width: Option<usize>,
     color: bool,
     theme: &ThemeDefinition,
-    token: StyleToken,
+    border_token: StyleToken,
+    title_token: StyleToken,
     style_overrides: &StyleOverrides,
 ) -> String {
     let fill_char = if unicode { '─' } else { '-' };
@@ -407,8 +409,8 @@ pub fn render_section_divider_with_overrides(
         return raw;
     }
 
-    if title.is_empty() || token != StyleToken::PanelBorder {
-        return apply_style_with_theme_overrides(&raw, token, true, theme, style_overrides);
+    if title.is_empty() || title_token == border_token {
+        return apply_style_with_theme_overrides(&raw, border_token, true, theme, style_overrides);
     }
 
     let prefix = if unicode { "─ " } else { "- " };
@@ -423,27 +425,12 @@ pub fn render_section_divider_with_overrides(
         format!(" {}", fill_char.to_string().repeat(fill_len))
     };
 
-    let styled_prefix = apply_style_with_theme_overrides(
-        prefix,
-        StyleToken::PanelBorder,
-        true,
-        theme,
-        style_overrides,
-    );
-    let styled_title = apply_style_with_theme_overrides(
-        title_text,
-        StyleToken::PanelTitle,
-        true,
-        theme,
-        style_overrides,
-    );
-    let styled_suffix = apply_style_with_theme_overrides(
-        &suffix,
-        StyleToken::PanelBorder,
-        true,
-        theme,
-        style_overrides,
-    );
+    let styled_prefix =
+        apply_style_with_theme_overrides(prefix, border_token, true, theme, style_overrides);
+    let styled_title =
+        apply_style_with_theme_overrides(title_text, title_token, true, theme, style_overrides);
+    let styled_suffix =
+        apply_style_with_theme_overrides(&suffix, border_token, true, theme, style_overrides);
     format!("{styled_prefix}{styled_title}{styled_suffix}")
 }
 
@@ -497,8 +484,9 @@ fn render_plain_section(
     let body = body.trim_end_matches('\n');
 
     if !title.is_empty() {
-        out.push_str(&render_section_title_with_overrides(
-            title,
+        let raw_title = format!("{title}:");
+        out.push_str(&style_segment(
+            &raw_title,
             render.color,
             render.theme,
             title_token,
@@ -537,11 +525,13 @@ fn render_ruled_section(
             render.color,
             render.theme,
             tokens.border,
+            tokens.title,
             render.style_overrides,
         ));
     } else if !title.is_empty() {
-        out.push_str(&render_section_title_with_overrides(
-            title,
+        let raw_title = format!("{title}:");
+        out.push_str(&style_segment(
+            &raw_title,
             render.color,
             render.theme,
             tokens.title,
@@ -567,6 +557,7 @@ fn render_ruled_section(
             render.color,
             render.theme,
             tokens.border,
+            tokens.title,
             render.style_overrides,
         ));
     }
@@ -669,7 +660,7 @@ fn render_boxed_section(
     if !out.is_empty() {
         out.push('\n');
     }
-    out.push_str(&style_border_segment(
+    out.push_str(&style_segment(
         &format!(
             "{}{}{}",
             chars.bottom_left,
@@ -692,7 +683,7 @@ fn render_box_top(
     tokens: SectionStyleTokens,
 ) -> String {
     if title.is_empty() {
-        return style_border_segment(
+        return style_segment(
             &format!(
                 "{}{}{}",
                 chars.top_left,
@@ -717,21 +708,21 @@ fn render_box_top(
 
     format!(
         "{}{}{}",
-        style_border_segment(
+        style_segment(
             &left,
             render.color,
             render.theme,
             tokens.border,
             render.style_overrides,
         ),
-        style_title_segment(
+        style_segment(
             title,
             render.color,
             render.theme,
             tokens.title,
             render.style_overrides,
         ),
-        style_border_segment(
+        style_segment(
             &right,
             render.color,
             render.theme,
@@ -753,7 +744,7 @@ fn render_box_body_line(
     let right = format!("{} {}", " ".repeat(padding), chars.vertical);
     format!(
         "{}{}{}",
-        style_border_segment(
+        style_segment(
             &left,
             render.color,
             render.theme,
@@ -761,7 +752,7 @@ fn render_box_body_line(
             render.style_overrides,
         ),
         line,
-        style_border_segment(
+        style_segment(
             &right,
             render.color,
             render.theme,
@@ -771,32 +762,7 @@ fn render_box_body_line(
     )
 }
 
-fn render_section_title_with_overrides(
-    title: &str,
-    color: bool,
-    theme: &ThemeDefinition,
-    title_token: StyleToken,
-    style_overrides: &StyleOverrides,
-) -> String {
-    let raw = format!("{title}:");
-    style_title_segment(&raw, color, theme, title_token, style_overrides)
-}
-
-fn style_border_segment(
-    text: &str,
-    color: bool,
-    theme: &ThemeDefinition,
-    token: StyleToken,
-    style_overrides: &StyleOverrides,
-) -> String {
-    if color {
-        apply_style_with_theme_overrides(text, token, true, theme, style_overrides)
-    } else {
-        text.to_string()
-    }
-}
-
-fn style_title_segment(
+fn style_segment(
     text: &str,
     color: bool,
     theme: &ThemeDefinition,
@@ -1027,6 +993,30 @@ mod tests {
         }
 
         assert_eq!(divider.len(), 12);
+    }
+
+    #[test]
+    fn section_divider_can_style_border_and_title_separately() {
+        let theme = crate::theme::resolve_theme("dracula");
+        let overrides = crate::style::StyleOverrides {
+            panel_border: Some("#112233".to_string()),
+            panel_title: Some("#445566".to_string()),
+            ..Default::default()
+        };
+        let divider = super::render_section_divider_with_overrides(
+            "Info",
+            true,
+            Some(20),
+            true,
+            &theme,
+            crate::style::StyleToken::PanelBorder,
+            crate::style::StyleToken::PanelTitle,
+            &overrides,
+        );
+
+        assert!(divider.starts_with("\x1b[38;2;17;34;51m"));
+        assert!(divider.contains("\x1b[38;2;68;85;102mInfo\x1b[0m"));
+        assert!(divider.ends_with("\x1b[0m"));
     }
 
     #[test]

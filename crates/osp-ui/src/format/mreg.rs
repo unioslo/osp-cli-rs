@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 
 use osp_core::row::Row;
 use serde_json::{Map, Value};
-use unicode_width::UnicodeWidthStr;
 
 use crate::display::value_to_display;
 use crate::document::{Block, MregBlock, MregEntry, MregRow, MregValue, TableBlock, TableStyle};
+use crate::width::display_width;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MregBuildOptions<'a> {
@@ -409,10 +409,6 @@ fn estimate_table_width(table: &TableBlock) -> usize {
     }
 
     widths.iter().sum::<usize>() + widths.len() * 3 + 1
-}
-
-fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
 }
 
 #[cfg(test)]

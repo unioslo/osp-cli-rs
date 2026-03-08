@@ -9,6 +9,7 @@ pub mod messages;
 mod renderer;
 pub mod style;
 pub mod theme;
+mod width;
 
 use crate::messages::SectionFrameStyle;
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};

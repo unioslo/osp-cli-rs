@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
-use unicode_width::UnicodeWidthStr;
 
 use crate::display::value_to_display;
 use crate::document::{Block, Document, MregBlock, MregValue, TableBlock};
+use crate::width::{display_width, mreg_alignment_key_width};
 use crate::{RenderBackend, ResolvedRenderSettings, TableOverflow};
 
 #[derive(Debug, Clone)]
@@ -295,27 +295,6 @@ fn compute_mreg_key_width(block: &MregBlock, indent_size: usize) -> usize {
         .unwrap_or(0)
 }
 
-fn mreg_alignment_key_width(key: &str) -> usize {
-    display_width(strip_count_suffix(key))
-}
-
-fn strip_count_suffix(key: &str) -> &str {
-    if let Some(prefix_end) = key.rfind(" (") {
-        let suffix = &key[prefix_end + 2..];
-        if let Some(count) = suffix.strip_suffix(')')
-            && !count.is_empty()
-            && count.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return &key[..prefix_end];
-        }
-    }
-    key
-}
-
-fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
-}
-
 fn json_display_width(value: &Value) -> usize {
     display_width(&value_to_display(value))
 }
@@ -324,12 +303,13 @@ fn json_display_width(value: &Value) -> usize {
 mod tests {
     use super::{
         TableDescriptor, compute_raw_table_widths, next_shrink_step, prepare_layout_context,
-        shrink_global_widths_to_fit, strip_count_suffix,
+        shrink_global_widths_to_fit,
     };
     use crate::document::{
         Block, Document, MregBlock, MregEntry, MregRow, MregValue, TableBlock, TableStyle,
     };
     use crate::theme::DEFAULT_THEME_NAME;
+    use crate::width::strip_count_suffix;
     use crate::{RenderBackend, ResolvedRenderSettings};
     use serde_json::json;
 

@@ -8,6 +8,7 @@ comfy-table.workspace = true
 serde_json.workspace = true
 unicode-width.workspace = true
 terminal_size.workspace = true
+nu-ansi-term.workspace = true
 osp-core = { path = "../osp-core" }
 dialoguer.workspace = true
 indicatif.workspace = true
