@@ -336,52 +336,79 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
 
         {hidden_modules}
 
-        pub mod app {{
+        pub mod app;
+        pub mod runtime;
+        pub mod config;
+        pub mod core;
+        pub mod dsl;
+        pub mod ports;
+        pub mod api;
+        pub mod services;
+        pub mod ui;
+        pub mod completion;
+        pub mod repl;
+        pub mod cli;
+        pub mod prelude;
+
+        pub use crate::app::{{App, AppBuilder, AppRunner, run_from, run_process}};
+
+        #[cfg(test)]
+        mod tests;
+        """
+    )
+
+
+def render_foundation_module(name: str) -> str:
+    modules = {
+        "app.rs": textwrap.dedent(
+            """\
             //! Main host-facing entrypoints and stateful runtime surfaces.
 
-            pub use crate::osp_cli::{{
+            pub use crate::osp_cli::{
                 App, AppBuilder, AppRunner, BufferedUiSink, StdIoUiSink, UiSink, run_from,
                 run_process, run_process_with_sink,
-            }};
-        }}
-
-        pub mod runtime {{
+            };
+            """
+        ),
+        "runtime.rs": textwrap.dedent(
+            """\
             //! Host runtime, session, and launch-state types used to embed the CLI/REPL.
 
-            pub use crate::osp_cli::state::{{
+            pub use crate::osp_cli::state::{
                 AppClients, AppRuntime, AppSession, AppState, AuthState, ConfigState,
                 DebugTimingBadge, DebugTimingState, LastFailure, LaunchContext, ReplScopeFrame,
                 ReplScopeStack, RuntimeContext, TerminalKind, UiState,
-            }};
-        }}
-
-        pub mod config {{
+            };
+            """
+        ),
+        "config.rs": textwrap.dedent(
+            """\
             //! Configuration loading, resolution, schema, and persistence.
 
-            pub mod schema {{
-                pub use crate::osp_config::{{
+            pub mod schema {
+                pub use crate::osp_config::{
                     ActiveProfileSource, BootstrapConfigExplain, BootstrapKeySpec,
                     BootstrapPhase, BootstrapScopeRule, BootstrapValueRule, ConfigLayer,
                     ConfigSchema, ExplainInterpolation, ExplainInterpolationStep, LayerEntry,
                     ResolveOptions, ResolvedValue, SchemaEntry, SchemaValueType,
-                }};
-            }}
+                };
+            }
 
-            pub mod load {{
-                pub use crate::osp_config::{{
+            pub mod load {
+                pub use crate::osp_config::{
                     ChainedLoader, ConfigLoader, EnvSecretsLoader, EnvVarLoader, LoadedLayers,
                     LoaderPipeline, SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
-                }};
-            }}
+                };
+            }
 
-            pub mod resolve {{
-                pub use crate::osp_config::{{
+            pub mod resolve {
+                pub use crate::osp_config::{
                     ConfigExplain, ConfigResolver, ExplainCandidate, ExplainLayer, ResolvedConfig,
-                }};
-            }}
+                };
+            }
 
-            pub mod runtime {{
-                pub use crate::osp_config::{{
+            pub mod runtime {
+                pub use crate::osp_config::{
                     RuntimeConfig, RuntimeConfigPaths, RuntimeDefaults, RuntimeLoadOptions,
                     DEFAULT_DEBUG_LEVEL, DEFAULT_LOG_FILE_ENABLED, DEFAULT_LOG_FILE_LEVEL,
                     DEFAULT_PROFILE_NAME, DEFAULT_REPL_HISTORY_DEDUPE,
@@ -394,140 +421,146 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
                     DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO, DEFAULT_UI_PRESENTATION,
                     DEFAULT_UI_SHORT_LIST_MAX, DEFAULT_UI_TABLE_BORDER,
                     DEFAULT_UI_TABLE_OVERFLOW, DEFAULT_UI_WIDTH,
-                }};
-            }}
+                };
+            }
 
-            pub mod store {{
-                pub use crate::osp_config::{{
+            pub mod store {
+                pub use crate::osp_config::{
                     TomlEditResult, secret_file_mode, set_scoped_value_in_toml,
                     unset_scoped_value_in_toml,
-                }};
-            }}
+                };
+            }
 
-            pub use crate::osp_config::{{
+            pub use crate::osp_config::{
                 ConfigError, ConfigSource, ConfigValue, Scope, SecretValue, bootstrap_key_spec,
                 build_runtime_pipeline, default_cache_root_dir, default_config_root_dir,
                 default_state_root_dir, is_alias_key, is_bootstrap_only_key,
                 validate_bootstrap_value, validate_key_scope,
-            }};
-        }}
-
-        pub mod core {{
+            };
+            """
+        ),
+        "core.rs": textwrap.dedent(
+            """\
             //! Shared output, row, runtime, and plugin protocol types.
 
-            pub mod output {{
+            pub mod output {
                 pub use crate::osp_core::output::*;
-            }}
+            }
 
-            pub mod output_model {{
+            pub mod output_model {
                 pub use crate::osp_core::output_model::*;
-            }}
+            }
 
-            pub mod plugin {{
+            pub mod plugin {
                 pub use crate::osp_core::plugin::*;
-            }}
+            }
 
-            pub mod row {{
+            pub mod row {
                 pub use crate::osp_core::row::*;
-            }}
+            }
 
-            pub mod runtime {{
+            pub mod runtime {
                 pub use crate::osp_core::runtime::*;
-            }}
+            }
 
             pub use crate::osp_core::row::Row;
-            pub use crate::osp_core::runtime::{{RuntimeHints, RuntimeTerminalKind, UiVerbosity}};
-        }}
-
-        pub mod dsl {{
+            pub use crate::osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
+            """
+        ),
+        "dsl.rs": textwrap.dedent(
+            """\
             //! DSL parsing, stage metadata, and pipeline execution.
 
-            pub mod eval {{
+            pub mod eval {
                 pub use crate::osp_dsl::eval::*;
-            }}
+            }
 
-            pub mod model {{
+            pub mod model {
                 pub use crate::osp_dsl::model::*;
-            }}
+            }
 
-            pub mod parse {{
+            pub mod parse {
                 pub use crate::osp_dsl::parse::*;
-            }}
+            }
 
-            pub mod stages {{
+            pub mod stages {
                 pub use crate::osp_dsl::stages::*;
-            }}
+            }
 
-            pub mod verbs {{
+            pub mod verbs {
                 pub use crate::osp_dsl::verbs::*;
-            }}
+            }
 
-            pub use crate::osp_dsl::{{
+            pub use crate::osp_dsl::{
                 Pipeline, VerbInfo, VerbStreaming, apply_output_pipeline, apply_pipeline,
                 execute_pipeline, execute_pipeline_streaming, is_registered_explicit_verb,
                 parse_pipeline, registered_verbs, render_streaming_badge, verb_info,
-            }};
-        }}
-
-        pub mod ports {{
+            };
+            """
+        ),
+        "ports.rs": textwrap.dedent(
+            """\
             //! Port traits and data-shaping helpers used by services and APIs.
 
-            pub use crate::osp_ports::{{LdapDirectory, apply_filter_and_projection, parse_attributes}};
-        }}
-
-        pub mod api {{
+            pub use crate::osp_ports::{LdapDirectory, apply_filter_and_projection, parse_attributes};
+            """
+        ),
+        "api.rs": textwrap.dedent(
+            """\
             //! Higher-level API/client adapters built on the shared ports layer.
 
             pub use crate::osp_api::MockLdapClient;
-        }}
-
-        pub mod services {{
+            """
+        ),
+        "services.rs": textwrap.dedent(
+            """\
             //! Service-style command execution helpers over config, DSL, and ports.
 
-            pub use crate::osp_services::{{
+            pub use crate::osp_services::{
                 ParsedCommand, ServiceContext, execute_command, execute_line, parse_repl_command,
-            }};
-        }}
-
-        pub mod ui {{
+            };
+            """
+        ),
+        "ui.rs": textwrap.dedent(
+            """\
             //! Rendering, layout, document, and message formatting surfaces.
 
-            pub mod chrome {{
+            pub mod chrome {
                 pub use crate::osp_ui::chrome::*;
-            }}
+            }
 
-            pub mod clipboard {{
+            pub mod clipboard {
                 pub use crate::osp_ui::clipboard::*;
-            }}
+            }
 
-            pub mod document {{
+            pub mod document {
                 pub use crate::osp_ui::document::*;
-            }}
+            }
 
-            pub mod format {{
-                pub use crate::osp_ui::format::{{
+            pub mod format {
+                pub use crate::osp_ui::format::{
                     MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules,
                     build_help_document,
-                }};
-            }}
+                };
+            }
 
-            pub mod interactive {{
+            pub mod interactive {
                 pub use crate::osp_ui::interactive::*;
-            }}
+            }
 
-            pub mod messages {{
+            pub mod messages {
                 pub use crate::osp_ui::messages::*;
-            }}
+            }
 
-            pub mod style {{
+            pub mod style {
                 pub use crate::osp_ui::style::*;
-            }}
+            }
 
-            pub mod theme {{
+            pub mod theme {
                 pub use crate::osp_ui::theme::*;
-            }}
+            }
 
-            pub use crate::osp_ui::{{
+            pub use crate::osp_ui::{
                 CodeBlock, Document, Interactive, InteractiveResult, InteractiveRuntime, JsonBlock,
                 LineBlock, LinePart, MregBlock, MregEntry, MregRow, MregValue, PanelBlock,
                 PanelRules, RenderBackend, RenderRuntime, RenderSettings,
@@ -536,25 +569,27 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
                 copy_rows_to_clipboard, line_from_inline, parts_from_inline, render_document,
                 render_document_for_copy, render_inline, render_output, render_output_for_copy,
                 render_rows, render_rows_for_copy,
-            }};
-        }}
-
-        pub mod completion {{
+            };
+            """
+        ),
+        "completion.rs": textwrap.dedent(
+            """\
             //! Completion tree, engine, and suggestion model types.
 
-            pub use crate::osp_completion::{{
+            pub use crate::osp_completion::{
                 ArgNode, CommandLine, CommandLineParser, CommandSpec, CompletionAnalysis,
                 CompletionContext, CompletionEngine, CompletionNode, CompletionTree,
                 CompletionTreeBuilder, ConfigKeySpec, ContextScope, CursorState, FlagNode,
                 FlagOccurrence, MatchKind, ParsedLine, QuoteStyle, Suggestion, SuggestionEngine,
                 SuggestionEntry, SuggestionOutput, TailItem, TokenSpan, ValueType,
-            }};
-        }}
-
-        pub mod repl {{
+            };
+            """
+        ),
+        "repl.rs": textwrap.dedent(
+            """\
             //! REPL engine and prompt/history types.
 
-            pub use crate::osp_repl::{{
+            pub use crate::osp_repl::{
                 CompletionDebug, CompletionDebugFrame, CompletionDebugMatch,
                 CompletionDebugOptions, DebugStep, HighlightDebugSpan, HistoryConfig,
                 HistoryEntry, HistoryShellContext, LineProjection, LineProjector,
@@ -562,35 +597,34 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
                 ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunConfig, ReplRunResult,
                 SharedHistory, color_from_style_spec, debug_completion, debug_completion_steps,
                 debug_highlight, default_pipe_verbs, expand_history, run_repl,
-            }};
-        }}
-
-        pub mod cli {{
+            };
+            """
+        ),
+        "cli.rs": textwrap.dedent(
+            """\
             //! CLI-specific helpers still owned by the host layer.
 
-            pub use crate::osp_cli::{{Cli, pipeline}};
-        }}
-
-        pub mod prelude {{
+            pub use crate::osp_cli::{Cli, pipeline};
+            """
+        ),
+        "prelude.rs": textwrap.dedent(
+            """\
             //! Small convenience surface for embedding the app without importing the full module tree.
 
-            pub use crate::app::{{App, AppBuilder, AppRunner, run_from, run_process}};
-            pub use crate::core::output::{{ColorMode, OutputFormat, RenderMode, UnicodeMode}};
-            pub use crate::runtime::{{AppState, RuntimeContext, UiState}};
+            pub use crate::app::{App, AppBuilder, AppRunner, run_from, run_process};
+            pub use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+            pub use crate::runtime::{AppState, RuntimeContext, UiState};
             pub use crate::ui::RenderSettings;
-        }}
-
-        pub use crate::app::{{App, AppBuilder, AppRunner, run_from, run_process}};
-
-        #[cfg(test)]
-        mod tests {{
+            """
+        ),
+        "tests.rs": textwrap.dedent(
+            """\
             use crate::core::output::OutputFormat;
 
             #[test]
-            fn stable_top_level_surface_exposes_primary_entrypoints_and_types_unit() {{
+            fn stable_top_level_surface_exposes_primary_entrypoints_and_types_unit() {
                 let _run_from = |args: Vec<&str>| crate::app::run_from::<Vec<&str>, &str>(args);
-                let _run_process =
-                    |args: Vec<&str>| crate::app::run_process::<Vec<&str>, &str>(args);
+                let _run_process = |args: Vec<&str>| crate::app::run_process::<Vec<&str>, &str>(args);
                 let mut sink = crate::app::BufferedUiSink::default();
                 let _builder = crate::app::AppBuilder::new().build();
                 let _runner = crate::app::AppBuilder::new().build_with_sink(&mut sink);
@@ -603,17 +637,18 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
                 let _runtime: Option<crate::runtime::AppRuntime> = None;
                 let _format = OutputFormat::Json;
                 let _settings = crate::ui::RenderSettings::test_plain(OutputFormat::Table);
-            }}
+            }
 
             #[test]
-            fn legacy_osp_namespaces_still_exist_during_transition_unit() {{
+            fn legacy_osp_namespaces_still_exist_during_transition_unit() {
                 let _settings = crate::osp_ui::RenderSettings::test_plain(OutputFormat::Table);
                 let _format = crate::osp_core::output::OutputFormat::Json;
                 let _cli_type: Option<crate::osp_cli::Cli> = None;
-            }}
-        }}
-        """
-    )
+            }
+            """
+        ),
+    }
+    return modules[name]
 
 
 def render_binary(crate_name: str) -> str:
@@ -694,6 +729,23 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
     out_src = out_dir / "src"
     copy_crate_sources(out_src, crates, package_name)
     write_text(out_src / "lib.rs", render_foundation_lib(crates))
+    for module_name in (
+        "app.rs",
+        "runtime.rs",
+        "config.rs",
+        "core.rs",
+        "dsl.rs",
+        "ports.rs",
+        "api.rs",
+        "services.rs",
+        "ui.rs",
+        "completion.rs",
+        "repl.rs",
+        "cli.rs",
+        "prelude.rs",
+        "tests.rs",
+    ):
+        write_text(out_src / module_name, render_foundation_module(module_name))
     write_text(out_src / "bin" / "osp.rs", render_binary(package_name))
 
     cargo_toml = render_cargo_toml(
