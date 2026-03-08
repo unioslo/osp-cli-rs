@@ -12,6 +12,7 @@
         //! - [`ui`] for rendering and message formatting
         //! - [`repl`] for REPL engine types
         //! - [`completion`] for command/completion tree types
+        //! - [`plugin`] for plugin discovery/dispatch management
         //! - [`api`], [`ports`], and [`services`] for the service/client layer
         //!
         //! The `osp_*` modules remain public for now as compatibility shims while the
@@ -53,6 +54,7 @@ pub mod osp_cli;
         pub mod completion;
         pub mod repl;
         pub mod cli;
+        pub mod plugin;
         pub mod prelude;
 
         pub use crate::app::{App, AppBuilder, AppRunner, run_from, run_process};

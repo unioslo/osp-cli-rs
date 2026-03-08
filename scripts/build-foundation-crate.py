@@ -310,6 +310,7 @@ def copy_crate_sources(out_src: Path, crates: list[CrateInfo], foundation_crate_
                 rewritten = rewritten.replace("mod app;", "pub(crate) mod app;", 1)
                 rewritten = rewritten.replace("mod cli;", "pub(crate) mod cli;", 1)
                 rewritten = rewritten.replace("mod invocation;", "pub(crate) mod invocation;", 1)
+                rewritten = rewritten.replace("mod plugin_manager;", "pub(crate) mod plugin_manager;", 1)
                 shim = "\npub use crate::row;\n"
                 if "\n#[cfg(test)]\nmod tests {" in rewritten:
                     rewritten = rewritten.replace("\n#[cfg(test)]\nmod tests {", f"{shim}\n#[cfg(test)]\nmod tests {{", 1)
@@ -338,6 +339,7 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
         //! - [`ui`] for rendering and message formatting
         //! - [`repl`] for REPL engine types
         //! - [`completion`] for command/completion tree types
+        //! - [`plugin`] for plugin discovery/dispatch management
         //! - [`api`], [`ports`], and [`services`] for the service/client layer
         //!
         //! The `osp_*` modules remain public for now as compatibility shims while the
@@ -360,6 +362,7 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
         pub mod completion;
         pub mod repl;
         pub mod cli;
+        pub mod plugin;
         pub mod prelude;
 
         pub use crate::app::{{App, AppBuilder, AppRunner, run_from, run_process}};
@@ -631,6 +634,30 @@ def render_foundation_module(name: str) -> str:
             };
             """
         ),
+        "plugin/mod.rs": textwrap.dedent(
+            """\
+            //! Plugin discovery, dispatch, and catalog management.
+
+            pub mod manager;
+
+            pub use manager::{
+                CommandCatalogEntry, DiscoveredPlugin, DoctorReport, PluginDispatchContext,
+                PluginDispatchError, PluginManager, PluginSource, PluginSummary,
+                DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
+            };
+            """
+        ),
+        "plugin/manager.rs": textwrap.dedent(
+            """\
+            //! Plugin manager surface staged as a first-class top-level module.
+
+            pub use crate::osp_cli::plugin_manager::{
+                CommandCatalogEntry, DiscoveredPlugin, DoctorReport, PluginDispatchContext,
+                PluginDispatchError, PluginManager, PluginSource, PluginSummary,
+                DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
+            };
+            """
+        ),
         "cli/mod.rs": textwrap.dedent(
             """\
             //! CLI grammar and command-facing helpers still owned by the host layer.
@@ -693,6 +720,7 @@ def render_foundation_module(name: str) -> str:
                 let _resolver: Option<crate::config::resolve::ConfigResolver> = None;
                 let _completion: Option<crate::completion::CompletionEngine> = None;
                 let _prompt: Option<crate::repl::ReplPrompt> = None;
+                let _plugins: Option<crate::plugin::PluginManager> = None;
                 let _ldap: Option<crate::api::MockLdapClient> = None;
                 let _runtime: Option<crate::runtime::AppRuntime> = None;
                 let _format = OutputFormat::Json;
@@ -858,6 +886,8 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
         "cli/commands.rs",
         "cli/invocation.rs",
         "cli/pipeline.rs",
+        "plugin/mod.rs",
+        "plugin/manager.rs",
         "prelude.rs",
         "tests.rs",
     ):

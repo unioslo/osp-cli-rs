@@ -278,6 +278,7 @@ fn foundation_public_facade_stays_curated() {
         "completion",
         "repl",
         "cli",
+        "plugin",
         "prelude",
         "osp_core",
         "osp_config",
