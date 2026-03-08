@@ -171,6 +171,10 @@ impl OspCompletionMenu {
         }
     }
 
+    pub(crate) fn accept_selection_in_buffer(&self, editor: &mut Editor) {
+        self.apply_selection(editor, ApplyMode::Accept);
+    }
+
     fn apply_selection(
         &self,
         editor: &mut Editor,
@@ -602,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_accepts_selected_completion() {
+    fn explicit_accept_applies_selected_completion() {
         let mut editor = Editor::default();
         set_buffer(&mut editor, "doctor ");
         let insert_at = editor.line_buffer().len();
@@ -631,6 +635,39 @@ mod tests {
             ),
             suggestion(
                 "theme",
+                Span {
+                    start: insert_at,
+                    end: insert_at,
+                },
+            ),
+        ];
+        let mut completer = FixedCompleter { suggestions };
+        let mut menu = OspCompletionMenu::default();
+
+        menu.menu_event(MenuEvent::Activate(false));
+        menu.update_for_test(&mut editor, &mut completer, 80);
+
+        menu.accept_selection_in_buffer(&mut editor);
+
+        assert_eq!(editor.line_buffer().get_buffer(), "doctor all ");
+    }
+
+    #[test]
+    fn replace_in_buffer_accepts_selected_completion() {
+        let mut editor = Editor::default();
+        set_buffer(&mut editor, "doctor ");
+        let insert_at = editor.line_buffer().len();
+
+        let suggestions = vec![
+            suggestion(
+                "all",
+                Span {
+                    start: insert_at,
+                    end: insert_at,
+                },
+            ),
+            suggestion(
+                "config",
                 Span {
                     start: insert_at,
                     end: insert_at,
@@ -967,7 +1004,7 @@ mod tests {
         menu.update_for_test(&mut editor, &mut completer, 80);
         menu.menu_event(MenuEvent::NextElement);
         menu.update_for_test(&mut editor, &mut completer, 80);
-        menu.replace_in_buffer(&mut editor);
+        menu.accept_selection_in_buffer(&mut editor);
 
         assert_eq!(editor.line_buffer().get_buffer(), "doctor config ");
         assert!(needs_space_prefix("doctor", 6, 6));

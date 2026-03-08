@@ -377,6 +377,52 @@ alias.pres = "config set ui.presentation"
 
 #[cfg(unix)]
 #[test]
+fn repl_enter_submits_current_line_without_accepting_menu_completion() {
+    let mut session = spawn_repl(true);
+
+    write_bytes(&mut session, b"history ");
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\t");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\"selected_index\":-1",
+            Duration::from_secs(3)
+        ),
+        "expected menu activation trace; output:\n{}",
+        output_snapshot(&session.output, 2000),
+    );
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\r");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "history <COMMAND>",
+            Duration::from_secs(3)
+        ),
+        "expected Enter to submit the current line instead of accepting `list`; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+    assert!(
+        !output_snapshot(&session.output, 4000).contains("History is disabled."),
+        "expected Enter not to accept the first completion; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+
+    write_bytes(&mut session, b"\x03");
+    write_bytes(&mut session, b"exit\r\r");
+    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn repl_close_menu_keeps_typed_input() {
     let mut session = spawn_repl(true);
 
