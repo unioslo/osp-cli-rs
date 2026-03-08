@@ -185,7 +185,11 @@ impl RenderSettings {
             RenderMode::Plain => RenderBackend::Plain,
             RenderMode::Rich => RenderBackend::Rich,
             RenderMode::Auto => {
-                if !self.runtime.stdout_is_tty
+                if matches!(self.color, ColorMode::Always)
+                    || matches!(self.unicode, UnicodeMode::Always)
+                {
+                    RenderBackend::Rich
+                } else if !self.runtime.stdout_is_tty
                     || matches!(self.runtime.terminal.as_deref(), Some("dumb"))
                 {
                     RenderBackend::Plain
@@ -568,6 +572,27 @@ mod tests {
         assert!(!resolved.color);
         assert!(!resolved.unicode);
         assert_eq!(resolved.width, Some(72));
+    }
+
+    #[test]
+    fn auto_mode_forced_color_promotes_rich_backend_unit() {
+        let settings = RenderSettings {
+            mode: RenderMode::Auto,
+            color: ColorMode::Always,
+            unicode: UnicodeMode::Auto,
+            runtime: super::RenderRuntime {
+                stdout_is_tty: false,
+                terminal: Some("xterm-256color".to_string()),
+                no_color: false,
+                width: Some(80),
+                locale_utf8: Some(true),
+            },
+            ..RenderSettings::test_plain(OutputFormat::Table)
+        };
+
+        let resolved = settings.resolve_render_settings();
+        assert_eq!(resolved.backend, RenderBackend::Rich);
+        assert!(resolved.color);
     }
 
     #[test]

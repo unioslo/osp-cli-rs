@@ -274,7 +274,7 @@ pub(crate) fn explain_presentation_effect(
     })
 }
 
-fn is_builtin_default(config: &ResolvedConfig, key: &str) -> bool {
+pub(crate) fn is_builtin_default(config: &ResolvedConfig, key: &str) -> bool {
     config
         .get_value_entry(key)
         .map(|entry| matches!(entry.source, ConfigSource::BuiltinDefaults))
