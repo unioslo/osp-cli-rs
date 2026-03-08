@@ -937,6 +937,7 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
 #[cfg(unix)]
 #[test]
 fn dispatch_surfaces_nonzero_invalid_json_invalid_payload_and_passthrough_unit() {
+    let _lock = env_lock().lock().expect("env lock should be available");
     let root = make_temp_dir("osp-cli-plugin-manager-dispatch-errors");
     let plugins_dir = root.join("plugins");
     std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");

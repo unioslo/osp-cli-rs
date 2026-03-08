@@ -745,4 +745,160 @@ mod tests {
             vec!["alice", "bob"]
         );
     }
+
+    #[test]
+    fn grouped_output_pipeline_covers_flat_row_only_explicit_stage_aliases_unit() {
+        let grouped = OutputResult {
+            items: OutputItems::Groups(vec![crate::core::output_model::Group {
+                groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
+                aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+                rows: vec![
+                    json!({"uid": "alice", "roles": ["eng", "ops"]})
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
+                ],
+            }]),
+            meta: Default::default(),
+        };
+
+        for stage in [
+            "V alice",
+            "K alice",
+            "VALUE uid",
+            "F uid=alice",
+            "? uid",
+            "Y",
+        ] {
+            let output = apply_output_pipeline(grouped.clone(), &[stage.to_string()])
+                .expect("grouped pipeline should succeed");
+            assert!(matches!(output.items, OutputItems::Groups(_)));
+        }
+    }
+
+    #[test]
+    fn grouped_output_pipeline_covers_group_limit_and_unroll_paths_unit() {
+        let grouped = OutputResult {
+            items: OutputItems::Groups(vec![
+                crate::core::output_model::Group {
+                    groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
+                    aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+                    rows: vec![
+                        json!({"uid": "alice", "roles": ["eng", "ops"]})
+                            .as_object()
+                            .cloned()
+                            .expect("object"),
+                    ],
+                },
+                crate::core::output_model::Group {
+                    groups: json!({"team": "eng"}).as_object().cloned().expect("object"),
+                    aggregates: json!({"count": 1}).as_object().cloned().expect("object"),
+                    rows: vec![
+                        json!({"uid": "bob", "roles": ["ops"]})
+                            .as_object()
+                            .cloned()
+                            .expect("object"),
+                    ],
+                },
+            ]),
+            meta: Default::default(),
+        };
+
+        let regrouped = apply_output_pipeline(grouped.clone(), &["G team".to_string()])
+            .expect("group regroup should succeed");
+        assert!(matches!(regrouped.items, OutputItems::Groups(_)));
+
+        let limited = apply_output_pipeline(grouped.clone(), &["L 1".to_string()])
+            .expect("group limit should succeed");
+        let OutputItems::Groups(limited_groups) = limited.items else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(limited_groups.len(), 1);
+
+        let unrolled = apply_output_pipeline(grouped, &["U roles".to_string()])
+            .expect("group unroll should succeed");
+        assert!(matches!(unrolled.items, OutputItems::Groups(_)));
+    }
+
+    #[test]
+    fn streaming_pipeline_covers_stream_stage_variants_and_errors_unit() {
+        let rows = vec![
+            json!({"uid": "alice", "active": true, "roles": ["eng", "ops"]})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "bob", "active": false, "roles": ["ops"]})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let value_output = execute_pipeline_streaming(rows.clone(), &["VALUE uid".to_string()])
+            .expect("streaming values should succeed");
+        assert_eq!(output_rows(&value_output).len(), 2);
+
+        let filtered = execute_pipeline_streaming(rows.clone(), &["? uid".to_string()])
+            .expect("question filter should stream");
+        assert_eq!(output_rows(&filtered).len(), 2);
+
+        let cleaned = execute_pipeline_streaming(rows.clone(), &["?".to_string()])
+            .expect("question clean should stream");
+        assert_eq!(output_rows(&cleaned).len(), 2);
+
+        let limited = execute_pipeline_streaming(rows.clone(), &["L 1".to_string()])
+            .expect("head limit should stream");
+        assert_eq!(output_rows(&limited).len(), 1);
+
+        let unrolled = execute_pipeline_streaming(rows.clone(), &["U roles".to_string()])
+            .expect("unroll should stream");
+        assert_eq!(output_rows(&unrolled).len(), 3);
+
+        let err = execute_pipeline_streaming(rows, &["U".to_string()])
+            .expect_err("missing unroll field should fail");
+        assert!(err.to_string().contains("missing field name"));
+    }
+
+    #[test]
+    fn apply_output_pipeline_covers_explicit_materializing_row_stages_unit() {
+        let rows = vec![
+            json!({"uid": "bob", "dept": "ops"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "alice", "dept": "ops"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "carol", "dept": "eng"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let sorted = apply_pipeline(rows.clone(), &["S uid".to_string()]).expect("sort works");
+        assert_eq!(
+            output_rows(&sorted)[0]
+                .get("uid")
+                .and_then(|value| value.as_str()),
+            Some("alice")
+        );
+
+        let grouped = apply_pipeline(rows.clone(), &["G dept".to_string()]).expect("group works");
+        assert!(grouped.meta.grouped);
+
+        let aggregated =
+            apply_pipeline(rows.clone(), &["A count total".to_string()]).expect("aggregate works");
+        assert!(!output_rows(&aggregated).is_empty());
+
+        let counted = apply_pipeline(rows.clone(), &["C".to_string()]).expect("count works");
+        assert_eq!(output_rows(&counted).len(), 1);
+
+        let collapsed = apply_pipeline(rows.clone(), &["G dept".to_string(), "Z".to_string()])
+            .expect("collapse works");
+        assert!(matches!(collapsed.items, OutputItems::Rows(_)));
+
+        let err = apply_pipeline(rows, &["R nope".to_string()])
+            .expect_err("unknown explicit stage should fail");
+        assert!(err.to_string().contains("unknown DSL verb"));
+    }
 }

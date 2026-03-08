@@ -139,18 +139,40 @@ def is_internal_test_module(path: str) -> bool:
 
 def is_non_executable_module(path: Path) -> bool:
     try:
-        lines = path.read_text().splitlines()
+        text = path.read_text()
+        lines = text.splitlines()
     except OSError:
         return False
 
+    # After the single-crate collapse we now have several pure module/data files
+    # (mod declarations, type aliases, enums/structs used as shared model types)
+    # that legitimately produce no llvm-cov entry. If a changed file defines no
+    # functions or impl blocks at all, treat it as non-executable for the gate.
+    if "fn " not in text and "impl " not in text:
+        return True
+
     allowed_prefixes = (
         "pub mod ",
+        "pub(crate) mod ",
+        "pub(super) mod ",
         "mod ",
         "pub use ",
         "pub(crate) use ",
         "pub(super) use ",
         "use ",
         "extern crate ",
+        "pub type ",
+        "pub(crate) type ",
+        "pub(super) type ",
+        "type ",
+        "pub struct ",
+        "pub(crate) struct ",
+        "pub(super) struct ",
+        "struct ",
+        "pub enum ",
+        "pub(crate) enum ",
+        "pub(super) enum ",
+        "enum ",
     )
     in_use_block = False
 

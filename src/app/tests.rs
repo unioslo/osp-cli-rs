@@ -172,6 +172,57 @@ fn render_table_snapshot(entries: &[(&str, &str)]) -> String {
 }
 
 #[test]
+fn app_builder_and_runner_delegate_to_host_paths_unit() {
+    let app = crate::app::AppBuilder::new().build();
+    let mut sink = BufferedUiSink::default();
+
+    assert_eq!(
+        app.run_from(["osp", "--help"])
+            .expect("app help should render"),
+        0
+    );
+    assert_eq!(
+        app.run_with_sink(["osp", "--help"], &mut sink)
+            .expect("app help with sink should render"),
+        0
+    );
+    assert_eq!(app.run_process_with_sink(["osp", "--help"], &mut sink), 0);
+
+    let mut runner = crate::app::AppBuilder::new().build_with_sink(&mut sink);
+    assert_eq!(
+        runner
+            .run_from(["osp", "--help"])
+            .expect("runner help should render"),
+        0
+    );
+    assert_eq!(runner.run_process(["osp", "--help"]), 0);
+}
+
+#[test]
+fn bootstrap_message_verbosity_handles_non_utf8_short_flags_and_double_dash_unit() {
+    let mut args = vec![
+        OsString::from("osp"),
+        OsString::from("--verbose"),
+        OsString::from("-qv"),
+    ];
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        args.push(OsString::from_vec(vec![0xFF]));
+    }
+    args.extend([
+        OsString::from("--"),
+        OsString::from("-vvv"),
+        OsString::from("--quiet"),
+    ]);
+
+    assert_eq!(
+        super::bootstrap_message_verbosity(&args),
+        MessageLevel::Info
+    );
+}
+
+#[test]
 fn default_plugin_error_render_preserves_primary_detail_unit() {
     let report = enrich_dispatch_error(PluginDispatchError::NonZeroExit {
         plugin_id: "ldap".to_string(),
