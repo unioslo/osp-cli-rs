@@ -27,3 +27,6 @@ mod theme_commands;
 
 #[path = "contracts/version_commands.rs"]
 mod version_commands;
+
+#[path = "contracts/snapshot_support.rs"]
+mod snapshot_support;

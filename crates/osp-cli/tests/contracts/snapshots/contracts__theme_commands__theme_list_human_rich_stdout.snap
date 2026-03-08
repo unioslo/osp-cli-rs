@@ -1,0 +1,16 @@
+---
+source: crates/osp-cli/tests/contracts/theme_commands.rs
+expression: sanitized
+---
++---------------+----------------+---------+--------+--------+---------+
+| id            | name           | source  | origin | active | default |
++---------------+----------------+---------+--------+--------+---------+
+| catppuccin    | Catppuccin     | builtin | null   | false  | false   |
+| dracula       | Dracula        | builtin | null   | false  | false   |
+| gruvbox       | Gruvbox        | builtin | null   | false  | false   |
+| molokai       | Molokai        | builtin | null   | false  | false   |
+| nord          | Nord           | builtin | null   | false  | false   |
+| plain         | Plain          | builtin | null   | false  | false   |
+| rose-pine-moo | Rose Pine Moon | builtin | null   | true   | true    |
+| tokyonight    | Tokyo Night    | builtin | null   | false  | false   |
++---------------+----------------+---------+--------+--------+---------+

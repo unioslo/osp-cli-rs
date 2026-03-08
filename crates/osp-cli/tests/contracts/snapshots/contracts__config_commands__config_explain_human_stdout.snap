@@ -1,0 +1,21 @@
+---
+source: crates/osp-cli/tests/contracts/config_commands.rs
+expression: sanitized
+---
+key: ui.mode
+phase: runtime
+value: plain (string)
+
+winner:
+  source: file
+  scope: profile:uio
+  origin: <HOME>/.config/osp/config.toml
+
+context:
+  active_profile: uio
+  active_profile_source: profile.default
+  terminal: cli
+
+candidates (in priority order):
+  ✅ file (profile:uio) = plain [<HOME>/.config/osp/config.toml]
+    file (global) = rich [<HOME>/.config/osp/config.toml]

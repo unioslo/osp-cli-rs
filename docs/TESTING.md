@@ -59,6 +59,21 @@ Per-crate internal unit tests may also exist in `src/lib.rs` modules
 - Review snapshots: `cargo insta review`
 - Re-record snapshots during a focused run: `cargo insta test -p osp-cli`
 
+## Snapshot Placement
+
+Keep snapshots close to the behavior they lock:
+
+- use unit-style snapshots for stable single-command rendering, help output, and
+  formatter chrome
+- use contract snapshots for spawned CLI behavior where stdout/stderr boundaries
+  matter
+- use PTY or transcript-style tests for multi-step REPL flows, prompt redraws,
+  and shell-state transitions
+
+The current REPL snapshot coverage should stay mostly in unit tests. Move a case
+to a transcript-style test only when the behavior depends on multiple commands or
+interactive state over time.
+
 ## Coverage and Hooks
 
 `TESTING.md` describes test shape and workflow. Coverage policy and git hook

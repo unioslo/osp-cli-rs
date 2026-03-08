@@ -1,3 +1,4 @@
+use crate::assert_snapshot_text;
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -17,6 +18,37 @@ fn theme_list_contract() {
 
 #[cfg(unix)]
 #[test]
+fn theme_list_human_rich_snapshot_contract() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--mode",
+            "rich",
+            "--color",
+            "never",
+            "--unicode",
+            "never",
+            "theme",
+            "list",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should stay empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_snapshot_text!(
+        "theme_list_human_rich_stdout",
+        String::from_utf8(output.stdout).expect("stdout should be utf-8"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn theme_show_contract() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd.env("PATH", "/usr/bin:/bin")
@@ -26,6 +58,38 @@ fn theme_show_contract() {
         .stdout(predicate::str::contains("\"id\": \"dracula\""))
         .stdout(predicate::str::contains("\"name\": \"Dracula\""))
         .stdout(predicate::str::contains("\"accent\": \"#bd93f9\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn theme_show_plain_snapshot_contract() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--mode",
+            "plain",
+            "--color",
+            "never",
+            "--unicode",
+            "never",
+            "theme",
+            "show",
+            "dracula",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should stay empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_snapshot_text!(
+        "theme_show_plain_stdout",
+        String::from_utf8(output.stdout).expect("stdout should be utf-8"),
+    );
 }
 
 #[cfg(unix)]

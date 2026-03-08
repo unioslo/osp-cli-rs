@@ -1,0 +1,7 @@
+---
+source: crates/osp-cli/tests/contracts/config_commands.rs
+expression: sanitized
+---
+- Errors ---------------------------------------------------------------
+- config key not found: ui.m
+------------------------------------------------------------------------

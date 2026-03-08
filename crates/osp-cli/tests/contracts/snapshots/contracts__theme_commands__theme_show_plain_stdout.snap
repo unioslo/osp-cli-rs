@@ -1,0 +1,22 @@
+---
+source: crates/osp-cli/tests/contracts/theme_commands.rs
+expression: sanitized
+---
+id:        dracula
+name:      Dracula
+base:
+source:    builtin
+origin:
+text:      #f8f8f2
+muted:     #6879ad
+accent:    #bd93f9
+info:      #8be9fd
+warning:   #f1fa8c
+success:   #50fa7b
+error:     bold #ff5555
+border:    #ff79c6
+title:     #ff79c6
+selection: #bd93f9
+link:      #bd93f9
+bg:
+bg_alt:

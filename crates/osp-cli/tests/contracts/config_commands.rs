@@ -1,5 +1,5 @@
+use crate::{assert_snapshot_text, assert_snapshot_text_with};
 use assert_cmd::Command;
-use insta::assert_snapshot;
 use predicates::prelude::*;
 
 #[cfg(unix)]
@@ -816,9 +816,9 @@ profile.default = "uio"
         "stdout should stay empty: {}",
         String::from_utf8_lossy(&output.stdout)
     );
-    assert_snapshot!(
+    assert_snapshot_text!(
         "config_get_missing_key_grouped_stderr",
-        String::from_utf8(output.stderr).expect("stderr should be utf-8")
+        String::from_utf8(output.stderr).expect("stderr should be utf-8"),
     );
 
     let _ = std::fs::remove_dir_all(&home);
@@ -849,10 +849,66 @@ ui.mode = "plain"
         "explain",
         "ui.m",
     ]);
-    cmd.assert()
-        .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("config key not found: ui.m"));
+    let output = cmd.assert().failure().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should stay empty: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_snapshot_text!(
+        "config_explain_missing_key_grouped_stderr",
+        String::from_utf8(output.stderr).expect("stderr should be utf-8"),
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_explain_human_output_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-human");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+ui.mode = "rich"
+
+[profile.uio]
+ui.mode = "plain"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--mode",
+            "rich",
+            "--color",
+            "never",
+            "--unicode",
+            "never",
+            "config",
+            "explain",
+            "ui.mode",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should stay empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let home_text = home.display().to_string();
+    assert_snapshot_text_with!(
+        "config_explain_human_stdout",
+        String::from_utf8(output.stdout).expect("stdout should be utf-8"),
+        &[(&home_text, "<HOME>")],
+    );
 
     let _ = std::fs::remove_dir_all(&home);
 }

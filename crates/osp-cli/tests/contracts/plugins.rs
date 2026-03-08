@@ -1,5 +1,5 @@
+use crate::assert_snapshot_text;
 use assert_cmd::Command;
-use insta::assert_snapshot;
 use predicates::prelude::*;
 
 #[test]
@@ -15,24 +15,6 @@ fn plugins_list_and_doctor_contract() {
     let mut doctor = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     doctor.args(["plugins", "doctor"]);
     doctor.assert().success();
-}
-
-fn assert_contract_snapshot(name: &str, text: String) {
-    let sanitized = text
-        .lines()
-        .map(sanitize_log_timestamp)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_snapshot!(name, sanitized);
-}
-
-fn sanitize_log_timestamp(line: &str) -> String {
-    if let Some(idx) = line.find("Z ")
-        && line.chars().next().is_some_and(|ch| ch.is_ascii_digit())
-    {
-        return format!("<TIMESTAMP>{}", &line[idx..]);
-    }
-    line.to_string()
 }
 
 #[test]
@@ -292,7 +274,7 @@ fn plugin_non_zero_exit_surfaces_stderr_contract() {
         "stdout should stay empty: {}",
         String::from_utf8_lossy(&output.stdout)
     );
-    assert_contract_snapshot(
+    assert_snapshot_text!(
         "plugin_non_zero_exit_stderr",
         String::from_utf8(output.stderr).expect("stderr should be utf-8"),
     );
@@ -339,8 +321,8 @@ fn plugin_messages_stay_on_stderr_when_data_is_json_contract() {
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
     assert!(stdout.contains("\"message\": \"json-from-plugin\""));
     assert!(!stdout.contains("plugin-warning-line"));
-    assert_contract_snapshot("plugin_messages_json_stdout", stdout);
-    assert_contract_snapshot("plugin_messages_json_stderr", stderr);
+    assert_snapshot_text!("plugin_messages_json_stdout", stdout);
+    assert_snapshot_text!("plugin_messages_json_stderr", stderr);
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -422,7 +404,7 @@ fn external_plugin_help_is_passed_through_contract() {
     let help_flag = cmd.assert().success().get_output().clone();
     let help_flag_stdout =
         String::from_utf8(help_flag.stdout).expect("help stdout should be utf-8");
-    assert_contract_snapshot("external_plugin_help_stdout", help_flag_stdout.clone());
+    assert_snapshot_text!("external_plugin_help_stdout", help_flag_stdout.clone());
 
     let mut cmd_help_subcommand = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd_help_subcommand
@@ -452,8 +434,8 @@ fn external_plugin_help_keeps_raw_stderr_contract() {
     let output = cmd.assert().success().get_output().clone();
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
-    assert_contract_snapshot("external_plugin_help_stderr_stdout", stdout);
-    assert_contract_snapshot("external_plugin_help_stderr_stderr", stderr);
+    assert_snapshot_text!("external_plugin_help_stderr_stdout", stdout);
+    assert_snapshot_text!("external_plugin_help_stderr_stderr", stderr);
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -721,7 +703,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         "stdout should stay empty: {}",
         String::from_utf8_lossy(&before_output.stdout)
     );
-    assert_contract_snapshot(
+    assert_snapshot_text!(
         "provider_selection_before_selection_stderr",
         String::from_utf8(before_output.stderr).expect("stderr should be utf-8"),
     );
@@ -753,7 +735,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
     let commands_output = commands.assert().success().get_output().clone();
     let commands_stdout =
         String::from_utf8(commands_output.stdout).expect("stdout should be utf-8");
-    assert_contract_snapshot("provider_selection_selected_commands_json", commands_stdout);
+    assert_snapshot_text!("provider_selection_selected_commands_json", commands_stdout);
 
     let mut after_select = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     after_select
@@ -788,7 +770,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         "stdout should stay empty: {}",
         String::from_utf8_lossy(&after_clear_output.stdout)
     );
-    assert_contract_snapshot(
+    assert_snapshot_text!(
         "provider_selection_after_clear_stderr",
         String::from_utf8(after_clear_output.stderr).expect("stderr should be utf-8"),
     );
@@ -853,7 +835,7 @@ commands = ["ranked"]
     let commands_output = commands.assert().success().get_output().clone();
     let commands_stdout =
         String::from_utf8(commands_output.stdout).expect("stdout should be utf-8");
-    assert_contract_snapshot(
+    assert_snapshot_text!(
         "provider_override_conflicted_commands_json",
         commands_stdout,
     );
