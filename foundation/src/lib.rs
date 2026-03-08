@@ -54,55 +54,211 @@ pub mod osp_cli;
         pub mod config {
             //! Configuration loading, resolution, schema, and persistence.
 
-            pub use crate::osp_config::*;
+            pub mod schema {
+                pub use crate::osp_config::{
+                    ActiveProfileSource, BootstrapConfigExplain, BootstrapKeySpec,
+                    BootstrapPhase, BootstrapScopeRule, BootstrapValueRule, ConfigLayer,
+                    ConfigSchema, ExplainInterpolation, ExplainInterpolationStep, LayerEntry,
+                    ResolveOptions, ResolvedValue, SchemaEntry, SchemaValueType,
+                };
+            }
+
+            pub mod load {
+                pub use crate::osp_config::{
+                    ChainedLoader, ConfigLoader, EnvSecretsLoader, EnvVarLoader, LoadedLayers,
+                    LoaderPipeline, SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
+                };
+            }
+
+            pub mod resolve {
+                pub use crate::osp_config::{
+                    ConfigExplain, ConfigResolver, ExplainCandidate, ExplainLayer, ResolvedConfig,
+                };
+            }
+
+            pub mod runtime {
+                pub use crate::osp_config::{
+                    RuntimeConfig, RuntimeConfigPaths, RuntimeDefaults, RuntimeLoadOptions,
+                    DEFAULT_DEBUG_LEVEL, DEFAULT_LOG_FILE_ENABLED, DEFAULT_LOG_FILE_LEVEL,
+                    DEFAULT_PROFILE_NAME, DEFAULT_REPL_HISTORY_DEDUPE,
+                    DEFAULT_REPL_HISTORY_ENABLED, DEFAULT_REPL_HISTORY_MAX_ENTRIES,
+                    DEFAULT_REPL_HISTORY_PROFILE_SCOPED, DEFAULT_REPL_INTRO_STYLE,
+                    DEFAULT_SESSION_CACHE_MAX_RESULTS, DEFAULT_UI_CHROME_FRAME,
+                    DEFAULT_UI_COLUMN_WEIGHT, DEFAULT_UI_GRID_PADDING, DEFAULT_UI_HELP_LAYOUT,
+                    DEFAULT_UI_INDENT, DEFAULT_UI_MARGIN, DEFAULT_UI_MEDIUM_LIST_MAX,
+                    DEFAULT_UI_MESSAGES_LAYOUT, DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH,
+                    DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO, DEFAULT_UI_PRESENTATION,
+                    DEFAULT_UI_SHORT_LIST_MAX, DEFAULT_UI_TABLE_BORDER,
+                    DEFAULT_UI_TABLE_OVERFLOW, DEFAULT_UI_WIDTH,
+                };
+            }
+
+            pub mod store {
+                pub use crate::osp_config::{
+                    TomlEditResult, secret_file_mode, set_scoped_value_in_toml,
+                    unset_scoped_value_in_toml,
+                };
+            }
+
+            pub use crate::osp_config::{
+                ConfigError, ConfigSource, ConfigValue, Scope, SecretValue, bootstrap_key_spec,
+                build_runtime_pipeline, default_cache_root_dir, default_config_root_dir,
+                default_state_root_dir, is_alias_key, is_bootstrap_only_key,
+                validate_bootstrap_value, validate_key_scope,
+            };
         }
 
         pub mod core {
             //! Shared output, row, runtime, and plugin protocol types.
 
-            pub use crate::osp_core::*;
+            pub mod output {
+                pub use crate::osp_core::output::*;
+            }
+
+            pub mod output_model {
+                pub use crate::osp_core::output_model::*;
+            }
+
+            pub mod plugin {
+                pub use crate::osp_core::plugin::*;
+            }
+
+            pub mod row {
+                pub use crate::osp_core::row::*;
+            }
+
+            pub mod runtime {
+                pub use crate::osp_core::runtime::*;
+            }
+
+            pub use crate::osp_core::row::Row;
+            pub use crate::osp_core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
         }
 
         pub mod dsl {
             //! DSL parsing, stage metadata, and pipeline execution.
 
-            pub use crate::osp_dsl::*;
+            pub mod eval {
+                pub use crate::osp_dsl::eval::*;
+            }
+
+            pub mod model {
+                pub use crate::osp_dsl::model::*;
+            }
+
+            pub mod parse {
+                pub use crate::osp_dsl::parse::*;
+            }
+
+            pub mod stages {
+                pub use crate::osp_dsl::stages::*;
+            }
+
+            pub mod verbs {
+                pub use crate::osp_dsl::verbs::*;
+            }
+
+            pub use crate::osp_dsl::{
+                Pipeline, VerbInfo, VerbStreaming, apply_output_pipeline, apply_pipeline,
+                execute_pipeline, execute_pipeline_streaming, is_registered_explicit_verb,
+                parse_pipeline, registered_verbs, render_streaming_badge, verb_info,
+            };
         }
 
         pub mod ports {
             //! Port traits and data-shaping helpers used by services and APIs.
 
-            pub use crate::osp_ports::*;
+            pub use crate::osp_ports::{LdapDirectory, apply_filter_and_projection, parse_attributes};
         }
 
         pub mod api {
             //! Higher-level API/client adapters built on the shared ports layer.
 
-            pub use crate::osp_api::*;
+            pub use crate::osp_api::MockLdapClient;
         }
 
         pub mod services {
             //! Service-style command execution helpers over config, DSL, and ports.
 
-            pub use crate::osp_services::*;
+            pub use crate::osp_services::{
+                ParsedCommand, ServiceContext, execute_command, execute_line, parse_repl_command,
+            };
         }
 
         pub mod ui {
             //! Rendering, layout, document, and message formatting surfaces.
 
-            pub use crate::osp_ui::*;
+            pub mod chrome {
+                pub use crate::osp_ui::chrome::*;
+            }
+
+            pub mod clipboard {
+                pub use crate::osp_ui::clipboard::*;
+            }
+
+            pub mod document {
+                pub use crate::osp_ui::document::*;
+            }
+
+            pub mod format {
+                pub use crate::osp_ui::format::{
+                    MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules,
+                    build_help_document,
+                };
+            }
+
+            pub mod interactive {
+                pub use crate::osp_ui::interactive::*;
+            }
+
+            pub mod messages {
+                pub use crate::osp_ui::messages::*;
+            }
+
+            pub mod style {
+                pub use crate::osp_ui::style::*;
+            }
+
+            pub mod theme {
+                pub use crate::osp_ui::theme::*;
+            }
+
+            pub use crate::osp_ui::{
+                CodeBlock, Document, Interactive, InteractiveResult, InteractiveRuntime, JsonBlock,
+                LineBlock, LinePart, MregBlock, MregEntry, MregRow, MregValue, PanelBlock,
+                PanelRules, RenderBackend, RenderRuntime, RenderSettings,
+                ResolvedRenderSettings, Spinner, StyleOverrides, TableAlign, TableBlock,
+                TableBorderStyle, TableOverflow, TableStyle, ValueBlock, copy_output_to_clipboard,
+                copy_rows_to_clipboard, line_from_inline, parts_from_inline, render_document,
+                render_document_for_copy, render_inline, render_output, render_output_for_copy,
+                render_rows, render_rows_for_copy,
+            };
         }
 
         pub mod completion {
             //! Completion tree, engine, and suggestion model types.
 
-            pub use crate::osp_completion::*;
+            pub use crate::osp_completion::{
+                ArgNode, CommandLine, CommandLineParser, CommandSpec, CompletionAnalysis,
+                CompletionContext, CompletionEngine, CompletionNode, CompletionTree,
+                CompletionTreeBuilder, ConfigKeySpec, ContextScope, CursorState, FlagNode,
+                FlagOccurrence, MatchKind, ParsedLine, QuoteStyle, Suggestion, SuggestionEngine,
+                SuggestionEntry, SuggestionOutput, TailItem, TokenSpan, ValueType,
+            };
         }
 
         pub mod repl {
             //! REPL engine and prompt/history types.
 
-            pub use crate::osp_repl::*;
+            pub use crate::osp_repl::{
+                CompletionDebug, CompletionDebugFrame, CompletionDebugMatch,
+                CompletionDebugOptions, DebugStep, HighlightDebugSpan, HistoryConfig,
+                HistoryEntry, HistoryShellContext, LineProjection, LineProjector,
+                OspHistoryStore, PromptRightRenderer, ReplAppearance, ReplInputMode,
+                ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunConfig, ReplRunResult,
+                SharedHistory, color_from_style_spec, debug_completion, debug_completion_steps,
+                debug_highlight, default_pipe_verbs, expand_history, run_repl,
+            };
         }
 
         pub mod cli {
@@ -132,6 +288,11 @@ pub mod osp_cli;
                     |args: Vec<&str>| crate::app::run_process::<Vec<&str>, &str>(args);
                 let _builder = crate::app::AppBuilder::new().build();
                 let _cli_type: Option<crate::app::Cli> = None;
+                let _row: crate::core::Row = Default::default();
+                let _resolver: Option<crate::config::resolve::ConfigResolver> = None;
+                let _completion: Option<crate::completion::CompletionEngine> = None;
+                let _prompt: Option<crate::repl::ReplPrompt> = None;
+                let _ldap: Option<crate::api::MockLdapClient> = None;
                 let _format = OutputFormat::Json;
                 let _settings = crate::ui::RenderSettings::test_plain(OutputFormat::Table);
             }
