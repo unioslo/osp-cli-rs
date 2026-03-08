@@ -938,6 +938,7 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
 #[cfg(test)]
 mod tests {
     use clap::error::ErrorKind;
+    use insta::assert_snapshot;
     use osp_core::output::OutputFormat;
     use osp_repl::{HistoryConfig, ReplLineResult, ReplReloadKind, SharedHistory};
     use osp_ui::RenderSettings;
@@ -1280,6 +1281,7 @@ For more information, try '--help'.\n";
         )
         .expect("root help should render");
         assert!(help.contains("help"));
+        assert_snapshot!("repl_root_help", help);
         assert_eq!(
             super::apply_repl_shell_prefix(&state.session.scope, &["config".to_string()]),
             vec!["config".to_string()]

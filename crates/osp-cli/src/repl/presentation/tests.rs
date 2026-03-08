@@ -11,6 +11,7 @@ use crate::state::{
     AppState, AppStateInit, DebugTimingBadge, DebugTimingState, LaunchContext, RuntimeContext,
     TerminalKind,
 };
+use insta::assert_snapshot;
 use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use osp_core::output::OutputFormat;
 use osp_ui::RenderSettings;
@@ -63,6 +64,7 @@ fn repl_intro_expressive_includes_sections_and_user_context() {
     assert!(rendered.contains("Oistes"));
     assert!(rendered.contains("oistes"));
     assert!(rendered.contains("Rose Pine Moon"));
+    assert_snapshot!("repl_intro_expressive", rendered);
 }
 
 #[test]
@@ -93,6 +95,7 @@ fn repl_overview_lists_invocation_options_for_expressive_surface() {
     assert!(rendered.contains("[INVOCATION_OPTIONS] COMMAND [ARGS]"));
     assert!(rendered.contains("options"));
     assert!(rendered.contains("--format json"));
+    assert_snapshot!("repl_overview_expressive", rendered);
 }
 
 #[test]

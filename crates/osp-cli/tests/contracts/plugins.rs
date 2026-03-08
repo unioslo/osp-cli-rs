@@ -17,6 +17,24 @@ fn plugins_list_and_doctor_contract() {
     doctor.assert().success();
 }
 
+fn assert_contract_snapshot(name: &str, text: String) {
+    let sanitized = text
+        .lines()
+        .map(sanitize_log_timestamp)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!(name, sanitized);
+}
+
+fn sanitize_log_timestamp(line: &str) -> String {
+    if let Some(idx) = line.find("Z ")
+        && line.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+    {
+        return format!("<TIMESTAMP>{}", &line[idx..]);
+    }
+    line.to_string()
+}
+
 #[test]
 fn debug_flag_enables_developer_logs_contract() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -274,9 +292,9 @@ fn plugin_non_zero_exit_surfaces_stderr_contract() {
         "stdout should stay empty: {}",
         String::from_utf8_lossy(&output.stdout)
     );
-    assert_snapshot!(
+    assert_contract_snapshot(
         "plugin_non_zero_exit_stderr",
-        String::from_utf8(output.stderr).expect("stderr should be utf-8")
+        String::from_utf8(output.stderr).expect("stderr should be utf-8"),
     );
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -321,8 +339,8 @@ fn plugin_messages_stay_on_stderr_when_data_is_json_contract() {
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
     assert!(stdout.contains("\"message\": \"json-from-plugin\""));
     assert!(!stdout.contains("plugin-warning-line"));
-    assert_snapshot!("plugin_messages_json_stdout", stdout);
-    assert_snapshot!("plugin_messages_json_stderr", stderr);
+    assert_contract_snapshot("plugin_messages_json_stdout", stdout);
+    assert_contract_snapshot("plugin_messages_json_stderr", stderr);
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -404,7 +422,7 @@ fn external_plugin_help_is_passed_through_contract() {
     let help_flag = cmd.assert().success().get_output().clone();
     let help_flag_stdout =
         String::from_utf8(help_flag.stdout).expect("help stdout should be utf-8");
-    assert_snapshot!("external_plugin_help_stdout", help_flag_stdout.clone());
+    assert_contract_snapshot("external_plugin_help_stdout", help_flag_stdout.clone());
 
     let mut cmd_help_subcommand = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd_help_subcommand
@@ -434,8 +452,8 @@ fn external_plugin_help_keeps_raw_stderr_contract() {
     let output = cmd.assert().success().get_output().clone();
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
-    assert_snapshot!("external_plugin_help_stderr_stdout", stdout);
-    assert_snapshot!("external_plugin_help_stderr_stderr", stderr);
+    assert_contract_snapshot("external_plugin_help_stderr_stdout", stdout);
+    assert_contract_snapshot("external_plugin_help_stderr_stderr", stderr);
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -697,14 +715,16 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         .env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["shared"]);
-    before
-        .assert()
-        .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains(
-            "command shared is provided by multiple plugins",
-        ))
-        .stderr(predicate::str::contains("--plugin-provider"));
+    let before_output = before.assert().failure().get_output().clone();
+    assert!(
+        before_output.stdout.is_empty(),
+        "stdout should stay empty: {}",
+        String::from_utf8_lossy(&before_output.stdout)
+    );
+    assert_contract_snapshot(
+        "provider_selection_before_selection_stderr",
+        String::from_utf8(before_output.stderr).expect("stderr should be utf-8"),
+    );
 
     let mut oneshot = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     oneshot
@@ -730,13 +750,10 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         .env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "plugins", "commands"]);
-    commands
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(r#""name": "shared""#))
-        .stdout(predicate::str::contains(r#""provider": "beta-provider""#))
-        .stdout(predicate::str::contains(r#""requires_selection": false"#))
-        .stdout(predicate::str::contains(r#""selected_explicitly": true"#));
+    let commands_output = commands.assert().success().get_output().clone();
+    let commands_stdout =
+        String::from_utf8(commands_output.stdout).expect("stdout should be utf-8");
+    assert_contract_snapshot("provider_selection_selected_commands_json", commands_stdout);
 
     let mut after_select = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     after_select
@@ -765,14 +782,16 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         .env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["shared"]);
-    after_clear
-        .assert()
-        .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains(
-            "command shared is provided by multiple plugins",
-        ))
-        .stderr(predicate::str::contains("--plugin-provider"));
+    let after_clear_output = after_clear.assert().failure().get_output().clone();
+    assert!(
+        after_clear_output.stdout.is_empty(),
+        "stdout should stay empty: {}",
+        String::from_utf8_lossy(&after_clear_output.stdout)
+    );
+    assert_contract_snapshot(
+        "provider_selection_after_clear_stderr",
+        String::from_utf8(after_clear_output.stderr).expect("stderr should be utf-8"),
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -831,19 +850,13 @@ commands = ["ranked"]
             "plugins",
             "commands",
         ]);
-    commands
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(r#""name": "ranked""#))
-        .stdout(predicate::str::contains(r#""provider": null"#))
-        .stdout(predicate::str::contains(r#""source": null"#))
-        .stdout(predicate::str::contains(r#""conflicted": true"#))
-        .stdout(predicate::str::contains(r#""requires_selection": true"#))
-        .stdout(predicate::str::contains("explicit-provider (explicit)"))
-        .stdout(predicate::str::contains("env-provider (env)"))
-        .stdout(predicate::str::contains("bundled-provider (bundled)"))
-        .stdout(predicate::str::contains("user-provider (user)"))
-        .stdout(predicate::str::contains("path-provider (path)"));
+    let commands_output = commands.assert().success().get_output().clone();
+    let commands_stdout =
+        String::from_utf8(commands_output.stdout).expect("stdout should be utf-8");
+    assert_contract_snapshot(
+        "provider_override_conflicted_commands_json",
+        commands_stdout,
+    );
 
     let mut explicit = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     explicit

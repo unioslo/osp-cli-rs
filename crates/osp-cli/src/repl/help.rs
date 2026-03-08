@@ -275,6 +275,7 @@ fn parse_section_header(line: &str) -> Option<HelpSection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
     use osp_ui::style::StyleOverrides;
     use osp_ui::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 
@@ -317,10 +318,7 @@ mod tests {
             HelpLayout::Minimal,
         );
 
-        assert_eq!(
-            rendered,
-            "Usage:\n  osp [OPTIONS]\nCommands:\n  help\nOptions:\n  -h, --help\nUse `osp plugins commands` to list plugin-provided commands.\n"
-        );
+        assert_snapshot!("repl_help_minimal_layout", rendered);
     }
 
     #[test]
@@ -331,10 +329,7 @@ mod tests {
             HelpLayout::Compact,
         );
 
-        assert_eq!(
-            rendered,
-            "Usage:\n  osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n"
-        );
+        assert_snapshot!("repl_help_compact_layout", rendered);
     }
 
     #[test]

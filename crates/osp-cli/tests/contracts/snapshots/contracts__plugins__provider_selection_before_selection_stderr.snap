@@ -1,0 +1,9 @@
+---
+source: crates/osp-cli/tests/contracts/plugins.rs
+expression: sanitized
+---
+<TIMESTAMP>Z  WARN osp_cli::plugin_manager::state: plugin command requires explicit provider selection command=shared providers="alpha-provider (env), beta-provider (env)"
+- Errors ---
+- command shared is provided by multiple plugins: alpha-provider (env), beta-provider (env)
+Hint: rerun with --plugin-provider <plugin-id> or persist a default with osp plugins select-provider <command> <plugin-id>
+------------

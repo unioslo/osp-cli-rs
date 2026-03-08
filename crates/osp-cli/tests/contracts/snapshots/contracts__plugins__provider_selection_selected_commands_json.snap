@@ -1,0 +1,20 @@
+---
+source: crates/osp-cli/tests/contracts/plugins.rs
+expression: commands_stdout
+---
+[
+  {
+    "name": "shared",
+    "about": "beta-provider plugin",
+    "provider": "beta-provider",
+    "providers": [
+      "alpha-provider (env)",
+      "beta-provider (env)"
+    ],
+    "conflicted": true,
+    "requires_selection": false,
+    "selected_explicitly": true,
+    "source": "env",
+    "subcommands": []
+  }
+]

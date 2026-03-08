@@ -1,0 +1,23 @@
+---
+source: crates/osp-cli/tests/contracts/plugins.rs
+expression: commands_stdout
+---
+[
+  {
+    "name": "ranked",
+    "about": "provider selection required; use --plugin-provider <plugin-id> or `osp plugins select-provider ranked <plugin-id>`",
+    "provider": null,
+    "providers": [
+      "explicit-provider (explicit)",
+      "env-provider (env)",
+      "bundled-provider (bundled)",
+      "user-provider (user)",
+      "path-provider (path)"
+    ],
+    "conflicted": true,
+    "requires_selection": true,
+    "selected_explicitly": false,
+    "source": null,
+    "subcommands": []
+  }
+]

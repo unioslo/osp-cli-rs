@@ -1,4 +1,5 @@
 use super::*;
+use insta::assert_snapshot;
 
 #[test]
 fn repl_plugin_error_payload_is_handled_as_error_unit() {
@@ -878,6 +879,7 @@ fn repl_invalid_subcommand_renders_inline_help_unit() {
             assert!(text.contains("unrecognized subcommand"));
             assert!(text.contains("config <COMMAND>"));
             assert!(!text.contains("For more information, try '--help'."));
+            assert_snapshot!("repl_invalid_subcommand_inline_help", text);
         }
         other => panic!("unexpected repl result: {other:?}"),
     }
@@ -901,6 +903,7 @@ fn repl_help_alias_hides_common_invocation_options_without_verbose_unit() {
         osp_repl::ReplLineResult::Continue(text) => {
             assert!(text.contains("history"));
             assert!(!text.contains("Common Invocation Options"));
+            assert_snapshot!("repl_help_alias_default", text);
         }
         other => panic!("unexpected repl result: {other:?}"),
     }
@@ -936,6 +939,7 @@ fn repl_help_alias_keeps_colored_help_chrome_and_subcommands_unit() {
             assert!(text.contains("\u{1b}[31mlist\u{1b}[0m"));
             assert!(text.contains("\u{1b}[31mprune\u{1b}[0m"));
             assert!(text.contains("\u{1b}[31mclear\u{1b}[0m"));
+            assert_snapshot!("repl_help_alias_colored", text);
         }
         other => panic!("unexpected repl result: {other:?}"),
     }
@@ -961,6 +965,10 @@ fn repl_help_alias_rejects_help_and_flag_targets_unit() {
                 assert!(text.contains("invalid help target"));
                 assert!(text.contains("Usage"));
                 assert!(text.contains("help <command>"));
+                assert_snapshot!(
+                    format!("repl_help_alias_invalid_target_{}", line.replace(' ', "_")),
+                    text
+                );
             }
             other => panic!("unexpected repl result: {other:?}"),
         }
@@ -985,6 +993,7 @@ fn repl_verbose_help_alias_dispatches_to_command_help_with_invocation_section_un
         osp_repl::ReplLineResult::Continue(text) => {
             assert!(text.contains("history"));
             assert!(text.contains("Common Invocation Options"));
+            assert_snapshot!("repl_help_alias_verbose", text);
         }
         other => panic!("unexpected repl result: {other:?}"),
     }
@@ -1008,6 +1017,7 @@ fn repl_verbose_direct_help_shows_common_invocation_options_unit() {
         osp_repl::ReplLineResult::Continue(text) => {
             assert!(text.contains("history"));
             assert!(text.contains("Common Invocation Options"));
+            assert_snapshot!("repl_direct_help_verbose", text);
         }
         other => panic!("unexpected repl result: {other:?}"),
     }

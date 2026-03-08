@@ -30,3 +30,4 @@ __pycache__/
 *.py[cod]
 *.pyo
 .pytest_cache/
+*.snap.new
