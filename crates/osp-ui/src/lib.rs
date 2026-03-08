@@ -1,3 +1,4 @@
+pub mod chrome;
 pub mod clipboard;
 mod display;
 pub mod document;
@@ -11,7 +12,7 @@ pub mod style;
 pub mod theme;
 mod width;
 
-use crate::messages::SectionFrameStyle;
+use crate::chrome::SectionFrameStyle;
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use osp_core::output_model::{OutputItems, OutputResult};
 use osp_core::row::Row;

@@ -1,6 +1,7 @@
 use osp_config::{ConfigSource, ConfigValue, ResolvedConfig, Scope};
 use osp_core::output::{ColorMode, RenderMode, UnicodeMode};
-use osp_ui::messages::{MessageLayout, SectionFrameStyle};
+use osp_ui::chrome::SectionFrameStyle;
+use osp_ui::messages::MessageLayout;
 use osp_ui::{RenderSettings, TableBorderStyle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

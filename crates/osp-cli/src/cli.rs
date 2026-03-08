@@ -3,7 +3,7 @@ pub(crate) mod commands;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use osp_config::{ConfigLayer, ConfigValue, ResolvedConfig, RuntimeLoadOptions};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use osp_ui::messages::SectionFrameStyle;
+use osp_ui::chrome::SectionFrameStyle;
 use osp_ui::theme::DEFAULT_THEME_NAME;
 use osp_ui::{RenderRuntime, RenderSettings, StyleOverrides, TableBorderStyle, TableOverflow};
 use std::path::PathBuf;

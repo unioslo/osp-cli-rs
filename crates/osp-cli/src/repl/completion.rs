@@ -9,7 +9,7 @@ use osp_completion::{
 use osp_dsl::parse::pipeline::parse_stage;
 use osp_dsl::{VerbStreaming, registered_verbs, render_streaming_badge, verb_info};
 use osp_repl::default_pipe_verbs;
-use osp_ui::messages::{
+use osp_ui::chrome::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
 };
 use osp_ui::style::StyleToken;

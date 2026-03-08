@@ -4,12 +4,12 @@ use comfy_table::{
 use serde_json::Value;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::chrome::render_section_divider_with_overrides;
 use crate::display::value_to_display;
 use crate::document::{
     Block, Document, MregBlock, MregValue, PanelRules, TableAlign, TableBlock, TableStyle,
 };
 use crate::layout::{LayoutContext, MregEntryMetrics, MregMetrics, prepare_layout_context};
-use crate::messages::render_section_divider_with_overrides;
 use crate::style::{StyleToken, apply_style_spec, apply_style_with_theme_overrides};
 use crate::width::{display_width, mreg_alignment_key_width};
 use crate::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
@@ -1190,7 +1190,7 @@ mod tests {
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
-            chrome_frame: crate::messages::SectionFrameStyle::Top,
+            chrome_frame: crate::chrome::SectionFrameStyle::Top,
         }
     }
 
@@ -1221,7 +1221,7 @@ mod tests {
             theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
             theme: None,
             style_overrides: crate::style::StyleOverrides::default(),
-            chrome_frame: crate::messages::SectionFrameStyle::Top,
+            chrome_frame: crate::chrome::SectionFrameStyle::Top,
             runtime: RenderRuntime::default(),
         }
     }
@@ -1340,7 +1340,7 @@ mod tests {
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
         assert_eq!(rendered, "members: alice\n");
@@ -1383,7 +1383,7 @@ mod tests {
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 
@@ -1908,7 +1908,7 @@ mod tests {
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 
@@ -1951,7 +1951,7 @@ mod tests {
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 
@@ -1993,7 +1993,7 @@ mod tests {
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 
@@ -2036,7 +2036,7 @@ mod tests {
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 
@@ -2078,7 +2078,7 @@ mod tests {
                 theme_name: "plain".to_string(),
                 theme: crate::theme::resolve_theme("plain"),
                 style_overrides: crate::style::StyleOverrides::default(),
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
         assert!(!rendered.contains("\x1b["));
@@ -2118,7 +2118,7 @@ mod tests {
                 theme_name: crate::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::theme::resolve_theme(crate::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::style::StyleOverrides::default(),
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 
@@ -2156,7 +2156,7 @@ mod tests {
                     code: Some("#00ff00".to_string()),
                     ..Default::default()
                 },
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 
@@ -2194,7 +2194,7 @@ mod tests {
                     text: Some("#224466".to_string()),
                     ..Default::default()
                 },
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 
@@ -2238,7 +2238,7 @@ mod tests {
                     value: Some("#cc5500".to_string()),
                     ..Default::default()
                 },
-                chrome_frame: crate::messages::SectionFrameStyle::Top,
+                chrome_frame: crate::chrome::SectionFrameStyle::Top,
             },
         );
 

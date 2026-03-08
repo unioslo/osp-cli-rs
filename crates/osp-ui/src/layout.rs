@@ -331,7 +331,7 @@ mod tests {
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: crate::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
-            chrome_frame: crate::messages::SectionFrameStyle::Top,
+            chrome_frame: crate::chrome::SectionFrameStyle::Top,
         }
     }
 
@@ -353,7 +353,7 @@ mod tests {
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: crate::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::style::StyleOverrides::default(),
-            chrome_frame: crate::messages::SectionFrameStyle::Top,
+            chrome_frame: crate::chrome::SectionFrameStyle::Top,
         }
     }
 

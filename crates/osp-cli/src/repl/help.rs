@@ -1,5 +1,5 @@
 use osp_ui::ResolvedRenderSettings;
-use osp_ui::messages::{
+use osp_ui::chrome::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
 };
 use osp_ui::style::{StyleToken, apply_style_with_theme_overrides};
@@ -279,7 +279,7 @@ mod tests {
     use osp_ui::style::StyleOverrides;
     use osp_ui::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 
-    fn resolved_settings(frame: osp_ui::messages::SectionFrameStyle) -> ResolvedRenderSettings {
+    fn resolved_settings(frame: osp_ui::chrome::SectionFrameStyle) -> ResolvedRenderSettings {
         ResolvedRenderSettings {
             backend: RenderBackend::Plain,
             color: false,
@@ -314,7 +314,7 @@ mod tests {
     fn minimal_help_layout_matches_plain_snapshot_unit() {
         let rendered = render_help_with_chrome(
             "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n\nUse `osp plugins commands` to list plugin-provided commands.\n",
-            &resolved_settings(osp_ui::messages::SectionFrameStyle::None),
+            &resolved_settings(osp_ui::chrome::SectionFrameStyle::None),
             HelpLayout::Minimal,
         );
 
@@ -325,7 +325,7 @@ mod tests {
     fn compact_help_layout_preserves_single_section_gap_unit() {
         let rendered = render_help_with_chrome(
             "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
-            &resolved_settings(osp_ui::messages::SectionFrameStyle::None),
+            &resolved_settings(osp_ui::chrome::SectionFrameStyle::None),
             HelpLayout::Compact,
         );
 
@@ -336,7 +336,7 @@ mod tests {
     fn help_chrome_preserves_preamble_before_known_sections_unit() {
         let rendered = render_help_with_chrome(
             "Custom plugin help\nwith two intro lines\n\nUsage: osp sample\n\nCommands:\n  run\n",
-            &resolved_settings(osp_ui::messages::SectionFrameStyle::None),
+            &resolved_settings(osp_ui::chrome::SectionFrameStyle::None),
             HelpLayout::Compact,
         );
 
@@ -350,7 +350,7 @@ mod tests {
     fn help_chrome_preserves_custom_titled_sections_unit() {
         let rendered = render_help_with_chrome(
             "Usage: osp sample\n\nExamples:\n  osp sample run\n\nNotes:\n  extra detail\n",
-            &resolved_settings(osp_ui::messages::SectionFrameStyle::None),
+            &resolved_settings(osp_ui::chrome::SectionFrameStyle::None),
             HelpLayout::Compact,
         );
 
@@ -362,7 +362,7 @@ mod tests {
     fn minimal_help_layout_preserves_custom_titled_sections_unit() {
         let rendered = render_help_with_chrome(
             "Usage: osp sample\n\nExamples:\n  osp sample run\n\nNotes:\n  extra detail\n",
-            &resolved_settings(osp_ui::messages::SectionFrameStyle::None),
+            &resolved_settings(osp_ui::chrome::SectionFrameStyle::None),
             HelpLayout::Minimal,
         );
 
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn help_chrome_colors_help_body_keys_and_text_unit() {
-        let mut resolved = resolved_settings(osp_ui::messages::SectionFrameStyle::TopBottom);
+        let mut resolved = resolved_settings(osp_ui::chrome::SectionFrameStyle::TopBottom);
         resolved.color = true;
         resolved.style_overrides = help_test_overrides();
 
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn help_chrome_splits_single_space_command_descriptions_unit() {
-        let mut resolved = resolved_settings(osp_ui::messages::SectionFrameStyle::None);
+        let mut resolved = resolved_settings(osp_ui::chrome::SectionFrameStyle::None);
         resolved.color = true;
         resolved.style_overrides = help_test_overrides();
 

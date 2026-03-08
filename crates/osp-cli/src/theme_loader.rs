@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use osp_config::{ConfigSource, ResolvedConfig};
+use osp_ui::style::is_valid_style_spec;
 use osp_ui::theme::{
     ThemeDefinition, ThemeOverrides, ThemePalette, builtin_themes, display_name_from_id,
     find_builtin_theme, normalize_theme_name,
@@ -501,58 +502,7 @@ fn check_spec(issues: &mut Vec<String>, key: &str, value: &str) {
 }
 
 fn is_valid_color_spec(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-
-    for raw in trimmed.split_whitespace() {
-        let token = raw.trim().to_ascii_lowercase();
-        if is_known_style_token(&token) {
-            continue;
-        }
-        if parse_hex_rgb(&token).is_some() {
-            continue;
-        }
-        return false;
-    }
-    true
-}
-
-fn is_known_style_token(token: &str) -> bool {
-    matches!(
-        token,
-        "bold"
-            | "dim"
-            | "italic"
-            | "underline"
-            | "black"
-            | "red"
-            | "green"
-            | "yellow"
-            | "blue"
-            | "magenta"
-            | "cyan"
-            | "white"
-            | "bright-black"
-            | "bright-red"
-            | "bright-green"
-            | "bright-yellow"
-            | "bright-blue"
-            | "bright-magenta"
-            | "bright-cyan"
-            | "bright-white"
-    )
-}
-
-fn parse_hex_rgb(value: &str) -> Option<(u8, u8, u8)> {
-    if !value.starts_with('#') || value.len() != 7 {
-        return None;
-    }
-    let r = u8::from_str_radix(&value[1..3], 16).ok()?;
-    let g = u8::from_str_radix(&value[3..5], 16).ok()?;
-    let b = u8::from_str_radix(&value[5..7], 16).ok()?;
-    Some((r, g, b))
+    is_valid_style_spec(value)
 }
 
 fn empty_palette() -> ThemePalette {

@@ -89,8 +89,7 @@ pub fn apply_style_with_theme_overrides(
         return text.to_string();
     }
 
-    let spec = style_spec_for_token(token, theme, overrides);
-    apply_style_spec(text, spec.as_str(), color)
+    apply_style_spec(text, resolve_style_spec(token, theme, overrides), color)
 }
 
 pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
@@ -107,68 +106,79 @@ pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
     format!("{prefix}{text}{}", style.suffix())
 }
 
-fn style_spec_for_token(
-    token: StyleToken,
-    theme: &ThemeDefinition,
-    overrides: &StyleOverrides,
-) -> String {
-    if let Some(value) = override_for_token(token, overrides) {
-        return value.to_string();
+pub fn is_valid_style_spec(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return true;
     }
 
-    match token {
-        StyleToken::None => String::new(),
-        StyleToken::Key => theme.palette.accent.clone(),
-        StyleToken::Muted => theme.palette.muted.clone(),
-        StyleToken::PromptText => theme.palette.text.clone(),
-        StyleToken::PromptCommand => theme.palette.success.clone(),
-        StyleToken::TableHeader => theme.palette.accent.clone(),
-        StyleToken::MregKey => theme.palette.accent.clone(),
-        StyleToken::JsonKey => theme.palette.accent.clone(),
-        StyleToken::Code => theme.palette.text.clone(),
-        StyleToken::PanelBorder => theme.palette.border.clone(),
-        StyleToken::PanelTitle => theme.palette.title.clone(),
-        StyleToken::Value => theme.palette.text.clone(),
-        StyleToken::Number => theme.value_number_spec().to_string(),
-        StyleToken::BoolTrue => theme.palette.success.clone(),
-        StyleToken::BoolFalse => theme.palette.error.clone(),
-        StyleToken::Null => theme.palette.muted.clone(),
-        StyleToken::Ipv4 => theme.palette.border.clone(),
-        StyleToken::Ipv6 => theme.palette.border.clone(),
-        StyleToken::MessageError => theme.palette.error.clone(),
-        StyleToken::MessageWarning => theme.palette.warning.clone(),
-        StyleToken::MessageSuccess => theme.palette.success.clone(),
-        StyleToken::MessageInfo => theme.palette.info.clone(),
-        StyleToken::MessageTrace => theme.palette.border.clone(),
+    trimmed.split_whitespace().all(|raw| {
+        let token = raw.trim().to_ascii_lowercase();
+        !token.is_empty() && (is_style_modifier(&token) || parse_color_token(&token).is_some())
+    })
+}
+
+fn resolve_style_spec<'a>(
+    token: StyleToken,
+    theme: &'a ThemeDefinition,
+    overrides: &'a StyleOverrides,
+) -> &'a str {
+    overrides
+        .spec_for(token)
+        .unwrap_or_else(|| token.theme_spec(theme))
+}
+
+impl StyleOverrides {
+    fn spec_for(&self, token: StyleToken) -> Option<&str> {
+        match token {
+            StyleToken::None | StyleToken::PromptText | StyleToken::PromptCommand => None,
+            StyleToken::Key => self.key.as_deref(),
+            StyleToken::Muted => self.muted.as_deref(),
+            StyleToken::TableHeader => self.table_header.as_deref().or(self.key.as_deref()),
+            StyleToken::MregKey => self.mreg_key.as_deref().or(self.key.as_deref()),
+            StyleToken::JsonKey => self.json_key.as_deref().or(self.key.as_deref()),
+            StyleToken::Code => self.code.as_deref().or(self.text.as_deref()),
+            StyleToken::PanelBorder => self.panel_border.as_deref(),
+            StyleToken::PanelTitle => self.panel_title.as_deref(),
+            StyleToken::Value => self.value.as_deref().or(self.text.as_deref()),
+            StyleToken::Number => self.number.as_deref(),
+            StyleToken::BoolTrue => self.bool_true.as_deref(),
+            StyleToken::BoolFalse => self.bool_false.as_deref(),
+            StyleToken::Null => self.null_value.as_deref(),
+            StyleToken::Ipv4 => self.ipv4.as_deref(),
+            StyleToken::Ipv6 => self.ipv6.as_deref(),
+            StyleToken::MessageError => self.message_error.as_deref(),
+            StyleToken::MessageWarning => self.message_warning.as_deref(),
+            StyleToken::MessageSuccess => self.message_success.as_deref(),
+            StyleToken::MessageInfo => self.message_info.as_deref(),
+            StyleToken::MessageTrace => self.message_trace.as_deref(),
+        }
     }
 }
 
-fn override_for_token(token: StyleToken, overrides: &StyleOverrides) -> Option<&str> {
-    match token {
-        StyleToken::Key => overrides.key.as_deref(),
-        StyleToken::Muted => overrides.muted.as_deref(),
-        StyleToken::TableHeader => overrides
-            .table_header
-            .as_deref()
-            .or(overrides.key.as_deref()),
-        StyleToken::MregKey => overrides.mreg_key.as_deref().or(overrides.key.as_deref()),
-        StyleToken::JsonKey => overrides.json_key.as_deref().or(overrides.key.as_deref()),
-        StyleToken::Code => overrides.code.as_deref().or(overrides.text.as_deref()),
-        StyleToken::PanelBorder => overrides.panel_border.as_deref(),
-        StyleToken::PanelTitle => overrides.panel_title.as_deref(),
-        StyleToken::Value => overrides.value.as_deref().or(overrides.text.as_deref()),
-        StyleToken::Number => overrides.number.as_deref(),
-        StyleToken::BoolTrue => overrides.bool_true.as_deref(),
-        StyleToken::BoolFalse => overrides.bool_false.as_deref(),
-        StyleToken::Null => overrides.null_value.as_deref(),
-        StyleToken::Ipv4 => overrides.ipv4.as_deref(),
-        StyleToken::Ipv6 => overrides.ipv6.as_deref(),
-        StyleToken::MessageError => overrides.message_error.as_deref(),
-        StyleToken::MessageWarning => overrides.message_warning.as_deref(),
-        StyleToken::MessageSuccess => overrides.message_success.as_deref(),
-        StyleToken::MessageInfo => overrides.message_info.as_deref(),
-        StyleToken::MessageTrace => overrides.message_trace.as_deref(),
-        _ => None,
+impl StyleToken {
+    fn theme_spec<'a>(self, theme: &'a ThemeDefinition) -> &'a str {
+        match self {
+            StyleToken::None => "",
+            StyleToken::Key
+            | StyleToken::TableHeader
+            | StyleToken::MregKey
+            | StyleToken::JsonKey => &theme.palette.accent,
+            StyleToken::Muted | StyleToken::Null => &theme.palette.muted,
+            StyleToken::PromptText | StyleToken::Code | StyleToken::Value => &theme.palette.text,
+            StyleToken::PromptCommand | StyleToken::BoolTrue | StyleToken::MessageSuccess => {
+                &theme.palette.success
+            }
+            StyleToken::PanelBorder
+            | StyleToken::Ipv4
+            | StyleToken::Ipv6
+            | StyleToken::MessageTrace => &theme.palette.border,
+            StyleToken::PanelTitle => &theme.palette.title,
+            StyleToken::Number => theme.value_number_spec(),
+            StyleToken::BoolFalse | StyleToken::MessageError => &theme.palette.error,
+            StyleToken::MessageWarning => &theme.palette.warning,
+            StyleToken::MessageInfo => &theme.palette.info,
+        }
     }
 }
 
@@ -182,33 +192,27 @@ fn parse_style_spec(spec: &str) -> Option<Style> {
             continue;
         }
 
-        match token.as_str() {
-            "bold" => {
-                style = style.bold();
-                changed = true;
-            }
-            "dim" => {
-                style = style.dimmed();
-                changed = true;
-            }
-            "italic" => {
-                style = style.italic();
-                changed = true;
-            }
-            "underline" => {
-                style = style.underline();
-                changed = true;
-            }
-            _ => {
-                if let Some(color) = parse_color_token(&token) {
-                    style = style.fg(color);
-                    changed = true;
-                }
-            }
+        if let Some(updated) = apply_style_token(style, &token) {
+            style = updated;
+            changed = true;
         }
     }
 
     changed.then_some(style)
+}
+
+fn apply_style_token(style: Style, token: &str) -> Option<Style> {
+    match token {
+        "bold" => Some(style.bold()),
+        "dim" => Some(style.dimmed()),
+        "italic" => Some(style.italic()),
+        "underline" => Some(style.underline()),
+        _ => parse_color_token(token).map(|color| style.fg(color)),
+    }
+}
+
+fn is_style_modifier(token: &str) -> bool {
+    matches!(token, "bold" | "dim" | "italic" | "underline")
 }
 
 fn parse_color_token(token: &str) -> Option<Color> {

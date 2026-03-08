@@ -2,7 +2,7 @@ use crate::app::format_timing_badge;
 use crate::app::{CMD_CONFIG, CMD_HELP, CMD_PLUGINS, CMD_THEME, DEFAULT_REPL_PROMPT};
 use crate::state::DebugTimingState;
 use osp_repl::{ReplAppearance, ReplPrompt};
-use osp_ui::messages::{
+use osp_ui::chrome::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
 };
 use osp_ui::render_inline;
