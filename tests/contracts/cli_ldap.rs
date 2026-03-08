@@ -150,7 +150,7 @@ impl Drop for LdapPluginFixture {
 
 #[cfg(unix)]
 fn ldap_plugin_script() -> &'static str {
-    r#"#!/bin/sh
+    r#"#!/usr/bin/env bash
 PATH=/usr/bin:/bin:$PATH
 set -euo pipefail
 
