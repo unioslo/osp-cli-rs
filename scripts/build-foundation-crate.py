@@ -339,10 +339,19 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
         pub mod app {{
             //! Main host-facing entrypoints and stateful runtime surfaces.
 
-            pub use crate::osp_cli::state;
             pub use crate::osp_cli::{{
                 App, AppBuilder, BufferedUiSink, Cli, StdIoUiSink, UiSink, classify_exit_code,
                 render_report_message, run_from, run_process, run_process_with_sink,
+            }};
+        }}
+
+        pub mod runtime {{
+            //! Host runtime, session, and launch-state types used to embed the CLI/REPL.
+
+            pub use crate::osp_cli::state::{{
+                AppClients, AppRuntime, AppSession, AppState, AuthState, ConfigState,
+                DebugTimingBadge, DebugTimingState, LastFailure, LaunchContext, ReplScopeFrame,
+                ReplScopeStack, RuntimeContext, TerminalKind, UiState,
             }};
         }}
 
@@ -557,9 +566,9 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
         }}
 
         pub mod cli {{
-            //! CLI-specific pipeline and state helpers still owned by the host layer.
+            //! CLI-specific helpers still owned by the host layer.
 
-            pub use crate::osp_cli::{{pipeline, state}};
+            pub use crate::osp_cli::pipeline;
         }}
 
         pub mod prelude {{
@@ -567,6 +576,7 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
 
             pub use crate::app::{{App, AppBuilder, Cli, run_from, run_process}};
             pub use crate::core::output::{{ColorMode, OutputFormat, RenderMode, UnicodeMode}};
+            pub use crate::runtime::{{AppState, RuntimeContext, UiState}};
             pub use crate::ui::RenderSettings;
         }}
 
@@ -588,6 +598,7 @@ def render_foundation_lib(crates: list[CrateInfo]) -> str:
                 let _completion: Option<crate::completion::CompletionEngine> = None;
                 let _prompt: Option<crate::repl::ReplPrompt> = None;
                 let _ldap: Option<crate::api::MockLdapClient> = None;
+                let _runtime: Option<crate::runtime::AppRuntime> = None;
                 let _format = OutputFormat::Json;
                 let _settings = crate::ui::RenderSettings::test_plain(OutputFormat::Table);
             }}
