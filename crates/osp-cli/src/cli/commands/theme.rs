@@ -16,7 +16,7 @@ pub(crate) struct ThemeCommandContext<'a> {
 }
 
 pub(crate) fn run_theme_command(
-    session_overrides: &mut ConfigLayer,
+    config_overrides: &mut ConfigLayer,
     context: ThemeCommandContext<'_>,
     args: ThemeArgs,
 ) -> Result<CliCommandResult> {
@@ -37,7 +37,7 @@ pub(crate) fn run_theme_command(
         }
         ThemeCommands::Use(ThemeUseArgs { name }) => {
             let selected = resolve_known_theme_name(&name, context.themes)?;
-            session_overrides.set("theme.name", selected.clone());
+            config_overrides.set("theme.name", selected.clone());
 
             let mut result = CliCommandResult::exit(0);
             result

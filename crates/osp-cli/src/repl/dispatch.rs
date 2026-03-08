@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use crate::app;
 use crate::app::{
-    BuiltinCommandTransport, CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, CMD_THEME,
-    EffectiveInvocation, ReplCommandSpec, resolve_effective_invocation,
+    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, CMD_THEME, EffectiveInvocation,
+    ReplCommandSpec, resolve_effective_invocation,
 };
 use crate::cli::{
     Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands,
@@ -169,8 +169,8 @@ fn execute_repl_plugin_line_inner(
     Ok(finalize_repl_command(
         session,
         rendered,
-        invocation.restart_repl,
-        invocation.show_intro_on_reload,
+        invocation.side_effects.restart_repl,
+        invocation.side_effects.show_intro_on_reload,
     ))
 }
 
@@ -275,8 +275,19 @@ struct ParsedReplInvocation {
     effective: EffectiveInvocation,
     stages: Vec<String>,
     cache_key: Option<String>,
+    side_effects: CommandSideEffects,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CommandSideEffects {
     restart_repl: bool,
     show_intro_on_reload: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedClapHelp<'a> {
+    summary: Option<&'a str>,
+    body: &'a str,
 }
 
 enum ParsedReplDispatch {
@@ -342,8 +353,7 @@ fn parse_repl_invocation(
         ParsedReplInvocation {
             cache_key: repl_cache_key_for_command(runtime, &command, &scanned.invocation),
             effective: resolve_effective_invocation(&runtime.ui, &scanned.invocation),
-            restart_repl: command_restarts_repl(&command),
-            show_intro_on_reload: theme_or_palette_change_requires_intro(&command),
+            side_effects: command_side_effects(&command),
             command,
             stages: parsed.stages.clone(),
         },
@@ -381,56 +391,91 @@ fn render_repl_parse_help(
     invocation: &crate::invocation::InvocationOptions,
     error_text: &str,
 ) -> String {
+    let parsed = parse_clap_help(error_text);
     let mut out = String::new();
-    if let Some(summary) = summarize_clap_error(error_text) {
+    if let Some(summary) = parsed.summary {
         out.push_str(summary);
         out.push_str("\n\n");
     }
-    let help_body = strip_clap_error_preamble_and_epilogue(error_text);
     out.push_str(&help::render_repl_help_with_chrome(
         view,
-        &append_invocation_help_if_verbose(&help_body, invocation),
+        &append_invocation_help_if_verbose(parsed.body, invocation),
     ));
     out
 }
 
-fn summarize_clap_error(error_text: &str) -> Option<&str> {
-    error_text
-        .lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix("error:").map(str::trim))
+fn parse_clap_help(error_text: &str) -> ParsedClapHelp<'_> {
+    let lines = error_text.lines().collect::<Vec<_>>();
+    let summary = lines
+        .iter()
+        .map(|line| line.trim())
+        .find_map(|line| line.strip_prefix("error:").map(str::trim));
+
+    let body_start = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("Usage:"))
+        .unwrap_or(0);
+    let mut body_end = lines.len();
+    while body_end > body_start {
+        let trimmed = lines[body_end - 1].trim();
+        if trimmed.is_empty() {
+            body_end -= 1;
+            continue;
+        }
+        if trimmed.starts_with("tip:") || trimmed.starts_with("For more information") {
+            body_end -= 1;
+            continue;
+        }
+        break;
+    }
+
+    let body = if body_start < body_end {
+        &error_text[line_start_offset(&lines, body_start)..line_end_offset(&lines, body_end)]
+    } else {
+        ""
+    };
+
+    ParsedClapHelp { summary, body }
 }
 
-fn strip_clap_error_preamble_and_epilogue(error_text: &str) -> String {
-    error_text
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            !trimmed.starts_with("error:")
-                && !trimmed.starts_with("tip:")
-                && !trimmed.starts_with("For more information")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn line_start_offset(lines: &[&str], line_index: usize) -> usize {
+    lines
+        .iter()
+        .take(line_index)
+        .map(|line| line.len() + 1)
+        .sum()
 }
 
-fn command_restarts_repl(command: &Commands) -> bool {
-    matches!(
-        command,
+fn line_end_offset(lines: &[&str], line_count: usize) -> usize {
+    let mut offset = line_start_offset(lines, line_count);
+    if line_count > 0 {
+        offset = offset.saturating_sub(1);
+    }
+    offset
+}
+
+fn command_side_effects(command: &Commands) -> CommandSideEffects {
+    match command {
         Commands::Theme(ThemeArgs {
-            command: ThemeCommands::Use(_)
-        })
-    ) || matches!(
-        command,
+            command: ThemeCommands::Use(_),
+        }) => CommandSideEffects {
+            restart_repl: true,
+            show_intro_on_reload: true,
+        },
         Commands::Config(ConfigArgs {
             command: ConfigCommands::Set(set),
-        }) if !set.dry_run
-    ) || matches!(
-        command,
+        }) if !set.dry_run => CommandSideEffects {
+            restart_repl: true,
+            show_intro_on_reload: config_key_change_requires_intro(&set.key),
+        },
         Commands::Config(ConfigArgs {
             command: ConfigCommands::Unset(unset),
-        }) if !unset.dry_run
-    )
+        }) if !unset.dry_run => CommandSideEffects {
+            restart_repl: true,
+            show_intro_on_reload: config_key_change_requires_intro(&unset.key),
+        },
+        _ => CommandSideEffects::default(),
+    }
 }
 
 fn render_repl_command_output(
@@ -699,22 +744,6 @@ fn is_repl_bang_request(raw: &str) -> bool {
     raw.trim_start().starts_with('!')
 }
 
-fn theme_or_palette_change_requires_intro(command: &Commands) -> bool {
-    match command {
-        Commands::Theme(ThemeArgs {
-            command: ThemeCommands::Use(_),
-        }) => true,
-        Commands::Config(args) => match &args.command {
-            ConfigCommands::Set(set) => !set.dry_run && config_key_change_requires_intro(&set.key),
-            ConfigCommands::Unset(unset) => {
-                !unset.dry_run && config_key_change_requires_intro(&unset.key)
-            }
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
 fn config_key_change_requires_intro(key: &str) -> bool {
     let key = key.trim().to_ascii_lowercase();
     key == "theme.name"
@@ -815,7 +844,7 @@ fn run_repl_command(
             runtime,
             session,
             clients,
-            BuiltinCommandTransport::Repl { history },
+            Some(history),
             Some(invocation),
             builtin,
         )
@@ -915,13 +944,11 @@ mod tests {
     use osp_ui::messages::MessageLevel;
 
     use super::{
-        BangCommand, command_restarts_repl, config_key_change_requires_intro,
-        current_history_scope, enter_repl_shell, execute_bang_command, finalize_repl_command,
-        handle_repl_exit_request, is_repl_bang_request, leave_repl_shell, parse_bang_command,
+        BangCommand, command_side_effects, config_key_change_requires_intro, current_history_scope,
+        enter_repl_shell, execute_bang_command, finalize_repl_command, handle_repl_exit_request,
+        is_repl_bang_request, leave_repl_shell, parse_bang_command, parse_clap_help,
         parse_repl_builtin, render_repl_command_output, renders_repl_inline_help,
-        repl_command_spec, repl_help_for_scope, run_repl_command,
-        strip_clap_error_preamble_and_epilogue, strip_history_scope, summarize_clap_error,
-        theme_or_palette_change_requires_intro,
+        repl_command_spec, repl_help_for_scope, run_repl_command, strip_history_scope,
     };
     use crate::app::{CliCommandResult, ReplCommandOutput};
     use crate::cli::{
@@ -944,14 +971,9 @@ Usage: osp config show [OPTIONS]\n\
 tip: try --help\n\
 For more information, try '--help'.\n";
 
-        assert_eq!(
-            summarize_clap_error(error),
-            Some("unknown argument '--wat'")
-        );
-        assert_eq!(
-            strip_clap_error_preamble_and_epilogue(error),
-            "\nUsage: osp config show [OPTIONS]\n"
-        );
+        let parsed = parse_clap_help(error);
+        assert_eq!(parsed.summary, Some("unknown argument '--wat'"));
+        assert_eq!(parsed.body, "Usage: osp config show [OPTIONS]");
     }
 
     #[test]
@@ -986,7 +1008,9 @@ For more information, try '--help'.\n";
                 name: "dracula".to_string(),
             }),
         });
-        assert!(command_restarts_repl(&theme));
+        let theme_effects = command_side_effects(&theme);
+        assert!(theme_effects.restart_repl);
+        assert!(theme_effects.show_intro_on_reload);
 
         let config_set = Commands::Config(ConfigArgs {
             command: ConfigCommands::Set(ConfigSetArgs {
@@ -1005,7 +1029,9 @@ For more information, try '--help'.\n";
                 explain: false,
             }),
         });
-        assert!(command_restarts_repl(&config_set));
+        let config_set_effects = command_side_effects(&config_set);
+        assert!(config_set_effects.restart_repl);
+        assert!(!config_set_effects.show_intro_on_reload);
 
         let config_unset_dry_run = Commands::Config(ConfigArgs {
             command: ConfigCommands::Unset(ConfigUnsetArgs {
@@ -1021,7 +1047,10 @@ For more information, try '--help'.\n";
                 dry_run: true,
             }),
         });
-        assert!(!command_restarts_repl(&config_unset_dry_run));
+        assert_eq!(
+            command_side_effects(&config_unset_dry_run),
+            Default::default()
+        );
     }
 
     #[test]
@@ -1060,11 +1089,9 @@ For more information, try '--help'.\n";
     #[test]
     fn clap_error_helpers_handle_missing_summary_gracefully_unit() {
         let error = "\nUsage: osp ldap user\nFor more information, try '--help'.\n";
-        assert_eq!(summarize_clap_error(error), None);
-        assert_eq!(
-            strip_clap_error_preamble_and_epilogue(error),
-            "\nUsage: osp ldap user"
-        );
+        let parsed = parse_clap_help(error);
+        assert_eq!(parsed.summary, None);
+        assert_eq!(parsed.body, "Usage: osp ldap user");
     }
 
     #[test]
@@ -1213,7 +1240,9 @@ For more information, try '--help'.\n";
                 dry_run: false,
             }),
         });
-        assert!(theme_or_palette_change_requires_intro(&config_unset));
+        let side_effects = command_side_effects(&config_unset);
+        assert!(side_effects.restart_repl);
+        assert!(side_effects.show_intro_on_reload);
     }
 
     fn make_state_with_plugins(plugins: crate::plugin_manager::PluginManager) -> AppState {

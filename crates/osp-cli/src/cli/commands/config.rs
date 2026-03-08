@@ -26,7 +26,7 @@ pub(crate) struct ConfigCommandContext<'a> {
     pub(crate) config: &'a ResolvedConfig,
     pub(crate) ui: &'a UiState,
     pub(crate) themes: &'a ThemeCatalog,
-    pub(crate) session_overrides: &'a mut ConfigLayer,
+    pub(crate) config_overrides: &'a mut ConfigLayer,
     pub(crate) runtime_load: RuntimeLoadOptions,
 }
 
@@ -36,7 +36,7 @@ pub(crate) struct ConfigReadContext<'a> {
     pub(crate) config: &'a ResolvedConfig,
     pub(crate) ui: &'a UiState,
     pub(crate) themes: &'a ThemeCatalog,
-    pub(crate) session_layer: &'a ConfigLayer,
+    pub(crate) config_overrides: &'a ConfigLayer,
     pub(crate) runtime_load: RuntimeLoadOptions,
 }
 
@@ -47,7 +47,7 @@ impl<'a> ConfigCommandContext<'a> {
             config: self.config,
             ui: self.ui,
             themes: self.themes,
-            session_layer: &*self.session_overrides,
+            config_overrides: &*self.config_overrides,
             runtime_load: self.runtime_load,
         }
     }
@@ -69,7 +69,7 @@ pub(crate) fn run_config_command(
                 context: read.context,
                 config: read.config,
                 ui: read.ui,
-                session_layer: read.session_layer,
+                session_layer: read.config_overrides,
                 runtime_load: read.runtime_load,
             },
             explain,
@@ -148,7 +148,7 @@ fn config_get_rows(
                 Some(context.context.terminal_kind().as_config_terminal()),
             )
             .with_runtime_load(context.runtime_load)
-            .with_session_layer(Some(context.session_layer.clone())),
+            .with_session_layer(Some(context.config_overrides.clone())),
             &args.key,
         )?;
 
@@ -368,7 +368,7 @@ fn run_config_set(
             ConfigStore::Session => {
                 if !args.dry_run {
                     context
-                        .session_overrides
+                        .config_overrides
                         .insert(key.clone(), value.clone(), scope.clone());
                 }
                 row.insert("path", serde_json::Value::Null);
@@ -427,7 +427,7 @@ fn run_config_set(
             Some(context.context.terminal_kind().as_config_terminal()),
         )
         .with_runtime_load(context.runtime_load)
-        .with_session_layer(Some(context.session_overrides.clone()));
+        .with_session_layer(Some(context.config_overrides.clone()));
         let explain = explain_runtime_config(request.clone(), &key)?;
         let config = resolve_runtime_config(request)?;
         if matches!(context.ui.render_settings.format, OutputFormat::Json) {
@@ -488,9 +488,9 @@ fn run_config_unset(
         match store {
             ConfigStore::Session => {
                 let previous = if args.dry_run {
-                    session_scoped_value(context.session_overrides, &key, scope)
+                    session_scoped_value(context.config_overrides, &key, scope)
                 } else {
-                    context.session_overrides.remove_scoped(&key, scope)
+                    context.config_overrides.remove_scoped(&key, scope)
                 };
                 row.insert("path", serde_json::Value::Null);
                 row.insert("changed", previous.is_some());
@@ -784,14 +784,14 @@ mod tests {
             debug_verbosity: 0,
         }));
         let themes = Box::leak(Box::new(ThemeCatalog::default()));
-        let session_layer = Box::leak(Box::new(ConfigLayer::default()));
+        let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
 
         ConfigReadContext {
             context,
             config: resolved,
             ui,
             themes,
-            session_layer,
+            config_overrides,
             runtime_load: RuntimeLoadOptions::default(),
         }
     }

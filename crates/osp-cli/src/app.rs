@@ -105,15 +105,27 @@ pub(crate) struct EffectiveInvocation {
     pub(crate) show_invocation_help: bool,
 }
 
-pub(crate) enum BuiltinCommandTransport<'a> {
-    Cli,
-    Repl { history: &'a SharedHistory },
-}
-
 #[derive(Debug)]
 struct ContextError<E> {
     context: &'static str,
     source: E,
+}
+
+#[derive(Clone, Copy)]
+struct KnownErrorChain<'a> {
+    clap: Option<&'a clap::Error>,
+    config: Option<&'a osp_config::ConfigError>,
+    plugin: Option<&'a PluginDispatchError>,
+}
+
+impl<'a> KnownErrorChain<'a> {
+    fn inspect(err: &'a miette::Report) -> Self {
+        Self {
+            clap: find_error_in_chain::<clap::Error>(err),
+            config: find_error_in_chain::<osp_config::ConfigError>(err),
+            plugin: find_error_in_chain::<PluginDispatchError>(err),
+        }
+    }
 }
 
 impl<E> std::fmt::Display for ContextError<E>
@@ -415,15 +427,9 @@ fn run_builtin_cli_command_parts(
     command: Commands,
     sink: &mut dyn UiSink,
 ) -> Result<i32> {
-    let result = dispatch_builtin_command_parts(
-        runtime,
-        session,
-        clients,
-        BuiltinCommandTransport::Cli,
-        Some(invocation),
-        command,
-    )?
-    .ok_or_else(|| miette!("expected builtin command"))?;
+    let result =
+        dispatch_builtin_command_parts(runtime, session, clients, None, Some(invocation), command)?
+            .ok_or_else(|| miette!("expected builtin command"))?;
     run_cli_command(
         &CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
         result,
@@ -445,21 +451,14 @@ fn run_inline_builtin_command(
 
     let spec = repl::repl_command_spec(&command);
     ensure_command_supports_dsl(&spec, stages)?;
-    dispatch_builtin_command_parts(
-        runtime,
-        session,
-        clients,
-        BuiltinCommandTransport::Cli,
-        invocation,
-        command,
-    )
+    dispatch_builtin_command_parts(runtime, session, clients, None, invocation, command)
 }
 
 pub(crate) fn dispatch_builtin_command_parts(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
-    transport: BuiltinCommandTransport<'_>,
+    repl_history: Option<&SharedHistory>,
     invocation: Option<&EffectiveInvocation>,
     command: Commands,
 ) -> Result<Option<CliCommandResult>> {
@@ -467,37 +466,15 @@ pub(crate) fn dispatch_builtin_command_parts(
     match command {
         Commands::Plugins(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_PLUGINS)?;
-            plugins_cmd::run_plugins_command(
-                plugins_cmd::PluginsCommandContext {
-                    config: runtime.config.resolved(),
-                    config_state: Some(&runtime.config),
-                    auth: &runtime.auth,
-                    clients: Some(clients),
-                    plugin_manager: &clients.plugins,
-                },
-                args,
-            )
-            .map(Some)
+            plugins_cmd::run_plugins_command(plugins_command_context(runtime, clients), args)
+                .map(Some)
         }
         Commands::Doctor(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_DOCTOR)?;
             doctor_cmd::run_doctor_command(
                 doctor_cmd::DoctorCommandContext {
-                    config: config_cmd::ConfigReadContext {
-                        context: &runtime.context,
-                        config: runtime.config.resolved(),
-                        ui: &effective_ui,
-                        themes: &runtime.themes,
-                        session_layer: &session.config_overrides,
-                        runtime_load: runtime.launch.runtime_load,
-                    },
-                    plugins: plugins_cmd::PluginsCommandContext {
-                        config: runtime.config.resolved(),
-                        config_state: Some(&runtime.config),
-                        auth: &runtime.auth,
-                        clients: Some(clients),
-                        plugin_manager: &clients.plugins,
-                    },
+                    config: config_read_context(runtime, session, &effective_ui),
+                    plugins: plugins_command_context(runtime, clients),
                     ui: &effective_ui,
                     auth: &runtime.auth,
                     themes: &runtime.themes,
@@ -520,42 +497,72 @@ pub(crate) fn dispatch_builtin_command_parts(
         }
         Commands::Config(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_CONFIG)?;
-            let context = &runtime.context;
-            let config = runtime.config.resolved();
-            let ui = &effective_ui;
-            let themes = &runtime.themes;
-            let runtime_load = runtime.launch.runtime_load;
             config_cmd::run_config_command(
-                config_cmd::ConfigCommandContext {
-                    context,
-                    config,
-                    ui,
-                    themes,
-                    session_overrides: &mut session.config_overrides,
-                    runtime_load,
-                },
+                config_command_context(runtime, session, &effective_ui),
                 args,
             )
             .map(Some)
         }
         Commands::History(args) => {
             ensure_builtin_visible_for(&runtime.auth, CMD_HISTORY)?;
-            match transport {
-                BuiltinCommandTransport::Cli => history_cmd::run_history_command(args).map(Some),
-                BuiltinCommandTransport::Repl { history } => {
+            match repl_history {
+                Some(history) => {
                     history_cmd::run_history_repl_command(session, args, history).map(Some)
                 }
+                None => history_cmd::run_history_command(args).map(Some),
             }
         }
-        Commands::Repl(args) => match transport {
-            BuiltinCommandTransport::Cli => {
+        Commands::Repl(args) => {
+            if repl_history.is_some() {
+                Err(miette!("`repl` debug commands are not available in REPL"))
+            } else {
                 repl::run_repl_debug_command_for(runtime, session, clients, args).map(Some)
             }
-            BuiltinCommandTransport::Repl { .. } => {
-                Err(miette!("`repl` debug commands are not available in REPL"))
-            }
-        },
+        }
         Commands::External(_) => Ok(None),
+    }
+}
+
+fn plugins_command_context<'a>(
+    runtime: &'a AppRuntime,
+    clients: &'a AppClients,
+) -> plugins_cmd::PluginsCommandContext<'a> {
+    plugins_cmd::PluginsCommandContext {
+        config: runtime.config.resolved(),
+        config_state: Some(&runtime.config),
+        auth: &runtime.auth,
+        clients: Some(clients),
+        plugin_manager: &clients.plugins,
+    }
+}
+
+fn config_read_context<'a>(
+    runtime: &'a AppRuntime,
+    session: &'a AppSession,
+    ui: &'a UiState,
+) -> config_cmd::ConfigReadContext<'a> {
+    config_cmd::ConfigReadContext {
+        context: &runtime.context,
+        config: runtime.config.resolved(),
+        ui,
+        themes: &runtime.themes,
+        config_overrides: &session.config_overrides,
+        runtime_load: runtime.launch.runtime_load,
+    }
+}
+
+fn config_command_context<'a>(
+    runtime: &'a AppRuntime,
+    session: &'a mut AppSession,
+    ui: &'a UiState,
+) -> config_cmd::ConfigCommandContext<'a> {
+    config_cmd::ConfigCommandContext {
+        context: &runtime.context,
+        config: runtime.config.resolved(),
+        ui,
+        themes: &runtime.themes,
+        config_overrides: &mut session.config_overrides,
+        runtime_load: runtime.launch.runtime_load,
     }
 }
 

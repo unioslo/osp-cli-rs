@@ -215,7 +215,7 @@ mod tests {
         let ui = Box::leak(Box::new(ui_state(format, 0)));
         let themes = Box::leak(Box::new(ThemeCatalog::default()));
         let auth = Box::leak(Box::new(AuthState::from_resolved(resolved)));
-        let session_layer = Box::leak(Box::new(ConfigLayer::default()));
+        let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
         let plugin_manager = Box::leak(Box::new(PluginManager::new(Vec::new())));
         let context = Box::leak(Box::new(RuntimeContext::new(None, TerminalKind::Cli, None)));
 
@@ -225,7 +225,7 @@ mod tests {
                 config: resolved,
                 ui,
                 themes,
-                session_layer,
+                config_overrides,
                 runtime_load: RuntimeLoadOptions::default(),
             },
             plugins: plugins_cmd::PluginsCommandContext {

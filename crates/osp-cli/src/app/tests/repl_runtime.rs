@@ -637,7 +637,7 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
                 config: state.runtime.config.resolved(),
                 ui: &state.runtime.ui,
                 themes: &state.runtime.themes,
-                session_layer: &state.session.config_overrides,
+                config_overrides: &state.session.config_overrides,
                 runtime_load: state.runtime.launch.runtime_load,
             },
             plugins: crate::cli::commands::plugins::PluginsCommandContext {
