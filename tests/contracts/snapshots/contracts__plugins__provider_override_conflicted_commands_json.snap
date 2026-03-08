@@ -18,6 +18,10 @@ expression: commands_stdout
     "requires_selection": true,
     "selected_explicitly": false,
     "source": null,
+    "auth_hint": null,
+    "auth_visibility": null,
+    "required_capabilities": [],
+    "feature_flags": [],
     "subcommands": []
   }
 ]

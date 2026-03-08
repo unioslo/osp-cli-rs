@@ -15,6 +15,7 @@ use super::manager::{
     DiscoveredPlugin, PluginDispatchContext, PluginDispatchError, PluginManager, PluginSource,
 };
 use super::state::{PluginState, is_enabled, merge_issue};
+use crate::core::command_policy::{CommandPath, VisibilityMode};
 use crate::core::plugin::{
     DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1, DescribeV1,
 };
@@ -226,6 +227,38 @@ fn refresh_picks_up_filesystem_changes_and_prunes_stale_cache() {
     let cache_raw = std::fs::read_to_string(&cache_path).expect("describe cache should be written");
     assert!(cache_raw.contains("osp-beta"));
     assert!(!cache_raw.contains("osp-alpha"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn command_policy_registry_collects_recursive_plugin_auth_metadata_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-policy-registry");
+    let plugins_dir = root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+    write_auth_test_plugin(&plugins_dir, "orch");
+    let manager = PluginManager::new(vec![plugins_dir]);
+    let registry = manager
+        .command_policy_registry()
+        .expect("policy registry should build");
+
+    let root_policy = registry
+        .resolved_policy(&CommandPath::new(["orch"]))
+        .expect("root command policy should exist");
+    assert_eq!(root_policy.visibility, VisibilityMode::Authenticated);
+
+    let nested_policy = registry
+        .resolved_policy(&CommandPath::new(["orch", "approval", "decide"]))
+        .expect("nested command policy should exist");
+    assert_eq!(nested_policy.visibility, VisibilityMode::CapabilityGated);
+    assert!(
+        nested_policy
+            .required_capabilities
+            .contains("orch.approval.decide")
+    );
+    assert!(nested_policy.feature_flags.contains("orch"));
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -560,6 +593,7 @@ fn describe_command_helpers_preserve_nested_completion_metadata_unit() {
     let command = DescribeCommandV1 {
         name: "ldap".to_string(),
         about: "lookup users".to_string(),
+        auth: None,
         args: vec![DescribeArgV1 {
             name: Some("uid".to_string()),
             about: Some("user id".to_string()),
@@ -580,6 +614,7 @@ fn describe_command_helpers_preserve_nested_completion_metadata_unit() {
         subcommands: vec![DescribeCommandV1 {
             name: "user".to_string(),
             about: String::new(),
+            auth: None,
             args: Vec::new(),
             flags: Default::default(),
             subcommands: Vec::new(),
@@ -892,6 +927,7 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
     write_provider_test_plugin(&plugins_dir, "alpha", "shared");
     write_provider_test_plugin(&plugins_dir, "beta", "shared");
     write_named_test_plugin(&plugins_dir, "solo");
+    write_auth_test_plugin(&plugins_dir, "orch");
 
     let manager = PluginManager::new(vec![plugins_dir.clone()])
         .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
@@ -899,6 +935,7 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
     let ambiguous_help = manager.repl_help_text().expect("help should render");
     assert!(ambiguous_help.contains("shared - provider selection required"));
     assert!(ambiguous_help.contains("solo - solo plugin"));
+    assert!(ambiguous_help.contains("orch plugin [auth]"));
     let completion_words = manager
         .completion_words()
         .expect("completion words should render");
@@ -921,7 +958,7 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
     let doctor = manager.doctor().expect("doctor should render");
     assert_eq!(doctor.conflicts.len(), 1);
     assert_eq!(doctor.conflicts[0].command, "shared");
-    assert_eq!(doctor.plugins.len(), 3);
+    assert_eq!(doctor.plugins.len(), 4);
 
     manager
         .set_preferred_provider("shared", "beta")
@@ -1130,6 +1167,7 @@ fn describe_plugin_and_run_provider_cover_direct_error_paths_unit() {
         executable: root.join("osp-missing-run"),
         source: PluginSource::Explicit,
         commands: vec!["missing".to_string()],
+        describe_commands: Vec::new(),
         command_specs: Vec::new(),
         issue: None,
         default_enabled: true,
@@ -1223,6 +1261,29 @@ JSON
 "#,
         plugin_id = plugin_id,
         command_name = command_name
+    );
+
+    write_executable_script_atomically(&plugin_path, &script);
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_auth_test_plugin(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let plugin_path = dir.join(format!("osp-{name}"));
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","auth":{{"visibility":"authenticated"}},"args":[],"flags":{{}},"subcommands":[{{"name":"approval","about":"approval commands","args":[],"flags":{{}},"subcommands":[{{"name":"decide","about":"decide approvals","auth":{{"visibility":"capability_gated","required_capabilities":["orch.approval.decide"],"feature_flags":["orch"]}},"args":[],"flags":{{}},"subcommands":[]}}]}}]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+        name = name,
     );
 
     write_executable_script_atomically(&plugin_path, &script);

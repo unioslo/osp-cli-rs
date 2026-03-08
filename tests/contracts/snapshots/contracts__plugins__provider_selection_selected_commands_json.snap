@@ -15,6 +15,10 @@ expression: commands_stdout
     "requires_selection": false,
     "selected_explicitly": true,
     "source": "env",
+    "auth_hint": null,
+    "auth_visibility": null,
+    "required_capabilities": [],
+    "feature_flags": [],
     "subcommands": []
   }
 ]

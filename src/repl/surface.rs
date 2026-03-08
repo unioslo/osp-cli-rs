@@ -286,6 +286,10 @@ fn command_spec_from_catalog(entry: &CommandCatalogEntry) -> Option<CommandSpec>
     }
 
     let mut spec = entry.completion.clone();
+    if let Some(auth_hint) = entry.auth_hint() {
+        let base = spec.tooltip.as_deref().unwrap_or("Plugin command");
+        spec.tooltip = Some(format!("{base} [{auth_hint}]"));
+    }
     if entry.conflicted || entry.requires_selection {
         spec.tooltip = Some(provider_selection_summary(entry, spec.tooltip.as_deref()));
     }
@@ -314,6 +318,10 @@ fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
             base
         }
     };
+    let summary = entry
+        .auth_hint()
+        .map(|hint| format!("{summary} [{hint}]"))
+        .unwrap_or(summary);
 
     ReplOverviewEntry {
         name: entry.name.clone(),

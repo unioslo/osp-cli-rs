@@ -112,6 +112,7 @@ See:
 - [docs/USING_PLUGINS.md](docs/USING_PLUGINS.md)
 - [docs/WRITING_PLUGINS.md](docs/WRITING_PLUGINS.md)
 - [docs/PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md)
+- [docs/AUTH.md](docs/AUTH.md)
 
 ## Documentation
 

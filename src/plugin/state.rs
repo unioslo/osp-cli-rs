@@ -5,6 +5,7 @@ use super::manager::{
 };
 use crate::completion::CommandSpec;
 use crate::config::default_config_root_dir;
+use crate::core::command_policy::{CommandPath, CommandPolicyRegistry};
 use crate::plugin::PluginDispatchError;
 use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -96,6 +97,12 @@ impl PluginManager {
                     out.push(CommandCatalogEntry {
                         name: command_name,
                         about: spec.tooltip.clone().unwrap_or_default(),
+                        auth: selection
+                            .plugin
+                            .describe_commands
+                            .iter()
+                            .find(|candidate| candidate.name == spec.name)
+                            .and_then(|candidate| candidate.auth.clone()),
                         subcommands: direct_subcommand_names(spec),
                         completion: spec.clone(),
                         provider: Some(selection.plugin.plugin_id.clone()),
@@ -116,6 +123,7 @@ impl PluginManager {
                     out.push(CommandCatalogEntry {
                         name: command_name.clone(),
                         about: about.clone(),
+                        auth: None,
                         subcommands: Vec::new(),
                         completion: CommandSpec::new(command_name),
                         provider: None,
@@ -131,6 +139,38 @@ impl PluginManager {
 
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
+    }
+
+    pub fn command_policy_registry(&self) -> Result<CommandPolicyRegistry> {
+        let state = self.load_state().unwrap_or_default();
+        let discovered = self.discover();
+        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
+        let command_names = active
+            .iter()
+            .flat_map(|plugin| plugin.command_specs.iter().map(|spec| spec.name.clone()))
+            .collect::<BTreeSet<_>>();
+        let mut registry = CommandPolicyRegistry::new();
+
+        for command_name in command_names {
+            let resolution = resolve_provider_for_command(&command_name, &active, &state, None)
+                .map_err(|err| {
+                    anyhow!("failed to resolve provider for `{command_name}`: {err:?}")
+                })?;
+            let ProviderResolution::Selected(selection) = resolution else {
+                continue;
+            };
+
+            if let Some(command) = selection
+                .plugin
+                .describe_commands
+                .iter()
+                .find(|candidate| candidate.name == command_name)
+            {
+                register_describe_command_policies(&mut registry, command, &[]);
+            }
+        }
+
+        Ok(registry)
     }
 
     pub fn completion_words(&self) -> Result<Vec<String>> {
@@ -172,6 +212,10 @@ impl PluginManager {
             } else {
                 format!(" [{}]", command.subcommands.join(", "))
             };
+            let auth_hint = command
+                .auth_hint()
+                .map(|hint| format!(" [{hint}]"))
+                .unwrap_or_default();
             let about = if command.about.trim().is_empty() {
                 "-".to_string()
             } else {
@@ -179,8 +223,9 @@ impl PluginManager {
             };
             if command.requires_selection {
                 out.push_str(&format!(
-                    "  {name}{subs} - {about} (providers: {providers})\n",
+                    "  {name}{subs} - {about}{auth_hint} (providers: {providers})\n",
                     name = command.name,
+                    auth_hint = auth_hint,
                     providers = command.providers.join(", "),
                 ));
             } else {
@@ -190,8 +235,9 @@ impl PluginManager {
                     String::new()
                 };
                 out.push_str(&format!(
-                    "  {name}{subs} - {about} ({provider}/{source}){conflict}\n",
+                    "  {name}{subs} - {about}{auth_hint} ({provider}/{source}){conflict}\n",
                     name = command.name,
+                    auth_hint = auth_hint,
                     provider = command.provider.as_deref().unwrap_or("-"),
                     source = command
                         .source
@@ -437,6 +483,22 @@ impl PluginManager {
         let mut path = self.config_root.clone().or_else(default_config_root_dir)?;
         path.push("plugins.json");
         Some(path)
+    }
+}
+
+fn register_describe_command_policies(
+    registry: &mut CommandPolicyRegistry,
+    command: &crate::core::plugin::DescribeCommandV1,
+    prefix: &[String],
+) {
+    let mut segments = prefix.to_vec();
+    segments.push(command.name.clone());
+    let path = CommandPath::new(segments.clone());
+    if let Some(policy) = command.command_policy(path) {
+        registry.register(policy);
+    }
+    for subcommand in &command.subcommands {
+        register_describe_command_policies(registry, subcommand, &segments);
     }
 }
 

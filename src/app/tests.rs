@@ -14,6 +14,7 @@ use crate::cli::commands::doctor as doctor_cmd;
 use crate::cli::invocation::{InvocationOptions, scan_cli_argv};
 use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
 use crate::config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions};
+use crate::core::command_policy::{CommandPath, VisibilityMode};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::plugin::{
     ResponseErrorV1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
@@ -375,6 +376,7 @@ fn sample_catalog() -> Vec<CommandCatalogEntry> {
     vec![CommandCatalogEntry {
         name: "orch".to_string(),
         about: "Provision orchestrator resources".to_string(),
+        auth: None,
         subcommands: vec!["provision".to_string(), "status".to_string()],
         completion: crate::completion::CommandSpec {
             name: "orch".to_string(),
@@ -398,6 +400,7 @@ fn sample_catalog_with_provision_context() -> Vec<CommandCatalogEntry> {
     vec![CommandCatalogEntry {
         name: "orch".to_string(),
         about: "Provision orchestrator resources".to_string(),
+        auth: None,
         subcommands: vec!["provision".to_string(), "status".to_string()],
         completion: crate::completion::CommandSpec {
             name: "orch".to_string(),
@@ -460,6 +463,7 @@ fn sample_conflicted_catalog() -> Vec<CommandCatalogEntry> {
     vec![CommandCatalogEntry {
         name: "hello".to_string(),
         about: "hello plugin".to_string(),
+        auth: None,
         subcommands: Vec::new(),
         completion: crate::completion::CommandSpec {
             name: "hello".to_string(),
@@ -1046,6 +1050,37 @@ fn external_inline_builtin_reuses_repl_dsl_policy_unit() {
 }
 
 #[cfg(unix)]
+#[test]
+fn app_state_seeds_plugin_command_policy_registry_unit() {
+    let root = make_temp_dir("osp-cli-test-plugin-policy-seed");
+    let plugins_dir = root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    write_auth_pipeline_test_plugin(&plugins_dir);
+
+    let state = make_test_state(vec![plugins_dir]);
+
+    let root_policy = state
+        .runtime
+        .auth
+        .plugin_policy()
+        .resolved_policy(&CommandPath::new(["orch"]))
+        .expect("root plugin policy should exist");
+    assert_eq!(root_policy.visibility, VisibilityMode::Authenticated);
+
+    let nested_policy = state
+        .runtime
+        .auth
+        .plugin_policy()
+        .resolved_policy(&CommandPath::new(["orch", "approval", "decide"]))
+        .expect("nested plugin policy should exist");
+    assert!(
+        nested_policy
+            .required_capabilities
+            .contains("orch.approval.decide")
+    );
+}
+
+#[cfg(unix)]
 fn make_test_history(state: &mut AppState) -> SharedHistory {
     let history_dir = make_temp_dir("osp-cli-test-history");
     let history_path = history_dir.join("history.jsonl");
@@ -1130,6 +1165,36 @@ JSON
 "#,
         )
         .expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_auth_pipeline_test_plugin(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join("osp-orch");
+    std::fs::write(
+        &plugin_path,
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{"protocol_version":1,"plugin_id":"orch","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"orch","about":"orch plugin","auth":{"visibility":"authenticated"},"args":[],"flags":{},"subcommands":[{"name":"approval","about":"approval","args":[],"flags":{},"subcommands":[{"name":"decide","about":"decide","auth":{"visibility":"capability_gated","required_capabilities":["orch.approval.decide"]},"args":[],"flags":{},"subcommands":[]}]}]}]}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}
+JSON
+"#,
+    )
+    .expect("plugin script should be written");
     let mut perms = std::fs::metadata(&plugin_path)
         .expect("metadata should be readable")
         .permissions();

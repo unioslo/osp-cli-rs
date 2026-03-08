@@ -769,3 +769,47 @@ fn repl_surface_exposes_selected_provider_for_conflicts_unit() {
     assert!(tooltip.contains("provider selection required"));
     assert!(tooltip.contains("beta-provider (user)"));
 }
+
+#[test]
+fn repl_surface_includes_plugin_auth_hints_in_overview_and_tooltip_unit() {
+    let state = make_completion_state(None);
+    let surface = surface::build_repl_surface(
+        repl_view(&state.runtime, &state.session),
+        &[crate::plugin::CommandCatalogEntry {
+            name: "orch".to_string(),
+            about: "orch plugin".to_string(),
+            auth: Some(crate::core::plugin::DescribeCommandAuthV1 {
+                visibility: Some(crate::core::plugin::DescribeVisibilityModeV1::CapabilityGated),
+                required_capabilities: vec!["orch.approval.decide".to_string()],
+                feature_flags: vec!["orch".to_string()],
+            }),
+            subcommands: vec!["approval".to_string()],
+            completion: crate::completion::CommandSpec::new("orch"),
+            provider: Some("orch".to_string()),
+            providers: vec!["orch (explicit)".to_string()],
+            conflicted: false,
+            requires_selection: false,
+            selected_explicitly: false,
+            source: Some(crate::plugin::PluginSource::Explicit),
+        }],
+    );
+
+    let overview = surface
+        .overview_entries
+        .iter()
+        .find(|entry| entry.name == "orch")
+        .expect("orch overview should exist");
+    assert!(
+        overview
+            .summary
+            .contains("[cap: orch.approval.decide; feature: orch]")
+    );
+
+    let spec = surface
+        .specs
+        .iter()
+        .find(|entry| entry.name == "orch")
+        .expect("orch command spec should exist");
+    let tooltip = spec.tooltip.as_deref().expect("tooltip should exist");
+    assert!(tooltip.contains("[cap: orch.approval.decide; feature: orch]"));
+}

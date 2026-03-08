@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::command_policy::{CommandPath, CommandPolicy, VisibilityMode};
+
 pub const PLUGIN_PROTOCOL_V1: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,11 +21,81 @@ pub struct DescribeCommandV1 {
     #[serde(default)]
     pub about: String,
     #[serde(default)]
+    pub auth: Option<DescribeCommandAuthV1>,
+    #[serde(default)]
     pub args: Vec<DescribeArgV1>,
     #[serde(default)]
     pub flags: BTreeMap<String, DescribeFlagV1>,
     #[serde(default)]
     pub subcommands: Vec<DescribeCommandV1>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DescribeCommandAuthV1 {
+    #[serde(default)]
+    pub visibility: Option<DescribeVisibilityModeV1>,
+    #[serde(default)]
+    pub required_capabilities: Vec<String>,
+    #[serde(default)]
+    pub feature_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DescribeVisibilityModeV1 {
+    Public,
+    Authenticated,
+    CapabilityGated,
+    Hidden,
+}
+
+impl DescribeVisibilityModeV1 {
+    pub fn as_visibility_mode(self) -> VisibilityMode {
+        match self {
+            DescribeVisibilityModeV1::Public => VisibilityMode::Public,
+            DescribeVisibilityModeV1::Authenticated => VisibilityMode::Authenticated,
+            DescribeVisibilityModeV1::CapabilityGated => VisibilityMode::CapabilityGated,
+            DescribeVisibilityModeV1::Hidden => VisibilityMode::Hidden,
+        }
+    }
+
+    pub fn as_label(self) -> &'static str {
+        match self {
+            DescribeVisibilityModeV1::Public => "public",
+            DescribeVisibilityModeV1::Authenticated => "authenticated",
+            DescribeVisibilityModeV1::CapabilityGated => "capability_gated",
+            DescribeVisibilityModeV1::Hidden => "hidden",
+        }
+    }
+}
+
+impl DescribeCommandAuthV1 {
+    pub fn hint(&self) -> Option<String> {
+        let mut parts = Vec::new();
+
+        match self.visibility {
+            Some(DescribeVisibilityModeV1::Public) | None => {}
+            Some(DescribeVisibilityModeV1::Authenticated) => parts.push("auth".to_string()),
+            Some(DescribeVisibilityModeV1::CapabilityGated) => {
+                if self.required_capabilities.len() == 1 {
+                    parts.push(format!("cap: {}", self.required_capabilities[0]));
+                } else if self.required_capabilities.is_empty() {
+                    parts.push("cap".to_string());
+                } else {
+                    parts.push(format!("caps: {}", self.required_capabilities.len()));
+                }
+            }
+            Some(DescribeVisibilityModeV1::Hidden) => parts.push("hidden".to_string()),
+        }
+
+        match self.feature_flags.as_slice() {
+            [] => {}
+            [feature] => parts.push(format!("feature: {feature}")),
+            features => parts.push(format!("features: {}", features.len())),
+        }
+
+        (!parts.is_empty()).then(|| parts.join("; "))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +248,23 @@ impl DescribeV1 {
     }
 }
 
+impl DescribeCommandV1 {
+    pub fn command_policy(&self, path: CommandPath) -> Option<CommandPolicy> {
+        let auth = self.auth.as_ref()?;
+        let mut policy = CommandPolicy::new(path);
+        if let Some(visibility) = auth.visibility {
+            policy = policy.visibility(visibility.as_visibility_mode());
+        }
+        for capability in &auth.required_capabilities {
+            policy = policy.require_capability(capability.clone());
+        }
+        for feature in &auth.feature_flags {
+            policy = policy.feature_flag(feature.clone());
+        }
+        Some(policy)
+    }
+}
+
 impl ResponseV1 {
     pub fn validate_v1(&self) -> Result<(), String> {
         if self.protocol_version != PLUGIN_PROTOCOL_V1 {
@@ -212,6 +301,9 @@ fn validate_command(command: &DescribeCommandV1) -> Result<(), String> {
     if command.name.trim().is_empty() {
         return Err("command name must not be empty".to_string());
     }
+    if let Some(auth) = &command.auth {
+        validate_command_auth(auth)?;
+    }
 
     for (name, flag) in &command.flags {
         if !name.starts_with('-') {
@@ -241,6 +333,24 @@ fn validate_suggestions(suggestions: &[DescribeSuggestionV1], owner: &str) -> Re
     Ok(())
 }
 
+fn validate_command_auth(auth: &DescribeCommandAuthV1) -> Result<(), String> {
+    if auth
+        .required_capabilities
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return Err("required_capabilities must not contain empty values".to_string());
+    }
+    if auth
+        .feature_flags
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return Err("feature_flags must not contain empty values".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(feature = "clap")]
 fn describe_command_from_clap(command: clap::Command) -> DescribeCommandV1 {
     let positionals = command
@@ -263,6 +373,7 @@ fn describe_command_from_clap(command: clap::Command) -> DescribeCommandV1 {
     DescribeCommandV1 {
         name: command.get_name().to_string(),
         about: styled_to_plain(command.get_about()),
+        auth: None,
         args: positionals,
         flags,
         subcommands: command
@@ -352,6 +463,71 @@ fn styled_to_plain(value: Option<&clap::builder::StyledStr>) -> String {
 #[cfg(feature = "clap")]
 fn range_is_multiple(range: clap::builder::ValueRange) -> bool {
     range.min_values() > 1 || range.max_values() > 1
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{
+        DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, validate_command_auth,
+    };
+    use crate::core::command_policy::{CommandPath, VisibilityMode};
+
+    #[test]
+    fn command_auth_converts_to_generic_command_policy_unit() {
+        let command = DescribeCommandV1 {
+            name: "orch".to_string(),
+            about: String::new(),
+            auth: Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+                required_capabilities: vec!["orch.approval.decide".to_string()],
+                feature_flags: vec!["orch".to_string()],
+            }),
+            args: Vec::new(),
+            flags: BTreeMap::new(),
+            subcommands: Vec::new(),
+        };
+
+        let policy = command
+            .command_policy(CommandPath::new(["orch", "approval", "decide"]))
+            .expect("auth metadata should build a policy");
+        assert_eq!(policy.visibility, VisibilityMode::CapabilityGated);
+        assert!(
+            policy
+                .required_capabilities
+                .contains("orch.approval.decide")
+        );
+        assert!(policy.feature_flags.contains("orch"));
+    }
+
+    #[test]
+    fn command_auth_validation_rejects_blank_entries_unit() {
+        let err = validate_command_auth(&DescribeCommandAuthV1 {
+            visibility: None,
+            required_capabilities: vec![" ".to_string()],
+            feature_flags: Vec::new(),
+        })
+        .expect_err("blank capabilities should be rejected");
+        assert!(err.contains("required_capabilities"));
+    }
+
+    #[test]
+    fn command_auth_hint_stays_compact_and_stable_unit() {
+        let auth = DescribeCommandAuthV1 {
+            visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+            required_capabilities: vec!["orch.approval.decide".to_string()],
+            feature_flags: vec!["orch".to_string()],
+        };
+        assert_eq!(
+            auth.hint().as_deref(),
+            Some("cap: orch.approval.decide; feature: orch")
+        );
+        assert_eq!(
+            DescribeVisibilityModeV1::Authenticated.as_label(),
+            "authenticated"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "clap"))]

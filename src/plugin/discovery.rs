@@ -416,6 +416,7 @@ fn seeded_discovered_plugin(
         plugin_version: manifest_entry.as_ref().map(|entry| entry.version.clone()),
         executable,
         source,
+        describe_commands: Vec::new(),
         command_specs: commands
             .iter()
             .map(|name| CommandSpec::new(name.clone()))
@@ -498,6 +499,7 @@ fn apply_describe_metadata(
         .iter()
         .map(|cmd| cmd.name.clone())
         .collect::<Vec<String>>();
+    plugin.describe_commands = describe.commands.clone();
     plugin.command_specs = describe
         .commands
         .iter()

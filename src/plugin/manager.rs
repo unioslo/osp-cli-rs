@@ -1,4 +1,5 @@
 use crate::completion::CommandSpec;
+use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1};
 use crate::core::runtime::RuntimeHints;
 use std::collections::HashMap;
 use std::error::Error as StdError;
@@ -38,6 +39,7 @@ pub struct DiscoveredPlugin {
     pub executable: PathBuf,
     pub source: PluginSource,
     pub commands: Vec<String>,
+    pub describe_commands: Vec<DescribeCommandV1>,
     pub command_specs: Vec<CommandSpec>,
     pub issue: Option<String>,
     pub default_enabled: bool,
@@ -71,6 +73,7 @@ pub struct DoctorReport {
 pub struct CommandCatalogEntry {
     pub name: String,
     pub about: String,
+    pub auth: Option<DescribeCommandAuthV1>,
     pub subcommands: Vec<String>,
     pub completion: CommandSpec,
     pub provider: Option<String>,
@@ -79,6 +82,12 @@ pub struct CommandCatalogEntry {
     pub requires_selection: bool,
     pub selected_explicitly: bool,
     pub source: Option<PluginSource>,
+}
+
+impl CommandCatalogEntry {
+    pub fn auth_hint(&self) -> Option<String> {
+        self.auth.as_ref().and_then(|auth| auth.hint())
+    }
 }
 
 #[derive(Debug, Clone)]

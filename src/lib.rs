@@ -29,6 +29,7 @@ pub mod services;
 pub mod ui;
 
 pub use crate::app::{App, AppBuilder, AppRunner, run_from, run_process};
+pub use crate::core::command_policy;
 
 #[cfg(test)]
 mod tests;

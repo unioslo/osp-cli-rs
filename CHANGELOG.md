@@ -16,3 +16,9 @@ matching `docs/releases/vX.Y.Z.md` file before a tag can be published.
 - Promoted the root package to the canonical single-crate implementation and removed the mirrored `osp_*` modules from the active build.
 - Compiled presentation presets into canonical config/UI keys so REPL and help behavior stop relying on ad hoc fallback logic.
 - Finished the crates.io release path with trusted publishing while keeping cross-platform GitHub release artifacts.
+
+## [1.4.7] - 2026-03-08
+
+- Adds a generic upstream command-policy layer with typed visibility, runnability, policy registry, and access evaluation so downstream distributions can supply auth facts without reimplementing policy mechanics.
+- Extends plugin describe metadata, plugin listings, and REPL/help surfaces with generic auth metadata and compact auth hints while keeping capability semantics downstream-owned.
+- Tightens upstream dispatch and runtime integration so command policy is enforced consistently across discovery, UI surfaces, and execution, with coverage kept above the repo push gate.

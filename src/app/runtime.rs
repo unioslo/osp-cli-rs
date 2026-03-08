@@ -4,6 +4,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::config::{ResolvedConfig, RuntimeLoadOptions};
+use crate::core::command_policy::{
+    AccessReason, CommandAccess, CommandPolicy, CommandPolicyContext, CommandPolicyRegistry,
+    VisibilityMode,
+};
 use crate::plugin::PluginManager;
 use crate::plugin::config::{PluginConfigEntry, PluginConfigEnv, PluginConfigEnvCache};
 use crate::ui::RenderSettings;
@@ -164,6 +168,9 @@ pub struct AppRuntime {
 pub struct AuthState {
     builtins_allowlist: Option<HashSet<String>>,
     plugins_allowlist: Option<HashSet<String>>,
+    policy_context: CommandPolicyContext,
+    builtin_policy: CommandPolicyRegistry,
+    plugin_policy: CommandPolicyRegistry,
 }
 
 impl AuthState {
@@ -171,15 +178,64 @@ impl AuthState {
         Self {
             builtins_allowlist: parse_allowlist(config.get_string("auth.visible.builtins")),
             plugins_allowlist: parse_allowlist(config.get_string("auth.visible.plugins")),
+            policy_context: CommandPolicyContext::default(),
+            builtin_policy: CommandPolicyRegistry::default(),
+            plugin_policy: CommandPolicyRegistry::default(),
         }
     }
 
+    pub fn policy_context(&self) -> &CommandPolicyContext {
+        &self.policy_context
+    }
+
+    pub fn set_policy_context(&mut self, context: CommandPolicyContext) {
+        self.policy_context = context;
+    }
+
+    pub fn builtin_policy(&self) -> &CommandPolicyRegistry {
+        &self.builtin_policy
+    }
+
+    pub fn builtin_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
+        &mut self.builtin_policy
+    }
+
+    pub fn plugin_policy(&self) -> &CommandPolicyRegistry {
+        &self.plugin_policy
+    }
+
+    pub fn plugin_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
+        &mut self.plugin_policy
+    }
+
+    pub fn replace_plugin_policy(&mut self, registry: CommandPolicyRegistry) {
+        self.plugin_policy = registry;
+    }
+
+    pub fn builtin_access(&self, command: &str) -> CommandAccess {
+        command_access_for(
+            command,
+            &self.builtins_allowlist,
+            &self.builtin_policy,
+            &self.policy_context,
+        )
+    }
+
+    pub fn plugin_command_access(&self, command: &str) -> CommandAccess {
+        command_access_for(
+            command,
+            &self.plugins_allowlist,
+            &self.plugin_policy,
+            &self.policy_context,
+        )
+    }
+
     pub fn is_builtin_visible(&self, command: &str) -> bool {
-        is_visible_in_allowlist(&self.builtins_allowlist, command)
+        self.builtin_access(command).is_visible()
     }
 
     pub fn is_plugin_command_visible(&self, command: &str) -> bool {
-        is_visible_in_allowlist(&self.plugins_allowlist, command)
+        self.plugin_command_access(command).is_visible()
     }
 }
 
@@ -207,5 +263,180 @@ fn is_visible_in_allowlist(allowlist: &Option<HashSet<String>>, command: &str) -
     match allowlist {
         None => true,
         Some(values) => values.contains(&command.to_ascii_lowercase()),
+    }
+}
+
+fn command_access_for(
+    command: &str,
+    allowlist: &Option<HashSet<String>>,
+    registry: &CommandPolicyRegistry,
+    context: &CommandPolicyContext,
+) -> CommandAccess {
+    let normalized = command.trim().to_ascii_lowercase();
+    let default_policy = CommandPolicy::new(crate::core::command_policy::CommandPath::new([
+        normalized.clone(),
+    ]))
+    .visibility(VisibilityMode::Public);
+    let mut access = registry
+        .evaluate(&default_policy.path, context)
+        .unwrap_or_else(|| crate::core::command_policy::evaluate_policy(&default_policy, context));
+
+    if !is_visible_in_allowlist(allowlist, &normalized) {
+        access = CommandAccess::hidden(AccessReason::HiddenByPolicy);
+    }
+
+    access
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use crate::config::{ConfigLayer, ConfigResolver, LoadedLayers, ResolveOptions};
+    use crate::core::command_policy::{
+        AccessReason, CommandPath, CommandPolicy, CommandPolicyContext, CommandPolicyRegistry,
+        VisibilityMode,
+    };
+
+    use super::{
+        AuthState, ConfigState, RuntimeContext, TerminalKind, command_access_for,
+        is_visible_in_allowlist, parse_allowlist,
+    };
+
+    fn resolved_with(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
+        let mut file = ConfigLayer::default();
+        for (key, value) in entries {
+            file.set(*key, (*value).to_string());
+        }
+        ConfigResolver::from_loaded_layers(LoadedLayers {
+            file,
+            ..LoadedLayers::default()
+        })
+        .resolve(ResolveOptions::default())
+        .expect("config should resolve")
+    }
+
+    #[test]
+    fn runtime_context_and_allowlists_normalize_inputs() {
+        let context = RuntimeContext::new(
+            Some("  Dev  ".to_string()),
+            TerminalKind::Repl,
+            Some("xterm-256color".to_string()),
+        );
+        assert_eq!(context.profile_override(), Some("dev"));
+        assert_eq!(context.terminal_kind(), TerminalKind::Repl);
+        assert_eq!(context.terminal_env(), Some("xterm-256color"));
+
+        assert_eq!(parse_allowlist(None), None);
+        assert_eq!(parse_allowlist(Some("   ")), None);
+        assert_eq!(parse_allowlist(Some("*")), None);
+        assert_eq!(
+            parse_allowlist(Some(" LDAP, mreg ldap ")),
+            Some(HashSet::from(["ldap".to_string(), "mreg".to_string()]))
+        );
+
+        let allowlist = Some(HashSet::from(["ldap".to_string()]));
+        assert!(is_visible_in_allowlist(&allowlist, "LDAP"));
+        assert!(!is_visible_in_allowlist(&allowlist, "orch"));
+    }
+
+    #[test]
+    fn config_state_tracks_noops_changes_and_transaction_errors() {
+        let resolved = resolved_with(&[]);
+        let mut state = ConfigState::new(resolved.clone());
+        assert_eq!(state.revision(), 1);
+        assert!(!state.replace_resolved(resolved.clone()));
+        assert_eq!(state.revision(), 1);
+
+        let changed = resolved_with(&[("ui.format", "json")]);
+        assert!(state.replace_resolved(changed));
+        assert_eq!(state.revision(), 2);
+
+        let changed = state
+            .transaction(|current| {
+                let _ = current;
+                Ok::<_, &'static str>(resolved_with(&[("ui.format", "mreg")]))
+            })
+            .expect("transaction should succeed");
+        assert!(changed);
+        assert_eq!(state.revision(), 3);
+
+        let err = state
+            .transaction(|_| Err::<crate::config::ResolvedConfig, _>("boom"))
+            .expect_err("transaction error should propagate");
+        assert_eq!(err, "boom");
+        assert_eq!(state.revision(), 3);
+    }
+
+    #[test]
+    fn auth_state_and_command_access_layer_policy_overrides_on_allowlists() {
+        let resolved = resolved_with(&[
+            ("auth.visible.builtins", "config"),
+            ("auth.visible.plugins", "ldap"),
+        ]);
+        let mut auth = AuthState::from_resolved(&resolved);
+        auth.set_policy_context(
+            CommandPolicyContext::default()
+                .authenticated(true)
+                .with_capabilities(["orch.approval.decide"]),
+        );
+        assert!(auth.policy_context().authenticated);
+
+        auth.builtin_policy_mut().register(
+            CommandPolicy::new(CommandPath::new(["config"]))
+                .visibility(VisibilityMode::Authenticated),
+        );
+        assert!(auth.builtin_access("config").is_runnable());
+        assert!(auth.is_builtin_visible("config"));
+        assert!(!auth.is_builtin_visible("theme"));
+
+        let mut plugin_registry = CommandPolicyRegistry::new();
+        plugin_registry.register(
+            CommandPolicy::new(CommandPath::new(["ldap"]))
+                .visibility(VisibilityMode::CapabilityGated)
+                .require_capability("orch.approval.decide"),
+        );
+        plugin_registry.register(
+            CommandPolicy::new(CommandPath::new(["orch"]))
+                .visibility(VisibilityMode::Authenticated),
+        );
+        auth.replace_plugin_policy(plugin_registry);
+
+        assert!(auth.plugin_policy().contains(&CommandPath::new(["ldap"])));
+        assert!(
+            auth.plugin_policy_mut()
+                .contains(&CommandPath::new(["ldap"]))
+        );
+        assert!(auth.plugin_command_access("ldap").is_runnable());
+        assert!(auth.is_plugin_command_visible("ldap"));
+
+        let hidden = auth.plugin_command_access("orch");
+        assert_eq!(hidden.reasons, vec![AccessReason::HiddenByPolicy]);
+        assert!(!hidden.is_visible());
+    }
+
+    #[test]
+    fn command_access_for_uses_registry_when_present_and_public_default_otherwise() {
+        let context = CommandPolicyContext::default();
+        let allowlist = Some(HashSet::from(["config".to_string()]));
+        let mut registry = CommandPolicyRegistry::new();
+        registry.register(
+            CommandPolicy::new(CommandPath::new(["config"]))
+                .visibility(VisibilityMode::Authenticated),
+        );
+
+        let denied = command_access_for("config", &allowlist, &registry, &context);
+        assert_eq!(denied.reasons, vec![AccessReason::Unauthenticated]);
+        assert!(denied.is_visible());
+        assert!(!denied.is_runnable());
+
+        let hidden = command_access_for("theme", &allowlist, &registry, &context);
+        assert_eq!(hidden.reasons, vec![AccessReason::HiddenByPolicy]);
+        assert!(!hidden.is_visible());
+
+        let fallback =
+            command_access_for("config", &None, &CommandPolicyRegistry::default(), &context);
+        assert!(fallback.is_visible());
+        assert!(fallback.is_runnable());
     }
 }

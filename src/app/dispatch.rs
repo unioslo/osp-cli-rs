@@ -7,6 +7,7 @@ use crate::cli::{
     Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, PluginsArgs, ReplArgs, ThemeArgs,
     parse_inline_command_tokens,
 };
+use crate::core::command_policy::{AccessReason, CommandAccess};
 
 use super::{CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS, CMD_THEME};
 
@@ -142,23 +143,15 @@ pub(crate) fn ensure_dispatch_visibility(auth: &AuthState, action: &RunAction) -
 }
 
 pub(crate) fn ensure_builtin_visible_for(auth: &AuthState, command: &str) -> Result<()> {
-    if auth.is_builtin_visible(command) {
-        Ok(())
-    } else {
-        Err(miette!(
-            "command `{command}` is hidden by current auth policy"
-        ))
-    }
+    ensure_command_access(command, "command", auth.builtin_access(command))
 }
 
 pub(crate) fn ensure_plugin_visible_for(auth: &AuthState, command: &str) -> Result<()> {
-    if auth.is_plugin_command_visible(command) {
-        Ok(())
-    } else {
-        Err(miette!(
-            "plugin command `{command}` is hidden by current auth policy"
-        ))
-    }
+    ensure_command_access(
+        command,
+        "plugin command",
+        auth.plugin_command_access(command),
+    )
 }
 
 pub(crate) fn normalize_profile_override(value: Option<String>) -> Option<String> {
@@ -233,11 +226,41 @@ fn inline_run_action(parsed: Option<Commands>) -> RunAction {
     }
 }
 
+fn ensure_command_access(command: &str, kind: &str, access: CommandAccess) -> Result<()> {
+    if access.is_runnable() {
+        return Ok(());
+    }
+
+    let detail = access
+        .reasons
+        .first()
+        .map(render_access_reason)
+        .unwrap_or_else(|| "denied by current auth policy".to_string());
+    Err(miette!("{kind} `{command}` {detail}"))
+}
+
+fn render_access_reason(reason: &AccessReason) -> String {
+    match reason {
+        AccessReason::HiddenByPolicy => "is hidden by current auth policy".to_string(),
+        AccessReason::DisabledByProduct => "is disabled by current product policy".to_string(),
+        AccessReason::Unauthenticated => "requires authentication".to_string(),
+        AccessReason::MissingCapabilities => "requires additional capabilities".to_string(),
+        AccessReason::FeatureDisabled(flag) => format!("requires feature `{flag}`"),
+        AccessReason::ProfileUnavailable(profile) if profile.is_empty() => {
+            "requires an eligible profile".to_string()
+        }
+        AccessReason::ProfileUnavailable(profile) => {
+            format!("is unavailable in profile `{profile}`")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use crate::config::{ConfigLayer, ConfigResolver, LoadedLayers, ResolveOptions};
+    use crate::core::command_policy::{AccessReason, CommandPath, CommandPolicy, VisibilityMode};
     use clap::Parser;
 
     use super::{
@@ -351,6 +374,19 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_visibility_helpers_deny_visible_but_unrunnable_commands_unit() {
+        let mut auth = auth_state(None, None);
+        auth.builtin_policy_mut().register(
+            CommandPolicy::new(CommandPath::new(["config"]))
+                .visibility(VisibilityMode::Authenticated),
+        );
+
+        let err = ensure_builtin_visible_for(&auth, "config")
+            .expect_err("unauthenticated builtin should be denied");
+        assert!(err.to_string().contains("requires authentication"));
+    }
+
+    #[test]
     fn ensure_dispatch_visibility_and_terminal_kind_cover_all_action_families_unit() {
         let profiles = BTreeSet::from(["dev".to_string()]);
         let auth = auth_state(
@@ -422,6 +458,63 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("failed to parse command after profile shorthand `dev`")
+        );
+    }
+
+    #[test]
+    fn dispatch_reason_rendering_covers_feature_profile_and_capability_denials_unit() {
+        let mut auth = auth_state(None, Some(&["ldap", "orch"]));
+        auth.builtin_policy_mut().register(
+            CommandPolicy::new(CommandPath::new(["config"]))
+                .visibility(VisibilityMode::Authenticated)
+                .allow_profiles(["dev"])
+                .feature_flag("config-ui"),
+        );
+        auth.plugin_policy_mut().register(
+            CommandPolicy::new(CommandPath::new(["orch"]))
+                .visibility(VisibilityMode::CapabilityGated)
+                .require_capability("orch.approval.decide"),
+        );
+
+        let profile_err = ensure_builtin_visible_for(&auth, "config")
+            .expect_err("missing profile should deny builtin");
+        assert!(
+            profile_err
+                .to_string()
+                .contains("requires an eligible profile")
+        );
+
+        auth.set_policy_context(
+            crate::core::command_policy::CommandPolicyContext::default().with_profile("dev"),
+        );
+        let feature_err = ensure_builtin_visible_for(&auth, "config")
+            .expect_err("missing feature should deny builtin");
+        assert!(
+            feature_err
+                .to_string()
+                .contains("requires feature `config-ui`")
+        );
+
+        auth.set_policy_context(
+            crate::core::command_policy::CommandPolicyContext::default()
+                .authenticated(true)
+                .with_profile("dev"),
+        );
+        let capability_err = ensure_plugin_visible_for(&auth, "orch")
+            .expect_err("missing capability should deny plugin");
+        assert!(
+            capability_err
+                .to_string()
+                .contains("requires additional capabilities")
+        );
+
+        assert_eq!(
+            super::render_access_reason(&AccessReason::DisabledByProduct),
+            "is disabled by current product policy"
+        );
+        assert_eq!(
+            super::render_access_reason(&AccessReason::ProfileUnavailable("prod".to_string())),
+            "is unavailable in profile `prod`"
         );
     }
 }

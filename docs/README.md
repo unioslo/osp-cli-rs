@@ -10,6 +10,7 @@ Start here if you are using `osp`.
 - Themes and presentation: [THEMES.md](THEMES.md)
 - Plugin usage: [USING_PLUGINS.md](USING_PLUGINS.md)
 - Plugin authoring: [WRITING_PLUGINS.md](WRITING_PLUGINS.md)
+- Auth and command policy: [AUTH.md](AUTH.md)
 - Troubleshooting: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
 ## Other References

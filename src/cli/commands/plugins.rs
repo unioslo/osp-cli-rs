@@ -178,6 +178,38 @@ fn command_catalog_rows(commands: &[CommandCatalogEntry]) -> Vec<Row> {
     commands
         .iter()
         .map(|command| {
+            let auth_hint = command
+                .auth_hint()
+                .map_or(serde_json::Value::Null, Into::into);
+            let auth_visibility = command
+                .auth
+                .as_ref()
+                .and_then(|auth| auth.visibility.map(|visibility| visibility.as_label()))
+                .map_or(serde_json::Value::Null, Into::into);
+            let required_capabilities = serde_json::Value::Array(
+                command
+                    .auth
+                    .as_ref()
+                    .map(|auth| {
+                        auth.required_capabilities
+                            .iter()
+                            .map(|value| value.clone().into())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            );
+            let feature_flags = serde_json::Value::Array(
+                command
+                    .auth
+                    .as_ref()
+                    .map(|auth| {
+                        auth.feature_flags
+                            .iter()
+                            .map(|value| value.clone().into())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            );
             let subcommands = serde_json::Value::Array(
                 command
                     .subcommands
@@ -206,6 +238,10 @@ fn command_catalog_rows(commands: &[CommandCatalogEntry]) -> Vec<Row> {
                     .source
                     .map(|value| value.to_string())
                     .map_or(serde_json::Value::Null, Into::into),
+                "auth_hint" => auth_hint,
+                "auth_visibility" => auth_visibility,
+                "required_capabilities" => required_capabilities,
+                "feature_flags" => feature_flags,
                 "subcommands" => subcommands,
             }
         })
@@ -276,6 +312,7 @@ pub(crate) fn doctor_rows(report: &DoctorReport) -> Vec<Row> {
 mod tests {
     use super::{command_catalog_rows, doctor_rows, plugin_config_rows, plugin_list_rows};
     use crate::app::PluginConfigEntry;
+    use crate::core::plugin::{DescribeCommandAuthV1, DescribeVisibilityModeV1};
     use crate::core::row::Row;
     use crate::plugin::{
         CommandCatalogEntry, CommandConflict, DoctorReport, PluginSource, PluginSummary,
@@ -325,6 +362,11 @@ mod tests {
         let commands = command_catalog_rows(&[CommandCatalogEntry {
             name: "shared".to_string(),
             about: "shared command".to_string(),
+            auth: Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+                required_capabilities: vec!["shared.run".to_string()],
+                feature_flags: vec!["shared".to_string()],
+            }),
             completion: crate::completion::CommandSpec::new("shared"),
             provider: Some("beta".to_string()),
             providers: vec!["alpha".to_string(), "beta".to_string()],
@@ -343,6 +385,18 @@ mod tests {
         assert_eq!(
             commands[0].get("providers"),
             Some(&serde_json::json!(["alpha", "beta"]))
+        );
+        assert_eq!(
+            row_str(&commands[0], "auth_visibility"),
+            Some("capability_gated")
+        );
+        assert_eq!(
+            row_str(&commands[0], "auth_hint"),
+            Some("cap: shared.run; feature: shared")
+        );
+        assert_eq!(
+            commands[0].get("required_capabilities"),
+            Some(&serde_json::json!(["shared.run"]))
         );
 
         let config = plugin_config_rows(

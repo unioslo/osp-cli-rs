@@ -295,7 +295,15 @@ pub struct AppState {
 impl AppState {
     pub(crate) fn new(init: AppStateInit) -> Self {
         let config_state = ConfigState::new(init.config);
-        let auth_state = AuthState::from_resolved(config_state.resolved());
+        let mut auth_state = AuthState::from_resolved(config_state.resolved());
+        let plugin_policy = init
+            .plugins
+            .command_policy_registry()
+            .unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "failed to build plugin command policy registry");
+                crate::core::command_policy::CommandPolicyRegistry::default()
+            });
+        auth_state.replace_plugin_policy(plugin_policy);
         let session_cache_max_results = crate::app::host::config_usize(
             config_state.resolved(),
             "session.cache.max_results",
