@@ -1,22 +1,23 @@
-# osp-cli-rust
+# osp-cli
 
-A Rust command-line tool and interactive REPL for querying and managing
-OSP infrastructure data, with structured output, config layering, and
-plugin support.
+`osp-cli` is a Rust CLI and interactive REPL for querying and managing
+OSP infrastructure data. It combines structured command output, a small
+pipeline DSL, layered configuration, themes, and a plugin protocol for
+external commands.
 
 ## Status
 
-Early development. Internal tool for UiO OSP operators.
-Linux is the primary platform. Rust 2024 edition (nightly may be
-required).
+Published package and active development target. The tool is still most
+heavily exercised in the UiO OSP environment, but the package itself is
+the canonical single-crate implementation.
 
 ## Quick start
 
 ```bash
 cargo run -- --help
-cargo run -- ldap user alice
-cargo run -- ldap user alice --format json
-cargo run -- ldap user alice | P uid cn mail
+cargo run -- config show
+cargo run -- theme list
+cargo run -- plugins list
 ```
 
 Start the REPL:
@@ -37,6 +38,7 @@ cargo run
 - Plugin system: external commands discovered and invoked via a JSON
   subprocess protocol
 - Theming with color and unicode control
+- Per-invocation output and debug controls shared between CLI and REPL
 
 ## Installation
 
@@ -62,19 +64,6 @@ Bundled plugins (if present) go alongside the binary:
 ### CLI
 
 ```bash
-# Query LDAP
-cargo run -- ldap user alice
-cargo run -- ldap group staff
-
-# Pipeline: filter, project, sort
-cargo run -- ldap user alice | P uid cn mail
-cargo run -- ldap users --group staff | F uid=oistes | P uid cn
-
-# Output formats
-cargo run -- ldap user alice --format json
-cargo run -- ldap user alice --format table
-cargo run -- ldap user alice --format value
-
 # Config management
 cargo run -- config show
 cargo run -- config get ui.color.mode
@@ -127,7 +116,7 @@ See [docs/DSL.md](docs/DSL.md) for the full reference.
 ## Configuration
 
 Config file: `~/.config/osp/config.toml`
-Secrets file: `~/.config/osp/secrets.toml` (must be mode 0600)
+Secrets file: `~/.config/osp/secrets.toml` (owner-only mode is enforced on Unix)
 
 ### Precedence (highest first)
 
@@ -162,31 +151,6 @@ Select a profile with `--profile prod`.
 
 See [docs/CONFIG.md](docs/CONFIG.md) for details.
 
-## Architecture
-
-The root package is now the canonical single-crate implementation. The old
-multi-crate layout lives under [workspace/](/home/oistes/git/github.uio.no/osp/osp-cli-rust/workspace)
-as a compatibility/source mirror during the transition.
-
-The legacy workspace still contains ten crates with a strict downward dependency graph:
-
-```
-osp-cli          Binary, app wiring, dispatch, plugin manager
-osp-repl         Generic REPL engine (reedline). No business logic.
-osp-completion   Tab completion tree. Cursor-aware, independent of clap.
-osp-ui           Output rendering. Pure: rows in, string out.
-osp-services     Business logic orchestration. No CLI/REPL imports.
-osp-dsl          Pipeline DSL: parse, eval, stages. Pure transforms.
-osp-config       Config loading, interpolation, scoping, secrets.
-osp-ports        Trait definitions for external services (LdapDirectory).
-osp-api          Mock implementations for testing.
-osp-core         Domain types and enums. Zero internal dependencies.
-```
-
-Business logic (`osp-services`, `osp-dsl`) can run without the CLI or
-REPL. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full
-picture.
-
 ## Plugins
 
 External commands are discovered from explicit plugin directories,
@@ -198,6 +162,16 @@ JSON-over-stdin/stdout protocol, declare their commands with
 
 See [docs/WRITING_PLUGINS.md](docs/WRITING_PLUGINS.md) for a guide to
 writing and packaging plugins.
+
+## Documentation
+
+- User guide index: [docs/README.md](docs/README.md)
+- Config and profiles: [docs/CONFIG.md](docs/CONFIG.md)
+- REPL usage: [docs/REPL.md](docs/REPL.md)
+- Output and invocation flags: [docs/FORMATTING.md](docs/FORMATTING.md)
+- Plugins: [docs/USING_PLUGINS.md](docs/USING_PLUGINS.md)
+- Writing plugins: [docs/WRITING_PLUGINS.md](docs/WRITING_PLUGINS.md)
+- Troubleshooting: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ## Development
 
@@ -219,10 +193,10 @@ cargo run -- --debug ldap user x
 ### Project layout
 
 ```
-src/              Canonical single-crate implementation
-tests/            Root package integration/contract/e2e tests
-workspace/        Legacy multi-crate compatibility mirror
-docs/              Architecture docs, specs, plans
+src/               Canonical single-crate implementation
+tests/             Integration, contract, and PTY tests
+docs/              User and contributor documentation
+workspace/         Legacy compatibility mirror during the transition
 ```
 
 ## Contributing

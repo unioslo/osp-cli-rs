@@ -1,9 +1,0 @@
----
-source: src/osp_cli/app/tests/repl_runtime.rs
-assertion_line: 892
-expression: text
----
-unrecognized subcommand 'sho'
-
-- Usage ----
-  config <COMMAND>
