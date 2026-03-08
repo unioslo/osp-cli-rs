@@ -1171,8 +1171,6 @@ fn write_named_test_plugin_with_min_version(
     name: &str,
     min_osp_version: &str,
 ) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/usr/bin/env bash
@@ -1191,12 +1189,7 @@ JSON
         min_osp_version = min_osp_version
     );
 
-    std::fs::write(&plugin_path, script).expect("plugin should be written");
-    let mut perms = std::fs::metadata(&plugin_path)
-        .expect("metadata should be readable")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+    write_executable_script_atomically(&plugin_path, &script);
     plugin_path
 }
 
@@ -1206,8 +1199,6 @@ fn write_provider_test_plugin(
     plugin_id: &str,
     command_name: &str,
 ) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let plugin_path = dir.join(format!("osp-{plugin_id}"));
     let script = format!(
         r#"#!/usr/bin/env bash
@@ -1226,12 +1217,7 @@ JSON
         command_name = command_name
     );
 
-    std::fs::write(&plugin_path, script).expect("plugin should be written");
-    let mut perms = std::fs::metadata(&plugin_path)
-        .expect("metadata should be readable")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+    write_executable_script_atomically(&plugin_path, &script);
     plugin_path
 }
 
@@ -1241,8 +1227,6 @@ fn write_sleepy_test_plugin(
     name: &str,
     sleep_on_describe: bool,
 ) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/usr/bin/env bash
@@ -1265,12 +1249,7 @@ JSON
         sleep_on_describe = if sleep_on_describe { "true" } else { "false" }
     );
 
-    std::fs::write(&plugin_path, script).expect("plugin should be written");
-    let mut perms = std::fs::metadata(&plugin_path)
-        .expect("metadata should be readable")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+    write_executable_script_atomically(&plugin_path, &script);
     plugin_path
 }
 
@@ -1280,8 +1259,6 @@ fn write_timeout_leak_test_plugin(
     name: &str,
     marker: &std::path::Path,
 ) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/usr/bin/env bash
@@ -1299,12 +1276,7 @@ sleep 1
         marker = marker.display(),
     );
 
-    std::fs::write(&plugin_path, script).expect("plugin should be written");
-    let mut perms = std::fs::metadata(&plugin_path)
-        .expect("metadata should be readable")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+    write_executable_script_atomically(&plugin_path, &script);
     plugin_path
 }
 
@@ -1314,8 +1286,6 @@ fn write_marker_describe_plugin(
     name: &str,
     marker: &std::path::Path,
 ) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let plugin_path = dir.join(format!("osp-{name}"));
     let script = format!(
         r#"#!/usr/bin/env bash
@@ -1335,12 +1305,7 @@ JSON
         name = name,
     );
 
-    std::fs::write(&plugin_path, script).expect("plugin should be written");
-    let mut perms = std::fs::metadata(&plugin_path)
-        .expect("metadata should be readable")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+    write_executable_script_atomically(&plugin_path, &script);
     plugin_path
 }
 
@@ -1351,8 +1316,6 @@ fn write_dispatch_fixture_plugin(
     command_name: &str,
     body: &str,
 ) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
     let plugin_path = dir.join(format!("osp-{plugin_id}"));
     let script = format!(
         r#"#!/usr/bin/env bash
@@ -1370,11 +1333,33 @@ fi
         body = body
     );
 
-    std::fs::write(&plugin_path, script).expect("plugin should be written");
-    let mut perms = std::fs::metadata(&plugin_path)
+    write_executable_script_atomically(&plugin_path, &script);
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_executable_script_atomically(path: &std::path::Path, script: &str) {
+    use std::fs::File;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp_path = path.with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp_path);
+    let mut file = File::create(&tmp_path).expect("temp plugin should be created");
+    file.write_all(script.as_bytes())
+        .expect("plugin should be written");
+    file.sync_all().expect("temp plugin should be flushed");
+
+    let mut perms = file
+        .metadata()
         .expect("metadata should be readable")
         .permissions();
     perms.set_mode(0o755);
-    std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
-    plugin_path
+    file.set_permissions(perms)
+        .expect("temp plugin should be executable");
+    drop(file);
+
+    // Publish the executable in one rename step so discovery never races a partially
+    // written script. This keeps the tests from manufacturing ETXTBSY on CI.
+    std::fs::rename(&tmp_path, path).expect("plugin should be installed atomically");
 }
