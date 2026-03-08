@@ -20,11 +20,11 @@ edition = "2024"
 [workspace.dependencies]
 anyhow = "1.0"
 assert_cmd = "2.0"
-clap = { version = "4.5", features = ["derive"] }
-comfy-table = { version = "7.1", features = ["custom_styling"] }
+clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context", "suggestions", "color"] }
+comfy-table = { version = "7.1", default-features = false, features = ["custom_styling"] }
 chrono = "0.4"
 fuzzy-matcher = "0.3"
-miette = { version = "7.4", features = ["fancy"] }
+miette = { version = "7.4", default-features = false, features = ["derive", "fancy"] }
 nu-ansi-term = "0.50"
 predicates = "3.1"
 reedline = "0.33"
@@ -36,6 +36,7 @@ sha2 = "0.10"
 shell-words = "1.1"
 toml = "0.8"
 terminal_size = "0.4"
+thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 unicode-width = "0.2"

@@ -2,12 +2,39 @@ use std::io::{ErrorKind, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use osp_core::{
     output_model::{Group, OutputItems},
     row::Row,
 };
 use serde_json::Value;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum JqError {
+    #[error("JQ expects a jq expression")]
+    MissingExpression,
+    #[error("failed to encode jq payload")]
+    SerializePayload {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("jq executable not found in PATH: {source}")]
+    ExecutableNotFound { source: std::io::Error },
+    #[error("jq process I/O failed: {source}")]
+    Io { source: std::io::Error },
+    #[error("jq stdin writer thread panicked")]
+    StdinWriterPanicked,
+    #[error("jq failed with status {status_code}")]
+    FailedWithoutStderr { status_code: i32 },
+    #[error("jq failed: {stderr}")]
+    FailedWithStderr { stderr: String },
+    #[error("jq output is not valid JSON")]
+    InvalidJsonOutput {
+        #[source]
+        source: serde_json::Error,
+    },
+}
 
 pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     let expr = normalize_expression(spec)?;
@@ -17,10 +44,10 @@ pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     }
 }
 
-fn normalize_expression(spec: &str) -> Result<String> {
+fn normalize_expression(spec: &str) -> std::result::Result<String, JqError> {
     let trimmed = spec.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("JQ expects a jq expression"));
+        return Err(JqError::MissingExpression);
     }
 
     let mut expr = trimmed.to_string();
@@ -35,7 +62,7 @@ fn normalize_expression(spec: &str) -> Result<String> {
         expr = rest.trim_start().to_string();
     }
     if expr.trim().is_empty() {
-        return Err(anyhow!("JQ expects a jq expression"));
+        return Err(JqError::MissingExpression);
     }
     Ok(expr)
 }
@@ -141,40 +168,42 @@ fn json_value_to_row(value: Value) -> Vec<Row> {
     }
 }
 
-fn run_jq(expr: &str, payload: &Value) -> Result<Option<Value>> {
-    let input = serde_json::to_string(payload)?;
+fn run_jq(expr: &str, payload: &Value) -> std::result::Result<Option<Value>, JqError> {
+    let input =
+        serde_json::to_string(payload).map_err(|source| JqError::SerializePayload { source })?;
     let mut child = Command::new("jq")
         .arg(expr)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| anyhow!("jq executable not found in PATH: {err}"))?;
+        .map_err(|source| JqError::ExecutableNotFound { source })?;
 
     let writer = child.stdin.take().map(|mut stdin| {
         let input = input.into_bytes();
         thread::spawn(move || stdin.write_all(&input))
     });
 
-    let output = child.wait_with_output()?;
+    let output = child
+        .wait_with_output()
+        .map_err(|source| JqError::Io { source })?;
     if let Some(writer) = writer {
         match writer.join() {
             Ok(Ok(())) => {}
             Ok(Err(err)) if !output.status.success() && err.kind() == ErrorKind::BrokenPipe => {}
-            Ok(Err(err)) => return Err(err.into()),
-            Err(_) => return Err(anyhow!("jq stdin writer thread panicked")),
+            Ok(Err(source)) => return Err(JqError::Io { source }),
+            Err(_) => return Err(JqError::StdinWriterPanicked),
         }
     }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if stderr.is_empty() {
-            return Err(anyhow!(
-                "jq failed with status {}",
-                output.status.code().unwrap_or(-1)
-            ));
+            return Err(JqError::FailedWithoutStderr {
+                status_code: output.status.code().unwrap_or(-1),
+            });
         }
-        return Err(anyhow!("jq failed: {stderr}"));
+        return Err(JqError::FailedWithStderr { stderr });
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -184,7 +213,7 @@ fn run_jq(expr: &str, payload: &Value) -> Result<Option<Value>> {
     }
 
     let parsed = serde_json::from_str::<Value>(trimmed)
-        .map_err(|_| anyhow!("jq output is not valid JSON"))?;
+        .map_err(|source| JqError::InvalidJsonOutput { source })?;
     Ok(Some(parsed))
 }
 
@@ -344,10 +373,22 @@ mod tests {
         } else {
             set_env_for_test("PATH", None);
         }
-        assert!(missing.to_string().contains("jq executable not found"));
+        assert!(matches!(missing, super::JqError::ExecutableNotFound { .. }));
 
         let invalid = run_jq(".[]", &json!([1, 2])).expect_err("non-json jq output should fail");
-        assert!(invalid.to_string().contains("jq output is not valid JSON"));
+        assert!(matches!(invalid, super::JqError::InvalidJsonOutput { .. }));
+    }
+
+    #[test]
+    fn normalize_expression_reports_typed_missing_expression_unit() {
+        assert!(matches!(
+            normalize_expression("   ").unwrap_err(),
+            super::JqError::MissingExpression
+        ));
+        assert!(matches!(
+            normalize_expression("'   '").unwrap_err(),
+            super::JqError::MissingExpression
+        ));
     }
 
     #[test]

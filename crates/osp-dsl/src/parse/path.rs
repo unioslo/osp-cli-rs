@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathExpression {
@@ -23,16 +23,42 @@ pub enum Selector {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PathParseError {
+    #[error("path expression cannot be empty")]
+    EmptyExpression,
+    #[error("path expression cannot be only '.'")]
+    DotOnlyExpression,
+    #[error("unmatched ']' in path expression")]
+    UnmatchedClosingBracket,
+    #[error("empty path segment")]
+    EmptySegment,
+    #[error("unclosed '[' in path expression")]
+    UnclosedBracket,
+    #[error("unexpected character in path segment")]
+    UnexpectedSegmentCharacter,
+    #[error("unclosed '[' in path segment")]
+    UnclosedSegmentBracket,
+    #[error("slice selector has too many components")]
+    SliceTooManyComponents,
+    #[error("invalid list index: {content}")]
+    InvalidListIndex { content: String },
+    #[error("invalid integer in slice selector: {value}")]
+    InvalidSliceInteger { value: String },
+}
+
+type Result<T> = std::result::Result<T, PathParseError>;
+
 pub fn parse_path(input: &str) -> Result<PathExpression> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("path expression cannot be empty"));
+        return Err(PathParseError::EmptyExpression);
     }
 
     let absolute = trimmed.starts_with('.');
     let body = if absolute { &trimmed[1..] } else { trimmed };
     if body.is_empty() {
-        return Err(anyhow!("path expression cannot be only '.'"));
+        return Err(PathParseError::DotOnlyExpression);
     }
 
     let raw_segments = split_path_segments(body)?;
@@ -102,14 +128,14 @@ fn split_path_segments(path: &str) -> Result<Vec<String>> {
             }
             ']' => {
                 if depth == 0 {
-                    return Err(anyhow!("unmatched ']' in path expression"));
+                    return Err(PathParseError::UnmatchedClosingBracket);
                 }
                 depth -= 1;
                 current.push(ch);
             }
             '.' if depth == 0 => {
                 if current.is_empty() {
-                    return Err(anyhow!("empty path segment"));
+                    return Err(PathParseError::EmptySegment);
                 }
                 segments.push(current);
                 current = String::new();
@@ -119,10 +145,10 @@ fn split_path_segments(path: &str) -> Result<Vec<String>> {
     }
 
     if depth != 0 {
-        return Err(anyhow!("unclosed '[' in path expression"));
+        return Err(PathParseError::UnclosedBracket);
     }
     if current.is_empty() {
-        return Err(anyhow!("empty path segment"));
+        return Err(PathParseError::EmptySegment);
     }
     segments.push(current);
 
@@ -144,7 +170,7 @@ fn parse_segment(raw_segment: &str) -> Result<PathSegment> {
 
     while index < chars.len() {
         if chars[index] != '[' {
-            return Err(anyhow!("unexpected character in path segment"));
+            return Err(PathParseError::UnexpectedSegmentCharacter);
         }
         index += 1;
 
@@ -154,7 +180,7 @@ fn parse_segment(raw_segment: &str) -> Result<PathSegment> {
             index += 1;
         }
         if index == chars.len() {
-            return Err(anyhow!("unclosed '[' in path segment"));
+            return Err(PathParseError::UnclosedSegmentBracket);
         }
         index += 1;
 
@@ -172,7 +198,7 @@ fn parse_selector(content: &str) -> Result<Selector> {
     if content.contains(':') {
         let parts: Vec<&str> = content.split(':').collect();
         if parts.len() > 3 {
-            return Err(anyhow!("slice selector has too many components"));
+            return Err(PathParseError::SliceTooManyComponents);
         }
 
         let start = parse_optional_i64(parts.first().copied().unwrap_or_default())?;
@@ -184,7 +210,9 @@ fn parse_selector(content: &str) -> Result<Selector> {
 
     let index = content
         .parse::<i64>()
-        .map_err(|_| anyhow!("invalid list index: {content}"))?;
+        .map_err(|_| PathParseError::InvalidListIndex {
+            content: content.to_string(),
+        })?;
     Ok(Selector::Index(index))
 }
 
@@ -196,12 +224,16 @@ fn parse_optional_i64(value: &str) -> Result<Option<i64>> {
         .trim()
         .parse::<i64>()
         .map(Some)
-        .map_err(|_| anyhow!("invalid integer in slice selector: {value}"))
+        .map_err(|_| PathParseError::InvalidSliceInteger {
+            value: value.to_string(),
+        })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Selector, expression_to_flat_key, parse_path, requires_materialization};
+    use super::{
+        PathParseError, Selector, expression_to_flat_key, parse_path, requires_materialization,
+    };
 
     #[test]
     fn parses_dotted_path_with_selectors() {
@@ -238,5 +270,33 @@ mod tests {
 
         let path = parse_path("members[-1].uid").expect("path should parse");
         assert_eq!(expression_to_flat_key(&path), None);
+    }
+
+    #[test]
+    fn parse_path_reports_typed_errors_for_common_invalid_inputs_unit() {
+        assert_eq!(
+            parse_path("   ").unwrap_err(),
+            PathParseError::EmptyExpression
+        );
+        assert_eq!(
+            parse_path(".").unwrap_err(),
+            PathParseError::DotOnlyExpression
+        );
+        assert_eq!(
+            parse_path("items.").unwrap_err(),
+            PathParseError::EmptySegment
+        );
+        assert_eq!(
+            parse_path("items[abc]").unwrap_err(),
+            PathParseError::InvalidListIndex {
+                content: "abc".to_string()
+            }
+        );
+        assert_eq!(
+            parse_path("items[:x]").unwrap_err(),
+            PathParseError::InvalidSliceInteger {
+                value: "x".to_string()
+            }
+        );
     }
 }

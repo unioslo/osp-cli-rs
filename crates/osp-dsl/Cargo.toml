@@ -7,6 +7,7 @@ edition.workspace = true
 anyhow.workspace = true
 regex.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 osp-core = { path = "../osp-core" }
 
 [dev-dependencies]
