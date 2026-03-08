@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use insta::assert_snapshot;
 use predicates::prelude::*;
 
 #[cfg(unix)]
@@ -809,15 +810,16 @@ profile.default = "uio"
         "get",
         "missing.key",
     ]);
-    cmd.assert()
-        .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("- Errors "))
-        .stderr(predicate::str::contains(
-            "config key not found: missing.key",
-        ))
-        .stderr(predicate::str::contains("\x1b[").not())
-        .stderr(predicate::str::contains("──").not());
+    let output = cmd.assert().failure().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should stay empty: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_snapshot!(
+        "config_get_missing_key_grouped_stderr",
+        String::from_utf8(output.stderr).expect("stderr should be utf-8")
+    );
 
     let _ = std::fs::remove_dir_all(&home);
 }

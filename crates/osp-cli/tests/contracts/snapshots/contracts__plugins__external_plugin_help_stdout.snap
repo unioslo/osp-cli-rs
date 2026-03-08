@@ -1,0 +1,5 @@
+---
+source: crates/osp-cli/tests/contracts/plugins.rs
+expression: help_flag_stdout.clone()
+---
+hello plugin help text

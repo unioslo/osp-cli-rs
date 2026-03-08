@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use insta::assert_snapshot;
 use predicates::prelude::*;
 
 #[test]
@@ -267,12 +268,16 @@ fn plugin_non_zero_exit_surfaces_stderr_contract() {
     cmd.env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["boom"]);
-    cmd.assert()
-        .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains(
-            "plugin boom exited with status 7: boom-from-stderr",
-        ));
+    let output = cmd.assert().failure().get_output().clone();
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should stay empty: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_snapshot!(
+        "plugin_non_zero_exit_stderr",
+        String::from_utf8(output.stderr).expect("stderr should be utf-8")
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -311,13 +316,13 @@ fn plugin_messages_stay_on_stderr_when_data_is_json_contract() {
     cmd.env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["--json", "messageful"]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "\"message\": \"json-from-plugin\"",
-        ))
-        .stdout(predicate::str::contains("plugin-warning-line").not())
-        .stderr(predicate::str::contains("plugin-warning-line"));
+    let output = cmd.assert().success().get_output().clone();
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(stdout.contains("\"message\": \"json-from-plugin\""));
+    assert!(!stdout.contains("plugin-warning-line"));
+    assert_snapshot!("plugin_messages_json_stdout", stdout);
+    assert_snapshot!("plugin_messages_json_stderr", stderr);
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -396,19 +401,20 @@ fn external_plugin_help_is_passed_through_contract() {
     cmd.env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["hello", "--help"]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("hello plugin help text"));
+    let help_flag = cmd.assert().success().get_output().clone();
+    let help_flag_stdout =
+        String::from_utf8(help_flag.stdout).expect("help stdout should be utf-8");
+    assert_snapshot!("external_plugin_help_stdout", help_flag_stdout.clone());
 
     let mut cmd_help_subcommand = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd_help_subcommand
         .env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["hello", "help"]);
-    cmd_help_subcommand
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("hello plugin help text"));
+    let help_subcommand = cmd_help_subcommand.assert().success().get_output().clone();
+    let help_subcommand_stdout =
+        String::from_utf8(help_subcommand.stdout).expect("help stdout should be utf-8");
+    assert_eq!(help_subcommand_stdout, help_flag_stdout);
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
@@ -425,11 +431,11 @@ fn external_plugin_help_keeps_raw_stderr_contract() {
     cmd.env("HOME", &home)
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["hello", "--help"]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("hello plugin help text"))
-        .stderr(predicate::str::contains("plugin help note"))
-        .stderr(predicate::str::contains("Warnings").not());
+    let output = cmd.assert().success().get_output().clone();
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert_snapshot!("external_plugin_help_stderr_stdout", stdout);
+    assert_snapshot!("external_plugin_help_stderr_stderr", stderr);
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);

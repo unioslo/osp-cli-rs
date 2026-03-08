@@ -1,0 +1,10 @@
+---
+source: crates/osp-cli/tests/contracts/plugins.rs
+assertion_line: 277
+expression: "String::from_utf8(output.stderr).expect(\"stderr should be utf-8\")"
+---
+2026-03-08T03:05:36.270882Z  WARN osp_cli::plugin_manager::dispatch: plugin command exited with non-zero status plugin_id=boom command=boom status_code=7 stderr=boom-from-stderr
+- Errors ---
+- plugin boom exited with status 7: boom-from-stderr
+Hint: inspect the plugin stderr output or rerun with -v/-vv for more context
+------------
