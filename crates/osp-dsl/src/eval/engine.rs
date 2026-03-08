@@ -692,4 +692,57 @@ mod tests {
         assert_eq!(output.meta.key_index, vec!["dept", "total"]);
         assert!(output.meta.grouped);
     }
+
+    #[test]
+    fn grouped_rows_ignore_flat_row_only_projection_and_copy_preserves_flag() {
+        let grouped = OutputResult {
+            items: OutputItems::Groups(vec![osp_core::output_model::Group {
+                groups: json!({"dept": "sales"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+                aggregates: json!({"total": 2}).as_object().cloned().expect("object"),
+                rows: vec![
+                    json!({"uid": "alice"})
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
+                ],
+            }]),
+            meta: Default::default(),
+        };
+
+        let projected =
+            apply_output_pipeline(grouped.clone(), &["P uid".to_string()]).expect("pipeline works");
+        assert_eq!(projected.items, grouped.items);
+
+        let copied = apply_output_pipeline(grouped, &["Y".to_string()]).expect("copy works");
+        assert!(copied.meta.wants_copy);
+        assert!(copied.meta.grouped);
+    }
+
+    #[test]
+    fn streaming_materializes_cleanly_at_sort_barrier() {
+        let rows = vec![
+            json!({"uid": "bob"}).as_object().cloned().expect("object"),
+            json!({"uid": "alice"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let output = execute_pipeline_streaming(rows, &["S uid".to_string()])
+            .expect("streaming pipeline should pass");
+
+        assert_eq!(
+            output_rows(&output)
+                .iter()
+                .map(|row| row
+                    .get("uid")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["alice", "bob"]
+        );
+    }
 }
