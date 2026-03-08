@@ -75,6 +75,11 @@ def parse_args() -> argparse.Namespace:
         help="Run `cargo package --allow-dirty` in the generated crate.",
     )
     parser.add_argument(
+        "--run-cov",
+        action="store_true",
+        help="Run `cargo llvm-cov --lib --all-features` in the generated crate.",
+    )
+    parser.add_argument(
         "--keep-existing",
         action="store_true",
         help="Do not delete the output directory before regenerating it.",
@@ -261,9 +266,31 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content)
 
 
-def copy_crate_sources(out_src: Path, crates: list[CrateInfo]) -> None:
+def rename_snapshot_filename(filename: str, source_crate_name: str, foundation_crate_name: str) -> str:
+    rust_ident = source_crate_name.replace("-", "_")
+    if filename.startswith(f"{rust_ident}__"):
+        return f"{foundation_crate_name.replace('-', '_')}__{filename}"
+    return filename
+
+
+def copy_support_files(crate: CrateInfo, dest_root: Path, foundation_crate_name: str) -> None:
+    for source in crate.src_dir.rglob("*"):
+        if not source.is_file() or source.suffix == ".rs":
+            continue
+        relative = source.relative_to(crate.src_dir)
+        if source.suffix == ".snap":
+            relative = relative.with_name(
+                rename_snapshot_filename(relative.name, crate.package_name, foundation_crate_name)
+            )
+        dest = dest_root / relative
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+
+
+def copy_crate_sources(out_src: Path, crates: list[CrateInfo], foundation_crate_name: str) -> None:
     for crate in crates:
         dest_root = out_src / crate.module_name
+        copy_support_files(crate, dest_root, foundation_crate_name)
         for source in crate.src_dir.rglob("*.rs"):
             relative = source.relative_to(crate.src_dir)
             if relative.name == "main.rs":
@@ -364,7 +391,7 @@ def write_generated_crate(out_dir: Path, package_name: str) -> None:
     dependencies, dev_dependencies = merged_dependencies(crates, workspace_deps)
 
     out_src = out_dir / "src"
-    copy_crate_sources(out_src, crates)
+    copy_crate_sources(out_src, crates, package_name)
     write_text(out_src / "lib.rs", render_foundation_lib(crates))
     write_text(out_src / "bin" / "osp.rs", render_binary(package_name))
 
@@ -398,6 +425,8 @@ def main() -> None:
         run(["cargo", "check", "--all-features"], cwd=out_dir)
     if args.run_tests:
         run(["cargo", "test", "--lib", "--all-features"], cwd=out_dir)
+    if args.run_cov:
+        run(["cargo", "llvm-cov", "--lib", "--all-features"], cwd=out_dir)
     if args.run_package:
         run(["cargo", "package", "--allow-dirty"], cwd=out_dir)
 

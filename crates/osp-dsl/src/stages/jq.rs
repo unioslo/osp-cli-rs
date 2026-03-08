@@ -169,9 +169,17 @@ fn json_value_to_row(value: Value) -> Vec<Row> {
 }
 
 fn run_jq(expr: &str, payload: &Value) -> std::result::Result<Option<Value>, JqError> {
+    run_jq_with_program("jq", expr, payload)
+}
+
+fn run_jq_with_program(
+    program: &str,
+    expr: &str,
+    payload: &Value,
+) -> std::result::Result<Option<Value>, JqError> {
     let input =
         serde_json::to_string(payload).map_err(|source| JqError::SerializePayload { source })?;
-    let mut child = Command::new("jq")
+    let mut child = Command::new(program)
         .arg(expr)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -226,7 +234,7 @@ mod tests {
 
     use super::{
         apply, apply_rows, group_to_value, json_to_rows, normalize_expression, run_jq,
-        value_to_group,
+        run_jq_with_program, value_to_group,
     };
 
     fn row(value: serde_json::Value) -> osp_core::row::Row {
@@ -239,13 +247,6 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn set_env_for_test(key: &str, value: Option<&str>) {
-        match value {
-            Some(value) => unsafe { std::env::set_var(key, value) },
-            None => unsafe { std::env::remove_var(key) },
-        }
     }
 
     #[test]
@@ -318,8 +319,18 @@ mod tests {
             row(json!({"uid": "oistes"})),
             row(json!({"uid": "andreasd"})),
         ];
-        let filtered = apply_rows(rows.clone(), "map(select(.uid == \"oistes\"))")
-            .expect("jq row filter should succeed");
+        let filtered = match apply_rows(rows.clone(), "map(select(.uid == \"oistes\"))") {
+            Ok(filtered) => filtered,
+            Err(err)
+                if matches!(
+                    err.downcast_ref::<super::JqError>(),
+                    Some(super::JqError::ExecutableNotFound { .. })
+                ) =>
+            {
+                return;
+            }
+            Err(err) => panic!("jq row filter should succeed: {err}"),
+        };
         assert_eq!(filtered.len(), 1);
         assert_eq!(
             filtered[0].get("uid").and_then(|value| value.as_str()),
@@ -327,10 +338,18 @@ mod tests {
         );
 
         let payload = json!([{"uid": "oistes"}]);
-        let direct = run_jq("map(.uid)", &payload).expect("jq should run");
+        let direct = match run_jq("map(.uid)", &payload) {
+            Ok(direct) => direct,
+            Err(super::JqError::ExecutableNotFound { .. }) => return,
+            Err(err) => panic!("jq should run: {err}"),
+        };
         assert_eq!(direct, Some(json!(["oistes"])));
 
-        let none = run_jq("empty", &payload).expect("jq empty output should be allowed");
+        let none = match run_jq("empty", &payload) {
+            Ok(none) => none,
+            Err(super::JqError::ExecutableNotFound { .. }) => return,
+            Err(err) => panic!("jq empty output should be allowed: {err}"),
+        };
         assert!(none.is_none());
 
         let groups = OutputItems::Groups(vec![Group {
@@ -338,11 +357,21 @@ mod tests {
             aggregates: row(json!({"count": 1})),
             rows: vec![row(json!({"uid": "oistes"}))],
         }]);
-        let replaced = apply(
+        let replaced = match apply(
             groups,
             "{groups:{team:\"eng\"}, aggregates:{count:9}, rows:[{uid:\"andreasd\"}]}",
-        )
-        .expect("group replacement should succeed");
+        ) {
+            Ok(replaced) => replaced,
+            Err(err)
+                if matches!(
+                    err.downcast_ref::<super::JqError>(),
+                    Some(super::JqError::ExecutableNotFound { .. })
+                ) =>
+            {
+                return;
+            }
+            Err(err) => panic!("group replacement should succeed: {err}"),
+        };
         let OutputItems::Groups(groups) = replaced else {
             panic!("expected grouped output");
         };
@@ -364,18 +393,21 @@ mod tests {
     #[test]
     fn run_jq_reports_missing_binary_and_invalid_output() {
         let _guard = env_lock().lock().expect("env lock should not be poisoned");
-        let original_path = std::env::var("PATH").ok();
-        set_env_for_test("PATH", Some(""));
-        let missing =
-            run_jq(".", &json!({"uid": "oistes"})).expect_err("missing jq binary should fail");
-        if let Some(value) = original_path.as_deref() {
-            set_env_for_test("PATH", Some(value));
-        } else {
-            set_env_for_test("PATH", None);
-        }
+        let missing = run_jq_with_program(
+            "jq-this-command-should-not-exist",
+            ".",
+            &json!({"uid": "oistes"}),
+        )
+        .expect_err("missing jq binary should fail");
         assert!(matches!(missing, super::JqError::ExecutableNotFound { .. }));
 
-        let invalid = run_jq(".[]", &json!([1, 2])).expect_err("non-json jq output should fail");
+        let invalid = match run_jq(".[]", &json!([1, 2])) {
+            Err(err) => err,
+            Ok(_) => panic!("non-json jq output should fail"),
+        };
+        if matches!(invalid, super::JqError::ExecutableNotFound { .. }) {
+            return;
+        }
         assert!(matches!(invalid, super::JqError::InvalidJsonOutput { .. }));
     }
 
