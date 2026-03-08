@@ -1,15 +1,22 @@
 # osp-cli
 
-`osp-cli` is a Rust CLI and interactive REPL for querying and managing
-OSP infrastructure data. It combines structured command output, a small
-pipeline DSL, layered configuration, themes, and a plugin protocol for
-external commands.
+[![Verify](https://github.com/unioslo/osp-cli-rs/actions/workflows/verify.yml/badge.svg?branch=main)](https://github.com/unioslo/osp-cli-rs/actions/workflows/verify.yml)
+[![Release](https://github.com/unioslo/osp-cli-rs/actions/workflows/release.yml/badge.svg)](https://github.com/unioslo/osp-cli-rs/actions/workflows/release.yml)
+[![Crates.io](https://img.shields.io/crates/v/osp-cli.svg)](https://crates.io/crates/osp-cli)
+[![Docs.rs](https://img.shields.io/docsrs/osp-cli)](https://docs.rs/osp-cli)
+
+`osp-cli` is a batteries-included Rust CLI and interactive REPL for
+structured command workflows. It combines a command runner, completion,
+history, inline help, layered configuration, themes, a small pipeline
+DSL, and a plugin protocol for external commands.
+
+`OSP` is just the project name here. The crate is not tied to one
+particular data domain.
 
 ## Status
 
-Published package and active development target. The tool is still most
-heavily exercised in the UiO OSP environment, but the package itself is
-the canonical single-crate implementation.
+Published crate and active development target. The root package is the
+canonical single-crate implementation.
 
 ## Quick start
 
@@ -28,8 +35,8 @@ cargo run
 
 ## Features
 
-- CLI commands and an interactive REPL with history, completion, and
-  inline help
+- CLI commands and an interactive REPL with history, completion, inline
+  help, and scoped shells
 - Pipeline DSL for filtering, projecting, grouping, sorting, and
   aggregating row data (`| F uid=alice | P uid cn mail | S cn`)
 - Multiple output formats: table, JSON, markdown, mreg, value
@@ -78,7 +85,7 @@ cargo run -- doctor
 
 ### REPL
 
-When started without a command, `osp` drops into an interactive REPL:
+When started without a command, `osp` starts an interactive REPL:
 
 ```
 $ cargo run
@@ -90,7 +97,7 @@ osp> exit
 ```
 
 The REPL shares the same command grammar as the CLI. It adds history,
-tab completion, syntax highlighting, and scoped shells.
+tab completion, syntax highlighting, inline help, and scoped shells.
 
 ### Pipeline DSL
 
@@ -201,7 +208,7 @@ workspace/         Legacy compatibility mirror during the transition
 
 ## Contributing
 
-Internal project. Contributions welcome from UiO OSP team members.
+Contributions are welcome.
 
 Commit messages follow `<type>(<scope>): <subject>` convention.
 See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
