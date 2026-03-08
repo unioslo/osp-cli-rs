@@ -219,7 +219,12 @@ fn parse_hex_rgb(value: &str) -> Option<(u8, u8, u8)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{StyleOverrides, StyleToken, apply_style, apply_style_with_overrides};
+    use crate::theme;
+
+    use super::{
+        StyleOverrides, StyleToken, apply_style, apply_style_spec, apply_style_with_overrides,
+        apply_style_with_theme, apply_style_with_theme_overrides,
+    };
 
     #[test]
     fn plain_theme_disables_styling_even_with_color_enabled() {
@@ -312,5 +317,92 @@ mod tests {
             &overrides,
         );
         assert!(out.starts_with("\x1b[38;2;255;170;0m"));
+    }
+
+    #[test]
+    fn none_token_and_invalid_specs_fall_back_to_plain_text_unit() {
+        assert_eq!(
+            apply_style("plain", StyleToken::None, true, "nord"),
+            "plain"
+        );
+        assert_eq!(apply_style_spec("plain", "mystery-token", true), "plain");
+        assert_eq!(
+            apply_style_spec("plain", "bold #zzzzzz", true),
+            "\x1b[1mplain\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn theme_and_override_helpers_cover_prompt_panel_and_ip_tokens_unit() {
+        let theme = theme::resolve_theme("nord");
+
+        let prompt = apply_style_with_theme("osp", StyleToken::PromptCommand, true, &theme);
+        let ipv6 = apply_style_with_theme("::1", StyleToken::Ipv6, true, &theme);
+        assert_ne!(prompt, "osp");
+        assert_ne!(ipv6, "::1");
+
+        let overrides = StyleOverrides {
+            panel_border: Some("underline".to_string()),
+            panel_title: Some("#445566".to_string()),
+            ipv4: Some("bright-green".to_string()),
+            bool_false: Some("red".to_string()),
+            null_value: Some("dim".to_string()),
+            ..Default::default()
+        };
+
+        assert!(
+            apply_style_with_theme_overrides(
+                "border",
+                StyleToken::PanelBorder,
+                true,
+                &theme,
+                &overrides
+            )
+            .starts_with("\x1b[4m")
+        );
+        assert!(
+            apply_style_with_theme_overrides(
+                "title",
+                StyleToken::PanelTitle,
+                true,
+                &theme,
+                &overrides
+            )
+            .starts_with("\x1b[38;2;68;85;102m")
+        );
+        assert!(
+            apply_style_with_theme_overrides(
+                "127.0.0.1",
+                StyleToken::Ipv4,
+                true,
+                &theme,
+                &overrides
+            )
+            .starts_with("\x1b[92m")
+        );
+        assert!(
+            apply_style_with_theme_overrides(
+                "false",
+                StyleToken::BoolFalse,
+                true,
+                &theme,
+                &overrides
+            )
+            .starts_with("\x1b[31m")
+        );
+        assert!(
+            apply_style_with_theme_overrides("null", StyleToken::Null, true, &theme, &overrides)
+                .starts_with("\x1b[2m")
+        );
+    }
+
+    #[test]
+    fn prompt_text_and_trace_tokens_cover_theme_defaults_unit() {
+        let theme = theme::resolve_theme("dracula");
+        let prompt = apply_style_with_theme("osp>", StyleToken::PromptText, true, &theme);
+        let trace = apply_style_with_theme("trace", StyleToken::MessageTrace, true, &theme);
+
+        assert_ne!(prompt, "osp>");
+        assert_ne!(trace, "trace");
     }
 }

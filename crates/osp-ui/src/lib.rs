@@ -596,6 +596,47 @@ mod tests {
     }
 
     #[test]
+    fn auto_mode_forced_unicode_promotes_rich_backend_unit() {
+        let settings = RenderSettings {
+            mode: RenderMode::Auto,
+            color: ColorMode::Auto,
+            unicode: UnicodeMode::Always,
+            runtime: super::RenderRuntime {
+                stdout_is_tty: false,
+                terminal: Some("dumb".to_string()),
+                no_color: true,
+                width: Some(64),
+                locale_utf8: Some(false),
+            },
+            ..RenderSettings::test_plain(OutputFormat::Table)
+        };
+
+        let resolved = settings.resolve_render_settings();
+        assert_eq!(resolved.backend, RenderBackend::Rich);
+        assert!(!resolved.color);
+        assert!(resolved.unicode);
+    }
+
+    #[test]
+    fn copy_helpers_force_plain_copy_settings_for_rows_unit() {
+        let rows = vec![{
+            let mut row = Row::new();
+            row.insert("value".to_string(), json!("hello"));
+            row
+        }];
+        let settings = RenderSettings {
+            mode: RenderMode::Rich,
+            color: ColorMode::Always,
+            unicode: UnicodeMode::Always,
+            ..RenderSettings::test_plain(OutputFormat::Value)
+        };
+
+        let copied = render_rows_for_copy(&rows, &settings);
+        assert_eq!(copied.trim(), "hello");
+        assert!(!copied.contains("\x1b["));
+    }
+
+    #[test]
     fn render_document_helpers_force_plain_copy_mode_unit() {
         let document = crate::Document {
             blocks: vec![Block::Line(crate::LineBlock {
