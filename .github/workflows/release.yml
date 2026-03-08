@@ -162,13 +162,14 @@ jobs:
           Copy-Item "LICENSE" $stageDir
           $archivePath = Join-Path "dist" "$artifactBase.zip"
           Compress-Archive -Path "$stageDir/*" -DestinationPath $archivePath -Force
-          python - <<'PY'
+          $pythonScript = @'
           import hashlib
           from pathlib import Path
           archive = next(Path("dist").glob("*.zip"))
           digest = hashlib.sha256(archive.read_bytes()).hexdigest()
           Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n")
-          PY
+          '@
+          python -c $pythonScript
 
       - name: Upload packaged artifact
         uses: actions/upload-artifact@v4
