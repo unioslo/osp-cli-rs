@@ -52,7 +52,7 @@ fn spawn_repl(plugins: &Path) -> PtySession {
     cmd.env("XDG_STATE_HOME", home.join(".local/state"));
     cmd.env("TERM", "xterm-256color");
     cmd.env("NO_COLOR", "1");
-    cmd.env("OSP__REPL__INTRO", "false");
+    cmd.env("OSP__REPL__INTRO", "none");
     cmd.env("OSP__REPL__SIMPLE_PROMPT", "true");
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
     cmd.env("OSP_PLUGIN_PATH", plugins);
@@ -170,7 +170,8 @@ fn write_provider_plugin(
 
     let plugin_path = dir.join(format!("osp-{plugin_id}"));
     let script = format!(
-        r#"#!/usr/bin/env bash
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}

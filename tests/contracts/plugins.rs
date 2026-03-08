@@ -445,7 +445,7 @@ fn ignores_non_plugin_extension_files_contract() {
 
     let dir = make_temp_dir("osp-cli-ignore-script");
     let script_path = dir.join("osp-ignore.sh");
-    std::fs::write(&script_path, "#!/usr/bin/env bash\necho should-not-run\n")
+    std::fs::write(&script_path, "#!/bin/sh\necho should-not-run\n")
         .expect("script should be written");
     let mut perms = std::fs::metadata(&script_path)
         .expect("metadata should be readable")
@@ -1009,7 +1009,8 @@ fn write_hello_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-hello");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"hello","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hello","about":"hello plugin","args":[],"flags":{},"subcommands":[]}]}
@@ -1042,7 +1043,8 @@ fn write_message_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-messageful");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"messageful","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"messageful","about":"messageful plugin","args":[],"flags":{},"subcommands":[]}]}
@@ -1069,7 +1071,8 @@ fn write_help_stderr_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-hello");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"hello","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hello","about":"hello plugin","args":[],"flags":{},"subcommands":[]}]}
@@ -1104,7 +1107,8 @@ fn write_named_plugin(dir: &std::path::Path, name: &str, message: &str) -> std::
 
     let plugin_path = dir.join(format!("osp-{name}"));
     let plugin_script = format!(
-        r#"#!/usr/bin/env bash
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
@@ -1139,7 +1143,8 @@ fn write_provider_plugin(
 
     let plugin_path = dir.join(format!("osp-{plugin_id}"));
     let plugin_script = format!(
-        r#"#!/usr/bin/env bash
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
@@ -1175,7 +1180,8 @@ fn write_plugin_with_min_version(
 
     let plugin_path = dir.join(format!("osp-{plugin_id}"));
     let plugin_script = format!(
-        r#"#!/usr/bin/env bash
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"{min_osp_version}","commands":[{{"name":"{plugin_id}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
@@ -1205,7 +1211,8 @@ fn write_hints_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-hints");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"hints","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hints","about":"runtime hints plugin","args":[],"flags":{},"subcommands":[]}]}
@@ -1241,7 +1248,8 @@ fn write_multi_command_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-multi");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"multi","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"alpha","about":"alpha command","args":[],"flags":{},"subcommands":[]},{"name":"beta","about":"beta command","args":[],"flags":{},"subcommands":[]}]}
@@ -1268,7 +1276,8 @@ fn write_config_env_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-cfg");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"cfg","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cfg","about":"config env plugin","args":[],"flags":{},"subcommands":[]}]}
@@ -1301,7 +1310,8 @@ fn write_non_zero_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-boom");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"boom","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"boom","about":"boom plugin","args":[],"flags":{},"subcommands":[]}]}
@@ -1327,7 +1337,8 @@ fn write_invalid_json_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-broken");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"broken","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"broken","about":"broken plugin","args":[],"flags":{},"subcommands":[]}]}
@@ -1351,7 +1362,8 @@ fn write_describe_mismatch_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let plugin_path = dir.join("osp-hello");
-    let plugin_script = r#"#!/usr/bin/env bash
+    let plugin_script = r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {"protocol_version":1,"plugin_id":"wrong","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"hello","about":"mismatch plugin","args":[],"flags":{},"subcommands":[]}]}
@@ -1380,7 +1392,8 @@ fn write_counter_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     let plugin_path = dir.join("osp-counter");
     let counter_path = dir.join("counter.txt");
     let plugin_script = format!(
-        r#"#!/usr/bin/env bash
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
 {{"protocol_version":1,"plugin_id":"counter","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"counter","about":"counter plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
@@ -1418,7 +1431,8 @@ fn write_describe_counter_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     let plugin_path = dir.join("osp-describe-counter");
     let describe_count_path = dir.join("describe-count.txt");
     let plugin_script = format!(
-        r#"#!/usr/bin/env bash
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   count=0
   if [ -f "{describe_count_path}" ]; then

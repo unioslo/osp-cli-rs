@@ -1,4 +1,4 @@
-use osp_cli::osp_dsl::parse_pipeline;
+use osp_cli::dsl::parse_pipeline;
 
 #[test]
 fn parse_pipeline_preserves_quoted_pipe_in_command() {

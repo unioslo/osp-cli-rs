@@ -1,0 +1,22 @@
+---
+source: src/repl/presentation/tests.rs
+assertion_line: 80
+expression: rendered
+---
+
+- OSP ------
+  Welcome Oistes!
+  Logged in as: oistes
+  Theme: Rose Pine Moon
+  Version: 1.4.5
+
+- Keybindings 
+  Ctrl-D    exit
+  Ctrl-L    clear screen
+  Ctrl-R    reverse search history
+
+- Pipes ----
+  F key>3 | P col1 col2 | S sort_key | G group_by_k1 k2
+  | A metric() | L limit offset | C count
+  K key | V value | contains | !not | ?exist | !?not_exist (= exact, == case-sens.)
+  Help: | H or | H <verb> e.g. | H F

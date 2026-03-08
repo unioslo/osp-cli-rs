@@ -1,4 +1,4 @@
-pub use crate::osp_ui::{
+pub use crate::ui::{
     CodeBlock, Document, Interactive, InteractiveResult, InteractiveRuntime, JsonBlock, LineBlock,
     LinePart, MregBlock, MregEntry, MregRow, MregValue, PanelBlock, PanelRules, RenderBackend,
     RenderRuntime, RenderSettings, ResolvedRenderSettings, Spinner, StyleOverrides, TableAlign,

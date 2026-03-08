@@ -1,0 +1,13 @@
+---
+source: src/repl/help.rs
+assertion_line: 334
+expression: rendered
+---
+Usage:
+  osp [OPTIONS]
+
+Commands:
+  help
+
+Options:
+  -h, --help

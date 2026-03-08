@@ -66,6 +66,21 @@ impl Component {
         }
     }
 
+    fn root_source_paths(self) -> &'static [&'static str] {
+        match self {
+            Self::Api => &["api.rs"],
+            Self::Cli => &["osp_cli", "app", "cli", "plugin", "runtime.rs"],
+            Self::Completion => &["completion"],
+            Self::Config => &["config"],
+            Self::Core => &["core"],
+            Self::Dsl => &["dsl"],
+            Self::Ports => &["ports.rs"],
+            Self::Repl => &["osp_repl", "repl"],
+            Self::Services => &["services.rs"],
+            Self::Ui => &["ui"],
+        }
+    }
+
     fn runtime_allowed(self) -> BTreeSet<Component> {
         let values = match self {
             Self::Api => &[Self::Api, Self::Core, Self::Ports][..],
@@ -164,9 +179,10 @@ fn root_single_crate_imports_follow_logical_layer_matrix() {
     let mut failures = Vec::new();
 
     for component in all_components() {
-        let src_root = root.join(component.rust_module_name());
         let mut files = Vec::new();
-        collect_rust_files(&src_root, &mut files);
+        for rel_path in component.root_source_paths() {
+            collect_rust_sources(&root.join(rel_path), &mut files);
+        }
 
         for file in files {
             let source = fs::read_to_string(&file)
@@ -278,15 +294,6 @@ fn root_public_facade_stays_curated() {
         "cli",
         "plugin",
         "prelude",
-        "osp_core",
-        "osp_config",
-        "osp_dsl",
-        "osp_ports",
-        "osp_api",
-        "osp_services",
-        "osp_completion",
-        "osp_repl",
-        "osp_cli",
     ]
     .into_iter()
     .map(str::to_string)
@@ -295,6 +302,15 @@ fn root_public_facade_stays_curated() {
     assert_eq!(
         public_modules, expected_modules,
         "src/lib.rs top-level public modules drifted"
+    );
+
+    assert!(
+        !source.contains("pub mod osp_")
+            && !source.contains("#[doc(hidden)]\npub mod osp_")
+            && !source.contains("#[doc(hidden)]\r\npub mod osp_")
+            && !source.contains("pub(crate) mod osp_")
+            && !source.contains("mod osp_ui;"),
+        "src/lib.rs should not expose or special-case legacy osp_* facade modules"
     );
 
     assert!(
@@ -347,6 +363,18 @@ fn collect_rust_files(root: &Path, files: &mut Vec<PathBuf>) {
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
             files.push(path);
         }
+    }
+}
+
+fn collect_rust_sources(root: &Path, files: &mut Vec<PathBuf>) {
+    if root.is_file() {
+        if root.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            files.push(root.to_path_buf());
+        }
+        return;
+    }
+    if root.is_dir() {
+        collect_rust_files(root, files);
     }
 }
 

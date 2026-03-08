@@ -1,0 +1,7 @@
+---
+source: src/app/tests/presentation.rs
+assertion_line: 187
+expression: "render_prompt_snapshot(&[(\"ui.presentation\", \"expressive\")])"
+---
+╭─anonymous@local 
+╰─default>

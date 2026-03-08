@@ -1,12 +1,12 @@
+use osp_cli::api::MockLdapClient;
 use osp_cli::cli::pipeline::parse_command_text_with_aliases;
-use osp_cli::osp_api::MockLdapClient;
-use osp_cli::osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
-use osp_cli::osp_core::output::OutputFormat;
-use osp_cli::osp_dsl::apply_pipeline;
-use osp_cli::osp_ports::LdapDirectory;
+use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+use osp_cli::core::output::OutputFormat;
+use osp_cli::dsl::apply_pipeline;
+use osp_cli::ports::LdapDirectory;
 use osp_cli::ui::{RenderSettings, render_output};
 
-fn make_config(entries: &[(&str, &str)]) -> osp_cli::osp_config::ResolvedConfig {
+fn make_config(entries: &[(&str, &str)]) -> osp_cli::config::ResolvedConfig {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
     defaults.set("profile.active", "default");

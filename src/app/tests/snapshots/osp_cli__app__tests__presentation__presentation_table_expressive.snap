@@ -1,0 +1,11 @@
+---
+source: src/app/tests/presentation.rs
+assertion_line: 203
+expression: "render_table_snapshot(&[(\"ui.presentation\", \"expressive\")])"
+---
+╭━━━━━━━┳━━━━━━━╮
+┃ uid   ┃ count ┃
+┡━━━━━━━╇━━━━━━━┩
+│ alice │ 2     │
+│ bob   │ 15    │
+╰───────┴───────╯

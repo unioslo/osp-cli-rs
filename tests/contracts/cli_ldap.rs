@@ -150,7 +150,8 @@ impl Drop for LdapPluginFixture {
 
 #[cfg(unix)]
 fn ldap_plugin_script() -> &'static str {
-    r#"#!/usr/bin/env bash
+    r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
 set -euo pipefail
 
 if [ "${1:-}" = "--describe" ]; then

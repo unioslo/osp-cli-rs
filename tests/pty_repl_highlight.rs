@@ -54,7 +54,7 @@ fn spawn_repl_with_color() -> PtySession {
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("NO_COLOR");
     cmd.env("OSP__UI__COLOR__MODE", "always");
-    cmd.env("OSP__REPL__INTRO", "false");
+    cmd.env("OSP__REPL__INTRO", "none");
     cmd.env("OSP__REPL__SIMPLE_PROMPT", "true");
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
     cmd.env("OSP_PLUGIN_PATH", &plugins);

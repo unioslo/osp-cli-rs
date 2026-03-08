@@ -1,5 +1,5 @@
-use osp_cli::osp_api::MockLdapClient;
-use osp_cli::osp_ports::LdapDirectory;
+use osp_cli::api::MockLdapClient;
+use osp_cli::ports::LdapDirectory;
 
 #[test]
 fn ldap_filter_key_value_matches() {

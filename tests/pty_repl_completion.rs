@@ -69,7 +69,7 @@ fn spawn_repl_with_config(trace: bool, config: Option<&str>) -> PtySession {
     cmd.env("XDG_STATE_HOME", home.join(".local/state"));
     cmd.env("TERM", "xterm-256color");
     cmd.env("NO_COLOR", "1");
-    cmd.env("OSP__REPL__INTRO", "false");
+    cmd.env("OSP__REPL__INTRO", "none");
     cmd.env("OSP__REPL__SIMPLE_PROMPT", "true");
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
     cmd.env("OSP_PLUGIN_PATH", &plugins);

@@ -1,0 +1,16 @@
+---
+source: src/app/tests/presentation.rs
+assertion_line: 155
+expression: "render_help_snapshot(&[(\"ui.presentation\", \"expressive\")])"
+---
+- Usage ----------
+  osp [OPTIONS]
+------------------
+
+- Commands -------
+  help
+------------------
+
+- Options --------
+  -h, --help
+------------------

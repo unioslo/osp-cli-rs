@@ -1,0 +1,11 @@
+---
+source: src/app/tests/presentation.rs
+assertion_line: 207
+expression: "render_table_snapshot(&[(\"ui.presentation\", \"compact\")])"
+---
++--------+--------+
+| uid    | count  |
++--------+--------+
+| alice  | 2      |
+| bob    | 15     |
++--------+--------+

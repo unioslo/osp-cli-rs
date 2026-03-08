@@ -1,5 +1,5 @@
 use osp_cli::cli::pipeline::{parse_command_text_with_aliases, parse_command_tokens_with_aliases};
-use osp_cli::osp_config::{ConfigLayer, ConfigResolver, ResolveOptions, ResolvedConfig};
+use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions, ResolvedConfig};
 
 fn make_config(entries: &[(&str, &str)]) -> ResolvedConfig {
     let mut defaults = ConfigLayer::default();

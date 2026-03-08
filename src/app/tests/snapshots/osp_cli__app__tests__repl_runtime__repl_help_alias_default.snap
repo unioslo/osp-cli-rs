@@ -1,0 +1,16 @@
+---
+source: src/app/tests/repl_runtime.rs
+assertion_line: 916
+expression: text
+---
+- Usage ----
+  history <COMMAND>
+
+- Commands -
+  list
+  prune
+  clear
+  help   Print this message or the help of the given subcommand(s)
+
+- Options --
+  -h, --help  Print help

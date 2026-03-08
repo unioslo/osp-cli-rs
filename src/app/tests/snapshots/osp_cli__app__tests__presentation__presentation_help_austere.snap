@@ -1,0 +1,11 @@
+---
+source: src/app/tests/presentation.rs
+assertion_line: 163
+expression: "render_help_snapshot(&[(\"ui.presentation\", \"austere\")])"
+---
+Usage:
+  osp [OPTIONS]
+Commands:
+  help
+Options:
+  -h, --help

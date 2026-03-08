@@ -1,0 +1,7 @@
+---
+source: src/app/tests/presentation.rs
+assertion_line: 179
+expression: "render_message_snapshot(&[(\"ui.presentation\", \"austere\")])"
+---
+error: bad
+warning: careful
