@@ -238,10 +238,11 @@ fn build_repl_ui_line_projector(
 
 #[cfg(test)]
 mod tests {
-    use super::build_cycle_chrome_output;
+    use super::{build_cycle_chrome_output, build_repl_ui_line_projector, map_repl_input_mode};
     use crate::state::{
         AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
     };
+    use crate::ui_presentation::ReplInputMode;
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use osp_core::output::OutputFormat;
     use osp_ui::RenderSettings;
@@ -303,5 +304,30 @@ mod tests {
         );
 
         assert_eq!(output, "PENDING\n");
+    }
+
+    #[test]
+    fn repl_input_mode_mapping_covers_all_variants_unit() {
+        assert_eq!(
+            map_repl_input_mode(ReplInputMode::Auto),
+            osp_repl::ReplInputMode::Auto
+        );
+        assert_eq!(
+            map_repl_input_mode(ReplInputMode::Interactive),
+            osp_repl::ReplInputMode::Interactive
+        );
+        assert_eq!(
+            map_repl_input_mode(ReplInputMode::Basic),
+            osp_repl::ReplInputMode::Basic
+        );
+    }
+
+    #[test]
+    fn repl_ui_line_projector_falls_back_to_passthrough_on_parse_error_unit() {
+        let (runtime, _) = make_state();
+        let projector = build_repl_ui_line_projector(runtime.config.resolved());
+        let projected = projector("config \"unterminated");
+
+        assert_eq!(projected.line, "config \"unterminated");
     }
 }

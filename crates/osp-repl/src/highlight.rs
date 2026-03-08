@@ -405,4 +405,17 @@ mod tests {
             vec![(0, 4, "help".to_string()), (5, 12, "history".to_string())]
         );
     }
+
+    #[test]
+    fn three_digit_hex_and_invalid_tokens_cover_debug_paths_unit() {
+        let spans = debug_highlight(&CompletionTree::default(), "#0af", Color::Green, None);
+        assert_eq!(spans[0].rgb, Some([0, 170, 255]));
+
+        let highlighter = ReplHighlighter::new(CompletionTree::default(), Color::Green, None);
+        let tokens = token_styles(&highlighter.highlight("unknown #nope", 0));
+        assert_eq!(
+            tokens,
+            vec![("unknown".to_string(), None), ("#nope".to_string(), None),]
+        );
+    }
 }
