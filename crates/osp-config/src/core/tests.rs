@@ -1,9 +1,9 @@
 use super::{
     BootstrapPhase, BootstrapScopeRule, ConfigLayer, ConfigSchema, ConfigSource, ConfigValue,
-    ResolvedConfig, ResolvedValue, SchemaValueType, Scope, SecretValue, adapt_value_for_schema,
-    bootstrap_key_spec, is_alias_key, is_bootstrap_only_key, parse_env_key, parse_string_list,
-    remaining_parts_are_bootstrap_profile_default, validate_bootstrap_value, validate_key_scope,
-    value_type_name,
+    ResolvedConfig, ResolvedValue, SchemaEntry, SchemaValueType, Scope, SecretValue,
+    adapt_value_for_schema, bootstrap_key_spec, is_alias_key, is_bootstrap_only_key, parse_env_key,
+    parse_string_list, remaining_parts_are_bootstrap_profile_default, validate_bootstrap_value,
+    validate_key_scope, value_type_name,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -725,5 +725,133 @@ fn schema_adaptation_helpers_cover_scalar_secret_list_and_env_paths_unit() {
             .err()
             .expect("missing final key should fail"),
         crate::ConfigError::InvalidEnvOverride { reason, .. } if reason.contains("missing final config key")
+    ));
+}
+
+#[test]
+fn env_bootstrap_and_scope_normalization_cover_remaining_edge_cases_unit() {
+    let env = parse_env_key("OSP__PROFILE__DEFAULT").expect("bootstrap env key should parse");
+    assert_eq!(env.key, "profile.default");
+    assert_eq!(env.scope, Scope::global());
+
+    let normalized = crate::normalize_scope(Scope {
+        profile: Some("   ".to_string()),
+        terminal: Some(" RePl ".to_string()),
+    });
+    assert_eq!(normalized.profile, None);
+    assert_eq!(normalized.terminal.as_deref(), Some("repl"));
+
+    assert!(!remaining_parts_are_bootstrap_profile_default(&[
+        "PROFILE", "OPS"
+    ]));
+}
+
+#[test]
+fn bootstrap_env_helpers_cover_terminal_scoped_default_profile_and_unknown_specs_unit() {
+    let env = parse_env_key("OSP__TERM__repl__PROFILE__DEFAULT")
+        .expect("terminal-scoped bootstrap env key should parse");
+    assert_eq!(env.key, "profile.default");
+    assert_eq!(env.scope, Scope::terminal("repl"));
+
+    assert!(bootstrap_key_spec("ui.format").is_none());
+    assert!(!is_bootstrap_only_key("ui.format"));
+}
+
+#[test]
+fn config_value_display_and_from_impls_cover_scalar_variants_unit() {
+    assert_eq!(ConfigValue::from(true), ConfigValue::Bool(true));
+    assert_eq!(ConfigValue::from(7_i64), ConfigValue::Integer(7));
+    assert_eq!(ConfigValue::from(2.5_f64), ConfigValue::Float(2.5));
+
+    assert_eq!(ConfigValue::Bool(true).to_string(), "true");
+    assert_eq!(ConfigValue::Integer(7).to_string(), "7");
+    assert_eq!(ConfigValue::Float(2.5).to_string(), "2.5");
+}
+
+#[test]
+fn resolved_config_string_list_helpers_cover_secret_and_non_string_variants_unit() {
+    let mut values = BTreeMap::new();
+    values.insert(
+        "theme.path".to_string(),
+        ResolvedValue {
+            raw_value: ConfigValue::List(vec![
+                ConfigValue::String("base".to_string()),
+                ConfigValue::Integer(5),
+                ConfigValue::String("secret".to_string()).into_secret(),
+            ]),
+            value: ConfigValue::List(vec![
+                ConfigValue::String("base".to_string()),
+                ConfigValue::Integer(5),
+                ConfigValue::String("secret".to_string()).into_secret(),
+            ]),
+            source: ConfigSource::ConfigFile,
+            scope: Scope::global(),
+            origin: None,
+        },
+    );
+    values.insert(
+        "user.name".to_string(),
+        ResolvedValue {
+            raw_value: ConfigValue::Integer(42).into_secret(),
+            value: ConfigValue::Integer(42).into_secret(),
+            source: ConfigSource::Secrets,
+            scope: Scope::global(),
+            origin: None,
+        },
+    );
+
+    let resolved = ResolvedConfig {
+        active_profile: "ops".to_string(),
+        terminal: None,
+        known_profiles: BTreeSet::new(),
+        values,
+        aliases: BTreeMap::new(),
+    };
+
+    assert_eq!(
+        resolved.get_string_list("theme.path"),
+        Some(vec!["base".to_string(), "secret".to_string()])
+    );
+    assert_eq!(resolved.get_string_list("user.name"), None);
+}
+
+#[test]
+fn adapt_value_for_schema_covers_float_and_secret_string_list_paths_unit() {
+    assert_eq!(
+        adapt_value_for_schema(
+            "demo.float",
+            &ConfigValue::Integer(4),
+            &SchemaEntry::float()
+        )
+        .expect("integer should adapt to float"),
+        ConfigValue::Float(4.0)
+    );
+    assert_eq!(
+        adapt_value_for_schema(
+            "demo.paths",
+            &ConfigValue::String("base, custom".to_string()).into_secret(),
+            &SchemaEntry::string_list(),
+        )
+        .expect("secret string should adapt into a secret string list"),
+        ConfigValue::List(vec![
+            ConfigValue::String("base".to_string()),
+            ConfigValue::String("custom".to_string()),
+        ])
+        .into_secret()
+    );
+
+    let err = adapt_value_for_schema(
+        "demo.paths",
+        &ConfigValue::Integer(9).into_secret(),
+        &SchemaEntry::string_list(),
+    )
+    .expect_err("secret non-string should fail");
+    assert!(matches!(
+        err,
+        crate::ConfigError::InvalidValueType {
+            key,
+            expected: SchemaValueType::StringList,
+            ..
+        } if key == "demo.paths"
     ));
 }

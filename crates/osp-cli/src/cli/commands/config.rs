@@ -1001,7 +1001,7 @@ mod tests {
         );
         assert_eq!(
             rows[0].get("source").and_then(|value| value.as_str()),
-            Some("derived")
+            Some("defaults")
         );
         assert!(messages.is_empty());
     }
