@@ -21,6 +21,9 @@ use crate::ui_sink::BufferedUiSink;
 use clap::Parser;
 use osp_config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions};
 use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+use osp_core::plugin::{
+    ResponseErrorV1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
+};
 use osp_repl::{HistoryConfig, HistoryShellContext, SharedHistory};
 use osp_ui::document::Block;
 use osp_ui::messages::{MessageBuffer, MessageLevel};
@@ -224,6 +227,62 @@ fn verbose_plugin_error_render_includes_detail_chain_unit() {
     assert!(rendered.contains("plugin ldap exited with status 7"));
     assert!(rendered.contains("plugin command failed"));
     assert!(rendered.contains("backend exploded"));
+}
+
+#[test]
+fn prepare_plugin_response_keeps_protocol_failures_in_messages_unit() {
+    let response = ResponseV1 {
+        protocol_version: 1,
+        ok: false,
+        data: serde_json::json!({}),
+        error: Some(ResponseErrorV1 {
+            code: "NOT_FOUND".to_string(),
+            message: "missing user".to_string(),
+            details: serde_json::json!({}),
+        }),
+        messages: vec![ResponseMessageV1 {
+            level: ResponseMessageLevelV1::Warning,
+            text: "queried fallback backend".to_string(),
+        }],
+        meta: ResponseMetaV1::default(),
+    };
+
+    let prepared = super::command_output::prepare_plugin_response(response, &[])
+        .expect("protocol failure should still parse");
+
+    let super::command_output::PreparedPluginResponse::Failure(failure) = prepared else {
+        panic!("expected failure response");
+    };
+
+    let rendered = failure.messages.render_grouped(MessageLevel::Trace);
+    assert!(rendered.contains("queried fallback backend"));
+    assert!(rendered.contains("NOT_FOUND: missing user"));
+    assert_eq!(failure.report, "NOT_FOUND: missing user");
+}
+
+#[test]
+fn prepare_plugin_response_drops_format_hint_after_pipeline_unit() {
+    let response = ResponseV1 {
+        protocol_version: 1,
+        ok: true,
+        data: serde_json::json!([{"uid": "alice"}]),
+        error: None,
+        messages: Vec::new(),
+        meta: ResponseMetaV1 {
+            format_hint: Some("table".to_string()),
+            columns: Some(vec!["uid".to_string()]),
+            column_align: Vec::new(),
+        },
+    };
+
+    let prepared = super::command_output::prepare_plugin_response(response, &["P uid".to_string()])
+        .expect("pipeline should apply");
+
+    let super::command_output::PreparedPluginResponse::Output(output) = prepared else {
+        panic!("expected successful output response");
+    };
+
+    assert!(output.format_hint.is_none());
 }
 
 #[test]

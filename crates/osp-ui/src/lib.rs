@@ -357,10 +357,11 @@ pub fn copy_output_to_clipboard(
 mod tests {
     use super::{
         RenderBackend, RenderSettings, TableBorderStyle, TableOverflow, format, render_document,
-        render_document_for_copy, render_rows_for_copy,
+        render_document_for_copy, render_output, render_output_for_copy, render_rows_for_copy,
     };
     use crate::document::{Block, MregValue, TableStyle};
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+    use osp_core::output_model::OutputResult;
     use osp_core::row::Row;
     use serde_json::json;
 
@@ -658,6 +659,35 @@ mod tests {
 
         assert!(rich.contains("hello"));
         assert!(copied.contains("hello"));
+        assert!(!copied.contains("\x1b["));
+    }
+
+    #[test]
+    fn json_output_snapshot_and_copy_contracts_are_stable_unit() {
+        let rows = vec![{
+            let mut row = Row::new();
+            row.insert("uid".to_string(), json!("alice"));
+            row.insert("count".to_string(), json!(2));
+            row
+        }];
+        let settings = RenderSettings {
+            format: OutputFormat::Json,
+            mode: RenderMode::Rich,
+            color: ColorMode::Always,
+            unicode: UnicodeMode::Always,
+            ..RenderSettings::test_plain(OutputFormat::Json)
+        };
+
+        let output = OutputResult::from_rows(rows);
+        let rendered = render_output(&output, &settings);
+        let copied = render_output_for_copy(&output, &settings);
+
+        assert!(rendered.contains("\"uid\""));
+        assert!(rendered.contains("\x1b["));
+        assert_eq!(
+            copied,
+            "[\n  {\n    \"uid\": \"alice\",\n    \"count\": 2\n  }\n]\n"
+        );
         assert!(!copied.contains("\x1b["));
     }
 }
