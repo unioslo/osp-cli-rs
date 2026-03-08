@@ -13,7 +13,7 @@ use crate::cli::{
     Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands,
     ThemeArgs, ThemeCommands, parse_inline_command_tokens,
 };
-use crate::invocation::{append_invocation_help, scan_command_tokens};
+use crate::invocation::{append_invocation_help_if_verbose, scan_command_tokens};
 use crate::rows::output::output_to_rows;
 use crate::state::{AppClients, AppRuntime, AppSession};
 
@@ -119,7 +119,20 @@ fn execute_repl_plugin_line_inner(
     }
 
     let invocation = match parse_repl_invocation(runtime, session, &parsed)? {
-        ParsedReplDispatch::Help(rendered) => return Ok(ReplLineResult::Continue(rendered)),
+        ParsedReplDispatch::Help {
+            rendered,
+            effective,
+        } => {
+            let finished = Instant::now();
+            session.record_prompt_timing(
+                effective.ui.debug_verbosity,
+                finished.saturating_duration_since(started),
+                Some(finished.saturating_duration_since(started)),
+                None,
+                None,
+            );
+            return Ok(ReplLineResult::Continue(rendered));
+        }
         ParsedReplDispatch::Invocation(invocation) => invocation,
     };
     let parse_finished = Instant::now();
@@ -263,7 +276,10 @@ struct ParsedReplInvocation {
 }
 
 enum ParsedReplDispatch {
-    Help(String),
+    Help {
+        rendered: String,
+        effective: Box<EffectiveInvocation>,
+    },
     Invocation(Box<ParsedReplInvocation>),
 }
 
@@ -274,9 +290,23 @@ fn parse_repl_invocation(
 ) -> Result<ParsedReplDispatch> {
     let prefixed_tokens = parsed.prefixed_tokens(&session.scope);
     let scanned = scan_command_tokens(&prefixed_tokens)?;
-    let scoped_tokens =
-        input::rewrite_help_alias_tokens_at(&scanned.tokens, session.scope.commands().len())
-            .unwrap_or_else(|| scanned.tokens.clone());
+    let command_index = session.scope.commands().len();
+    if scanned.tokens.get(command_index).map(String::as_str) == Some(CMD_HELP)
+        && !input::has_valid_help_alias_target(&scanned.tokens, command_index)
+    {
+        return Ok(ParsedReplDispatch::Help {
+            rendered: render_invalid_help_alias(
+                ReplViewContext::from_parts(runtime, session),
+                input::help_alias_target_at(&scanned.tokens, command_index),
+            ),
+            effective: Box::new(resolve_effective_invocation(
+                &runtime.ui,
+                &scanned.invocation,
+            )),
+        });
+    }
+    let scoped_tokens = input::rewrite_help_alias_tokens_at(&scanned.tokens, command_index)
+        .unwrap_or_else(|| scanned.tokens.clone());
     let command = match parse_inline_command_tokens(&scoped_tokens) {
         Ok(Some(command)) => command,
         Ok(None) => return Err(miette!("missing command")),
@@ -284,9 +314,16 @@ fn parse_repl_invocation(
             if renders_repl_inline_help(err.kind()) {
                 let rendered = render_repl_parse_help(
                     ReplViewContext::from_parts(runtime, session),
+                    &scanned.invocation,
                     &err.to_string(),
                 );
-                return Ok(ParsedReplDispatch::Help(rendered));
+                return Ok(ParsedReplDispatch::Help {
+                    rendered,
+                    effective: Box::new(resolve_effective_invocation(
+                        &runtime.ui,
+                        &scanned.invocation,
+                    )),
+                });
             }
             return Err(miette!(err.to_string()));
         }
@@ -309,6 +346,21 @@ fn parse_repl_invocation(
     )))
 }
 
+fn render_invalid_help_alias(view: ReplViewContext<'_>, target: Option<&str>) -> String {
+    let mut out = String::new();
+    let detail = match target {
+        Some(target) => format!("invalid help target: `{target}`"),
+        None => "help expects a command target".to_string(),
+    };
+    out.push_str(&detail);
+    out.push_str("\n\n");
+    out.push_str(&help::render_repl_help_with_chrome(
+        view,
+        "Usage: help <command>\n\nNotes:\n  Use bare `help` for the REPL overview.\n  `help help` and `help --help` are not valid.\n  Add -v to include common invocation options.\n",
+    ));
+    out
+}
+
 fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {
     matches!(
         kind,
@@ -320,7 +372,11 @@ fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {
     )
 }
 
-fn render_repl_parse_help(view: ReplViewContext<'_>, error_text: &str) -> String {
+fn render_repl_parse_help(
+    view: ReplViewContext<'_>,
+    invocation: &crate::invocation::InvocationOptions,
+    error_text: &str,
+) -> String {
     let mut out = String::new();
     if let Some(summary) = summarize_clap_error(error_text) {
         out.push_str(summary);
@@ -329,7 +385,7 @@ fn render_repl_parse_help(view: ReplViewContext<'_>, error_text: &str) -> String
     let help_body = strip_clap_error_preamble_and_epilogue(error_text);
     out.push_str(&help::render_repl_help_with_chrome(
         view,
-        &append_invocation_help(&help_body),
+        &append_invocation_help_if_verbose(&help_body, invocation),
     ));
     out
 }

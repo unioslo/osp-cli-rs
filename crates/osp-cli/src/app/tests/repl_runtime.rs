@@ -884,7 +884,7 @@ fn repl_invalid_subcommand_renders_inline_help_unit() {
 }
 
 #[test]
-fn repl_flag_prefixed_help_alias_dispatches_to_command_help_unit() {
+fn repl_help_alias_hides_common_invocation_options_without_verbose_unit() {
     let mut state = make_test_state(Vec::new());
     let history = make_test_history(&mut state);
 
@@ -893,15 +893,159 @@ fn repl_flag_prefixed_help_alias_dispatches_to_command_help_unit() {
         &mut state.session,
         &state.clients,
         &history,
-        "-q help config",
+        "help history",
     )
     .expect("flag-prefixed help alias should stay in help flow");
 
     match rendered {
         osp_repl::ReplLineResult::Continue(text) => {
-            assert!(text.contains("config <COMMAND>"));
+            assert!(text.contains("history"));
+            assert!(!text.contains("Common Invocation Options"));
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+}
+
+#[test]
+fn repl_help_alias_keeps_colored_help_chrome_and_subcommands_unit() {
+    let mut state = make_test_state(Vec::new());
+    state.runtime.ui.render_settings.mode = RenderMode::Auto;
+    state.runtime.ui.render_settings.color = ColorMode::Always;
+    state.runtime.ui.render_settings.unicode = UnicodeMode::Always;
+    state.runtime.ui.render_settings.runtime.stdout_is_tty = true;
+    let history = make_test_history(&mut state);
+
+    let rendered = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "help history",
+    )
+    .expect("help alias should render with chrome");
+
+    match rendered {
+        osp_repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("\u{1b}[38;2;232;223;246mUsage\u{1b}[0m"));
+            assert!(text.contains("\u{1b}[38;2;196;167;231mlist\u{1b}[0m"));
+            assert!(text.contains("\u{1b}[38;2;196;167;231mprune\u{1b}[0m"));
+            assert!(text.contains("\u{1b}[38;2;196;167;231mclear\u{1b}[0m"));
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+}
+
+#[test]
+fn repl_help_alias_rejects_help_and_flag_targets_unit() {
+    let mut state = make_test_state(Vec::new());
+    let history = make_test_history(&mut state);
+
+    for line in ["help help", "help --help"] {
+        let rendered = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            line,
+        )
+        .expect("invalid help target should stay in repl help flow");
+
+        match rendered {
+            osp_repl::ReplLineResult::Continue(text) => {
+                assert!(text.contains("invalid help target"));
+                assert!(text.contains("Usage"));
+                assert!(text.contains("help <command>"));
+            }
+            other => panic!("unexpected repl result: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn repl_verbose_help_alias_dispatches_to_command_help_with_invocation_section_unit() {
+    let mut state = make_test_state(Vec::new());
+    let history = make_test_history(&mut state);
+
+    let rendered = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "help history -v",
+    )
+    .expect("verbose help alias should stay in help flow");
+
+    match rendered {
+        osp_repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("history"));
             assert!(text.contains("Common Invocation Options"));
         }
         other => panic!("unexpected repl result: {other:?}"),
     }
+}
+
+#[test]
+fn repl_verbose_direct_help_shows_common_invocation_options_unit() {
+    let mut state = make_test_state(Vec::new());
+    let history = make_test_history(&mut state);
+
+    let rendered = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "history --help -v",
+    )
+    .expect("verbose direct help should stay in help flow");
+
+    match rendered {
+        osp_repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("history"));
+            assert!(text.contains("Common Invocation Options"));
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+}
+
+#[test]
+fn repl_flag_prefixed_help_records_prompt_timing_badge_unit() {
+    let mut state = make_test_state(Vec::new());
+    let history = make_test_history(&mut state);
+
+    let rendered = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "-ddd help config",
+    )
+    .expect("flag-prefixed help should render successfully");
+
+    match rendered {
+        osp_repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("config <COMMAND>"));
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+
+    let badge = state
+        .session
+        .prompt_timing
+        .badge()
+        .expect("help flow should update prompt timing");
+    assert_eq!(badge.level, 3);
+
+    let prompt_right = crate::repl::render_repl_prompt_right_for_test(
+        &state.runtime.ui.render_settings.resolve_render_settings(),
+        true,
+        &state.session.prompt_timing,
+    );
+    assert!(
+        prompt_right.contains("ms"),
+        "unexpected prompt right: {prompt_right:?}"
+    );
+    assert!(
+        prompt_right.contains('p'),
+        "unexpected prompt right: {prompt_right:?}"
+    );
 }

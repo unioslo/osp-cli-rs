@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 
 use miette::{Result, miette};
@@ -20,6 +21,31 @@ pub(crate) const INVOCATION_HELP_SECTION: &str = r#"Common Invocation Options:
 
 These flags may appear anywhere before `--` and affect only the current command.
 `--cache` is available only inside the interactive REPL."#;
+
+const INVOCATION_COMPLETION_FLAGS: &[&str] = &[
+    "--format",
+    "--json",
+    "--table",
+    "--mreg",
+    "--value",
+    "--md",
+    "--mode",
+    "--plain",
+    "--rich",
+    "--color",
+    "--unicode",
+    "--ascii",
+    "--verbose",
+    "--quiet",
+    "--debug",
+    "--cache",
+    "--plugin-provider",
+];
+
+const FORMAT_COMPLETION_FLAGS: &[&str] =
+    &["--format", "--json", "--table", "--mreg", "--value", "--md"];
+const MODE_COMPLETION_FLAGS: &[&str] = &["--mode", "--plain", "--rich"];
+const UNICODE_COMPLETION_FLAGS: &[&str] = &["--unicode", "--ascii"];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct InvocationOptions {
@@ -278,6 +304,63 @@ pub(crate) fn append_invocation_help(help_text: &str) -> String {
     format!("{trimmed}\n\n{INVOCATION_HELP_SECTION}\n")
 }
 
+pub(crate) fn append_invocation_help_if_verbose(
+    help_text: &str,
+    invocation: &InvocationOptions,
+) -> String {
+    if should_show_invocation_help(invocation) {
+        append_invocation_help(help_text)
+    } else {
+        help_text.to_string()
+    }
+}
+
+pub(crate) fn should_show_invocation_help(invocation: &InvocationOptions) -> bool {
+    invocation.verbose > 0
+}
+
+pub(crate) fn hidden_invocation_completion_flags(
+    invocation: &InvocationOptions,
+) -> BTreeSet<String> {
+    if !should_show_invocation_help(invocation) {
+        return INVOCATION_COMPLETION_FLAGS
+            .iter()
+            .map(|flag| (*flag).to_string())
+            .collect();
+    }
+
+    let mut hidden = BTreeSet::new();
+
+    if invocation.format.is_some() {
+        hidden.extend(
+            FORMAT_COMPLETION_FLAGS
+                .iter()
+                .map(|flag| (*flag).to_string()),
+        );
+    }
+    if invocation.mode.is_some() {
+        hidden.extend(MODE_COMPLETION_FLAGS.iter().map(|flag| (*flag).to_string()));
+    }
+    if invocation.color.is_some() {
+        hidden.insert("--color".to_string());
+    }
+    if invocation.unicode.is_some() {
+        hidden.extend(
+            UNICODE_COMPLETION_FLAGS
+                .iter()
+                .map(|flag| (*flag).to_string()),
+        );
+    }
+    if invocation.cache {
+        hidden.insert("--cache".to_string());
+    }
+    if invocation.plugin_provider.is_some() {
+        hidden.insert("--plugin-provider".to_string());
+    }
+
+    hidden
+}
+
 fn is_short_count_cluster(token: &str) -> bool {
     token.starts_with('-')
         && !token.starts_with("--")
@@ -402,8 +485,9 @@ impl RenderAlias {
 #[cfg(test)]
 mod tests {
     use super::{
-        INVOCATION_HELP_SECTION, InvocationOptions, append_invocation_help, scan_cli_argv,
-        scan_command_tokens, scan_command_tokens_with_trace,
+        INVOCATION_HELP_SECTION, InvocationOptions, append_invocation_help,
+        append_invocation_help_if_verbose, hidden_invocation_completion_flags, scan_cli_argv,
+        scan_command_tokens, scan_command_tokens_with_trace, should_show_invocation_help,
     };
     use osp_core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use std::ffi::OsString;
@@ -515,6 +599,62 @@ mod tests {
 
         let twice = append_invocation_help(&rendered);
         assert_eq!(rendered, twice);
+    }
+
+    #[test]
+    fn invocation_help_requires_verbose_unit() {
+        assert!(!should_show_invocation_help(&InvocationOptions::default()));
+        assert!(should_show_invocation_help(&InvocationOptions {
+            verbose: 1,
+            ..InvocationOptions::default()
+        }));
+        assert_eq!(
+            append_invocation_help_if_verbose(
+                "Usage: osp [COMMAND]\n",
+                &InvocationOptions::default()
+            ),
+            "Usage: osp [COMMAND]\n"
+        );
+        assert!(
+            append_invocation_help_if_verbose(
+                "Usage: osp [COMMAND]\n",
+                &InvocationOptions {
+                    verbose: 1,
+                    ..InvocationOptions::default()
+                }
+            )
+            .contains("Common Invocation Options:")
+        );
+    }
+
+    #[test]
+    fn hidden_completion_flags_follow_verbose_and_used_one_shots_unit() {
+        let hidden = hidden_invocation_completion_flags(&InvocationOptions::default());
+        assert!(hidden.contains("--json"));
+        assert!(hidden.contains("--plugin-provider"));
+        assert!(hidden.contains("--debug"));
+
+        let hidden = hidden_invocation_completion_flags(&InvocationOptions {
+            verbose: 1,
+            ..InvocationOptions::default()
+        });
+        assert!(!hidden.contains("--json"));
+        assert!(!hidden.contains("--plugin-provider"));
+        assert!(!hidden.contains("--debug"));
+
+        let hidden = hidden_invocation_completion_flags(&InvocationOptions {
+            verbose: 1,
+            format: Some(OutputFormat::Json),
+            cache: true,
+            plugin_provider: Some("ldap".to_string()),
+            ..InvocationOptions::default()
+        });
+        assert!(hidden.contains("--format"));
+        assert!(hidden.contains("--json"));
+        assert!(hidden.contains("--table"));
+        assert!(hidden.contains("--cache"));
+        assert!(hidden.contains("--plugin-provider"));
+        assert!(!hidden.contains("--debug"));
     }
 
     #[test]

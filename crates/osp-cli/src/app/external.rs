@@ -1,7 +1,7 @@
 use miette::{Result, miette};
 
 use crate::cli::{Commands, parse_inline_command_tokens};
-use crate::invocation::append_invocation_help;
+use crate::invocation::{InvocationOptions, append_invocation_help_if_verbose};
 use crate::pipeline::parse_command_tokens_with_aliases;
 use crate::plugin_manager::PluginManager;
 use crate::repl::ReplViewContext;
@@ -66,7 +66,12 @@ pub(super) fn run_external_command(
         invocation,
         |stdout| {
             let resolved = invocation.ui.render_settings.resolve_render_settings();
-            repl_help::render_help_with_chrome(stdout, &resolved, help_layout)
+            let body = if invocation.show_invocation_help {
+                crate::invocation::append_invocation_help(stdout)
+            } else {
+                stdout.to_string()
+            };
+            repl_help::render_help_with_chrome(&body, &resolved, help_layout)
         },
     )
 }
@@ -79,7 +84,11 @@ pub(crate) fn run_external_command_with_help_renderer(
     invocation: &EffectiveInvocation,
     render_help: impl Fn(&str) -> String,
 ) -> Result<CliCommandResult> {
-    let parsed = match parse_external_invocation(runtime, session, tokens)? {
+    let help_invocation = InvocationOptions {
+        verbose: u8::from(invocation.show_invocation_help),
+        ..InvocationOptions::default()
+    };
+    let parsed = match parse_external_invocation(runtime, session, tokens, &help_invocation)? {
         ExternalParse::Handled(result) => return Ok(result),
         ExternalParse::Invocation(parsed) => parsed,
     };
@@ -119,6 +128,7 @@ fn parse_external_invocation(
     runtime: &AppRuntime,
     session: &AppSession,
     tokens: &[String],
+    invocation: &InvocationOptions,
 ) -> Result<ExternalParse> {
     let parsed = parse_command_tokens_with_aliases(tokens, runtime.config.resolved())?;
     if parsed.tokens.is_empty() {
@@ -141,7 +151,7 @@ fn parse_external_invocation(
                 let help_layout = effective_help_layout(runtime.config.resolved());
                 return Ok(ExternalParse::Handled(CliCommandResult::text(
                     repl_help::render_help_with_chrome(
-                        &append_invocation_help(&err.to_string()),
+                        &append_invocation_help_if_verbose(&err.to_string(), invocation),
                         &resolved,
                         help_layout,
                     ),
@@ -284,8 +294,8 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
 
-        let parsed =
-            parse_external_invocation(&runtime, &session, &tokens).expect("help should parse");
+        let parsed = parse_external_invocation(&runtime, &session, &tokens, &Default::default())
+            .expect("help should parse");
         assert!(matches!(
             parsed,
             ExternalParse::Handled(CliCommandResult {

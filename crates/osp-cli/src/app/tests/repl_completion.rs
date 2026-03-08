@@ -47,7 +47,7 @@ fn repl_ui_projection_supports_flag_prefixed_help_and_completion_unit() {
     )
     .expect("projection should succeed");
 
-    let (_, suggestions) = engine.complete(&projected, projected.len());
+    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
     assert!(suggestions.into_iter().any(|entry| matches!(
         entry,
         osp_completion::SuggestionOutput::Item(item) if item.text == "provision"
@@ -235,6 +235,137 @@ fn repl_alias_with_prefilled_positional_args_inherits_target_flags_unit() {
 
     assert!(values.contains(&"--provider".to_string()));
     assert!(values.contains(&"--os".to_string()));
+}
+
+#[test]
+fn repl_trailing_space_prefers_subcommands_over_flags_unit() {
+    let state = make_completion_state(None);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let (_, suggestions) = engine.complete("history ", "history ".len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item) => Some(item.text),
+            osp_completion::SuggestionOutput::PathSentinel => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(values, vec!["list", "prune", "clear"]);
+}
+
+#[test]
+fn repl_dash_prefix_switches_from_subcommands_to_flags_unit() {
+    let state = make_completion_state(None);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let (_, suggestions) = engine.complete("history -", "history -".len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item) => Some(item.text),
+            osp_completion::SuggestionOutput::PathSentinel => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(values.contains(&"--json".to_string()));
+    assert!(values.contains(&"--color".to_string()));
+    assert!(!values.contains(&"list".to_string()));
+}
+
+#[test]
+fn repl_help_alias_trailing_space_exposes_target_subcommands_unit() {
+    let state = make_completion_state(None);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let projected =
+        crate::repl::input::project_repl_ui_line("help history ", state.runtime.config.resolved())
+            .expect("projection should succeed");
+
+    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item)
+                if !projected.hidden_suggestions.contains(&item.text) =>
+            {
+                Some(item.text)
+            }
+            osp_completion::SuggestionOutput::PathSentinel => None,
+            osp_completion::SuggestionOutput::Item(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(values, vec!["list", "prune", "clear"]);
+}
+
+#[test]
+fn repl_help_alias_dash_prefix_exposes_target_flags_unit() {
+    let state = make_completion_state(None);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let projected =
+        crate::repl::input::project_repl_ui_line("help history -", state.runtime.config.resolved())
+            .expect("projection should succeed");
+
+    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item)
+                if !projected.hidden_suggestions.contains(&item.text) =>
+            {
+                Some(item.text)
+            }
+            osp_completion::SuggestionOutput::PathSentinel => None,
+            osp_completion::SuggestionOutput::Item(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(values, vec!["--verbose"]);
+    assert!(!values.contains(&"list".to_string()));
+}
+
+#[test]
+fn repl_help_root_does_not_suggest_help_or_flags_unit() {
+    let state = make_completion_state(None);
+    let catalog = sample_catalog();
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
+    let tree =
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+    let engine = osp_completion::CompletionEngine::new(tree);
+
+    let projected =
+        crate::repl::input::project_repl_ui_line("help ", state.runtime.config.resolved())
+            .expect("projection should succeed");
+
+    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
+    let values = suggestions
+        .into_iter()
+        .filter_map(|entry| match entry {
+            osp_completion::SuggestionOutput::Item(item) => Some(item.text),
+            osp_completion::SuggestionOutput::PathSentinel => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(!values.contains(&"help".to_string()));
+    assert!(!values.iter().any(|value| value.starts_with("--")));
 }
 
 #[test]

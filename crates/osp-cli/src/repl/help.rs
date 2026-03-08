@@ -2,7 +2,7 @@ use osp_ui::ResolvedRenderSettings;
 use osp_ui::messages::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
 };
-use osp_ui::style::StyleToken;
+use osp_ui::style::{StyleToken, apply_style_with_theme_overrides};
 
 use super::ReplViewContext;
 use crate::ui_presentation::{HelpLayout, effective_help_layout};
@@ -36,7 +36,11 @@ pub(crate) fn render_help_with_chrome(
             out.push_str(section_separator(layout));
         }
 
-        let body = normalize_help_body(&section.body, layout);
+        let body = style_help_body(
+            &section.title,
+            &normalize_help_body(&section.body, layout),
+            resolved,
+        );
         out.push_str(&render_section_block_with_overrides(
             &section.title,
             &body,
@@ -60,6 +64,85 @@ pub(crate) fn render_help_with_chrome(
     }
 
     out
+}
+
+fn style_help_body(title: &str, body: &str, resolved: &ResolvedRenderSettings) -> String {
+    if !resolved.color {
+        return body.to_string();
+    }
+
+    body.lines()
+        .map(|line| style_help_line(title, line, resolved))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn style_help_line(title: &str, line: &str, resolved: &ResolvedRenderSettings) -> String {
+    if line.trim().is_empty() {
+        return line.to_string();
+    }
+
+    match title {
+        "Commands" | "Options" | "Arguments" | "Common Invocation Options" => {
+            style_help_keyed_line(line, resolved)
+        }
+        _ => style_help_text(line, resolved),
+    }
+}
+
+fn style_help_keyed_line(line: &str, resolved: &ResolvedRenderSettings) -> String {
+    let indent_len = line.len().saturating_sub(line.trim_start().len());
+    let (indent, rest) = line.split_at(indent_len);
+    let split = help_description_split(rest).unwrap_or(rest.len());
+    let (head, tail) = rest.split_at(split);
+
+    let mut out = String::new();
+    out.push_str(indent);
+    out.push_str(&style_help_segment(head, StyleToken::Key, resolved));
+    if !tail.is_empty() {
+        out.push_str(&style_help_segment(tail, StyleToken::Value, resolved));
+    }
+    out
+}
+
+fn help_description_split(line: &str) -> Option<usize> {
+    let mut saw_non_whitespace = false;
+    let mut run_start = None;
+    let mut run_len = 0usize;
+
+    for (idx, ch) in line.char_indices() {
+        if ch.is_whitespace() {
+            if saw_non_whitespace {
+                run_start.get_or_insert(idx);
+                run_len += 1;
+            }
+            continue;
+        }
+
+        if saw_non_whitespace && run_len >= 2 {
+            return run_start;
+        }
+
+        saw_non_whitespace = true;
+        run_start = None;
+        run_len = 0;
+    }
+
+    None
+}
+
+fn style_help_text(line: &str, resolved: &ResolvedRenderSettings) -> String {
+    style_help_segment(line, StyleToken::Value, resolved)
+}
+
+fn style_help_segment(text: &str, token: StyleToken, resolved: &ResolvedRenderSettings) -> String {
+    apply_style_with_theme_overrides(
+        text,
+        token,
+        true,
+        &resolved.theme,
+        &resolved.style_overrides,
+    )
 }
 
 fn normalize_help_body(body: &str, layout: HelpLayout) -> String {
@@ -272,5 +355,25 @@ mod tests {
 
         assert!(rendered.contains("Examples:\n  osp sample run"));
         assert!(rendered.contains("Notes:\n  extra detail"));
+    }
+
+    #[test]
+    fn help_chrome_colors_help_body_keys_and_text_unit() {
+        let mut resolved = resolved_settings(osp_ui::messages::SectionFrameStyle::TopBottom);
+        resolved.color = true;
+        resolved.theme = osp_ui::theme::resolve_theme("rose-pine-moon");
+
+        let rendered = render_help_with_chrome(
+            "Usage: osp history <COMMAND>\n\nCommands:\n  list   List stored history entries\n",
+            &resolved,
+            HelpLayout::Compact,
+        );
+
+        assert!(rendered.contains("\u{1b}[38;2;232;223;246mUsage\u{1b}[0m"));
+        assert!(rendered.contains("\u{1b}[38;2;196;167;231mlist\u{1b}[0m"));
+        assert!(
+            rendered.contains("\u{1b}[38;2;224;222;244m   List stored history entries\u{1b}[0m")
+        );
+        assert!(rendered.contains("\u{1b}[38;2;224;222;244m  osp history <COMMAND>\u{1b}[0m"));
     }
 }

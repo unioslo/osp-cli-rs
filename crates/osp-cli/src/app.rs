@@ -19,7 +19,7 @@ use crate::cli::commands::{
     theme as theme_cmd,
 };
 use crate::cli::{Cli, Commands};
-use crate::invocation::{InvocationOptions, append_invocation_help, scan_cli_argv};
+use crate::invocation::{InvocationOptions, append_invocation_help_if_verbose, scan_cli_argv};
 use crate::logging::{bootstrap_logging_config, init_developer_logging};
 use crate::plugin_manager::{
     CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
@@ -101,6 +101,7 @@ pub(crate) struct ReplCommandSpec {
 pub(crate) struct EffectiveInvocation {
     pub(crate) ui: UiState,
     pub(crate) plugin_provider: Option<String>,
+    pub(crate) show_invocation_help: bool,
 }
 
 pub(crate) enum BuiltinCommandTransport<'a> {
@@ -142,16 +143,20 @@ where
     let scanned = scan_cli_argv(&argv)?;
     match Cli::try_parse_from(scanned.argv.iter().cloned()) {
         Ok(cli) => run(cli, scanned.invocation),
-        Err(err) => handle_clap_parse_error(&argv, err),
+        Err(err) => handle_clap_parse_error(&argv, &scanned.invocation, err),
     }
 }
 
-fn handle_clap_parse_error(args: &[OsString], err: clap::Error) -> Result<i32> {
+fn handle_clap_parse_error(
+    args: &[OsString],
+    invocation: &InvocationOptions,
+    err: clap::Error,
+) -> Result<i32> {
     match err.kind() {
         clap::error::ErrorKind::DisplayHelp => {
             let help_context = help::render_settings_for_help(args);
             let rendered = repl_help::render_help_with_chrome(
-                &append_invocation_help(&err.to_string()),
+                &append_invocation_help_if_verbose(&err.to_string(), invocation),
                 &help_context.settings.resolve_render_settings(),
                 help_context.layout,
             );
@@ -577,6 +582,7 @@ pub(crate) fn resolve_effective_invocation(
             },
         },
         plugin_provider: invocation.plugin_provider.clone(),
+        show_invocation_help: invocation.verbose > 0,
     }
 }
 

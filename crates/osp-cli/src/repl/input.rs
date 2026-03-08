@@ -1,9 +1,11 @@
 use miette::Result;
 use osp_completion::CommandLineParser;
 use osp_config::ResolvedConfig;
+use osp_repl::LineProjection;
+use std::collections::BTreeSet;
 
 use crate::app::{CMD_HELP, REPL_SHELLABLE_COMMANDS};
-use crate::invocation::scan_command_tokens_with_trace;
+use crate::invocation::{hidden_invocation_completion_flags, scan_command_tokens_with_trace};
 use crate::pipeline::{ParsedCommandLine, parse_command_text_with_aliases};
 use crate::state::ReplScopeStack;
 
@@ -70,7 +72,7 @@ pub(crate) fn rewrite_help_alias_tokens_at(
     command_index: usize,
 ) -> Option<Vec<String>> {
     if tokens.get(command_index).map(String::as_str) != Some(CMD_HELP)
-        || tokens.len() <= command_index + 1
+        || !has_valid_help_alias_target(tokens, command_index)
     {
         return None;
     }
@@ -83,12 +85,13 @@ pub(crate) fn rewrite_help_alias_tokens_at(
     Some(rewritten)
 }
 
-pub(crate) fn project_repl_ui_line(line: &str, config: &ResolvedConfig) -> Result<String> {
+pub(crate) fn project_repl_ui_line(line: &str, config: &ResolvedConfig) -> Result<LineProjection> {
     let _ = config;
     let parser = CommandLineParser;
     let spans = parser.tokenize_with_spans(line);
     if spans.is_empty() {
-        return Ok(line.to_string());
+        return Ok(LineProjection::passthrough(line)
+            .with_hidden_suggestions(hidden_invocation_completion_flags(&Default::default())));
     }
 
     let tokens = spans
@@ -113,7 +116,43 @@ pub(crate) fn project_repl_ui_line(line: &str, config: &ResolvedConfig) -> Resul
         blank_bytes(&mut projected, span.start, span.end);
     }
 
-    Ok(String::from_utf8(projected).unwrap_or_else(|_| line.to_string()))
+    let hidden_suggestions = projection_hidden_suggestions(&scanned.tokens, &scanned.invocation);
+
+    Ok(LineProjection::passthrough(
+        String::from_utf8(projected).unwrap_or_else(|_| line.to_string()),
+    )
+    .with_hidden_suggestions(hidden_suggestions))
+}
+
+pub(crate) fn help_alias_target_at(tokens: &[String], command_index: usize) -> Option<&str> {
+    tokens.get(command_index + 1).map(String::as_str)
+}
+
+pub(crate) fn has_valid_help_alias_target(tokens: &[String], command_index: usize) -> bool {
+    matches!(
+        help_alias_target_at(tokens, command_index),
+        Some(target) if !target.is_empty() && !target.starts_with('-') && target != CMD_HELP
+    )
+}
+
+fn projection_hidden_suggestions(
+    tokens: &[String],
+    invocation: &crate::invocation::InvocationOptions,
+) -> BTreeSet<String> {
+    if tokens.first().map(String::as_str) != Some(CMD_HELP) {
+        return hidden_invocation_completion_flags(invocation);
+    }
+
+    let mut hidden = hidden_invocation_completion_flags(&Default::default());
+    hidden.insert(CMD_HELP.to_string());
+    if has_valid_help_alias_target(tokens, 0) {
+        hidden.remove("--verbose");
+        if invocation.verbose > 0 {
+            hidden.insert("--verbose".to_string());
+        }
+    }
+
+    hidden
 }
 
 fn blank_bytes(buffer: &mut [u8], start: usize, end: usize) {
@@ -130,7 +169,10 @@ pub(crate) fn is_repl_shellable_command(command: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ReplParsedLine, project_repl_ui_line, rewrite_help_alias_tokens_at};
+    use super::{
+        ReplParsedLine, has_valid_help_alias_target, project_repl_ui_line,
+        rewrite_help_alias_tokens_at,
+    };
     use crate::state::ReplScopeStack;
     use osp_config::{ConfigLayer, ConfigResolver, ResolveOptions};
 
@@ -183,20 +225,90 @@ mod tests {
     }
 
     #[test]
+    fn invalid_help_alias_targets_do_not_rewrite_unit() {
+        assert!(
+            rewrite_help_alias_tokens_at(&["help".to_string(), "help".to_string()], 0).is_none()
+        );
+        assert!(
+            rewrite_help_alias_tokens_at(&["help".to_string(), "--help".to_string()], 0).is_none()
+        );
+        assert!(!has_valid_help_alias_target(
+            &["help".to_string(), "help".to_string()],
+            0
+        ));
+        assert!(!has_valid_help_alias_target(
+            &["help".to_string(), "--help".to_string()],
+            0
+        ));
+    }
+
+    #[test]
     fn projects_repl_ui_line_hides_invocation_flags_and_help_keyword_unit() {
         let projected = project_repl_ui_line("--json help ldap user", &make_config())
             .expect("projection should succeed");
 
-        assert!(projected.contains("ldap user"));
-        assert!(!projected.contains("--json"));
-        assert!(!projected.contains("help"));
-        assert_eq!(projected.len(), "--json help ldap user".len());
+        assert!(projected.line.contains("ldap user"));
+        assert!(!projected.line.contains("--json"));
+        assert!(!projected.line.contains("help"));
+        assert_eq!(projected.line.len(), "--json help ldap user".len());
     }
 
     #[test]
     fn projects_empty_repl_ui_line_without_tokenization_unit() {
         let projected =
             project_repl_ui_line("", &make_config()).expect("projection should succeed");
-        assert_eq!(projected, "");
+        assert_eq!(projected.line, "");
+        assert!(projected.hidden_suggestions.contains("--json"));
+    }
+
+    #[test]
+    fn projection_hides_invocation_completion_flags_until_verbose_unit() {
+        let projected =
+            project_repl_ui_line("history -", &make_config()).expect("projection should succeed");
+        assert!(projected.hidden_suggestions.contains("--json"));
+        assert!(projected.hidden_suggestions.contains("--debug"));
+
+        let projected = project_repl_ui_line("-v history -", &make_config())
+            .expect("projection should succeed");
+        assert!(!projected.hidden_suggestions.contains("--json"));
+        assert!(!projected.hidden_suggestions.contains("--debug"));
+    }
+
+    #[test]
+    fn projection_suppresses_used_one_shot_invocation_flags_unit() {
+        let projected = project_repl_ui_line("-v --json history -", &make_config())
+            .expect("projection should succeed");
+        assert!(projected.hidden_suggestions.contains("--json"));
+        assert!(projected.hidden_suggestions.contains("--format"));
+        assert!(projected.hidden_suggestions.contains("--table"));
+        assert!(!projected.hidden_suggestions.contains("--debug"));
+    }
+
+    #[test]
+    fn projection_blanks_help_keyword_but_keeps_target_text_unit() {
+        let projected = project_repl_ui_line("help history", &make_config())
+            .expect("projection should succeed");
+        assert!(!projected.line.contains("help"));
+        assert!(projected.line.contains("history"));
+
+        let partial =
+            project_repl_ui_line("help his", &make_config()).expect("projection should succeed");
+        assert!(!partial.line.contains("help"));
+        assert!(partial.line.contains("his"));
+    }
+
+    #[test]
+    fn help_projection_hides_help_and_non_verbose_flags_unit() {
+        let projected =
+            project_repl_ui_line("help ", &make_config()).expect("projection should succeed");
+        assert!(projected.hidden_suggestions.contains("help"));
+        assert!(projected.hidden_suggestions.contains("--json"));
+        assert!(projected.hidden_suggestions.contains("--debug"));
+
+        let target = project_repl_ui_line("help history -", &make_config())
+            .expect("projection should succeed");
+        assert!(!target.hidden_suggestions.contains("--verbose"));
+        assert!(target.hidden_suggestions.contains("--json"));
+        assert!(target.hidden_suggestions.contains("--debug"));
     }
 }

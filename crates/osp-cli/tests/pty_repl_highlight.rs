@@ -184,3 +184,30 @@ fn repl_highlights_commands_with_success_color() {
         let _ = session.child.wait();
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn repl_help_history_highlights_help_keyword() {
+    let mut session = spawn_repl_with_color();
+
+    write_bytes(&mut session, b"help history");
+
+    let start = output_len(&session.output);
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\x1b[38;2;139;213;202mhelp\x1b[0m",
+            Duration::from_secs(3)
+        ),
+        "expected `help` to be highlighted with the command color; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+
+    write_bytes(&mut session, b"\x03");
+    write_bytes(&mut session, b"exit\r\r");
+    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+}
