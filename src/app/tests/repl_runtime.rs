@@ -1,6 +1,11 @@
 use super::*;
 use insta::assert_snapshot;
 
+fn env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 #[test]
 fn repl_plugin_error_payload_is_handled_as_error_unit() {
     use std::os::unix::fs::PermissionsExt;
@@ -310,6 +315,155 @@ fn rebuild_repl_state_preserves_session_render_defaults_unit() {
     let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
 
     assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Table);
+}
+
+#[test]
+fn rebuild_repl_state_preserves_path_discovery_enabled_by_config_unit() {
+    let _guard = env_lock().lock().expect("env lock should not be poisoned");
+    let path_root = make_temp_dir("osp-cli-repl-path-discovery");
+    let plugins_dir = path_root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    let _plugin = write_pipeline_test_plugin(&plugins_dir);
+
+    let original_path = std::env::var_os("PATH");
+    let joined_path = std::env::join_paths(
+        std::iter::once(plugins_dir.clone())
+            .chain(original_path.iter().flat_map(std::env::split_paths)),
+    )
+    .expect("PATH should join");
+    unsafe { std::env::set_var("PATH", joined_path) };
+
+    let mut state = make_test_state(Vec::new());
+    state
+        .session
+        .config_overrides
+        .set("extensions.plugins.discovery.path", true);
+
+    let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    let plugins = next
+        .clients
+        .plugins
+        .list_plugins()
+        .expect("path-discovered plugins should list");
+    assert!(plugins.iter().any(|plugin| plugin.plugin_id == "hello"));
+
+    match original_path {
+        Some(value) => unsafe { std::env::set_var("PATH", value) },
+        None => unsafe { std::env::remove_var("PATH") },
+    }
+    let _ = std::fs::remove_dir_all(path_root);
+}
+
+#[test]
+fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
+    let dir = make_temp_dir("osp-cli-repl-plugin-enable");
+    let _plugin = write_pipeline_test_plugin(&dir);
+    let mut state = make_test_state(vec![dir.clone()]);
+    state
+        .clients
+        .plugins
+        .set_enabled("hello", false)
+        .expect("plugin should disable");
+    assert!(
+        state
+            .clients
+            .plugins
+            .command_catalog()
+            .expect("catalog should render")
+            .is_empty()
+    );
+
+    let history = make_test_history(&mut state);
+    let result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "plugins enable hello",
+    )
+    .expect("plugin enable should succeed");
+    assert!(matches!(
+        result,
+        crate::repl::ReplLineResult::Restart {
+            reload: crate::repl::ReplReloadKind::Default,
+            ..
+        }
+    ));
+
+    let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    let catalog = next
+        .clients
+        .plugins
+        .command_catalog()
+        .expect("catalog should render");
+    assert!(
+        catalog.iter().any(|entry| entry.name == "hello"),
+        "enabled plugin should appear after rebuild"
+    );
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn repl_provider_selection_restart_invalidates_command_cache_unit() {
+    let dir = make_temp_dir("osp-cli-repl-provider-selection-restart");
+    let _alpha = write_provider_test_plugin(&dir, "alpha-provider", "hello", "alpha");
+    let _beta = write_provider_test_plugin(&dir, "beta-provider", "hello", "beta");
+    let mut state = make_test_state(vec![dir.clone()]);
+    let history = make_test_history(&mut state);
+
+    let first = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "--plugin-provider alpha-provider hello --cache",
+    )
+    .expect("one-shot provider override should succeed");
+    match first {
+        crate::repl::ReplLineResult::Continue(text) => assert!(text.contains("alpha-from-plugin")),
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+    assert!(!state.session.command_cache.is_empty());
+
+    let selection = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "plugins select-provider hello beta-provider",
+    )
+    .expect("provider selection should succeed");
+    assert!(matches!(
+        selection,
+        crate::repl::ReplLineResult::Restart {
+            reload: crate::repl::ReplReloadKind::Default,
+            ..
+        }
+    ));
+
+    let mut next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    assert!(next.session.command_cache.is_empty());
+    assert!(next.session.command_cache_order.is_empty());
+
+    let history = make_test_history(&mut next);
+    let second = repl_dispatch::execute_repl_plugin_line(
+        &mut next.runtime,
+        &mut next.session,
+        &next.clients,
+        &history,
+        "hello --cache",
+    )
+    .expect("selected provider should execute after rebuild");
+    match second {
+        crate::repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("beta-from-plugin"));
+            assert!(!text.contains("alpha-from-plugin"));
+        }
+        other => panic!("unexpected repl result: {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

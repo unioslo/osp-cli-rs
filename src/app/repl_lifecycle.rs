@@ -6,8 +6,8 @@ use crate::app::logging::init_developer_logging;
 use crate::app::{AppClients, AppRuntime, AppSession};
 use crate::app::{
     RuntimeConfigRequest, build_app_state, build_logging_config, debug_verbosity_from_config,
-    message_verbosity_from_config, plugin_process_timeout, resolve_default_render_width,
-    resolve_known_theme_name, resolve_runtime_config,
+    message_verbosity_from_config, plugin_path_discovery_enabled, plugin_process_timeout,
+    resolve_default_render_width, resolve_known_theme_name, resolve_runtime_config,
 };
 use crate::plugin::PluginManager;
 use crate::ui::theme::DEFAULT_THEME_NAME;
@@ -20,8 +20,6 @@ struct ReplSessionSnapshot {
     prompt_timing: crate::app::DebugTimingState,
     result_cache: std::collections::HashMap<String, Vec<crate::core::row::Row>>,
     cache_order: std::collections::VecDeque<String>,
-    command_cache: std::collections::HashMap<String, crate::app::CliCommandResult>,
-    command_cache_order: std::collections::VecDeque<String>,
     last_rows: Vec<crate::core::row::Row>,
     last_failure: Option<crate::app::LastFailure>,
     session_overrides: crate::config::ConfigLayer,
@@ -38,8 +36,6 @@ impl ReplSessionSnapshot {
             prompt_timing: session.prompt_timing.clone(),
             result_cache: session.result_cache.clone(),
             cache_order: session.cache_order.clone(),
-            command_cache: session.command_cache.clone(),
-            command_cache_order: session.command_cache_order.clone(),
             last_rows: session.last_rows.clone(),
             last_failure: session.last_failure.clone(),
             session_overrides: session.config_overrides.clone(),
@@ -60,8 +56,6 @@ impl ReplSessionSnapshot {
         next.last_failure = self.last_failure;
         next.result_cache = self.result_cache;
         next.cache_order = self.cache_order;
-        next.command_cache = self.command_cache;
-        next.command_cache_order = self.command_cache_order;
         next.history_shell = self.history_shell;
         next.sync_history_shell_context();
     }
@@ -111,7 +105,8 @@ pub(crate) fn rebuild_repl_parts(
     let launch = snapshot.launch.clone();
     let plugin_manager = PluginManager::new(launch.plugin_dirs.clone())
         .with_roots(launch.config_root.clone(), launch.cache_root.clone())
-        .with_process_timeout(plugin_process_timeout(&config));
+        .with_process_timeout(plugin_process_timeout(&config))
+        .with_path_discovery(plugin_path_discovery_enabled(&config));
     let mut next = build_app_state(crate::app::AppStateInit {
         context,
         config,

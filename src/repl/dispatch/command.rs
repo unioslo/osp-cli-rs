@@ -13,8 +13,9 @@ use crate::app::{
 use crate::cli::invocation::{append_invocation_help_if_verbose, scan_command_tokens};
 use crate::cli::rows::output::output_to_rows;
 use crate::cli::{
-    Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginsCommands,
-    ThemeArgs, ThemeCommands, parse_inline_command_tokens,
+    Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginProviderClearArgs,
+    PluginProviderSelectArgs, PluginToggleArgs, PluginsCommands, ThemeArgs, ThemeCommands,
+    parse_inline_command_tokens,
 };
 
 use crate::repl::{ReplViewContext, completion, help, input};
@@ -245,6 +246,17 @@ pub(super) fn command_side_effects(command: &Commands) -> CommandSideEffects {
         }) if !unset.dry_run => CommandSideEffects {
             restart_repl: true,
             show_intro_on_reload: config_key_change_requires_intro(&unset.key),
+        },
+        Commands::Plugins(crate::cli::PluginsArgs {
+            command:
+                PluginsCommands::Enable(PluginToggleArgs { .. })
+                | PluginsCommands::Disable(PluginToggleArgs { .. })
+                | PluginsCommands::Refresh
+                | PluginsCommands::SelectProvider(PluginProviderSelectArgs { .. })
+                | PluginsCommands::ClearProvider(PluginProviderClearArgs { .. }),
+        }) => CommandSideEffects {
+            restart_repl: true,
+            show_intro_on_reload: false,
         },
         _ => CommandSideEffects::default(),
     }

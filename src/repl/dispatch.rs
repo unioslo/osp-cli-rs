@@ -296,6 +296,22 @@ For more information, try '--help'.\n";
             command_side_effects(&config_unset_dry_run),
             Default::default()
         );
+
+        let plugins_enable = Commands::Plugins(PluginsArgs {
+            command: PluginsCommands::Enable(crate::cli::PluginToggleArgs {
+                plugin_id: "orch".to_string(),
+            }),
+        });
+        let plugins_enable_effects = command_side_effects(&plugins_enable);
+        assert!(plugins_enable_effects.restart_repl);
+        assert!(!plugins_enable_effects.show_intro_on_reload);
+
+        let plugins_refresh = Commands::Plugins(PluginsArgs {
+            command: PluginsCommands::Refresh,
+        });
+        let plugins_refresh_effects = command_side_effects(&plugins_refresh);
+        assert!(plugins_refresh_effects.restart_repl);
+        assert!(!plugins_refresh_effects.show_intro_on_reload);
     }
 
     #[test]
