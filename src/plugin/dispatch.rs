@@ -3,8 +3,10 @@ use super::manager::{
 };
 use crate::core::plugin::{DescribeV1, ResponseV1};
 use anyhow::{Result, anyhow};
+use std::io::Read;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -242,18 +244,19 @@ fn run_command_with_timeout(
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
-    let mut child = spawn_command_with_retry(&mut command).map_err(CommandRunError::Execute)?;
+    let mut child = DrainedChild::spawn(command).map_err(CommandRunError::Execute)?;
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
 
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().map_err(CommandRunError::Execute),
+            Ok(Some(status)) => return child.finish(status).map_err(CommandRunError::Execute),
             Ok(None) if Instant::now() < deadline => {
                 thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
             }
             Ok(None) => {
-                terminate_timed_out_child(&mut child);
-                let output = child.wait_with_output().map_err(CommandRunError::Execute)?;
+                terminate_timed_out_child(child.child_mut());
+                let status = child.wait().map_err(CommandRunError::Execute)?;
+                let output = child.finish(status).map_err(CommandRunError::Execute)?;
                 return Err(CommandRunError::TimedOut {
                     timeout,
                     stderr: output.stderr,
@@ -262,6 +265,68 @@ fn run_command_with_timeout(
             Err(source) => return Err(CommandRunError::Execute(source)),
         }
     }
+}
+
+struct DrainedChild {
+    child: Child,
+    stdout: JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr: JoinHandle<std::io::Result<Vec<u8>>>,
+}
+
+impl DrainedChild {
+    fn spawn(mut command: Command) -> std::io::Result<Self> {
+        let mut child = spawn_command_with_retry(&mut command)?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("failed to capture child stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| std::io::Error::other("failed to capture child stderr"))?;
+        Ok(Self {
+            child,
+            stdout: spawn_capture_thread(stdout),
+            stderr: spawn_capture_thread(stderr),
+        })
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.child.try_wait()
+    }
+
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.child.wait()
+    }
+
+    fn finish(self, status: std::process::ExitStatus) -> std::io::Result<Output> {
+        Ok(Output {
+            status,
+            stdout: join_capture(self.stdout)?,
+            stderr: join_capture(self.stderr)?,
+        })
+    }
+}
+
+fn spawn_capture_thread<R>(mut reader: R) -> JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer)?;
+        Ok(buffer)
+    })
+}
+
+fn join_capture(handle: JoinHandle<std::io::Result<Vec<u8>>>) -> std::io::Result<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| std::io::Error::other("plugin output capture thread panicked"))?
 }
 
 fn spawn_command_with_retry(command: &mut Command) -> std::io::Result<Child> {

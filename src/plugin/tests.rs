@@ -318,6 +318,34 @@ fn dispatch_times_out_hung_plugin() {
 
 #[cfg(unix)]
 #[test]
+fn dispatch_drains_large_plugin_output_without_false_timeout_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-large-output");
+    let plugins_dir = root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+    write_large_output_test_plugin(&plugins_dir, "loud");
+    let manager = PluginManager::new(vec![plugins_dir.clone()])
+        .with_process_timeout(Duration::from_millis(500));
+
+    let response = manager
+        .dispatch("loud", &[], &PluginDispatchContext::default())
+        .expect("large-output plugin should complete without timing out");
+
+    assert!(response.ok);
+    assert!(
+        response
+            .data
+            .as_object()
+            .and_then(|data| data.get("blob"))
+            .and_then(|value| value.as_str())
+            .is_some_and(|blob| blob.len() >= 131_072)
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
 fn timed_out_plugin_terminates_background_process_group_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-timeout-process-group");
     let plugins_dir = root.join("plugins");
@@ -338,6 +366,40 @@ fn timed_out_plugin_terminates_background_process_group_unit() {
         !marker.exists(),
         "timed-out plugin left a background child behind"
     );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn duplicate_plugin_ids_are_marked_unhealthy_and_removed_from_catalog_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-duplicate-ids");
+    let plugins_dir = root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+
+    write_mismatched_id_plugin(&plugins_dir, "alpha-bin", "shared-id", "alpha");
+    write_mismatched_id_plugin(&plugins_dir, "beta-bin", "shared-id", "beta");
+    let manager = PluginManager::new(vec![plugins_dir.clone()]);
+
+    let plugins = manager.list_plugins().expect("plugins should list");
+    assert_eq!(plugins.len(), 2);
+    assert!(plugins.iter().all(|plugin| !plugin.healthy));
+    assert!(plugins.iter().all(|plugin| {
+        plugin
+            .issue
+            .as_deref()
+            .is_some_and(|issue| issue.contains("duplicate plugin id `shared-id`"))
+    }));
+
+    let catalog = manager.command_catalog().expect("catalog should render");
+    assert!(
+        catalog.is_empty(),
+        "duplicate providers should not stay active"
+    );
+    assert!(matches!(
+        manager.resolve_provider("alpha", None),
+        Err(PluginDispatchError::CommandNotFound { .. })
+    ));
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -1374,6 +1436,61 @@ sleep 1
 "#,
         name = name,
         marker = marker.display(),
+    );
+
+    write_executable_script_atomically(&plugin_path, &script);
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_large_output_test_plugin(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let plugin_path = dir.join(format!("osp-{name}"));
+    let script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+printf '{{"protocol_version":1,"ok":true,"data":{{"blob":"'
+head -c 131072 /dev/zero | tr '\0' 'x'
+printf '"}},"error":null,"meta":{{"format_hint":"table","columns":["blob"]}}}}'
+"#,
+        name = name,
+    );
+
+    write_executable_script_atomically(&plugin_path, &script);
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_mismatched_id_plugin(
+    dir: &std::path::Path,
+    file_stem: &str,
+    describe_id: &str,
+    command_name: &str,
+) -> std::path::PathBuf {
+    let plugin_path = dir.join(format!("osp-{file_stem}"));
+    let script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{describe_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{file_stem} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+        file_stem = file_stem,
+        describe_id = describe_id,
+        command_name = command_name,
     );
 
     write_executable_script_atomically(&plugin_path, &script);

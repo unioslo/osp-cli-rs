@@ -125,6 +125,8 @@ impl PluginManager {
             ));
         }
 
+        mark_duplicate_plugin_ids(&mut plugins);
+
         cache_dirty |=
             prune_stale_describe_cache_entries(&mut describe_cache, &seen_describe_paths);
         if cache_dirty {
@@ -331,6 +333,39 @@ fn discover_plugins_in_root(
     );
 
     plugins
+}
+
+fn mark_duplicate_plugin_ids(plugins: &mut [DiscoveredPlugin]) {
+    let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, plugin) in plugins.iter().enumerate() {
+        by_id
+            .entry(plugin.plugin_id.clone())
+            .or_default()
+            .push(index);
+    }
+
+    for (plugin_id, indexes) in by_id {
+        if indexes.len() < 2 {
+            continue;
+        }
+
+        let providers = indexes
+            .iter()
+            .map(|index| plugins[*index].executable.display().to_string())
+            .collect::<Vec<_>>();
+        let issue = format!(
+            "duplicate plugin id `{plugin_id}` discovered at {}",
+            providers.join(", ")
+        );
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            providers = providers.join(", "),
+            "duplicate plugin id discovered"
+        );
+        for index in indexes {
+            super::state::merge_issue(&mut plugins[index].issue, issue.clone());
+        }
+    }
 }
 
 pub(super) fn assemble_discovered_plugin(
