@@ -39,6 +39,10 @@ pub enum ConfigError {
         key: String,
         reason: String,
     },
+    ReadOnlyConfigKey {
+        key: String,
+        reason: String,
+    },
     InvalidBootstrapScope {
         key: String,
         profile: Option<String>,
@@ -123,6 +127,9 @@ impl Display for ConfigError {
             }
             ConfigError::InvalidConfigKey { key, reason } => {
                 write!(f, "invalid config key {key}: {reason}")
+            }
+            ConfigError::ReadOnlyConfigKey { key, reason } => {
+                write!(f, "config key {key} is read-only: {reason}")
             }
             ConfigError::InvalidBootstrapScope {
                 key,
@@ -278,6 +285,13 @@ mod tests {
                     reason: "unknown key".to_string(),
                 },
                 "invalid config key ui.wat: unknown key",
+            ),
+            (
+                ConfigError::ReadOnlyConfigKey {
+                    key: "profile.active".to_string(),
+                    reason: "derived at runtime".to_string(),
+                },
+                "config key profile.active is read-only: derived at runtime",
             ),
             (
                 ConfigError::InvalidBootstrapScope {

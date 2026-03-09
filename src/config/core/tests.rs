@@ -44,6 +44,18 @@ fn schema_marks_profile_default_bootstrap_only() {
 }
 
 #[test]
+fn schema_rejects_writes_to_derived_profile_active() {
+    let schema = ConfigSchema::default();
+    let err = schema
+        .parse_input_value("profile.active", "ops")
+        .expect_err("profile.active should be read-only");
+    assert!(matches!(
+        err,
+        crate::config::ConfigError::ReadOnlyConfigKey { key, .. } if key == "profile.active"
+    ));
+}
+
+#[test]
 fn parse_input_value_adapts_scalars_lists_and_enums() {
     let schema = ConfigSchema::default();
 
@@ -239,6 +251,21 @@ fn config_layer_from_env_iter_parses_scopes_and_bootstrap_profile_default() {
             && entry.scope == Scope::global()
             && entry.key == "profile.default"
     }));
+}
+
+#[test]
+fn config_layer_from_toml_str_rejects_derived_profile_active() {
+    let err = ConfigLayer::from_toml_str(
+        r#"
+[default.profile]
+active = "ops"
+"#,
+    )
+    .expect_err("derived profile.active should not load from toml");
+    assert!(matches!(
+        err,
+        crate::config::ConfigError::ReadOnlyConfigKey { key, .. } if key == "profile.active"
+    ));
 }
 
 #[test]

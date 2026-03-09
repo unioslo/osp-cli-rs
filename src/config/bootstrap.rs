@@ -29,13 +29,10 @@ pub(crate) fn prepare_resolution(
     let profile_override = options
         .profile_override
         .map(|value| normalize_identifier(&value));
-    let known_profiles = collect_known_profiles(layers);
-    let profile_selection = resolve_active_profile(
-        layers,
-        profile_override.as_deref(),
-        terminal.as_deref(),
-        &known_profiles,
-    )?;
+    let mut known_profiles = collect_known_profiles(layers);
+    let profile_selection =
+        resolve_active_profile(layers, profile_override.as_deref(), terminal.as_deref())?;
+    known_profiles.insert(profile_selection.profile.clone());
 
     tracing::debug!(
         active_profile = %profile_selection.profile,
@@ -137,17 +134,16 @@ fn resolve_active_profile(
     layers: [LayerRef<'_>; 7],
     explicit: Option<&str>,
     terminal: Option<&str>,
-    known_profiles: &BTreeSet<String>,
 ) -> Result<ActiveProfileSelection, ConfigError> {
     tracing::debug!(
         explicit_profile = ?explicit,
         terminal = ?terminal,
-        known_profiles = known_profiles.len(),
         "resolving active profile"
     );
     let selection = if let Some(profile) = explicit {
+        let normalized = normalize_identifier(profile);
         ActiveProfileSelection {
-            profile: normalize_identifier(profile),
+            profile: normalized,
             source: ActiveProfileSource::Override,
         }
     } else {
@@ -159,18 +155,6 @@ fn resolve_active_profile(
 
     if selection.profile.trim().is_empty() {
         return Err(ConfigError::MissingDefaultProfile);
-    }
-
-    if !known_profiles.is_empty() && !known_profiles.contains(&selection.profile) {
-        tracing::warn!(
-            active_profile = %selection.profile,
-            known_profiles = known_profiles.len(),
-            "resolved unknown active profile"
-        );
-        return Err(ConfigError::UnknownProfile {
-            profile: selection.profile,
-            known: known_profiles.iter().cloned().collect::<Vec<String>>(),
-        });
     }
 
     tracing::debug!(

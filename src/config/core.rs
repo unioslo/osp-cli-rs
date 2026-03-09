@@ -199,6 +199,7 @@ pub struct SchemaEntry {
     canonical_key: Option<&'static str>,
     value_type: SchemaValueType,
     required: bool,
+    writable: bool,
     allowed_values: Option<Vec<String>>,
     runtime_visible: bool,
     bootstrap_phase: Option<BootstrapPhase>,
@@ -212,6 +213,7 @@ impl SchemaEntry {
             canonical_key: None,
             value_type: SchemaValueType::String,
             required: false,
+            writable: true,
             allowed_values: None,
             runtime_visible: true,
             bootstrap_phase: None,
@@ -225,6 +227,7 @@ impl SchemaEntry {
             canonical_key: None,
             value_type: SchemaValueType::Bool,
             required: false,
+            writable: true,
             allowed_values: None,
             runtime_visible: true,
             bootstrap_phase: None,
@@ -238,6 +241,7 @@ impl SchemaEntry {
             canonical_key: None,
             value_type: SchemaValueType::Integer,
             required: false,
+            writable: true,
             allowed_values: None,
             runtime_visible: true,
             bootstrap_phase: None,
@@ -251,6 +255,7 @@ impl SchemaEntry {
             canonical_key: None,
             value_type: SchemaValueType::Float,
             required: false,
+            writable: true,
             allowed_values: None,
             runtime_visible: true,
             bootstrap_phase: None,
@@ -264,6 +269,7 @@ impl SchemaEntry {
             canonical_key: None,
             value_type: SchemaValueType::StringList,
             required: false,
+            writable: true,
             allowed_values: None,
             runtime_visible: true,
             bootstrap_phase: None,
@@ -274,6 +280,11 @@ impl SchemaEntry {
 
     pub fn required(mut self) -> Self {
         self.required = true;
+        self
+    }
+
+    pub fn read_only(mut self) -> Self {
+        self.writable = false;
         self
     }
 
@@ -315,6 +326,10 @@ impl SchemaEntry {
         self.runtime_visible
     }
 
+    pub fn writable(&self) -> bool {
+        self.writable
+    }
+
     fn with_canonical_key(mut self, key: &'static str) -> Self {
         self.canonical_key = Some(key);
         self
@@ -353,6 +368,12 @@ pub struct ConfigSchema {
     allow_extensions_namespace: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DynamicSchemaKeyKind {
+    PluginCommandState,
+    PluginCommandProvider,
+}
+
 impl Default for ConfigSchema {
     fn default() -> Self {
         builtin_config_schema().clone()
@@ -375,7 +396,10 @@ impl ConfigSchema {
                 )
                 .with_bootstrap_value_rule(BootstrapValueRule::NonEmptyString),
         );
-        schema.insert("profile.active", SchemaEntry::string().required());
+        schema.insert(
+            "profile.active",
+            SchemaEntry::string().required().read_only(),
+        );
         schema.insert("theme.name", SchemaEntry::string());
         schema.insert("theme.path", SchemaEntry::string_list());
         schema.insert("user.name", SchemaEntry::string());
@@ -529,7 +553,10 @@ impl ConfigSchema {
     }
 
     pub fn is_known_key(&self, key: &str) -> bool {
-        self.entries.contains_key(key) || self.is_extension_key(key) || self.is_alias_key(key)
+        self.entries.contains_key(key)
+            || self.is_extension_key(key)
+            || self.is_alias_key(key)
+            || dynamic_schema_key_kind(key).is_some()
     }
 
     pub fn is_runtime_visible_key(&self, key: &str) -> bool {
@@ -537,6 +564,20 @@ impl ConfigSchema {
             .get(key)
             .is_some_and(SchemaEntry::runtime_visible)
             || self.is_extension_key(key)
+            || dynamic_schema_key_kind(key).is_some()
+    }
+
+    pub fn validate_writable_key(&self, key: &str) -> Result<(), ConfigError> {
+        let normalized = key.trim().to_ascii_lowercase();
+        if let Some(entry) = self.entries.get(&normalized)
+            && !entry.writable()
+        {
+            return Err(ConfigError::ReadOnlyConfigKey {
+                key: normalized,
+                reason: "derived at runtime".to_string(),
+            });
+        }
+        Ok(())
     }
 
     pub fn bootstrap_key_spec(&self, key: &str) -> Option<BootstrapKeySpec> {
@@ -553,7 +594,10 @@ impl ConfigSchema {
     }
 
     pub fn expected_type(&self, key: &str) -> Option<SchemaValueType> {
-        self.entries.get(key).map(|entry| entry.value_type)
+        self.entries
+            .get(key)
+            .map(|entry| entry.value_type)
+            .or_else(|| dynamic_schema_key_kind(key).map(|_| SchemaValueType::String))
     }
 
     pub fn parse_input_value(&self, key: &str, raw: &str) -> Result<ConfigValue, ConfigError> {
@@ -562,6 +606,7 @@ impl ConfigSchema {
                 keys: vec![key.to_string()],
             });
         }
+        self.validate_writable_key(key)?;
 
         let value = match self.expected_type(key) {
             Some(SchemaValueType::String) | None => ConfigValue::String(raw.to_string()),
@@ -602,18 +647,18 @@ impl ConfigSchema {
             }
         };
 
-        if let Some(entry) = self.entries.get(key)
-            && let Some(allowed) = &entry.allowed_values
-            && let ConfigValue::String(current) = &value
+        if let Some(entry) = self.entries.get(key) {
+            validate_allowed_values(
+                key,
+                &value,
+                entry
+                    .allowed_values()
+                    .map(|values| values.iter().map(String::as_str).collect::<Vec<_>>())
+                    .as_deref(),
+            )?;
+        } else if let Some(DynamicSchemaKeyKind::PluginCommandState) = dynamic_schema_key_kind(key)
         {
-            let normalized = current.to_ascii_lowercase();
-            if !allowed.contains(&normalized) {
-                return Err(ConfigError::InvalidEnumValue {
-                    key: key.to_string(),
-                    value: current.clone(),
-                    allowed: allowed.clone(),
-                });
-            }
+            validate_allowed_values(key, &value, Some(&["enabled", "disabled"]))?;
         }
 
         Ok(value)
@@ -642,6 +687,10 @@ impl ConfigSchema {
         }
 
         for (key, resolved) in values.iter_mut() {
+            if let Some(kind) = dynamic_schema_key_kind(key) {
+                resolved.value = adapt_dynamic_value_for_schema(key, &resolved.value, kind)?;
+                continue;
+            }
             let Some(schema_entry) = self.entries.get(key) else {
                 continue;
             };
@@ -1001,6 +1050,7 @@ impl ConfigLayer {
             }
 
             let spec = parse_env_key(key)?;
+            builtin_config_schema().validate_writable_key(&spec.key)?;
             validate_key_scope(&spec.key, &spec.scope)?;
             let converted = ConfigValue::String(value.as_ref().to_string());
             validate_bootstrap_value(&spec.key, &converted)?;
@@ -1012,6 +1062,7 @@ impl ConfigLayer {
 
     pub(crate) fn validate_entries(&self) -> Result<(), ConfigError> {
         for entry in &self.entries {
+            builtin_config_schema().validate_writable_key(&entry.key)?;
             validate_key_scope(&entry.key, &entry.scope)?;
             validate_bootstrap_value(&entry.key, &entry.value)?;
         }
@@ -1238,6 +1289,7 @@ fn flatten_key_value(
         toml::Value::Table(table) => flatten_table(layer, table, key, scope),
         _ => {
             let converted = ConfigValue::from_toml(key, value)?;
+            builtin_config_schema().validate_writable_key(key)?;
             validate_key_scope(key, scope)?;
             validate_bootstrap_value(key, &converted)?;
             layer.insert(key.to_string(), converted, scope.clone());
@@ -1427,6 +1479,59 @@ fn adapt_value_for_schema(
     }
 
     Ok(adapted)
+}
+
+fn adapt_dynamic_value_for_schema(
+    key: &str,
+    value: &ConfigValue,
+    kind: DynamicSchemaKeyKind,
+) -> Result<ConfigValue, ConfigError> {
+    let adapted = match kind {
+        DynamicSchemaKeyKind::PluginCommandState | DynamicSchemaKeyKind::PluginCommandProvider => {
+            adapt_value_for_schema(key, value, &SchemaEntry::string())?
+        }
+    };
+
+    if matches!(kind, DynamicSchemaKeyKind::PluginCommandState) {
+        validate_allowed_values(key, &adapted, Some(&["enabled", "disabled"]))?;
+    }
+
+    Ok(adapted)
+}
+
+fn validate_allowed_values(
+    key: &str,
+    value: &ConfigValue,
+    allowed: Option<&[&str]>,
+) -> Result<(), ConfigError> {
+    let Some(allowed) = allowed else {
+        return Ok(());
+    };
+    if let ConfigValue::String(current) = value {
+        let normalized = current.to_ascii_lowercase();
+        if !allowed.iter().any(|candidate| *candidate == normalized) {
+            return Err(ConfigError::InvalidEnumValue {
+                key: key.to_string(),
+                value: current.clone(),
+                allowed: allowed.iter().map(|value| (*value).to_string()).collect(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn dynamic_schema_key_kind(key: &str) -> Option<DynamicSchemaKeyKind> {
+    let normalized = key.trim().to_ascii_lowercase();
+    let remainder = normalized.strip_prefix("plugins.")?;
+    let (command, field) = remainder.rsplit_once('.')?;
+    if command.trim().is_empty() {
+        return None;
+    }
+    match field {
+        "state" => Some(DynamicSchemaKeyKind::PluginCommandState),
+        "provider" => Some(DynamicSchemaKeyKind::PluginCommandProvider),
+        _ => None,
+    }
 }
 
 fn parse_bool(value: &str) -> Option<bool> {

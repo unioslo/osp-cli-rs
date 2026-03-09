@@ -191,7 +191,6 @@ mod tests {
     fn make_config() -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
-        defaults.set("profile.active", "default");
 
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);

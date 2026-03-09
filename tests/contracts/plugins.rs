@@ -131,7 +131,7 @@ fn errors_remain_visible_at_double_quiet_contract() {
 
 #[test]
 #[cfg(unix)]
-fn profile_override_is_validated_against_config_contract() {
+fn profile_override_can_select_unscoped_profile_contract() {
     let home = make_temp_dir("osp-cli-profile-override-home");
     write_config(
         &home,
@@ -152,8 +152,8 @@ ui.format = "json"
         .env("PATH", "/usr/bin:/bin")
         .args(["--profile", "prod", "plugins", "list"]);
     cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("unknown profile 'prod'"));
+        .success()
+        .stdout(predicate::str::contains("No plugins discovered."));
 
     let _ = std::fs::remove_dir_all(&home);
 }

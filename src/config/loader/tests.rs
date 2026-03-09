@@ -181,7 +181,7 @@ fn process_env_and_pipeline_builder_cover_remaining_loader_paths_unit() {
         }))
         .with_session(StaticLayerLoader::new({
             let mut layer = ConfigLayer::default();
-            layer.insert("profile.active", "uio", Scope::global());
+            layer.insert("session.cache.max_results", 32_i64, Scope::global());
             layer
         }))
         .load_layers()

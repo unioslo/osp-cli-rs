@@ -295,6 +295,15 @@ impl ConfigResolver {
         for layer in self.layers() {
             if let Some(entry) = selector.select(layer, key) {
                 if let Some(previous) = &selected {
+                    if should_preserve_selected_secret(previous, &entry) {
+                        tracing::trace!(
+                            key = %key,
+                            secret_origin = ?previous.entry.origin,
+                            env_origin = ?entry.entry.origin,
+                            "preserving secret env override over plain env value"
+                        );
+                        continue;
+                    }
                     tracing::trace!(
                         key = %key,
                         previous_source = ?previous.source,
@@ -345,10 +354,26 @@ impl ConfigResolver {
     }
 }
 
+fn should_preserve_selected_secret(
+    previous: &SelectedLayerEntry<'_>,
+    next: &SelectedLayerEntry<'_>,
+) -> bool {
+    previous.source == ConfigSource::Secrets
+        && next.source == ConfigSource::Environment
+        && previous.entry.value.is_secret()
+        && previous
+            .entry
+            .origin
+            .as_deref()
+            .is_some_and(|origin| origin.starts_with("OSP_SECRET__"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::ConfigResolver;
-    use crate::config::{ConfigError, ConfigLayer, ResolveOptions};
+    use crate::config::{
+        ConfigError, ConfigLayer, ConfigSource, ConfigValue, ResolveOptions, Scope,
+    };
 
     #[test]
     fn resolver_layer_mutators_and_setters_are_callable_unit() {
@@ -393,5 +418,50 @@ mod tests {
             err,
             ConfigError::InvalidConfigKey { key, .. } if key == "ui.theme"
         ));
+    }
+
+    #[test]
+    fn resolver_keeps_secret_env_value_over_plain_env_value() {
+        let mut resolver = ConfigResolver::default();
+        resolver.defaults_mut().set("profile.default", "default");
+        resolver.secrets_mut().insert_with_origin(
+            "extensions.demo.token",
+            ConfigValue::String("secret-token".to_string()).into_secret(),
+            Scope::global(),
+            Some("OSP_SECRET__AUTH__TOKEN"),
+        );
+        resolver.env_mut().insert_with_origin(
+            "extensions.demo.token",
+            ConfigValue::String("plain-token".to_string()),
+            Scope::global(),
+            Some("OSP__AUTH__TOKEN"),
+        );
+
+        let resolved = resolver
+            .resolve(ResolveOptions::default())
+            .expect("resolver should resolve");
+        let entry = resolved
+            .get_value_entry("extensions.demo.token")
+            .expect("extensions.demo.token should resolve");
+
+        assert!(entry.value.is_secret());
+        assert_eq!(
+            entry.value.reveal(),
+            &ConfigValue::String("secret-token".to_string())
+        );
+        assert_eq!(entry.source, ConfigSource::Secrets);
+    }
+
+    #[test]
+    fn resolver_allows_selected_profile_without_scoped_entries() {
+        let mut resolver = ConfigResolver::default();
+        resolver.defaults_mut().set("profile.default", "ops");
+
+        let resolved = resolver
+            .resolve(ResolveOptions::default())
+            .expect("selected profile without scoped entries should resolve");
+
+        assert_eq!(resolved.active_profile(), "ops");
+        assert!(resolved.known_profiles().contains("ops"));
     }
 }

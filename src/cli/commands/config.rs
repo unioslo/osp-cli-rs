@@ -334,6 +334,7 @@ fn run_config_set(
 ) -> Result<CliCommandResult> {
     let key = args.key.trim().to_ascii_lowercase();
     let schema = ConfigSchema::default();
+    schema.validate_writable_key(&key).into_diagnostic()?;
     let value = schema
         .parse_input_value(&key, &args.value)
         .into_diagnostic()
@@ -496,6 +497,9 @@ fn run_config_unset(
     args: ConfigUnsetArgs,
 ) -> Result<CliCommandResult> {
     let key = args.key.trim().to_ascii_lowercase();
+    ConfigSchema::default()
+        .validate_writable_key(&key)
+        .into_diagnostic()?;
     let target = ConfigWriteTarget::from_unset_args(&args);
     let read = context.read();
     let store = resolve_config_store(read, &target);
@@ -870,8 +874,7 @@ mod tests {
 
     fn read_context(terminal: TerminalKind) -> ConfigReadContext<'static> {
         let mut defaults = ConfigLayer::default();
-        defaults.set("profile.default", "default");
-        defaults.set("profile.active", "ops");
+        defaults.set("profile.default", "ops");
         let resolved = build_resolved_config(defaults, terminal);
         let context = Box::leak(Box::new(RuntimeContext::new(None, terminal, None)));
         let ui = Box::leak(Box::new(UiState {
@@ -933,8 +936,7 @@ mod tests {
         format: OutputFormat,
     ) -> ConfigCommandContext<'static> {
         let mut defaults = ConfigLayer::default();
-        defaults.set("profile.default", "default");
-        defaults.set("profile.active", "ops");
+        defaults.set("profile.default", "ops");
         let resolved = build_resolved_config(defaults, terminal);
         let context = Box::leak(Box::new(RuntimeContext::new(None, terminal, None)));
         let ui = Box::leak(Box::new(UiState {
@@ -1048,7 +1050,7 @@ mod tests {
         .expect("profile-all scopes should resolve");
         assert_eq!(
             all_profile_scopes,
-            vec![Scope::profile_terminal("default", "cli")]
+            vec![Scope::profile_terminal("ops", "cli")]
         );
     }
 
@@ -1167,8 +1169,7 @@ mod tests {
     #[test]
     fn run_config_get_covers_alias_hit_and_missing_key_paths_unit() {
         let mut defaults = ConfigLayer::default();
-        defaults.set("profile.default", "default");
-        defaults.set("profile.active", "ops");
+        defaults.set("profile.default", "ops");
         defaults.set("alias.lookup", "ldap user");
         let context = read_context_with_defaults(TerminalKind::Cli, defaults);
 
@@ -1253,7 +1254,6 @@ mod tests {
     fn resolve_config_scopes_covers_known_profiles_and_active_profile_terminal_unit() {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "ops");
-        defaults.set("profile.active", "ops");
         defaults.insert(
             "ui.format".to_string(),
             crate::config::ConfigValue::from("json"),
@@ -1386,6 +1386,48 @@ mod tests {
                 .render_grouped(MessageLevel::Success)
                 .contains("unset value for ui.format")
         );
+    }
+
+    #[test]
+    fn run_config_set_and_unset_reject_derived_profile_active() {
+        let set_err = run_config_set(
+            command_context(TerminalKind::Cli),
+            ConfigSetArgs {
+                key: "profile.active".to_string(),
+                value: "ops".to_string(),
+                global: true,
+                profile: None,
+                profile_all: false,
+                terminal: None,
+                session: false,
+                config_store: false,
+                secrets: false,
+                save: false,
+                yes: false,
+                explain: false,
+                dry_run: false,
+            },
+        )
+        .expect_err("profile.active set should be rejected");
+        assert!(set_err.to_string().contains("read-only"));
+
+        let unset_err = run_config_unset(
+            command_context(TerminalKind::Cli),
+            ConfigUnsetArgs {
+                key: "profile.active".to_string(),
+                global: true,
+                profile: None,
+                profile_all: false,
+                terminal: None,
+                session: false,
+                config_store: false,
+                secrets: false,
+                save: false,
+                dry_run: false,
+            },
+        )
+        .expect_err("profile.active unset should be rejected");
+        assert!(unset_err.to_string().contains("read-only"));
     }
 
     #[test]

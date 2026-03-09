@@ -56,6 +56,7 @@ fn edit_scoped_value_in_toml(
     strict_secret_permissions: bool,
 ) -> Result<TomlEditResult, ConfigError> {
     let normalized_scope = normalize_scope(scope.clone());
+    crate::config::ConfigSchema::default().validate_writable_key(key)?;
     validate_key_scope(key, &normalized_scope)?;
     if let TomlEditOperation::Set(value) = operation {
         validate_bootstrap_value(key, value)?;

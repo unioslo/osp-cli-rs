@@ -9,7 +9,6 @@ use osp_cli::ui::{RenderSettings, render_output};
 fn make_config(entries: &[(&str, &str)]) -> osp_cli::config::ResolvedConfig {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
-    defaults.set("profile.active", "default");
     for (key, value) in entries {
         defaults.set(*key, *value);
     }

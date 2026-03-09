@@ -4,7 +4,6 @@ use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions, ResolvedConfi
 fn make_config(entries: &[(&str, &str)]) -> ResolvedConfig {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
-    defaults.set("profile.active", "default");
     for (key, value) in entries {
         defaults.set(*key, *value);
     }

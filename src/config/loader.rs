@@ -274,6 +274,7 @@ impl ConfigLoader for EnvSecretsLoader {
 
             let synthetic = format!("OSP__{rest}");
             let spec = parse_env_key(&synthetic)?;
+            ConfigSchema::default().validate_writable_key(&spec.key)?;
             layer.insert_with_origin(
                 spec.key,
                 ConfigValue::String(value.clone()).into_secret(),
