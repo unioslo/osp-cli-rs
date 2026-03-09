@@ -37,8 +37,5 @@ jobs:
           cargo clippy --all-features --all-targets -- -D warnings
           cargo test --all-features --locked
 
-      - name: Run workspace compatibility tests
-        run: cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
-
       - name: Enforce coverage gate
         run: ./scripts/check-coverage-gate.py

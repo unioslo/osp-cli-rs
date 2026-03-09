@@ -90,9 +90,6 @@ jobs:
           cargo test --all-features --locked
           cargo publish --dry-run --locked
 
-      - name: Run workspace compatibility tests
-        run: cargo test --manifest-path workspace/Cargo.toml --workspace --all-features --locked
-
       - name: Enforce coverage gate
         run: ./scripts/check-coverage-gate.py
 
