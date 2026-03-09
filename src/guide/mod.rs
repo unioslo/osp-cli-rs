@@ -581,7 +581,7 @@ fn usage_section_from_payload(lines: &[String]) -> Option<GuideSection> {
         return None;
     }
     let mut section = GuideSection::new("Usage", GuideSectionKind::Usage);
-    for line in lines.iter().cloned() {
+    for line in lines {
         section = section.paragraph(format!("  {}", line.trim()));
     }
     Some(section)
@@ -592,7 +592,7 @@ fn notes_section_from_payload(lines: &[String]) -> Option<GuideSection> {
         return None;
     }
     let mut section = GuideSection::new("Notes", GuideSectionKind::Notes);
-    for line in lines.iter().cloned() {
+    for line in lines {
         section = section.paragraph(format!("  {}", line.trim()));
     }
     Some(section)

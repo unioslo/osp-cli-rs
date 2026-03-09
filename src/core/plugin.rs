@@ -322,7 +322,7 @@ impl From<&CommandDef> for DescribeCommandV1 {
             flags: command
                 .flags
                 .iter()
-                .flat_map(|flag| describe_flag_entries(flag))
+                .flat_map(describe_flag_entries)
                 .collect(),
             subcommands: command
                 .subcommands
@@ -595,10 +595,7 @@ fn describe_value_type(value_kind: Option<ValueKind>) -> Option<DescribeValueTyp
 }
 
 fn command_value_kind(value_type: Option<DescribeValueTypeV1>) -> Option<ValueKind> {
-    match value_type {
-        Some(DescribeValueTypeV1::Path) => Some(ValueKind::Path),
-        None => None,
-    }
+    value_type.map(|_| ValueKind::Path)
 }
 
 #[cfg(test)]
