@@ -89,7 +89,12 @@ fn ambiguous_command_requires_explicit_selection() {
     assert_eq!(entry.provider, None);
     assert!(entry.requires_selection);
     assert!(!entry.selected_explicitly);
-    assert_eq!(manager.selected_provider_label("shared"), None);
+    assert_eq!(
+        manager
+            .selected_provider_label("shared")
+            .expect("selected provider label should load"),
+        None
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -121,7 +126,10 @@ fn preferred_provider_updates_catalog_and_resolves_command() {
     assert!(!entry.requires_selection);
     assert!(entry.selected_explicitly);
     assert_eq!(
-        manager.selected_provider_label("shared").as_deref(),
+        manager
+            .selected_provider_label("shared")
+            .expect("selected provider label should load")
+            .as_deref(),
         Some("beta (explicit)")
     );
 
@@ -159,7 +167,12 @@ fn clearing_preferred_provider_requires_selection_again() {
     assert_eq!(entry.provider, None);
     assert!(entry.requires_selection);
     assert!(!entry.selected_explicitly);
-    assert_eq!(manager.selected_provider_label("shared"), None);
+    assert_eq!(
+        manager
+            .selected_provider_label("shared")
+            .expect("selected provider label should load"),
+        None
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -506,6 +519,80 @@ fn set_enabled_and_clear_missing_provider_preference_cover_state_round_trip_unit
     let raw = std::fs::read_to_string(&state_path).expect("plugin state should be written");
     assert!(raw.contains("\"enabled\""));
     assert!(raw.contains("alpha"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn corrupt_plugin_state_surfaces_for_result_apis_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-corrupt-state-result");
+    let plugins_dir = root.join("plugins");
+    let config_root = root.join("config");
+    let cache_root = root.join("cache");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    std::fs::create_dir_all(&config_root).expect("config dir should be created");
+    write_named_test_plugin(&plugins_dir, "alpha");
+    std::fs::write(config_root.join("plugins.json"), "{not-json\n")
+        .expect("corrupt state should be written");
+
+    let manager =
+        PluginManager::new(vec![plugins_dir]).with_roots(Some(config_root), Some(cache_root));
+
+    let err = manager
+        .list_plugins()
+        .expect_err("corrupt plugin state should fail");
+    let rendered = err.to_string();
+    assert!(rendered.contains("failed to parse plugin state"));
+    assert!(rendered.contains("plugins.json"));
+    assert!(rendered.contains("line 1, column 2"));
+
+    let err = manager
+        .set_enabled("alpha", false)
+        .expect_err("mutating plugin state should fail");
+    let rendered = err.to_string();
+    assert!(rendered.contains("failed to parse plugin state"));
+    assert!(rendered.contains("plugins.json"));
+    assert!(rendered.contains("line 1, column 2"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn corrupt_plugin_state_surfaces_for_dispatch_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-corrupt-state-dispatch");
+    let plugins_dir = root.join("plugins");
+    let config_root = root.join("config");
+    let cache_root = root.join("cache");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    std::fs::create_dir_all(&config_root).expect("config dir should be created");
+    write_dispatch_fixture_plugin(
+        &plugins_dir,
+        "alpha",
+        "alpha",
+        r#"cat <<'JSON'
+{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}
+JSON"#,
+    );
+    std::fs::write(config_root.join("plugins.json"), "{not-json\n")
+        .expect("corrupt state should be written");
+
+    let manager =
+        PluginManager::new(vec![plugins_dir]).with_roots(Some(config_root), Some(cache_root));
+
+    match manager
+        .dispatch("alpha", &[], &PluginDispatchContext::default())
+        .expect_err("dispatch should fail when plugin state is corrupt")
+    {
+        PluginDispatchError::StateLoadFailed { source } => {
+            let rendered = source.to_string();
+            assert!(rendered.contains("failed to parse plugin state"));
+            assert!(rendered.contains("plugins.json"));
+            assert!(rendered.contains("line 1, column 2"));
+        }
+        other => panic!("unexpected corrupt state dispatch result: {other:?}"),
+    }
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1027,15 +1114,25 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
     assert!(completion_words.contains(&"shared".to_string()));
     assert!(completion_words.contains(&"solo".to_string()));
     assert_eq!(
-        manager.command_providers("shared"),
+        manager
+            .command_providers("shared")
+            .expect("command providers should load"),
         vec![
             format!("alpha ({})", PluginSource::Explicit),
             format!("beta ({})", PluginSource::Explicit)
         ]
     );
-    assert_eq!(manager.selected_provider_label("shared"), None);
     assert_eq!(
-        manager.selected_provider_label("solo").as_deref(),
+        manager
+            .selected_provider_label("shared")
+            .expect("selected provider label should load"),
+        None
+    );
+    assert_eq!(
+        manager
+            .selected_provider_label("solo")
+            .expect("selected provider label should load")
+            .as_deref(),
         Some("solo (explicit)")
     );
 

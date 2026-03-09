@@ -51,7 +51,7 @@ enum ProviderResolutionError<'a> {
 impl PluginManager {
     pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
         let discovered = self.discover();
-        let state = self.load_state().unwrap_or_default();
+        let state = self.load_state()?;
 
         Ok(discovered
             .iter()
@@ -69,7 +69,7 @@ impl PluginManager {
     }
 
     pub fn command_catalog(&self) -> Result<Vec<CommandCatalogEntry>> {
-        let state = self.load_state().unwrap_or_default();
+        let state = self.load_state()?;
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
         let provider_index = provider_labels_by_command(&active);
@@ -142,7 +142,7 @@ impl PluginManager {
     }
 
     pub fn command_policy_registry(&self) -> Result<CommandPolicyRegistry> {
-        let state = self.load_state().unwrap_or_default();
+        let state = self.load_state()?;
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
         let command_names = active
@@ -251,8 +251,8 @@ impl PluginManager {
         Ok(out)
     }
 
-    pub fn command_providers(&self, command: &str) -> Vec<String> {
-        let state = self.load_state().unwrap_or_default();
+    pub fn command_providers(&self, command: &str) -> Result<Vec<String>> {
+        let state = self.load_state()?;
         let discovered = self.discover();
         let mut out = Vec::new();
         for plugin in active_plugins(discovered.as_ref(), &state) {
@@ -260,17 +260,21 @@ impl PluginManager {
                 out.push(format!("{} ({})", plugin.plugin_id, plugin.source));
             }
         }
-        out
+        Ok(out)
     }
 
-    pub fn selected_provider_label(&self, command: &str) -> Option<String> {
-        let state = self.load_state().unwrap_or_default();
+    pub fn selected_provider_label(&self, command: &str) -> Result<Option<String>> {
+        let state = self.load_state()?;
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        match resolve_provider_for_command(command, &active, &state, None).ok()? {
-            ProviderResolution::Selected(selection) => Some(plugin_label(selection.plugin)),
-            ProviderResolution::Ambiguous(_) => None,
-        }
+        Ok(
+            match resolve_provider_for_command(command, &active, &state, None).ok() {
+                Some(ProviderResolution::Selected(selection)) => {
+                    Some(plugin_label(selection.plugin))
+                }
+                Some(ProviderResolution::Ambiguous(_)) | None => None,
+            },
+        )
     }
 
     pub fn doctor(&self) -> Result<DoctorReport> {
@@ -305,7 +309,7 @@ impl PluginManager {
     }
 
     pub fn set_enabled(&self, plugin_id: &str, enabled: bool) -> Result<()> {
-        let mut state = self.load_state().unwrap_or_default();
+        let mut state = self.load_state()?;
         state.enabled.retain(|id| id != plugin_id);
         state.disabled.retain(|id| id != plugin_id);
 
@@ -332,7 +336,7 @@ impl PluginManager {
             return Err(anyhow!("plugin id must not be empty"));
         }
 
-        let mut state = self.load_state().unwrap_or_default();
+        let mut state = self.load_state()?;
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
         let available = providers_for_command(command, &active);
@@ -362,7 +366,7 @@ impl PluginManager {
             return Err(anyhow!("command must not be empty"));
         }
 
-        let mut state = self.load_state().unwrap_or_default();
+        let mut state = self.load_state()?;
         let removed = state.preferred_providers.remove(command).is_some();
         if removed {
             self.save_state(&state)?;
@@ -375,7 +379,9 @@ impl PluginManager {
         command: &str,
         provider_override: Option<&str>,
     ) -> std::result::Result<DiscoveredPlugin, PluginDispatchError> {
-        let state = self.load_state().unwrap_or_default();
+        let state = self
+            .load_state()
+            .map_err(|source| PluginDispatchError::StateLoadFailed { source })?;
         let discovered = self.discover();
         let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
         match resolve_provider_for_command(command, &active, &state, provider_override) {
@@ -449,14 +455,16 @@ impl PluginManager {
         }
 
         let raw = std::fs::read_to_string(&path)
-            .map_err(anyhow::Error::from)
-            .and_then(|raw| serde_json::from_str::<PluginState>(&raw).map_err(anyhow::Error::from))
-            .map_err(|err| {
-                err.context(format!(
-                    "failed to load plugin state from {}",
-                    path.display()
-                ))
-            })?;
+            .map_err(|err| anyhow!("failed to read plugin state {}: {err}", path.display()))?;
+        let raw = serde_json::from_str::<PluginState>(&raw).map_err(|err| {
+            anyhow!(
+                "failed to parse plugin state {} at line {}, column {}: {}",
+                path.display(),
+                err.line(),
+                err.column(),
+                err
+            )
+        })?;
         tracing::debug!(
             path = %path.display(),
             enabled = raw.enabled.len(),

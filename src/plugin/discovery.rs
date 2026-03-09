@@ -110,7 +110,7 @@ impl PluginManager {
         let roots = self.search_roots();
         let mut plugins: Vec<DiscoveredPlugin> = Vec::new();
         let mut seen_paths: HashSet<PathBuf> = HashSet::new();
-        let mut describe_cache = self.load_describe_cache().unwrap_or_default();
+        let mut describe_cache = self.load_describe_cache_or_warn();
         let mut seen_describe_paths: HashSet<String> = HashSet::new();
         let mut cache_dirty = false;
 
@@ -130,7 +130,7 @@ impl PluginManager {
         cache_dirty |=
             prune_stale_describe_cache_entries(&mut describe_cache, &seen_describe_paths);
         if cache_dirty {
-            let _ = self.save_describe_cache(&describe_cache);
+            self.save_describe_cache_or_warn(&describe_cache);
         }
 
         tracing::debug!(
@@ -218,6 +218,16 @@ impl PluginManager {
         Ok(cache)
     }
 
+    fn load_describe_cache_or_warn(&self) -> DescribeCacheFile {
+        match self.load_describe_cache() {
+            Ok(cache) => cache,
+            Err(err) => {
+                warn_nonfatal_cache_error("load", self.describe_cache_path().as_deref(), &err);
+                DescribeCacheFile::default()
+            }
+        }
+    }
+
     fn save_describe_cache(&self, cache: &DescribeCacheFile) -> Result<()> {
         let Some(path) = self.describe_cache_path() else {
             return Ok(());
@@ -234,6 +244,12 @@ impl PluginManager {
             .with_context(|| format!("failed to write describe cache {}", path.display()))
     }
 
+    fn save_describe_cache_or_warn(&self, cache: &DescribeCacheFile) {
+        if let Err(err) = self.save_describe_cache(cache) {
+            warn_nonfatal_cache_error("write", self.describe_cache_path().as_deref(), &err);
+        }
+    }
+
     fn user_plugin_dir(&self) -> Option<PathBuf> {
         let mut path = self.config_root.clone().or_else(default_config_root_dir)?;
         path.push("plugins");
@@ -244,6 +260,22 @@ impl PluginManager {
         let mut path = self.cache_root.clone().or_else(default_cache_root_dir)?;
         path.push("describe-v1.json");
         Some(path)
+    }
+}
+
+fn warn_nonfatal_cache_error(action: &str, path: Option<&Path>, err: &anyhow::Error) {
+    match path {
+        Some(path) => tracing::warn!(
+            action,
+            path = %path.display(),
+            error = %err,
+            "non-fatal describe cache error; continuing without cache"
+        ),
+        None => tracing::warn!(
+            action,
+            error = %err,
+            "non-fatal describe cache error; continuing without cache"
+        ),
     }
 }
 

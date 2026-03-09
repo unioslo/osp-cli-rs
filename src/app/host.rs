@@ -746,6 +746,9 @@ pub(crate) fn plugin_path_discovery_enabled(config: &ResolvedConfig) -> bool {
 fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
     if let Some(plugin_err) = known.plugin {
         return Some(match plugin_err {
+            PluginDispatchError::StateLoadFailed { .. } => {
+                "fix or remove the plugin state file before retrying the command"
+            }
             PluginDispatchError::CommandNotFound { .. } => {
                 "run `osp plugins list` and set --plugin-dir or OSP_PLUGIN_PATH"
             }

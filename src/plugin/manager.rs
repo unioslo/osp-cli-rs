@@ -125,6 +125,9 @@ impl PluginDispatchContext {
 
 #[derive(Debug)]
 pub enum PluginDispatchError {
+    StateLoadFailed {
+        source: anyhow::Error,
+    },
     CommandNotFound {
         command: String,
     },
@@ -164,6 +167,9 @@ pub enum PluginDispatchError {
 impl Display for PluginDispatchError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            PluginDispatchError::StateLoadFailed { source } => {
+                write!(f, "failed to load plugin state: {source}")
+            }
             PluginDispatchError::CommandNotFound { command } => {
                 write!(f, "no plugin provides command: {command}")
             }
@@ -236,6 +242,7 @@ impl Display for PluginDispatchError {
 impl StdError for PluginDispatchError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
+            PluginDispatchError::StateLoadFailed { source } => Some(source.as_ref()),
             PluginDispatchError::ExecuteFailed { source, .. } => Some(source),
             PluginDispatchError::InvalidJsonResponse { source, .. } => Some(source),
             PluginDispatchError::CommandNotFound { .. }
