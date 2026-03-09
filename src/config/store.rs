@@ -122,7 +122,7 @@ fn write_toml_root(
     Ok(())
 }
 
-fn write_text_atomic(
+pub(crate) fn write_text_atomic(
     path: &Path,
     payload: &[u8],
     strict_secret_permissions: bool,
@@ -151,7 +151,8 @@ fn write_text_atomic(
                 file.write_all(payload)?;
                 file.sync_all()?;
                 drop(file);
-                std::fs::rename(&temp_path, path)?;
+                replace_file_atomic(&temp_path, path)?;
+                sync_parent_dir(parent)?;
                 return Ok(());
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -163,6 +164,61 @@ fn write_text_atomic(
         std::io::ErrorKind::AlreadyExists,
         format!("failed to allocate temp file for {}", path.display()),
     ))
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomic(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file_atomic(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    unsafe extern "system" {
+        fn MoveFileExW(
+            lp_existing_file_name: *const u16,
+            lp_new_file_name: *const u16,
+            dw_flags: u32,
+        ) -> i32;
+    }
+
+    let source_wide = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination_wide = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+
+    let replaced = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(unix)]

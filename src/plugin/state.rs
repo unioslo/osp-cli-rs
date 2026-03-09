@@ -620,24 +620,7 @@ pub(super) fn is_enabled(state: &PluginState, plugin_id: &str, default_enabled: 
 }
 
 pub(super) fn write_text_atomic(path: &std::path::Path, payload: &str) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| anyhow!("path has no file name: {}", path.display()))?;
-    let suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut temp_name = std::ffi::OsString::from(".");
-    temp_name.push(file_name);
-    temp_name.push(format!(".tmp-{}-{suffix}", std::process::id()));
-    let temp_path = parent.join(temp_name);
-    std::fs::write(&temp_path, payload)?;
-    if let Err(err) = std::fs::rename(&temp_path, path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(err.into());
-    }
-    Ok(())
+    crate::config::write_text_atomic(path, payload.as_bytes(), false).map_err(Into::into)
 }
 
 pub(super) fn merge_issue(target: &mut Option<String>, message: String) {

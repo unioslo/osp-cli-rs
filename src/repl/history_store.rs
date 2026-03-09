@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -395,14 +395,12 @@ impl OspHistoryStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = File::create(path)?;
-        let mut writer = BufWriter::new(file);
+        let mut payload = Vec::new();
         for record in &self.records {
-            let payload = serde_json::to_string(record).map_err(std::io::Error::other)?;
-            writer.write_all(payload.as_bytes())?;
-            writer.write_all(b"\n")?;
+            serde_json::to_writer(&mut payload, record).map_err(std::io::Error::other)?;
+            payload.push(b'\n');
         }
-        writer.flush()
+        crate::config::write_text_atomic(path, &payload, false)
     }
 
     fn should_skip_command(&self, command: &str) -> bool {
