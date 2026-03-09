@@ -101,19 +101,11 @@ impl MenuCore {
     }
 
     pub(crate) fn selected_value(&self) -> Option<&Suggestion> {
-        if self.values.is_empty() || self.just_activated {
-            None
-        } else {
-            self.values.get(self.index())
-        }
+        self.values.get(self.index())
     }
 
     pub(crate) fn selected_index(&self) -> Option<usize> {
-        if self.values.is_empty() || self.just_activated {
-            None
-        } else {
-            Some(self.index())
-        }
+        (!self.values.is_empty()).then_some(self.index())
     }
 
     pub(crate) fn selected_row(&self) -> u16 {
@@ -223,7 +215,16 @@ impl MenuCore {
                 self.move_right();
                 MenuAction::ApplySelection
             }
-            MenuEvent::NextPage | MenuEvent::PreviousPage => MenuAction::None,
+            MenuEvent::NextPage => {
+                self.just_activated = false;
+                self.move_page_down();
+                MenuAction::ApplySelection
+            }
+            MenuEvent::PreviousPage => {
+                self.just_activated = false;
+                self.move_page_up();
+                MenuAction::ApplySelection
+            }
         }
     }
 
@@ -572,6 +573,31 @@ impl MenuCore {
         };
     }
 
+    fn move_page_down(&mut self) {
+        self.move_rows(self.default_details.max_rows.max(1) as i32);
+    }
+
+    fn move_page_up(&mut self) {
+        self.move_rows(-(self.default_details.max_rows.max(1) as i32));
+    }
+
+    fn move_rows(&mut self, delta: i32) {
+        let rows = self.get_rows();
+        if rows == 0 || self.values.is_empty() {
+            return;
+        }
+
+        let rows_i32 = rows as i32;
+        let mut new_row = self.row_pos as i32 + delta;
+        new_row = ((new_row % rows_i32) + rows_i32) % rows_i32;
+        self.row_pos = new_row as u16;
+
+        let max_col = self.rightmost_valid_col_for_row(self.row_pos);
+        if self.col_pos > max_col {
+            self.col_pos = max_col;
+        }
+    }
+
     fn description_line(&self) -> Option<String> {
         let description = self
             .selected_value()
@@ -616,7 +642,7 @@ impl MenuCore {
         let display = display_text(suggestion);
         let col_width = self.get_col_width(column);
         let display_width = display.width();
-        let styled = if !self.just_activated && index == self.index() {
+        let styled = if index == self.index() {
             colors.selected_text_style.prefix()
         } else {
             colors.text_style.prefix()
@@ -634,7 +660,7 @@ impl MenuCore {
                 empty = empty_space,
             )
         } else {
-            let selected = !self.just_activated && index == self.index();
+            let selected = index == self.index();
             let (marker, marker_width) = marker_prefix(selected, col_width);
             let max_text_width = col_width.saturating_sub(marker_width);
             let display = truncate_to_width(display, max_text_width);
@@ -843,5 +869,50 @@ mod tests {
         assert_eq!(core.selected_col(), 1);
         assert_eq!(core.selected_index(), Some(5));
         assert!(core.selected_value().is_some());
+    }
+
+    #[test]
+    fn activation_exposes_first_selection_immediately() {
+        let mut core = MenuCore::default();
+        core.set_values(vec![suggestion("config"), suggestion("doctor")]);
+
+        core.pre_event(&MenuEvent::Activate(false));
+        assert_eq!(
+            core.handle_event(MenuEvent::Activate(false)),
+            MenuAction::UpdateValues
+        );
+        core.set_values(vec![suggestion("config"), suggestion("doctor")]);
+
+        assert_eq!(core.selected_index(), Some(0));
+        assert_eq!(
+            core.selected_value().map(|item| item.value.as_str()),
+            Some("config")
+        );
+    }
+
+    #[test]
+    fn page_events_move_by_configured_page_size() {
+        let mut core = MenuCore::default();
+        core.set_columns(1);
+        core.set_max_rows(3);
+        core.set_values(
+            (0..8)
+                .map(|idx| suggestion(&format!("item{idx}")))
+                .collect::<Vec<_>>(),
+        );
+
+        assert_eq!(
+            core.handle_event(MenuEvent::NextPage),
+            MenuAction::ApplySelection
+        );
+        assert_eq!(core.selected_row(), 3);
+        assert_eq!(core.selected_index(), Some(3));
+
+        assert_eq!(
+            core.handle_event(MenuEvent::PreviousPage),
+            MenuAction::ApplySelection
+        );
+        assert_eq!(core.selected_row(), 0);
+        assert_eq!(core.selected_index(), Some(0));
     }
 }

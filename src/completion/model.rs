@@ -1,14 +1,9 @@
+pub use crate::core::shell_words::QuoteStyle;
 use std::{collections::BTreeMap, ops::Range};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueType {
     Path,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuoteStyle {
-    Single,
-    Double,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

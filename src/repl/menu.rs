@@ -181,17 +181,7 @@ impl OspCompletionMenu {
         mode: ApplyMode,
     ) -> Option<(usize, usize, bool)> {
         let suggestion = match mode {
-            ApplyMode::Accept => self
-                .core
-                .selected_value()
-                .or_else(|| {
-                    if self.core.just_activated() {
-                        self.core.values().first()
-                    } else {
-                        None
-                    }
-                })?
-                .clone(),
+            ApplyMode::Accept => self.core.selected_value()?.clone(),
             ApplyMode::Cycle => self.core.selected_value()?.clone(),
         };
         let line_before = editor.get_buffer().to_string();
@@ -587,7 +577,7 @@ mod tests {
         menu.update_for_test(&mut editor, &mut completer, 80);
 
         let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
-        assert_eq!(debug.selected_index, -1);
+        assert_eq!(debug.selected_index, 0);
         assert_eq!(editor.line_buffer().get_buffer(), "co");
 
         menu.menu_event(MenuEvent::NextElement);
@@ -935,7 +925,7 @@ mod tests {
             debug.styles.selected_match.foreground.as_deref(),
             Some("magenta")
         );
-        assert_eq!(debug.selected_index, -1);
+        assert_eq!(debug.selected_index, 0);
         assert_eq!(debug.selected_row, 0);
         assert_eq!(debug.selected_col, 0);
     }

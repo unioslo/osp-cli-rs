@@ -159,7 +159,6 @@ impl SuggestionEngine {
             out.extend(
                 self.flag_name_suggestions(request.flag_scope_node, request.stub, request.cmd)
                     .into_iter()
-                    .filter(|suggestion| !request.cmd.has_flag(&suggestion.text))
                     .map(SuggestionOutput::Item),
             );
         }
@@ -205,7 +204,7 @@ impl SuggestionEngine {
                     .as_ref()
                     .is_none_or(|allowed| allowed.contains(flag.as_str()))
             })
-            .filter(|(flag, _, _)| !cmd.has_flag(flag) || stub == *flag)
+            .filter(|(flag, meta, _)| meta.multi || !cmd.has_flag(flag) || stub == *flag)
             .map(|(flag, meta, score)| Suggestion {
                 text: flag.clone(),
                 meta: meta.tooltip.clone(),
@@ -303,11 +302,10 @@ impl SuggestionEngine {
         }
 
         if !stub.is_empty()
-            && last_occurrence.values.last().is_some_and(|value| {
-                value
-                    .to_ascii_lowercase()
-                    .starts_with(&stub.to_ascii_lowercase())
-            })
+            && last_occurrence
+                .values
+                .last()
+                .is_some_and(|value| fold_case(value).starts_with(&fold_case(stub)))
         {
             return (true, Some(last_flag.clone()));
         }
@@ -386,8 +384,8 @@ impl SuggestionEngine {
             return Some(MATCH_SCORE_EMPTY_STUB);
         }
 
-        let stub_lc = stub.to_ascii_lowercase();
-        let candidate_lc = candidate.to_ascii_lowercase();
+        let stub_lc = fold_case(stub);
+        let candidate_lc = fold_case(candidate);
 
         if stub_lc == candidate_lc {
             return Some(MATCH_SCORE_EXACT);
@@ -507,11 +505,7 @@ fn compare_suggestions(left: &Suggestion, right: &Suggestion) -> std::cmp::Order
     (not_exact(left), left.match_score)
         .cmp(&(not_exact(right), right.match_score))
         .then_with(|| compare_sort_value(left.sort.as_deref(), right.sort.as_deref()))
-        .then_with(|| {
-            left.text
-                .to_ascii_lowercase()
-                .cmp(&right.text.to_ascii_lowercase())
-        })
+        .then_with(|| fold_case(&left.text).cmp(&fold_case(&right.text)))
 }
 
 fn compare_sort_value(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
@@ -524,7 +518,7 @@ fn compare_sort_value(left: Option<&str>, right: Option<&str>) -> std::cmp::Orde
                 (Some(left_num), Some(right_num)) => left_num
                     .partial_cmp(&right_num)
                     .unwrap_or(std::cmp::Ordering::Equal),
-                _ => left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase()),
+                _ => fold_case(left).cmp(&fold_case(right)),
             }
         }
         (Some(_), None) => std::cmp::Ordering::Less,
@@ -559,6 +553,10 @@ fn boundary_prefix_index(candidate: &str, stub: &str) -> Option<usize> {
                     .is_some_and(|byte| matches!(byte, b'-' | b'_' | b'.' | b':' | b'/'))
         })
         .map(|(idx, _)| idx)
+}
+
+fn fold_case(value: &str) -> String {
+    value.chars().flat_map(char::to_lowercase).collect()
 }
 
 fn fuzzy_matcher() -> &'static SkimMatcherV2 {
@@ -860,6 +858,41 @@ mod tests {
     }
 
     #[test]
+    fn repeatable_flags_remain_suggestible_after_first_use() {
+        let mut cmd_node = CompletionNode::default();
+        cmd_node.flags.insert(
+            "--tags".to_string(),
+            FlagNode {
+                multi: true,
+                suggestions: vec![
+                    SuggestionEntry::from("red"),
+                    SuggestionEntry::from("green"),
+                    SuggestionEntry::from("blue"),
+                ],
+                ..FlagNode::default()
+            },
+        );
+        cmd_node.flags.insert(
+            "--mode".to_string(),
+            FlagNode {
+                suggestions: vec![SuggestionEntry::from("fast"), SuggestionEntry::from("full")],
+                ..FlagNode::default()
+            },
+        );
+
+        let tree = CompletionTree {
+            root: CompletionNode::default().with_child("tag", cmd_node),
+            ..CompletionTree::default()
+        };
+        let engine = CompletionEngine::new(tree);
+        let cmd = with_flag(command(&["tag"]), "--tags", &["red"]);
+
+        let values = values(generate(&engine, cmd, "--"));
+        assert!(values.contains(&"--tags".to_string()));
+        assert!(values.contains(&"--mode".to_string()));
+    }
+
+    #[test]
     fn args_after_double_dash_advance_index() {
         let cmd_node = CompletionNode {
             args: vec![
@@ -1143,5 +1176,28 @@ mod tests {
         let output = values(generate(&engine, CommandLine::default(), ""));
 
         assert_eq!(output[..2], ["config", "orch"]);
+    }
+
+    #[test]
+    fn suggestions_match_unicode_case_insensitively() {
+        let cmd_node = CompletionNode {
+            args: vec![ArgNode {
+                suggestions: vec![
+                    SuggestionEntry::from("Ålesund"),
+                    SuggestionEntry::from("Oslo"),
+                ],
+                ..ArgNode::default()
+            }],
+            ..CompletionNode::default()
+        };
+        let tree = CompletionTree {
+            root: CompletionNode::default().with_child("city", cmd_node),
+            ..CompletionTree::default()
+        };
+        let engine = CompletionEngine::new(tree);
+        let cmd = command(&["city"]);
+
+        let values = values(generate(&engine, cmd, "å"));
+        assert_eq!(values, vec!["Ålesund".to_string()]);
     }
 }

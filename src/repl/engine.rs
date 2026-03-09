@@ -16,6 +16,7 @@ use super::menu::{MenuDebug, MenuStyleDebug, OspCompletionMenu, debug_snapshot, 
 use crate::completion::{
     ArgNode, CompletionEngine, CompletionNode, CompletionTree, SuggestionEntry, SuggestionOutput,
 };
+use crate::core::shell_words::{QuoteStyle, escape_for_shell, quote_for_shell};
 use anyhow::Result;
 use nu_ansi_term::{Color, Style};
 use reedline::{
@@ -940,7 +941,12 @@ impl Completer for ReplCompleter {
             .collect::<Vec<_>>();
 
         if has_path_sentinel {
-            suggestions.extend(path_suggestions(&cursor_state.raw_stub, span));
+            suggestions.extend(path_suggestions(
+                &cursor_state.raw_stub,
+                &cursor_state.token_stub,
+                cursor_state.quote_style,
+                span,
+            ));
         }
 
         suggestions
@@ -1293,8 +1299,13 @@ pub(crate) fn trace_completion_enabled() -> bool {
     )
 }
 
-fn path_suggestions(stub: &str, span: Span) -> Vec<Suggestion> {
-    let (lookup, insert_prefix, typed_prefix) = split_path_stub(stub);
+fn path_suggestions(
+    raw_stub: &str,
+    token_stub: &str,
+    quote_style: Option<QuoteStyle>,
+    span: Span,
+) -> Vec<Suggestion> {
+    let (lookup, insert_prefix, typed_prefix) = split_path_stub(token_stub);
     let read_dir = std::fs::read_dir(&lookup);
     let Ok(entries) = read_dir else {
         return Vec::new();
@@ -1310,9 +1321,14 @@ fn path_suggestions(stub: &str, span: Span) -> Vec<Suggestion> {
         let path = entry.path();
         let is_dir = path.is_dir();
         let suffix = if is_dir { "/" } else { "" };
+        let inserted = render_path_completion(
+            raw_stub,
+            &format!("{insert_prefix}{file_name}{suffix}"),
+            quote_style,
+        );
 
         out.push(Suggestion {
-            value: format!("{insert_prefix}{file_name}{suffix}"),
+            value: inserted,
             description: Some(if is_dir { "dir" } else { "file" }.to_string()),
             span,
             append_whitespace: !is_dir,
@@ -1321,6 +1337,45 @@ fn path_suggestions(stub: &str, span: Span) -> Vec<Suggestion> {
     }
 
     out
+}
+
+fn render_path_completion(
+    raw_stub: &str,
+    candidate: &str,
+    quote_style: Option<QuoteStyle>,
+) -> String {
+    match infer_quote_context(raw_stub, quote_style) {
+        PathQuoteContext::Open(style) => quoted_completion_tail(candidate, style),
+        PathQuoteContext::Closed(style) => quote_for_shell(candidate, style),
+        PathQuoteContext::Unquoted => escape_for_shell(candidate),
+    }
+}
+
+fn quoted_completion_tail(candidate: &str, style: QuoteStyle) -> String {
+    let quoted = quote_for_shell(candidate, style);
+    quoted.chars().skip(1).collect()
+}
+
+fn infer_quote_context(raw_stub: &str, quote_style: Option<QuoteStyle>) -> PathQuoteContext {
+    if let Some(style) = quote_style {
+        return PathQuoteContext::Open(style);
+    }
+
+    if raw_stub.len() >= 2 && raw_stub.starts_with('\'') && raw_stub.ends_with('\'') {
+        return PathQuoteContext::Closed(QuoteStyle::Single);
+    }
+    if raw_stub.len() >= 2 && raw_stub.starts_with('"') && raw_stub.ends_with('"') {
+        return PathQuoteContext::Closed(QuoteStyle::Double);
+    }
+
+    PathQuoteContext::Unquoted
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathQuoteContext {
+    Unquoted,
+    Open(QuoteStyle),
+    Closed(QuoteStyle),
 }
 
 fn split_path_stub(stub: &str) -> (PathBuf, String, String) {
@@ -1452,6 +1507,7 @@ mod tests {
         is_cursor_position_error, parse_cursor_position_report, path_suggestions,
         process_submission, split_path_stub, trace_completion, trace_completion_enabled,
     };
+    use crate::core::shell_words::QuoteStyle;
     use crate::repl::LineProjection;
 
     fn env_lock() -> &'static Mutex<()> {
@@ -1840,6 +1896,8 @@ mod tests {
 
         let missing = path_suggestions(
             "/definitely/not/a/real/dir/",
+            "/definitely/not/a/real/dir/",
+            None,
             reedline::Span { start: 0, end: 0 },
         );
         assert!(missing.is_empty());
@@ -2003,6 +2061,8 @@ mod tests {
 
         let suggestions = path_suggestions(
             &stub,
+            &stub,
+            None,
             reedline::Span {
                 start: 0,
                 end: stub.len(),
@@ -2025,6 +2085,53 @@ mod tests {
         assert!(values.iter().any(|(value, desc, append)| {
             value.ends_with("alpine/") && desc.as_deref() == Some("dir") && !*append
         }));
+    }
+
+    #[test]
+    fn path_suggestions_escape_spaces_when_unquoted_unit() {
+        let root = make_temp_dir("osp-repl-paths-quoted");
+        std::fs::write(root.join("team docs.txt"), "x").expect("file should be written");
+        let stub = format!("{}/te", root.display());
+
+        let suggestions = path_suggestions(
+            &stub,
+            &stub,
+            None,
+            reedline::Span {
+                start: 0,
+                end: stub.len(),
+            },
+        );
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|item| item.value.ends_with("team\\ docs.txt"))
+        );
+    }
+
+    #[test]
+    fn path_suggestions_preserve_open_double_quote_context_unit() {
+        let root = make_temp_dir("osp-repl-paths-double");
+        std::fs::write(root.join("team docs.txt"), "x").expect("file should be written");
+        let token_stub = format!("{}/te", root.display());
+        let raw_stub = format!("\"{token_stub}");
+
+        let suggestions = path_suggestions(
+            &raw_stub,
+            &token_stub,
+            Some(QuoteStyle::Double),
+            reedline::Span {
+                start: 0,
+                end: raw_stub.len(),
+            },
+        );
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|item| item.value.ends_with("team docs.txt\""))
+        );
     }
 
     #[test]

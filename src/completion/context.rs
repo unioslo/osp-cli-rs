@@ -125,6 +125,8 @@ impl<'a> ProviderSelection<'a> {
 fn normalize_token(value: &str) -> String {
     value
         .trim()
-        .to_ascii_lowercase()
+        .chars()
+        .flat_map(char::to_lowercase)
+        .collect::<String>()
         .replace([' ', '-', '_'], "")
 }

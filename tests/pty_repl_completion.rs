@@ -194,7 +194,7 @@ fn repl_tab_opens_menu_and_moves_selection() {
         wait_for_output_since(
             &session.output,
             start,
-            "\"selected_index\":-1",
+            "\"selected_index\":0",
             Duration::from_secs(3)
         ),
         "expected menu activation trace; output:\n{}",
@@ -392,7 +392,7 @@ fn repl_enter_submits_current_line_without_accepting_menu_completion() {
         wait_for_output_since(
             &session.output,
             start,
-            "\"selected_index\":-1",
+            "\"selected_index\":0",
             Duration::from_secs(3)
         ),
         "expected menu activation trace; output:\n{}",
@@ -436,7 +436,7 @@ fn repl_close_menu_keeps_typed_input() {
         wait_for_output_since(
             &session.output,
             start,
-            "\"selected_index\":-1",
+            "\"selected_index\":0",
             Duration::from_secs(3)
         ),
         "expected menu activation trace; output:\n{}",
