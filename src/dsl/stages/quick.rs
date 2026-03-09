@@ -15,7 +15,7 @@ use crate::dsl::{
     },
     parse::{
         key_spec::ExactMode,
-        path::parse_path,
+        path::{Selector, parse_path},
         quick::{QuickScope, parse_quick_spec},
     },
     stages::common::map_group_rows,
@@ -279,6 +279,7 @@ fn transform_row(
         extend_unique(&mut selected, &mut seen, &result.key_hits);
         extend_unique(&mut selected, &mut seen, &result.value_hits);
         extend_unique(&mut selected, &mut seen, &synthetic_keys);
+        let selected = expand_object_array_parent_keys(selected, &[flat, &result.synthetic]);
 
         let mut projected = Row::new();
         for key in selected {
@@ -354,8 +355,14 @@ fn transform_row(
     }
 
     let mut filtered = Row::new();
-    let keys = union_keys(&result.key_hits, &result.value_hits);
-    for key in keys.into_iter().chain(result.synthetic.keys().cloned()) {
+    let keys = expand_object_array_parent_keys(
+        union_keys(&result.key_hits, &result.value_hits)
+            .into_iter()
+            .chain(result.synthetic.keys().cloned())
+            .collect(),
+        &[flat, &result.synthetic],
+    );
+    for key in keys {
         let Some(value) = flat
             .get(&key)
             .cloned()
@@ -433,6 +440,65 @@ fn union_keys(left: &[String], right: &[String]) -> Vec<String> {
     extend_unique(&mut out, &mut seen, left);
     extend_unique(&mut out, &mut seen, right);
     out
+}
+
+fn expand_object_array_parent_keys(selected: Vec<String>, sources: &[&Row]) -> Vec<String> {
+    let mut expanded = Vec::new();
+    let mut seen = HashSet::new();
+
+    for key in selected {
+        if seen.insert(key.clone()) {
+            expanded.push(key.clone());
+        }
+
+        let Some(parent) = object_array_parent_prefix(&key) else {
+            continue;
+        };
+        let child_prefix = format!("{parent}.");
+        for source in sources {
+            for candidate in source.keys() {
+                if candidate.starts_with(&child_prefix) && seen.insert(candidate.clone()) {
+                    expanded.push(candidate.clone());
+                }
+            }
+        }
+    }
+
+    expanded
+}
+
+fn object_array_parent_prefix(key: &str) -> Option<String> {
+    let path = parse_path(key).ok()?;
+    let mut prefix = String::new();
+    let mut parent = None;
+
+    for (segment_index, segment) in path.segments.iter().enumerate() {
+        if !prefix.is_empty() {
+            prefix.push('.');
+        }
+        let name = segment.name.as_ref()?;
+        prefix.push_str(name);
+
+        if !segment.selectors.is_empty() {
+            for selector in &segment.selectors {
+                let Selector::Index(index) = selector else {
+                    return None;
+                };
+                if *index < 0 {
+                    return None;
+                }
+                prefix.push('[');
+                prefix.push_str(&index.to_string());
+                prefix.push(']');
+            }
+
+            if segment_index + 1 < path.segments.len() {
+                parent = Some(prefix.clone());
+            }
+        }
+    }
+
+    parent
 }
 
 fn value_matches_token(value: &Value, token: &str, exact: ExactMode) -> bool {

@@ -32,6 +32,7 @@ use crate::ui::messages::{MessageBuffer, MessageLevel};
 use crate::ui::presentation::build_presentation_defaults_layer;
 use crate::ui::{RenderSettings, render_output};
 use crate::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
+use clap::Command;
 use clap::Parser;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -51,6 +52,37 @@ fn repl_view<'a>(
     session: &'a crate::app::AppSession,
 ) -> repl::ReplViewContext<'a> {
     repl::ReplViewContext::from_parts(runtime, session)
+}
+
+#[test]
+fn intro_command_dispatches_as_repl_scoped_builtin_unit() {
+    let mut cli = Cli::try_parse_from(["osp", "intro"]).expect("cli parse");
+    let plan = build_dispatch_plan(&mut cli, &profiles(&["default"])).expect("dispatch plan");
+
+    assert!(matches!(plan.action, RunAction::Intro(_)));
+    assert_eq!(plan.action.terminal_kind(), TerminalKind::Repl);
+}
+
+#[test]
+fn intro_command_emits_semantic_json_with_explicit_format_unit() {
+    let mut sink = BufferedUiSink::default();
+    let code = crate::app::App::new()
+        .run_with_sink(
+            ["osp", "--no-env", "--no-config-file", "--json", "intro"],
+            &mut sink,
+        )
+        .expect("intro command should succeed");
+
+    assert_eq!(code, 0);
+    let json: serde_json::Value =
+        serde_json::from_str(&sink.stdout).expect("intro JSON should parse");
+    let rows = json.as_array().expect("guide output should be row array");
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0].get("sections").is_some() || rows[0].get("preamble").is_some(),
+        "expected semantic intro payload, got: {}",
+        sink.stdout
+    );
 }
 
 fn make_completion_state(auth_visible_builtins: Option<&str>) -> AppState {
@@ -114,30 +146,29 @@ fn make_completion_state_with_entries_and_native(
 struct TestNativeCommand;
 
 impl NativeCommand for TestNativeCommand {
+    fn command(&self) -> Command {
+        Command::new("ldap")
+            .about("Directory lookup")
+            .subcommand(Command::new("user").about("Look up a user"))
+    }
+
+    fn auth(&self) -> Option<DescribeCommandAuthV1> {
+        Some(DescribeCommandAuthV1 {
+            visibility: Some(DescribeVisibilityModeV1::Public),
+            required_capabilities: Vec::new(),
+            feature_flags: Vec::new(),
+        })
+    }
+
     fn describe(&self) -> DescribeCommandV1 {
-        DescribeCommandV1 {
-            name: "ldap".to_string(),
-            about: "Directory lookup".to_string(),
-            auth: Some(DescribeCommandAuthV1 {
-                visibility: Some(DescribeVisibilityModeV1::Public),
-                required_capabilities: Vec::new(),
-                feature_flags: Vec::new(),
-            }),
-            args: Vec::new(),
-            flags: BTreeMap::new(),
-            subcommands: vec![DescribeCommandV1 {
-                name: "user".to_string(),
-                about: "Look up a user".to_string(),
-                auth: Some(DescribeCommandAuthV1 {
-                    visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
-                    required_capabilities: vec!["ldap.user.read".to_string()],
-                    feature_flags: Vec::new(),
-                }),
-                args: Vec::new(),
-                flags: BTreeMap::new(),
-                subcommands: Vec::new(),
-            }],
-        }
+        let mut describe = DescribeCommandV1::from_clap(self.command());
+        describe.auth = self.auth();
+        describe.subcommands[0].auth = Some(DescribeCommandAuthV1 {
+            visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+            required_capabilities: vec!["ldap.user.read".to_string()],
+            feature_flags: Vec::new(),
+        });
+        describe
     }
 
     fn execute(
@@ -858,6 +889,7 @@ fn invocation_ui_overlays_runtime_defaults_per_command_unit() {
     let resolved = resolve_invocation_ui(&ui, &invocation);
 
     assert_eq!(resolved.ui.render_settings.format, OutputFormat::Json);
+    assert!(resolved.ui.render_settings.format_explicit);
     assert_eq!(resolved.ui.render_settings.mode, RenderMode::Rich);
     assert_eq!(resolved.ui.render_settings.color, ColorMode::Always);
     assert_eq!(resolved.ui.render_settings.unicode, UnicodeMode::Never);
@@ -1112,8 +1144,11 @@ fn repl_dsl_capability_is_declared_per_command_unit() {
         command: PluginsCommands::List,
     });
     let plugins_enable = Commands::Plugins(crate::cli::PluginsArgs {
-        command: PluginsCommands::Enable(crate::cli::PluginToggleArgs {
-            plugin_id: "uio-ldap".to_string(),
+        command: PluginsCommands::Enable(crate::cli::PluginCommandStateArgs {
+            command: "ldap".to_string(),
+            global: false,
+            profile: None,
+            terminal: None,
         }),
     });
     let theme_show = Commands::Theme(crate::cli::ThemeArgs {
@@ -1282,6 +1317,7 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
         config_root: Some(config_root.clone()),
         cache_root: Some(cache_root.clone()),
         runtime_load: RuntimeLoadOptions::default(),
+        startup_started_at: std::time::Instant::now(),
     };
 
     AppState::new(AppStateInit {

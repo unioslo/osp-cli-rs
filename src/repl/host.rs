@@ -61,6 +61,11 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
             &cycle.help_text,
         );
 
+        state.session.seed_startup_prompt_timing(
+            state.runtime.ui.debug_verbosity,
+            state.runtime.launch.startup_started_at.elapsed(),
+        );
+
         let result = run_repl(
             ReplRunConfig {
                 prompt: cycle.prompt,

@@ -4,21 +4,97 @@ use super::manager::{
     PluginSummary,
 };
 use crate::completion::CommandSpec;
-use crate::config::default_config_root_dir;
+use crate::config::{ConfigValue, ResolvedConfig};
 use crate::core::command_policy::{CommandPath, CommandPolicyRegistry};
 use crate::plugin::PluginDispatchError;
 use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub(super) struct PluginState {
-    #[serde(default)]
-    pub(super) enabled: Vec<String>,
-    #[serde(default)]
-    pub(super) disabled: Vec<String>,
-    #[serde(default)]
-    pub(super) preferred_providers: BTreeMap<String, String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PluginCommandState {
+    Enabled,
+    Disabled,
+}
+
+impl PluginCommandState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    fn from_config_value(value: &ConfigValue) -> Option<Self> {
+        match value.reveal() {
+            ConfigValue::String(raw) if raw.eq_ignore_ascii_case("enabled") => Some(Self::Enabled),
+            ConfigValue::String(raw) if raw.eq_ignore_ascii_case("disabled") => {
+                Some(Self::Disabled)
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PluginCommandPreferences {
+    pub(crate) command_states: BTreeMap<String, PluginCommandState>,
+    pub(crate) preferred_providers: BTreeMap<String, String>,
+}
+
+impl PluginCommandPreferences {
+    pub(crate) fn from_resolved(config: &ResolvedConfig) -> Self {
+        let mut preferences = Self::default();
+        for (key, entry) in config.values() {
+            let Some((command, field)) = plugin_command_config_field(key) else {
+                continue;
+            };
+            match field {
+                PluginCommandConfigField::State => {
+                    if let Some(state) = PluginCommandState::from_config_value(&entry.value) {
+                        preferences.command_states.insert(command, state);
+                    }
+                }
+                PluginCommandConfigField::Provider => {
+                    if let ConfigValue::String(provider) = entry.value.reveal() {
+                        let provider = provider.trim();
+                        if !provider.is_empty() {
+                            preferences
+                                .preferred_providers
+                                .insert(command, provider.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        preferences
+    }
+
+    fn state_for(&self, command: &str) -> Option<PluginCommandState> {
+        self.command_states.get(command).copied()
+    }
+
+    fn preferred_provider_for(&self, command: &str) -> Option<&str> {
+        self.preferred_providers.get(command).map(String::as_str)
+    }
+
+    #[cfg(test)]
+    fn set_state(&mut self, command: &str, state: PluginCommandState) {
+        self.command_states.insert(command.to_string(), state);
+    }
+
+    fn set_provider(&mut self, command: &str, plugin_id: &str) {
+        self.preferred_providers
+            .insert(command.to_string(), plugin_id.to_string());
+    }
+
+    fn clear_provider(&mut self, command: &str) -> bool {
+        self.preferred_providers.remove(command).is_some()
+    }
+}
+
+enum PluginCommandConfigField {
+    State,
+    Provider,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,12 +127,12 @@ enum ProviderResolutionError<'a> {
 impl PluginManager {
     pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
         let discovered = self.discover();
-        let state = self.load_state()?;
+        let preferences = self.command_preferences();
 
         Ok(discovered
             .iter()
             .map(|plugin| PluginSummary {
-                enabled: is_enabled(&state, &plugin.plugin_id, plugin.default_enabled),
+                enabled: plugin_enabled(plugin, &preferences),
                 healthy: plugin.issue.is_none(),
                 issue: plugin.issue.clone(),
                 plugin_id: plugin.plugin_id.clone(),
@@ -69,13 +145,14 @@ impl PluginManager {
     }
 
     pub fn command_catalog(&self) -> Result<Vec<CommandCatalogEntry>> {
-        let state = self.load_state()?;
+        let preferences = self.command_preferences();
         let discovered = self.discover();
-        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        let provider_index = provider_labels_by_command(&active);
-        let command_names = active
+        let healthy = healthy_plugins(discovered.as_ref()).collect::<Vec<_>>();
+        let provider_index = provider_labels_by_command(&healthy, &preferences);
+        let command_names = healthy
             .iter()
             .flat_map(|plugin| plugin.command_specs.iter().map(|spec| spec.name.clone()))
+            .filter(|command| command_has_available_provider(command, &healthy, &preferences))
             .collect::<BTreeSet<_>>();
         let mut out = Vec::new();
 
@@ -84,8 +161,8 @@ impl PluginManager {
                 .get(&command_name)
                 .cloned()
                 .unwrap_or_default();
-            match resolve_provider_for_command(&command_name, &active, &state, None)
-                .expect("active command name should resolve to one or more providers")
+            match resolve_provider_for_command(&command_name, &healthy, &preferences, None)
+                .expect("enabled command name should resolve to one or more providers")
             {
                 ProviderResolution::Selected(selection) => {
                     let spec = selection
@@ -142,20 +219,21 @@ impl PluginManager {
     }
 
     pub fn command_policy_registry(&self) -> Result<CommandPolicyRegistry> {
-        let state = self.load_state()?;
+        let preferences = self.command_preferences();
         let discovered = self.discover();
-        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        let command_names = active
+        let healthy = healthy_plugins(discovered.as_ref()).collect::<Vec<_>>();
+        let command_names = healthy
             .iter()
             .flat_map(|plugin| plugin.command_specs.iter().map(|spec| spec.name.clone()))
+            .filter(|command| command_has_available_provider(command, &healthy, &preferences))
             .collect::<BTreeSet<_>>();
         let mut registry = CommandPolicyRegistry::new();
 
         for command_name in command_names {
-            let resolution = resolve_provider_for_command(&command_name, &active, &state, None)
-                .map_err(|err| {
-                    anyhow!("failed to resolve provider for `{command_name}`: {err:?}")
-                })?;
+            let resolution =
+                resolve_provider_for_command(&command_name, &healthy, &preferences, None).map_err(
+                    |err| anyhow!("failed to resolve provider for `{command_name}`: {err:?}"),
+                )?;
             let ProviderResolution::Selected(selection) = resolution else {
                 continue;
             };
@@ -252,23 +330,20 @@ impl PluginManager {
     }
 
     pub fn command_providers(&self, command: &str) -> Result<Vec<String>> {
-        let state = self.load_state()?;
+        let preferences = self.command_preferences();
         let discovered = self.discover();
-        let mut out = Vec::new();
-        for plugin in active_plugins(discovered.as_ref(), &state) {
-            if plugin.commands.iter().any(|name| name == command) {
-                out.push(format!("{} ({})", plugin.plugin_id, plugin.source));
-            }
-        }
-        Ok(out)
+        Ok(healthy_plugins(discovered.as_ref())
+            .filter(|plugin| provider_available(plugin, command, &preferences))
+            .map(plugin_label)
+            .collect())
     }
 
     pub fn selected_provider_label(&self, command: &str) -> Result<Option<String>> {
-        let state = self.load_state()?;
+        let preferences = self.command_preferences();
         let discovered = self.discover();
-        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
+        let healthy = healthy_plugins(discovered.as_ref()).collect::<Vec<_>>();
         Ok(
-            match resolve_provider_for_command(command, &active, &state, None).ok() {
+            match resolve_provider_for_command(command, &healthy, &preferences, None).ok() {
                 Some(ProviderResolution::Selected(selection)) => {
                     Some(plugin_label(selection.plugin))
                 }
@@ -278,18 +353,23 @@ impl PluginManager {
     }
 
     pub fn doctor(&self) -> Result<DoctorReport> {
+        let preferences = self.command_preferences();
         let plugins = self.list_plugins()?;
+        let discovered = self.discover();
         let mut conflicts_index: HashMap<String, Vec<String>> = HashMap::new();
 
-        for plugin in &plugins {
-            if !plugin.enabled || !plugin.healthy {
+        for plugin in healthy_plugins(discovered.as_ref()) {
+            if !plugin_enabled(plugin, &preferences) {
                 continue;
             }
             for command in &plugin.commands {
+                if !provider_available(plugin, command, &preferences) {
+                    continue;
+                }
                 conflicts_index
                     .entry(command.clone())
                     .or_default()
-                    .push(format!("{} ({})", plugin.plugin_id, plugin.source));
+                    .push(plugin_label(plugin));
             }
         }
 
@@ -308,22 +388,27 @@ impl PluginManager {
         Ok(DoctorReport { plugins, conflicts })
     }
 
-    pub fn set_enabled(&self, plugin_id: &str, enabled: bool) -> Result<()> {
-        let mut state = self.load_state()?;
-        state.enabled.retain(|id| id != plugin_id);
-        state.disabled.retain(|id| id != plugin_id);
-
-        if enabled {
-            state.enabled.push(plugin_id.to_string());
-        } else {
-            state.disabled.push(plugin_id.to_string());
+    pub(crate) fn validate_command(&self, command: &str) -> Result<()> {
+        let command = command.trim();
+        if command.is_empty() {
+            return Err(anyhow!("command must not be empty"));
         }
 
-        state.enabled.sort();
-        state.enabled.dedup();
-        state.disabled.sort();
-        state.disabled.dedup();
-        self.save_state(&state)
+        let discovered = self.discover_for_dispatch();
+        let healthy = healthy_plugins(discovered.as_ref()).collect::<Vec<_>>();
+        if providers_for_command(command, &healthy).is_empty() {
+            return Err(anyhow!("no healthy plugin provides command `{command}`"));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_command_state(&self, command: &str, state: PluginCommandState) -> Result<()> {
+        self.validate_command(command)?;
+        self.update_command_preferences(|preferences| {
+            preferences.set_state(command, state);
+        });
+        Ok(())
     }
 
     pub fn set_preferred_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
@@ -336,28 +421,9 @@ impl PluginManager {
             return Err(anyhow!("plugin id must not be empty"));
         }
 
-        let mut state = self.load_state()?;
-        let discovered = self.discover();
-        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        let available = providers_for_command(command, &active);
-        if available.is_empty() {
-            return Err(anyhow!("no active plugin provides command `{command}`"));
-        }
-        if !available.iter().any(|plugin| plugin.plugin_id == plugin_id) {
-            return Err(anyhow!(
-                "plugin `{plugin_id}` does not provide active command `{command}`; available providers: {}",
-                available
-                    .iter()
-                    .map(|plugin| plugin_label(plugin))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-
-        state
-            .preferred_providers
-            .insert(command.to_string(), plugin_id.to_string());
-        self.save_state(&state)
+        self.validate_preferred_provider(command, plugin_id)?;
+        self.update_command_preferences(|preferences| preferences.set_provider(command, plugin_id));
+        Ok(())
     }
 
     pub fn clear_preferred_provider(&self, command: &str) -> Result<bool> {
@@ -366,12 +432,31 @@ impl PluginManager {
             return Err(anyhow!("command must not be empty"));
         }
 
-        let mut state = self.load_state()?;
-        let removed = state.preferred_providers.remove(command).is_some();
-        if removed {
-            self.save_state(&state)?;
-        }
+        let mut removed = false;
+        self.update_command_preferences(|preferences| {
+            removed = preferences.clear_provider(command);
+        });
         Ok(removed)
+    }
+
+    pub fn validate_preferred_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
+        let discovered = self.discover_for_dispatch();
+        let healthy = healthy_plugins(discovered.as_ref()).collect::<Vec<_>>();
+        let available = providers_for_command(command, &healthy);
+        if available.is_empty() {
+            return Err(anyhow!("no healthy plugin provides command `{command}`"));
+        }
+        if !available.iter().any(|plugin| plugin.plugin_id == plugin_id) {
+            return Err(anyhow!(
+                "plugin `{plugin_id}` does not provide healthy command `{command}`; available providers: {}",
+                available
+                    .iter()
+                    .map(|plugin| plugin_label(plugin))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        Ok(())
     }
 
     pub(super) fn resolve_provider(
@@ -379,16 +464,14 @@ impl PluginManager {
         command: &str,
         provider_override: Option<&str>,
     ) -> std::result::Result<DiscoveredPlugin, PluginDispatchError> {
-        let state = self
-            .load_state()
-            .map_err(|source| PluginDispatchError::StateLoadFailed { source })?;
-        let discovered = self.discover();
-        let active = active_plugins(discovered.as_ref(), &state).collect::<Vec<_>>();
-        match resolve_provider_for_command(command, &active, &state, provider_override) {
+        let preferences = self.command_preferences();
+        let discovered = self.discover_for_dispatch();
+        let healthy = healthy_plugins(discovered.as_ref()).collect::<Vec<_>>();
+        match resolve_provider_for_command(command, &healthy, &preferences, provider_override) {
             Ok(ProviderResolution::Selected(selection)) => {
                 tracing::debug!(
                     command = %command,
-                    active_providers = providers_for_command(command, &active).len(),
+                    active_providers = providers_for_command(command, &healthy).len(),
                     selected_provider = %selection.plugin.plugin_id,
                     selection_mode = ?selection.mode,
                     "resolved plugin provider"
@@ -435,7 +518,7 @@ impl PluginManager {
             Err(ProviderResolutionError::CommandNotFound) => {
                 tracing::warn!(
                     command = %command,
-                    active_plugins = active.len(),
+                    active_plugins = healthy.len(),
                     "no plugin provider found for command"
                 );
                 Err(PluginDispatchError::CommandNotFound {
@@ -445,53 +528,46 @@ impl PluginManager {
         }
     }
 
-    pub(super) fn load_state(&self) -> Result<PluginState> {
-        let path = self
-            .plugin_state_path()
-            .ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
-        if !path.exists() {
-            tracing::debug!(path = %path.display(), "plugin state file missing; using defaults");
-            return Ok(PluginState::default());
-        }
-
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|err| anyhow!("failed to read plugin state {}: {err}", path.display()))?;
-        let raw = serde_json::from_str::<PluginState>(&raw).map_err(|err| {
-            anyhow!(
-                "failed to parse plugin state {} at line {}, column {}: {}",
-                path.display(),
-                err.line(),
-                err.column(),
-                err
-            )
-        })?;
-        tracing::debug!(
-            path = %path.display(),
-            enabled = raw.enabled.len(),
-            disabled = raw.disabled.len(),
-            preferred = raw.preferred_providers.len(),
-            "loaded plugin state"
-        );
-        Ok(raw)
+    fn command_preferences(&self) -> PluginCommandPreferences {
+        self.command_preferences
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
     }
 
-    pub(super) fn save_state(&self, state: &PluginState) -> Result<()> {
-        let path = self
-            .plugin_state_path()
-            .ok_or_else(|| anyhow!("failed to resolve plugin state path"))?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let payload = serde_json::to_string_pretty(state)?;
-        write_text_atomic(&path, &payload)
+    pub(crate) fn replace_command_preferences(&self, preferences: PluginCommandPreferences) {
+        let mut current = self
+            .command_preferences
+            .write()
+            .unwrap_or_else(|err| err.into_inner());
+        *current = preferences;
     }
 
-    fn plugin_state_path(&self) -> Option<PathBuf> {
-        let mut path = self.config_root.clone().or_else(default_config_root_dir)?;
-        path.push("plugins.json");
-        Some(path)
+    fn update_command_preferences<F>(&self, update: F)
+    where
+        F: FnOnce(&mut PluginCommandPreferences),
+    {
+        let mut preferences = self
+            .command_preferences
+            .write()
+            .unwrap_or_else(|err| err.into_inner());
+        update(&mut preferences);
     }
+}
+
+fn plugin_command_config_field(key: &str) -> Option<(String, PluginCommandConfigField)> {
+    let normalized = key.trim().to_ascii_lowercase();
+    let remainder = normalized.strip_prefix("plugins.")?;
+    let (command, field) = remainder.rsplit_once('.')?;
+    if command.trim().is_empty() {
+        return None;
+    }
+    let field = match field {
+        "state" => PluginCommandConfigField::State,
+        "provider" => PluginCommandConfigField::Provider,
+        _ => return None,
+    };
+    Some((command.to_string(), field))
 }
 
 fn register_describe_command_policies(
@@ -510,17 +586,20 @@ fn register_describe_command_policies(
     }
 }
 
-pub(super) fn is_active_plugin(plugin: &DiscoveredPlugin, state: &PluginState) -> bool {
-    plugin.issue.is_none() && is_enabled(state, &plugin.plugin_id, plugin.default_enabled)
+fn healthy_plugins<'a>(
+    discovered: &'a [DiscoveredPlugin],
+) -> impl Iterator<Item = &'a DiscoveredPlugin> + 'a {
+    discovered.iter().filter(|plugin| plugin.issue.is_none())
 }
 
-pub(super) fn active_plugins<'a>(
-    discovered: &'a [DiscoveredPlugin],
-    state: &'a PluginState,
-) -> impl Iterator<Item = &'a DiscoveredPlugin> + 'a {
-    discovered
+fn plugin_enabled(plugin: &DiscoveredPlugin, preferences: &PluginCommandPreferences) -> bool {
+    if plugin.commands.is_empty() {
+        return plugin.default_enabled;
+    }
+    plugin
+        .commands
         .iter()
-        .filter(move |plugin| is_active_plugin(plugin, state))
+        .any(|command| provider_available(plugin, command, preferences))
 }
 
 fn plugin_label(plugin: &DiscoveredPlugin) -> String {
@@ -542,13 +621,24 @@ fn providers_for_command<'a>(
         .collect()
 }
 
+fn available_providers_for_command<'a>(
+    command: &str,
+    plugins: &[&'a DiscoveredPlugin],
+    preferences: &PluginCommandPreferences,
+) -> Vec<&'a DiscoveredPlugin> {
+    providers_for_command(command, plugins)
+        .into_iter()
+        .filter(|plugin| provider_available(plugin, command, preferences))
+        .collect()
+}
+
 fn resolve_provider_for_command<'a>(
     command: &str,
     plugins: &[&'a DiscoveredPlugin],
-    state: &PluginState,
+    preferences: &PluginCommandPreferences,
     provider_override: Option<&str>,
 ) -> std::result::Result<ProviderResolution<'a>, ProviderResolutionError<'a>> {
-    let providers = providers_for_command(command, plugins);
+    let providers = available_providers_for_command(command, plugins, preferences);
     if providers.is_empty() {
         return Err(ProviderResolutionError::CommandNotFound);
     }
@@ -573,11 +663,11 @@ fn resolve_provider_for_command<'a>(
         });
     }
 
-    if let Some(preferred) = state.preferred_providers.get(command) {
+    if let Some(preferred) = preferences.preferred_provider_for(command) {
         if let Some(plugin) = providers
             .iter()
             .copied()
-            .find(|plugin| plugin.plugin_id == *preferred)
+            .find(|plugin| plugin.plugin_id == preferred)
         {
             return Ok(ProviderResolution::Selected(ProviderSelection {
                 plugin,
@@ -603,11 +693,17 @@ fn resolve_provider_for_command<'a>(
     Ok(ProviderResolution::Ambiguous(providers))
 }
 
-fn provider_labels_by_command(plugins: &[&DiscoveredPlugin]) -> HashMap<String, Vec<String>> {
+fn provider_labels_by_command(
+    plugins: &[&DiscoveredPlugin],
+    preferences: &PluginCommandPreferences,
+) -> HashMap<String, Vec<String>> {
     let mut index = HashMap::new();
     for plugin in plugins {
         let label = plugin_label(plugin);
         for command in &plugin.commands {
+            if !provider_available(plugin, command, preferences) {
+                continue;
+            }
             index
                 .entry(command.clone())
                 .or_insert_with(Vec::new)
@@ -617,14 +713,30 @@ fn provider_labels_by_command(plugins: &[&DiscoveredPlugin]) -> HashMap<String, 
     index
 }
 
-pub(super) fn is_enabled(state: &PluginState, plugin_id: &str, default_enabled: bool) -> bool {
-    if state.enabled.iter().any(|id| id == plugin_id) {
-        return true;
-    }
-    if state.disabled.iter().any(|id| id == plugin_id) {
+fn command_has_available_provider(
+    command: &str,
+    plugins: &[&DiscoveredPlugin],
+    preferences: &PluginCommandPreferences,
+) -> bool {
+    plugins
+        .iter()
+        .copied()
+        .any(|plugin| provider_available(plugin, command, preferences))
+}
+
+fn provider_available(
+    plugin: &DiscoveredPlugin,
+    command: &str,
+    preferences: &PluginCommandPreferences,
+) -> bool {
+    if !plugin_provides_command(plugin, command) {
         return false;
     }
-    default_enabled
+    match preferences.state_for(command) {
+        Some(PluginCommandState::Enabled) => true,
+        Some(PluginCommandState::Disabled) => false,
+        None => plugin.default_enabled,
+    }
 }
 
 pub(super) fn write_text_atomic(path: &std::path::Path, payload: &str) -> Result<()> {

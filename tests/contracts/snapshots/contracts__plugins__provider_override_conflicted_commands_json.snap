@@ -1,6 +1,7 @@
 ---
-source: crates/osp-cli/tests/contracts/plugins.rs
-expression: commands_stdout
+source: tests/contracts/plugins.rs
+assertion_line: 834
+expression: sanitized
 ---
 [
   {
@@ -11,8 +12,7 @@ expression: commands_stdout
       "explicit-provider (explicit)",
       "env-provider (env)",
       "bundled-provider (bundled)",
-      "user-provider (user)",
-      "path-provider (path)"
+      "user-provider (user)"
     ],
     "conflicted": true,
     "requires_selection": true,

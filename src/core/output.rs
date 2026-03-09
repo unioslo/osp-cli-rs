@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Auto,
+    Guide,
     Json,
     Table,
     Markdown,
@@ -12,6 +13,7 @@ impl OutputFormat {
     pub fn as_str(self) -> &'static str {
         match self {
             OutputFormat::Auto => "auto",
+            OutputFormat::Guide => "guide",
             OutputFormat::Json => "json",
             OutputFormat::Table => "table",
             OutputFormat::Markdown => "md",
@@ -23,6 +25,7 @@ impl OutputFormat {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(OutputFormat::Auto),
+            "guide" => Some(OutputFormat::Guide),
             "json" => Some(OutputFormat::Json),
             "table" => Some(OutputFormat::Table),
             "md" | "markdown" => Some(OutputFormat::Markdown),
@@ -118,8 +121,10 @@ mod tests {
     #[test]
     fn output_format_round_trips_known_values_and_aliases() {
         assert_eq!(OutputFormat::Auto.as_str(), "auto");
+        assert_eq!(OutputFormat::Guide.as_str(), "guide");
         assert_eq!(OutputFormat::Json.as_str(), "json");
         assert_eq!(OutputFormat::Markdown.as_str(), "md");
+        assert_eq!(OutputFormat::parse("guide"), Some(OutputFormat::Guide));
         assert_eq!(OutputFormat::parse(" json "), Some(OutputFormat::Json));
         assert_eq!(
             OutputFormat::parse("markdown"),

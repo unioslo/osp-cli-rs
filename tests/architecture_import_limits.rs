@@ -166,6 +166,7 @@ fn root_public_facade_stays_curated() {
         "config",
         "core",
         "dsl",
+        "guide",
         "ports",
         "api",
         "services",

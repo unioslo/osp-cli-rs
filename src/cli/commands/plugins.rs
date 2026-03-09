@@ -1,22 +1,28 @@
-use crate::app::{AppClients, AuthState, ConfigState};
-use crate::app::{CliCommandResult, PluginConfigScope, plugin_config_entries};
-use crate::cli::rows::output::rows_to_output_result;
-use crate::cli::{
-    PluginConfigArgs, PluginProviderClearArgs, PluginProviderSelectArgs, PluginToggleArgs,
-    PluginsArgs, PluginsCommands,
+use crate::app::{AppClients, AuthState, ConfigState, RuntimeContext};
+use crate::app::{
+    CURRENT_TERMINAL_SENTINEL, CliCommandResult, PluginConfigScope, plugin_config_entries,
 };
-use crate::config::ResolvedConfig;
+use crate::cli::rows::output::rows_to_output_result;
+use crate::cli::{PluginConfigArgs, PluginsArgs, PluginsCommands};
+use crate::config::{
+    ConfigValue, ResolvedConfig, RuntimeConfigPaths, Scope, set_scoped_value_in_toml,
+    unset_scoped_value_in_toml,
+};
 use crate::core::row::Row;
-use crate::plugin::{CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary};
+use crate::plugin::{
+    CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary, state::PluginCommandState,
+};
 use miette::Result;
 
 #[derive(Clone, Copy)]
 pub(crate) struct PluginsCommandContext<'a> {
+    pub(crate) context: &'a RuntimeContext,
     pub(crate) config: &'a ResolvedConfig,
     pub(crate) config_state: Option<&'a ConfigState>,
     pub(crate) auth: &'a AuthState,
     pub(crate) clients: Option<&'a AppClients>,
     pub(crate) plugin_manager: &'a PluginManager,
+    pub(crate) runtime_load: crate::config::RuntimeLoadOptions,
 }
 
 pub(crate) fn run_plugins_command(
@@ -71,40 +77,117 @@ pub(crate) fn run_plugins_command(
                 None,
             ))
         }
-        PluginsCommands::Enable(PluginToggleArgs { plugin_id }) => {
+        PluginsCommands::Enable(args) => {
+            let command = normalize_command_name(&args.command)?;
             plugin_manager
-                .set_enabled(&plugin_id, true)
+                .validate_command(&command)
                 .map_err(|err| miette::miette!("{err:#}"))?;
+            persist_command_state(
+                context,
+                command.as_str(),
+                PluginCommandState::Enabled,
+                plugin_scope(
+                    context,
+                    args.global,
+                    args.profile.as_deref(),
+                    args.terminal.as_deref(),
+                ),
+            )?;
+            sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
             result
                 .messages
-                .success(format!("enabled plugin: {plugin_id}"));
+                .success(format!("enabled command: {command}"));
             Ok(result)
         }
-        PluginsCommands::Disable(PluginToggleArgs { plugin_id }) => {
+        PluginsCommands::Disable(args) => {
+            let command = normalize_command_name(&args.command)?;
             plugin_manager
-                .set_enabled(&plugin_id, false)
+                .validate_command(&command)
                 .map_err(|err| miette::miette!("{err:#}"))?;
+            persist_command_state(
+                context,
+                command.as_str(),
+                PluginCommandState::Disabled,
+                plugin_scope(
+                    context,
+                    args.global,
+                    args.profile.as_deref(),
+                    args.terminal.as_deref(),
+                ),
+            )?;
+            sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
             result
                 .messages
-                .success(format!("disabled plugin: {plugin_id}"));
+                .success(format!("disabled command: {command}"));
             Ok(result)
         }
-        PluginsCommands::SelectProvider(PluginProviderSelectArgs { command, plugin_id }) => {
+        PluginsCommands::ClearState(args) => {
+            let command = normalize_command_name(&args.command)?;
             plugin_manager
-                .set_preferred_provider(&command, &plugin_id)
+                .validate_command(&command)
                 .map_err(|err| miette::miette!("{err:#}"))?;
+            let removed = clear_command_state(
+                context,
+                command.as_str(),
+                plugin_scope(
+                    context,
+                    args.global,
+                    args.profile.as_deref(),
+                    args.terminal.as_deref(),
+                ),
+            )?;
+            sync_current_command_preferences(context)?;
+            let mut result = CliCommandResult::exit(0);
+            if removed {
+                result
+                    .messages
+                    .success(format!("cleared command state for {command}"));
+            } else {
+                result
+                    .messages
+                    .warning(format!("no explicit command state set for {command}"));
+            }
+            Ok(result)
+        }
+        PluginsCommands::SelectProvider(args) => {
+            let command = normalize_command_name(&args.command)?;
+            plugin_manager
+                .validate_preferred_provider(&command, &args.plugin_id)
+                .map_err(|err| miette::miette!("{err:#}"))?;
+            persist_provider_selection(
+                context,
+                &command,
+                &args.plugin_id,
+                plugin_scope(
+                    context,
+                    args.global,
+                    args.profile.as_deref(),
+                    args.terminal.as_deref(),
+                ),
+            )?;
+            sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
             result.messages.success(format!(
-                "selected provider for command `{command}`: {plugin_id}"
+                "selected provider for command `{command}`: {}",
+                args.plugin_id
             ));
             Ok(result)
         }
-        PluginsCommands::ClearProvider(PluginProviderClearArgs { command }) => {
-            let removed = plugin_manager
-                .clear_preferred_provider(&command)
-                .map_err(|err| miette::miette!("{err:#}"))?;
+        PluginsCommands::ClearProvider(args) => {
+            let command = normalize_command_name(&args.command)?;
+            let removed = clear_provider_selection(
+                context,
+                &command,
+                plugin_scope(
+                    context,
+                    args.global,
+                    args.profile.as_deref(),
+                    args.terminal.as_deref(),
+                ),
+            )?;
+            sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
             if removed {
                 result.messages.success(format!(
@@ -118,6 +201,167 @@ pub(crate) fn run_plugins_command(
             Ok(result)
         }
     }
+}
+
+fn persist_command_state(
+    context: PluginsCommandContext<'_>,
+    command: &str,
+    state: PluginCommandState,
+    scope: Scope,
+) -> Result<()> {
+    let config_path = plugin_config_path(context)?;
+    let value = ConfigValue::String(state.as_str().to_string());
+    set_scoped_value_in_toml(
+        &config_path,
+        &plugin_state_key(command),
+        &value,
+        &scope,
+        false,
+        false,
+    )
+    .map_err(|err| miette::miette!("{err}"))?;
+    Ok(())
+}
+
+fn clear_command_state(
+    context: PluginsCommandContext<'_>,
+    command: &str,
+    scope: Scope,
+) -> Result<bool> {
+    let config_path = plugin_config_path(context)?;
+    let edit_result = unset_scoped_value_in_toml(
+        &config_path,
+        &plugin_state_key(command),
+        &scope,
+        false,
+        false,
+    )
+    .map_err(|err| miette::miette!("{err}"))?;
+    Ok(edit_result.previous.is_some())
+}
+
+fn persist_provider_selection(
+    context: PluginsCommandContext<'_>,
+    command: &str,
+    plugin_id: &str,
+    scope: Scope,
+) -> Result<()> {
+    let config_path = plugin_config_path(context)?;
+    set_scoped_value_in_toml(
+        &config_path,
+        &plugin_provider_key(command),
+        &ConfigValue::String(plugin_id.trim().to_string()),
+        &scope,
+        false,
+        false,
+    )
+    .map_err(|err| miette::miette!("{err}"))?;
+    Ok(())
+}
+
+fn clear_provider_selection(
+    context: PluginsCommandContext<'_>,
+    command: &str,
+    scope: Scope,
+) -> Result<bool> {
+    let config_path = plugin_config_path(context)?;
+    let edit_result = unset_scoped_value_in_toml(
+        &config_path,
+        &plugin_provider_key(command),
+        &scope,
+        false,
+        false,
+    )
+    .map_err(|err| miette::miette!("{err}"))?;
+    Ok(edit_result.previous.is_some())
+}
+
+fn plugin_config_path(context: PluginsCommandContext<'_>) -> Result<std::path::PathBuf> {
+    if !context.runtime_load.include_config_file {
+        return Err(miette::miette!(
+            "config file writes are disabled for this session"
+        ));
+    }
+    RuntimeConfigPaths::discover()
+        .config_file
+        .ok_or_else(|| miette::miette!("failed to resolve config.toml path for plugin config"))
+}
+
+fn plugin_scope(
+    context: PluginsCommandContext<'_>,
+    global: bool,
+    profile: Option<&str>,
+    terminal: Option<&str>,
+) -> Scope {
+    let terminal = resolve_terminal_selector(context, terminal);
+    if global {
+        return terminal
+            .as_deref()
+            .map_or_else(Scope::global, Scope::terminal);
+    }
+
+    let profile = profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| context.config.active_profile());
+
+    terminal.as_deref().map_or_else(
+        || Scope::profile(profile),
+        |current| Scope::profile_terminal(profile, current),
+    )
+}
+
+fn resolve_terminal_selector(
+    context: PluginsCommandContext<'_>,
+    selector: Option<&str>,
+) -> Option<String> {
+    let value = selector?;
+    if value == CURRENT_TERMINAL_SENTINEL {
+        return Some(
+            context
+                .context
+                .terminal_kind()
+                .as_config_terminal()
+                .to_string(),
+        );
+    }
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_ascii_lowercase())
+    }
+}
+
+fn normalize_command_name(command: &str) -> Result<String> {
+    let normalized = command.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(miette::miette!("command must not be empty"));
+    }
+    Ok(normalized)
+}
+
+fn sync_current_command_preferences(context: PluginsCommandContext<'_>) -> Result<()> {
+    let resolved = crate::app::resolve_runtime_config(
+        crate::app::RuntimeConfigRequest::new(
+            context.context.profile_override().map(ToOwned::to_owned),
+            Some(context.context.terminal_kind().as_config_terminal()),
+        )
+        .with_runtime_load(context.runtime_load),
+    )
+    .map_err(|err| miette::miette!("{err:#}"))?;
+    context.plugin_manager.replace_command_preferences(
+        crate::plugin::state::PluginCommandPreferences::from_resolved(&resolved),
+    );
+    Ok(())
+}
+
+fn plugin_state_key(command: &str) -> String {
+    format!("plugins.{}.state", command.trim().to_ascii_lowercase())
+}
+
+fn plugin_provider_key(command: &str) -> String {
+    format!("plugins.{}.provider", command.trim().to_ascii_lowercase())
 }
 
 fn projected_plugin_config_entries(

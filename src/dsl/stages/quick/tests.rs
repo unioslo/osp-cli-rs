@@ -264,10 +264,33 @@ fn quick_single_row_value_projection_squeezes_single_object_array() {
     assert_eq!(output.len(), 1);
     assert_eq!(
         output[0],
-        json!({"interfaces": [{"mac": "aa:bb"}]})
+        json!({"interfaces": [{"mac": "aa:bb", "name": "eth0"}]})
             .as_object()
             .cloned()
             .expect("object")
+    );
+}
+
+#[test]
+fn quick_preserves_matching_parent_objects_inside_object_arrays() {
+    let rows = vec![row(json!({
+        "commands": [
+            {"name": "history", "short_help": "List and prune history"},
+            {"name": "help", "short_help": "Print this message or the help of the given subcommand(s)"}
+        ]
+    }))];
+
+    let output = apply(rows, "message").expect("quick should keep matching command object");
+    assert_eq!(
+        output,
+        vec![row(json!({
+            "commands": [
+                {
+                    "name": "help",
+                    "short_help": "Print this message or the help of the given subcommand(s)"
+                }
+            ]
+        }))]
     );
 }
 

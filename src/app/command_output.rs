@@ -1,8 +1,9 @@
 use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
-use crate::core::output_model::OutputResult;
+use crate::core::output_model::{OutputResult, RenderRecommendation};
 use crate::core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use crate::dsl::apply_output_pipeline;
+use crate::guide::GuidePayload;
 use crate::ui::clipboard::ClipboardService;
 use crate::ui::document::{Block, Document, JsonBlock, LineBlock, LinePart};
 use crate::ui::messages::{MessageBuffer, MessageLevel};
@@ -21,6 +22,7 @@ pub(crate) enum ReplCommandOutput {
         output: OutputResult,
         format_hint: Option<OutputFormat>,
     },
+    Guide(GuidePayload),
     Document(Document),
     Text(String),
 }
@@ -90,6 +92,16 @@ impl CliCommandResult {
             exit_code: 0,
             messages: MessageBuffer::default(),
             output: Some(ReplCommandOutput::Document(document)),
+            stderr_text: None,
+            failure_report: None,
+        }
+    }
+
+    pub(crate) fn guide(guide: impl Into<GuidePayload>) -> Self {
+        Self {
+            exit_code: 0,
+            messages: MessageBuffer::default(),
+            output: Some(ReplCommandOutput::Guide(guide.into())),
             stderr_text: None,
             failure_report: None,
         }
@@ -227,11 +239,18 @@ pub(crate) fn apply_output_stages(
     stages: &[String],
     format_hint: Option<OutputFormat>,
 ) -> anyhow::Result<(OutputResult, Option<OutputFormat>)> {
+    if output.meta.render_recommendation.is_none()
+        && let Some(format) = format_hint
+    {
+        output.meta.render_recommendation = Some(RenderRecommendation::Format(format));
+    }
+
     if !stages.is_empty() {
         tracing::trace!(stage_count = stages.len(), "applying DSL output pipeline");
         output = apply_output_pipeline(output, stages)?;
-        // Once a DSL pipeline runs, the transformed output should use the
-        // caller's format settings rather than the producer's original hint.
+        // Once a DSL pipeline runs, producer-side format hints stop being an
+        // out-of-band override. Any surviving recommendation now lives on the
+        // transformed output metadata itself.
         return Ok((output, None));
     }
 
@@ -257,6 +276,7 @@ pub(crate) fn parse_output_format_hint(value: Option<&str>) -> Option<OutputForm
     let normalized = value?.trim().to_ascii_lowercase();
     match normalized.as_str() {
         "auto" => Some(OutputFormat::Auto),
+        "guide" => Some(OutputFormat::Guide),
         "json" => Some(OutputFormat::Json),
         "table" => Some(OutputFormat::Table),
         "md" | "markdown" => Some(OutputFormat::Markdown),
@@ -307,6 +327,18 @@ fn render_cli_output(
                 resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
             sink.write_stdout(&render_output(&output, &effective));
             maybe_copy_output_with_runtime(runtime, &output, sink);
+        }
+        ReplCommandOutput::Guide(guide) => {
+            let rendered = crate::repl::help::render_help_payload(
+                &guide,
+                &runtime.ui().render_settings,
+                runtime.config(),
+            );
+            sink.write_stdout(&rendered);
+            if !runtime.ui().render_settings.prefers_guide_rendering() {
+                let output = guide.to_output_result();
+                maybe_copy_output_with_runtime(runtime, &output, sink);
+            }
         }
         ReplCommandOutput::Document(document) => {
             sink.write_stdout(&render_document(&document, &runtime.ui().render_settings));

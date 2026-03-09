@@ -116,6 +116,7 @@ impl MessageFormatter {
                 title,
                 body,
                 rules: options.rules.to_panel_rules(),
+                frame_style: None,
                 kind: Some(options.kind.as_label().to_string()),
                 border_token: Some(kind_border_token(options.kind)),
                 title_token: Some(kind_title_token(options.kind)),

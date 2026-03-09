@@ -14,7 +14,7 @@ fn subcommand_names(cmd: &clap::Command) -> BTreeSet<String> {
 }
 
 fn is_ignored_subcommand(name: &str) -> bool {
-    matches!(name, "help" | "completion" | "external" | "repl")
+    matches!(name, "help" | "completion" | "external" | "repl" | "intro")
 }
 
 fn assert_subcommands(cmd: &clap::Command, name: &str, allowed: BTreeSet<String>) {
@@ -46,6 +46,7 @@ fn builtin_command_verbs_are_consistent() {
             "refresh",
             "enable",
             "disable",
+            "clear-state",
             "select-provider",
             "clear-provider",
             "doctor",

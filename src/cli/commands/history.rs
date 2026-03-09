@@ -38,7 +38,9 @@ mod tests {
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
         let output = match result.output? {
             ReplCommandOutput::Output { output, .. } => output,
-            ReplCommandOutput::Document(_) | ReplCommandOutput::Text(_) => return None,
+            ReplCommandOutput::Guide(_)
+            | ReplCommandOutput::Document(_)
+            | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
     }

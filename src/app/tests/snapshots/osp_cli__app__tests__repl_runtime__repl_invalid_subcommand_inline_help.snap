@@ -1,9 +1,10 @@
 ---
 source: src/app/tests/repl_runtime.rs
-assertion_line: 892
+assertion_line: 1045
 expression: text
 ---
 unrecognized subcommand 'sho'
+
 
 - Usage ----
   config <COMMAND>

@@ -19,6 +19,7 @@ pub const DEFAULT_UI_MARGIN: i64 = 0;
 pub const DEFAULT_UI_INDENT: i64 = 2;
 pub const DEFAULT_UI_PRESENTATION: &str = "expressive";
 pub const DEFAULT_UI_HELP_LAYOUT: &str = "full";
+pub const DEFAULT_UI_GUIDE_DEFAULT_FORMAT: &str = "guide";
 pub const DEFAULT_UI_MESSAGES_LAYOUT: &str = "grouped";
 pub const DEFAULT_UI_CHROME_FRAME: &str = "top";
 pub const DEFAULT_UI_TABLE_BORDER: &str = "square";
@@ -148,6 +149,7 @@ impl RuntimeDefaults {
             "ui.indent" => DEFAULT_UI_INDENT,
             "ui.presentation" => DEFAULT_UI_PRESENTATION.to_string(),
             "ui.help.layout" => DEFAULT_UI_HELP_LAYOUT.to_string(),
+            "ui.guide.default_format" => DEFAULT_UI_GUIDE_DEFAULT_FORMAT.to_string(),
             "ui.messages.layout" => DEFAULT_UI_MESSAGES_LAYOUT.to_string(),
             "ui.chrome.frame" => DEFAULT_UI_CHROME_FRAME.to_string(),
             "ui.table.overflow" => DEFAULT_UI_TABLE_OVERFLOW.to_string(),

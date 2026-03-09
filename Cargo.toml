@@ -43,6 +43,7 @@ indicatif = "0.17"
 libc = "0.2"
 miette = { version = "7.4", default-features = false, features = ["derive", "fancy"] }
 nu-ansi-term = "0.50"
+pulldown-cmark = "0.13"
 reedline = "0.33"
 regex = "1.11"
 semver = "1.0"

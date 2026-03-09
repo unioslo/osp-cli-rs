@@ -1,6 +1,7 @@
 use super::{
-    build_repl_appearance, build_repl_prompt, render_prompt_template, render_repl_command_overview,
-    render_repl_intro, render_repl_prompt_right_for_test, theme_display_name,
+    build_repl_appearance, build_repl_intro_payload, build_repl_prompt, render_prompt_template,
+    render_repl_command_overview, render_repl_intro, render_repl_prompt_right_for_test,
+    theme_display_name,
 };
 use crate::app::TimingSummary;
 use crate::app::{
@@ -59,6 +60,16 @@ fn intro_commands(commands: &[&str]) -> Vec<String> {
     commands.iter().map(|value| (*value).to_string()).collect()
 }
 
+fn intro_surface(commands: &[&str]) -> ReplSurface {
+    ReplSurface {
+        root_words: intro_commands(commands),
+        intro_commands: intro_commands(commands),
+        specs: Vec::new(),
+        aliases: Vec::new(),
+        overview_entries: Vec::new(),
+    }
+}
+
 #[test]
 fn repl_intro_expressive_includes_sections_and_user_context() {
     let state = make_state(&[
@@ -70,7 +81,7 @@ fn repl_intro_expressive_includes_sections_and_user_context() {
 
     let rendered = render_repl_intro(
         repl_view(&state),
-        &intro_commands(&["help", "config", "theme", "plugins"]),
+        &intro_surface(&["help", "config", "theme", "plugins"]),
     );
     assert!(rendered.contains("OSP"));
     assert!(rendered.contains("Keybindings"));
@@ -238,10 +249,112 @@ fn repl_intro_minimal_without_help_visibility_uses_completion_hint() {
 
     let rendered = render_repl_intro(
         repl_view(&state),
-        &intro_commands(&["config", "theme", "plugins"]),
+        &intro_surface(&["config", "theme", "plugins"]),
     );
     assert!(rendered.contains("Use completion to explore commands."));
     assert!(!rendered.contains("See `help`"));
+}
+
+#[test]
+fn repl_intro_template_expands_placeholders_and_preserves_unknowns() {
+    let state = make_state(&[
+        ("ui.presentation", "compact"),
+        (
+            "repl.intro_template.compact",
+            "Hello {{display_name}} {{profile}} {{version}} {{missing}}",
+        ),
+        ("user.display_name", "Oistes"),
+    ]);
+
+    let rendered = render_repl_intro(repl_view(&state), &intro_surface(&["help"]));
+    assert!(rendered.contains("Hello Oistes default"));
+    assert!(rendered.contains(env!("CARGO_PKG_VERSION")));
+    assert!(rendered.contains("{{missing}}"));
+}
+
+#[test]
+fn repl_intro_template_does_not_expand_sensitive_placeholders() {
+    let state = make_state(&[
+        ("ui.presentation", "compact"),
+        (
+            "repl.intro_template.compact",
+            "Token {{extensions.demo.token}}",
+        ),
+        ("extensions.demo.token", "secret"),
+    ]);
+
+    let rendered = render_repl_intro(repl_view(&state), &intro_surface(&["help"]));
+    assert!(rendered.contains("{{extensions.demo.token}}"));
+    assert!(!rendered.contains("Token secret"));
+}
+
+#[test]
+fn repl_intro_payload_uses_custom_full_section_templates() {
+    let state = make_state(&[
+        ("ui.presentation", "expressive"),
+        (
+            "repl.intro_template.full",
+            "## OSP\nUser {{user.name}}\n## Keybindings\nKeys {{profile.active}}\n## Pipes\nPipe {{theme_display}}",
+        ),
+    ]);
+
+    let payload =
+        build_repl_intro_payload(repl_view(&state), &intro_surface(&["help", "config"]), None);
+    let expected_theme_display =
+        theme_display_name(&repl_view(&state).ui.render_settings.theme_name);
+
+    assert_eq!(payload.sections.len(), 3);
+    assert_eq!(payload.sections[0].paragraphs, vec!["  User anonymous"]);
+    assert_eq!(payload.sections[1].paragraphs, vec!["  Keys default"]);
+    assert_eq!(
+        payload.sections[2].paragraphs,
+        vec![format!("  Pipe {expected_theme_display}")]
+    );
+}
+
+#[test]
+fn repl_intro_payload_help_placeholder_merges_overview_entries_unit() {
+    let state = make_state(&[
+        ("ui.presentation", "expressive"),
+        ("repl.intro_template.full", "## Summary\n{{ help }}"),
+    ]);
+    let surface = ReplSurface {
+        root_words: intro_commands(&["help", "config", "theme"]),
+        intro_commands: intro_commands(&["help", "config", "theme"]),
+        specs: Vec::new(),
+        aliases: Vec::new(),
+        overview_entries: vec![
+            ReplOverviewEntry {
+                name: "config".to_string(),
+                summary: "Show and change config".to_string(),
+            },
+            ReplOverviewEntry {
+                name: "theme".to_string(),
+                summary: "List and use themes".to_string(),
+            },
+        ],
+    };
+
+    let payload = build_repl_intro_payload(repl_view(&state), &surface, None);
+
+    assert_eq!(payload.sections.len(), 2);
+    assert_eq!(payload.sections[0].title, "Usage");
+    assert_eq!(
+        payload.sections[0].paragraphs,
+        vec!["[INVOCATION_OPTIONS] COMMAND [ARGS]..."]
+    );
+    assert_eq!(payload.sections[1].title, "Commands");
+    assert_eq!(payload.sections[1].entries.len(), 2);
+    assert_eq!(payload.sections[1].entries[0].name, "config");
+    assert_eq!(
+        payload.sections[1].entries[0].short_help,
+        "Show and change config"
+    );
+    assert_eq!(payload.sections[1].entries[1].name, "theme");
+    assert_eq!(
+        payload.sections[1].entries[1].short_help,
+        "List and use themes"
+    );
 }
 
 #[test]

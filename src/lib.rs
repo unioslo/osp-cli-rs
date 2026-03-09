@@ -20,6 +20,7 @@ pub mod completion;
 pub mod config;
 pub mod core;
 pub mod dsl;
+pub mod guide;
 pub mod plugin;
 pub mod ports;
 pub mod prelude;

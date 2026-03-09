@@ -1,22 +1,14 @@
-use crate::completion::{ArgNode, CommandSpec, FlagNode, SuggestionEntry, ValueType};
-use crate::core::plugin::{DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1};
+use crate::completion::{
+    ArgNode, CommandSpec, FlagNode, SuggestionEntry, ValueType, tree::command_spec_from_command_def,
+};
+use crate::core::command_def::CommandDef;
+use crate::core::plugin::{
+    DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1, DescribeValueTypeV1,
+};
 
 pub(crate) fn to_command_spec(command: &DescribeCommandV1) -> CommandSpec {
-    let spec = CommandSpec::new(&command.name)
-        .args(command.args.iter().map(to_arg_node))
-        .flags(
-            command
-                .flags
-                .iter()
-                .map(|(name, flag)| (name.clone(), to_flag_node(flag))),
-        )
-        .subcommands(command.subcommands.iter().map(to_command_spec));
-
-    if command.about.trim().is_empty() {
-        spec
-    } else {
-        spec.tooltip(&command.about)
-    }
+    let def = CommandDef::from(command);
+    command_spec_from_command_def(&def)
 }
 
 pub(super) fn to_arg_node(arg: &DescribeArgV1) -> ArgNode {
@@ -62,11 +54,9 @@ pub(super) fn to_suggestion_entry(entry: &DescribeSuggestionV1) -> SuggestionEnt
     }
 }
 
-pub(super) fn to_value_type(
-    value_type: crate::core::plugin::DescribeValueTypeV1,
-) -> Option<ValueType> {
+pub(super) fn to_value_type(value_type: DescribeValueTypeV1) -> Option<ValueType> {
     match value_type {
-        crate::core::plugin::DescribeValueTypeV1::Path => Some(ValueType::Path),
+        DescribeValueTypeV1::Path => Some(ValueType::Path),
     }
 }
 

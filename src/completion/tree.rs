@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::completion::model::{
     ArgNode, CompletionNode, CompletionTree, FlagNode, SuggestionEntry,
 };
+use crate::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -154,6 +155,95 @@ impl CompletionTreeBuilder {
     }
 }
 
+pub(crate) fn command_spec_from_command_def(def: &CommandDef) -> CommandSpec {
+    let mut spec = CommandSpec::new(def.name.clone())
+        .args(def.args.iter().map(arg_node_from_def))
+        .flags(
+            def.flags
+                .iter()
+                .flat_map(flag_entries_from_def)
+                .collect::<Vec<_>>(),
+        )
+        .subcommands(def.subcommands.iter().map(command_spec_from_command_def));
+
+    if let Some(about) = def.about.as_deref() {
+        spec = spec.tooltip(about);
+    }
+    if let Some(sort_key) = def.sort_key.as_deref() {
+        spec = spec.sort(sort_key);
+    }
+    spec
+}
+
+fn arg_node_from_def(arg: &ArgDef) -> ArgNode {
+    let mut node = ArgNode::named(arg.value_name.as_deref().unwrap_or(&arg.id))
+        .suggestions(arg.choices.iter().map(suggestion_from_choice));
+    if let Some(help) = arg.help.as_deref() {
+        node = node.tooltip(help);
+    }
+    if arg.multi {
+        node = node.multi();
+    }
+    if let Some(value_type) = to_completion_value_type(arg.value_kind) {
+        node = node.value_type(value_type);
+    }
+    node
+}
+
+fn flag_entries_from_def(flag: &FlagDef) -> Vec<(String, FlagNode)> {
+    let mut node = FlagNode::new().suggestions(flag.choices.iter().map(suggestion_from_choice));
+    if let Some(help) = flag.help.as_deref() {
+        node = node.tooltip(help);
+    }
+    if !flag.takes_value {
+        node = node.flag_only();
+    }
+    if flag.multi {
+        node = node.multi();
+    }
+    if let Some(value_type) = to_completion_value_type(flag.value_kind) {
+        node = node.value_type(value_type);
+    }
+
+    flag_spellings(flag)
+        .into_iter()
+        .map(|name| (name, node.clone()))
+        .collect()
+}
+
+fn flag_spellings(flag: &FlagDef) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(long) = flag.long.as_deref() {
+        names.push(format!("--{long}"));
+    }
+    if let Some(short) = flag.short {
+        names.push(format!("-{short}"));
+    }
+    names.extend(flag.aliases.iter().cloned());
+    names
+}
+
+fn suggestion_from_choice(choice: &ValueChoice) -> SuggestionEntry {
+    let mut entry = SuggestionEntry::value(choice.value.clone());
+    if let Some(meta) = choice.help.as_deref() {
+        entry = entry.meta(meta);
+    }
+    if let Some(display) = choice.display.as_deref() {
+        entry = entry.display(display);
+    }
+    if let Some(sort_key) = choice.sort_key.as_deref() {
+        entry = entry.sort(sort_key);
+    }
+    entry
+}
+
+fn to_completion_value_type(value_kind: Option<ValueKind>) -> Option<crate::completion::ValueType> {
+    match value_kind {
+        Some(ValueKind::Path) => Some(crate::completion::ValueType::Path),
+        Some(ValueKind::Enum | ValueKind::FreeText) | None => None,
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigKeySpec {
     pub key: String,
@@ -186,8 +276,9 @@ impl ConfigKeySpec {
 #[cfg(test)]
 mod tests {
     use crate::completion::model::CompletionTree;
+    use crate::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
 
-    use super::{CommandSpec, CompletionTreeBuilder, ConfigKeySpec};
+    use super::{CommandSpec, CompletionTreeBuilder, ConfigKeySpec, command_spec_from_command_def};
 
     fn build_tree() -> CompletionTree {
         CompletionTreeBuilder.build_from_specs(
@@ -245,6 +336,40 @@ mod tests {
                 ConfigKeySpec::new("ui.format"),
                 ConfigKeySpec::new("ui.format"),
             ],
+        );
+    }
+
+    #[test]
+    fn command_spec_conversion_preserves_flag_spellings_and_choices_unit() {
+        let def = CommandDef::new("theme")
+            .about("Inspect themes")
+            .sort("10")
+            .arg(
+                ArgDef::new("name")
+                    .help("Theme name")
+                    .value_kind(ValueKind::Path)
+                    .choices([ValueChoice::new("nord").help("Builtin theme")]),
+            )
+            .flag(
+                FlagDef::new("raw")
+                    .long("raw")
+                    .short('r')
+                    .alias("--plain")
+                    .help("Show raw values"),
+            );
+
+        let spec = command_spec_from_command_def(&def);
+
+        assert_eq!(spec.tooltip.as_deref(), Some("Inspect themes"));
+        assert_eq!(spec.sort.as_deref(), Some("10"));
+        assert!(spec.flags.contains_key("--raw"));
+        assert!(spec.flags.contains_key("-r"));
+        assert!(spec.flags.contains_key("--plain"));
+        assert_eq!(spec.args[0].tooltip.as_deref(), Some("Theme name"));
+        assert_eq!(spec.args[0].suggestions[0].value, "nord");
+        assert_eq!(
+            spec.args[0].value_type,
+            Some(crate::completion::ValueType::Path)
         );
     }
 }

@@ -5,7 +5,8 @@ use serde_json::Value;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::ui::chrome::{
-    SectionRenderContext, SectionStyleTokens, render_section_divider_with_overrides,
+    SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
+    render_section_divider_with_overrides,
 };
 use crate::ui::display::value_to_display;
 use crate::ui::document::{
@@ -227,36 +228,44 @@ impl<'a> DocumentRenderer<'a> {
             section_style_token(block.kind.as_deref()).unwrap_or(StyleToken::PanelBorder);
         let border_token = block.border_token.unwrap_or(fallback);
         let title_token = block.title_token.unwrap_or(StyleToken::PanelTitle);
+        let inner = DocumentRenderer::new(&block.body, self.settings).render(&block.body);
+        let render = SectionRenderContext {
+            color: self.settings.color,
+            theme: &self.settings.theme,
+            style_overrides: &self.settings.style_overrides,
+        };
+        let tokens = SectionStyleTokens {
+            border: border_token,
+            title: title_token,
+        };
+
+        if let Some(frame_style) = block.frame_style {
+            return render_section_block_with_overrides(
+                block.title.as_deref().unwrap_or(""),
+                inner.trim_end_matches('\n'),
+                frame_style,
+                self.settings.unicode,
+                self.settings.width,
+                render,
+                tokens,
+            );
+        }
+
         let divider_width = Some(self.settings.width.unwrap_or(24).max(12));
         let titled_divider = render_section_divider_with_overrides(
             block.title.as_deref().unwrap_or(""),
             self.settings.unicode,
             divider_width,
-            SectionRenderContext {
-                color: self.settings.color,
-                theme: &self.settings.theme,
-                style_overrides: &self.settings.style_overrides,
-            },
-            SectionStyleTokens {
-                border: border_token,
-                title: title_token,
-            },
+            render,
+            tokens,
         );
         let trailing_divider = render_section_divider_with_overrides(
             "",
             self.settings.unicode,
             divider_width,
-            SectionRenderContext {
-                color: self.settings.color,
-                theme: &self.settings.theme,
-                style_overrides: &self.settings.style_overrides,
-            },
-            SectionStyleTokens {
-                border: border_token,
-                title: title_token,
-            },
+            render,
+            SectionStyleTokens::same(border_token),
         );
-        let inner = DocumentRenderer::new(&block.body, self.settings).render(&block.body);
 
         match block.rules {
             PanelRules::None => inner,
@@ -1211,6 +1220,7 @@ mod tests {
     fn mreg_render_settings(width: usize) -> RenderSettings {
         RenderSettings {
             format: OutputFormat::Mreg,
+            format_explicit: false,
             mode: RenderMode::Plain,
             color: ColorMode::Never,
             unicode: UnicodeMode::Never,
@@ -1230,6 +1240,7 @@ mod tests {
             theme: None,
             style_overrides: crate::ui::style::StyleOverrides::default(),
             chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
+            guide_default_format: crate::ui::GuideDefaultFormat::Guide,
             runtime: RenderRuntime::default(),
         }
     }
@@ -1267,6 +1278,7 @@ mod tests {
                     })],
                 },
                 rules: crate::ui::document::PanelRules::Both,
+                frame_style: None,
                 kind: Some("info".to_string()),
                 border_token: None,
                 title_token: None,

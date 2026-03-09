@@ -40,6 +40,7 @@ pub struct RenderRuntime {
 #[derive(Debug, Clone)]
 pub struct RenderSettings {
     pub format: OutputFormat,
+    pub format_explicit: bool,
     pub mode: RenderMode,
     pub color: ColorMode,
     pub unicode: UnicodeMode,
@@ -59,7 +60,25 @@ pub struct RenderSettings {
     pub theme: Option<ThemeDefinition>,
     pub style_overrides: StyleOverrides,
     pub chrome_frame: SectionFrameStyle,
+    pub guide_default_format: GuideDefaultFormat,
     pub runtime: RenderRuntime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GuideDefaultFormat {
+    #[default]
+    Guide,
+    Inherit,
+}
+
+impl GuideDefaultFormat {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "guide" => Some(Self::Guide),
+            "inherit" | "none" => Some(Self::Inherit),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +152,7 @@ impl RenderSettings {
     pub fn test_plain(format: OutputFormat) -> Self {
         Self {
             format,
+            format_explicit: false,
             mode: RenderMode::Plain,
             color: ColorMode::Never,
             unicode: UnicodeMode::Never,
@@ -152,8 +172,15 @@ impl RenderSettings {
             theme: None,
             style_overrides: crate::ui::style::StyleOverrides::default(),
             chrome_frame: SectionFrameStyle::Top,
+            guide_default_format: GuideDefaultFormat::Guide,
             runtime: RenderRuntime::default(),
         }
+    }
+
+    pub fn prefers_guide_rendering(&self) -> bool {
+        matches!(self.format, OutputFormat::Guide)
+            || (!self.format_explicit
+                && matches!(self.guide_default_format, GuideDefaultFormat::Guide))
     }
 
     fn resolve_color_mode(&self) -> bool {
@@ -262,6 +289,7 @@ impl RenderSettings {
     fn plain_copy_settings(&self) -> Self {
         Self {
             format: self.format,
+            format_explicit: self.format_explicit,
             mode: RenderMode::Plain,
             color: ColorMode::Never,
             unicode: UnicodeMode::Never,
@@ -281,6 +309,7 @@ impl RenderSettings {
             theme: self.theme.clone(),
             style_overrides: self.style_overrides.clone(),
             chrome_frame: self.chrome_frame,
+            guide_default_format: self.guide_default_format,
             runtime: self.runtime.clone(),
         }
     }
@@ -305,6 +334,13 @@ pub fn render_output(output: &OutputResult, settings: &RenderSettings) -> String
 pub fn render_document(document: &Document, settings: &RenderSettings) -> String {
     let resolved = settings.resolve_render_settings();
     renderer::render_document(document, resolved)
+}
+
+pub(crate) fn render_document_resolved(
+    document: &Document,
+    settings: ResolvedRenderSettings,
+) -> String {
+    renderer::render_document(document, settings)
 }
 
 pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {

@@ -53,6 +53,7 @@ pub(crate) fn plugin_data_to_output_result(
                 .unwrap_or_default(),
             wants_copy: false,
             grouped: false,
+            render_recommendation: None,
         },
     }
 }
@@ -208,6 +209,7 @@ mod tests {
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: true,
+                render_recommendation: None,
             },
         };
 

@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::ui::chrome::SectionFrameStyle;
 use crate::ui::style::StyleToken;
 
 #[derive(Debug, Clone, Default)]
@@ -34,6 +35,7 @@ pub struct PanelBlock {
     pub title: Option<String>,
     pub body: Document,
     pub rules: PanelRules,
+    pub frame_style: Option<SectionFrameStyle>,
     pub kind: Option<String>,
     pub border_token: Option<StyleToken>,
     pub title_token: Option<StyleToken>,

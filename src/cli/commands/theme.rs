@@ -3,6 +3,7 @@ use crate::app::{CliCommandResult, resolve_known_theme_name};
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{ThemeArgs, ThemeCommands, ThemeShowArgs, ThemeUseArgs};
 use crate::config::ConfigLayer;
+use crate::core::command_def::{ArgDef, CommandDef, ValueChoice};
 use crate::core::row::Row;
 use crate::ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 use crate::ui::theme_loader::{ThemeCatalog, ThemeSource};
@@ -49,6 +50,42 @@ pub(crate) fn run_theme_command(
             Ok(result)
         }
     }
+}
+
+pub(crate) fn theme_command_def(themes: &ThemeCatalog, sort_key: impl Into<String>) -> CommandDef {
+    let theme_choices = themes
+        .ids()
+        .into_iter()
+        .map(ValueChoice::new)
+        .collect::<Vec<_>>();
+
+    CommandDef::new("theme")
+        .about("Inspect and apply themes")
+        .sort(sort_key)
+        .subcommands([
+            CommandDef::new("list")
+                .about("List available themes")
+                .sort("10"),
+            CommandDef::new("show")
+                .about("Show a theme definition")
+                .sort("11")
+                .arg(
+                    ArgDef::new("name")
+                        .value_name("name")
+                        .help("Theme name")
+                        .choices(theme_choices.clone()),
+                ),
+            CommandDef::new("use")
+                .about("Set active theme")
+                .sort("12")
+                .arg(
+                    ArgDef::new("name")
+                        .value_name("name")
+                        .help("Theme name")
+                        .required()
+                        .choices(theme_choices),
+                ),
+        ])
 }
 
 fn theme_list_rows(themes: &ThemeCatalog, active_theme: &str) -> Vec<Row> {
@@ -132,7 +169,9 @@ fn theme_show_rows(themes: &ThemeCatalog, name: &str) -> Result<Vec<Row>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ThemeCommandContext, run_theme_command, theme_list_rows, theme_show_rows};
+    use super::{
+        ThemeCommandContext, run_theme_command, theme_command_def, theme_list_rows, theme_show_rows,
+    };
     use crate::app::CliCommandResult;
     use crate::app::ReplCommandOutput;
     use crate::app::UiState;
@@ -186,7 +225,9 @@ mod tests {
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
         let output = match result.output? {
             ReplCommandOutput::Output { output, .. } => output,
-            ReplCommandOutput::Document(_) | ReplCommandOutput::Text(_) => return None,
+            ReplCommandOutput::Guide(_)
+            | ReplCommandOutput::Document(_)
+            | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
     }
@@ -278,5 +319,18 @@ mod tests {
     #[test]
     fn extract_output_rows_returns_none_for_text_results_unit() {
         assert!(extract_output_rows(CliCommandResult::text("hello")).is_none());
+    }
+
+    #[test]
+    fn theme_command_def_exposes_runtime_theme_choices_unit() {
+        let def = theme_command_def(&builtin_theme_catalog(), "20");
+        assert_eq!(def.name, "theme");
+        assert_eq!(def.sort_key.as_deref(), Some("20"));
+        let show = def
+            .subcommands
+            .iter()
+            .find(|subcommand| subcommand.name == "show")
+            .expect("show subcommand");
+        assert_eq!(show.args[0].choices[0].value, "nord");
     }
 }

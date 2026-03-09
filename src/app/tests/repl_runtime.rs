@@ -362,8 +362,8 @@ fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
     state
         .clients
         .plugins
-        .set_enabled("hello", false)
-        .expect("plugin should disable");
+        .set_command_state("hello", crate::plugin::state::PluginCommandState::Disabled)
+        .expect("command should disable");
     assert!(
         state
             .clients
@@ -800,11 +800,13 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
                 runtime_load: state.runtime.launch.runtime_load,
             },
             plugins: crate::cli::commands::plugins::PluginsCommandContext {
+                context: &state.runtime.context,
                 config: state.runtime.config.resolved(),
                 config_state: Some(&state.runtime.config),
                 auth: &state.runtime.auth,
                 clients: Some(&state.clients),
                 plugin_manager: &state.clients.plugins,
+                runtime_load: state.runtime.launch.runtime_load,
             },
             ui: &state.runtime.ui,
             auth: &state.runtime.auth,
@@ -824,6 +826,7 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
             assert_eq!(json.payload["status"], "error");
             assert_eq!(json.payload["command"], "missing");
         }
+        Some(ReplCommandOutput::Guide(_)) => panic!("unexpected doctor output variant"),
         Some(ReplCommandOutput::Output { .. }) => panic!("unexpected doctor output variant"),
         Some(ReplCommandOutput::Text(_)) => panic!("unexpected doctor output variant"),
         None => panic!("expected doctor output"),

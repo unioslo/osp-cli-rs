@@ -441,6 +441,10 @@ impl ConfigSchema {
             SchemaEntry::string().with_allowed_values(["full", "compact", "minimal"]),
         );
         schema.insert(
+            "ui.guide.default_format",
+            SchemaEntry::string().with_allowed_values(["guide", "inherit", "none"]),
+        );
+        schema.insert(
             "ui.messages.layout",
             SchemaEntry::string().with_allowed_values(["grouped", "minimal"]),
         );
@@ -492,6 +496,9 @@ impl ConfigSchema {
             "repl.intro",
             SchemaEntry::string().with_allowed_values(["none", "minimal", "compact", "full"]),
         );
+        schema.insert("repl.intro_template.minimal", SchemaEntry::string());
+        schema.insert("repl.intro_template.compact", SchemaEntry::string());
+        schema.insert("repl.intro_template.full", SchemaEntry::string());
         schema.insert("repl.history.path", SchemaEntry::string());
         schema.insert("repl.history.max_entries", SchemaEntry::integer());
         schema.insert("repl.history.enabled", SchemaEntry::boolean());

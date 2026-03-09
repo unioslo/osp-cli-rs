@@ -184,3 +184,40 @@ fn unicode_case_insensitive_matching_is_shared_by_quick_and_filter() {
     };
     assert_eq!(filtered_rows.len(), 1);
 }
+
+#[test]
+fn quick_contract_preserves_matching_parent_objects_in_object_arrays() {
+    let rows = vec![row(json!({
+        "commands": [
+            {
+                "name": "doctor",
+                "short_help": "subcommands: all, config, last, plugins, theme"
+            },
+            {
+                "name": "config",
+                "short_help": "subcommands: show, get, explain, set, doctor"
+            }
+        ]
+    }))];
+
+    let output = apply_pipeline(rows, &["config".to_string()])
+        .expect("quick should preserve full matching command entries");
+    let OutputItems::Rows(result_rows) = output.items else {
+        panic!("expected row output");
+    };
+    assert_eq!(
+        result_rows,
+        vec![row(json!({
+            "commands": [
+                {
+                    "name": "doctor",
+                    "short_help": "subcommands: all, config, last, plugins, theme"
+                },
+                {
+                    "name": "config",
+                    "short_help": "subcommands: show, get, explain, set, doctor"
+                }
+            ]
+        }))]
+    );
+}

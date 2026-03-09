@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use crate::config::{ResolvedConfig, RuntimeLoadOptions};
 use crate::core::command_policy::{
@@ -113,12 +114,25 @@ pub struct UiState {
     pub debug_verbosity: u8,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct LaunchContext {
     pub plugin_dirs: Vec<PathBuf>,
     pub config_root: Option<PathBuf>,
     pub cache_root: Option<PathBuf>,
     pub runtime_load: RuntimeLoadOptions,
+    pub startup_started_at: Instant,
+}
+
+impl Default for LaunchContext {
+    fn default() -> Self {
+        Self {
+            plugin_dirs: Vec::new(),
+            config_root: None,
+            cache_root: None,
+            runtime_load: RuntimeLoadOptions::default(),
+            startup_started_at: Instant::now(),
+        }
+    }
 }
 
 pub struct AppClients {

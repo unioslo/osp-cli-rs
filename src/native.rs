@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use clap::Command;
 
 use crate::completion::CommandSpec;
 use crate::config::ResolvedConfig;
@@ -30,7 +31,17 @@ pub enum NativeCommandOutcome {
 }
 
 pub trait NativeCommand: Send + Sync {
-    fn describe(&self) -> DescribeCommandV1;
+    fn command(&self) -> Command;
+
+    fn auth(&self) -> Option<DescribeCommandAuthV1> {
+        None
+    }
+
+    fn describe(&self) -> DescribeCommandV1 {
+        let mut describe = DescribeCommandV1::from_clap(self.command());
+        describe.auth = self.auth();
+        describe
+    }
 
     fn execute(
         &self,
@@ -126,35 +137,24 @@ mod tests {
         DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, PLUGIN_PROTOCOL_V1,
         ResponseMetaV1, ResponseV1,
     };
+    use clap::Command;
     use serde_json::json;
 
     struct TestNativeCommand;
 
     impl NativeCommand for TestNativeCommand {
-        fn describe(&self) -> DescribeCommandV1 {
-            DescribeCommandV1 {
-                name: "ldap".to_string(),
-                about: "Directory lookups".to_string(),
-                auth: Some(DescribeCommandAuthV1 {
-                    visibility: Some(DescribeVisibilityModeV1::Public),
-                    required_capabilities: Vec::new(),
-                    feature_flags: vec!["uio".to_string()],
-                }),
-                args: Vec::new(),
-                flags: Default::default(),
-                subcommands: vec![DescribeCommandV1 {
-                    name: "user".to_string(),
-                    about: "Look up a user".to_string(),
-                    auth: Some(DescribeCommandAuthV1 {
-                        visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
-                        required_capabilities: vec!["ldap.user.read".to_string()],
-                        feature_flags: Vec::new(),
-                    }),
-                    args: Vec::new(),
-                    flags: Default::default(),
-                    subcommands: Vec::new(),
-                }],
-            }
+        fn command(&self) -> Command {
+            Command::new("ldap")
+                .about("Directory lookups")
+                .subcommand(Command::new("user").about("Look up a user"))
+        }
+
+        fn auth(&self) -> Option<DescribeCommandAuthV1> {
+            Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::Public),
+                required_capabilities: Vec::new(),
+                feature_flags: vec!["uio".to_string()],
+            })
         }
 
         fn execute(
@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_normalizes_lookup_and_collects_recursive_policy_unit() {
+    fn registry_normalizes_lookup_and_collects_root_policy_without_nested_auth_unit() {
         let registry = NativeCommandRegistry::new().with_command(TestNativeCommand);
 
         assert!(registry.command("LDAP").is_some());
@@ -208,8 +208,51 @@ mod tests {
 
         let policy = registry.command_policy_registry();
         assert!(policy.contains(&CommandPath::new(["ldap"])));
-        assert!(policy.contains(&CommandPath::new(["ldap", "user"])));
+        assert!(!policy.contains(&CommandPath::new(["ldap", "user"])));
+    }
 
+    struct TestNativeCommandWithNestedAuth;
+
+    impl NativeCommand for TestNativeCommandWithNestedAuth {
+        fn command(&self) -> Command {
+            Command::new("ldap")
+                .about("Directory lookups")
+                .subcommand(Command::new("user").about("Look up a user"))
+        }
+
+        fn describe(&self) -> DescribeCommandV1 {
+            let mut root = DescribeCommandV1::from_clap(
+                Command::new("ldap")
+                    .about("Directory lookups")
+                    .subcommand(Command::new("user").about("Look up a user")),
+            );
+            root.auth = Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::Public),
+                required_capabilities: Vec::new(),
+                feature_flags: vec!["uio".to_string()],
+            });
+            root.subcommands[0].auth = Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+                required_capabilities: vec!["ldap.user.read".to_string()],
+                feature_flags: Vec::new(),
+            });
+            root
+        }
+
+        fn execute(
+            &self,
+            _args: &[String],
+            _context: &NativeCommandContext<'_>,
+        ) -> anyhow::Result<NativeCommandOutcome> {
+            unreachable!("not used in policy test");
+        }
+    }
+
+    #[test]
+    fn registry_collects_nested_auth_policies_when_describe_is_overridden_unit() {
+        let registry = NativeCommandRegistry::new().with_command(TestNativeCommandWithNestedAuth);
+
+        let policy = registry.command_policy_registry();
         let user_policy = policy
             .resolved_policy(&CommandPath::new(["ldap", "user"]))
             .expect("nested native policy should exist");

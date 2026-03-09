@@ -9,11 +9,8 @@ use crate::app::{AppClients, AppRuntime, AppSession};
 use super::ReplViewContext;
 use super::completion;
 use super::history;
-use super::presentation::{
-    build_repl_appearance, build_repl_prompt, render_repl_command_overview, render_repl_intro,
-};
+use super::presentation::{build_repl_appearance, build_repl_prompt, render_repl_intro};
 use super::surface;
-use crate::ui::presentation::repl_intro_includes_overview;
 
 pub(super) struct ReplLoopState {
     show_intro: bool,
@@ -101,17 +98,8 @@ impl ReplCycle {
         let view = ReplViewContext::from_parts(runtime, session);
         let surface = surface::build_repl_surface(view, &catalog);
         let completion_tree = completion::build_repl_completion_tree(view, &surface);
-        let help_text = if include_help_text
-            && repl_intro_includes_overview(crate::ui::presentation::intro_style_with_verbosity(
-                crate::ui::presentation::intro_style(runtime.config.resolved()),
-                runtime.ui.message_verbosity,
-            )) {
-            render_repl_command_overview(view, &surface)
-        } else {
-            String::new()
-        };
         let intro_text = if include_help_text {
-            render_repl_intro(view, &surface.intro_commands)
+            render_repl_intro(view, &surface)
         } else {
             String::new()
         };
@@ -122,7 +110,7 @@ impl ReplCycle {
             completion_tree,
             appearance: build_repl_appearance(view),
             history_config: history::build_history_config(runtime, session),
-            help_text: format!("{intro_text}{help_text}"),
+            help_text: intro_text,
         })
     }
 }

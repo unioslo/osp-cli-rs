@@ -3,10 +3,12 @@ use crate::ui::{render_document, render_output};
 use miette::{Result, miette};
 
 use crate::app;
-use crate::app::{AppClients, AppRuntime, AppSession};
+use crate::app::{AppClients, AppRuntime, AppSession, CliCommandResult};
 use crate::app::{CMD_HELP, ResolvedInvocation};
+use crate::cli::invocation::scan_command_tokens;
 
-use super::command::run_repl_external_command;
+use super::command::{render_repl_command_output, run_repl_external_command};
+use crate::app::sink::UiSink;
 use crate::repl::{ReplViewContext, input, presentation, surface};
 
 pub(super) fn maybe_handle_repl_shortcuts(
@@ -15,14 +17,31 @@ pub(super) fn maybe_handle_repl_shortcuts(
     clients: &AppClients,
     parsed: &input::ReplParsedLine,
     base_invocation: &ResolvedInvocation,
+    line: &str,
+    sink: &mut dyn UiSink,
 ) -> Result<Option<ReplLineResult>> {
-    if parsed.requests_repl_help() {
-        return repl_help_result(runtime, session, clients, base_invocation).map(Some);
+    if let Some(help_invocation) = repl_shortcut_help_invocation(runtime, session, parsed)? {
+        return repl_help_result(
+            runtime,
+            session,
+            clients,
+            parsed,
+            &help_invocation,
+            line,
+            sink,
+        )
+        .map(Some);
     }
 
-    if let Some(result) =
-        maybe_handle_single_token_shortcut(runtime, session, clients, parsed, base_invocation)?
-    {
+    if let Some(result) = maybe_handle_single_token_shortcut(
+        runtime,
+        session,
+        clients,
+        parsed,
+        base_invocation,
+        line,
+        sink,
+    )? {
         return Ok(Some(result));
     }
 
@@ -36,32 +55,95 @@ pub(super) fn maybe_handle_repl_shortcuts(
 }
 
 fn maybe_handle_single_token_shortcut(
-    runtime: &mut AppRuntime,
+    _runtime: &mut AppRuntime,
     session: &mut AppSession,
-    clients: &AppClients,
+    _clients: &AppClients,
     parsed: &input::ReplParsedLine,
-    base_invocation: &ResolvedInvocation,
+    _base_invocation: &ResolvedInvocation,
+    _line: &str,
+    _sink: &mut dyn UiSink,
 ) -> Result<Option<ReplLineResult>> {
     if parsed.dispatch_tokens.len() != 1 {
         return Ok(None);
     }
 
     match parsed.dispatch_tokens[0].as_str() {
-        CMD_HELP => repl_help_result(runtime, session, clients, base_invocation).map(Some),
         "exit" | "quit" => Ok(handle_repl_exit_request(session)),
         _ => Ok(None),
     }
+}
+
+fn repl_shortcut_help_invocation(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    parsed: &input::ReplParsedLine,
+) -> Result<Option<ResolvedInvocation>> {
+    if parsed.requests_repl_help() {
+        return Ok(Some(app::resolve_invocation_ui(
+            &runtime.ui,
+            &crate::cli::invocation::InvocationOptions::default(),
+        )));
+    }
+
+    let prefixed_tokens = parsed.prefixed_tokens(&session.scope);
+    let command_index = session.scope.commands().len();
+    if prefixed_tokens.get(command_index).map(String::as_str) == Some(CMD_HELP) {
+        let help_suffix = &prefixed_tokens[command_index + 1..];
+        if !help_suffix.is_empty()
+            && help_suffix.iter().all(|token| token.starts_with('-'))
+            && !help_suffix
+                .iter()
+                .any(|token| matches!(token.as_str(), "-h" | "--help"))
+        {
+            let scanned_suffix = scan_command_tokens(help_suffix)?;
+            if scanned_suffix.tokens.is_empty() {
+                return Ok(Some(app::resolve_invocation_ui(
+                    &runtime.ui,
+                    &scanned_suffix.invocation,
+                )));
+            }
+        }
+    }
+
+    let scanned = scan_command_tokens(&prefixed_tokens)?;
+    if scanned.tokens.get(command_index).map(String::as_str) == Some(CMD_HELP)
+        && scanned.tokens.len() == command_index + 1
+    {
+        return Ok(Some(app::resolve_invocation_ui(
+            &runtime.ui,
+            &scanned.invocation,
+        )));
+    }
+
+    Ok(None)
 }
 
 fn repl_help_result(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
+    parsed: &input::ReplParsedLine,
     invocation: &ResolvedInvocation,
+    line: &str,
+    sink: &mut dyn UiSink,
 ) -> Result<ReplLineResult> {
-    Ok(ReplLineResult::Continue(repl_help_for_scope(
-        runtime, session, clients, invocation,
-    )?))
+    if parsed.stages.is_empty() {
+        return Ok(ReplLineResult::Continue(repl_help_for_scope(
+            runtime, session, clients, invocation,
+        )?));
+    }
+
+    let result = repl_help_command_result_for_scope(runtime, session, clients, invocation)?;
+    let rendered = render_repl_command_output(
+        runtime,
+        session,
+        line,
+        &parsed.stages,
+        result,
+        invocation,
+        sink,
+    )?;
+    Ok(ReplLineResult::Continue(rendered))
 }
 
 pub(super) fn handle_repl_exit_request(session: &mut AppSession) -> Option<ReplLineResult> {
@@ -119,16 +201,21 @@ pub(super) fn repl_help_for_scope(
     clients: &AppClients,
     invocation: &ResolvedInvocation,
 ) -> Result<String> {
-    if session.scope.is_root() {
-        let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
-        let view = ReplViewContext::from_parts(runtime, session);
-        let surface = surface::build_repl_surface(view, &catalog);
-        return Ok(presentation::render_repl_command_overview(view, &surface));
-    }
-
-    let tokens = session.scope.help_tokens();
-    match run_repl_external_command(runtime, clients, session, tokens, invocation)?.output {
+    match repl_help_command_result_for_scope(runtime, session, clients, invocation)?.output {
         Some(crate::app::ReplCommandOutput::Text(text)) => Ok(text),
+        Some(crate::app::ReplCommandOutput::Guide(guide)) => {
+            let output = guide.to_output_result();
+            Ok(crate::repl::help::render_guide_output(
+                &output,
+                &invocation.ui.render_settings,
+                crate::ui::format::help::GuideRenderOptions {
+                    title_prefix: None,
+                    layout: crate::ui::presentation::help_layout(runtime.config.resolved()),
+                    frame_style: invocation.ui.render_settings.chrome_frame,
+                    panel_kind: None,
+                },
+            ))
+        }
         Some(crate::app::ReplCommandOutput::Document(document)) => {
             Ok(render_document(&document, &invocation.ui.render_settings))
         }
@@ -144,16 +231,36 @@ pub(super) fn repl_help_for_scope(
     }
 }
 
+fn repl_help_command_result_for_scope(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    invocation: &ResolvedInvocation,
+) -> Result<CliCommandResult> {
+    if session.scope.is_root() {
+        let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
+        let view = ReplViewContext::from_parts(runtime, session);
+        let surface = surface::build_repl_surface(view, &catalog);
+        return Ok(CliCommandResult::guide(
+            presentation::build_repl_command_overview_guide(&surface),
+        ));
+    }
+
+    let tokens = session.scope.help_tokens();
+    run_repl_external_command(runtime, clients, session, tokens, invocation)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         apply_repl_shell_prefix, enter_repl_shell, handle_repl_exit_request,
         maybe_handle_repl_shortcuts, repl_help_for_scope,
     };
+    use crate::app::sink::BufferedUiSink;
     use crate::app::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
-    use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1};
+    use crate::core::plugin::{DescribeCommandAuthV1, DescribeVisibilityModeV1};
     use crate::native::{
         NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
     };
@@ -162,31 +269,23 @@ mod tests {
     use crate::repl::input::ReplParsedLine;
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
-    use std::collections::BTreeMap;
+    use clap::Command;
 
     struct NativeLdapHelpCommand;
 
     impl NativeCommand for NativeLdapHelpCommand {
-        fn describe(&self) -> DescribeCommandV1 {
-            DescribeCommandV1 {
-                name: "ldap".to_string(),
-                about: "Directory lookup".to_string(),
-                auth: Some(DescribeCommandAuthV1 {
-                    visibility: Some(DescribeVisibilityModeV1::Public),
-                    required_capabilities: Vec::new(),
-                    feature_flags: Vec::new(),
-                }),
-                args: Vec::new(),
-                flags: BTreeMap::new(),
-                subcommands: vec![DescribeCommandV1 {
-                    name: "user".to_string(),
-                    about: "Look up a user".to_string(),
-                    auth: None,
-                    args: Vec::new(),
-                    flags: BTreeMap::new(),
-                    subcommands: Vec::new(),
-                }],
-            }
+        fn command(&self) -> Command {
+            Command::new("ldap")
+                .about("Directory lookup")
+                .subcommand(Command::new("user").about("Look up a user"))
+        }
+
+        fn auth(&self) -> Option<DescribeCommandAuthV1> {
+            Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::Public),
+                required_capabilities: Vec::new(),
+                feature_flags: Vec::new(),
+            })
         }
 
         fn execute(
@@ -269,6 +368,7 @@ mod tests {
     fn shortcut_handling_covers_help_none_and_shell_entry_error_unit() {
         let mut state = app_state();
         let invocation = base_repl_invocation(&state.runtime);
+        let mut sink = BufferedUiSink::default();
 
         let help = ReplParsedLine::parse("--help", state.runtime.config.resolved())
             .expect("help should parse");
@@ -279,6 +379,8 @@ mod tests {
                 &state.clients,
                 &help,
                 &invocation,
+                "--help",
+                &mut sink,
             )
             .expect("help shortcut should succeed"),
             Some(ReplLineResult::Continue(text)) if text.contains("help") || text.contains("config")
@@ -293,6 +395,8 @@ mod tests {
                 &state.clients,
                 &ordinary,
                 &invocation,
+                "config show",
+                &mut sink,
             )
             .expect("ordinary command should not shortcut"),
             None
@@ -306,6 +410,8 @@ mod tests {
             &state.clients,
             &shell_entry,
             &invocation,
+            "ldap",
+            &mut sink,
         )
         .expect_err("missing plugin should reject shell entry");
         assert!(err.to_string().contains("no plugin provides command: ldap"));
@@ -346,5 +452,30 @@ mod tests {
         )
         .expect("scoped help should render");
         assert!(scoped_help.contains("LDAP HELP"));
+    }
+
+    #[test]
+    fn root_help_shortcut_supports_dsl_stages_unit() {
+        let mut state = app_state();
+        let invocation = base_repl_invocation(&state.runtime);
+        let mut sink = BufferedUiSink::default();
+        let help = ReplParsedLine::parse("help | help", state.runtime.config.resolved())
+            .expect("staged help should parse");
+
+        let rendered = maybe_handle_repl_shortcuts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &help,
+            &invocation,
+            "help | help",
+            &mut sink,
+        )
+        .expect("staged help shortcut should succeed");
+
+        assert!(matches!(
+            rendered,
+            Some(ReplLineResult::Continue(text)) if text.contains("help") || text.contains("Show this command overview")
+        ));
     }
 }

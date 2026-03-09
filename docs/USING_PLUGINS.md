@@ -13,11 +13,31 @@ Useful commands:
 
 Use `plugins doctor` first when a command is missing or behaving unexpectedly.
 
-## Enable and Disable Plugins
+## Enable and Disable Commands
 
 ```bash
-osp plugins enable uio-ldap
-osp plugins disable uio-ldap
+osp plugins enable ldap
+osp plugins disable ldap
+osp plugins clear-state ldap
+```
+
+These commands persist command routing in the scoped config file. `enable` and
+`disable` set `state = "enabled" | "disabled"`, and `clear-state` removes the
+explicit override so the command falls back to plugin defaults.
+
+Example:
+
+```toml
+[profile.default.plugins.ldap]
+state = "enabled"
+provider = "uio-ldap"
+```
+
+More specific terminal and profile scopes override less specific ones:
+
+```toml
+[terminal.repl.profile.default.plugins.ldap]
+provider = "uio-ldap-beta"
 ```
 
 ## Discovery Order
@@ -48,6 +68,9 @@ Or store a preferred provider:
 osp plugins select-provider ldap uio-ldap
 osp plugins clear-provider ldap
 ```
+
+The persisted value is `plugins.<command>.provider = "<plugin-id>"` in the
+active config scope.
 
 `osp plugins commands` and REPL help/completion show unresolved conflicts
 instead of inventing a merged command grammar.

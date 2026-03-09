@@ -1,3 +1,4 @@
+use super::state::PluginCommandPreferences;
 use crate::completion::CommandSpec;
 use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1};
 use crate::core::runtime::RuntimeHints;
@@ -125,9 +126,6 @@ impl PluginDispatchContext {
 
 #[derive(Debug)]
 pub enum PluginDispatchError {
-    StateLoadFailed {
-        source: anyhow::Error,
-    },
     CommandNotFound {
         command: String,
     },
@@ -167,9 +165,6 @@ pub enum PluginDispatchError {
 impl Display for PluginDispatchError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            PluginDispatchError::StateLoadFailed { source } => {
-                write!(f, "failed to load plugin state: {source}")
-            }
             PluginDispatchError::CommandNotFound { command } => {
                 write!(f, "no plugin provides command: {command}")
             }
@@ -242,7 +237,6 @@ impl Display for PluginDispatchError {
 impl StdError for PluginDispatchError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
-            PluginDispatchError::StateLoadFailed { source } => Some(source.as_ref()),
             PluginDispatchError::ExecuteFailed { source, .. } => Some(source),
             PluginDispatchError::InvalidJsonResponse { source, .. } => Some(source),
             PluginDispatchError::CommandNotFound { .. }
@@ -258,6 +252,8 @@ impl StdError for PluginDispatchError {
 pub struct PluginManager {
     pub(crate) explicit_dirs: Vec<PathBuf>,
     pub(crate) discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
+    pub(crate) dispatch_discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
+    pub(crate) command_preferences: RwLock<PluginCommandPreferences>,
     pub(crate) config_root: Option<PathBuf>,
     pub(crate) cache_root: Option<PathBuf>,
     pub(crate) process_timeout: Duration,
@@ -269,6 +265,8 @@ impl PluginManager {
         Self {
             explicit_dirs,
             discovered_cache: RwLock::new(None),
+            dispatch_discovered_cache: RwLock::new(None),
+            command_preferences: RwLock::new(PluginCommandPreferences::default()),
             config_root: None,
             cache_root: None,
             process_timeout: Duration::from_millis(DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as u64),
@@ -289,6 +287,14 @@ impl PluginManager {
 
     pub fn with_path_discovery(mut self, allow_path_discovery: bool) -> Self {
         self.allow_path_discovery = allow_path_discovery;
+        self
+    }
+
+    pub(crate) fn with_command_preferences(
+        mut self,
+        preferences: PluginCommandPreferences,
+    ) -> Self {
+        self.command_preferences = RwLock::new(preferences);
         self
     }
 }

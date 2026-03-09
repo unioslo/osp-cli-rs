@@ -14,60 +14,42 @@ use super::dispatch::{describe_plugin, run_provider};
 use super::manager::{
     DiscoveredPlugin, PluginDispatchContext, PluginDispatchError, PluginManager, PluginSource,
 };
-use super::state::{PluginState, is_enabled, merge_issue};
+use super::state::{PluginCommandPreferences, PluginCommandState, merge_issue};
+use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use crate::core::command_policy::{CommandPath, VisibilityMode};
 use crate::core::plugin::{
     DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1, DescribeV1,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::error::Error as _;
 #[cfg(unix)]
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 #[test]
-fn explicit_enable_overrides_default_disabled() {
-    let state = PluginState {
-        enabled: vec!["hello".to_string()],
-        disabled: Vec::new(),
-        preferred_providers: BTreeMap::new(),
-    };
+fn command_preferences_load_state_and_provider_from_resolved_config_unit() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    defaults.set("plugins.ldap.state", "disabled");
+    defaults.set("plugins.ldap.provider", "uio-ldap");
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    let resolved = resolver
+        .resolve(ResolveOptions::default().with_terminal("cli"))
+        .expect("config should resolve");
 
-    assert!(is_enabled(&state, "hello", false));
-}
-
-#[test]
-fn explicit_disable_overrides_default_enabled() {
-    let state = PluginState {
-        enabled: Vec::new(),
-        disabled: vec!["hello".to_string()],
-        preferred_providers: BTreeMap::new(),
-    };
-
-    assert!(!is_enabled(&state, "hello", true));
-}
-
-#[test]
-fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins() {
-    let state = PluginState {
-        enabled: vec!["alpha".to_string()],
-        disabled: Vec::new(),
-        preferred_providers: BTreeMap::new(),
-    };
-
-    assert!(is_enabled(&state, "alpha", true));
-    assert!(is_enabled(&state, "beta", true));
-}
-
-#[test]
-fn explicit_enable_wins_if_state_file_contains_conflicting_entries() {
-    let state = PluginState {
-        enabled: vec!["hello".to_string()],
-        disabled: vec!["hello".to_string()],
-        preferred_providers: BTreeMap::new(),
-    };
-
-    assert!(is_enabled(&state, "hello", false));
+    let preferences = PluginCommandPreferences::from_resolved(&resolved);
+    assert_eq!(
+        preferences.command_states.get("ldap"),
+        Some(&PluginCommandState::Disabled)
+    );
+    assert_eq!(
+        preferences
+            .preferred_providers
+            .get("ldap")
+            .map(String::as_str),
+        Some("uio-ldap")
+    );
 }
 
 #[cfg(unix)]
@@ -461,13 +443,13 @@ fn preferred_provider_rejects_unknown_command_and_provider_unit() {
         .expect_err("unknown command should fail");
     assert!(
         err.to_string()
-            .contains("no active plugin provides command")
+            .contains("no healthy plugin provides command")
     );
 
     let err = manager
         .set_preferred_provider("shared", "beta")
         .expect_err("unknown provider should fail");
-    assert!(err.to_string().contains("does not provide active command"));
+    assert!(err.to_string().contains("does not provide healthy command"));
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -492,107 +474,66 @@ fn preferred_provider_rejects_empty_plugin_id_unit() {
 
 #[cfg(unix)]
 #[test]
-fn set_enabled_and_clear_missing_provider_preference_cover_state_round_trip_unit() {
-    let root = make_temp_dir("osp-cli-plugin-manager-state-round-trip");
+fn disabling_a_command_updates_only_that_command_in_memory_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-in-memory-disable");
     let plugins_dir = root.join("plugins");
-    let config_root = root.join("config");
-    let cache_root = root.join("cache");
     std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    write_multi_command_plugin(&plugins_dir, "multi", &["ldap", "extra"]);
 
-    write_named_test_plugin(&plugins_dir, "alpha");
-    let manager = PluginManager::new(vec![plugins_dir])
-        .with_roots(Some(config_root.clone()), Some(cache_root));
+    let manager = PluginManager::new(vec![plugins_dir]);
+    manager
+        .set_command_state("ldap", PluginCommandState::Disabled)
+        .expect("disabling command should succeed");
 
-    manager
-        .set_enabled("alpha", false)
-        .expect("disabling plugin should succeed");
-    manager
-        .set_enabled("alpha", true)
-        .expect("enabling plugin should succeed");
+    let catalog = manager.command_catalog().expect("catalog should load");
     assert!(
-        !manager
-            .clear_preferred_provider("alpha")
-            .expect("clearing missing preference should succeed")
+        !catalog.iter().any(|entry| entry.name == "ldap"),
+        "disabled command should be removed"
     );
-
-    let state_path = config_root.join("plugins.json");
-    let raw = std::fs::read_to_string(&state_path).expect("plugin state should be written");
-    assert!(raw.contains("\"enabled\""));
-    assert!(raw.contains("alpha"));
+    assert!(
+        catalog.iter().any(|entry| entry.name == "extra"),
+        "other commands from the same plugin should remain available"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[cfg(unix)]
 #[test]
-fn corrupt_plugin_state_surfaces_for_result_apis_unit() {
-    let root = make_temp_dir("osp-cli-plugin-manager-corrupt-state-result");
+fn config_backed_preferences_can_disable_and_route_commands_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-config-preferences");
     let plugins_dir = root.join("plugins");
-    let config_root = root.join("config");
-    let cache_root = root.join("cache");
     std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-    std::fs::create_dir_all(&config_root).expect("config dir should be created");
-    write_named_test_plugin(&plugins_dir, "alpha");
-    std::fs::write(config_root.join("plugins.json"), "{not-json\n")
-        .expect("corrupt state should be written");
+    write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+    write_provider_test_plugin(&plugins_dir, "beta", "shared");
 
-    let manager =
-        PluginManager::new(vec![plugins_dir]).with_roots(Some(config_root), Some(cache_root));
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    defaults.set("plugins.shared.state", "disabled");
+    defaults.set("plugins.shared.provider", "beta");
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    let resolved = resolver
+        .resolve(ResolveOptions::default().with_terminal("cli"))
+        .expect("config should resolve");
 
-    let err = manager
-        .list_plugins()
-        .expect_err("corrupt plugin state should fail");
-    let rendered = err.to_string();
-    assert!(rendered.contains("failed to parse plugin state"));
-    assert!(rendered.contains("plugins.json"));
-    assert!(rendered.contains("line 1, column 2"));
+    let manager = PluginManager::new(vec![plugins_dir])
+        .with_command_preferences(PluginCommandPreferences::from_resolved(&resolved));
 
-    let err = manager
-        .set_enabled("alpha", false)
-        .expect_err("mutating plugin state should fail");
-    let rendered = err.to_string();
-    assert!(rendered.contains("failed to parse plugin state"));
-    assert!(rendered.contains("plugins.json"));
-    assert!(rendered.contains("line 1, column 2"));
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[cfg(unix)]
-#[test]
-fn corrupt_plugin_state_surfaces_for_dispatch_unit() {
-    let root = make_temp_dir("osp-cli-plugin-manager-corrupt-state-dispatch");
-    let plugins_dir = root.join("plugins");
-    let config_root = root.join("config");
-    let cache_root = root.join("cache");
-    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-    std::fs::create_dir_all(&config_root).expect("config dir should be created");
-    write_dispatch_fixture_plugin(
-        &plugins_dir,
-        "alpha",
-        "alpha",
-        r#"cat <<'JSON'
-{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}
-JSON"#,
+    assert!(
+        manager
+            .dispatch("shared", &[], &PluginDispatchContext::default())
+            .is_err(),
+        "disabled command should not dispatch"
     );
-    std::fs::write(config_root.join("plugins.json"), "{not-json\n")
-        .expect("corrupt state should be written");
 
-    let manager =
-        PluginManager::new(vec![plugins_dir]).with_roots(Some(config_root), Some(cache_root));
-
-    match manager
-        .dispatch("alpha", &[], &PluginDispatchContext::default())
-        .expect_err("dispatch should fail when plugin state is corrupt")
-    {
-        PluginDispatchError::StateLoadFailed { source } => {
-            let rendered = source.to_string();
-            assert!(rendered.contains("failed to parse plugin state"));
-            assert!(rendered.contains("plugins.json"));
-            assert!(rendered.contains("line 1, column 2"));
-        }
-        other => panic!("unexpected corrupt state dispatch result: {other:?}"),
-    }
+    manager
+        .set_command_state("shared", PluginCommandState::Enabled)
+        .expect("re-enabling selected command should work");
+    let provider = manager
+        .selected_provider_label("shared")
+        .expect("selected provider label should load");
+    assert_eq!(provider.as_deref(), Some("beta (explicit)"));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1289,6 +1230,80 @@ fn path_discovery_is_opt_in_unit() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[cfg(unix)]
+#[test]
+fn passive_path_discovery_uses_cache_without_executing_plugins_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-passive-path-discovery");
+    let _lock = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let original_path = std::env::var("PATH").ok();
+    let plugins_dir = root.join("plugins");
+    let config_root = root.join("config");
+    let cache_root = root.join("cache");
+    let probe_path = root.join("describe-probe");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    write_path_probe_plugin(&plugins_dir, "pathdemo", &probe_path);
+
+    unsafe {
+        std::env::set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                plugins_dir.display(),
+                original_path.as_deref().unwrap_or("")
+            ),
+        );
+    }
+
+    let manager = PluginManager::new(Vec::new())
+        .with_roots(Some(config_root), Some(cache_root))
+        .with_path_discovery(true);
+
+    let plugins = manager.list_plugins().expect("plugins should list");
+    let pathdemo = plugins
+        .iter()
+        .find(|plugin| plugin.plugin_id == "pathdemo")
+        .expect("path-discovered plugin should be visible");
+    assert!(
+        pathdemo
+            .issue
+            .as_deref()
+            .is_some_and(|issue| issue.contains("passive discovery does not execute PATH plugins"))
+    );
+    assert!(
+        !probe_path.exists(),
+        "--describe should not run during passive discovery"
+    );
+
+    manager
+        .dispatch("pathdemo", &[], &PluginDispatchContext::default())
+        .expect("actual dispatch should resolve and run path plugin");
+    assert!(
+        probe_path.exists(),
+        "--describe should run when resolving an invoked path plugin"
+    );
+
+    manager.refresh();
+    let refreshed = manager.list_plugins().expect("cached plugins should list");
+    let pathdemo = refreshed
+        .iter()
+        .find(|plugin| plugin.plugin_id == "pathdemo")
+        .expect("path-discovered plugin should still be visible");
+    assert!(
+        pathdemo.issue.is_none(),
+        "cached metadata should clear passive issue"
+    );
+    assert_eq!(pathdemo.commands, vec!["pathdemo".to_string()]);
+
+    match original_path {
+        Some(value) => unsafe { std::env::set_var("PATH", value) },
+        None => unsafe { std::env::remove_var("PATH") },
+    }
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn describe_plugin_reports_missing_executable_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-missing-describe");
@@ -1448,6 +1463,74 @@ JSON
 "#,
         plugin_id = plugin_id,
         command_name = command_name
+    );
+
+    write_executable_script_atomically(&plugin_path, &script);
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_multi_command_plugin(
+    dir: &std::path::Path,
+    plugin_id: &str,
+    commands: &[&str],
+) -> std::path::PathBuf {
+    let plugin_path = dir.join(format!("osp-{plugin_id}"));
+    let describe_commands = commands
+        .iter()
+        .map(|command| {
+            format!(
+                r#"{{"name":"{command}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{describe_commands}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+        plugin_id = plugin_id,
+        describe_commands = describe_commands,
+    );
+
+    write_executable_script_atomically(&plugin_path, &script);
+    plugin_path
+}
+
+#[cfg(unix)]
+fn write_path_probe_plugin(
+    dir: &std::path::Path,
+    name: &str,
+    probe_path: &std::path::Path,
+) -> std::path::PathBuf {
+    let plugin_path = dir.join(format!("osp-{name}"));
+    let script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin
+if [ "$1" = "--describe" ]; then
+  printf 'described\n' >> '{probe_path}'
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+        name = name,
+        probe_path = probe_path.display(),
     );
 
     write_executable_script_atomically(&plugin_path, &script);

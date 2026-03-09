@@ -1,14 +1,18 @@
 use crate::app::DebugTimingState;
 use crate::app::format_timing_badge;
+use crate::app::is_sensitive_key;
 use crate::app::{CMD_HELP, DEFAULT_REPL_PROMPT};
+use crate::config::ConfigValue;
+use crate::guide::template::{GuideTemplateBlock, GuideTemplateInclude, parse_markdown_template};
+use crate::guide::{GuideDoc, GuidePayload, GuideSection, GuideSectionKind};
+#[cfg(test)]
+use crate::repl::help::render_guide_doc;
+use crate::repl::help::render_help_payload;
 use crate::repl::{ReplAppearance, ReplPrompt};
-use crate::ui::chrome::{
-    SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
-};
-use crate::ui::render_inline;
 use crate::ui::style::{
     StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
 };
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::ReplViewContext;
@@ -18,178 +22,356 @@ use crate::ui::presentation::{
     ReplIntroStyle, intro_style, intro_style_with_verbosity, repl_simple_prompt,
 };
 
-pub(crate) fn render_repl_intro(view: ReplViewContext<'_>, intro_commands: &[String]) -> String {
-    let resolved = view.ui.render_settings.resolve_render_settings();
-    let config = view.config;
+const DEFAULT_MINIMAL_INTRO_TEMPLATE: &str =
+    "Welcome `{{display_name}}`. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
+const DEFAULT_COMPACT_INTRO_TEMPLATE: &str =
+    "Welcome `{{display_name}}`. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
+const DEFAULT_FULL_INTRO_TEMPLATE: &str = r#"## OSP
+  Welcome `{{display_name}}`!
+  Logged in as: `{{user.name}}`
+  Theme: `{{theme_display}}`
+  Version: `{{version}}`
 
-    let user = config.get_string("user.name").unwrap_or("anonymous");
-    let display_name = config
-        .get_string("user.display_name")
-        .or_else(|| config.get_string("user.full_name"))
-        .unwrap_or(user);
-    let theme_id = view.ui.render_settings.theme_name.clone();
-    let version = env!("CARGO_PKG_VERSION");
-    let theme_display = theme_display_name(&theme_id);
-    let intro_style = intro_style_with_verbosity(intro_style(config), view.ui.message_verbosity);
+## Keybindings
+  `Ctrl-D`    **exit**
+  `Ctrl-L`    **clear screen**
+  `Ctrl-R`    **reverse search history**
 
-    if matches!(intro_style, ReplIntroStyle::None) {
-        return String::new();
+## Pipes
+  `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2
+  *|* `A` metric() *|* `L` limit offset *|* `C` count
+  `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*
+  *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`
+
+{{ help }}"#;
+
+pub(crate) fn render_repl_intro(view: ReplViewContext<'_>, surface: &ReplSurface) -> String {
+    let intro_style =
+        intro_style_with_verbosity(intro_style(view.config), view.ui.message_verbosity);
+    let mut rendered = render_help_payload(
+        &build_repl_intro_payload(view, surface, Some(intro_style)),
+        &view.ui.render_settings,
+        view.config,
+    );
+    if !rendered.is_empty() {
+        rendered.insert(0, '\n');
+        rendered.push('\n');
     }
-
-    if matches!(
-        intro_style,
-        ReplIntroStyle::Minimal | ReplIntroStyle::Compact
-    ) {
-        let visible_commands = intro_commands
-            .iter()
-            .map(|command| format!("`{command}`"))
-            .collect::<Vec<_>>();
-        let help_hint = if view.auth.is_builtin_visible(CMD_HELP) {
-            "See `help` for more.".to_string()
-        } else {
-            "Use completion to explore commands.".to_string()
-        };
-        let command_summary = if visible_commands.is_empty() {
-            help_hint
-        } else {
-            format!("Commands: {}. {help_hint}", visible_commands.join(", "))
-        };
-        let summary = format!("Welcome `{display_name}`. v{version}. {command_summary}");
-        let mut out = String::new();
-        out.push('\n');
-        out.push_str(&render_inline(
-            &summary,
-            resolved.color,
-            &resolved.theme,
-            &resolved.style_overrides,
-        ));
-        out.push_str("\n\n");
-        return out;
-    }
-
-    let mut out = String::new();
-    out.push('\n');
-    out.push_str(&render_chrome_section(
-        &resolved,
-        "OSP",
-        &[
-            format!("  Welcome `{display_name}`!"),
-            format!("  Logged in as: `{user}`"),
-            format!("  Theme: `{theme_display}`"),
-            format!("  Version: `{version}`"),
-        ],
-    ));
-    out.push_str("\n\n");
-    out.push_str(&render_chrome_section(
-        &resolved,
-        "Keybindings",
-        &[
-            "  `Ctrl-D`    **exit**".to_string(),
-            "  `Ctrl-L`    **clear screen**".to_string(),
-            "  `Ctrl-R`    **reverse search history**".to_string(),
-        ],
-    ));
-    out.push_str("\n\n");
-    out.push_str(&render_chrome_section(
-        &resolved,
-        "Pipes",
-        &[
-            "  `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2".to_string(),
-            "  *|* `A` metric() *|* `L` limit offset *|* `C` count".to_string(),
-            "  `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*".to_string(),
-            "  *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`".to_string(),
-        ],
-    ));
-    out.push_str("\n\n");
-    out
+    rendered
 }
 
+pub(crate) fn build_repl_intro_payload(
+    view: ReplViewContext<'_>,
+    surface: &ReplSurface,
+    override_style: Option<ReplIntroStyle>,
+) -> GuidePayload {
+    let config = view.config;
+    let intro_style = intro_style_with_verbosity(
+        override_style.unwrap_or_else(|| intro_style(config)),
+        view.ui.message_verbosity,
+    );
+
+    if matches!(intro_style, ReplIntroStyle::None) {
+        return GuidePayload::default();
+    }
+    let template = intro_template(view.config, intro_style);
+    let expanded = expand_intro_template(view, &surface.intro_commands, template);
+    parse_intro_template_payload(&expanded, &build_repl_command_overview_payload(surface))
+}
+
+fn intro_template(config: &crate::config::ResolvedConfig, style: ReplIntroStyle) -> &str {
+    match style {
+        ReplIntroStyle::None => "",
+        ReplIntroStyle::Minimal => config
+            .get_string("repl.intro_template.minimal")
+            .unwrap_or(DEFAULT_MINIMAL_INTRO_TEMPLATE),
+        ReplIntroStyle::Compact => config
+            .get_string("repl.intro_template.compact")
+            .unwrap_or(DEFAULT_COMPACT_INTRO_TEMPLATE),
+        ReplIntroStyle::Full => config
+            .get_string("repl.intro_template.full")
+            .unwrap_or(DEFAULT_FULL_INTRO_TEMPLATE),
+    }
+}
+
+fn parse_intro_template_payload(template: &str, help: &GuidePayload) -> GuidePayload {
+    let trimmed = template.trim();
+    if trimmed.is_empty() {
+        return GuidePayload::default();
+    }
+
+    let mut payload = GuidePayload::default();
+    let mut current_title: Option<String> = None;
+    let mut current_lines: Vec<String> = Vec::new();
+
+    let flush_section = |payload: &mut GuidePayload,
+                         current_title: &mut Option<String>,
+                         current_lines: &mut Vec<String>| {
+        let Some(title) = current_title.take() else {
+            return;
+        };
+        if current_lines.is_empty() {
+            return;
+        }
+        payload.sections.push(crate::guide::GuidePayloadSection {
+            title,
+            kind: GuideSectionKind::Custom,
+            paragraphs: std::mem::take(current_lines),
+            entries: Vec::new(),
+        });
+    };
+
+    for block in parse_markdown_template(trimmed) {
+        match block {
+            GuideTemplateBlock::Heading(title) => {
+                flush_section(&mut payload, &mut current_title, &mut current_lines);
+                current_title = Some(title);
+            }
+            GuideTemplateBlock::Include(GuideTemplateInclude::Help)
+            | GuideTemplateBlock::Include(GuideTemplateInclude::Overview) => {
+                flush_section(&mut payload, &mut current_title, &mut current_lines);
+                append_template_include_payload(&mut payload, help);
+            }
+            GuideTemplateBlock::Paragraph(line) => {
+                let lines = line
+                    .lines()
+                    .map(str::trim_end)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                if current_title.is_some() {
+                    current_lines.extend(lines.into_iter().map(|line| format!("  {line}")));
+                } else {
+                    payload.preamble.extend(lines);
+                }
+            }
+        }
+    }
+
+    flush_section(&mut payload, &mut current_title, &mut current_lines);
+    payload
+}
+
+fn append_template_include_payload(payload: &mut GuidePayload, included: &GuidePayload) {
+    payload.preamble.extend(included.preamble.iter().cloned());
+
+    if !included.usage.is_empty() {
+        payload.sections.push(crate::guide::GuidePayloadSection {
+            title: "Usage".to_string(),
+            kind: GuideSectionKind::Usage,
+            paragraphs: included.usage.clone(),
+            entries: Vec::new(),
+        });
+    }
+    if !included.commands.is_empty() {
+        payload.sections.push(crate::guide::GuidePayloadSection {
+            title: "Commands".to_string(),
+            kind: GuideSectionKind::Commands,
+            paragraphs: Vec::new(),
+            entries: included.commands.clone(),
+        });
+    }
+    if !included.arguments.is_empty() {
+        payload.sections.push(crate::guide::GuidePayloadSection {
+            title: "Arguments".to_string(),
+            kind: GuideSectionKind::Arguments,
+            paragraphs: Vec::new(),
+            entries: included.arguments.clone(),
+        });
+    }
+    if !included.options.is_empty() {
+        payload.sections.push(crate::guide::GuidePayloadSection {
+            title: "Options".to_string(),
+            kind: GuideSectionKind::Options,
+            paragraphs: Vec::new(),
+            entries: included.options.clone(),
+        });
+    }
+    if !included.common_invocation_options.is_empty() {
+        payload.sections.push(crate::guide::GuidePayloadSection {
+            title: "Common Invocation Options".to_string(),
+            kind: GuideSectionKind::CommonInvocationOptions,
+            paragraphs: Vec::new(),
+            entries: included.common_invocation_options.clone(),
+        });
+    }
+    if !included.notes.is_empty() {
+        payload.sections.push(crate::guide::GuidePayloadSection {
+            title: "Notes".to_string(),
+            kind: GuideSectionKind::Notes,
+            paragraphs: included.notes.clone(),
+            entries: Vec::new(),
+        });
+    }
+
+    payload.sections.extend(included.sections.iter().cloned());
+    payload.epilogue.extend(included.epilogue.iter().cloned());
+}
+
+fn expand_intro_template<'a>(
+    view: ReplViewContext<'_>,
+    intro_commands: &[String],
+    template: &'a str,
+) -> Cow<'a, str> {
+    let mut out = String::new();
+    let mut cursor = 0;
+
+    while let Some(open_rel) = template[cursor..].find("{{") {
+        let open = cursor + open_rel;
+        out.push_str(&template[cursor..open]);
+        let tail = &template[open + 2..];
+        let Some(close_rel) = tail.find("}}") else {
+            out.push_str(&template[open..]);
+            return Cow::Owned(out);
+        };
+        let close = open + 2 + close_rel;
+        let key = template[open + 2..close].trim();
+        if key.is_empty() {
+            out.push_str("{{}}");
+            cursor = close + 2;
+            continue;
+        }
+        out.push_str(&resolve_intro_placeholder(view, intro_commands, key));
+        cursor = close + 2;
+    }
+
+    if cursor == 0 {
+        Cow::Borrowed(template)
+    } else {
+        out.push_str(&template[cursor..]);
+        Cow::Owned(out)
+    }
+}
+
+fn resolve_intro_placeholder(
+    view: ReplViewContext<'_>,
+    intro_commands: &[String],
+    key: &str,
+) -> String {
+    match key {
+        "help" => return "{{ help }}".to_string(),
+        "overview" => return "{{ overview }}".to_string(),
+        "user" => {
+            return view
+                .config
+                .get_string("user.name")
+                .unwrap_or("anonymous")
+                .to_string();
+        }
+        "user.name" => {
+            return view
+                .config
+                .get_string("user.name")
+                .unwrap_or("anonymous")
+                .to_string();
+        }
+        "display_name" => {
+            return view
+                .config
+                .get_string("user.display_name")
+                .or_else(|| view.config.get_string("user.full_name"))
+                .or_else(|| view.config.get_string("user.name"))
+                .unwrap_or("anonymous")
+                .to_string();
+        }
+        "user.display_name" | "user.full_name" => {
+            return view
+                .config
+                .get_string("user.display_name")
+                .or_else(|| view.config.get_string("user.full_name"))
+                .or_else(|| view.config.get_string("user.name"))
+                .unwrap_or("anonymous")
+                .to_string();
+        }
+        "profile" => return view.config.active_profile().to_string(),
+        "profile.active" => return view.config.active_profile().to_string(),
+        "domain" => {
+            return view
+                .config
+                .get_string("domain")
+                .unwrap_or("local")
+                .to_string();
+        }
+        "theme" | "theme.name" => return view.ui.render_settings.theme_name.clone(),
+        "theme_display" => return theme_display_name(&view.ui.render_settings.theme_name),
+        "version" => return env!("CARGO_PKG_VERSION").to_string(),
+        "intro.commands" => {
+            return intro_commands
+                .iter()
+                .map(|command| format!("`{command}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+        "help_hint" => {
+            return if view.auth.is_builtin_visible(CMD_HELP) {
+                "See `help` for more.".to_string()
+            } else {
+                "Use completion to explore commands.".to_string()
+            };
+        }
+        _ => {}
+    }
+
+    if is_sensitive_key(key) {
+        return format!("{{{{{key}}}}}");
+    }
+
+    match view.config.get(key).map(ConfigValue::reveal) {
+        Some(ConfigValue::String(value)) => value.clone(),
+        Some(ConfigValue::Bool(value)) => value.to_string(),
+        Some(ConfigValue::Integer(value)) => value.to_string(),
+        Some(ConfigValue::Float(value)) => value.to_string(),
+        Some(ConfigValue::List(values)) => values
+            .iter()
+            .filter_map(|value| match value {
+                ConfigValue::String(value) => Some(value.clone()),
+                ConfigValue::Bool(value) => Some(value.to_string()),
+                ConfigValue::Integer(value) => Some(value.to_string()),
+                ConfigValue::Float(value) => Some(value.to_string()),
+                ConfigValue::List(_) | ConfigValue::Secret(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        Some(ConfigValue::Secret(_)) | None => format!("{{{{{key}}}}}"),
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn render_repl_command_overview(
     view: ReplViewContext<'_>,
     surface: &ReplSurface,
 ) -> String {
-    let resolved = view.ui.render_settings.resolve_render_settings();
-    let theme = &resolved.theme;
-    let mut out = String::new();
-
-    let usage_label = if resolved.color {
-        apply_style_with_theme_overrides(
-            "Usage:",
-            StyleToken::MessageInfo,
-            true,
-            theme,
-            &resolved.style_overrides,
-        )
-    } else {
-        "Usage:".to_string()
-    };
-    out.push(' ');
-    out.push_str(&usage_label);
-    out.push_str("  [INVOCATION_OPTIONS] COMMAND [ARGS]...\n\n");
-
-    let body = surface
-        .overview_entries
-        .iter()
-        .map(|entry| {
-            let name = format!("{:<12}", entry.name);
-            format!(
-                "  {}{}",
-                style_command_name(&resolved, theme, &name),
-                entry.summary
-            )
-        })
-        .collect::<Vec<_>>();
-    out.push_str(&render_chrome_section(&resolved, "Commands", &body));
-    out.push('\n');
-    out
-}
-
-fn render_chrome_section(
-    resolved: &crate::ui::ResolvedRenderSettings,
-    title: &str,
-    lines: &[String],
-) -> String {
-    let theme = &resolved.theme;
-    let body = lines
-        .iter()
-        .map(|line| render_inline(line, resolved.color, theme, &resolved.style_overrides))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    render_section_block_with_overrides(
-        title,
-        &body,
-        resolved.chrome_frame,
-        resolved.unicode,
-        resolved.width,
-        SectionRenderContext {
-            color: resolved.color,
-            theme,
-            style_overrides: &resolved.style_overrides,
-        },
-        SectionStyleTokens {
-            border: StyleToken::PanelBorder,
-            title: StyleToken::PanelTitle,
+    render_guide_doc(
+        &build_repl_command_overview_guide(surface),
+        &view.ui.render_settings,
+        crate::ui::format::help::GuideRenderOptions {
+            title_prefix: None,
+            layout: crate::ui::presentation::help_layout(view.config),
+            frame_style: view.ui.render_settings.chrome_frame,
+            panel_kind: None,
         },
     )
 }
 
-fn style_command_name(
-    resolved: &crate::ui::ResolvedRenderSettings,
-    theme: &crate::ui::theme::ThemeDefinition,
-    name: &str,
-) -> String {
-    if resolved.color {
-        apply_style_with_theme_overrides(
-            name,
-            StyleToken::Key,
-            true,
-            theme,
-            &resolved.style_overrides,
-        )
-    } else {
-        name.to_string()
+pub(crate) fn build_repl_command_overview_guide(surface: &ReplSurface) -> GuideDoc {
+    let mut commands = GuideSection::new("Commands", GuideSectionKind::Commands);
+    for entry in &surface.overview_entries {
+        commands = commands.entry(format!("{:<12}", entry.name), entry.summary.clone());
     }
+
+    GuideDoc {
+        preamble: Vec::new(),
+        sections: vec![
+            GuideSection::new("Usage", GuideSectionKind::Usage)
+                .paragraph("  [INVOCATION_OPTIONS] COMMAND [ARGS]..."),
+            commands,
+        ],
+        epilogue: Vec::new(),
+    }
+}
+
+pub(crate) fn build_repl_command_overview_payload(surface: &ReplSurface) -> GuidePayload {
+    build_repl_command_overview_guide(surface).to_payload()
 }
 
 pub(crate) fn theme_display_name(slug: &str) -> String {

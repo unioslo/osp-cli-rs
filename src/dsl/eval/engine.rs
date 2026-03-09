@@ -1,5 +1,5 @@
 use crate::core::{
-    output_model::{OutputItems, OutputMeta, OutputResult},
+    output_model::{OutputItems, OutputMeta, OutputResult, RenderRecommendation},
     row::Row,
 };
 use anyhow::{Result, anyhow};
@@ -27,7 +27,12 @@ pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult>
 /// Unlike `apply_pipeline`, this preserves the incoming `OutputMeta.wants_copy`
 /// bit when continuing an existing output flow.
 pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<OutputResult> {
-    execute_pipeline_items(output.items, output.meta.wants_copy, stages)
+    execute_pipeline_items(
+        output.items,
+        output.meta.wants_copy,
+        output.meta.render_recommendation,
+        stages,
+    )
 }
 
 /// Execute a pipeline starting from plain rows.
@@ -54,10 +59,17 @@ where
 fn execute_pipeline_items(
     items: OutputItems,
     initial_wants_copy: bool,
+    initial_render_recommendation: Option<RenderRecommendation>,
     stages: &[String],
 ) -> Result<OutputResult> {
     let parsed = parse_stage_list(stages)?;
-    PipelineExecutor::new(items, initial_wants_copy, parsed).run()
+    PipelineExecutor::new(
+        items,
+        initial_wants_copy,
+        initial_render_recommendation,
+        parsed,
+    )
+    .run()
 }
 
 /// Small stateful executor for one parsed pipeline.
@@ -74,11 +86,17 @@ enum PipelineItems {
 struct PipelineExecutor {
     items: PipelineItems,
     wants_copy: bool,
+    render_recommendation: Option<RenderRecommendation>,
     parsed: ParsedPipeline,
 }
 
 impl PipelineExecutor {
-    fn new(items: OutputItems, wants_copy: bool, parsed: ParsedPipeline) -> Self {
+    fn new(
+        items: OutputItems,
+        wants_copy: bool,
+        render_recommendation: Option<RenderRecommendation>,
+        parsed: ParsedPipeline,
+    ) -> Self {
         Self {
             items: match items {
                 OutputItems::Rows(rows) => {
@@ -89,6 +107,7 @@ impl PipelineExecutor {
                 }
             },
             wants_copy,
+            render_recommendation,
             parsed,
         }
     }
@@ -100,6 +119,7 @@ impl PipelineExecutor {
         Self {
             items: PipelineItems::RowStream(Box::new(rows.map(Ok))),
             wants_copy,
+            render_recommendation: None,
             parsed,
         }
     }
@@ -120,6 +140,10 @@ impl PipelineExecutor {
     }
 
     fn apply_stage(&mut self, stage: &ParsedStage) -> Result<()> {
+        if !stage_preserves_render_recommendation(stage) {
+            self.render_recommendation = None;
+        }
+
         if stage_can_stream_rows(stage)
             && let PipelineItems::RowStream(_) = self.items
         {
@@ -378,6 +402,7 @@ impl PipelineExecutor {
             column_align: Vec::new(),
             wants_copy: self.wants_copy,
             grouped: matches!(items, OutputItems::Groups(_)),
+            render_recommendation: self.render_recommendation,
         }
     }
 }
@@ -409,9 +434,18 @@ fn merged_group_header(group: &crate::core::output_model::Group) -> Row {
     row
 }
 
+fn stage_preserves_render_recommendation(stage: &ParsedStage) -> bool {
+    match stage.kind {
+        ParsedStageKind::Quick => true,
+        ParsedStageKind::UnknownExplicit => false,
+        ParsedStageKind::Explicit => matches!(stage.verb.as_str(), "F" | "S" | "L" | "Y" | "?"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::core::output_model::{OutputItems, OutputResult};
+    use crate::core::output::OutputFormat;
+    use crate::core::output_model::{OutputItems, OutputResult, RenderRecommendation};
     use serde_json::json;
 
     use super::{
@@ -957,5 +991,122 @@ mod tests {
         let err = apply_pipeline(rows, &["R nope".to_string()])
             .expect_err("unknown explicit stage should fail");
         assert!(err.to_string().contains("unknown DSL verb"));
+    }
+
+    #[test]
+    fn render_recommendation_survives_narrowing_stages_unit() {
+        let rows = vec![
+            json!({"uid": "alice", "dept": "ops"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "bob", "dept": "eng"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+        let mut output = OutputResult::from_rows(rows);
+        output.meta.render_recommendation = Some(RenderRecommendation::Guide);
+
+        let quick = apply_output_pipeline(output.clone(), &["alice".to_string()])
+            .expect("quick should work");
+        assert_eq!(
+            quick.meta.render_recommendation,
+            Some(RenderRecommendation::Guide)
+        );
+
+        let filtered = apply_output_pipeline(output.clone(), &["F dept=ops".to_string()])
+            .expect("filter should work");
+        assert_eq!(
+            filtered.meta.render_recommendation,
+            Some(RenderRecommendation::Guide)
+        );
+
+        let sorted = apply_output_pipeline(output, &["S uid".to_string()]).expect("sort works");
+        assert_eq!(
+            sorted.meta.render_recommendation,
+            Some(RenderRecommendation::Guide)
+        );
+    }
+
+    #[test]
+    fn render_recommendation_survives_limit_and_copy_unit() {
+        let rows = vec![
+            json!({"uid": "alice"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "bob"}).as_object().cloned().expect("object"),
+        ];
+        let mut output = OutputResult::from_rows(rows);
+        output.meta.render_recommendation = Some(RenderRecommendation::Format(OutputFormat::Value));
+
+        let limited =
+            apply_output_pipeline(output.clone(), &["L 1".to_string()]).expect("limit should work");
+        assert_eq!(
+            limited.meta.render_recommendation,
+            Some(RenderRecommendation::Format(OutputFormat::Value))
+        );
+
+        let copied = apply_output_pipeline(output, &["Y".to_string()]).expect("copy should work");
+        assert_eq!(
+            copied.meta.render_recommendation,
+            Some(RenderRecommendation::Format(OutputFormat::Value))
+        );
+    }
+
+    #[test]
+    fn render_recommendation_clears_on_structural_row_reshapes_unit() {
+        let rows = vec![
+            json!({"uid": "alice", "roles": ["eng", "ops"]})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "bob", "roles": ["ops"]})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+        let mut output = OutputResult::from_rows(rows);
+        output.meta.render_recommendation = Some(RenderRecommendation::Guide);
+
+        let projected = apply_output_pipeline(output.clone(), &["P uid".to_string()])
+            .expect("project should work");
+        assert_eq!(projected.meta.render_recommendation, None);
+
+        let unrolled = apply_output_pipeline(output.clone(), &["U roles".to_string()])
+            .expect("unroll should work");
+        assert_eq!(unrolled.meta.render_recommendation, None);
+
+        let values =
+            apply_output_pipeline(output, &["VALUE uid".to_string()]).expect("values should work");
+        assert_eq!(values.meta.render_recommendation, None);
+    }
+
+    #[test]
+    fn render_recommendation_clears_on_grouping_and_aggregate_stages_unit() {
+        let rows = vec![
+            json!({"uid": "alice", "dept": "ops"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+            json!({"uid": "bob", "dept": "ops"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+        let mut output = OutputResult::from_rows(rows);
+        output.meta.render_recommendation = Some(RenderRecommendation::Guide);
+
+        let grouped = apply_output_pipeline(output.clone(), &["G dept".to_string()])
+            .expect("group should work");
+        assert_eq!(grouped.meta.render_recommendation, None);
+
+        let aggregated = apply_output_pipeline(output.clone(), &["A count total".to_string()])
+            .expect("aggregate should work");
+        assert_eq!(aggregated.meta.render_recommendation, None);
+
+        let counted = apply_output_pipeline(output, &["C".to_string()]).expect("count works");
+        assert_eq!(counted.meta.render_recommendation, None);
     }
 }

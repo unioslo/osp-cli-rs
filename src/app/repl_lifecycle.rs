@@ -18,6 +18,7 @@ struct ReplSessionSnapshot {
     scope: crate::app::ReplScopeStack,
     history_shell: crate::repl::HistoryShellContext,
     prompt_timing: crate::app::DebugTimingState,
+    startup_prompt_timing_pending: bool,
     result_cache: std::collections::HashMap<String, Vec<crate::core::row::Row>>,
     cache_order: std::collections::VecDeque<String>,
     last_rows: Vec<crate::core::row::Row>,
@@ -34,6 +35,7 @@ impl ReplSessionSnapshot {
             scope: session.scope.clone(),
             history_shell: session.history_shell.clone(),
             prompt_timing: session.prompt_timing.clone(),
+            startup_prompt_timing_pending: session.startup_prompt_timing_pending,
             result_cache: session.result_cache.clone(),
             cache_order: session.cache_order.clone(),
             last_rows: session.last_rows.clone(),
@@ -52,6 +54,7 @@ impl ReplSessionSnapshot {
         next.config_overrides = self.session_overrides;
         next.scope = self.scope;
         next.prompt_timing = self.prompt_timing;
+        next.startup_prompt_timing_pending = self.startup_prompt_timing_pending;
         next.last_rows = self.last_rows;
         next.last_failure = self.last_failure;
         next.result_cache = self.result_cache;
@@ -106,7 +109,10 @@ pub(crate) fn rebuild_repl_parts(
     let plugin_manager = PluginManager::new(launch.plugin_dirs.clone())
         .with_roots(launch.config_root.clone(), launch.cache_root.clone())
         .with_process_timeout(plugin_process_timeout(&config))
-        .with_path_discovery(plugin_path_discovery_enabled(&config));
+        .with_path_discovery(plugin_path_discovery_enabled(&config))
+        .with_command_preferences(
+            crate::plugin::state::PluginCommandPreferences::from_resolved(&config),
+        );
     let mut next = build_app_state(crate::app::AppStateInit {
         context,
         config,

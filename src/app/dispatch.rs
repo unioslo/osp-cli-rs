@@ -4,8 +4,8 @@ use miette::{Result, WrapErr, miette};
 
 use crate::app::{AuthState, TerminalKind};
 use crate::cli::{
-    Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, PluginsArgs, ReplArgs, ThemeArgs,
-    parse_inline_command_tokens,
+    Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, IntroArgs, PluginsArgs, ReplArgs,
+    ThemeArgs, parse_inline_command_tokens,
 };
 use crate::core::command_policy::{AccessReason, CommandAccess};
 
@@ -20,13 +20,14 @@ pub(crate) enum RunAction {
     Theme(ThemeArgs),
     Config(ConfigArgs),
     History(HistoryArgs),
+    Intro(IntroArgs),
     External(Vec<String>),
 }
 
 impl RunAction {
     pub(crate) fn terminal_kind(&self) -> TerminalKind {
         match self {
-            RunAction::Repl | RunAction::ReplCommand(_) => TerminalKind::Repl,
+            RunAction::Repl | RunAction::ReplCommand(_) | RunAction::Intro(_) => TerminalKind::Repl,
             RunAction::Plugins(_)
             | RunAction::Doctor(_)
             | RunAction::Theme(_)
@@ -46,6 +47,7 @@ fn run_action_name(action: &RunAction) -> &'static str {
         RunAction::Theme(_) => "theme",
         RunAction::Config(_) => "config",
         RunAction::History(_) => "history",
+        RunAction::Intro(_) => "intro",
         RunAction::External(_) => "external",
     }
 }
@@ -98,6 +100,9 @@ pub(crate) fn build_dispatch_plan(
             RunAction::History(args),
             explicit_profile,
         )),
+        Some(Commands::Intro(args)) => {
+            Ok(DispatchPlan::new(RunAction::Intro(args), explicit_profile))
+        }
         Some(Commands::Repl(args)) => Ok(DispatchPlan::new(
             RunAction::ReplCommand(args),
             explicit_profile,
@@ -132,7 +137,7 @@ pub(crate) fn ensure_dispatch_visibility(auth: &AuthState, action: &RunAction) -
         RunAction::Theme(_) => ensure_builtin_visible_for(auth, CMD_THEME),
         RunAction::Config(_) => ensure_builtin_visible_for(auth, CMD_CONFIG),
         RunAction::History(_) => ensure_builtin_visible_for(auth, CMD_HISTORY),
-        RunAction::ReplCommand(_) | RunAction::Repl => Ok(()),
+        RunAction::ReplCommand(_) | RunAction::Repl | RunAction::Intro(_) => Ok(()),
         RunAction::External(tokens) => {
             if let Some(command) = tokens.first() {
                 ensure_plugin_visible_for(auth, command)?;
@@ -220,6 +225,7 @@ fn inline_run_action(parsed: Option<Commands>) -> RunAction {
         Some(Commands::Theme(args)) => RunAction::Theme(args),
         Some(Commands::Config(args)) => RunAction::Config(args),
         Some(Commands::History(args)) => RunAction::History(args),
+        Some(Commands::Intro(args)) => RunAction::Intro(args),
         Some(Commands::Repl(args)) => RunAction::ReplCommand(args),
         Some(Commands::External(external)) => RunAction::External(external),
         None => RunAction::Repl,

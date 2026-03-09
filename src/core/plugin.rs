@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::command_def::{
+    ArgDef, CommandDef, CommandPolicyDef, FlagDef, ValueChoice, ValueKind,
+};
 use crate::core::command_policy::{CommandPath, CommandPolicy, VisibilityMode};
 
 pub const PLUGIN_PROTOCOL_V1: u32 = 1;
@@ -226,7 +229,8 @@ impl DescribeV1 {
             min_osp_version,
             commands: commands
                 .into_iter()
-                .map(DescribeCommandV1::from_clap)
+                .map(CommandDef::from_clap)
+                .map(|command| DescribeCommandV1::from(&command))
                 .collect(),
         }
     }
@@ -293,7 +297,154 @@ impl ResponseV1 {
 #[cfg(feature = "clap")]
 impl DescribeCommandV1 {
     pub fn from_clap(command: clap::Command) -> Self {
-        describe_command_from_clap(command)
+        Self::from(&CommandDef::from_clap(command))
+    }
+}
+
+impl From<&CommandDef> for DescribeCommandV1 {
+    fn from(command: &CommandDef) -> Self {
+        Self {
+            name: command.name.clone(),
+            about: command.about.clone().unwrap_or_default(),
+            auth: (!command.policy.is_empty()).then(|| DescribeCommandAuthV1 {
+                visibility: match command.policy.visibility {
+                    VisibilityMode::Public => None,
+                    VisibilityMode::Authenticated => Some(DescribeVisibilityModeV1::Authenticated),
+                    VisibilityMode::CapabilityGated => {
+                        Some(DescribeVisibilityModeV1::CapabilityGated)
+                    }
+                    VisibilityMode::Hidden => Some(DescribeVisibilityModeV1::Hidden),
+                },
+                required_capabilities: command.policy.required_capabilities.clone(),
+                feature_flags: command.policy.feature_flags.clone(),
+            }),
+            args: command.args.iter().map(DescribeArgV1::from).collect(),
+            flags: command
+                .flags
+                .iter()
+                .flat_map(|flag| describe_flag_entries(flag))
+                .collect(),
+            subcommands: command
+                .subcommands
+                .iter()
+                .map(DescribeCommandV1::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<&DescribeCommandV1> for CommandDef {
+    fn from(command: &DescribeCommandV1) -> Self {
+        Self {
+            name: command.name.clone(),
+            about: (!command.about.trim().is_empty()).then(|| command.about.clone()),
+            long_about: None,
+            usage: None,
+            before_help: None,
+            after_help: None,
+            aliases: Vec::new(),
+            hidden: matches!(
+                command.auth.as_ref().and_then(|auth| auth.visibility),
+                Some(DescribeVisibilityModeV1::Hidden)
+            ),
+            sort_key: None,
+            policy: command
+                .auth
+                .as_ref()
+                .map(command_policy_from_describe)
+                .unwrap_or_default(),
+            args: command.args.iter().map(ArgDef::from).collect(),
+            flags: collect_describe_flags(&command.flags),
+            subcommands: command.subcommands.iter().map(CommandDef::from).collect(),
+        }
+    }
+}
+
+impl From<&ArgDef> for DescribeArgV1 {
+    fn from(arg: &ArgDef) -> Self {
+        Self {
+            name: arg.value_name.clone().or_else(|| Some(arg.id.clone())),
+            about: arg.help.clone(),
+            multi: arg.multi,
+            value_type: describe_value_type(arg.value_kind),
+            suggestions: arg.choices.iter().map(DescribeSuggestionV1::from).collect(),
+        }
+    }
+}
+
+impl From<&FlagDef> for DescribeFlagV1 {
+    fn from(flag: &FlagDef) -> Self {
+        Self {
+            about: flag.help.clone(),
+            flag_only: !flag.takes_value,
+            multi: flag.multi,
+            value_type: describe_value_type(flag.value_kind),
+            suggestions: flag
+                .choices
+                .iter()
+                .map(DescribeSuggestionV1::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<&DescribeArgV1> for ArgDef {
+    fn from(arg: &DescribeArgV1) -> Self {
+        let mut def = ArgDef::new(arg.name.clone().unwrap_or_else(|| "value".to_string()));
+        if let Some(value_name) = &arg.name {
+            def = def.value_name(value_name.clone());
+        }
+        if let Some(help) = &arg.about {
+            def = def.help(help.clone());
+        }
+        if arg.multi {
+            def = def.multi();
+        }
+        if let Some(value_kind) = command_value_kind(arg.value_type) {
+            def = def.value_kind(value_kind);
+        }
+        def.choices(arg.suggestions.iter().map(ValueChoice::from))
+    }
+}
+
+impl From<&DescribeFlagV1> for FlagDef {
+    fn from(flag: &DescribeFlagV1) -> Self {
+        let mut def = FlagDef::new("flag");
+        if let Some(help) = &flag.about {
+            def = def.help(help.clone());
+        }
+        if !flag.flag_only {
+            def = def.takes_value("value");
+        }
+        if flag.multi {
+            def = def.multi();
+        }
+        if let Some(value_kind) = command_value_kind(flag.value_type) {
+            def = def.value_kind(value_kind);
+        }
+        def.choices(flag.suggestions.iter().map(ValueChoice::from))
+    }
+}
+
+impl From<&ValueChoice> for DescribeSuggestionV1 {
+    fn from(choice: &ValueChoice) -> Self {
+        Self {
+            value: choice.value.clone(),
+            meta: choice.help.clone(),
+            display: choice.display.clone(),
+            sort: choice.sort_key.clone(),
+        }
+    }
+}
+
+impl From<&DescribeSuggestionV1> for ValueChoice {
+    fn from(entry: &DescribeSuggestionV1) -> Self {
+        Self {
+            value: entry.value.clone(),
+            help: entry.meta.clone(),
+            display: entry.display.clone(),
+            sort_key: entry.sort.clone(),
+        }
     }
 }
 
@@ -351,118 +502,103 @@ fn validate_command_auth(auth: &DescribeCommandAuthV1) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(feature = "clap")]
-fn describe_command_from_clap(command: clap::Command) -> DescribeCommandV1 {
-    let positionals = command
-        .get_positionals()
-        .filter(|arg| !arg.is_hide_set())
-        .map(describe_arg_from_clap)
-        .collect::<Vec<_>>();
-
-    let mut flags = BTreeMap::new();
-    for arg in command.get_arguments().filter(|arg| !arg.is_positional()) {
-        if arg.is_hide_set() {
-            continue;
-        }
-        let flag = describe_flag_from_clap(arg);
-        for name in visible_flag_names(arg) {
-            flags.insert(name, flag.clone());
-        }
+fn describe_flag_entries(flag: &FlagDef) -> Vec<(String, DescribeFlagV1)> {
+    let value = DescribeFlagV1::from(flag);
+    let mut names = Vec::new();
+    if let Some(long) = flag.long.as_deref() {
+        names.push(format!("--{long}"));
     }
-
-    DescribeCommandV1 {
-        name: command.get_name().to_string(),
-        about: styled_to_plain(command.get_about()),
-        auth: None,
-        args: positionals,
-        flags,
-        subcommands: command
-            .get_subcommands()
-            .filter(|subcommand| !subcommand.is_hide_set())
-            .map(|subcommand| describe_command_from_clap(subcommand.clone()))
-            .collect(),
+    if let Some(short) = flag.short {
+        names.push(format!("-{short}"));
     }
-}
-
-#[cfg(feature = "clap")]
-fn describe_arg_from_clap(arg: &clap::Arg) -> DescribeArgV1 {
-    DescribeArgV1 {
-        name: arg
-            .get_value_names()
-            .and_then(|names| names.first())
-            .map(ToString::to_string)
-            .or_else(|| Some(arg.get_id().as_str().to_string())),
-        about: Some(styled_to_plain(
-            arg.get_long_help().or_else(|| arg.get_help()),
-        ))
-        .filter(|text| !text.is_empty()),
-        multi: arg.get_num_args().is_some_and(range_is_multiple)
-            || matches!(arg.get_action(), clap::ArgAction::Append),
-        value_type: value_type_from_hint(arg.get_value_hint()),
-        suggestions: describe_suggestions_from_clap(arg),
-    }
-}
-
-#[cfg(feature = "clap")]
-fn describe_flag_from_clap(arg: &clap::Arg) -> DescribeFlagV1 {
-    DescribeFlagV1 {
-        about: Some(styled_to_plain(
-            arg.get_long_help().or_else(|| arg.get_help()),
-        ))
-        .filter(|text| !text.is_empty()),
-        flag_only: !arg.get_action().takes_values(),
-        multi: arg.get_num_args().is_some_and(range_is_multiple)
-            || matches!(arg.get_action(), clap::ArgAction::Append),
-        value_type: value_type_from_hint(arg.get_value_hint()),
-        suggestions: describe_suggestions_from_clap(arg),
-    }
-}
-
-#[cfg(feature = "clap")]
-fn describe_suggestions_from_clap(arg: &clap::Arg) -> Vec<DescribeSuggestionV1> {
-    arg.get_possible_values()
+    names.extend(flag.aliases.iter().cloned());
+    names
         .into_iter()
-        .filter(|value| !value.is_hide_set())
-        .map(|value| DescribeSuggestionV1 {
-            value: value.get_name().to_string(),
-            meta: value.get_help().map(ToString::to_string),
-            display: None,
-            sort: None,
+        .map(|name| (name, value.clone()))
+        .collect()
+}
+
+fn group_describe_flag((name, flag): (&String, &DescribeFlagV1)) -> Option<FlagDef> {
+    if !name.starts_with('-') {
+        return None;
+    }
+
+    let mut def = FlagDef::from(flag);
+    if let Some(long) = name.strip_prefix("--") {
+        def.long = Some(long.to_string());
+        def.id = long.to_string();
+    } else if let Some(short) = name.strip_prefix('-') {
+        def.short = short.chars().next();
+        def.id = short.to_string();
+    }
+    Some(def)
+}
+
+fn collect_describe_flags(flags: &BTreeMap<String, DescribeFlagV1>) -> Vec<FlagDef> {
+    let mut grouped: BTreeMap<String, Vec<(&String, &DescribeFlagV1)>> = BTreeMap::new();
+    for entry in flags.iter() {
+        let signature = serde_json::to_string(entry.1).unwrap_or_default();
+        grouped.entry(signature).or_default().push(entry);
+    }
+
+    grouped
+        .into_values()
+        .filter_map(|group| {
+            let mut iter = group.into_iter();
+            let first = iter.next()?;
+            let mut def = group_describe_flag(first)?;
+            for (name, _) in iter {
+                if let Some(long) = name.strip_prefix("--") {
+                    if def.long.is_none() {
+                        def.long = Some(long.to_string());
+                        if def.id == "flag" {
+                            def.id = long.to_string();
+                        }
+                    } else if Some(long) != def.long.as_deref() {
+                        def.aliases.push(format!("--{long}"));
+                    }
+                } else if let Some(short) = name.strip_prefix('-') {
+                    let short_char = short.chars().next();
+                    if def.short.is_none() {
+                        def.short = short_char;
+                        if def.id == "flag" {
+                            def.id = short.to_string();
+                        }
+                    } else if short_char != def.short {
+                        def.aliases.push(format!("-{short}"));
+                    }
+                }
+            }
+            Some(def)
         })
         .collect()
 }
 
-#[cfg(feature = "clap")]
-fn visible_flag_names(arg: &clap::Arg) -> Vec<String> {
-    let mut names = Vec::new();
-    if let Some(longs) = arg.get_long_and_visible_aliases() {
-        names.extend(longs.into_iter().map(|name| format!("--{name}")));
-    }
-    if let Some(shorts) = arg.get_short_and_visible_aliases() {
-        names.extend(shorts.into_iter().map(|name| format!("-{name}")));
-    }
-    names
-}
-
-#[cfg(feature = "clap")]
-fn value_type_from_hint(hint: clap::ValueHint) -> Option<DescribeValueTypeV1> {
-    match hint {
-        clap::ValueHint::AnyPath
-        | clap::ValueHint::FilePath
-        | clap::ValueHint::DirPath
-        | clap::ValueHint::ExecutablePath => Some(DescribeValueTypeV1::Path),
-        _ => None,
+fn command_policy_from_describe(auth: &DescribeCommandAuthV1) -> CommandPolicyDef {
+    CommandPolicyDef {
+        visibility: match auth.visibility {
+            Some(DescribeVisibilityModeV1::Authenticated) => VisibilityMode::Authenticated,
+            Some(DescribeVisibilityModeV1::CapabilityGated) => VisibilityMode::CapabilityGated,
+            Some(DescribeVisibilityModeV1::Hidden) => VisibilityMode::Hidden,
+            Some(DescribeVisibilityModeV1::Public) | None => VisibilityMode::Public,
+        },
+        required_capabilities: auth.required_capabilities.clone(),
+        feature_flags: auth.feature_flags.clone(),
     }
 }
 
-#[cfg(feature = "clap")]
-fn styled_to_plain(value: Option<&clap::builder::StyledStr>) -> String {
-    value.map(ToString::to_string).unwrap_or_default()
+fn describe_value_type(value_kind: Option<ValueKind>) -> Option<DescribeValueTypeV1> {
+    match value_kind {
+        Some(ValueKind::Path) => Some(DescribeValueTypeV1::Path),
+        Some(ValueKind::Enum | ValueKind::FreeText) | None => None,
+    }
 }
 
-#[cfg(feature = "clap")]
-fn range_is_multiple(range: clap::builder::ValueRange) -> bool {
-    range.min_values() > 1 || range.max_values() > 1
+fn command_value_kind(value_type: Option<DescribeValueTypeV1>) -> Option<ValueKind> {
+    match value_type {
+        Some(DescribeValueTypeV1::Path) => Some(ValueKind::Path),
+        None => None,
+    }
 }
 
 #[cfg(test)]

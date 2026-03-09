@@ -82,33 +82,36 @@ When a bundled plugin directory is used, `osp` validates each plugin against
 
 On mismatch, plugin is marked unhealthy and excluded from command dispatch.
 
-## Local Enable/Disable State
+## Scoped Command State
 
-Current scaffold stores local toggles in `~/.config/osp/plugins.json`.
-This can migrate to TOML later if needed.
+Plugin routing is regular config now, not a sidecar JSON file. State is scoped
+by the same profile and terminal rules as the rest of the config.
 
 Example:
 
-```json
-{
-  "enabled": ["uio-ldap"],
-  "disabled": ["uio-mreg"],
-  "preferred_providers": {
-    "ldap": "uio-ldap"
-  }
-}
+```toml
+[profile.default.plugins.ldap]
+state = "enabled"
+provider = "uio-ldap"
+
+[terminal.repl.profile.default.plugins.ldap]
+provider = "uio-ldap-beta"
 ```
 
 Backbone behavior:
-- Enabled list takes priority when non-empty.
-- Disabled list always excludes matched plugins.
+- `plugins.<command>.state = "enabled" | "disabled"` controls whether the
+  command is available in the active scope.
+- `plugins.<command>.provider = "<plugin-id>"` selects the preferred provider
+  when multiple healthy plugins expose the same command.
+- More specific scopes override less specific scopes.
 
 ## Operational Commands
 
 - `osp plugins list`
 - `osp plugins commands`
-- `osp plugins enable <plugin-id>`
-- `osp plugins disable <plugin-id>`
+- `osp plugins enable <command>`
+- `osp plugins disable <command>`
+- `osp plugins clear-state <command>`
 - `osp plugins select-provider <command> <plugin-id>`
 - `osp plugins clear-provider <command>`
 - `osp plugins doctor`

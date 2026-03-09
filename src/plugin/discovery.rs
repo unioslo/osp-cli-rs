@@ -59,6 +59,12 @@ enum DescribeEligibility {
     Skip,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoveryMode {
+    Passive,
+    Dispatch,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(super) struct DescribeCacheFile {
     #[serde(default)]
@@ -81,32 +87,41 @@ impl PluginManager {
             .write()
             .unwrap_or_else(|err| err.into_inner());
         *guard = None;
+        let mut dispatch_guard = self
+            .dispatch_discovered_cache
+            .write()
+            .unwrap_or_else(|err| err.into_inner());
+        *dispatch_guard = None;
     }
 
     pub(super) fn discover(&self) -> Arc<[DiscoveredPlugin]> {
-        if let Some(cached) = self
-            .discovered_cache
-            .read()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone()
-        {
+        self.discover_with_mode(DiscoveryMode::Passive)
+    }
+
+    pub(super) fn discover_for_dispatch(&self) -> Arc<[DiscoveredPlugin]> {
+        self.discover_with_mode(DiscoveryMode::Dispatch)
+    }
+
+    fn discover_with_mode(&self, mode: DiscoveryMode) -> Arc<[DiscoveredPlugin]> {
+        let cache = match mode {
+            DiscoveryMode::Passive => &self.discovered_cache,
+            DiscoveryMode::Dispatch => &self.dispatch_discovered_cache,
+        };
+        if let Some(cached) = cache.read().unwrap_or_else(|err| err.into_inner()).clone() {
             return cached;
         }
 
-        let mut guard = self
-            .discovered_cache
-            .write()
-            .unwrap_or_else(|err| err.into_inner());
+        let mut guard = cache.write().unwrap_or_else(|err| err.into_inner());
         if let Some(cached) = guard.clone() {
             return cached;
         }
-        let discovered = self.discover_uncached();
+        let discovered = self.discover_uncached(mode);
         let shared = Arc::<[DiscoveredPlugin]>::from(discovered);
         *guard = Some(shared.clone());
         shared
     }
 
-    fn discover_uncached(&self) -> Vec<DiscoveredPlugin> {
+    fn discover_uncached(&self, mode: DiscoveryMode) -> Vec<DiscoveredPlugin> {
         let roots = self.search_roots();
         let mut plugins: Vec<DiscoveredPlugin> = Vec::new();
         let mut seen_paths: HashSet<PathBuf> = HashSet::new();
@@ -122,6 +137,7 @@ impl PluginManager {
                 &mut seen_describe_paths,
                 &mut cache_dirty,
                 self.process_timeout,
+                mode,
             ));
         }
 
@@ -338,13 +354,14 @@ fn discover_plugins_in_root(
     seen_describe_paths: &mut HashSet<String>,
     cache_dirty: &mut bool,
     process_timeout: Duration,
+    mode: DiscoveryMode,
 ) -> Vec<DiscoveredPlugin> {
     let manifest_state = load_manifest_state(root);
     let plugins = discover_root_executables(&root.path)
         .into_iter()
         .filter(|path| seen_paths.insert(path.clone()))
         .map(|executable| {
-            assemble_discovered_plugin(
+            assemble_discovered_plugin_with_mode(
                 root.source,
                 executable,
                 &manifest_state,
@@ -352,6 +369,7 @@ fn discover_plugins_in_root(
                 seen_describe_paths,
                 cache_dirty,
                 process_timeout,
+                mode,
             )
         })
         .collect::<Vec<_>>();
@@ -400,6 +418,7 @@ fn mark_duplicate_plugin_ids(plugins: &mut [DiscoveredPlugin]) {
     }
 }
 
+#[cfg(test)]
 pub(super) fn assemble_discovered_plugin(
     source: PluginSource,
     executable: PathBuf,
@@ -408,6 +427,28 @@ pub(super) fn assemble_discovered_plugin(
     seen_describe_paths: &mut HashSet<String>,
     cache_dirty: &mut bool,
     process_timeout: Duration,
+) -> DiscoveredPlugin {
+    assemble_discovered_plugin_with_mode(
+        source,
+        executable,
+        manifest_state,
+        describe_cache,
+        seen_describe_paths,
+        cache_dirty,
+        process_timeout,
+        DiscoveryMode::Passive,
+    )
+}
+
+fn assemble_discovered_plugin_with_mode(
+    source: PluginSource,
+    executable: PathBuf,
+    manifest_state: &ManifestState,
+    describe_cache: &mut DescribeCacheFile,
+    seen_describe_paths: &mut HashSet<String>,
+    cache_dirty: &mut bool,
+    process_timeout: Duration,
+    mode: DiscoveryMode,
 ) -> DiscoveredPlugin {
     let file_name = executable
         .file_name()
@@ -423,6 +464,8 @@ pub(super) fn assemble_discovered_plugin(
     match describe_eligibility(source, manifest_state, manifest_entry.as_ref(), &executable) {
         Ok(DescribeEligibility::Allowed) => match describe_with_cache(
             &executable,
+            source,
+            mode,
             describe_cache,
             seen_describe_paths,
             cache_dirty,
@@ -745,6 +788,8 @@ fn validate_manifest_checksum(entry: &ManifestPlugin, path: &Path) -> Result<()>
 
 fn describe_with_cache(
     path: &Path,
+    source: PluginSource,
+    mode: DiscoveryMode,
     cache: &mut DescribeCacheFile,
     seen_describe_paths: &mut HashSet<String>,
     cache_dirty: &mut bool,
@@ -757,6 +802,13 @@ fn describe_with_cache(
     if let Some(entry) = find_cached_describe(cache, &key, size, mtime_secs, mtime_nanos) {
         tracing::trace!(path = %path.display(), "describe cache hit");
         return Ok(entry.describe.clone());
+    }
+
+    if source == PluginSource::Path && mode == DiscoveryMode::Passive {
+        return Err(anyhow!(
+            "path-discovered plugin metadata unavailable until first command execution for {}; passive discovery does not execute PATH plugins",
+            path.display()
+        ));
     }
 
     tracing::trace!(path = %path.display(), "describe cache miss");

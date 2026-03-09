@@ -8,17 +8,20 @@ use crate::app;
 use crate::app::sink::UiSink;
 use crate::app::{AppClients, AppRuntime, AppSession};
 use crate::app::{
-    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_PLUGINS, ReplCommandSpec, ResolvedInvocation,
+    CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_INTRO, CMD_PLUGINS, ReplCommandSpec,
+    ResolvedInvocation,
 };
 use crate::cli::invocation::{append_invocation_help_if_verbose, scan_command_tokens};
-use crate::cli::rows::output::output_to_rows;
+use crate::cli::rows::output::{output_to_rows, rows_to_output_result};
 use crate::cli::{
-    Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginProviderClearArgs,
-    PluginProviderSelectArgs, PluginToggleArgs, PluginsCommands, ThemeArgs, ThemeCommands,
-    parse_inline_command_tokens,
+    Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginCommandClearArgs,
+    PluginCommandStateArgs, PluginProviderClearArgs, PluginProviderSelectArgs, PluginsCommands,
+    ThemeArgs, ThemeCommands, parse_inline_command_tokens,
 };
+use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+use crate::guide::{GuideDoc, HelpDoc, HelpSection, HelpSectionKind};
 
-use crate::repl::{ReplViewContext, completion, help, input};
+use crate::repl::{completion, input};
 
 pub(super) struct ParsedReplInvocation {
     pub(super) command: Commands,
@@ -30,8 +33,9 @@ pub(super) struct ParsedReplInvocation {
 
 pub(super) enum ParsedReplDispatch {
     Help {
-        rendered: String,
+        result: crate::app::CliCommandResult,
         effective: Box<ResolvedInvocation>,
+        stages: Vec<String>,
     },
     Invocation(Box<ParsedReplInvocation>),
 }
@@ -60,11 +64,11 @@ pub(super) fn parse_repl_invocation(
         && !input::has_valid_help_alias_target(&scanned.tokens, command_index)
     {
         return Ok(ParsedReplDispatch::Help {
-            rendered: render_invalid_help_alias(
-                ReplViewContext::from_parts(runtime, session),
+            result: crate::app::CliCommandResult::guide(render_invalid_help_alias(
                 input::help_alias_target_at(&scanned.tokens, command_index),
-            ),
+            )),
             effective: Box::new(app::resolve_invocation_ui(&runtime.ui, &scanned.invocation)),
+            stages: parsed.stages.clone(),
         });
     }
     let scoped_tokens = input::rewrite_help_alias_tokens_at(&scanned.tokens, command_index)
@@ -74,17 +78,16 @@ pub(super) fn parse_repl_invocation(
         Ok(None) => return Err(miette!("missing command")),
         Err(err) => {
             if renders_repl_inline_help(err.kind()) {
-                let rendered = render_repl_parse_help(
-                    ReplViewContext::from_parts(runtime, session),
-                    &scanned.invocation,
-                    &err.to_string(),
-                );
                 return Ok(ParsedReplDispatch::Help {
-                    rendered,
+                    result: crate::app::CliCommandResult::guide(render_repl_parse_help(
+                        &scanned.invocation,
+                        &err.to_string(),
+                    )),
                     effective: Box::new(app::resolve_invocation_ui(
                         &runtime.ui,
                         &scanned.invocation,
                     )),
+                    stages: parsed.stages.clone(),
                 });
             }
             return Err(miette!(err.to_string()));
@@ -107,19 +110,22 @@ pub(super) fn parse_repl_invocation(
     )))
 }
 
-fn render_invalid_help_alias(view: ReplViewContext<'_>, target: Option<&str>) -> String {
-    let mut out = String::new();
+fn render_invalid_help_alias(target: Option<&str>) -> GuideDoc {
     let detail = match target {
         Some(target) => format!("invalid help target: `{target}`"),
         None => "help expects a command target".to_string(),
     };
-    out.push_str(&detail);
-    out.push_str("\n\n");
-    out.push_str(&help::render_repl_help_with_chrome(
-        view,
-        "Usage: help <command>\n\nNotes:\n  Use bare `help` for the REPL overview.\n  `help help` and `help --help` are not valid.\n  Add -v to include common invocation options.\n",
-    ));
-    out
+    HelpDoc {
+        preamble: vec![detail],
+        sections: vec![
+            HelpSection::new("Usage", HelpSectionKind::Usage).paragraph("  help <command>"),
+            HelpSection::new("Notes", HelpSectionKind::Notes)
+                .paragraph("  Use bare `help` for the REPL overview.")
+                .paragraph("  `help help` and `help --help` are not valid.")
+                .paragraph("  Add -v to include common invocation options."),
+        ],
+        epilogue: Vec::new(),
+    }
 }
 
 pub(super) fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {
@@ -134,21 +140,15 @@ pub(super) fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {
 }
 
 fn render_repl_parse_help(
-    view: ReplViewContext<'_>,
     invocation: &crate::cli::invocation::InvocationOptions,
     error_text: &str,
-) -> String {
+) -> GuideDoc {
     let parsed = parse_clap_help(error_text);
-    let mut out = String::new();
+    let mut doc = HelpDoc::from_text(&append_invocation_help_if_verbose(parsed.body, invocation));
     if let Some(summary) = parsed.summary {
-        out.push_str(summary);
-        out.push_str("\n\n");
+        doc.preamble.insert(0, summary.to_string());
     }
-    out.push_str(&help::render_repl_help_with_chrome(
-        view,
-        &append_invocation_help_if_verbose(parsed.body, invocation),
-    ));
-    out
+    doc
 }
 
 pub(super) fn parse_clap_help(error_text: &str) -> ParsedClapHelp<'_> {
@@ -249,8 +249,9 @@ pub(super) fn command_side_effects(command: &Commands) -> CommandSideEffects {
         },
         Commands::Plugins(crate::cli::PluginsArgs {
             command:
-                PluginsCommands::Enable(PluginToggleArgs { .. })
-                | PluginsCommands::Disable(PluginToggleArgs { .. })
+                PluginsCommands::Enable(PluginCommandStateArgs { .. })
+                | PluginsCommands::Disable(PluginCommandStateArgs { .. })
+                | PluginsCommands::ClearState(PluginCommandClearArgs { .. })
                 | PluginsCommands::Refresh
                 | PluginsCommands::SelectProvider(PluginProviderSelectArgs { .. })
                 | PluginsCommands::ClearProvider(PluginProviderClearArgs { .. }),
@@ -323,10 +324,52 @@ pub(super) fn render_repl_command_output(
             );
             rendered
         }
-        Some(crate::app::ReplCommandOutput::Document(document)) => {
-            render_document(&document, &invocation.ui.render_settings)
+        Some(crate::app::ReplCommandOutput::Guide(guide)) => {
+            let output = guide.to_output_result();
+            let (output, _format_hint) =
+                app::apply_output_stages(output, stages, None).map_err(|err| miette!("{err:#}"))?;
+            let rendered = crate::repl::help::render_guide_output(
+                &output,
+                &invocation.ui.render_settings,
+                crate::ui::format::help::GuideRenderOptions {
+                    title_prefix: None,
+                    layout: crate::ui::presentation::help_layout(runtime.config.resolved()),
+                    frame_style: invocation.ui.render_settings.chrome_frame,
+                    panel_kind: None,
+                },
+            );
+            session.record_result(line, output_to_rows(&output));
+            app::maybe_copy_output_with_runtime(
+                &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
+                &output,
+                sink,
+            );
+            rendered
         }
-        Some(crate::app::ReplCommandOutput::Text(text)) => text,
+        Some(crate::app::ReplCommandOutput::Document(document)) => {
+            if stages.is_empty() {
+                render_document(&document, &invocation.ui.render_settings)
+            } else {
+                render_staged_textual_output(
+                    runtime,
+                    session,
+                    line,
+                    stages,
+                    render_document_for_stages(&document, &invocation.ui.render_settings),
+                    invocation,
+                    sink,
+                )?
+            }
+        }
+        Some(crate::app::ReplCommandOutput::Text(text)) => {
+            if stages.is_empty() {
+                text
+            } else {
+                render_staged_textual_output(
+                    runtime, session, line, stages, text, invocation, sink,
+                )?
+            }
+        }
         None => String::new(),
     };
 
@@ -337,6 +380,54 @@ pub(super) fn render_repl_command_output(
     }
 
     Ok(rendered)
+}
+
+fn render_staged_textual_output(
+    runtime: &AppRuntime,
+    session: &mut AppSession,
+    line: &str,
+    stages: &[String],
+    text: String,
+    invocation: &ResolvedInvocation,
+    sink: &mut dyn UiSink,
+) -> Result<String> {
+    let (output, format_hint) = app::apply_output_stages(
+        text_output_to_rows(&text),
+        stages,
+        Some(OutputFormat::Value),
+    )
+    .map_err(|err| miette!("{err:#}"))?;
+
+    let render_settings =
+        app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
+    let rendered = render_output(&output, &render_settings);
+    session.record_result(line, output_to_rows(&output));
+    app::maybe_copy_output_with_runtime(
+        &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
+        &output,
+        sink,
+    );
+    Ok(rendered)
+}
+
+fn text_output_to_rows(text: &str) -> crate::core::output_model::OutputResult {
+    rows_to_output_result(
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| crate::row! { "value" => line })
+            .collect(),
+    )
+}
+
+fn render_document_for_stages(
+    document: &crate::ui::Document,
+    settings: &crate::ui::RenderSettings,
+) -> String {
+    let mut plain = settings.clone();
+    plain.mode = RenderMode::Plain;
+    plain.color = ColorMode::Never;
+    plain.unicode = UnicodeMode::Never;
+    render_document(document, &plain)
 }
 
 pub(super) fn finalize_repl_command(
@@ -416,15 +507,13 @@ pub(super) fn run_repl_external_command(
     tokens: Vec<String>,
     invocation: &ResolvedInvocation,
 ) -> Result<crate::app::CliCommandResult> {
-    let resolved = invocation.ui.render_settings.resolve_render_settings();
-    let layout = crate::ui::presentation::help_layout(runtime.config.resolved());
     app::run_external_command_with_help_renderer(
         runtime,
         session,
         clients,
         &tokens,
         invocation,
-        |stdout| help::render_help_with_chrome(stdout, &resolved, layout),
+        GuideDoc::from_text,
     )
 }
 
@@ -472,6 +561,10 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
         Commands::Theme(args) => ReplCommandSpec {
             name: Cow::Borrowed("theme"),
             supports_dsl: matches!(args.command, ThemeCommands::List | ThemeCommands::Show(_)),
+        },
+        Commands::Intro(_) => ReplCommandSpec {
+            name: Cow::Borrowed(CMD_INTRO),
+            supports_dsl: true,
         },
         Commands::Repl(_) => ReplCommandSpec {
             name: Cow::Borrowed("repl"),

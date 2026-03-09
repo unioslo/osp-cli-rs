@@ -6,7 +6,10 @@ use crate::config::{ConfigLayer, ConfigValue, ResolvedConfig, RuntimeLoadOptions
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::ui::chrome::SectionFrameStyle;
 use crate::ui::theme::DEFAULT_THEME_NAME;
-use crate::ui::{RenderRuntime, RenderSettings, StyleOverrides, TableBorderStyle, TableOverflow};
+use crate::ui::{
+    GuideDefaultFormat, RenderRuntime, RenderSettings, StyleOverrides, TableBorderStyle,
+    TableOverflow,
+};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -89,6 +92,8 @@ pub enum Commands {
     Theme(ThemeArgs),
     Config(ConfigArgs),
     History(HistoryArgs),
+    #[command(hide = true)]
+    Intro(IntroArgs),
     #[command(hide = true)]
     Repl(ReplArgs),
     #[command(external_subcommand)]
@@ -173,8 +178,9 @@ pub enum PluginsCommands {
     Commands,
     Config(PluginConfigArgs),
     Refresh,
-    Enable(PluginToggleArgs),
-    Disable(PluginToggleArgs),
+    Enable(PluginCommandStateArgs),
+    Disable(PluginCommandStateArgs),
+    ClearState(PluginCommandClearArgs),
     SelectProvider(PluginProviderSelectArgs),
     ClearProvider(PluginProviderClearArgs),
     Doctor,
@@ -204,19 +210,76 @@ pub struct ThemeUseArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct PluginToggleArgs {
-    pub plugin_id: String,
+pub struct PluginCommandStateArgs {
+    pub command: String,
+
+    #[arg(long = "global", conflicts_with = "profile")]
+    pub global: bool,
+
+    #[arg(long = "profile")]
+    pub profile: Option<String>,
+
+    #[arg(
+        long = "terminal",
+        num_args = 0..=1,
+        default_missing_value = "__current__"
+    )]
+    pub terminal: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct PluginCommandClearArgs {
+    pub command: String,
+
+    #[arg(long = "global", conflicts_with = "profile")]
+    pub global: bool,
+
+    #[arg(long = "profile")]
+    pub profile: Option<String>,
+
+    #[arg(
+        long = "terminal",
+        num_args = 0..=1,
+        default_missing_value = "__current__"
+    )]
+    pub terminal: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct PluginProviderSelectArgs {
     pub command: String,
     pub plugin_id: String,
+
+    #[arg(long = "global", conflicts_with = "profile")]
+    pub global: bool,
+
+    #[arg(long = "profile")]
+    pub profile: Option<String>,
+
+    #[arg(
+        long = "terminal",
+        num_args = 0..=1,
+        default_missing_value = "__current__"
+    )]
+    pub terminal: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct PluginProviderClearArgs {
     pub command: String,
+
+    #[arg(long = "global", conflicts_with = "profile")]
+    pub global: bool,
+
+    #[arg(long = "profile")]
+    pub profile: Option<String>,
+
+    #[arg(
+        long = "terminal",
+        num_args = 0..=1,
+        default_missing_value = "__current__"
+    )]
+    pub terminal: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -235,6 +298,9 @@ pub struct HistoryArgs {
     #[command(subcommand)]
     pub command: HistoryCommands,
 }
+
+#[derive(Debug, Args, Clone, Default)]
+pub struct IntroArgs {}
 
 #[derive(Debug, Subcommand)]
 pub enum HistoryCommands {
@@ -421,6 +487,7 @@ impl Cli {
 pub(crate) fn default_render_settings() -> RenderSettings {
     RenderSettings {
         format: OutputFormat::Auto,
+        format_explicit: false,
         mode: RenderMode::Auto,
         color: ColorMode::Auto,
         unicode: UnicodeMode::Auto,
@@ -440,6 +507,7 @@ pub(crate) fn default_render_settings() -> RenderSettings {
         theme: None,
         style_overrides: StyleOverrides::default(),
         chrome_frame: SectionFrameStyle::Top,
+        guide_default_format: GuideDefaultFormat::Guide,
         runtime: RenderRuntime::default(),
     }
 }
@@ -476,6 +544,12 @@ pub(crate) fn apply_render_settings_from_config(
         && let Some(parsed) = SectionFrameStyle::parse(value)
     {
         settings.chrome_frame = parsed;
+    }
+
+    if let Some(value) = config.get_string("ui.guide.default_format")
+        && let Some(parsed) = GuideDefaultFormat::parse(value)
+    {
+        settings.guide_default_format = parsed;
     }
 
     if settings.width.is_none() {
@@ -663,8 +737,8 @@ mod tests {
         parse_inline_command_tokens, parse_output_format, parse_render_mode, parse_unicode_mode,
     };
     use crate::config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
-    use crate::ui::RenderSettings;
     use crate::ui::presentation::build_presentation_defaults_layer;
+    use crate::ui::{GuideDefaultFormat, RenderSettings};
     use clap::Parser;
 
     fn resolved(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
@@ -782,6 +856,16 @@ mod tests {
 
         assert_eq!(settings.chrome_frame, SectionFrameStyle::Square);
         assert_eq!(settings.table_border, TableBorderStyle::None);
+    }
+
+    #[test]
+    fn guide_default_format_reads_from_config_unit() {
+        let config = resolved(&[("ui.guide.default_format", "inherit")]);
+        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+
+        apply_render_settings_from_config(&mut settings, &config);
+
+        assert_eq!(settings.guide_default_format, GuideDefaultFormat::Inherit);
     }
 
     #[test]

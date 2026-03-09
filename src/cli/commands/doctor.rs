@@ -7,6 +7,7 @@ use crate::app::{
 };
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{DoctorArgs, DoctorCommands, PluginsArgs, PluginsCommands};
+use crate::core::command_def::CommandDef;
 use crate::core::output::OutputFormat;
 use crate::core::row::Row;
 use crate::ui::document::{Block, Document, PanelBlock, PanelRules};
@@ -62,6 +63,29 @@ pub(crate) fn run_doctor_command(
     }
 }
 
+pub(crate) fn doctor_command_def(sort_key: impl Into<String>) -> CommandDef {
+    CommandDef::new("doctor")
+        .about("Run diagnostics checks")
+        .sort(sort_key)
+        .subcommands([
+            CommandDef::new("all")
+                .about("Run all visible diagnostics")
+                .sort("10"),
+            CommandDef::new(CMD_CONFIG)
+                .about("Show config diagnostics")
+                .sort("11"),
+            CommandDef::new("last")
+                .about("Show the last REPL failure")
+                .sort("12"),
+            CommandDef::new(CMD_PLUGINS)
+                .about("Run plugin diagnostics")
+                .sort("13"),
+            CommandDef::new(CMD_THEME)
+                .about("Show theme diagnostics")
+                .sort("14"),
+        ])
+}
+
 fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult> {
     let mut sections: Vec<(&str, Vec<Row>)> = Vec::new();
 
@@ -105,6 +129,7 @@ fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult>
                 title: Some(name.to_string()),
                 body,
                 rules: PanelRules::Top,
+                frame_style: None,
                 kind: None,
                 border_token: None,
                 title_token: None,
@@ -172,7 +197,8 @@ fn render_last_failure_document(ui: &UiState, last_failure: Option<&LastFailure>
 #[cfg(test)]
 mod tests {
     use super::{
-        DoctorCommandContext, render_last_failure_document, run_doctor_command, theme_doctor_rows,
+        DoctorCommandContext, doctor_command_def, render_last_failure_document, run_doctor_command,
+        theme_doctor_rows,
     };
     use crate::app::ReplCommandOutput;
     use crate::app::{AuthState, LastFailure, RuntimeContext, TerminalKind, UiState};
@@ -229,11 +255,13 @@ mod tests {
                 runtime_load: RuntimeLoadOptions::default(),
             },
             plugins: plugins_cmd::PluginsCommandContext {
+                context,
                 config: resolved,
                 config_state: None,
                 auth,
                 clients: None,
                 plugin_manager,
+                runtime_load: RuntimeLoadOptions::default(),
             },
             ui,
             auth,
@@ -432,6 +460,20 @@ mod tests {
         .expect_err("hidden theme builtin should fail");
 
         assert!(!err.to_string().trim().is_empty());
+    }
+
+    #[test]
+    fn doctor_command_def_exposes_expected_subcommands_unit() {
+        let def = doctor_command_def("30");
+        let names = def
+            .subcommands
+            .iter()
+            .map(|child| child.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(def.name, "doctor");
+        assert_eq!(def.sort_key.as_deref(), Some("30"));
+        assert_eq!(names, vec!["all", "config", "last", "plugins", "theme"]);
     }
 
     fn render_line_blocks(blocks: &[Block]) -> String {

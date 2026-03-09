@@ -426,8 +426,9 @@ Users manage plugins with built-in commands:
 ```bash
 osp plugins list              # Show discovered plugins
 osp plugins commands          # Show plugin-provided commands
-osp plugins enable my-plugin  # Enable a plugin
-osp plugins disable my-plugin # Disable a plugin
+osp plugins enable ldap       # Enable one command
+osp plugins disable ldap      # Disable one command
+osp plugins clear-state ldap  # Remove explicit command state
 osp plugins doctor            # Diagnose plugin issues
 osp plugins refresh           # Clear discovery cache
 ```
@@ -444,7 +445,13 @@ osp plugins select-provider ldap uio-ldap
 osp plugins clear-provider ldap
 ```
 
-Plugin state is stored in `~/.config/osp/plugins.json`.
+Plugin command routing is stored in the regular scoped config file. For example:
+
+```toml
+[profile.default.plugins.ldap]
+state = "enabled"
+provider = "uio-ldap"
+```
 
 ## Writing a plugin in Rust
 

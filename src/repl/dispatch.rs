@@ -109,9 +109,15 @@ fn execute_repl_plugin_line_inner(
     }
 
     let base_invocation = base_repl_invocation(runtime);
-    if let Some(result) =
-        maybe_handle_repl_shortcuts(runtime, session, clients, &parsed, &base_invocation)?
-    {
+    if let Some(result) = maybe_handle_repl_shortcuts(
+        runtime,
+        session,
+        clients,
+        &parsed,
+        &base_invocation,
+        line,
+        sink,
+    )? {
         session.record_prompt_timing(
             runtime.ui.debug_verbosity,
             started.elapsed(),
@@ -124,9 +130,13 @@ fn execute_repl_plugin_line_inner(
 
     let invocation = match parse_repl_invocation(runtime, session, &parsed)? {
         ParsedReplDispatch::Help {
-            rendered,
+            result,
             effective,
+            stages,
         } => {
+            let rendered = render_repl_command_output(
+                runtime, session, line, &stages, result, &effective, sink,
+            )?;
             let finished = Instant::now();
             session.record_prompt_timing(
                 effective.ui.debug_verbosity,
@@ -298,8 +308,11 @@ For more information, try '--help'.\n";
         );
 
         let plugins_enable = Commands::Plugins(PluginsArgs {
-            command: PluginsCommands::Enable(crate::cli::PluginToggleArgs {
-                plugin_id: "orch".to_string(),
+            command: PluginsCommands::Enable(crate::cli::PluginCommandStateArgs {
+                command: "orch".to_string(),
+                global: false,
+                profile: None,
+                terminal: None,
             }),
         });
         let plugins_enable_effects = command_side_effects(&plugins_enable);

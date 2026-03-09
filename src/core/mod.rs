@@ -1,3 +1,4 @@
+pub mod command_def;
 pub mod command_policy;
 pub mod output;
 pub mod output_model;

@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 
 use crate::config::{ConfigLayer, RuntimeLoadOptions};
-use crate::core::output::{ColorMode, RenderMode, UnicodeMode};
+use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::ui::RenderSettings;
 use crate::ui::theme::DEFAULT_THEME_NAME;
 use clap::Parser;
@@ -20,6 +20,7 @@ pub(crate) struct HelpRenderOverrides {
     pub(crate) profile: Option<String>,
     pub(crate) theme: Option<String>,
     pub(crate) presentation: Option<UiPresentation>,
+    pub(crate) format: Option<OutputFormat>,
     pub(crate) mode: Option<RenderMode>,
     pub(crate) color: Option<ColorMode>,
     pub(crate) unicode: Option<UnicodeMode>,
@@ -70,6 +71,10 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
         settings.theme = loaded
             .resolve(&settings.theme_name)
             .map(|entry| entry.theme.clone());
+    }
+    if let Some(format) = overrides.format {
+        settings.format = format;
+        settings.format_explicit = true;
     }
 
     HelpRenderContext { settings, layout }
@@ -135,6 +140,34 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
         .peekable();
 
     while let Some(token) = iter.next() {
+        match token {
+            "--json" => {
+                out.format = Some(OutputFormat::Json);
+                continue;
+            }
+            "--table" => {
+                out.format = Some(OutputFormat::Table);
+                continue;
+            }
+            "--mreg" => {
+                out.format = Some(OutputFormat::Mreg);
+                continue;
+            }
+            "--value" => {
+                out.format = Some(OutputFormat::Value);
+                continue;
+            }
+            "--md" => {
+                out.format = Some(OutputFormat::Markdown);
+                continue;
+            }
+            _ => {}
+        }
+
+        if let Some(value) = token.strip_prefix("--format=") {
+            out.format = OutputFormat::parse(value);
+            continue;
+        }
         if let Some(value) = token.strip_prefix("--profile=") {
             if !value.trim().is_empty() {
                 out.profile = Some(value.trim().to_string());
@@ -178,6 +211,15 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
                     && !value.starts_with('-')
                 {
                     out.theme = Some(value.to_string());
+                    iter.next();
+                }
+            }
+            "--format" => {
+                if let Some(value) = iter.peek().copied()
+                    && !value.starts_with('-')
+                    && let Some(parsed) = OutputFormat::parse(value)
+                {
+                    out.format = Some(parsed);
                     iter.next();
                 }
             }
@@ -301,6 +343,19 @@ mod tests {
         assert_eq!(context.settings.color, ColorMode::Always);
         assert_eq!(context.settings.unicode, UnicodeMode::Always);
         assert_eq!(context.settings.format, OutputFormat::Auto);
+    }
+
+    #[test]
+    fn render_settings_for_help_marks_format_flags_as_explicit_unit() {
+        let context = render_settings_for_help(&[
+            OsString::from("osp"),
+            OsString::from("--json"),
+            OsString::from("--no-env"),
+            OsString::from("--no-config-file"),
+        ]);
+
+        assert_eq!(context.settings.format, OutputFormat::Json);
+        assert!(context.settings.format_explicit);
     }
 
     #[test]

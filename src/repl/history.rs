@@ -1,7 +1,7 @@
-use crate::completion::CommandSpec;
 use crate::config::{
     ConfigValue, DEFAULT_REPL_HISTORY_MAX_ENTRIES, ResolvedConfig, RuntimeDefaults,
 };
+use crate::core::command_def::CommandDef;
 use crate::core::row::Row;
 use crate::repl::{HistoryConfig, HistoryEntry, SharedHistory};
 use crate::ui::theme::DEFAULT_THEME_NAME;
@@ -16,19 +16,18 @@ use crate::cli::rows::output::rows_to_output_result;
 
 const DEFAULT_REPL_HISTORY_EXCLUDES: [&str; 4] = ["exit", "quit", "help", "history list"];
 
-pub(crate) fn history_command_spec() -> CommandSpec {
-    CommandSpec::new(CMD_HISTORY)
-        .tooltip("Inspect or prune REPL history")
+pub(crate) fn history_command_def(sort_key: impl Into<String>) -> CommandDef {
+    CommandDef::new(CMD_HISTORY)
+        .about("Inspect or prune REPL history")
+        .sort(sort_key)
         .subcommands([
-            CommandSpec::new(CMD_LIST)
-                .tooltip("List recent history")
+            CommandDef::new(CMD_LIST)
+                .about("List recent history")
                 .sort("10"),
-            CommandSpec::new("prune")
-                .tooltip("Keep last N entries")
+            CommandDef::new("prune")
+                .about("Keep last N entries")
                 .sort("11"),
-            CommandSpec::new("clear")
-                .tooltip("Clear history")
-                .sort("12"),
+            CommandDef::new("clear").about("Clear history").sort("12"),
         ])
 }
 
@@ -204,7 +203,7 @@ fn history_scope_label(session: &AppSession) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        history_command_spec, history_scope_label, repl_history_enabled,
+        history_command_def, history_scope_label, repl_history_enabled,
         repl_history_exclude_patterns, run_history_repl_command,
     };
     use crate::app::AppSession;
@@ -266,8 +265,8 @@ mod tests {
     }
 
     #[test]
-    fn history_command_spec_exposes_expected_subcommands_unit() {
-        let spec = history_command_spec();
+    fn history_command_def_exposes_expected_subcommands_unit() {
+        let spec = history_command_def("20");
         let names = spec
             .subcommands
             .iter()

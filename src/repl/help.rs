@@ -1,282 +1,140 @@
-use crate::ui::ResolvedRenderSettings;
-use crate::ui::chrome::{
-    SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
+use crate::core::output::OutputFormat;
+use crate::guide::{GuideDoc, GuidePayload};
+use crate::ui::{RenderSettings, ResolvedRenderSettings, render_output};
+use crate::ui::{
+    format::help::{GuideRenderOptions, build_guide_document_from_doc},
+    render_document_resolved,
 };
-use crate::ui::style::{StyleToken, apply_style_with_theme_overrides};
 
+#[cfg(test)]
 use super::ReplViewContext;
 use crate::ui::presentation::{HelpLayout, help_layout};
 
+#[cfg(test)]
 pub(crate) fn render_repl_help_with_chrome(view: ReplViewContext<'_>, help_text: &str) -> String {
     let resolved = view.ui.render_settings.resolve_render_settings();
     let layout = help_layout(view.config);
     render_help_with_chrome(help_text, &resolved, layout)
 }
 
+#[cfg(test)]
 pub(crate) fn render_help_with_chrome(
     help_text: &str,
     resolved: &ResolvedRenderSettings,
     layout: HelpLayout,
 ) -> String {
-    let (preamble, sections) = parse_help_sections(help_text);
-    if sections.is_empty() {
+    let parsed = GuideDoc::from_text(help_text);
+    if parsed.sections.is_empty() {
         return help_text.to_string();
     }
-
-    let theme = &resolved.theme;
-    let mut out = String::new();
-
-    if !preamble.trim().is_empty() {
-        out.push_str(preamble.trim_end());
-        out.push_str(section_separator(layout));
-    }
-
-    for (index, section) in sections.iter().enumerate() {
-        if index > 0 {
-            out.push_str(section_separator(layout));
-        }
-
-        let body = style_help_body(
-            &section.title,
-            &normalize_help_body(&section.body, layout),
-            resolved,
-        );
-        out.push_str(&render_section_block_with_overrides(
-            &section.title,
-            &body,
-            resolved.chrome_frame,
-            resolved.unicode,
-            resolved.width,
-            SectionRenderContext {
-                color: resolved.color,
-                theme,
-                style_overrides: &resolved.style_overrides,
-            },
-            SectionStyleTokens {
-                border: StyleToken::PanelBorder,
-                title: StyleToken::PanelTitle,
-            },
-        ));
-    }
-
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-
-    out
+    let document = crate::ui::format::help::build_help_document_from_doc(
+        &parsed,
+        None,
+        layout,
+        resolved.chrome_frame,
+    );
+    render_help_document(document, resolved)
 }
 
-fn style_help_body(title: &str, body: &str, resolved: &ResolvedRenderSettings) -> String {
-    if !resolved.color {
-        return body.to_string();
-    }
-
-    body.lines()
-        .map(|line| style_help_line(title, line, resolved))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn style_help_line(title: &str, line: &str, resolved: &ResolvedRenderSettings) -> String {
-    if line.trim().is_empty() {
-        return line.to_string();
-    }
-
-    match title {
-        "Commands" | "Options" | "Arguments" | "Common Invocation Options" => {
-            style_help_keyed_line(title, line, resolved)
-        }
-        _ => style_help_text(line, resolved),
-    }
-}
-
-fn style_help_keyed_line(
-    section_title: &str,
-    line: &str,
+pub(crate) fn render_guide_doc_with_chrome(
+    guide: &GuideDoc,
     resolved: &ResolvedRenderSettings,
+    options: GuideRenderOptions<'_>,
 ) -> String {
-    let indent_len = line.len().saturating_sub(line.trim_start().len());
-    let (indent, rest) = line.split_at(indent_len);
-    let split = help_description_split(section_title, rest).unwrap_or(rest.len());
-    let (head, tail) = rest.split_at(split);
-
-    let mut out = String::new();
-    out.push_str(indent);
-    out.push_str(&style_help_segment(head, StyleToken::Key, resolved));
-    if !tail.is_empty() {
-        out.push_str(&style_help_segment(tail, StyleToken::Value, resolved));
-    }
-    out
+    let document = build_guide_document_from_doc(guide, options);
+    render_help_document(document, resolved)
 }
 
-fn help_description_split(section_title: &str, line: &str) -> Option<usize> {
-    let mut saw_non_whitespace = false;
-    let mut run_start = None;
-    let mut run_len = 0usize;
-
-    for (idx, ch) in line.char_indices() {
-        if ch.is_whitespace() {
-            if saw_non_whitespace {
-                run_start.get_or_insert(idx);
-                run_len += 1;
-            }
-            continue;
-        }
-
-        if saw_non_whitespace && run_len >= 2 {
-            return run_start;
-        }
-
-        saw_non_whitespace = true;
-        run_start = None;
-        run_len = 0;
+pub(crate) fn render_help_payload(
+    payload: &GuidePayload,
+    settings: &RenderSettings,
+    config: &crate::config::ResolvedConfig,
+) -> String {
+    if matches!(
+        crate::ui::format::resolve_output_format(&payload.to_output_result(), settings),
+        OutputFormat::Markdown
+    ) {
+        return payload.to_markdown_with_width(settings.resolve_render_settings().width);
     }
-
-    if matches!(section_title, "Commands" | "Arguments") {
-        return line.find(char::is_whitespace);
-    }
-
-    None
+    render_help_doc_with_layout(&payload.to_doc(), settings, help_layout(config))
 }
 
-fn style_help_text(line: &str, resolved: &ResolvedRenderSettings) -> String {
-    style_help_segment(line, StyleToken::Value, resolved)
-}
-
-fn style_help_segment(text: &str, token: StyleToken, resolved: &ResolvedRenderSettings) -> String {
-    apply_style_with_theme_overrides(
-        text,
-        token,
-        true,
-        &resolved.theme,
-        &resolved.style_overrides,
+pub(crate) fn render_help_doc_with_layout(
+    help: &GuideDoc,
+    settings: &RenderSettings,
+    layout: HelpLayout,
+) -> String {
+    render_guide_doc(
+        help,
+        settings,
+        GuideRenderOptions {
+            title_prefix: None,
+            layout,
+            frame_style: settings.chrome_frame,
+            panel_kind: None,
+        },
     )
 }
 
-fn normalize_help_body(body: &str, layout: HelpLayout) -> String {
-    let lines = trim_blank_lines(body.lines().map(str::trim_end).collect());
-    match layout {
-        HelpLayout::Full => lines.join("\n"),
-        HelpLayout::Compact => collapse_blank_runs(&lines, true).join("\n"),
-        HelpLayout::Minimal => collapse_blank_runs(&lines, false).join("\n"),
+pub(crate) fn render_guide_doc(
+    guide: &GuideDoc,
+    settings: &RenderSettings,
+    options: GuideRenderOptions<'_>,
+) -> String {
+    if settings.prefers_guide_rendering() {
+        return render_guide_doc_with_chrome(guide, &settings.resolve_render_settings(), options);
     }
+
+    render_output(&guide.to_output_result(), settings)
 }
 
-fn section_separator(layout: HelpLayout) -> &'static str {
-    match layout {
-        HelpLayout::Minimal => "\n",
-        HelpLayout::Full | HelpLayout::Compact => "\n\n",
+pub(crate) fn render_guide_output(
+    output: &crate::core::output_model::OutputResult,
+    settings: &RenderSettings,
+    options: GuideRenderOptions<'_>,
+) -> String {
+    let resolved_format = crate::ui::format::resolve_output_format(output, settings);
+    if matches!(resolved_format, OutputFormat::Markdown)
+        && let Some(payload) = GuidePayload::try_from_output_result(output)
+    {
+        return payload.to_markdown_with_width(settings.resolve_render_settings().width);
     }
+
+    if settings.prefers_guide_rendering()
+        && matches!(
+            output.meta.render_recommendation,
+            Some(crate::core::output_model::RenderRecommendation::Guide)
+        )
+        && let Some(payload) = GuidePayload::try_from_output_result(output)
+    {
+        let guide = payload.to_doc();
+        return render_guide_doc_with_chrome(&guide, &settings.resolve_render_settings(), options);
+    }
+
+    render_output(output, settings)
 }
 
-fn trim_blank_lines(mut lines: Vec<&str>) -> Vec<&str> {
-    while lines.first().is_some_and(|line| line.trim().is_empty()) {
-        lines.remove(0);
+fn render_help_document(
+    document: crate::ui::Document,
+    resolved: &ResolvedRenderSettings,
+) -> String {
+    let mut rendered = render_document_resolved(&document, resolved.clone());
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
     }
-    while lines.last().is_some_and(|line| line.trim().is_empty()) {
-        lines.pop();
-    }
-    lines
-}
-
-fn collapse_blank_runs<'a>(lines: &'a [&'a str], keep_single_blank: bool) -> Vec<&'a str> {
-    let mut out = Vec::new();
-    let mut last_blank = false;
-
-    for line in lines {
-        let is_blank = line.trim().is_empty();
-        if is_blank {
-            if keep_single_blank && !last_blank {
-                out.push(*line);
-            }
-            last_blank = true;
-            continue;
-        }
-        out.push(*line);
-        last_blank = false;
-    }
-
-    trim_blank_lines(out)
-}
-
-#[derive(Debug, Clone)]
-struct HelpSection {
-    title: String,
-    body: String,
-}
-
-fn parse_help_sections(help_text: &str) -> (String, Vec<HelpSection>) {
-    let mut preamble = String::new();
-    let mut sections = Vec::new();
-    let mut current: Option<HelpSection> = None;
-
-    for raw_line in help_text.lines() {
-        let line = raw_line.trim_end();
-
-        if let Some(section) = parse_section_header(line) {
-            if let Some(existing) = current.take() {
-                sections.push(existing);
-            }
-            current = Some(section);
-            continue;
-        }
-
-        let Some(section) = current.as_mut() else {
-            if !preamble.is_empty() {
-                preamble.push('\n');
-            }
-            preamble.push_str(line);
-            continue;
-        };
-
-        if !section.body.is_empty() {
-            section.body.push('\n');
-        }
-        section.body.push_str(line);
-    }
-
-    if let Some(section) = current {
-        sections.push(section);
-    }
-
-    (preamble, sections)
-}
-
-fn parse_section_header(line: &str) -> Option<HelpSection> {
-    if line.starts_with("Usage:") {
-        let usage = line.trim_start_matches("Usage:").trim();
-        return Some(HelpSection {
-            title: "Usage".to_string(),
-            body: if usage.is_empty() {
-                String::new()
-            } else {
-                format!("  {usage}")
-            },
-        });
-    }
-
-    let title = match line {
-        "Commands:" => "Commands".to_string(),
-        "Options:" => "Options".to_string(),
-        "Arguments:" => "Arguments".to_string(),
-        "Common Invocation Options:" => "Common Invocation Options".to_string(),
-        _ if !line.starts_with(' ') && line.ends_with(':') => {
-            line.trim_end_matches(':').trim().to_string()
-        }
-        _ => return None,
-    };
-
-    Some(HelpSection {
-        title,
-        body: String::new(),
-    })
+    rendered
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::output::OutputFormat;
+    use crate::dsl::apply_output_pipeline;
     use crate::ui::style::StyleOverrides;
-    use crate::ui::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
+    use crate::ui::{
+        GuideDefaultFormat, RenderBackend, RenderSettings, ResolvedRenderSettings,
+        TableBorderStyle, TableOverflow,
+    };
     use insta::assert_snapshot;
 
     fn resolved_settings(frame: crate::ui::chrome::SectionFrameStyle) -> ResolvedRenderSettings {
@@ -402,5 +260,206 @@ mod tests {
 
         assert!(rendered.contains("\u{1b}[31mlist\u{1b}[0m"));
         assert!(rendered.contains("\u{1b}[34m List stored history entries\u{1b}[0m"));
+    }
+
+    #[test]
+    fn guide_default_prefers_chrome_over_inherited_json_unit() {
+        let guide = GuideDoc::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n");
+        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+        settings.guide_default_format = GuideDefaultFormat::Guide;
+
+        let rendered = render_guide_doc(
+            &guide,
+            &settings,
+            GuideRenderOptions {
+                title_prefix: None,
+                layout: HelpLayout::Compact,
+                frame_style: crate::ui::chrome::SectionFrameStyle::None,
+                panel_kind: None,
+            },
+        );
+
+        assert!(rendered.contains("Usage:"));
+        assert!(!rendered.trim_start().starts_with('['));
+    }
+
+    #[test]
+    fn guide_recommendation_beats_inherited_non_explicit_format_unit() {
+        let guide = GuideDoc::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n");
+        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+        settings.guide_default_format = GuideDefaultFormat::Inherit;
+
+        let rendered = render_guide_doc(
+            &guide,
+            &settings,
+            GuideRenderOptions {
+                title_prefix: None,
+                layout: HelpLayout::Compact,
+                frame_style: crate::ui::chrome::SectionFrameStyle::None,
+                panel_kind: None,
+            },
+        );
+
+        assert!(rendered.contains("usage:"));
+        assert!(!rendered.trim_start().starts_with('['));
+    }
+
+    #[test]
+    fn explicit_format_beats_guide_default_unit() {
+        let guide = GuideDoc::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n");
+        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+        settings.guide_default_format = GuideDefaultFormat::Guide;
+        settings.format_explicit = true;
+
+        let rendered = render_guide_doc(
+            &guide,
+            &settings,
+            GuideRenderOptions {
+                title_prefix: None,
+                layout: HelpLayout::Compact,
+                frame_style: crate::ui::chrome::SectionFrameStyle::None,
+                panel_kind: None,
+            },
+        );
+
+        assert!(rendered.trim_start().starts_with('['));
+    }
+
+    #[test]
+    fn guide_output_rehydrates_when_recommendation_survives_pipeline_unit() {
+        let output = GuideDoc::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n")
+            .to_output_result();
+        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+        settings.guide_default_format = GuideDefaultFormat::Guide;
+
+        let rendered = render_guide_output(
+            &output,
+            &settings,
+            GuideRenderOptions {
+                title_prefix: None,
+                layout: HelpLayout::Compact,
+                frame_style: crate::ui::chrome::SectionFrameStyle::None,
+                panel_kind: None,
+            },
+        );
+
+        assert!(rendered.contains("Usage:"));
+        assert!(!rendered.trim_start().starts_with('['));
+    }
+
+    #[test]
+    fn guide_output_after_quick_filter_keeps_guide_rendering_unit() {
+        let output = GuidePayload {
+            usage: vec!["history <COMMAND>".to_string()],
+            commands: vec![
+                crate::guide::GuidePayloadEntry {
+                    name: "list".to_string(),
+                    short_help: "List history entries".to_string(),
+                },
+                crate::guide::GuidePayloadEntry {
+                    name: "prune".to_string(),
+                    short_help: "Remove old history entries".to_string(),
+                },
+            ],
+            ..GuidePayload::default()
+        }
+        .to_output_result();
+        let output =
+            apply_output_pipeline(output, &["list".to_string()]).expect("guide quick should work");
+
+        let mut settings = RenderSettings::test_plain(OutputFormat::Auto);
+        settings.guide_default_format = GuideDefaultFormat::Guide;
+
+        let rendered = render_guide_output(
+            &output,
+            &settings,
+            GuideRenderOptions {
+                title_prefix: None,
+                layout: HelpLayout::Compact,
+                frame_style: crate::ui::chrome::SectionFrameStyle::None,
+                panel_kind: None,
+            },
+        );
+
+        assert!(rendered.contains("Commands:"));
+        assert!(rendered.contains("list"));
+        assert!(!rendered.trim_start().starts_with('['));
+    }
+
+    #[test]
+    fn explicit_format_beats_guide_recommendation_after_pipeline_unit() {
+        let output = GuidePayload {
+            usage: vec!["history <COMMAND>".to_string()],
+            commands: vec![crate::guide::GuidePayloadEntry {
+                name: "list".to_string(),
+                short_help: "List history entries".to_string(),
+            }],
+            ..GuidePayload::default()
+        }
+        .to_output_result();
+        let output =
+            apply_output_pipeline(output, &["list".to_string()]).expect("guide quick should work");
+
+        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+        settings.guide_default_format = GuideDefaultFormat::Guide;
+        settings.format_explicit = true;
+
+        let rendered = render_guide_output(
+            &output,
+            &settings,
+            GuideRenderOptions {
+                title_prefix: None,
+                layout: HelpLayout::Compact,
+                frame_style: crate::ui::chrome::SectionFrameStyle::None,
+                panel_kind: None,
+            },
+        );
+
+        assert!(rendered.trim_start().starts_with('['));
+        assert!(rendered.contains("\"commands\""));
+        assert!(rendered.contains("\"short_help\""));
+    }
+
+    #[test]
+    fn markdown_guide_output_uses_semantic_sections_after_pipeline_unit() {
+        let output = GuidePayload {
+            usage: vec!["history <COMMAND>".to_string()],
+            commands: vec![
+                crate::guide::GuidePayloadEntry {
+                    name: "list".to_string(),
+                    short_help: "List history entries".to_string(),
+                },
+                crate::guide::GuidePayloadEntry {
+                    name: "prune".to_string(),
+                    short_help: "Remove old history entries".to_string(),
+                },
+            ],
+            ..GuidePayload::default()
+        }
+        .to_output_result();
+        let output =
+            apply_output_pipeline(output, &["list".to_string()]).expect("guide quick should work");
+
+        let mut settings = RenderSettings::test_plain(OutputFormat::Markdown);
+        settings.format_explicit = true;
+        settings.guide_default_format = GuideDefaultFormat::Guide;
+
+        let rendered = render_guide_output(
+            &output,
+            &settings,
+            GuideRenderOptions {
+                title_prefix: None,
+                layout: HelpLayout::Compact,
+                frame_style: crate::ui::chrome::SectionFrameStyle::None,
+                panel_kind: None,
+            },
+        );
+
+        assert!(rendered.contains("## Commands"));
+        assert!(rendered.contains("| name"));
+        assert!(rendered.contains("short_help"));
+        assert!(rendered.contains("| list | List history entries |"));
+        assert!(!rendered.contains("\"commands\""));
+        assert!(!rendered.contains("+---"));
     }
 }

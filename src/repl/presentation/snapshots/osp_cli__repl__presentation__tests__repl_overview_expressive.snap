@@ -1,9 +1,10 @@
 ---
 source: src/repl/presentation/tests.rs
-assertion_line: 112
+assertion_line: 113
 expression: rendered
 ---
- Usage:  [INVOCATION_OPTIONS] COMMAND [ARGS]...
+- Usage ----
+  [INVOCATION_OPTIONS] COMMAND [ARGS]...
 
 - Commands -
   options     per invocation: --format json

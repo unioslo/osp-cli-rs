@@ -1,8 +1,19 @@
 use super::*;
+use crate::repl::surface::ReplSurface;
 use insta::assert_snapshot;
 
 fn intro_commands(commands: &[&str]) -> Vec<String> {
     commands.iter().map(|value| (*value).to_string()).collect()
+}
+
+fn intro_surface(commands: &[&str]) -> ReplSurface {
+    ReplSurface {
+        root_words: intro_commands(commands),
+        intro_commands: intro_commands(commands),
+        specs: Vec::new(),
+        aliases: Vec::new(),
+        overview_entries: Vec::new(),
+    }
 }
 
 #[test]
@@ -43,6 +54,21 @@ fn repl_prompt_right_includes_timing_breakdown_at_debug_three_unit() {
     assert!(rendered.contains("p4.0ms"));
     assert!(rendered.contains("e300.0ms"));
     assert!(rendered.contains("r17.0ms"));
+}
+
+#[test]
+fn startup_prompt_timing_is_seeded_once_unit() {
+    let settings = RenderSettings::test_plain(OutputFormat::Table);
+    let resolved = settings.resolve_render_settings();
+    let mut session = crate::app::AppSession::with_cache_limit(8);
+
+    session.seed_startup_prompt_timing(1, std::time::Duration::from_millis(42));
+    session.seed_startup_prompt_timing(1, std::time::Duration::from_millis(99));
+
+    let rendered = repl::render_repl_prompt_right_for_test(&resolved, true, &session.prompt_timing);
+
+    assert!(rendered.contains("42ms"));
+    assert!(!rendered.contains("99ms"));
 }
 
 #[test]
@@ -105,7 +131,7 @@ fn austere_repl_intro_is_minimal_single_line_unit() {
     let state = make_completion_state_with_entries(None, &[("ui.presentation", "austere")]);
     let rendered = crate::repl::presentation::render_repl_intro(
         repl_view(&state.runtime, &state.session),
-        &intro_commands(&["help", "config", "theme", "plugins"]),
+        &intro_surface(&["help", "config", "theme", "plugins"]),
     );
 
     assert_eq!(
@@ -122,7 +148,7 @@ fn repl_intro_respects_builtin_visibility_unit() {
     let state = make_completion_state_with_entries(Some("help"), &[("ui.presentation", "compact")]);
     let rendered = crate::repl::presentation::render_repl_intro(
         repl_view(&state.runtime, &state.session),
-        &intro_commands(&["help"]),
+        &intro_surface(&["help"]),
     );
 
     assert!(rendered.contains("Commands: help."), "{rendered:?}");
@@ -136,7 +162,7 @@ fn compact_repl_intro_is_minimal_single_line_unit() {
     let state = make_completion_state_with_entries(None, &[("ui.presentation", "compact")]);
     let rendered = crate::repl::presentation::render_repl_intro(
         repl_view(&state.runtime, &state.session),
-        &intro_commands(&["help", "config", "theme", "plugins"]),
+        &intro_surface(&["help", "config", "theme", "plugins"]),
     );
 
     assert_eq!(

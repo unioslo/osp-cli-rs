@@ -1,3 +1,4 @@
+use crate::core::output::OutputFormat;
 use crate::core::row::Row;
 use std::collections::HashSet;
 
@@ -23,6 +24,13 @@ pub struct OutputMeta {
     pub column_align: Vec<ColumnAlignment>,
     pub wants_copy: bool,
     pub grouped: bool,
+    pub render_recommendation: Option<RenderRecommendation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderRecommendation {
+    Format(OutputFormat),
+    Guide,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +55,7 @@ impl OutputResult {
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: false,
+                render_recommendation: None,
             },
         }
     }

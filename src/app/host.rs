@@ -22,8 +22,8 @@ use crate::app::{
     AppClients, AppRuntime, AppSession, AuthState, LaunchContext, TerminalKind, UiState,
 };
 use crate::cli::commands::{
-    config as config_cmd, doctor as doctor_cmd, history as history_cmd, plugins as plugins_cmd,
-    theme as theme_cmd,
+    config as config_cmd, doctor as doctor_cmd, history as history_cmd, intro as intro_cmd,
+    plugins as plugins_cmd, theme as theme_cmd,
 };
 use crate::cli::invocation::{InvocationOptions, append_invocation_help_if_verbose, scan_cli_argv};
 use crate::cli::{Cli, Commands};
@@ -66,6 +66,7 @@ pub(crate) const CMD_DOCTOR: &str = "doctor";
 pub(crate) const CMD_CONFIG: &str = "config";
 pub(crate) const CMD_THEME: &str = "theme";
 pub(crate) const CMD_HISTORY: &str = "history";
+pub(crate) const CMD_INTRO: &str = "intro";
 pub(crate) const CMD_HELP: &str = "help";
 pub(crate) const CMD_LIST: &str = "list";
 pub(crate) const CMD_SHOW: &str = "show";
@@ -179,9 +180,9 @@ fn handle_clap_parse_error(
             let help_context = help::render_settings_for_help(args);
             let body = append_invocation_help_if_verbose(&err.to_string(), invocation);
             let body = append_native_command_help(body, native_commands);
-            let rendered = repl_help::render_help_with_chrome(
-                &body,
-                &help_context.settings.resolve_render_settings(),
+            let rendered = repl_help::render_help_doc_with_layout(
+                &crate::guide::GuideDoc::from_text(&body),
+                &help_context.settings,
                 help_context.layout,
             );
             sink.write_stdout(&rendered);
@@ -246,6 +247,7 @@ fn run(
         config_root: None,
         cache_root: None,
         runtime_load,
+        startup_started_at: run_started,
     };
 
     let config = resolve_runtime_config(
@@ -271,7 +273,10 @@ fn run(
 
     let plugin_manager = PluginManager::new(cli.plugin_dirs.clone())
         .with_process_timeout(plugin_process_timeout(&config))
-        .with_path_discovery(plugin_path_discovery_enabled(&config));
+        .with_path_discovery(plugin_path_discovery_enabled(&config))
+        .with_command_preferences(
+            crate::plugin::state::PluginCommandPreferences::from_resolved(&config),
+        );
 
     let mut state = build_app_state(crate::app::AppStateInit {
         context: runtime_context,
@@ -361,6 +366,14 @@ fn run(
             &state.clients,
             &invocation_ui,
             Commands::History(args),
+            sink,
+        ),
+        RunAction::Intro(args) => run_builtin_cli_command_parts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &invocation_ui,
+            Commands::Intro(args),
             sink,
         ),
         RunAction::External(ref tokens) => run_external_command(
@@ -517,6 +530,11 @@ pub(crate) fn dispatch_builtin_command_parts(
                 None => history_cmd::run_history_command(args).map(Some),
             }
         }
+        Commands::Intro(args) => intro_cmd::run_intro_command(
+            intro_command_context(runtime, session, clients, &invocation_ui),
+            args,
+        )
+        .map(Some),
         Commands::Repl(args) => {
             if repl_history.is_some() {
                 Err(miette!("`repl` debug commands are not available in REPL"))
@@ -533,11 +551,13 @@ fn plugins_command_context<'a>(
     clients: &'a AppClients,
 ) -> plugins_cmd::PluginsCommandContext<'a> {
     plugins_cmd::PluginsCommandContext {
+        context: &runtime.context,
         config: runtime.config.resolved(),
         config_state: Some(&runtime.config),
         auth: &runtime.auth,
         clients: Some(clients),
         plugin_manager: &clients.plugins,
+        runtime_load: runtime.launch.runtime_load,
     }
 }
 
@@ -587,6 +607,33 @@ fn doctor_command_context<'a>(
     }
 }
 
+fn intro_command_context<'a>(
+    runtime: &'a AppRuntime,
+    session: &'a AppSession,
+    clients: &'a AppClients,
+    ui: &'a UiState,
+) -> intro_cmd::IntroCommandContext<'a> {
+    let view = repl::ReplViewContext {
+        config: runtime.config.resolved(),
+        ui,
+        auth: &runtime.auth,
+        themes: &runtime.themes,
+        scope: &session.scope,
+    };
+    let surface = authorized_command_catalog_for(&runtime.auth, clients)
+        .ok()
+        .map(|catalog| repl::surface::build_repl_surface(view, &catalog))
+        .unwrap_or_else(|| repl::surface::ReplSurface {
+            root_words: Vec::new(),
+            intro_commands: Vec::new(),
+            specs: Vec::new(),
+            aliases: Vec::new(),
+            overview_entries: Vec::new(),
+        });
+
+    intro_cmd::IntroCommandContext { view, surface }
+}
+
 fn ui_state_for_invocation(ui: &UiState, invocation: Option<&ResolvedInvocation>) -> UiState {
     let Some(invocation) = invocation else {
         return UiState {
@@ -603,6 +650,7 @@ pub(crate) fn resolve_invocation_ui(
     invocation: &InvocationOptions,
 ) -> ResolvedInvocation {
     let mut render_settings = ui.render_settings.clone();
+    render_settings.format_explicit = invocation.format.is_some();
     if let Some(format) = invocation.format {
         render_settings.format = format;
     }
@@ -746,9 +794,6 @@ pub(crate) fn plugin_path_discovery_enabled(config: &ResolvedConfig) -> bool {
 fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
     if let Some(plugin_err) = known.plugin {
         return Some(match plugin_err {
-            PluginDispatchError::StateLoadFailed { .. } => {
-                "fix or remove the plugin state file before retrying the command"
-            }
             PluginDispatchError::CommandNotFound { .. } => {
                 "run `osp plugins list` and set --plugin-dir or OSP_PLUGIN_PATH"
             }

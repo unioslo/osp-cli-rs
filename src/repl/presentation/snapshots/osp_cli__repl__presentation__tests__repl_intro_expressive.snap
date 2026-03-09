@@ -1,6 +1,5 @@
 ---
 source: src/repl/presentation/tests.rs
-assertion_line: 80
 expression: rendered
 ---
 
@@ -20,3 +19,6 @@ expression: rendered
   | A metric() | L limit offset | C count
   K key | V value | contains | !not | ?exist | !?not_exist (= exact, == case-sens.)
   Help: | H or | H <verb> e.g. | H F
+
+- Usage ----
+[INVOCATION_OPTIONS] COMMAND [ARGS]...

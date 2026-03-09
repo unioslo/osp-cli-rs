@@ -35,28 +35,38 @@ fn plugins_enable_and_disable_contract() {
         .expect("time should be valid")
         .as_nanos();
     home.push(format!("osp-cli-plugin-test-{nonce}"));
+    let dir = make_temp_dir("osp-cli-plugin-toggle");
+    let _plugin = write_named_plugin(&dir, "hello", "hello");
 
     let mut enable = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     enable
         .envs(crate::test_env::isolated_env(&home))
-        .args(["plugins", "enable", "uio-ldap"]);
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["plugins", "enable", "hello"]);
     enable
         .assert()
         .success()
-        .stderr(predicate::str::contains("enabled plugin: uio-ldap"));
+        .stderr(predicate::str::contains("enabled command: hello"));
 
-    let state_path = home.join(".config").join("osp").join("plugins.json");
-    assert!(state_path.exists(), "plugin state file should be created");
+    let config_path = home.join(".config").join("osp").join("config.toml");
+    let config = std::fs::read_to_string(&config_path).expect("plugin config should be written");
+    assert!(config.contains("[profile.default.plugins.hello]"));
+    assert!(config.contains("state = \"enabled\""));
 
     let mut disable = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     disable
         .envs(crate::test_env::isolated_env(&home))
-        .args(["plugins", "disable", "uio-ldap"]);
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["plugins", "disable", "hello"]);
     disable
         .assert()
         .success()
-        .stderr(predicate::str::contains("disabled plugin: uio-ldap"));
+        .stderr(predicate::str::contains("disabled command: hello"));
 
+    let updated = std::fs::read_to_string(&config_path).expect("updated plugin config should read");
+    assert!(updated.contains("state = \"disabled\""));
+
+    let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -68,12 +78,16 @@ fn quiet_hides_success_messages_contract() {
         .expect("time should be valid")
         .as_nanos();
     home.push(format!("osp-cli-plugin-quiet-test-{nonce}"));
+    let dir = make_temp_dir("osp-cli-plugin-quiet-toggle");
+    let _plugin = write_named_plugin(&dir, "hello", "hello");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd.envs(crate::test_env::isolated_env(&home))
-        .args(["-q", "plugins", "enable", "uio-ldap"]);
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["-q", "plugins", "enable", "hello"]);
     cmd.assert().success().stderr(predicate::str::is_empty());
 
+    let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -522,7 +536,7 @@ commands = ["hello"]
     enable
         .assert()
         .success()
-        .stderr(predicate::str::contains("enabled plugin: hello"));
+        .stderr(predicate::str::contains("enabled command: hello"));
 
     let mut second = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     second
@@ -554,7 +568,17 @@ fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins_contract()
     enable
         .assert()
         .success()
-        .stderr(predicate::str::contains("enabled plugin: alpha"));
+        .stderr(predicate::str::contains("enabled command: alpha"));
+
+    let mut clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    clear
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["plugins", "clear-state", "alpha"]);
+    clear
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("cleared command state for alpha"));
 
     let mut beta = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     beta.envs(crate::test_env::isolated_env(&home))
@@ -563,6 +587,46 @@ fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins_contract()
     beta.assert()
         .success()
         .stdout(predicate::str::contains("beta-from-plugin"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn plugins_enable_with_terminal_scope_and_clear_state_contract() {
+    let mut home = std::env::temp_dir();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("time should be valid")
+        .as_nanos();
+    home.push(format!("osp-cli-plugin-terminal-scope-{nonce}"));
+    let dir = make_temp_dir("osp-cli-plugin-terminal-toggle");
+    let _plugin = write_named_plugin(&dir, "hello", "hello");
+
+    let mut enable = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    enable
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["plugins", "enable", "hello", "--terminal", "repl"]);
+    enable.assert().success();
+
+    let config_path = home.join(".config").join("osp").join("config.toml");
+    let config = std::fs::read_to_string(&config_path).expect("plugin config should be written");
+    assert!(config.contains("[terminal.repl.profile.default.plugins.hello]"));
+    assert!(config.contains("state = \"enabled\""));
+
+    let mut clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    clear
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["plugins", "clear-state", "hello", "--terminal", "repl"]);
+    clear
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("cleared command state for hello"));
+
+    let updated = std::fs::read_to_string(&config_path).expect("updated plugin config should read");
+    assert!(!updated.contains("state = \"enabled\""));
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&home);

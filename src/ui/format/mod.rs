@@ -1,5 +1,7 @@
 use crate::core::output::OutputFormat;
-use crate::core::output_model::{ColumnAlignment, Group, OutputItems, OutputResult};
+use crate::core::output_model::{
+    ColumnAlignment, Group, OutputItems, OutputResult, RenderRecommendation,
+};
 use crate::core::row::Row;
 
 use crate::ui::document::{Block, Document, JsonBlock, TableStyle};
@@ -12,7 +14,6 @@ mod mreg;
 mod table;
 mod value;
 
-pub use help::build_help_document;
 pub use message::{MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules};
 
 #[cfg(test)]
@@ -36,9 +37,12 @@ pub fn build_document_from_output_resolved(
     settings: &RenderSettings,
     resolved: &ResolvedRenderSettings,
 ) -> Document {
-    let format = resolve_output_format(output, settings.format);
+    let format = resolve_output_format(output, settings);
     let mut next_block_id = 1u64;
     match format {
+        OutputFormat::Guide => {
+            build_guide_fallback_document(output, settings, resolved, &mut next_block_id)
+        }
         OutputFormat::Json => Document {
             blocks: vec![Block::Json(build_json_block_from_output(output))],
         },
@@ -84,13 +88,24 @@ pub fn resolve_format(rows: &[Row], format: OutputFormat) -> OutputFormat {
             items: OutputItems::Rows(rows.to_vec()),
             meta: Default::default(),
         },
-        format,
+        &RenderSettings::test_plain(format),
     )
 }
 
-pub fn resolve_output_format(output: &OutputResult, format: OutputFormat) -> OutputFormat {
-    if !matches!(format, OutputFormat::Auto) {
-        return format;
+pub fn resolve_output_format(output: &OutputResult, settings: &RenderSettings) -> OutputFormat {
+    if settings.format_explicit && !matches!(settings.format, OutputFormat::Auto) {
+        return settings.format;
+    }
+
+    if let Some(recommended) = output.meta.render_recommendation {
+        return match recommended {
+            RenderRecommendation::Format(format) => format,
+            RenderRecommendation::Guide => OutputFormat::Guide,
+        };
+    }
+
+    if !matches!(settings.format, OutputFormat::Auto) {
+        return settings.format;
     }
 
     if matches!(output.items, OutputItems::Groups(_)) {
@@ -107,6 +122,46 @@ pub fn resolve_output_format(output: &OutputResult, format: OutputFormat) -> Out
         OutputFormat::Mreg
     } else {
         OutputFormat::Table
+    }
+}
+
+fn build_guide_fallback_document(
+    output: &OutputResult,
+    settings: &RenderSettings,
+    resolved: &ResolvedRenderSettings,
+    next_block_id: &mut u64,
+) -> Document {
+    let rows = materialize_rows(output);
+    if rows
+        .iter()
+        .all(|row| row.len() == 1 && row.contains_key("value"))
+    {
+        return Document {
+            blocks: vec![Block::Value(value::build_value_block(&rows))],
+        };
+    }
+
+    if matches!(output.items, OutputItems::Groups(_)) || rows.len() > 1 {
+        return build_table_document(output, TableStyle::Grid, next_block_id);
+    }
+
+    let width_hint = resolved.width.unwrap_or(100).max(24);
+    let prefer_stacked_object_lists = resolved.backend == RenderBackend::Rich;
+    Document {
+        blocks: mreg::build_mreg_blocks(
+            &rows,
+            mreg::MregBuildOptions {
+                key_order: Some(&output.meta.key_index),
+                short_list_max: settings.short_list_max,
+                medium_list_max: settings.medium_list_max,
+                width_hint,
+                indent_size: settings.indent_size.max(1),
+                prefer_stacked_object_lists,
+                stack_min_col_width: settings.mreg_stack_min_col_width.max(1),
+                stack_overflow_ratio: settings.mreg_stack_overflow_ratio.max(100),
+            },
+            next_block_id,
+        ),
     }
 }
 
@@ -337,7 +392,7 @@ mod tests {
     };
     use crate::core::output::{OutputFormat, RenderMode};
     use crate::core::output_model::{
-        ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult,
+        ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult, RenderRecommendation,
     };
     use crate::core::row::Row;
     use crate::ui::RenderSettings;
@@ -370,7 +425,7 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_output_format(&output, OutputFormat::Auto),
+            resolve_output_format(&output, &RenderSettings::test_plain(OutputFormat::Auto)),
             OutputFormat::Table
         );
     }
@@ -394,6 +449,7 @@ mod tests {
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: true,
+                render_recommendation: None,
             },
         };
 
@@ -448,6 +504,7 @@ mod tests {
                 column_align: vec![ColumnAlignment::Left, ColumnAlignment::Right],
                 wants_copy: false,
                 grouped: false,
+                render_recommendation: None,
             },
         };
 
@@ -486,6 +543,7 @@ mod tests {
                 ],
                 wants_copy: false,
                 grouped: true,
+                render_recommendation: None,
             },
         };
 
@@ -532,6 +590,7 @@ mod tests {
                 ],
                 wants_copy: false,
                 grouped: true,
+                render_recommendation: None,
             },
         };
 
@@ -571,6 +630,34 @@ mod tests {
 
         let document = build_document(&rows, &settings(OutputFormat::Value));
         assert!(matches!(document.blocks[0], Block::Value(_)));
+    }
+
+    #[test]
+    fn recommendation_beats_inherited_format_unit() {
+        let rows = vec![json!({"value": 7}).as_object().cloned().expect("object")];
+        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+        settings.format_explicit = false;
+        let mut output = OutputResult::from_rows(rows);
+        output.meta.render_recommendation = Some(RenderRecommendation::Format(OutputFormat::Value));
+
+        assert_eq!(
+            resolve_output_format(&output, &settings),
+            OutputFormat::Value
+        );
+    }
+
+    #[test]
+    fn explicit_format_beats_recommendation_unit() {
+        let rows = vec![json!({"value": 7}).as_object().cloned().expect("object")];
+        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+        settings.format_explicit = true;
+        let mut output = OutputResult::from_rows(rows);
+        output.meta.render_recommendation = Some(RenderRecommendation::Format(OutputFormat::Value));
+
+        assert_eq!(
+            resolve_output_format(&output, &settings),
+            OutputFormat::Json
+        );
     }
 
     #[test]

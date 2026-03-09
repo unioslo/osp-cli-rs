@@ -186,6 +186,7 @@ pub(crate) fn intro_style_with_verbosity(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn repl_intro_includes_overview(style: ReplIntroStyle) -> bool {
     matches!(style, ReplIntroStyle::Compact | ReplIntroStyle::Full)
 }

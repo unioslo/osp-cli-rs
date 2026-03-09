@@ -146,6 +146,7 @@ pub struct AppSession {
     pub history_enabled: bool,
     pub history_shell: HistoryShellContext,
     pub prompt_timing: DebugTimingState,
+    pub(crate) startup_prompt_timing_pending: bool,
     pub scope: ReplScopeStack,
     pub last_rows: Vec<Row>,
     pub last_failure: Option<LastFailure>,
@@ -172,6 +173,7 @@ impl AppSession {
             history_enabled: true,
             history_shell: HistoryShellContext::default(),
             prompt_timing: DebugTimingState::default(),
+            startup_prompt_timing_pending: true,
             scope: ReplScopeStack::default(),
             last_rows: Vec::new(),
             last_failure: None,
@@ -268,6 +270,26 @@ impl AppSession {
                 parse,
                 execute,
                 render,
+            },
+        });
+    }
+
+    pub fn seed_startup_prompt_timing(&mut self, level: u8, total: Duration) {
+        if !self.startup_prompt_timing_pending {
+            return;
+        }
+        self.startup_prompt_timing_pending = false;
+        if level == 0 {
+            return;
+        }
+
+        self.prompt_timing.set(DebugTimingBadge {
+            level,
+            summary: TimingSummary {
+                total,
+                parse: None,
+                execute: None,
+                render: None,
             },
         });
     }

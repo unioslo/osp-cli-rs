@@ -1,5 +1,7 @@
+use crate::completion::tree::command_spec_from_command_def;
 use crate::completion::{ArgNode, CommandSpec, FlagNode, SuggestionEntry};
 use crate::config::{ConfigSchema, SchemaValueType};
+use crate::core::command_def::CommandDef;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::app::{
@@ -11,6 +13,7 @@ use crate::ui::presentation::{HelpLayout, help_layout};
 
 use super::ReplViewContext;
 use super::history;
+use crate::cli::commands::{doctor as doctor_cmd, theme as theme_cmd};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReplOverviewEntry {
@@ -88,11 +91,9 @@ pub(crate) fn build_repl_surface(
     }
     if view.auth.is_builtin_visible(CMD_DOCTOR) {
         root_words.push(CMD_DOCTOR.to_string());
-        specs.push(doctor_command_spec(help_layout));
-        overview_entries.push(ReplOverviewEntry {
-            name: CMD_DOCTOR.to_string(),
-            summary: "subcommands: all, config, last, plugins, theme".to_string(),
-        });
+        let def = doctor_cmd::doctor_command_def(command_sort_key(CMD_DOCTOR, help_layout));
+        specs.push(command_spec_from_command_def(&def));
+        overview_entries.push(overview_entry_from_command_def(&def));
     }
     if view.auth.is_builtin_visible(CMD_THEME) {
         root_words.extend([
@@ -101,11 +102,10 @@ pub(crate) fn build_repl_surface(
             CMD_SHOW.to_string(),
             CMD_USE.to_string(),
         ]);
-        specs.push(theme_command_spec(view));
-        overview_entries.push(ReplOverviewEntry {
-            name: CMD_THEME.to_string(),
-            summary: "subcommands: list, show, use".to_string(),
-        });
+        let def =
+            theme_cmd::theme_command_def(view.themes, command_sort_key(CMD_THEME, help_layout));
+        specs.push(command_spec_from_command_def(&def));
+        overview_entries.push(overview_entry_from_command_def(&def));
     }
     if view.auth.is_builtin_visible(CMD_CONFIG) {
         root_words.extend([
@@ -129,12 +129,9 @@ pub(crate) fn build_repl_surface(
             "prune".to_string(),
             "clear".to_string(),
         ]);
-        specs
-            .push(history::history_command_spec().sort(command_sort_key(CMD_HISTORY, help_layout)));
-        overview_entries.push(ReplOverviewEntry {
-            name: CMD_HISTORY.to_string(),
-            summary: "subcommands: list, prune, clear".to_string(),
-        });
+        let def = history::history_command_def(command_sort_key(CMD_HISTORY, help_layout));
+        specs.push(command_spec_from_command_def(&def));
+        overview_entries.push(overview_entry_from_command_def(&def));
     }
 
     overview_entries.extend(catalog.iter().map(plugin_overview_entry));
@@ -368,6 +365,26 @@ fn provider_selection_summary(entry: &CommandCatalogEntry, base: Option<&str>) -
     }
 }
 
+fn overview_entry_from_command_def(def: &CommandDef) -> ReplOverviewEntry {
+    let summary = if def.subcommands.is_empty() {
+        def.about.clone().unwrap_or_else(|| "Command".to_string())
+    } else {
+        format!(
+            "subcommands: {}",
+            def.subcommands
+                .iter()
+                .map(|subcommand| subcommand.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    ReplOverviewEntry {
+        name: def.name.clone(),
+        summary,
+    }
+}
+
 fn spec_completion_words(spec: &CommandSpec) -> Vec<String> {
     let mut words = vec![spec.name.clone()];
     for flag in spec.flags.keys() {
@@ -439,32 +456,6 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry], help_layout: HelpLayout
                 .tooltip("Clear selected provider for one command")
                 .sort("18")
                 .arg(ArgNode::named("command").suggestions(command_names)),
-        ])
-}
-
-fn theme_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
-    let theme_names = view
-        .themes
-        .ids()
-        .into_iter()
-        .map(SuggestionEntry::value)
-        .collect::<Vec<_>>();
-
-    CommandSpec::new(CMD_THEME)
-        .tooltip("Inspect and apply themes")
-        .sort(command_sort_key(CMD_THEME, help_layout(view.config)))
-        .subcommands([
-            CommandSpec::new(CMD_LIST)
-                .tooltip("List available themes")
-                .sort("10"),
-            CommandSpec::new(CMD_SHOW)
-                .tooltip("Show a theme definition")
-                .sort("11")
-                .arg(ArgNode::named("name").suggestions(theme_names.clone())),
-            CommandSpec::new(CMD_USE)
-                .tooltip("Set active theme")
-                .sort("12")
-                .arg(ArgNode::named("name").suggestions(theme_names)),
         ])
 }
 
@@ -546,21 +537,6 @@ fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
             CommandSpec::new("doctor")
                 .tooltip("Show config diagnostics")
                 .sort("14"),
-        ])
-}
-
-fn doctor_command_spec(help_layout: HelpLayout) -> CommandSpec {
-    CommandSpec::new(CMD_DOCTOR)
-        .tooltip("Run diagnostics checks")
-        .sort(command_sort_key(CMD_DOCTOR, help_layout))
-        .subcommands([
-            CommandSpec::new("all").sort("10"),
-            CommandSpec::new(CMD_CONFIG).sort("11"),
-            CommandSpec::new("last")
-                .tooltip("Show the last REPL failure")
-                .sort("12"),
-            CommandSpec::new(CMD_PLUGINS).sort("13"),
-            CommandSpec::new(CMD_THEME).sort("14"),
         ])
 }
 
