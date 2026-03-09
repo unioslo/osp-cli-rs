@@ -1,13 +1,43 @@
 use anyhow::{Result, anyhow};
 
-use crate::dsl::parse::lexer::{Span, StageSegment, tokenize_stage};
+use crate::core::{output_model::Group, row::Row};
 
-pub fn parse_terms(spec: &str) -> Vec<String> {
-    spec.split(|ch: char| ch == ',' || ch.is_whitespace())
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+use crate::dsl::parse::lexer::{Span, StageSegment, tokenize_stage, tokenize_stage_terms};
+
+pub fn parse_terms(spec: &str) -> Result<Vec<String>> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let segment = StageSegment {
+        raw: trimmed.to_string(),
+        span: Span {
+            start: 0,
+            end: trimmed.len(),
+        },
+    };
+    let tokens = tokenize_stage_terms(&segment).map_err(|error| anyhow!(error.to_string()))?;
+    Ok(tokens.into_iter().map(|token| token.text).collect())
+}
+
+// Row-oriented grouped stages should preserve the group envelope and only
+// transform the rows inside it. Keep that contract in one helper so new stages
+// do not silently diverge.
+pub(crate) fn map_group_rows(
+    groups: Vec<Group>,
+    mut map_rows: impl FnMut(Vec<Row>) -> Result<Vec<Row>>,
+) -> Result<Vec<Group>> {
+    let mut out = Vec::with_capacity(groups.len());
+    for group in groups {
+        let rows = map_rows(group.rows)?;
+        out.push(Group {
+            groups: group.groups,
+            aggregates: group.aggregates,
+            rows,
+        });
+    }
+    Ok(out)
 }
 
 pub fn parse_stage_words(spec: &str) -> Result<Vec<String>> {
@@ -60,15 +90,66 @@ pub fn parse_alias_after_as(words: &[String], index: usize, verb: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_alias_after_as, parse_optional_alias_after_key, parse_stage_words, parse_terms,
+        map_group_rows, parse_alias_after_as, parse_optional_alias_after_key, parse_stage_words,
+        parse_terms,
     };
+    use crate::core::output_model::Group;
+    use serde_json::json;
 
     #[test]
     fn parse_terms_splits_commas_and_whitespace() {
         assert_eq!(
-            parse_terms(" uid, cn  mail,,groups "),
+            parse_terms(" uid, cn  mail,,groups ").expect("terms should parse"),
             vec!["uid", "cn", "mail", "groups"]
         );
+    }
+
+    #[test]
+    fn parse_terms_respects_quoted_commas_and_spaces() {
+        assert_eq!(
+            parse_terms(" uid, \"display,name\", 'team ops' ").expect("quoted terms should parse"),
+            vec!["uid", "display,name", "team ops"]
+        );
+    }
+
+    #[test]
+    fn map_group_rows_preserves_metadata_while_transforming_rows() {
+        let groups = vec![Group {
+            groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
+            aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+            rows: vec![
+                json!({"uid": "alice"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+                json!({"uid": "bob"}).as_object().cloned().expect("object"),
+            ],
+        }];
+
+        let mapped = map_group_rows(groups, |rows| {
+            Ok(rows
+                .into_iter()
+                .filter(|row| row.get("uid") == Some(&json!("alice")))
+                .collect())
+        })
+        .expect("group row mapping should work");
+
+        assert_eq!(
+            mapped[0]
+                .groups
+                .get("team")
+                .and_then(|value| value.as_str()),
+            Some("ops")
+        );
+        assert_eq!(
+            mapped[0]
+                .aggregates
+                .get("count")
+                .and_then(|value| value.as_i64()),
+            Some(2)
+        );
+        assert_eq!(mapped[0].rows.len(), 1);
+        assert_eq!(mapped[0].rows[0].get("uid"), Some(&json!("alice")));
     }
 
     #[test]

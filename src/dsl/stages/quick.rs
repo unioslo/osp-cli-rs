@@ -1,13 +1,16 @@
 use std::collections::HashSet;
 
-use crate::core::row::Row;
+use crate::core::{output_model::Group, row::Row};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::dsl::{
     eval::{
         flatten::{coalesce_flat_row, flatten_row},
-        matchers::{KeyMatches, match_row_keys_detailed, render_value},
+        matchers::{
+            KeyMatches, contains_case_insensitive, eq_case_insensitive, match_row_keys_detailed,
+            render_value,
+        },
         resolve::{resolve_pairs, resolve_values_truthy},
     },
     parse::{
@@ -15,6 +18,7 @@ use crate::dsl::{
         path::parse_path,
         quick::{QuickScope, parse_quick_spec},
     },
+    stages::common::map_group_rows,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +73,22 @@ pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
     }
 
     Ok(out)
+}
+
+pub fn apply_groups(groups: Vec<Group>, raw_stage: &str) -> Result<Vec<Group>> {
+    let plan = compile(raw_stage)?;
+    map_group_rows(groups, |rows| {
+        let mode = if rows.len() > 1 {
+            MatchMode::Multi
+        } else {
+            MatchMode::Single
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            out.extend(plan.apply_row(row, mode));
+        }
+        Ok(out)
+    })
 }
 
 pub(crate) fn stream_rows_with_plan<I>(
@@ -392,11 +412,11 @@ fn key_hits_match_projection_token(key_hits: &[String], token: &str) -> bool {
         return false;
     };
 
-    if !first.eq_ignore_ascii_case(token) {
+    if !eq_case_insensitive(&first, token) {
         return false;
     }
 
-    names.all(|name| name.eq_ignore_ascii_case(&first))
+    names.all(|name| eq_case_insensitive(&name, &first))
 }
 
 fn extend_unique(out: &mut Vec<String>, seen: &mut HashSet<String>, keys: &[String]) {
@@ -431,7 +451,7 @@ fn value_matches_token(value: &Value, token: &str, exact: ExactMode) -> bool {
                     .iter()
                     .any(|item| value_matches_token(item, token, exact));
             }
-            render_value(value).eq_ignore_ascii_case(token)
+            eq_case_insensitive(&render_value(value), token)
         }
         ExactMode::None => {
             if let Value::Array(values) = value {
@@ -439,9 +459,7 @@ fn value_matches_token(value: &Value, token: &str, exact: ExactMode) -> bool {
                     .iter()
                     .any(|item| value_matches_token(item, token, exact));
             }
-            render_value(value)
-                .to_ascii_lowercase()
-                .contains(&token.to_ascii_lowercase())
+            contains_case_insensitive(&render_value(value), token)
         }
     }
 }

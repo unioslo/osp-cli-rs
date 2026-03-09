@@ -378,6 +378,26 @@ fn quick_helper_functions_cover_sparse_arrays_and_segment_fallbacks_unit() {
 }
 
 #[test]
+fn quick_matching_is_unicode_case_insensitive_for_keys_and_values() {
+    let value_matches = apply(
+        vec![
+            row(json!({"name": "Øystein"})),
+            row(json!({"name": "Alice"})),
+        ],
+        "V øys",
+    )
+    .expect("unicode value search should work");
+    assert_eq!(value_matches, vec![row(json!({"name": "Øystein"}))]);
+
+    let key_matches = apply(
+        vec![row(json!({"Grønn": true})), row(json!({"status": true}))],
+        "K grønn",
+    )
+    .expect("unicode key search should work");
+    assert_eq!(key_matches, vec![row(json!({"Grønn": true}))]);
+}
+
+#[test]
 fn quick_match_and_transform_helpers_cover_scalar_negated_and_filtered_paths_unit() {
     let original = row(json!({
         "uid": "alice",

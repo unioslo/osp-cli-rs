@@ -172,7 +172,7 @@ impl PipelineExecutor {
                 stream_row_fanout(stream, move |row| plan.project_row(&row))
             }
             "VAL" | "VALUE" => {
-                let plan = values::compile(&stage.spec);
+                let plan = values::compile(&stage.spec)?;
                 stream_row_fanout(stream, move |row| plan.extract_row(&row))
             }
             "L" => {
@@ -222,7 +222,12 @@ impl PipelineExecutor {
     }
 
     fn apply_quick_stage(&self, items: OutputItems, stage: &ParsedStage) -> Result<OutputItems> {
-        map_rows(items, |rows| quick::apply(rows, &stage.raw))
+        match items {
+            OutputItems::Rows(rows) => quick::apply(rows, &stage.raw).map(OutputItems::Rows),
+            OutputItems::Groups(groups) => {
+                quick::apply_groups(groups, &stage.raw).map(OutputItems::Groups)
+            }
+        }
     }
 
     fn apply_explicit_stage(
@@ -236,13 +241,18 @@ impl PipelineExecutor {
             "V" => self.apply_quick_alias(items, stage, "V"),
             "K" => self.apply_quick_alias(items, stage, "K"),
             // `VAL` / `VALUE` produce explicit `{"value": ...}` rows.
-            "VAL" | "VALUE" => map_rows(items, |rows| values::apply(rows, &stage.spec)),
+            "VAL" | "VALUE" => match items {
+                OutputItems::Rows(rows) => values::apply(rows, &stage.spec).map(OutputItems::Rows),
+                OutputItems::Groups(groups) => {
+                    values::apply_groups(groups, &stage.spec).map(OutputItems::Groups)
+                }
+            },
             "F" => self.filter(items, stage),
             "G" => self.group(items, stage),
             "A" => aggregate::apply(items, &stage.spec),
             "S" => sort::apply(items, &stage.spec),
             "L" => self.limit(items, stage),
-            "Z" => Ok(collapse::apply(items)),
+            "Z" => collapse::apply(items),
             "C" => aggregate::count_macro(items, &stage.spec),
             "Y" => self.copy(items, stage),
             "U" => self.unroll(items, stage),
@@ -295,7 +305,12 @@ impl PipelineExecutor {
 
     fn copy(&mut self, items: OutputItems, _stage: &ParsedStage) -> Result<OutputItems> {
         self.wants_copy = true;
-        map_rows(items, |rows| Ok(copy::apply(rows)))
+        Ok(match items {
+            OutputItems::Rows(rows) => OutputItems::Rows(copy::apply(rows)),
+            // Copy is metadata-only for grouped output: keep the current groups
+            // intact and carry the copy flag in OutputMeta.
+            OutputItems::Groups(groups) => OutputItems::Groups(groups),
+        })
     }
 
     fn unroll(&self, items: OutputItems, stage: &ParsedStage) -> Result<OutputItems> {
@@ -324,7 +339,12 @@ impl PipelineExecutor {
         } else {
             format!("{alias} {}", stage.spec)
         };
-        map_rows(items, |rows| quick::apply(rows, &quick_spec))
+        match items {
+            OutputItems::Rows(rows) => quick::apply(rows, &quick_spec).map(OutputItems::Rows),
+            OutputItems::Groups(groups) => {
+                quick::apply_groups(groups, &quick_spec).map(OutputItems::Groups)
+            }
+        }
     }
 
     fn materialize_items(&mut self) -> Result<OutputItems> {
@@ -387,19 +407,6 @@ fn merged_group_header(group: &crate::core::output_model::Group) -> Row {
     let mut row = group.groups.clone();
     row.extend(group.aggregates.clone());
     row
-}
-
-fn map_rows(
-    items: OutputItems,
-    map_fn: impl FnOnce(Vec<Row>) -> Result<Vec<Row>>,
-) -> Result<OutputItems> {
-    match items {
-        OutputItems::Rows(rows) => map_fn(rows).map(OutputItems::Rows),
-        // These stages only make sense on flat rows. When the pipeline is
-        // already grouped, leave groups unchanged instead of flattening them
-        // implicitly behind the caller's back.
-        OutputItems::Groups(groups) => Ok(OutputItems::Groups(groups)),
-    }
 }
 
 #[cfg(test)]
@@ -747,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn grouped_output_pipeline_covers_flat_row_only_explicit_stage_aliases_unit() {
+    fn grouped_output_pipeline_applies_quick_and_value_stages_to_group_rows_unit() {
         let grouped = OutputResult {
             items: OutputItems::Groups(vec![crate::core::output_model::Group {
                 groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
@@ -757,23 +764,73 @@ mod tests {
                         .as_object()
                         .cloned()
                         .expect("object"),
+                    json!({"uid": "bob", "roles": ["sales"]})
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
                 ],
             }]),
             meta: Default::default(),
         };
 
-        for stage in [
-            "V alice",
-            "K alice",
-            "VALUE uid",
-            "F uid=alice",
-            "? uid",
-            "Y",
-        ] {
-            let output = apply_output_pipeline(grouped.clone(), &[stage.to_string()])
-                .expect("grouped pipeline should succeed");
-            assert!(matches!(output.items, OutputItems::Groups(_)));
-        }
+        let value_only = apply_output_pipeline(grouped.clone(), &["V ops".to_string()])
+            .expect("grouped quick should succeed");
+        let OutputItems::Groups(value_groups) = value_only.items else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(value_groups[0].rows.len(), 1);
+        assert_eq!(
+            value_groups[0].rows[0].get("roles"),
+            Some(&json!(["eng", "ops"]))
+        );
+
+        let key_only = apply_output_pipeline(grouped.clone(), &["K uid".to_string()])
+            .expect("grouped key quick should succeed");
+        let OutputItems::Groups(key_groups) = key_only.items else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(key_groups[0].rows.len(), 2);
+        assert!(key_groups[0].rows.iter().all(|row| row.contains_key("uid")));
+
+        let values = apply_output_pipeline(grouped.clone(), &["VALUE uid".to_string()])
+            .expect("grouped values should succeed");
+        let OutputItems::Groups(value_rows) = values.items else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(value_rows[0].rows.len(), 2);
+        assert_eq!(
+            value_rows[0]
+                .rows
+                .iter()
+                .map(|row| row.get("value").cloned().expect("value"))
+                .collect::<Vec<_>>(),
+            vec![json!("alice"), json!("bob")]
+        );
+
+        let bare_quick = apply_output_pipeline(grouped.clone(), &["ops".to_string()])
+            .expect("grouped bare quick should succeed");
+        let OutputItems::Groups(bare_groups) = bare_quick.items else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(bare_groups[0].rows.len(), 1);
+
+        let filtered = apply_output_pipeline(grouped.clone(), &["F uid=alice".to_string()])
+            .expect("grouped filter should succeed");
+        let OutputItems::Groups(filtered_groups) = filtered.items else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(filtered_groups[0].rows.len(), 1);
+
+        let cleaned = apply_output_pipeline(grouped.clone(), &["? uid".to_string()])
+            .expect("grouped clean should succeed");
+        let OutputItems::Groups(cleaned_groups) = cleaned.items else {
+            panic!("expected grouped output");
+        };
+        assert_eq!(cleaned_groups[0].rows.len(), 2);
+
+        let copied = apply_output_pipeline(grouped, &["Y".to_string()])
+            .expect("grouped copy should succeed");
+        assert!(copied.meta.wants_copy);
     }
 
     #[test]

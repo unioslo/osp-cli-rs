@@ -193,14 +193,30 @@ pub fn tokenize_stage(segment: &StageSegment) -> Result<Vec<Token>, LexerError> 
     Ok(out)
 }
 
+/// Tokenize one stage into plain words using both commas and whitespace as
+/// delimiters while still respecting shell-style quoting and escaping.
+pub fn tokenize_stage_terms(segment: &StageSegment) -> Result<Vec<Token>, LexerError> {
+    tokenize_delimited_words(&segment.raw, segment.span.start, |ch| {
+        ch == ',' || ch.is_whitespace()
+    })
+}
+
 fn tokenize_words(input: &str, base_offset: usize) -> Result<Vec<Token>, LexerError> {
+    tokenize_delimited_words(input, base_offset, char::is_whitespace)
+}
+
+fn tokenize_delimited_words(
+    input: &str,
+    base_offset: usize,
+    is_delimiter: impl Fn(char) -> bool,
+) -> Result<Vec<Token>, LexerError> {
     let mut scanner = QuoteScanner::new(base_offset);
     let mut words = Vec::new();
     let mut current = String::new();
     let mut token_start: Option<usize> = None;
 
     for (index, ch) in input.char_indices() {
-        if scanner.is_normal() && ch.is_whitespace() {
+        if scanner.is_normal() && is_delimiter(ch) {
             finish_word(
                 &mut words,
                 &mut current,

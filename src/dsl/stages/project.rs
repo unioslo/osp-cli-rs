@@ -12,7 +12,7 @@ use crate::dsl::{
         key_spec::KeySpec,
         path::{PathExpression, Selector, parse_path},
     },
-    stages::common::parse_stage_words,
+    stages::common::{map_group_rows, parse_terms},
 };
 
 #[derive(Debug, Clone)]
@@ -54,22 +54,14 @@ pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
 
 pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
     let plan = compile(spec)?;
-
-    let mut out = Vec::with_capacity(groups.len());
-    for group in groups {
+    let mut out = map_group_rows(groups, |rows| {
         let mut projected_rows = Vec::new();
-        for row in &group.rows {
+        for row in &rows {
             projected_rows.extend(plan.project_row(row));
         }
-
-        if !projected_rows.is_empty() || !group.aggregates.is_empty() {
-            out.push(Group {
-                groups: group.groups,
-                aggregates: group.aggregates,
-                rows: projected_rows,
-            });
-        }
-    }
+        Ok(projected_rows)
+    })?;
+    out.retain(|group| !group.rows.is_empty() || !group.aggregates.is_empty());
     Ok(out)
 }
 
@@ -81,34 +73,27 @@ fn parse_patterns(spec: &str) -> Result<(Vec<Pattern>, Vec<Pattern>)> {
 
     let mut keepers = Vec::new();
     let mut droppers = Vec::new();
-    for token in parse_stage_words(trimmed)? {
-        for chunk in token.split(',') {
-            let text = chunk.trim();
-            if text.is_empty() {
-                continue;
-            }
+    for text in parse_terms(trimmed)? {
+        let drop = text.starts_with('!');
+        let key_spec = KeySpec::parse(&text);
+        let path = parse_path(&key_spec.token).ok();
+        let dotted = key_spec.token.contains('.')
+            || key_spec.token.contains('[')
+            || key_spec.token.contains(']')
+            || path
+                .as_ref()
+                .is_some_and(|expr| expr.absolute || has_selectors(expr));
 
-            let drop = text.starts_with('!');
-            let key_spec = KeySpec::parse(text);
-            let path = parse_path(&key_spec.token).ok();
-            let dotted = key_spec.token.contains('.')
-                || key_spec.token.contains('[')
-                || key_spec.token.contains(']')
-                || path
-                    .as_ref()
-                    .is_some_and(|expr| expr.absolute || has_selectors(expr));
+        let pattern = Pattern {
+            key_spec,
+            path,
+            dotted,
+        };
 
-            let pattern = Pattern {
-                key_spec,
-                path,
-                dotted,
-            };
-
-            if drop {
-                droppers.push(pattern);
-            } else {
-                keepers.push(pattern);
-            }
+        if drop {
+            droppers.push(pattern);
+        } else {
+            keepers.push(pattern);
         }
     }
 
@@ -364,6 +349,27 @@ mod tests {
         assert_eq!(projected.len(), 2);
         assert_eq!(projected[0].get("mac"), Some(&json!("aa:bb")));
         assert_eq!(projected[1].get("mac"), Some(&json!("cc:dd")));
+    }
+
+    #[test]
+    fn quoted_commas_remain_single_projection_terms() {
+        let rows = vec![
+            json!({"display,name": "Alice", "display": "wrong", "name": "wrong"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ];
+
+        let projected = apply(rows, "\"display,name\"").expect("project should work");
+        assert_eq!(
+            projected,
+            vec![
+                json!({"display,name": "Alice"})
+                    .as_object()
+                    .cloned()
+                    .expect("object")
+            ]
+        );
     }
 
     #[test]

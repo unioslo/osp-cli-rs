@@ -4,7 +4,7 @@ use regex::Regex;
 
 use crate::dsl::{
     eval::{
-        matchers::render_value,
+        matchers::{contains_case_insensitive, eq_case_insensitive, render_value},
         resolve::{resolve_values, resolve_values_truthy},
     },
     parse::key_spec::{ExactMode, KeySpec},
@@ -248,10 +248,10 @@ fn compare_text_or_bool(left: &serde_json::Value, rhs: &ComparisonValue) -> bool
     let left_rendered = render_value(left);
 
     if let serde_json::Value::Bool(flag) = left {
-        if rhs.text.eq_ignore_ascii_case("true") {
+        if eq_case_insensitive(&rhs.text, "true") {
             return *flag;
         }
-        if rhs.text.eq_ignore_ascii_case("false") {
+        if eq_case_insensitive(&rhs.text, "false") {
             return !*flag;
         }
     }
@@ -263,12 +263,10 @@ fn compare_text_or_bool(left: &serde_json::Value, rhs: &ComparisonValue) -> bool
         return left_rendered.contains(&rhs.text);
     }
 
-    let left_lower = left_rendered.to_ascii_lowercase();
-    let rhs_lower = rhs.text.to_ascii_lowercase();
     if rhs.exact {
-        left_lower == rhs_lower
+        eq_case_insensitive(&left_rendered, &rhs.text)
     } else {
-        left_lower.contains(&rhs_lower)
+        contains_case_insensitive(&left_rendered, &rhs.text)
     }
 }
 

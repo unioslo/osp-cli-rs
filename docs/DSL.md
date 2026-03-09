@@ -64,6 +64,8 @@ Value extraction:
 
 ```text
 | VALUE uid
+| VALUE metadata.owner
+| VALUE "display,name"
 ```
 
 ## Paths
@@ -76,9 +78,22 @@ Paths support:
 
 List values use any-match semantics for filters by default.
 
+## Semantic Contracts
+
+The DSL keeps a few deliberate rules so stages do not drift apart:
+
+- quoted term lists mean the same thing in `P`, `VAL`, and `VALUE`
+- path expressions mean the same thing in `F`, `P`, `VAL`, and `VALUE`
+- row-oriented stages keep group headers/aggregates intact and operate on each
+  group's rows when the current payload is grouped
+- unsupported stage/payload combinations should fail loudly instead of silently
+  acting like a no-op
+- case-insensitive text matching for user data is Unicode-aware, not ASCII-only
+
 ## Parsing Rules
 
 - shell-style quoting and escaping are supported
+- commas can separate projection/value terms, but quotes keep embedded commas
 - `|` starts a new DSL stage
 - malformed quoted pipelines are errors
 - unknown verb-shaped stages are errors
@@ -119,6 +134,16 @@ Quick-search stages keep flat rows on a streaming path, but they use a
 two-row lookahead to preserve the single-row "projection" behavior. That peek
 is measurable on large multi-row quick searches, but it is not the main cost
 of the stage.
+
+When the current payload is already grouped, row-oriented stages such as bare
+quick search, `V`, `K`, `VALUE`, `F`, `P`, `U`, and `?` run against each
+group's rows and keep the group headers/aggregates intact.
+
+`Z` is the opposite: it requires grouped output and errors on flat rows instead
+of silently passing them through unchanged.
+
+Case-insensitive quick search is Unicode-aware, not ASCII-only, so non-ASCII
+keys and values participate in normal `V` / `K` / bare quick matching.
 
 Streaming here only changes DSL execution. The CLI still renders the final
 `OutputResult` into one complete buffer before printing it. In measured release

@@ -2,13 +2,14 @@ use crate::core::{
     output_model::{Group, OutputItems},
     row::Row,
 };
+use anyhow::{Result, anyhow};
 
-pub fn apply(items: OutputItems) -> OutputItems {
+pub fn apply(items: OutputItems) -> Result<OutputItems> {
     match items {
-        OutputItems::Rows(rows) => OutputItems::Rows(rows),
+        OutputItems::Rows(_) => Err(anyhow!("Z requires grouped output; use G before Z")),
         OutputItems::Groups(groups) => {
             let collapsed = groups.into_iter().map(collapse_group).collect();
-            OutputItems::Rows(collapsed)
+            Ok(OutputItems::Rows(collapsed))
         }
     }
 }
@@ -28,7 +29,7 @@ mod tests {
     use super::apply;
 
     #[test]
-    fn passes_through_rows_unchanged() {
+    fn rejects_flat_rows() {
         let rows = vec![
             json!({"uid": "oistes"})
                 .as_object()
@@ -36,8 +37,8 @@ mod tests {
                 .expect("object"),
         ];
 
-        let output = apply(OutputItems::Rows(rows.clone()));
-        assert_eq!(output, OutputItems::Rows(rows));
+        let err = apply(OutputItems::Rows(rows)).expect_err("collapse should reject flat rows");
+        assert!(err.to_string().contains("requires grouped output"));
     }
 
     #[test]
@@ -54,7 +55,7 @@ mod tests {
             rows: Vec::new(),
         }];
 
-        let output = apply(OutputItems::Groups(groups));
+        let output = apply(OutputItems::Groups(groups)).expect("group collapse should work");
         match output {
             OutputItems::Rows(rows) => {
                 assert_eq!(rows.len(), 1);

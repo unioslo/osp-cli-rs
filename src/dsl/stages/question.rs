@@ -5,7 +5,7 @@ use crate::core::{
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::dsl::stages::quick;
+use crate::dsl::stages::{common::map_group_rows, quick};
 
 pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     let trimmed = spec.trim();
@@ -63,16 +63,7 @@ fn is_empty_value(value: &Value) -> bool {
 }
 
 fn apply_groups_quick(groups: Vec<Group>, raw: &str) -> Result<Vec<Group>> {
-    let mut out = Vec::with_capacity(groups.len());
-    for group in groups {
-        let rows = quick::apply(group.rows, raw)?;
-        out.push(Group {
-            groups: group.groups,
-            aggregates: group.aggregates,
-            rows,
-        });
-    }
-    Ok(out)
+    map_group_rows(groups, |rows| quick::apply(rows, raw))
 }
 
 #[cfg(test)]

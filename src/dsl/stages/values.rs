@@ -1,8 +1,10 @@
-use crate::core::row::Row;
+use crate::core::{output_model::Group, row::Row};
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use super::common::parse_terms;
+use crate::dsl::{eval::resolve::resolve_values, parse::key_spec::ExactMode};
+
+use super::common::{map_group_rows, parse_terms};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ValuesPlan {
@@ -21,8 +23,8 @@ impl ValuesPlan {
         }
 
         for key in &self.keys {
-            if let Some(value) = row.get(key) {
-                emit_value_rows(&mut out, value);
+            for value in resolve_values(row, key, ExactMode::CaseSensitive) {
+                emit_value_rows(&mut out, &value);
             }
         }
 
@@ -30,14 +32,14 @@ impl ValuesPlan {
     }
 }
 
-pub(crate) fn compile(spec: &str) -> ValuesPlan {
-    ValuesPlan {
-        keys: parse_terms(spec),
-    }
+pub(crate) fn compile(spec: &str) -> Result<ValuesPlan> {
+    Ok(ValuesPlan {
+        keys: parse_terms(spec)?,
+    })
 }
 
 pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
-    let plan = compile(spec);
+    let plan = compile(spec)?;
     let mut out: Vec<Row> = Vec::new();
 
     for row in rows {
@@ -45,6 +47,17 @@ pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     }
 
     Ok(out)
+}
+
+pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
+    let plan = compile(spec)?;
+    map_group_rows(groups, |rows| {
+        let mut out = Vec::new();
+        for row in &rows {
+            out.extend(plan.extract_row(row));
+        }
+        Ok(out)
+    })
 }
 
 fn emit_value_rows(out: &mut Vec<Row>, value: &Value) {
@@ -122,5 +135,27 @@ mod tests {
         values.sort();
 
         assert_eq!(values, vec!["\"a\"", "\"b\"", "\"oistes\"", "true"]);
+    }
+
+    #[test]
+    fn resolves_nested_paths_and_quoted_terms() {
+        let rows = vec![
+            json!({
+                "metadata": {"display,name": "Alice"},
+                "members": [{"uid": "alice"}, {"uid": "bob"}]
+            })
+            .as_object()
+            .cloned()
+            .expect("object"),
+        ];
+
+        let output = apply(rows, "\"metadata.display,name\" members[].uid")
+            .expect("nested values should work");
+        let values = output
+            .iter()
+            .map(|row| row.get("value").cloned().expect("value"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, vec![json!("Alice"), json!("alice"), json!("bob")]);
     }
 }

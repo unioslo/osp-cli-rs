@@ -23,3 +23,6 @@ pub use verbs::{
     VerbInfo, VerbStreaming, is_registered_explicit_verb, registered_verbs, render_streaming_badge,
     verb_info,
 };
+
+#[cfg(test)]
+mod contract_tests;

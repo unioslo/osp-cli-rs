@@ -47,9 +47,7 @@ pub fn value_contains(value: &serde_json::Value, query: &str, case_sensitive: bo
             if case_sensitive {
                 rendered.contains(query)
             } else {
-                rendered
-                    .to_ascii_lowercase()
-                    .contains(&query.to_ascii_lowercase())
+                contains_case_insensitive(&rendered, query)
             }
         }
     }
@@ -73,7 +71,7 @@ fn expression_segments(expr: &PathExpression, case_sensitive: bool) -> Vec<Strin
             if case_sensitive {
                 name.clone()
             } else {
-                name.to_ascii_lowercase()
+                fold_case(name)
             }
         })
         .collect()
@@ -117,7 +115,7 @@ fn push_segment(segments: &mut Vec<String>, current: &mut String, case_sensitive
     let segment = if case_sensitive {
         current.clone()
     } else {
-        current.to_ascii_lowercase()
+        fold_case(current)
     };
     segments.push(segment);
     current.clear();
@@ -178,7 +176,7 @@ fn names_match(left: &Option<String>, right: &Option<String>, case_sensitive: bo
             if case_sensitive {
                 left == right
             } else {
-                left.eq_ignore_ascii_case(right)
+                eq_case_insensitive(left, right)
             }
         }
         (None, None) => true,
@@ -243,7 +241,7 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
     let token_cmp = if case_sensitive {
         trimmed.to_string()
     } else {
-        trimmed.to_ascii_lowercase()
+        fold_case(trimmed)
     };
 
     let mut exact_keys = Vec::new();
@@ -277,13 +275,13 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
         let last_cmp = if case_sensitive {
             last_segment.clone()
         } else {
-            last_segment.to_ascii_lowercase()
+            fold_case(last_segment)
         };
 
         let exact_match = match exact {
             ExactMode::CaseSensitive => last_segment == trimmed,
-            ExactMode::CaseInsensitive => last_segment.eq_ignore_ascii_case(trimmed),
-            ExactMode::None => last_segment.eq_ignore_ascii_case(trimmed),
+            ExactMode::CaseInsensitive => eq_case_insensitive(last_segment, trimmed),
+            ExactMode::None => eq_case_insensitive(last_segment, trimmed),
         };
         if exact_match {
             exact_keys.push(key.clone());
@@ -294,7 +292,7 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
             let key_cmp = if case_sensitive {
                 key.clone()
             } else {
-                key.to_ascii_lowercase()
+                fold_case(key)
             };
             if key_cmp.contains(&token_cmp) || last_cmp.contains(&token_cmp) {
                 partial_keys.push(key.clone());
@@ -313,6 +311,18 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
         exact: exact_keys,
         partial: partial_keys,
     }
+}
+
+pub fn eq_case_insensitive(left: &str, right: &str) -> bool {
+    fold_case(left) == fold_case(right)
+}
+
+pub fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    fold_case(haystack).contains(&fold_case(needle))
+}
+
+pub fn fold_case(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
 }
 
 #[cfg(test)]
