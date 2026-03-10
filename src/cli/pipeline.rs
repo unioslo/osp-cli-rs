@@ -4,7 +4,7 @@ use crate::dsl::{
     parse::pipeline::parse_stage,
     parse_pipeline,
 };
-use miette::{IntoDiagnostic, Result, WrapErr, miette};
+use miette::{miette, IntoDiagnostic, Result, WrapErr};
 
 use crate::app::is_sensitive_key;
 
@@ -25,12 +25,16 @@ pub(crate) fn truncate_display(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Parsed command tokens plus trailing DSL stages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCommandLine {
+    /// Final command tokens after alias expansion and command normalization.
     pub tokens: Vec<String>,
+    /// Raw trailing DSL stage strings in execution order.
     pub stages: Vec<String>,
 }
 
+/// Parses a command line, expands aliases, and separates trailing DSL stages.
 pub fn parse_command_text_with_aliases(
     text: &str,
     config: &ResolvedConfig,
@@ -49,6 +53,7 @@ pub fn parse_command_text_with_aliases(
     finalize_command_with_aliases(command_tokens, parsed.stages, config)
 }
 
+/// Finalizes already-tokenized input into command tokens plus DSL stages.
 pub fn parse_command_tokens_with_aliases(
     tokens: &[String],
     config: &ResolvedConfig,
@@ -160,6 +165,7 @@ fn merge_orch_os_tokens(tokens: Vec<String>) -> Vec<String> {
     merged
 }
 
+/// Validates that every CLI pipe stage is known to the DSL surface.
 pub fn validate_cli_dsl_stages(stages: &[String]) -> Result<()> {
     for raw in stages {
         let parsed = parse_stage(raw).into_diagnostic().wrap_err_with(|| {
@@ -186,6 +192,7 @@ pub fn validate_cli_dsl_stages(stages: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Returns `true` when a parsed stage represents CLI help for a DSL verb.
 pub fn is_cli_help_stage(parsed: &ParsedStage) -> bool {
     matches!(parsed.kind, ParsedStageKind::UnknownExplicit) && parsed.verb.eq_ignore_ascii_case("H")
 }
@@ -426,10 +433,9 @@ mod tests {
 
         let err = expand_alias_template("danger", "echo ${auth.api_key}", &[], &config)
             .expect_err("sensitive placeholder should be rejected");
-        assert!(
-            err.to_string()
-                .contains("cannot expand sensitive config placeholder")
-        );
+        assert!(err
+            .to_string()
+            .contains("cannot expand sensitive config placeholder"));
     }
 
     #[test]
@@ -542,11 +548,9 @@ mod tests {
 
         let pipeline_err = parse_command_text_with_aliases("ldap user 'oops | P uid", &config)
             .expect_err("invalid pipeline should fail");
-        assert!(
-            pipeline_err
-                .to_string()
-                .contains("failed to parse pipeline")
-        );
+        assert!(pipeline_err
+            .to_string()
+            .contains("failed to parse pipeline"));
     }
 
     #[test]
@@ -554,10 +558,9 @@ mod tests {
         let config = test_config(&[("alias.demo", "ldap user 'oops | P uid")]);
         let err = parse_command_tokens_with_aliases(&["demo".to_string()], &config)
             .expect_err("broken alias command should fail");
-        assert!(
-            err.to_string()
-                .contains("failed to parse alias `demo` expansion")
-        );
+        assert!(err
+            .to_string()
+            .contains("failed to parse alias `demo` expansion"));
 
         let plain = test_config(&[]);
         let err = expand_alias_template("loop", "echo ${next}", &[], &plain)

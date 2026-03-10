@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::config::{
-    ConfigError, ConfigLayer, ConfigResolver, ConfigSchema, ConfigValue, ResolveOptions,
-    ResolvedConfig, core::parse_env_key, store::validate_secrets_permissions, with_path_context,
+    core::parse_env_key, store::validate_secrets_permissions, with_path_context, ConfigError,
+    ConfigLayer, ConfigResolver, ConfigSchema, ConfigValue, ResolveOptions, ResolvedConfig,
 };
 
 /// Loads a single config layer from some backing source.
@@ -360,12 +360,19 @@ impl ConfigLoader for ChainedLoader {
 /// Materialized config layers grouped by source priority.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedLayers {
+    /// Built-in defaults loaded before any user input.
     pub defaults: ConfigLayer,
+    /// Presentation-specific defaults layered above built-ins.
     pub presentation: ConfigLayer,
+    /// Values loaded from the ordinary config file.
     pub file: ConfigLayer,
+    /// Values loaded from the secrets store.
     pub secrets: ConfigLayer,
+    /// Values loaded from environment variables.
     pub env: ConfigLayer,
+    /// Values synthesized from CLI flags and arguments.
     pub cli: ConfigLayer,
+    /// In-memory session overrides.
     pub session: ConfigLayer,
 }
 

@@ -2,13 +2,16 @@ use crate::config::RuntimeConfig;
 use crate::core::output_model::OutputResult;
 use crate::core::row::Row;
 use crate::dsl::{apply_pipeline, parse_pipeline};
-use crate::ports::{LdapDirectory, parse_attributes};
-use anyhow::{Result, anyhow};
+use crate::ports::{parse_attributes, LdapDirectory};
+use anyhow::{anyhow, Result};
 
 /// Execution context for the small service-layer command API.
 pub struct ServiceContext<L: LdapDirectory> {
+    /// Effective user name for commands that default to the active user.
     pub user: Option<String>,
+    /// LDAP directory port used by service commands.
     pub ldap: L,
+    /// Minimal runtime config needed by service commands.
     pub config: RuntimeConfig,
 }
 
@@ -23,14 +26,22 @@ impl<L: LdapDirectory> ServiceContext<L> {
 /// Parsed subset of commands understood by [`execute_line`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedCommand {
+    /// Lookup a user entry in LDAP.
     LdapUser {
+        /// Explicit user identifier to query.
         uid: Option<String>,
+        /// Optional LDAP filter expression.
         filter: Option<String>,
+        /// Optional comma-separated attribute selection.
         attributes: Option<String>,
     },
+    /// Lookup a netgroup entry in LDAP.
     LdapNetgroup {
+        /// Explicit netgroup name to query.
         name: Option<String>,
+        /// Optional LDAP filter expression.
         filter: Option<String>,
+        /// Optional comma-separated attribute selection.
         attributes: Option<String>,
     },
 }
@@ -188,7 +199,7 @@ mod tests {
     use crate::api::MockLdapClient;
     use crate::core::output_model::OutputResult;
 
-    use super::{ParsedCommand, ServiceContext, execute_command, execute_line, parse_repl_command};
+    use super::{execute_command, execute_line, parse_repl_command, ParsedCommand, ServiceContext};
 
     fn output_rows(output: &OutputResult) -> &[crate::core::row::Row] {
         output.as_rows().expect("expected row output")
@@ -263,11 +274,9 @@ mod tests {
 
         let missing_subcommand = parse_repl_command(&["ldap".to_string()])
             .expect_err("missing ldap subcommand should fail");
-        assert!(
-            missing_subcommand
-                .to_string()
-                .contains("missing ldap subcommand")
-        );
+        assert!(missing_subcommand
+            .to_string()
+            .contains("missing ldap subcommand"));
     }
 
     #[test]
@@ -307,11 +316,9 @@ mod tests {
             "extra".to_string(),
         ])
         .expect_err("extra positional should fail");
-        assert!(
-            extra
-                .to_string()
-                .contains("ldap netgroup accepts one name positional argument")
-        );
+        assert!(extra
+            .to_string()
+            .contains("ldap netgroup accepts one name positional argument"));
     }
 
     #[test]
@@ -330,10 +337,9 @@ mod tests {
             },
         )
         .expect_err("ldap user should require uid when global user is missing");
-        assert!(
-            err.to_string()
-                .contains("ldap user requires <uid> or -u/--user")
-        );
+        assert!(err
+            .to_string()
+            .contains("ldap user requires <uid> or -u/--user"));
 
         let err = execute_command(
             &ctx,

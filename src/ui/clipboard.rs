@@ -2,8 +2,9 @@ use std::fmt::{Display, Formatter};
 use std::io::{IsTerminal, Write};
 use std::process::{Command, Stdio};
 
-use crate::ui::{Document, RenderSettings, render_document_for_copy};
+use crate::ui::{render_document_for_copy, Document, RenderSettings};
 
+/// Clipboard service that tries OSC 52 and platform-specific clipboard helpers.
 #[derive(Debug, Clone)]
 pub struct ClipboardService {
     prefer_osc52: bool,
@@ -15,20 +16,31 @@ impl Default for ClipboardService {
     }
 }
 
+/// Errors returned while copying rendered output to the clipboard.
 #[derive(Debug)]
 pub enum ClipboardError {
+    /// No supported clipboard backend was available.
     NoBackendAvailable {
+        /// Backend attempts that were tried or skipped.
         attempts: Vec<String>,
     },
+    /// A clipboard helper process could not be spawned.
     SpawnFailed {
+        /// Command that failed to start.
         command: String,
+        /// Human-readable spawn failure reason.
         reason: String,
     },
+    /// A clipboard helper process exited with failure status.
     CommandFailed {
+        /// Command that was run.
         command: String,
+        /// Exit status code, or `1` when unavailable.
         status: i32,
+        /// Standard error output captured from the helper.
         stderr: String,
     },
+    /// Local I/O failure while preparing or sending clipboard data.
     Io(String),
 }
 
@@ -286,13 +298,13 @@ mod tests {
 
     use crate::core::output::OutputFormat;
     use crate::ui::{
-        Document, RenderSettings,
         document::{Block, LineBlock, LinePart},
+        Document, RenderSettings,
     };
 
     use super::{
-        ClipboardError, ClipboardService, OSC52_MAX_BYTES_DEFAULT, base64_encode,
-        base64_encoded_len, copy_via_command, osc52_enabled, osc52_max_bytes, platform_backends,
+        base64_encode, base64_encoded_len, copy_via_command, osc52_enabled, osc52_max_bytes,
+        platform_backends, ClipboardError, ClipboardService, OSC52_MAX_BYTES_DEFAULT,
     };
 
     fn env_lock() -> &'static Mutex<()> {

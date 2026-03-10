@@ -14,14 +14,23 @@ use serde::{Deserialize, Serialize};
 /// Configuration for the REPL history store and its filtering behavior.
 #[derive(Debug, Clone)]
 pub struct HistoryConfig {
+    /// Path to the history file, when persistence is enabled.
     pub path: Option<PathBuf>,
+    /// Maximum number of retained history entries.
     pub max_entries: usize,
+    /// Whether history capture is enabled.
     pub enabled: bool,
+    /// Whether duplicate commands should be collapsed.
     pub dedupe: bool,
+    /// Whether entries should be partitioned by active profile.
     pub profile_scoped: bool,
+    /// Prefix patterns excluded from persistence.
     pub exclude_patterns: Vec<String>,
+    /// Active profile identifier used for scoping.
     pub profile: Option<String>,
+    /// Active terminal identifier used for scoping.
     pub terminal: Option<String>,
+    /// Shared shell-prefix context used for shell integration scoping.
     pub shell_context: HistoryShellContext,
 }
 
@@ -99,8 +108,11 @@ struct HistoryRecord {
 /// Public history entry returned by listing operations.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
+    /// Stable history record identifier.
     pub id: i64,
+    /// Recorded timestamp in milliseconds since the Unix epoch, when available.
     pub timestamp_ms: Option<i64>,
+    /// Command line stored for the entry.
     pub command: String,
 }
 

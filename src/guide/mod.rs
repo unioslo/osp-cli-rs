@@ -5,30 +5,43 @@ use crate::core::output_model::{OutputDocument, OutputItems, OutputResult, Rende
 use crate::ui::document_model::DocumentModel;
 use crate::ui::presentation::HelpLevel;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 /// Structured help/guide representation used by the CLI, REPL, and docs views.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct GuideView {
+    /// Introductory paragraphs shown before structured sections.
     pub preamble: Vec<String>,
+    /// Additional named sections that do not fit the standard buckets.
     pub sections: Vec<GuideSection>,
+    /// Closing paragraphs shown after structured sections.
     pub epilogue: Vec<String>,
+    /// Usage synopsis lines.
     pub usage: Vec<String>,
+    /// Command entries available from this guide.
     pub commands: Vec<GuideEntry>,
+    /// Positional argument entries.
     pub arguments: Vec<GuideEntry>,
+    /// Option and flag entries.
     pub options: Vec<GuideEntry>,
+    /// Global invocation options shared across commands.
     pub common_invocation_options: Vec<GuideEntry>,
+    /// Free-form notes associated with the guide.
     pub notes: Vec<String>,
 }
 
 /// One named help entry such as a command, argument, or option row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GuideEntry {
+    /// Display name for the entry.
     pub name: String,
+    /// Short description shown alongside the name.
     pub short_help: String,
+    /// Optional indentation override used during presentation.
     #[serde(skip)]
     pub display_indent: Option<String>,
+    /// Optional spacing override between the name and description.
     #[serde(skip)]
     pub display_gap: Option<String>,
 }
@@ -37,9 +50,13 @@ pub struct GuideEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct GuideSection {
+    /// Section heading.
     pub title: String,
+    /// Semantic kind used for filtering and rendering.
     pub kind: GuideSectionKind,
+    /// Paragraph content rendered before any entries.
     pub paragraphs: Vec<String>,
+    /// Structured entries rendered within the section.
     pub entries: Vec<GuideEntry>,
 }
 
@@ -47,12 +64,19 @@ pub struct GuideSection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuideSectionKind {
+    /// Usage synopsis content.
     Usage,
+    /// Command listing content.
     Commands,
+    /// Option and flag content.
     Options,
+    /// Positional argument content.
     Arguments,
+    /// Shared invocation option content.
     CommonInvocationOptions,
+    /// Free-form note content.
     Notes,
+    /// Any section outside the built-in guide categories.
     Custom,
 }
 
@@ -62,9 +86,13 @@ impl Default for GuideSectionKind {
     }
 }
 
+/// Backward-compatible alias for [`GuideView`].
 pub type HelpView = GuideView;
+/// Backward-compatible alias for [`GuideSection`].
 pub type HelpSection = GuideSection;
+/// Backward-compatible alias for [`GuideSectionKind`].
 pub type HelpSectionKind = GuideSectionKind;
+/// Backward-compatible alias for [`GuideEntry`].
 pub type HelpEntry = GuideEntry;
 
 impl GuideView {
@@ -795,8 +823,8 @@ fn help_description_split(kind: GuideSectionKind, line: &str) -> Option<usize> {
 mod tests {
     use super::{GuideEntry, GuideSection, GuideSectionKind, GuideView};
     use crate::core::command_def::{ArgDef, CommandDef, FlagDef};
-    use serde_json::Value;
     use serde_json::json;
+    use serde_json::Value;
 
     use crate::core::output_model::{OutputDocument, OutputResult};
     use crate::ui::presentation::HelpLevel;
@@ -900,19 +928,17 @@ mod tests {
 
     #[test]
     fn guide_view_accepts_legacy_summary_field_when_rehydrating_unit() {
-        let output = OutputResult::from_rows(vec![
-            json!({
-                "commands": [
-                    {
-                        "name": "list",
-                        "summary": "Show"
-                    }
-                ]
-            })
-            .as_object()
-            .cloned()
-            .expect("object"),
-        ]);
+        let output = OutputResult::from_rows(vec![json!({
+            "commands": [
+                {
+                    "name": "list",
+                    "summary": "Show"
+                }
+            ]
+        })
+        .as_object()
+        .cloned()
+        .expect("object")]);
 
         let rebuilt = GuideView::try_from_output_result(&output).expect("guide output");
         assert_eq!(rebuilt.commands[0].name, "list");

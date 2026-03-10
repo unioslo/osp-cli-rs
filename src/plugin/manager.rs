@@ -9,14 +9,21 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+/// Default timeout, in milliseconds, for plugin subprocess calls.
 pub const DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS: usize = 10_000;
 
+/// Describes how a plugin executable was discovered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginSource {
+    /// Loaded from an explicit search directory supplied by the caller.
     Explicit,
+    /// Loaded from a path specified through an environment variable.
     Env,
+    /// Loaded from the CLI's bundled plugin set.
     Bundled,
+    /// Loaded from the persisted user configuration.
     UserConfig,
+    /// Loaded by scanning the process `PATH`.
     Path,
 }
 
@@ -33,55 +40,92 @@ impl Display for PluginSource {
     }
 }
 
+/// Full discovery metadata for a single plugin executable.
 #[derive(Debug, Clone)]
 pub struct DiscoveredPlugin {
+    /// Stable provider identifier returned by the plugin.
     pub plugin_id: String,
+    /// Optional plugin version reported during discovery.
     pub plugin_version: Option<String>,
+    /// Absolute path to the plugin executable.
     pub executable: PathBuf,
+    /// Discovery source used to locate the executable.
     pub source: PluginSource,
+    /// Top-level commands exported by the plugin.
     pub commands: Vec<String>,
+    /// Raw describe-command payloads returned by the plugin.
     pub describe_commands: Vec<DescribeCommandV1>,
+    /// Normalized completion specs derived from `describe_commands`.
     pub command_specs: Vec<CommandSpec>,
+    /// Discovery or validation issue associated with this plugin.
     pub issue: Option<String>,
+    /// Whether the plugin should be enabled by default.
     pub default_enabled: bool,
 }
 
+/// User-facing summary of a discovered plugin.
 #[derive(Debug, Clone)]
 pub struct PluginSummary {
+    /// Stable provider identifier returned by the plugin.
     pub plugin_id: String,
+    /// Optional plugin version reported during discovery.
     pub plugin_version: Option<String>,
+    /// Absolute path to the plugin executable.
     pub executable: PathBuf,
+    /// Discovery source used to locate the executable.
     pub source: PluginSource,
+    /// Top-level commands exported by the plugin.
     pub commands: Vec<String>,
+    /// Whether the plugin is enabled for dispatch.
     pub enabled: bool,
+    /// Whether the plugin passed discovery-time validation.
     pub healthy: bool,
+    /// Discovery or validation issue associated with this plugin.
     pub issue: Option<String>,
 }
 
+/// Reports that multiple plugins provide the same command.
 #[derive(Debug, Clone)]
 pub struct CommandConflict {
+    /// Conflicting command name.
     pub command: String,
+    /// Plugin identifiers that provide `command`.
     pub providers: Vec<String>,
 }
 
+/// Aggregated health information for plugin discovery and dispatch.
 #[derive(Debug, Clone)]
 pub struct DoctorReport {
+    /// Summary entry for each discovered plugin.
     pub plugins: Vec<PluginSummary>,
+    /// Commands that are provided by more than one plugin.
     pub conflicts: Vec<CommandConflict>,
 }
 
+/// Catalog entry for a command exposed through the plugin system.
 #[derive(Debug, Clone)]
 pub struct CommandCatalogEntry {
+    /// Full command path, including parent commands when present.
     pub name: String,
+    /// Short description shown in help and catalog output.
     pub about: String,
+    /// Optional auth metadata returned by plugin discovery.
     pub auth: Option<DescribeCommandAuthV1>,
+    /// Immediate subcommand names beneath `name`.
     pub subcommands: Vec<String>,
+    /// Shell completion metadata for this command.
     pub completion: CommandSpec,
+    /// Selected provider when dispatch has been resolved.
     pub provider: Option<String>,
+    /// All providers that export this command.
     pub providers: Vec<String>,
+    /// Whether more than one provider exports this command.
     pub conflicted: bool,
+    /// Whether the caller must choose a provider before dispatch.
     pub requires_selection: bool,
+    /// Whether the provider was selected explicitly by the caller.
     pub selected_explicitly: bool,
+    /// Discovery source for the selected provider, if resolved.
     pub source: Option<PluginSource>,
 }
 
@@ -92,18 +136,27 @@ impl CommandCatalogEntry {
     }
 }
 
+/// Raw stdout/stderr captured from a plugin subprocess invocation.
 #[derive(Debug, Clone)]
 pub struct RawPluginOutput {
+    /// Process exit status code.
     pub status_code: i32,
+    /// Captured standard output.
     pub stdout: String,
+    /// Captured standard error.
     pub stderr: String,
 }
 
+/// Per-dispatch runtime overrides shared with plugin subprocesses.
 #[derive(Debug, Clone, Default)]
 pub struct PluginDispatchContext {
+    /// Runtime hints serialized into plugin requests.
     pub runtime_hints: RuntimeHints,
+    /// Environment pairs injected into every plugin process.
     pub shared_env: Vec<(String, String)>,
+    /// Additional environment pairs injected for specific plugins.
     pub plugin_env: HashMap<String, Vec<(String, String)>>,
+    /// Provider identifier forced by the caller, if any.
     pub provider_override: Option<String>,
 }
 
@@ -125,40 +178,67 @@ impl PluginDispatchContext {
     }
 }
 
+/// Errors returned when selecting or invoking a plugin command.
 #[derive(Debug)]
 pub enum PluginDispatchError {
+    /// No plugin provides the requested command.
     CommandNotFound {
+        /// Command name requested by the caller.
         command: String,
     },
+    /// More than one plugin provides the requested command.
     CommandAmbiguous {
+        /// Command name requested by the caller.
         command: String,
+        /// Plugin identifiers that provide `command`.
         providers: Vec<String>,
     },
+    /// The requested provider exists, but not for the requested command.
     ProviderNotFound {
+        /// Command name requested by the caller.
         command: String,
+        /// Provider identifier requested by the caller.
         requested_provider: String,
+        /// Plugin identifiers that provide `command`.
         providers: Vec<String>,
     },
+    /// Spawning or waiting for the plugin process failed.
     ExecuteFailed {
+        /// Plugin identifier being invoked.
         plugin_id: String,
+        /// Underlying process execution error.
         source: std::io::Error,
     },
+    /// The plugin process exceeded the configured timeout.
     TimedOut {
+        /// Plugin identifier being invoked.
         plugin_id: String,
+        /// Timeout applied to the subprocess call.
         timeout: Duration,
+        /// Captured standard error emitted before timeout.
         stderr: String,
     },
+    /// The plugin process exited with a non-zero status code.
     NonZeroExit {
+        /// Plugin identifier being invoked.
         plugin_id: String,
+        /// Process exit status code.
         status_code: i32,
+        /// Captured standard error emitted by the plugin.
         stderr: String,
     },
+    /// The plugin returned malformed JSON.
     InvalidJsonResponse {
+        /// Plugin identifier being invoked.
         plugin_id: String,
+        /// JSON decode error for the response payload.
         source: serde_json::Error,
     },
+    /// The plugin returned JSON that failed semantic validation.
     InvalidResponsePayload {
+        /// Plugin identifier being invoked.
         plugin_id: String,
+        /// Validation failure description.
         reason: String,
     },
 }
@@ -250,6 +330,7 @@ impl StdError for PluginDispatchError {
     }
 }
 
+/// Coordinates plugin discovery, caching, and dispatch settings.
 pub struct PluginManager {
     pub(crate) explicit_dirs: Vec<PathBuf>,
     pub(crate) discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,

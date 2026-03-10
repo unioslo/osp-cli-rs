@@ -2,90 +2,155 @@ use std::fmt::{Display, Formatter};
 
 use crate::config::SchemaValueType;
 
+/// Error type returned by config parsing, validation, and resolution code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
+    /// Reading a config file from disk failed.
     FileRead {
+        /// Path that could not be read.
         path: String,
+        /// Lower-level failure description.
         reason: String,
     },
+    /// Writing a config file to disk failed.
     FileWrite {
+        /// Path that could not be written.
         path: String,
+        /// Lower-level failure description.
         reason: String,
     },
+    /// Adds path context while propagating another config error.
     LayerLoad {
+        /// Path of the layer being loaded.
         path: String,
+        /// Underlying config error.
         source: Box<ConfigError>,
     },
+    /// Secrets file permissions are broader than allowed.
     InsecureSecretsPermissions {
+        /// Path of the secrets file.
         path: String,
+        /// Observed Unix file mode.
         mode: u32,
     },
+    /// TOML parsing failed before semantic validation.
     TomlParse(String),
+    /// The parsed TOML document root was not a table.
     TomlRootMustBeTable,
+    /// Encountered an unsupported top-level section name.
     UnknownTopLevelSection(String),
+    /// A named section had the wrong TOML type.
     InvalidSection {
+        /// Fully qualified section name.
         section: String,
+        /// Expected TOML kind for the section.
         expected: String,
     },
+    /// Encountered a TOML value kind that the config model does not accept.
     UnsupportedTomlValue {
+        /// Dotted config path at which the value was found.
         path: String,
+        /// TOML value kind that was rejected.
         kind: String,
     },
+    /// An `OSP__...` environment override used invalid syntax or scope.
     InvalidEnvOverride {
+        /// Environment variable name or derived config key.
         key: String,
+        /// Validation failure description.
         reason: String,
     },
+    /// A config key failed syntactic or semantic validation.
     InvalidConfigKey {
+        /// Key that failed validation.
         key: String,
+        /// Validation failure description.
         reason: String,
     },
+    /// A caller attempted to write a read-only config key.
     ReadOnlyConfigKey {
+        /// Key that is read-only.
         key: String,
+        /// Explanation of why the key is immutable.
         reason: String,
     },
+    /// A bootstrap-only key was used in a disallowed scope.
     InvalidBootstrapScope {
+        /// Bootstrap-only key being validated.
         key: String,
+        /// Profile selector present on the rejected scope, if any.
         profile: Option<String>,
+        /// Terminal selector present on the rejected scope, if any.
         terminal: Option<String>,
     },
+    /// No default profile could be determined during bootstrap.
     MissingDefaultProfile,
+    /// A bootstrap-only key failed its value validation rule.
     InvalidBootstrapValue {
+        /// Bootstrap-only key being validated.
         key: String,
+        /// Validation failure description.
         reason: String,
     },
+    /// Resolution requested a profile that is not known.
     UnknownProfile {
+        /// Requested profile name.
         profile: String,
+        /// Known profile names at the time of resolution.
         known: Vec<String>,
     },
+    /// Placeholder syntax inside a template string is malformed.
     InvalidPlaceholderSyntax {
+        /// Key containing the invalid template.
         key: String,
+        /// Original template string.
         template: String,
     },
+    /// Placeholder expansion referenced an unknown key.
     UnresolvedPlaceholder {
+        /// Key whose template is being resolved.
         key: String,
+        /// Placeholder that could not be resolved.
         placeholder: String,
     },
+    /// Placeholder expansion formed a dependency cycle.
     PlaceholderCycle {
+        /// Ordered key path describing the detected cycle.
         cycle: Vec<String>,
     },
+    /// Placeholder expansion referenced a non-scalar value.
     NonScalarPlaceholder {
+        /// Key whose template is being resolved.
         key: String,
+        /// Placeholder that resolved to a non-scalar value.
         placeholder: String,
     },
+    /// One or more config keys are unknown to the schema.
     UnknownConfigKeys {
+        /// Unknown canonical keys.
         keys: Vec<String>,
     },
+    /// A required runtime-visible key was missing after resolution.
     MissingRequiredKey {
+        /// Missing canonical key.
         key: String,
     },
+    /// A value could not be adapted to the schema's declared type.
     InvalidValueType {
+        /// Key whose value had the wrong type.
         key: String,
+        /// Schema type expected for the key.
         expected: SchemaValueType,
+        /// Actual type name observed during adaptation.
         actual: String,
     },
+    /// A string value was outside the schema allow-list.
     InvalidEnumValue {
+        /// Key whose value was rejected.
         key: String,
+        /// Rejected value.
         value: String,
+        /// Allowed normalized values.
         allowed: Vec<String>,
     },
 }
@@ -219,7 +284,7 @@ pub(crate) fn with_path_context(path: String, error: ConfigError) -> ConfigError
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigError, with_path_context};
+    use super::{with_path_context, ConfigError};
     use crate::config::SchemaValueType;
 
     #[test]
@@ -400,11 +465,9 @@ mod tests {
             ),
         ];
 
-        assert!(
-            cases
-                .into_iter()
-                .all(|(error, expected)| error.to_string().contains(expected))
-        );
+        assert!(cases
+            .into_iter()
+            .all(|(error, expected)| error.to_string().contains(expected)));
     }
 
     #[test]

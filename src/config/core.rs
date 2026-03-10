@@ -4,20 +4,31 @@ use std::sync::OnceLock;
 
 use crate::config::ConfigError;
 
+/// Result details for an in-place TOML edit operation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TomlEditResult {
+    /// Previous value removed or replaced by the edit, if one existed.
     pub previous: Option<ConfigValue>,
 }
 
+/// Origin of a resolved configuration value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConfigSource {
+    /// Built-in defaults compiled into the CLI.
     BuiltinDefaults,
+    /// Presentation defaults derived from the active UI preset.
     PresentationDefaults,
+    /// Values loaded from user configuration files.
     ConfigFile,
+    /// Values loaded from the secrets file.
     Secrets,
+    /// Values supplied through `OSP__...` environment variables.
     Environment,
+    /// Values supplied on the current command line.
     Cli,
+    /// Values recorded for the current interactive session.
     Session,
+    /// Values derived internally during resolution.
     Derived,
 }
 
@@ -37,21 +48,30 @@ impl Display for ConfigSource {
     }
 }
 
+/// Typed value stored in config layers and resolved output.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigValue {
+    /// UTF-8 string value.
     String(String),
+    /// Boolean value.
     Bool(bool),
+    /// Signed 64-bit integer value.
     Integer(i64),
+    /// 64-bit floating-point value.
     Float(f64),
+    /// Ordered list of nested config values.
     List(Vec<ConfigValue>),
+    /// Value wrapped for redacted display and debug output.
     Secret(SecretValue),
 }
 
 impl ConfigValue {
+    /// Returns `true` when the value is wrapped as a secret.
     pub fn is_secret(&self) -> bool {
         matches!(self, ConfigValue::Secret(_))
     }
 
+    /// Returns the underlying value, unwrapping one secret layer if present.
     pub fn reveal(&self) -> &ConfigValue {
         match self {
             ConfigValue::Secret(secret) => secret.expose(),
@@ -59,6 +79,7 @@ impl ConfigValue {
         }
     }
 
+    /// Wraps the value as a secret unless it is already secret.
     pub fn into_secret(self) -> ConfigValue {
         match self {
             ConfigValue::Secret(_) => self,
@@ -109,18 +130,22 @@ impl ConfigValue {
     }
 }
 
+/// Secret config value that redacts its display and debug output.
 #[derive(Clone, PartialEq)]
 pub struct SecretValue(Box<ConfigValue>);
 
 impl SecretValue {
+    /// Wraps a config value in a secret container.
     pub fn new(value: ConfigValue) -> Self {
         Self(Box::new(value))
     }
 
+    /// Returns the underlying unredacted value.
     pub fn expose(&self) -> &ConfigValue {
         &self.0
     }
 
+    /// Consumes the wrapper and returns the inner value.
     pub fn into_inner(self) -> ConfigValue {
         *self.0
     }
@@ -138,12 +163,18 @@ impl Display for SecretValue {
     }
 }
 
+/// Schema-level type used for parsing and validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaValueType {
+    /// Scalar string value.
     String,
+    /// Scalar boolean value.
     Bool,
+    /// Scalar signed integer value.
     Integer,
+    /// Scalar floating-point value.
     Float,
+    /// List of string values.
     StringList,
 }
 
@@ -160,28 +191,41 @@ impl Display for SchemaValueType {
     }
 }
 
+/// Bootstrap stage in which a key must be resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapPhase {
+    /// The key is needed before path-dependent config can be loaded.
     Path,
+    /// The key is needed before the active profile can be finalized.
     Profile,
 }
 
+/// Scope restriction for bootstrap-only keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapScopeRule {
+    /// The key is valid only in the global scope.
     GlobalOnly,
+    /// The key is valid globally or in a terminal-only scope.
     GlobalOrTerminal,
 }
 
+/// Additional validation rule for bootstrap values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapValueRule {
+    /// The value must be a string containing at least one non-whitespace character.
     NonEmptyString,
 }
 
+/// Bootstrap metadata derived from a schema entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapKeySpec {
+    /// Canonical dotted config key.
     pub key: &'static str,
+    /// Bootstrap phase in which the key is consulted.
     pub phase: BootstrapPhase,
+    /// Whether the key also appears in the runtime-resolved config.
     pub runtime_visible: bool,
+    /// Scope restriction enforced for the key.
     pub scope_rule: BootstrapScopeRule,
 }
 
@@ -194,6 +238,7 @@ impl BootstrapKeySpec {
     }
 }
 
+/// Schema definition for a single config key.
 #[derive(Debug, Clone)]
 pub struct SchemaEntry {
     canonical_key: Option<&'static str>,
@@ -208,6 +253,7 @@ pub struct SchemaEntry {
 }
 
 impl SchemaEntry {
+    /// Builds a schema entry for string values.
     pub fn string() -> Self {
         Self {
             canonical_key: None,
@@ -222,6 +268,7 @@ impl SchemaEntry {
         }
     }
 
+    /// Builds a schema entry for boolean values.
     pub fn boolean() -> Self {
         Self {
             canonical_key: None,
@@ -236,6 +283,7 @@ impl SchemaEntry {
         }
     }
 
+    /// Builds a schema entry for integer values.
     pub fn integer() -> Self {
         Self {
             canonical_key: None,
@@ -250,6 +298,7 @@ impl SchemaEntry {
         }
     }
 
+    /// Builds a schema entry for floating-point values.
     pub fn float() -> Self {
         Self {
             canonical_key: None,
@@ -264,6 +313,7 @@ impl SchemaEntry {
         }
     }
 
+    /// Builds a schema entry for lists of strings.
     pub fn string_list() -> Self {
         Self {
             canonical_key: None,
@@ -278,16 +328,19 @@ impl SchemaEntry {
         }
     }
 
+    /// Marks the key as required in the resolved runtime view.
     pub fn required(mut self) -> Self {
         self.required = true;
         self
     }
 
+    /// Marks the key as read-only for user-provided config sources.
     pub fn read_only(mut self) -> Self {
         self.writable = false;
         self
     }
 
+    /// Marks the key as bootstrap-only with the given phase and scope rule.
     pub fn bootstrap_only(mut self, phase: BootstrapPhase, scope_rule: BootstrapScopeRule) -> Self {
         self.runtime_visible = false;
         self.bootstrap_phase = Some(phase);
@@ -295,11 +348,13 @@ impl SchemaEntry {
         self
     }
 
+    /// Adds a bootstrap-only value validation rule.
     pub fn with_bootstrap_value_rule(mut self, rule: BootstrapValueRule) -> Self {
         self.bootstrap_value_rule = Some(rule);
         self
     }
 
+    /// Restricts accepted values using a case-insensitive allow-list.
     pub fn with_allowed_values<I, S>(mut self, values: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -314,18 +369,22 @@ impl SchemaEntry {
         self
     }
 
+    /// Returns the declared schema type for the key.
     pub fn value_type(&self) -> SchemaValueType {
         self.value_type
     }
 
+    /// Returns the normalized allow-list, if the key is enumerated.
     pub fn allowed_values(&self) -> Option<&[String]> {
         self.allowed_values.as_deref()
     }
 
+    /// Returns whether the key is visible in resolved runtime config.
     pub fn runtime_visible(&self) -> bool {
         self.runtime_visible
     }
 
+    /// Returns whether the key can be written by user-controlled sources.
     pub fn writable(&self) -> bool {
         self.writable
     }
@@ -362,6 +421,7 @@ impl SchemaEntry {
     }
 }
 
+/// Config schema used for validation, parsing, and runtime filtering.
 #[derive(Debug, Clone)]
 pub struct ConfigSchema {
     entries: BTreeMap<String, SchemaEntry>,
@@ -410,7 +470,7 @@ impl ConfigSchema {
         schema.insert(
             "ui.format",
             SchemaEntry::string()
-                .with_allowed_values(["auto", "json", "table", "md", "mreg", "value"]),
+                .with_allowed_values(["auto", "guide", "json", "table", "md", "mreg", "value"]),
         );
         schema.insert(
             "ui.mode",
@@ -437,8 +497,9 @@ impl ConfigSchema {
         schema.insert("ui.margin", SchemaEntry::integer());
         schema.insert("ui.indent", SchemaEntry::integer());
         schema.insert(
-            "ui.help.layout",
-            SchemaEntry::string().with_allowed_values(["full", "compact", "minimal"]),
+            "ui.help.level",
+            SchemaEntry::string()
+                .with_allowed_values(["inherit", "none", "tiny", "normal", "verbose"]),
         );
         schema.insert(
             "ui.guide.default_format",
@@ -469,6 +530,13 @@ impl ConfigSchema {
             "ui.table.border",
             SchemaEntry::string().with_allowed_values(["none", "square", "round"]),
         );
+        schema.insert(
+            "ui.help.table_chrome",
+            SchemaEntry::string().with_allowed_values(["inherit", "none", "square", "round"]),
+        );
+        schema.insert("ui.help.entry_indent", SchemaEntry::string());
+        schema.insert("ui.help.entry_gap", SchemaEntry::string());
+        schema.insert("ui.help.section_spacing", SchemaEntry::string());
         schema.insert("ui.short_list_max", SchemaEntry::integer());
         schema.insert("ui.medium_list_max", SchemaEntry::integer());
         schema.insert("ui.grid_padding", SchemaEntry::integer());
@@ -477,7 +545,7 @@ impl ConfigSchema {
         schema.insert("ui.mreg.stack_min_col_width", SchemaEntry::integer());
         schema.insert("ui.mreg.stack_overflow_ratio", SchemaEntry::integer());
         schema.insert(
-            "ui.verbosity.level",
+            "ui.message.verbosity",
             SchemaEntry::string()
                 .with_allowed_values(["error", "warning", "success", "info", "trace"]),
         );
@@ -550,15 +618,18 @@ impl ConfigSchema {
 }
 
 impl ConfigSchema {
+    /// Registers or replaces a schema entry for a canonical key.
     pub fn insert(&mut self, key: &'static str, entry: SchemaEntry) {
         self.entries
             .insert(key.to_string(), entry.with_canonical_key(key));
     }
 
+    /// Enables or disables the `extensions.*` namespace shortcut.
     pub fn set_allow_extensions_namespace(&mut self, value: bool) {
         self.allow_extensions_namespace = value;
     }
 
+    /// Returns whether the key is recognized by the schema.
     pub fn is_known_key(&self, key: &str) -> bool {
         self.entries.contains_key(key)
             || self.is_extension_key(key)
@@ -566,6 +637,7 @@ impl ConfigSchema {
             || dynamic_schema_key_kind(key).is_some()
     }
 
+    /// Returns whether the key can appear in resolved runtime output.
     pub fn is_runtime_visible_key(&self, key: &str) -> bool {
         self.entries
             .get(key)
@@ -574,6 +646,7 @@ impl ConfigSchema {
             || dynamic_schema_key_kind(key).is_some()
     }
 
+    /// Rejects read-only keys for user-supplied config input.
     pub fn validate_writable_key(&self, key: &str) -> Result<(), ConfigError> {
         let normalized = key.trim().to_ascii_lowercase();
         if let Some(entry) = self.entries.get(&normalized)
@@ -587,6 +660,7 @@ impl ConfigSchema {
         Ok(())
     }
 
+    /// Returns bootstrap metadata for the key, if it has bootstrap semantics.
     pub fn bootstrap_key_spec(&self, key: &str) -> Option<BootstrapKeySpec> {
         let normalized = key.trim().to_ascii_lowercase();
         self.entries
@@ -594,12 +668,14 @@ impl ConfigSchema {
             .and_then(SchemaEntry::bootstrap_spec)
     }
 
+    /// Iterates over canonical schema entries.
     pub fn entries(&self) -> impl Iterator<Item = (&str, &SchemaEntry)> {
         self.entries
             .iter()
             .map(|(key, entry)| (key.as_str(), entry))
     }
 
+    /// Returns the expected runtime type for a key.
     pub fn expected_type(&self, key: &str) -> Option<SchemaValueType> {
         self.entries
             .get(key)
@@ -607,6 +683,7 @@ impl ConfigSchema {
             .or_else(|| dynamic_schema_key_kind(key).map(|_| SchemaValueType::String))
     }
 
+    /// Parses a raw string into the schema's typed config representation.
     pub fn parse_input_value(&self, key: &str, raw: &str) -> Result<ConfigValue, ConfigError> {
         if !self.is_known_key(key) {
             return Err(ConfigError::UnknownConfigKeys {
@@ -718,6 +795,7 @@ impl ConfigSchema {
         key.starts_with("alias.")
     }
 
+    /// Validates that a key is allowed in the provided scope.
     pub fn validate_key_scope(&self, key: &str, scope: &Scope) -> Result<(), ConfigError> {
         let normalized_scope = normalize_scope(scope.clone());
         if let Some(spec) = self.bootstrap_key_spec(key)
@@ -733,6 +811,7 @@ impl ConfigSchema {
         Ok(())
     }
 
+    /// Validates bootstrap-only value rules for a key.
     pub fn validate_bootstrap_value(
         &self,
         key: &str,
@@ -807,17 +886,22 @@ impl From<Vec<String>> for ConfigValue {
     }
 }
 
+/// Scope selector used when storing or resolving config entries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Scope {
+    /// Profile selector, normalized to the canonical profile identifier.
     pub profile: Option<String>,
+    /// Terminal selector, normalized to the canonical terminal identifier.
     pub terminal: Option<String>,
 }
 
 impl Scope {
+    /// Creates a global scope with no profile or terminal selector.
     pub fn global() -> Self {
         Self::default()
     }
 
+    /// Creates a profile-scoped selector.
     pub fn profile(profile: &str) -> Self {
         Self {
             profile: Some(normalize_identifier(profile)),
@@ -825,6 +909,7 @@ impl Scope {
         }
     }
 
+    /// Creates a terminal-scoped selector.
     pub fn terminal(terminal: &str) -> Self {
         Self {
             profile: None,
@@ -832,6 +917,7 @@ impl Scope {
         }
     }
 
+    /// Creates a selector scoped to both profile and terminal.
     pub fn profile_terminal(profile: &str, terminal: &str) -> Self {
         Self {
             profile: Some(normalize_identifier(profile)),
@@ -840,24 +926,32 @@ impl Scope {
     }
 }
 
+/// Single entry stored inside a config layer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerEntry {
+    /// Canonical config key.
     pub key: String,
+    /// Stored value for the key in this layer.
     pub value: ConfigValue,
+    /// Scope attached to the entry.
     pub scope: Scope,
+    /// External origin label such as an environment variable name.
     pub origin: Option<String>,
 }
 
+/// Ordered collection of config entries from one source layer.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigLayer {
     pub(crate) entries: Vec<LayerEntry>,
 }
 
 impl ConfigLayer {
+    /// Returns the entries in insertion order.
     pub fn entries(&self) -> &[LayerEntry] {
         &self.entries
     }
 
+    /// Inserts a global entry.
     pub fn set<K, V>(&mut self, key: K, value: V)
     where
         K: Into<String>,
@@ -866,6 +960,7 @@ impl ConfigLayer {
         self.insert(key, value, Scope::global());
     }
 
+    /// Inserts an entry scoped to a profile.
     pub fn set_for_profile<K, V>(&mut self, profile: &str, key: K, value: V)
     where
         K: Into<String>,
@@ -874,6 +969,7 @@ impl ConfigLayer {
         self.insert(key, value, Scope::profile(profile));
     }
 
+    /// Inserts an entry scoped to a terminal.
     pub fn set_for_terminal<K, V>(&mut self, terminal: &str, key: K, value: V)
     where
         K: Into<String>,
@@ -882,6 +978,7 @@ impl ConfigLayer {
         self.insert(key, value, Scope::terminal(terminal));
     }
 
+    /// Inserts an entry scoped to both profile and terminal.
     pub fn set_for_profile_terminal<K, V>(
         &mut self,
         profile: &str,
@@ -895,6 +992,7 @@ impl ConfigLayer {
         self.insert(key, value, Scope::profile_terminal(profile, terminal));
     }
 
+    /// Inserts an entry with an explicit scope.
     pub fn insert<K, V>(&mut self, key: K, value: V, scope: Scope)
     where
         K: Into<String>,
@@ -908,6 +1006,7 @@ impl ConfigLayer {
         });
     }
 
+    /// Inserts an entry and records its external origin.
     pub fn insert_with_origin<K, V, O>(&mut self, key: K, value: V, scope: Scope, origin: Option<O>)
     where
         K: Into<String>,
@@ -922,6 +1021,7 @@ impl ConfigLayer {
         });
     }
 
+    /// Marks every entry in the layer as secret.
     pub fn mark_all_secret(&mut self) {
         for entry in &mut self.entries {
             if !entry.value.is_secret() {
@@ -930,6 +1030,7 @@ impl ConfigLayer {
         }
     }
 
+    /// Removes the last matching entry for a key and scope.
     pub fn remove_scoped(&mut self, key: &str, scope: &Scope) -> Option<ConfigValue> {
         let normalized_scope = normalize_scope(scope.clone());
         let index = self
@@ -939,6 +1040,7 @@ impl ConfigLayer {
         Some(self.entries.remove(index).value)
     }
 
+    /// Parses a config layer from the project's TOML layout.
     pub fn from_toml_str(raw: &str) -> Result<Self, ConfigError> {
         let parsed = raw
             .parse::<toml::Value>()
@@ -1042,6 +1144,7 @@ impl ConfigLayer {
         Ok(layer)
     }
 
+    /// Builds a config layer from `OSP__...` environment variables.
     pub fn from_env_iter<I, K, V>(vars: I) -> Result<Self, ConfigError>
     where
         I: IntoIterator<Item = (K, V)>,
@@ -1083,73 +1186,109 @@ pub(crate) struct EnvKeySpec {
     pub(crate) scope: Scope,
 }
 
+/// Options that affect profile and terminal selection during resolution.
 #[derive(Debug, Clone, Default)]
 pub struct ResolveOptions {
+    /// Explicit profile to use instead of the configured default profile.
     pub profile_override: Option<String>,
+    /// Terminal selector used to include terminal-scoped entries.
     pub terminal: Option<String>,
 }
 
 impl ResolveOptions {
+    /// Forces resolution to use the provided profile.
     pub fn with_profile(mut self, profile: &str) -> Self {
         self.profile_override = Some(normalize_identifier(profile));
         self
     }
 
+    /// Resolves values for the provided terminal selector.
     pub fn with_terminal(mut self, terminal: &str) -> Self {
         self.terminal = Some(normalize_identifier(terminal));
         self
     }
 }
 
+/// Fully resolved value together with selection metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedValue {
+    /// Value before schema adaptation or interpolation.
     pub raw_value: ConfigValue,
+    /// Final runtime value after adaptation and interpolation.
     pub value: ConfigValue,
+    /// Source layer that contributed the selected value.
     pub source: ConfigSource,
+    /// Scope of the selected entry.
     pub scope: Scope,
+    /// External origin label for the selected entry, if tracked.
     pub origin: Option<String>,
 }
 
+/// Candidate entry considered while explaining a key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExplainCandidate {
+    /// Zero-based index of the entry within its layer.
     pub entry_index: usize,
+    /// Candidate value before final selection.
     pub value: ConfigValue,
+    /// Scope attached to the candidate entry.
     pub scope: Scope,
+    /// External origin label for the candidate entry, if tracked.
     pub origin: Option<String>,
+    /// Selection rank used by resolution, if one was assigned.
     pub rank: Option<u8>,
+    /// Whether this candidate won selection within its layer.
     pub selected_in_layer: bool,
 }
 
+/// Per-layer explanation for a resolved or bootstrap key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExplainLayer {
+    /// Source represented by this explanation layer.
     pub source: ConfigSource,
+    /// Index of the selected candidate within `candidates`, if any.
     pub selected_entry_index: Option<usize>,
+    /// Candidate entries contributed by the layer.
     pub candidates: Vec<ExplainCandidate>,
 }
 
+/// Single placeholder expansion step captured by `config explain`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExplainInterpolationStep {
+    /// Placeholder name referenced by the template.
     pub placeholder: String,
+    /// Placeholder value before schema adaptation or interpolation.
     pub raw_value: ConfigValue,
+    /// Placeholder value after schema adaptation and interpolation.
     pub value: ConfigValue,
+    /// Source layer that provided the placeholder value.
     pub source: ConfigSource,
+    /// Scope of the entry that supplied the placeholder.
     pub scope: Scope,
+    /// External origin label for the placeholder entry, if tracked.
     pub origin: Option<String>,
 }
 
+/// Interpolation trace for a resolved string value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExplainInterpolation {
+    /// Original string template before placeholder substitution.
     pub template: String,
+    /// Placeholder expansion steps applied to the template.
     pub steps: Vec<ExplainInterpolationStep>,
 }
 
+/// Source used to determine the active profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveProfileSource {
+    /// The active profile came from an explicit override.
     Override,
+    /// The active profile came from `profile.default`.
     DefaultProfile,
 }
 
 impl ActiveProfileSource {
+    /// Returns the stable string label used in explain output.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Override => "override",
@@ -1158,29 +1297,47 @@ impl ActiveProfileSource {
     }
 }
 
+/// Human-readable explanation of runtime resolution for a single key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigExplain {
+    /// Canonical key being explained.
     pub key: String,
+    /// Profile used during resolution.
     pub active_profile: String,
+    /// Source used to determine `active_profile`.
     pub active_profile_source: ActiveProfileSource,
+    /// Terminal selector used during resolution, if any.
     pub terminal: Option<String>,
+    /// Profiles discovered across the evaluated layers.
     pub known_profiles: BTreeSet<String>,
+    /// Per-layer candidate and selection details.
     pub layers: Vec<ExplainLayer>,
+    /// Final resolved entry, if the key resolved successfully.
     pub final_entry: Option<ResolvedValue>,
+    /// Interpolation trace for string results, if interpolation occurred.
     pub interpolation: Option<ExplainInterpolation>,
 }
 
+/// Human-readable explanation of bootstrap resolution for a single key.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BootstrapConfigExplain {
+    /// Canonical key being explained.
     pub key: String,
+    /// Profile used during bootstrap resolution.
     pub active_profile: String,
+    /// Source used to determine `active_profile`.
     pub active_profile_source: ActiveProfileSource,
+    /// Terminal selector used during bootstrap resolution, if any.
     pub terminal: Option<String>,
+    /// Profiles discovered across the evaluated layers.
     pub known_profiles: BTreeSet<String>,
+    /// Per-layer candidate and selection details.
     pub layers: Vec<ExplainLayer>,
+    /// Final bootstrap-resolved entry, if one was selected.
     pub final_entry: Option<ResolvedValue>,
 }
 
+/// Final resolved configuration view used at runtime.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedConfig {
     pub(crate) active_profile: String,
@@ -1191,30 +1348,37 @@ pub struct ResolvedConfig {
 }
 
 impl ResolvedConfig {
+    /// Returns the profile selected for resolution.
     pub fn active_profile(&self) -> &str {
         &self.active_profile
     }
 
+    /// Returns the terminal selector used during resolution, if any.
     pub fn terminal(&self) -> Option<&str> {
         self.terminal.as_deref()
     }
 
+    /// Returns the set of profiles discovered across config layers.
     pub fn known_profiles(&self) -> &BTreeSet<String> {
         &self.known_profiles
     }
 
+    /// Returns all resolved runtime-visible values.
     pub fn values(&self) -> &BTreeMap<String, ResolvedValue> {
         &self.values
     }
 
+    /// Returns resolved alias entries excluded from normal runtime values.
     pub fn aliases(&self) -> &BTreeMap<String, ResolvedValue> {
         &self.aliases
     }
 
+    /// Returns the resolved value for a key.
     pub fn get(&self, key: &str) -> Option<&ConfigValue> {
         self.values.get(key).map(|entry| &entry.value)
     }
 
+    /// Returns the resolved string value for a key.
     pub fn get_string(&self, key: &str) -> Option<&str> {
         match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::String(value)) => Some(value),
@@ -1222,6 +1386,7 @@ impl ResolvedConfig {
         }
     }
 
+    /// Returns the resolved boolean value for a key.
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::Bool(value)) => Some(*value),
@@ -1229,6 +1394,7 @@ impl ResolvedConfig {
         }
     }
 
+    /// Returns the resolved string list for a key.
     pub fn get_string_list(&self, key: &str) -> Option<Vec<String>> {
         match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::List(values)) => Some(
@@ -1253,10 +1419,12 @@ impl ResolvedConfig {
         }
     }
 
+    /// Returns the full resolved entry for a runtime-visible key.
     pub fn get_value_entry(&self, key: &str) -> Option<&ResolvedValue> {
         self.values.get(key)
     }
 
+    /// Returns the resolved alias entry for a key.
     pub fn get_alias_entry(&self, key: &str) -> Option<&ResolvedValue> {
         let normalized = if key.trim().to_ascii_lowercase().starts_with("alias.") {
             key.trim().to_ascii_lowercase()
@@ -1305,22 +1473,27 @@ fn flatten_key_value(
     }
 }
 
+/// Returns bootstrap metadata for a canonical config key.
 pub fn bootstrap_key_spec(key: &str) -> Option<BootstrapKeySpec> {
     builtin_config_schema().bootstrap_key_spec(key)
 }
 
+/// Returns `true` when the key participates only in bootstrap resolution.
 pub fn is_bootstrap_only_key(key: &str) -> bool {
     bootstrap_key_spec(key).is_some_and(|spec| !spec.runtime_visible)
 }
 
+/// Returns `true` when the key is an alias entry.
 pub fn is_alias_key(key: &str) -> bool {
     key.trim().to_ascii_lowercase().starts_with("alias.")
 }
 
+/// Validates that a key can be written in the provided scope.
 pub fn validate_key_scope(key: &str, scope: &Scope) -> Result<(), ConfigError> {
     builtin_config_schema().validate_key_scope(key, scope)
 }
 
+/// Validates bootstrap-only value constraints for a key.
 pub fn validate_bootstrap_value(key: &str, value: &ConfigValue) -> Result<(), ConfigError> {
     builtin_config_schema().validate_bootstrap_value(key, value)
 }

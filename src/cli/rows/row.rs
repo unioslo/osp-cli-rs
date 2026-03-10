@@ -22,6 +22,7 @@ impl RowBuilder {
 }
 
 #[macro_export]
+/// Builds a [`Row`](crate::core::row::Row) from literal key/value pairs.
 macro_rules! row {
     ($($key:expr => $value:expr),* $(,)?) => {{
         let mut builder = $crate::cli::rows::row::RowBuilder::new();

@@ -1,11 +1,14 @@
 use crate::dsl::model::{ParsedPipeline, ParsedStage, ParsedStageKind};
 use crate::dsl::verbs::is_registered_explicit_verb;
 
-use super::lexer::{LexerError, StageSegment, split_pipeline, tokenize_stage};
+use super::lexer::{split_pipeline, tokenize_stage, LexerError, StageSegment};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Parsed command line split into a command segment and trailing DSL stages.
 pub struct Pipeline {
+    /// Raw command segment before pipe stages.
     pub command: String,
+    /// Raw DSL stages in left-to-right execution order.
     pub stages: Vec<String>,
 }
 
@@ -109,7 +112,7 @@ fn classify_stage_kind(verb: &str) -> ParsedStageKind {
 mod tests {
     use crate::dsl::model::ParsedStageKind;
 
-    use super::{LexerError, parse_pipeline, parse_stage, parse_stage_list};
+    use super::{parse_pipeline, parse_stage, parse_stage_list, LexerError};
 
     #[test]
     fn parse_pipeline_extracts_command_and_stages() {

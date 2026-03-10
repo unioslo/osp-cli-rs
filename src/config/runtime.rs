@@ -5,36 +5,63 @@ use crate::config::{
     SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
 };
 
+/// Default logical profile name used when no profile override is active.
 pub const DEFAULT_PROFILE_NAME: &str = "default";
+/// Default maximum number of REPL history entries to keep.
 pub const DEFAULT_REPL_HISTORY_MAX_ENTRIES: i64 = 1000;
+/// Default toggle for persistent REPL history.
 pub const DEFAULT_REPL_HISTORY_ENABLED: bool = true;
+/// Default toggle for deduplicating REPL history entries.
 pub const DEFAULT_REPL_HISTORY_DEDUPE: bool = true;
+/// Default toggle for profile-scoped REPL history storage.
 pub const DEFAULT_REPL_HISTORY_PROFILE_SCOPED: bool = true;
+/// Default upper bound for cached session results.
 pub const DEFAULT_SESSION_CACHE_MAX_RESULTS: i64 = 64;
+/// Default debug verbosity level.
 pub const DEFAULT_DEBUG_LEVEL: i64 = 0;
+/// Default toggle for file logging.
 pub const DEFAULT_LOG_FILE_ENABLED: bool = false;
+/// Default log level used for file logging.
 pub const DEFAULT_LOG_FILE_LEVEL: &str = "warn";
+/// Default render width hint.
 pub const DEFAULT_UI_WIDTH: i64 = 72;
+/// Default left margin for rendered output.
 pub const DEFAULT_UI_MARGIN: i64 = 0;
+/// Default indentation width for nested output.
 pub const DEFAULT_UI_INDENT: i64 = 2;
+/// Default presentation preset name.
 pub const DEFAULT_UI_PRESENTATION: &str = "expressive";
-pub const DEFAULT_UI_HELP_LAYOUT: &str = "full";
+/// Default semantic guide-format preference.
 pub const DEFAULT_UI_GUIDE_DEFAULT_FORMAT: &str = "guide";
+/// Default grouped-message layout mode.
 pub const DEFAULT_UI_MESSAGES_LAYOUT: &str = "grouped";
+/// Default section chrome frame style.
 pub const DEFAULT_UI_CHROME_FRAME: &str = "top";
+/// Default table border style.
 pub const DEFAULT_UI_TABLE_BORDER: &str = "square";
+/// Default REPL intro mode.
 pub const DEFAULT_REPL_INTRO: &str = "full";
+/// Default threshold for rendering short lists compactly.
 pub const DEFAULT_UI_SHORT_LIST_MAX: i64 = 1;
+/// Default threshold for rendering medium lists before expanding further.
 pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
+/// Default grid column padding.
 pub const DEFAULT_UI_GRID_PADDING: i64 = 4;
+/// Default adaptive grid column weight.
 pub const DEFAULT_UI_COLUMN_WEIGHT: i64 = 3;
+/// Default minimum width before MREG output stacks columns.
 pub const DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH: i64 = 10;
+/// Default threshold for stacked MREG overflow behavior.
 pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
+/// Default table overflow strategy.
 pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "clip";
 
+/// Options that control which runtime config sources are included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeLoadOptions {
+    /// Whether environment-derived layers should be loaded.
     pub include_env: bool,
+    /// Whether file-backed layers should be loaded.
     pub include_config_file: bool,
 }
 
@@ -47,8 +74,10 @@ impl Default for RuntimeLoadOptions {
     }
 }
 
+/// Minimal runtime-derived config that callers often need directly.
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
+    /// Active profile name selected for the current invocation.
     pub active_profile: String,
 }
 
@@ -61,6 +90,7 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    /// Builds a runtime snapshot from a resolved config.
     pub fn from_resolved(resolved: &ResolvedConfig) -> Self {
         Self {
             active_profile: resolved.active_profile().to_string(),
@@ -68,13 +98,17 @@ impl RuntimeConfig {
     }
 }
 
+/// Discovered filesystem paths for runtime config inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfigPaths {
+    /// Path to the ordinary config file, when discovered.
     pub config_file: Option<PathBuf>,
+    /// Path to the secrets config file, when discovered.
     pub secrets_file: Option<PathBuf>,
 }
 
 impl RuntimeConfigPaths {
+    /// Discovers config and secrets paths from the current process environment.
     pub fn discover() -> Self {
         let paths = Self::from_env(&RuntimeEnvironment::capture());
         tracing::debug!(
@@ -97,12 +131,14 @@ impl RuntimeConfigPaths {
     }
 }
 
+/// Built-in default values seeded before user-provided config is loaded.
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeDefaults {
     layer: ConfigLayer,
 }
 
 impl RuntimeDefaults {
+    /// Builds the default layer using the current process environment.
     pub fn from_process_env(default_theme_name: &str, default_repl_prompt: &str) -> Self {
         Self::from_env(
             &RuntimeEnvironment::capture(),
@@ -148,12 +184,17 @@ impl RuntimeDefaults {
             "ui.margin" => DEFAULT_UI_MARGIN,
             "ui.indent" => DEFAULT_UI_INDENT,
             "ui.presentation" => DEFAULT_UI_PRESENTATION.to_string(),
-            "ui.help.layout" => DEFAULT_UI_HELP_LAYOUT.to_string(),
+            "ui.help.level" => "inherit".to_string(),
             "ui.guide.default_format" => DEFAULT_UI_GUIDE_DEFAULT_FORMAT.to_string(),
             "ui.messages.layout" => DEFAULT_UI_MESSAGES_LAYOUT.to_string(),
+            "ui.message.verbosity" => "success".to_string(),
             "ui.chrome.frame" => DEFAULT_UI_CHROME_FRAME.to_string(),
             "ui.table.overflow" => DEFAULT_UI_TABLE_OVERFLOW.to_string(),
             "ui.table.border" => DEFAULT_UI_TABLE_BORDER.to_string(),
+            "ui.help.table_chrome" => "none".to_string(),
+            "ui.help.entry_indent" => "inherit".to_string(),
+            "ui.help.entry_gap" => "inherit".to_string(),
+            "ui.help.section_spacing" => "inherit".to_string(),
             "ui.short_list_max" => DEFAULT_UI_SHORT_LIST_MAX,
             "ui.medium_list_max" => DEFAULT_UI_MEDIUM_LIST_MAX,
             "ui.grid_padding" => DEFAULT_UI_GRID_PADDING,
@@ -196,6 +237,7 @@ impl RuntimeDefaults {
         Self { layer }
     }
 
+    /// Returns a default string value by key from the global scope.
     pub fn get_string(&self, key: &str) -> Option<&str> {
         self.layer
             .entries()
@@ -207,11 +249,13 @@ impl RuntimeDefaults {
             })
     }
 
+    /// Clones the defaults as a standalone config layer.
     pub fn to_layer(&self) -> ConfigLayer {
         self.layer.clone()
     }
 }
 
+/// Builds the standard runtime loader pipeline for CLI startup.
 pub fn build_runtime_pipeline(
     defaults: ConfigLayer,
     presentation: Option<ConfigLayer>,
@@ -267,14 +311,17 @@ pub fn build_runtime_pipeline(
     pipeline
 }
 
+/// Returns the default XDG-style config root for OSP.
 pub fn default_config_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().config_root_dir()
 }
 
+/// Returns the default XDG-style cache root for OSP.
 pub fn default_cache_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().cache_root_dir()
 }
 
+/// Returns the default XDG-style state root for OSP.
 pub fn default_state_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().state_root_dir()
 }
@@ -399,7 +446,7 @@ fn join_path(mut root: PathBuf, segments: &[&str]) -> PathBuf {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{DEFAULT_PROFILE_NAME, RuntimeConfigPaths, RuntimeDefaults, RuntimeEnvironment};
+    use super::{RuntimeConfigPaths, RuntimeDefaults, RuntimeEnvironment, DEFAULT_PROFILE_NAME};
     use crate::config::{ConfigLayer, ConfigValue, Scope};
 
     fn find_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {
@@ -448,16 +495,18 @@ mod tests {
             ))
         );
         assert_eq!(
-            find_value(&defaults, "ui.help.layout"),
-            Some(&ConfigValue::String(
-                super::DEFAULT_UI_HELP_LAYOUT.to_string()
-            ))
+            find_value(&defaults, "ui.help.level"),
+            Some(&ConfigValue::String("inherit".to_string()))
         );
         assert_eq!(
             find_value(&defaults, "ui.messages.layout"),
             Some(&ConfigValue::String(
                 super::DEFAULT_UI_MESSAGES_LAYOUT.to_string()
             ))
+        );
+        assert_eq!(
+            find_value(&defaults, "ui.message.verbosity"),
+            Some(&ConfigValue::String("success".to_string()))
         );
         assert_eq!(
             find_value(&defaults, "ui.chrome.frame"),

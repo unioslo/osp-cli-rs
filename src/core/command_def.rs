@@ -1,26 +1,44 @@
 use crate::core::command_policy::VisibilityMode;
 
+/// Declarative command description used for help, completion, and plugin metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CommandDef {
+    /// Canonical command name shown in the command path.
     pub name: String,
+    /// Short summary used in compact help output.
     pub about: Option<String>,
+    /// Expanded description used in detailed help output.
     pub long_about: Option<String>,
+    /// Explicit usage line when generated usage should be overridden.
     pub usage: Option<String>,
+    /// Text inserted before generated help content.
     pub before_help: Option<String>,
+    /// Text appended after generated help content.
     pub after_help: Option<String>,
+    /// Alternate visible names accepted for the command.
     pub aliases: Vec<String>,
+    /// Whether the command should be hidden from generated discovery output.
     pub hidden: bool,
+    /// Optional presentation key used to order sibling commands.
     pub sort_key: Option<String>,
+    /// Policy metadata that controls command visibility and availability.
     pub policy: CommandPolicyDef,
+    /// Positional arguments accepted by the command.
     pub args: Vec<ArgDef>,
+    /// Flags and options accepted by the command.
     pub flags: Vec<FlagDef>,
+    /// Nested subcommands exposed below this command.
     pub subcommands: Vec<CommandDef>,
 }
 
+/// Simplified policy description attached to a [`CommandDef`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPolicyDef {
+    /// Visibility mode applied to the command.
     pub visibility: VisibilityMode,
+    /// Capabilities required to execute or reveal the command.
     pub required_capabilities: Vec<String>,
+    /// Feature flags that must be enabled for the command to exist.
     pub feature_flags: Vec<String>,
 }
 
@@ -35,6 +53,7 @@ impl Default for CommandPolicyDef {
 }
 
 impl CommandPolicyDef {
+    /// Returns `true` when the policy matches the default public, unrestricted state.
     pub fn is_empty(&self) -> bool {
         self.visibility == VisibilityMode::Public
             && self.required_capabilities.is_empty()
@@ -42,53 +61,88 @@ impl CommandPolicyDef {
     }
 }
 
+/// Positional argument definition for a command.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ArgDef {
+    /// Stable identifier for the argument.
     pub id: String,
+    /// Placeholder shown for the argument value in help text.
     pub value_name: Option<String>,
+    /// Help text shown for the argument.
     pub help: Option<String>,
+    /// Optional help section heading for the argument.
     pub help_heading: Option<String>,
+    /// Whether the argument must be supplied.
     pub required: bool,
+    /// Whether the argument accepts multiple values.
     pub multi: bool,
+    /// Semantic hint for completions and UI presentation.
     pub value_kind: Option<ValueKind>,
+    /// Enumerated values suggested for the argument.
     pub choices: Vec<ValueChoice>,
+    /// Default values applied when the argument is omitted.
     pub defaults: Vec<String>,
 }
 
+/// Flag or option definition for a command.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FlagDef {
+    /// Stable identifier for the flag or option.
     pub id: String,
+    /// Single-character short form without the leading `-`.
     pub short: Option<char>,
+    /// Long form without the leading `--`.
     pub long: Option<String>,
+    /// Alternate visible spellings accepted for the flag.
     pub aliases: Vec<String>,
+    /// Help text shown for the flag.
     pub help: Option<String>,
+    /// Optional help section heading for the flag.
     pub help_heading: Option<String>,
+    /// Whether the flag consumes a value.
     pub takes_value: bool,
+    /// Placeholder shown for the flag value in help text.
     pub value_name: Option<String>,
+    /// Whether the flag must be supplied.
     pub required: bool,
+    /// Whether the flag accepts multiple values or occurrences.
     pub multi: bool,
+    /// Whether the flag should be hidden from generated discovery output.
     pub hidden: bool,
+    /// Semantic hint for the flag value.
     pub value_kind: Option<ValueKind>,
+    /// Enumerated values suggested for the flag.
     pub choices: Vec<ValueChoice>,
+    /// Default values applied when the flag is omitted.
     pub defaults: Vec<String>,
 }
 
+/// Semantic type hint for argument and option values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueKind {
+    /// Filesystem path input.
     Path,
+    /// Value chosen from a fixed set of named options.
     Enum,
+    /// Unstructured text input.
     FreeText,
 }
 
+/// Suggested value for an argument or flag.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ValueChoice {
+    /// Underlying value passed to the command.
     pub value: String,
+    /// Help text describing when to use this value.
     pub help: Option<String>,
+    /// Alternate label shown instead of the raw value.
     pub display: Option<String>,
+    /// Optional presentation key used to order sibling values.
     pub sort_key: Option<String>,
 }
 
 impl CommandDef {
+    /// Creates a command definition with the provided command name.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -96,81 +150,97 @@ impl CommandDef {
         }
     }
 
+    /// Sets the short help text and returns the updated definition.
     pub fn about(mut self, about: impl Into<String>) -> Self {
         self.about = Some(about.into());
         self
     }
 
+    /// Sets the long help text and returns the updated definition.
     pub fn long_about(mut self, long_about: impl Into<String>) -> Self {
         self.long_about = Some(long_about.into());
         self
     }
 
+    /// Sets the explicit usage line and returns the updated definition.
     pub fn usage(mut self, usage: impl Into<String>) -> Self {
         self.usage = Some(usage.into());
         self
     }
 
+    /// Sets text shown before generated help output.
     pub fn before_help(mut self, text: impl Into<String>) -> Self {
         self.before_help = Some(text.into());
         self
     }
 
+    /// Sets text shown after generated help output.
     pub fn after_help(mut self, text: impl Into<String>) -> Self {
         self.after_help = Some(text.into());
         self
     }
 
+    /// Appends a visible alias and returns the updated definition.
     pub fn alias(mut self, alias: impl Into<String>) -> Self {
         self.aliases.push(alias.into());
         self
     }
 
+    /// Appends multiple visible aliases and returns the updated definition.
     pub fn aliases(mut self, aliases: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.aliases.extend(aliases.into_iter().map(Into::into));
         self
     }
 
+    /// Marks the command as hidden from generated help and discovery output.
     pub fn hidden(mut self) -> Self {
         self.hidden = true;
         self
     }
 
+    /// Sets a sort key used when presenting the command alongside peers.
     pub fn sort(mut self, sort_key: impl Into<String>) -> Self {
         self.sort_key = Some(sort_key.into());
         self
     }
 
+    /// Replaces the command policy metadata.
     pub fn policy(mut self, policy: CommandPolicyDef) -> Self {
         self.policy = policy;
         self
     }
 
+    /// Appends a positional argument definition.
     pub fn arg(mut self, arg: ArgDef) -> Self {
         self.args.push(arg);
         self
     }
 
+    /// Appends multiple positional argument definitions.
     pub fn args(mut self, args: impl IntoIterator<Item = ArgDef>) -> Self {
         self.args.extend(args);
         self
     }
 
+    /// Appends a flag definition.
     pub fn flag(mut self, flag: FlagDef) -> Self {
         self.flags.push(flag);
         self
     }
 
+    /// Appends multiple flag definitions.
     pub fn flags(mut self, flags: impl IntoIterator<Item = FlagDef>) -> Self {
         self.flags.extend(flags);
         self
     }
 
+    /// Appends a nested subcommand definition.
     pub fn subcommand(mut self, subcommand: CommandDef) -> Self {
         self.subcommands.push(subcommand);
         self
     }
 
+    /// Appends multiple nested subcommand definitions.
     pub fn subcommands(mut self, subcommands: impl IntoIterator<Item = CommandDef>) -> Self {
         self.subcommands.extend(subcommands);
         self
@@ -178,6 +248,7 @@ impl CommandDef {
 }
 
 impl ArgDef {
+    /// Creates a positional argument definition with the provided identifier.
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -185,36 +256,43 @@ impl ArgDef {
         }
     }
 
+    /// Sets the displayed value name for the argument.
     pub fn value_name(mut self, value_name: impl Into<String>) -> Self {
         self.value_name = Some(value_name.into());
         self
     }
 
+    /// Sets the help text for the argument.
     pub fn help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
     }
 
+    /// Marks the argument as required.
     pub fn required(mut self) -> Self {
         self.required = true;
         self
     }
 
+    /// Marks the argument as accepting multiple values.
     pub fn multi(mut self) -> Self {
         self.multi = true;
         self
     }
 
+    /// Sets the semantic value kind for the argument.
     pub fn value_kind(mut self, value_kind: ValueKind) -> Self {
         self.value_kind = Some(value_kind);
         self
     }
 
+    /// Appends supported value choices for the argument.
     pub fn choices(mut self, choices: impl IntoIterator<Item = ValueChoice>) -> Self {
         self.choices.extend(choices);
         self
     }
 
+    /// Appends default values for the argument.
     pub fn defaults(mut self, defaults: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.defaults.extend(defaults.into_iter().map(Into::into));
         self
@@ -222,6 +300,7 @@ impl ArgDef {
 }
 
 impl FlagDef {
+    /// Creates a flag definition with the provided identifier.
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -229,67 +308,80 @@ impl FlagDef {
         }
     }
 
+    /// Sets the short option name.
     pub fn short(mut self, short: char) -> Self {
         self.short = Some(short);
         self
     }
 
+    /// Sets the long option name without the leading `--`.
     pub fn long(mut self, long: impl Into<String>) -> Self {
         self.long = Some(long.into());
         self
     }
 
+    /// Appends an alias name for this flag.
     pub fn alias(mut self, alias: impl Into<String>) -> Self {
         self.aliases.push(alias.into());
         self
     }
 
+    /// Appends multiple alias names for this flag.
     pub fn aliases(mut self, aliases: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.aliases.extend(aliases.into_iter().map(Into::into));
         self
     }
 
+    /// Sets the help text for the flag.
     pub fn help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
     }
 
+    /// Marks the flag as taking a value and sets its displayed value name.
     pub fn takes_value(mut self, value_name: impl Into<String>) -> Self {
         self.takes_value = true;
         self.value_name = Some(value_name.into());
         self
     }
 
+    /// Marks the flag as required.
     pub fn required(mut self) -> Self {
         self.required = true;
         self
     }
 
+    /// Marks the flag as accepting multiple values or occurrences.
     pub fn multi(mut self) -> Self {
         self.multi = true;
         self
     }
 
+    /// Marks the flag as hidden from generated help and discovery output.
     pub fn hidden(mut self) -> Self {
         self.hidden = true;
         self
     }
 
+    /// Sets the semantic value kind for the flag's value.
     pub fn value_kind(mut self, value_kind: ValueKind) -> Self {
         self.value_kind = Some(value_kind);
         self
     }
 
+    /// Appends supported value choices for the flag.
     pub fn choices(mut self, choices: impl IntoIterator<Item = ValueChoice>) -> Self {
         self.choices.extend(choices);
         self
     }
 
+    /// Appends default values for the flag.
     pub fn defaults(mut self, defaults: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.defaults.extend(defaults.into_iter().map(Into::into));
         self
     }
 
+    /// Marks the flag as not taking a value and clears any stored value name.
     pub fn takes_no_value(mut self) -> Self {
         self.takes_value = false;
         self.value_name = None;
@@ -298,6 +390,7 @@ impl FlagDef {
 }
 
 impl ValueChoice {
+    /// Creates a suggested value entry.
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -305,16 +398,19 @@ impl ValueChoice {
         }
     }
 
+    /// Sets the help text associated with this suggested value.
     pub fn help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
     }
 
+    /// Sets the display label shown for this suggested value.
     pub fn display(mut self, display: impl Into<String>) -> Self {
         self.display = Some(display.into());
         self
     }
 
+    /// Sets the presentation sort key for this suggested value.
     pub fn sort(mut self, sort_key: impl Into<String>) -> Self {
         self.sort_key = Some(sort_key.into());
         self
@@ -323,6 +419,7 @@ impl ValueChoice {
 
 #[cfg(feature = "clap")]
 impl CommandDef {
+    /// Converts a `clap` command tree into a [`CommandDef`] tree.
     pub fn from_clap(command: clap::Command) -> Self {
         clap_command_to_def(command)
     }

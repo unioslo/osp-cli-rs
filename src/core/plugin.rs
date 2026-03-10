@@ -7,52 +7,76 @@ use crate::core::command_def::{
 };
 use crate::core::command_policy::{CommandPath, CommandPolicy, VisibilityMode};
 
+/// Current plugin wire protocol version understood by this crate.
 pub const PLUGIN_PROTOCOL_V1: u32 = 1;
 
+/// `describe` payload emitted by a plugin that speaks protocol v1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescribeV1 {
+    /// Protocol version declared by the plugin.
     pub protocol_version: u32,
+    /// Stable plugin identifier.
     pub plugin_id: String,
+    /// Plugin version string.
     pub plugin_version: String,
+    /// Minimum `osp-cli` version required by the plugin, if any.
     pub min_osp_version: Option<String>,
+    /// Top-level commands exported by the plugin.
     pub commands: Vec<DescribeCommandV1>,
 }
 
+/// Recursive command description used in plugin metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescribeCommandV1 {
+    /// Command name exposed by the plugin.
     pub name: String,
     #[serde(default)]
+    /// Short help text for the command.
     pub about: String,
     #[serde(default)]
+    /// Optional authorization metadata for the command.
     pub auth: Option<DescribeCommandAuthV1>,
     #[serde(default)]
+    /// Positional argument descriptions in declaration order.
     pub args: Vec<DescribeArgV1>,
     #[serde(default)]
+    /// Flag descriptions keyed by protocol flag spelling.
     pub flags: BTreeMap<String, DescribeFlagV1>,
     #[serde(default)]
+    /// Nested subcommands under this command.
     pub subcommands: Vec<DescribeCommandV1>,
 }
 
+/// Authorization metadata attached to a described command.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeCommandAuthV1 {
     #[serde(default)]
+    /// Visibility level for the command.
     pub visibility: Option<DescribeVisibilityModeV1>,
     #[serde(default)]
+    /// Capabilities required to run the command.
     pub required_capabilities: Vec<String>,
     #[serde(default)]
+    /// Feature flags that must be enabled for the command.
     pub feature_flags: Vec<String>,
 }
 
+/// Wire-format visibility mode used by plugin metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DescribeVisibilityModeV1 {
+    /// Command is visible and runnable without authentication.
     Public,
+    /// Command requires an authenticated user.
     Authenticated,
+    /// Command requires one or more capabilities.
     CapabilityGated,
+    /// Command should be hidden from normal help surfaces.
     Hidden,
 }
 
 impl DescribeVisibilityModeV1 {
+    /// Converts the wire-format visibility mode into the internal policy enum.
     pub fn as_visibility_mode(self) -> VisibilityMode {
         match self {
             DescribeVisibilityModeV1::Public => VisibilityMode::Public,
@@ -62,6 +86,7 @@ impl DescribeVisibilityModeV1 {
         }
     }
 
+    /// Returns the canonical protocol label for this visibility mode.
     pub fn as_label(self) -> &'static str {
         match self {
             DescribeVisibilityModeV1::Public => "public",
@@ -73,6 +98,7 @@ impl DescribeVisibilityModeV1 {
 }
 
 impl DescribeCommandAuthV1 {
+    /// Returns a short human-readable summary of non-default auth requirements.
     pub fn hint(&self) -> Option<String> {
         let mut parts = Vec::new();
 
@@ -101,106 +127,155 @@ impl DescribeCommandAuthV1 {
     }
 }
 
+/// Wire-format type hint for plugin argument values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DescribeValueTypeV1 {
+    /// Value represents a filesystem path.
     Path,
 }
 
+/// Suggested value emitted in plugin metadata.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeSuggestionV1 {
+    /// Raw suggestion value inserted into the command line.
     pub value: String,
     #[serde(default)]
+    /// Optional short metadata string.
     pub meta: Option<String>,
     #[serde(default)]
+    /// Optional display label for menu rendering.
     pub display: Option<String>,
     #[serde(default)]
+    /// Optional sort key used for ordering suggestions.
     pub sort: Option<String>,
 }
 
+/// Positional argument description emitted by a plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeArgV1 {
     #[serde(default)]
+    /// Positional name or value label.
     pub name: Option<String>,
     #[serde(default)]
+    /// Short help text for the argument.
     pub about: Option<String>,
     #[serde(default)]
+    /// Whether the argument may be repeated.
     pub multi: bool,
     #[serde(default)]
+    /// Optional wire-format value type hint.
     pub value_type: Option<DescribeValueTypeV1>,
     #[serde(default)]
+    /// Suggested values for the argument.
     pub suggestions: Vec<DescribeSuggestionV1>,
 }
 
+/// Flag description emitted by a plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeFlagV1 {
     #[serde(default)]
+    /// Short help text for the flag.
     pub about: Option<String>,
     #[serde(default)]
+    /// Whether the flag is boolean-only and takes no value.
     pub flag_only: bool,
     #[serde(default)]
+    /// Whether the flag may be repeated.
     pub multi: bool,
     #[serde(default)]
+    /// Optional wire-format value type hint.
     pub value_type: Option<DescribeValueTypeV1>,
     #[serde(default)]
+    /// Suggested values for the flag.
     pub suggestions: Vec<DescribeSuggestionV1>,
 }
 
+/// Protocol v1 command response envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseV1 {
+    /// Protocol version declared by the response.
     pub protocol_version: u32,
+    /// Whether the command completed successfully.
     pub ok: bool,
+    /// Response payload produced by the plugin.
     pub data: serde_json::Value,
+    /// Structured error payload present when `ok` is `false`.
     pub error: Option<ResponseErrorV1>,
     #[serde(default)]
+    /// User-facing messages emitted alongside the payload.
     pub messages: Vec<ResponseMessageV1>,
+    /// Rendering and presentation metadata for the payload.
     pub meta: ResponseMetaV1,
 }
 
+/// Structured error payload returned when `ok` is `false`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseErrorV1 {
+    /// Stable machine-readable error code.
     pub code: String,
+    /// Human-readable error message.
     pub message: String,
     #[serde(default)]
+    /// Arbitrary structured error details.
     pub details: serde_json::Value,
 }
 
+/// Rendering hints attached to a plugin response.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ResponseMetaV1 {
+    /// Preferred output format for rendering the payload.
     pub format_hint: Option<String>,
+    /// Preferred column order for row-based payloads.
     pub columns: Option<Vec<String>>,
     #[serde(default)]
+    /// Preferred alignment hints for displayed columns.
     pub column_align: Vec<ColumnAlignmentV1>,
 }
 
+/// Column alignment hint used in plugin response metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ColumnAlignmentV1 {
+    /// Use the renderer's default alignment.
     #[default]
     Default,
+    /// Left-align the column.
     Left,
+    /// Center-align the column.
     Center,
+    /// Right-align the column.
     Right,
 }
 
+/// Message severity carried in plugin responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ResponseMessageLevelV1 {
+    /// Error-level message.
     Error,
+    /// Warning-level message.
     Warning,
+    /// Success-level message.
     Success,
+    /// Informational message.
     Info,
+    /// Trace or debug-style message.
     Trace,
 }
 
+/// User-facing message emitted alongside a plugin response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseMessageV1 {
+    /// Severity level for the message.
     pub level: ResponseMessageLevelV1,
+    /// Human-readable message text.
     pub text: String,
 }
 
 impl DescribeV1 {
     #[cfg(feature = "clap")]
+    /// Builds a v1 describe payload from a single `clap` command tree.
     pub fn from_clap_command(
         plugin_id: impl Into<String>,
         plugin_version: impl Into<String>,
@@ -216,6 +291,7 @@ impl DescribeV1 {
     }
 
     #[cfg(feature = "clap")]
+    /// Builds a v1 describe payload from multiple top-level `clap` commands.
     pub fn from_clap_commands(
         plugin_id: impl Into<String>,
         plugin_version: impl Into<String>,
@@ -235,6 +311,7 @@ impl DescribeV1 {
         }
     }
 
+    /// Validates the describe payload and returns an error string on protocol violations.
     pub fn validate_v1(&self) -> Result<(), String> {
         if self.protocol_version != PLUGIN_PROTOCOL_V1 {
             return Err(format!(
@@ -253,6 +330,7 @@ impl DescribeV1 {
 }
 
 impl DescribeCommandV1 {
+    /// Converts command auth metadata into an internal command policy for `path`.
     pub fn command_policy(&self, path: CommandPath) -> Option<CommandPolicy> {
         let auth = self.auth.as_ref()?;
         let mut policy = CommandPolicy::new(path);
@@ -270,6 +348,7 @@ impl DescribeCommandV1 {
 }
 
 impl ResponseV1 {
+    /// Validates the response envelope and returns an error string on protocol violations.
     pub fn validate_v1(&self) -> Result<(), String> {
         if self.protocol_version != PLUGIN_PROTOCOL_V1 {
             return Err(format!(
@@ -296,6 +375,7 @@ impl ResponseV1 {
 
 #[cfg(feature = "clap")]
 impl DescribeCommandV1 {
+    /// Converts a `clap` command into a protocol v1 command description.
     pub fn from_clap(command: clap::Command) -> Self {
         Self::from(&CommandDef::from_clap(command))
     }
@@ -603,7 +683,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, validate_command_auth,
+        validate_command_auth, DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1,
     };
     use crate::core::command_policy::{CommandPath, VisibilityMode};
 
@@ -626,11 +706,9 @@ mod tests {
             .command_policy(CommandPath::new(["orch", "approval", "decide"]))
             .expect("auth metadata should build a policy");
         assert_eq!(policy.visibility, VisibilityMode::CapabilityGated);
-        assert!(
-            policy
-                .required_capabilities
-                .contains("orch.approval.decide")
-        );
+        assert!(policy
+            .required_capabilities
+            .contains("orch.approval.decide"));
         assert!(policy.feature_flags.contains("orch"));
     }
 

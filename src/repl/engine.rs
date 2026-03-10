@@ -1,3 +1,15 @@
+//! REPL editor host and `reedline` integration.
+//!
+//! This module owns the interactive shell boundary:
+//! - prompt rendering and prompt-right hooks
+//! - line-editor setup and basic-mode fallback
+//! - completion/menu/highlighter adapters
+//! - completion debug and trace helpers used by host-side commands
+//!
+//! Higher-level REPL orchestration lives in [`super::host`] and
+//! [`super::lifecycle`]. Actual command execution lives in
+//! [`super::dispatch`]. This file stays focused on the editor/runtime surface.
+
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
@@ -7,41 +19,56 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::highlight::ReplHighlighter;
-pub use super::highlight::{HighlightDebugSpan, debug_highlight};
+pub use super::highlight::{debug_highlight, HighlightDebugSpan};
 pub use super::history_store::{
-    HistoryConfig, HistoryEntry, HistoryShellContext, OspHistoryStore, SharedHistory,
-    expand_history,
+    expand_history, HistoryConfig, HistoryEntry, HistoryShellContext, OspHistoryStore,
+    SharedHistory,
 };
-use super::menu::{MenuDebug, MenuStyleDebug, OspCompletionMenu, debug_snapshot, display_text};
+use super::menu::{debug_snapshot, display_text, MenuDebug, MenuStyleDebug, OspCompletionMenu};
 use crate::completion::{
     ArgNode, CompletionEngine, CompletionNode, CompletionTree, SuggestionEntry, SuggestionOutput,
 };
-use crate::core::shell_words::{QuoteStyle, escape_for_shell, quote_for_shell};
+use crate::core::shell_words::{escape_for_shell, quote_for_shell, QuoteStyle};
 use anyhow::Result;
 use nu_ansi_term::{Color, Style};
 use reedline::{
-    Completer, EditCommand, EditMode, Editor, Emacs, KeyCode, KeyModifiers, Menu, MenuEvent,
-    Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline,
-    ReedlineEvent, ReedlineMenu, ReedlineRawEvent, Signal, Span, Suggestion, UndoBehavior,
-    default_emacs_keybindings,
+    default_emacs_keybindings, Completer, EditCommand, EditMode, Editor, Emacs, KeyCode,
+    KeyModifiers, Menu, MenuEvent, Prompt, PromptEditMode, PromptHistorySearch,
+    PromptHistorySearchStatus, Reedline, ReedlineEvent, ReedlineMenu, ReedlineRawEvent, Signal,
+    Span, Suggestion, UndoBehavior,
 };
 use serde::Serialize;
 
+/// Static prompt text shown by the interactive editor.
+///
+/// The right-hand prompt is configured separately through
+/// [`PromptRightRenderer`] because it is often dynamic.
 #[derive(Debug, Clone)]
 pub struct ReplPrompt {
+    /// Left prompt text shown before the input buffer.
     pub left: String,
+    /// Prompt indicator rendered after `left`.
     pub indicator: String,
 }
 
+/// Lazily renders the right-hand prompt for a REPL frame.
 pub type PromptRightRenderer = Arc<dyn Fn() -> String + Send + Sync>;
 
+/// Pre-processed editor input used for completion and highlighting.
+///
+/// REPL input can contain host-level flags or aliases that should not
+/// participate in command completion. A [`LineProjector`] can blank those
+/// spans while also hiding corresponding suggestions.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LineProjection {
+    /// Projected line passed to completion and highlighting.
     pub line: String,
+    /// Suggestion values that should be hidden for this projection.
     pub hidden_suggestions: BTreeSet<String>,
 }
 
 impl LineProjection {
+    /// Returns a projection that leaves the line untouched.
     pub fn passthrough(line: impl Into<String>) -> Self {
         Self {
             line: line.into(),
@@ -49,103 +76,171 @@ impl LineProjection {
         }
     }
 
+    /// Marks suggestion values that should be suppressed for this projection.
     pub fn with_hidden_suggestions(mut self, hidden_suggestions: BTreeSet<String>) -> Self {
         self.hidden_suggestions = hidden_suggestions;
         self
     }
 }
 
+/// Projects a raw editor line into the view used by completion/highlighting.
 pub type LineProjector = Arc<dyn Fn(&str) -> LineProjection + Send + Sync>;
 
+/// Selects how aggressively the REPL should use the interactive line editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplInputMode {
+    /// Use the interactive editor when the terminal supports it, else fall back.
     Auto,
+    /// Require the interactive editor even when capability probes would skip it.
     Interactive,
+    /// Use plain stdin line reading instead of `reedline`.
     Basic,
 }
 
+/// Controls how a command-triggered REPL restart should be presented.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplReloadKind {
+    /// Rebuild the REPL and continue without reprinting the intro surface.
     Default,
+    /// Rebuild the REPL and re-render the intro/help chrome.
     WithIntro,
 }
 
+/// Outcome of executing one submitted REPL line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplLineResult {
+    /// Print output and continue the current session.
     Continue(String),
+    /// Replace the current input buffer instead of printing output.
     ReplaceInput(String),
+    /// Exit the REPL with the given process status.
     Exit(i32),
+    /// Rebuild the REPL runtime, optionally showing intro chrome again.
     Restart {
+        /// Output to print before restarting.
         output: String,
+        /// Restart presentation mode to use.
         reload: ReplReloadKind,
     },
 }
 
+/// Outcome of one `run_repl` session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplRunResult {
+    /// Exit the editor loop and return a process status.
     Exit(i32),
+    /// Restart the surrounding REPL host loop with refreshed state.
     Restart {
+        /// Output to print before restarting.
         output: String,
+        /// Restart presentation mode to use.
         reload: ReplReloadKind,
     },
 }
 
+/// Editor-host configuration for one REPL run.
 pub struct ReplRunConfig {
+    /// Left prompt and indicator strings.
     pub prompt: ReplPrompt,
+    /// Legacy root words used when no structured completion tree is provided.
     pub completion_words: Vec<String>,
+    /// Structured completion tree for commands, flags, and pipe verbs.
     pub completion_tree: Option<CompletionTree>,
+    /// Visual configuration for completion menus and command highlighting.
     pub appearance: ReplAppearance,
+    /// History backend configuration for the session.
     pub history_config: HistoryConfig,
+    /// Chooses between interactive and basic input handling.
     pub input_mode: ReplInputMode,
+    /// Optional renderer for the right-hand prompt.
     pub prompt_right: Option<PromptRightRenderer>,
+    /// Optional projector used before completion/highlighting analysis.
     pub line_projector: Option<LineProjector>,
 }
 
+/// One rendered completion entry in the debug surface.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionDebugMatch {
+    /// Stable completion identifier or inserted value.
     pub id: String,
+    /// Primary rendered label for the suggestion.
     pub label: String,
+    /// Optional secondary description for the suggestion.
     pub description: Option<String>,
+    /// Classified suggestion kind used by the debug view.
     pub kind: String,
 }
 
+/// Snapshot of completion/menu state for a given line and cursor position.
+///
+/// This is primarily consumed by REPL debug commands and tests.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionDebug {
+    /// Original input line.
     pub line: String,
+    /// Cursor position used for analysis.
     pub cursor: usize,
+    /// Replacement byte range for the active suggestion set.
     pub replace_range: [usize; 2],
+    /// Current completion stub under the cursor.
     pub stub: String,
+    /// Candidate matches visible to the menu.
     pub matches: Vec<CompletionDebugMatch>,
+    /// Selected match index, or `-1` when no match is selected.
     pub selected: i64,
+    /// Selected menu row.
     pub selected_row: u16,
+    /// Selected menu column.
     pub selected_col: u16,
+    /// Number of menu columns.
     pub columns: u16,
+    /// Number of menu rows.
     pub rows: u16,
+    /// Number of visible menu rows after clipping.
     pub visible_rows: u16,
+    /// Menu indentation used for rendering.
     pub menu_indent: u16,
+    /// Effective menu style snapshot.
     pub menu_styles: MenuStyleDebug,
+    /// Optional selected-item description.
     pub menu_description: Option<String>,
+    /// Rendered description as shown in the menu.
     pub menu_description_rendered: Option<String>,
+    /// Virtual render width.
     pub width: u16,
+    /// Virtual render height.
     pub height: u16,
+    /// Whether Unicode menu chrome was enabled.
     pub unicode: bool,
+    /// Whether ANSI styling was enabled.
     pub color: bool,
+    /// Rendered menu lines captured for debugging.
     pub rendered: Vec<String>,
 }
 
+/// Synthetic editor action used by completion-debug stepping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DebugStep {
+    /// Advance to the next item or open the menu.
     Tab,
+    /// Move to the previous item.
     BackTab,
+    /// Move selection upward.
     Up,
+    /// Move selection downward.
     Down,
+    /// Move selection left.
     Left,
+    /// Move selection right.
     Right,
+    /// Accept the selected item.
     Accept,
+    /// Close the completion menu.
     Close,
 }
 
 impl DebugStep {
+    /// Parses a step name accepted by REPL debug commands.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "tab" => Some(Self::Tab),
@@ -160,6 +255,7 @@ impl DebugStep {
         }
     }
 
+    /// Returns the stable lowercase name used in debug payloads.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Tab => "tab",
@@ -174,22 +270,32 @@ impl DebugStep {
     }
 }
 
+/// One frame from a stepped completion-debug session.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionDebugFrame {
+    /// Synthetic step that produced this frame.
     pub step: String,
+    /// Captured completion state after the step.
     pub state: CompletionDebug,
 }
 
+/// Rendering and capture options for completion-debug helpers.
 #[derive(Debug, Clone, Copy)]
 pub struct CompletionDebugOptions<'a> {
+    /// Virtual render width for the debug menu.
     pub width: u16,
+    /// Virtual render height for the debug menu.
     pub height: u16,
+    /// Whether ANSI styling should be enabled in captured output.
     pub ansi: bool,
+    /// Whether Unicode menu chrome should be enabled in captured output.
     pub unicode: bool,
+    /// Optional appearance override used for the debug session.
     pub appearance: Option<&'a ReplAppearance>,
 }
 
 impl<'a> CompletionDebugOptions<'a> {
+    /// Creates a new debug snapshot configuration for a virtual terminal size.
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             width,
@@ -200,22 +306,26 @@ impl<'a> CompletionDebugOptions<'a> {
         }
     }
 
+    /// Enables ANSI styling in captured menu output.
     pub fn ansi(mut self, ansi: bool) -> Self {
         self.ansi = ansi;
         self
     }
 
+    /// Selects unicode or ASCII menu chrome when rendering debug output.
     pub fn unicode(mut self, unicode: bool) -> Self {
         self.unicode = unicode;
         self
     }
 
+    /// Applies REPL appearance overrides to the debug menu session.
     pub fn appearance(mut self, appearance: Option<&'a ReplAppearance>) -> Self {
         self.appearance = appearance;
         self
     }
 }
 
+/// Builds a single completion-debug snapshot for `line` at `cursor`.
 pub fn debug_completion(
     tree: &CompletionTree,
     line: &str,
@@ -240,6 +350,7 @@ pub fn debug_completion(
     )
 }
 
+/// Replays a sequence of synthetic editor actions and captures each frame.
 pub fn debug_completion_steps(
     tree: &CompletionTree,
     line: &str,
@@ -452,6 +563,7 @@ fn snapshot_completion_debug(
 }
 
 impl ReplPrompt {
+    /// Builds a prompt with no indicator suffix.
     pub fn simple(left: impl Into<String>) -> Self {
         Self {
             left: left.into(),
@@ -460,11 +572,16 @@ impl ReplPrompt {
     }
 }
 
+/// Style overrides for REPL-only completion and highlighting chrome.
 #[derive(Debug, Clone, Default)]
 pub struct ReplAppearance {
+    /// Style applied to non-selected completion text.
     pub completion_text_style: Option<String>,
+    /// Background style applied to the completion menu.
     pub completion_background_style: Option<String>,
+    /// Style applied to the selected completion entry.
     pub completion_highlight_style: Option<String>,
+    /// Style applied to recognized command segments in the input line.
     pub command_highlight_style: Option<String>,
 }
 
@@ -576,6 +693,7 @@ where
     Ok(result)
 }
 
+/// Runs the interactive REPL and delegates submitted lines to `execute`.
 pub fn run_repl<F>(config: ReplRunConfig, mut execute: F) -> Result<ReplRunResult>
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
@@ -786,6 +904,9 @@ fn cursor_position_reports_supported() -> bool {
         return true;
     }
 
+    // A short raw-mode probe lets the REPL decide up front whether cursor
+    // position requests work on this terminal, instead of failing after the
+    // interactive editor is already running.
     let start = Instant::now();
     let mut buffer = Vec::with_capacity(32);
     while start.elapsed() < CURSOR_PROBE_TIMEOUT {
@@ -912,6 +1033,8 @@ impl Completer for ReplCompleter {
             .as_ref()
             .map(|project| project(line))
             .unwrap_or_else(|| LineProjection::passthrough(line));
+        // Completion runs against the projected line so host-only flags and
+        // aliases do not distort command-path or DSL suggestions.
         let (cursor_state, outputs) = self.engine.complete(&projected.line, pos);
         let span = Span {
             start: cursor_state.replace_range.start,
@@ -941,6 +1064,8 @@ impl Completer for ReplCompleter {
             .collect::<Vec<_>>();
 
         if has_path_sentinel {
+            // The pure completion engine reports that this slot expects a path;
+            // filesystem enumeration happens here at the editor boundary.
             suggestions.extend(path_suggestions(
                 &cursor_state.raw_stub,
                 &cursor_state.token_stub,
@@ -953,6 +1078,7 @@ impl Completer for ReplCompleter {
     }
 }
 
+/// Returns the default DSL verbs exposed after `|` in the REPL.
 pub fn default_pipe_verbs() -> BTreeMap<String, String> {
     BTreeMap::from([
         ("F".to_string(), "Filter rows".to_string()),
@@ -1052,6 +1178,11 @@ fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
     style
 }
 
+/// Parses a REPL style string and extracts a terminal color.
+///
+/// The parser accepts simple named colors as well as `#rrggbb`, `#rgb`,
+/// `ansiNN`, and `rgb(r,g,b)` forms. Non-color attributes such as `bold` are
+/// ignored when selecting the effective color token.
 pub fn color_from_style_spec(spec: &str) -> Option<Color> {
     let token = extract_color_token(spec)?;
     parse_color_token(token)
@@ -1498,14 +1629,15 @@ mod tests {
     use std::sync::{Arc, Mutex, OnceLock};
 
     use super::{
-        AutoCompleteEmacs, BasicInputReason, CompletionDebugOptions, DebugStep, HistoryConfig,
-        HistoryShellContext, OspPrompt, PromptRightRenderer, ReplAppearance, ReplCompleter,
-        ReplInputMode, ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunResult, SharedHistory,
-        SubmissionContext, SubmissionResult, basic_input_reason, build_repl_highlighter,
-        color_from_style_spec, contains_cursor_position_report, debug_completion,
-        debug_completion_steps, default_pipe_verbs, expand_history, expand_home,
-        is_cursor_position_error, parse_cursor_position_report, path_suggestions,
-        process_submission, split_path_stub, trace_completion, trace_completion_enabled,
+        basic_input_reason, build_repl_highlighter, color_from_style_spec,
+        contains_cursor_position_report, debug_completion, debug_completion_steps,
+        default_pipe_verbs, expand_history, expand_home, is_cursor_position_error,
+        parse_cursor_position_report, path_suggestions, process_submission, split_path_stub,
+        trace_completion, trace_completion_enabled, AutoCompleteEmacs, BasicInputReason,
+        CompletionDebugOptions, DebugStep, HistoryConfig, HistoryShellContext, OspPrompt,
+        PromptRightRenderer, ReplAppearance, ReplCompleter, ReplInputMode, ReplLineResult,
+        ReplPrompt, ReplReloadKind, ReplRunResult, SharedHistory, SubmissionContext,
+        SubmissionResult,
     };
     use crate::core::shell_words::QuoteStyle;
     use crate::repl::LineProjection;
@@ -2103,11 +2235,9 @@ mod tests {
             },
         );
 
-        assert!(
-            suggestions
-                .iter()
-                .any(|item| item.value.ends_with("team\\ docs.txt"))
-        );
+        assert!(suggestions
+            .iter()
+            .any(|item| item.value.ends_with("team\\ docs.txt")));
     }
 
     #[test]
@@ -2127,11 +2257,9 @@ mod tests {
             },
         );
 
-        assert!(
-            suggestions
-                .iter()
-                .any(|item| item.value.ends_with("team docs.txt\""))
-        );
+        assert!(suggestions
+            .iter()
+            .any(|item| item.value.ends_with("team docs.txt\"")));
     }
 
     #[test]

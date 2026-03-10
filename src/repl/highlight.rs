@@ -27,12 +27,18 @@ pub(crate) struct HighlightedSpan {
     pub kind: HighlightTokenKind,
 }
 
+/// Debug-friendly view of one highlighted span in the REPL line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HighlightDebugSpan {
+    /// Byte offset where the span starts.
     pub start: usize,
+    /// Byte offset where the span ends.
     pub end: usize,
+    /// Raw text contained in the span.
     pub text: String,
+    /// Stable debug classification name.
     pub kind: String,
+    /// RGB color used for the span, when highlighting applied a literal color.
     pub rgb: Option<[u8; 3]>,
 }
 
@@ -151,6 +157,7 @@ impl Highlighter for ReplHighlighter {
     }
 }
 
+/// Classifies a REPL line and returns serializable highlight spans for debugging tools.
 pub fn debug_highlight(
     tree: &CompletionTree,
     line: &str,
@@ -270,7 +277,7 @@ fn debug_kind_rgb(kind: HighlightTokenKind) -> Option<[u8; 3]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ReplHighlighter, debug_highlight};
+    use super::{debug_highlight, ReplHighlighter};
     use crate::completion::{CompletionNode, CompletionTree};
     use crate::repl::LineProjection;
     use nu_ansi_term::Color;

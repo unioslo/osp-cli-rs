@@ -2,26 +2,41 @@ use std::collections::HashMap;
 
 use crate::core::output::{ColorMode, OutputFormat, UnicodeMode};
 
+/// Environment variable carrying the UI verbosity hint.
 pub const ENV_OSP_UI_VERBOSITY: &str = "OSP_UI_VERBOSITY";
+/// Environment variable carrying the debug level hint.
 pub const ENV_OSP_DEBUG_LEVEL: &str = "OSP_DEBUG_LEVEL";
+/// Environment variable carrying the preferred output format.
 pub const ENV_OSP_FORMAT: &str = "OSP_FORMAT";
+/// Environment variable carrying the color-mode hint.
 pub const ENV_OSP_COLOR: &str = "OSP_COLOR";
+/// Environment variable carrying the Unicode-mode hint.
 pub const ENV_OSP_UNICODE: &str = "OSP_UNICODE";
+/// Environment variable carrying the active profile name.
 pub const ENV_OSP_PROFILE: &str = "OSP_PROFILE";
+/// Environment variable carrying the active terminal identifier.
 pub const ENV_OSP_TERMINAL: &str = "OSP_TERMINAL";
+/// Environment variable carrying the terminal kind hint.
 pub const ENV_OSP_TERMINAL_KIND: &str = "OSP_TERMINAL_KIND";
 
+/// UI message verbosity derived from runtime hints and environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum UiVerbosity {
+    /// Show only errors.
     Error,
+    /// Show errors and warnings.
     Warning,
+    /// Show success messages in addition to warnings and errors.
     #[default]
     Success,
+    /// Show normal informational output.
     Info,
+    /// Show trace-level output.
     Trace,
 }
 
 impl UiVerbosity {
+    /// Returns the canonical string representation for this verbosity level.
     pub fn as_str(self) -> &'static str {
         match self {
             UiVerbosity::Error => "error",
@@ -32,6 +47,7 @@ impl UiVerbosity {
         }
     }
 
+    /// Parses a case-insensitive verbosity level or supported alias.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "error" => Some(UiVerbosity::Error),
@@ -44,15 +60,20 @@ impl UiVerbosity {
     }
 }
 
+/// Runtime terminal mode exposed through environment hints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RuntimeTerminalKind {
+    /// Invocation is running as a one-shot CLI command.
     Cli,
+    /// Invocation is running inside the interactive REPL.
     Repl,
+    /// Terminal kind is unknown or unspecified.
     #[default]
     Unknown,
 }
 
 impl RuntimeTerminalKind {
+    /// Returns the canonical string representation for this terminal kind.
     pub fn as_str(self) -> &'static str {
         match self {
             RuntimeTerminalKind::Cli => "cli",
@@ -61,6 +82,7 @@ impl RuntimeTerminalKind {
         }
     }
 
+    /// Parses a case-insensitive terminal kind name.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "cli" => Some(RuntimeTerminalKind::Cli),
@@ -71,15 +93,24 @@ impl RuntimeTerminalKind {
     }
 }
 
+/// Normalized runtime settings loaded from environment variables.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeHints {
+    /// Effective UI message verbosity.
     pub ui_verbosity: UiVerbosity,
+    /// Effective debug level capped to the supported range.
     pub debug_level: u8,
+    /// Effective output format preference.
     pub format: OutputFormat,
+    /// Effective color-mode preference.
     pub color: ColorMode,
+    /// Effective Unicode-mode preference.
     pub unicode: UnicodeMode,
+    /// Active profile identifier, when set.
     pub profile: Option<String>,
+    /// Active terminal identifier, when set.
     pub terminal: Option<String>,
+    /// Effective terminal kind hint.
     pub terminal_kind: RuntimeTerminalKind,
 }
 
@@ -99,10 +130,12 @@ impl Default for RuntimeHints {
 }
 
 impl RuntimeHints {
+    /// Reads runtime hints from the current process environment.
     pub fn from_env() -> Self {
         Self::from_env_iter(std::env::vars())
     }
 
+    /// Builds runtime hints from arbitrary key-value environment pairs.
     pub fn from_env_iter<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -169,6 +202,7 @@ impl RuntimeHints {
         }
     }
 
+    /// Returns this hint set as environment variable pairs suitable for export.
     pub fn env_pairs(&self) -> Vec<(&'static str, String)> {
         let mut out = vec![
             (ENV_OSP_UI_VERBOSITY, self.ui_verbosity.as_str().to_string()),
@@ -196,8 +230,8 @@ impl RuntimeHints {
 #[cfg(test)]
 mod tests {
     use super::{
-        ENV_OSP_COLOR, ENV_OSP_DEBUG_LEVEL, ENV_OSP_FORMAT, ENV_OSP_PROFILE, ENV_OSP_TERMINAL,
-        ENV_OSP_UI_VERBOSITY, ENV_OSP_UNICODE, RuntimeHints, RuntimeTerminalKind, UiVerbosity,
+        RuntimeHints, RuntimeTerminalKind, UiVerbosity, ENV_OSP_COLOR, ENV_OSP_DEBUG_LEVEL,
+        ENV_OSP_FORMAT, ENV_OSP_PROFILE, ENV_OSP_TERMINAL, ENV_OSP_UI_VERBOSITY, ENV_OSP_UNICODE,
     };
     use crate::core::output::{ColorMode, OutputFormat, UnicodeMode};
 

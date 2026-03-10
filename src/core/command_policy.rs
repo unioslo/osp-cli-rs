@@ -2,10 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+/// Normalized command path used as the lookup key for policy evaluation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CommandPath(Vec<String>);
 
 impl CommandPath {
+    /// Builds a lowercased path, dropping empty segments after trimming.
     pub fn new<I, S>(segments: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -21,43 +23,63 @@ impl CommandPath {
         )
     }
 
+    /// Returns the normalized path segments.
     pub fn as_slice(&self) -> &[String] {
         self.0.as_slice()
     }
 
+    /// Returns `true` when the path contains no usable segments.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
 
+/// Visibility contract applied before runtime capability checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VisibilityMode {
+    /// Show and allow the command without authentication.
     Public,
+    /// Show the command, but require authentication to run it.
     Authenticated,
+    /// Show the command only when capability checks pass.
     CapabilityGated,
+    /// Hide the command regardless of runtime context.
     Hidden,
 }
 
+/// Product-level availability state for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandAvailability {
+    /// The product currently exposes the command.
     Available,
+    /// The product disables the command entirely.
     Disabled,
 }
 
+/// Declarative policy used to decide whether a command is visible and runnable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPolicy {
+    /// Normalized command path used as the registry key.
     pub path: CommandPath,
+    /// Baseline visibility rule for the command.
     pub visibility: VisibilityMode,
+    /// Product-level availability state for the command.
     pub availability: CommandAvailability,
+    /// Capabilities that must be present for capability-gated commands.
     pub required_capabilities: BTreeSet<String>,
+    /// Feature flags that must be enabled before the command is exposed.
     pub feature_flags: BTreeSet<String>,
+    /// Profiles allowed to see the command, when restricted.
     pub allowed_profiles: Option<BTreeSet<String>>,
+    /// Optional message shown when the command is visible but denied.
     pub denied_message: Option<String>,
+    /// Optional explanation for why the command is hidden.
     pub hidden_reason: Option<String>,
 }
 
 impl CommandPolicy {
+    /// Creates a public, available policy for the given command path.
     pub fn new(path: CommandPath) -> Self {
         Self {
             path,
@@ -71,11 +93,13 @@ impl CommandPolicy {
         }
     }
 
+    /// Sets the visibility mode applied during policy evaluation.
     pub fn visibility(mut self, visibility: VisibilityMode) -> Self {
         self.visibility = visibility;
         self
     }
 
+    /// Adds a required capability after trimming and lowercasing it.
     pub fn require_capability(mut self, capability: impl Into<String>) -> Self {
         let normalized = capability.into().trim().to_ascii_lowercase();
         if !normalized.is_empty() {
@@ -84,6 +108,7 @@ impl CommandPolicy {
         self
     }
 
+    /// Adds a feature flag prerequisite after trimming and lowercasing it.
     pub fn feature_flag(mut self, flag: impl Into<String>) -> Self {
         let normalized = flag.into().trim().to_ascii_lowercase();
         if !normalized.is_empty() {
@@ -92,6 +117,7 @@ impl CommandPolicy {
         self
     }
 
+    /// Restricts the policy to the provided normalized profile names.
     pub fn allow_profiles<I, S>(mut self, profiles: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -107,12 +133,14 @@ impl CommandPolicy {
         self
     }
 
+    /// Sets the user-facing denial message when the command is visible but not runnable.
     pub fn denied_message(mut self, message: impl Into<String>) -> Self {
         let normalized = message.into().trim().to_string();
         self.denied_message = (!normalized.is_empty()).then_some(normalized);
         self
     }
 
+    /// Sets the hidden-reason metadata after trimming empty values away.
     pub fn hidden_reason(mut self, reason: impl Into<String>) -> Self {
         let normalized = reason.into().trim().to_string();
         self.hidden_reason = (!normalized.is_empty()).then_some(normalized);
@@ -120,29 +148,42 @@ impl CommandPolicy {
     }
 }
 
+/// Partial override applied on top of a registered [`CommandPolicy`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CommandPolicyOverride {
+    /// Replacement visibility mode, when overridden.
     pub visibility: Option<VisibilityMode>,
+    /// Replacement availability state, when overridden.
     pub availability: Option<CommandAvailability>,
+    /// Additional required capabilities merged into the base policy.
     pub required_capabilities: BTreeSet<String>,
+    /// Replacement hidden-reason metadata, when overridden.
     pub hidden_reason: Option<String>,
+    /// Replacement denial message, when overridden.
     pub denied_message: Option<String>,
 }
 
+/// Runtime facts used to evaluate a command policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandPolicyContext {
+    /// Whether the current caller is authenticated.
     pub authenticated: bool,
+    /// Normalized capabilities available to the caller.
     pub capabilities: BTreeSet<String>,
+    /// Normalized feature flags enabled in the current product build.
     pub enabled_features: BTreeSet<String>,
+    /// Active normalized profile name, when one is selected.
     pub active_profile: Option<String>,
 }
 
 impl CommandPolicyContext {
+    /// Sets whether the current user is authenticated.
     pub fn authenticated(mut self, value: bool) -> Self {
         self.authenticated = value;
         self
     }
 
+    /// Replaces the current capability set with normalized capability names.
     pub fn with_capabilities<I, S>(mut self, capabilities: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -157,6 +198,7 @@ impl CommandPolicyContext {
         self
     }
 
+    /// Replaces the enabled feature set with normalized feature names.
     pub fn with_features<I, S>(mut self, features: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -171,6 +213,7 @@ impl CommandPolicyContext {
         self
     }
 
+    /// Sets the active profile after trimming and lowercasing it.
     pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
         let normalized = profile.into().trim().to_ascii_lowercase();
         self.active_profile = (!normalized.is_empty()).then_some(normalized);
@@ -178,37 +221,56 @@ impl CommandPolicyContext {
     }
 }
 
+/// Visibility outcome produced by policy evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandVisibility {
+    /// The command should not be shown to the caller.
     Hidden,
+    /// The command should be shown to the caller.
     Visible,
 }
 
+/// Runnable outcome produced by policy evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandRunnable {
+    /// The caller may execute the command.
     Runnable,
+    /// The caller may see the command but not run it.
     Denied,
 }
 
+/// Reason codes attached to denied or hidden command access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessReason {
+    /// The policy explicitly hides the command.
     HiddenByPolicy,
+    /// Product configuration disables the command entirely.
     DisabledByProduct,
+    /// Authentication is required before the command may run.
     Unauthenticated,
+    /// One or more required capabilities are missing.
     MissingCapabilities,
+    /// A required feature flag is disabled.
     FeatureDisabled(String),
+    /// The command is unavailable in the active profile.
     ProfileUnavailable(String),
 }
 
+/// Effective access decision for a command under a specific context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandAccess {
+    /// Whether the command should be shown to the caller.
     pub visibility: CommandVisibility,
+    /// Whether the caller may execute the command.
     pub runnable: CommandRunnable,
+    /// Reasons that explain why access was restricted.
     pub reasons: Vec<AccessReason>,
+    /// Required capabilities absent from the current context.
     pub missing_capabilities: BTreeSet<String>,
 }
 
 impl CommandAccess {
+    /// Returns an access result that is visible and runnable.
     pub fn visible_runnable() -> Self {
         Self {
             visibility: CommandVisibility::Visible,
@@ -218,6 +280,7 @@ impl CommandAccess {
         }
     }
 
+    /// Returns an access result that is hidden and denied for the given reason.
     pub fn hidden(reason: AccessReason) -> Self {
         Self {
             visibility: CommandVisibility::Hidden,
@@ -227,6 +290,7 @@ impl CommandAccess {
         }
     }
 
+    /// Returns an access result that is visible but denied for the given reason.
     pub fn visible_denied(reason: AccessReason) -> Self {
         Self {
             visibility: CommandVisibility::Visible,
@@ -236,15 +300,18 @@ impl CommandAccess {
         }
     }
 
+    /// Returns `true` when the command should be shown to the user.
     pub fn is_visible(&self) -> bool {
         matches!(self.visibility, CommandVisibility::Visible)
     }
 
+    /// Returns `true` when the command may be executed.
     pub fn is_runnable(&self) -> bool {
         matches!(self.runnable, CommandRunnable::Runnable)
     }
 }
 
+/// Registry of command policies and per-path overrides.
 #[derive(Debug, Clone, Default)]
 pub struct CommandPolicyRegistry {
     entries: BTreeMap<CommandPath, CommandPolicy>,
@@ -252,14 +319,17 @@ pub struct CommandPolicyRegistry {
 }
 
 impl CommandPolicyRegistry {
+    /// Creates an empty policy registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Registers a policy and returns the previous policy for the same path, if any.
     pub fn register(&mut self, policy: CommandPolicy) -> Option<CommandPolicy> {
         self.entries.insert(policy.path.clone(), policy)
     }
 
+    /// Stores an override for a path and returns the previous override, if any.
     pub fn override_policy(
         &mut self,
         path: CommandPath,
@@ -268,6 +338,7 @@ impl CommandPolicyRegistry {
         self.overrides.insert(path, value)
     }
 
+    /// Returns the registered policy merged with any override for the same path.
     pub fn resolved_policy(&self, path: &CommandPath) -> Option<CommandPolicy> {
         let mut policy = self.entries.get(path)?.clone();
         if let Some(override_policy) = self.overrides.get(path) {
@@ -290,6 +361,7 @@ impl CommandPolicyRegistry {
         Some(policy)
     }
 
+    /// Evaluates the resolved policy for `path`, or `None` if the path is unknown.
     pub fn evaluate(
         &self,
         path: &CommandPath,
@@ -299,15 +371,18 @@ impl CommandPolicyRegistry {
             .map(|policy| evaluate_policy(&policy, context))
     }
 
+    /// Returns `true` when a policy is registered for `path`.
     pub fn contains(&self, path: &CommandPath) -> bool {
         self.entries.contains_key(path)
     }
 
+    /// Iterates over the registered base policies.
     pub fn entries(&self) -> impl Iterator<Item = &CommandPolicy> {
         self.entries.values()
     }
 }
 
+/// Evaluates a single policy against the supplied runtime context.
 pub fn evaluate_policy(policy: &CommandPolicy, context: &CommandPolicyContext) -> CommandAccess {
     if matches!(policy.availability, CommandAvailability::Disabled) {
         return CommandAccess::hidden(AccessReason::DisabledByProduct);
@@ -371,9 +446,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        AccessReason, CommandAccess, CommandAvailability, CommandPath, CommandPolicy,
-        CommandPolicyContext, CommandPolicyOverride, CommandPolicyRegistry, CommandRunnable,
-        CommandVisibility, VisibilityMode, evaluate_policy,
+        evaluate_policy, AccessReason, CommandAccess, CommandAvailability, CommandPath,
+        CommandPolicy, CommandPolicyContext, CommandPolicyOverride, CommandPolicyRegistry,
+        CommandRunnable, CommandVisibility, VisibilityMode,
     };
 
     #[test]
