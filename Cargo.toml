@@ -2,7 +2,8 @@
 name = "osp-cli"
 version = "1.4.8"
 edition = "2024"
-rust-version = "1.85"
+# Note: `skim` as a library needs Rust 1.91+ in local compatibility checks.
+rust-version = "1.94"
 description = "CLI and REPL for querying and managing OSP infrastructure data"
 license-file = "LICENSE"
 readme = "README.md"
@@ -38,7 +39,6 @@ anyhow = "1.0"
 clap = { version = "4.5", default-features = false, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
 comfy-table = { version = "7.1", default-features = false, features = ["custom_styling"] }
 dialoguer = "0.11"
-fuzzy-matcher = "0.3"
 indicatif = "0.17"
 libc = "0.2"
 miette = { version = "7.4", default-features = false, features = ["derive", "fancy"] }
@@ -51,6 +51,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 sha2 = "0.10"
 shell-words = "1.1"
+skim = { version = "=3.7.0", default-features = false }
 terminal_size = "0.4"
 thiserror = "2.0"
 toml = "0.8"

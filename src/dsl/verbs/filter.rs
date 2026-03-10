@@ -1,16 +1,20 @@
 use crate::core::{output_model::Group, row::Row};
 use anyhow::{Result, anyhow};
 use regex::Regex;
+use serde_json::Value;
 
 use crate::dsl::{
     eval::{
         matchers::{contains_case_insensitive, eq_case_insensitive, render_value},
-        resolve::{resolve_values, resolve_values_truthy},
+        resolve::{is_truthy, resolve_values, resolve_values_truthy},
     },
     parse::key_spec::{ExactMode, KeySpec},
-    stages::common::parse_stage_words,
+    verbs::common::parse_stage_words,
 };
 
+use super::selector;
+
+#[derive(Debug, Clone)]
 pub(crate) struct FilterPlan {
     parsed: ParsedFilterSpec,
 }
@@ -27,9 +31,24 @@ pub(crate) fn compile(spec: &str) -> Result<FilterPlan> {
     })
 }
 
+#[cfg(test)]
 /// Filters flat rows according to the predicate in `spec`.
 pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     let plan = compile(spec)?;
+    apply_with_plan(rows, &plan)
+}
+
+#[cfg(test)]
+/// Filters grouped output according to `spec`.
+///
+/// Group headers and aggregates are tested first. Otherwise the predicate is
+/// applied to member rows and empty groups are dropped.
+pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
+    let plan = compile(spec)?;
+    apply_groups_with_plan(groups, &plan)
+}
+
+pub(crate) fn apply_with_plan(rows: Vec<Row>, plan: &FilterPlan) -> Result<Vec<Row>> {
     let mut out = Vec::new();
 
     for row in rows {
@@ -41,12 +60,7 @@ pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     Ok(out)
 }
 
-/// Filters grouped output according to `spec`.
-///
-/// Group headers and aggregates are tested first. Otherwise the predicate is
-/// applied to member rows and empty groups are dropped.
-pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
-    let plan = compile(spec)?;
+pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &FilterPlan) -> Result<Vec<Group>> {
     let mut out = Vec::new();
 
     for mut group in groups {
@@ -64,9 +78,16 @@ pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
     Ok(out)
 }
 
+pub(crate) fn apply_value_with_plan(value: Value, plan: &FilterPlan) -> Result<Value> {
+    if let Some(filtered) = try_apply_addressed_filter(&value, &plan.parsed) {
+        return Ok(filtered);
+    }
+    selector::filter_descendants(value, |row| plan.matches(row))
+}
+
 #[derive(Debug, Clone)]
 struct ParsedFilterSpec {
-    column: KeySpec,
+    column: selector::CompiledSelector,
     operator: Operator,
     value: Option<ComparisonValue>,
     negated: bool,
@@ -100,7 +121,7 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
         return Err(anyhow!("F requires a predicate"));
     }
 
-    let column = KeySpec::parse(&words[0]);
+    let column = selector::CompiledSelector::from_key_spec(KeySpec::parse(&words[0]));
     let mut index = 1usize;
 
     let mut operator = Operator::Eq;
@@ -120,7 +141,7 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
             let rhs = words
                 .get(index)
                 .ok_or_else(|| anyhow!("F: missing value after operator"))?;
-            rhs_token = Some(rhs.clone());
+            rhs_token = Some(rhs.to_string());
             let rhs_spec = KeySpec::parse(rhs);
             value = ComparisonValue {
                 text: rhs_spec.token,
@@ -130,7 +151,7 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
                 regex: None,
             };
         } else {
-            rhs_token = Some(token.clone());
+            rhs_token = Some(token.to_string());
             let rhs_spec = KeySpec::parse(token);
             value = ComparisonValue {
                 text: rhs_spec.token,
@@ -148,13 +169,14 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
         value.exact = true;
     }
 
-    let negated = column.negated || matches!(original_operator, Operator::Ne) || value.negated;
+    let negated =
+        column.key_spec.negated || matches!(original_operator, Operator::Ne) || value.negated;
     if matches!(operator, Operator::Regex) {
         value.regex =
             Some(Regex::new(&value.text).map_err(|err| anyhow!("F: invalid regex: {err}"))?);
     }
 
-    let existence_check = column.existence || rhs_token.is_none();
+    let existence_check = column.key_spec.existence || rhs_token.is_none();
 
     Ok(ParsedFilterSpec {
         column,
@@ -163,6 +185,43 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
         negated,
         existence_check,
     })
+}
+
+fn try_apply_addressed_filter(root: &Value, spec: &ParsedFilterSpec) -> Option<Value> {
+    if !spec.column.is_structural() {
+        return None;
+    }
+
+    let matches = spec.column.resolve_matches(root);
+    if matches.is_empty() {
+        return Some(if spec.negated {
+            root.clone()
+        } else {
+            Value::Null
+        });
+    }
+
+    let value_spec = spec.value.as_ref();
+    let survivors = matches
+        .into_iter()
+        .filter(|entry| {
+            let positive = if spec.existence_check {
+                is_truthy(&entry.value)
+            } else {
+                let Some(value_spec) = value_spec else {
+                    return false;
+                };
+                matches_value(&entry.value, spec.operator, value_spec)
+            };
+            if spec.negated { !positive } else { positive }
+        })
+        .collect::<Vec<_>>();
+
+    if survivors.is_empty() {
+        return Some(Value::Null);
+    }
+
+    Some(selector::project_matches(root, &survivors))
 }
 
 fn parse_operator_token(token: &str) -> Option<Operator> {
@@ -180,11 +239,16 @@ fn parse_operator_token(token: &str) -> Option<Operator> {
 
 fn evaluate_row(row: &Row, spec: &ParsedFilterSpec) -> bool {
     if spec.existence_check {
-        let found = resolve_values_truthy(row, &spec.column.token, spec.column.exact);
-        return if spec.column.negated { !found } else { found };
+        let found =
+            resolve_values_truthy(row, &spec.column.key_spec.token, spec.column.key_spec.exact);
+        return if spec.column.key_spec.negated {
+            !found
+        } else {
+            found
+        };
     }
 
-    let values = resolve_values(row, &spec.column.token, spec.column.exact);
+    let values = resolve_values(row, &spec.column.key_spec.token, spec.column.key_spec.exact);
     if values.is_empty() {
         return spec.negated;
     }
@@ -413,7 +477,7 @@ mod tests {
     use crate::core::output_model::Group;
     use serde_json::json;
 
-    use super::{apply, apply_groups, parse_timestamp};
+    use super::{apply, apply_groups, parse_filter_spec, parse_timestamp};
 
     #[test]
     fn filters_on_equals_predicate() {
@@ -602,5 +666,13 @@ mod tests {
         let boolean = apply(rows, "enabled false").expect("bool compare should work");
         assert_eq!(boolean.len(), 1);
         assert_eq!(boolean[0].get("uid"), Some(&json!("bob")));
+    }
+
+    #[test]
+    fn parse_treats_prefixed_path_filters_as_structural_selectors() {
+        let parsed =
+            parse_filter_spec("!sections[0].entries[0].name").expect("filter should parse");
+
+        assert!(parsed.column.is_structural());
     }
 }

@@ -1,17 +1,43 @@
+//! Self-contained executor body for the canonical DSL.
+//!
+//! The document-first executor keeps semantic JSON canonical through the
+//! pipeline and lowers to rows/groups only where verb semantics need that
+//! substrate.
+//!
+//! Rule of thumb:
+//! - selector verbs narrow or rewrite addressed structure
+//! - collection verbs operate on row/group collections
+//! - the semantic payload stays canonical JSON until a stage intentionally
+//!   degrades it
+//!
+//! Example:
+//! - `help | P commands[].name` stays on the semantic path and rebuilds
+//!   `{"commands": [{"name": ...}, ...]}`
+//! - `... | VALUE name` then transforms that narrowed structure into value rows
+//! - `... | G value` crosses onto the row/group substrate on purpose
+//!
+//! Keep that boundary explicit. If a selector verb starts looking like a custom
+//! row/group traversal, it usually belongs in `verbs::selector` or `verbs::json`
+//! instead of growing new engine-side special cases.
+
 use crate::core::{
-    output_model::{OutputDocument, OutputItems, OutputMeta, OutputResult, RenderRecommendation},
+    output_model::{
+        OutputDocument, OutputItems, OutputMeta, OutputResult, RenderRecommendation,
+        output_items_from_value,
+    },
     row::Row,
 };
 use anyhow::{Result, anyhow};
 
+use super::value as value_stage;
+use crate::dsl::verbs::{
+    aggregate, collapse, copy, filter, group, jq, limit, project, question, quick, sort, unroll,
+    values,
+};
 use crate::dsl::{
+    compiled::{CompiledPipeline, CompiledStage, SemanticEffect},
     eval::context::RowContext,
-    model::{ParsedPipeline, ParsedStage, ParsedStageKind},
     parse::pipeline::parse_stage_list,
-    stages::{
-        aggregate, collapse, copy, filter, group, jq, limit, project, question, quick, sort, values,
-    },
-    verbs::stage_can_stream_rows,
 };
 
 /// Apply a pipeline to plain row output.
@@ -54,7 +80,8 @@ where
     I::IntoIter: 'static,
 {
     let parsed = parse_stage_list(stages)?;
-    PipelineExecutor::new_stream(rows.into_iter(), false, parsed).run()
+    let compiled = CompiledPipeline::from_parsed(parsed)?;
+    PipelineExecutor::new_stream(rows.into_iter(), false, compiled).run()
 }
 
 fn execute_pipeline_items(
@@ -65,12 +92,13 @@ fn execute_pipeline_items(
     stages: &[String],
 ) -> Result<OutputResult> {
     let parsed = parse_stage_list(stages)?;
+    let compiled = CompiledPipeline::from_parsed(parsed)?;
     PipelineExecutor::new(
         items,
         initial_document,
         initial_wants_copy,
         initial_render_recommendation,
-        parsed,
+        compiled,
     )
     .run()
 }
@@ -84,6 +112,7 @@ type RowStream = Box<dyn Iterator<Item = Result<Row>>>;
 enum PipelineItems {
     RowStream(RowStream),
     Materialized(OutputItems),
+    Semantic(serde_json::Value),
 }
 
 struct PipelineExecutor {
@@ -91,7 +120,7 @@ struct PipelineExecutor {
     document: Option<OutputDocument>,
     wants_copy: bool,
     render_recommendation: Option<RenderRecommendation>,
-    parsed: ParsedPipeline,
+    compiled: CompiledPipeline,
 }
 
 impl PipelineExecutor {
@@ -100,25 +129,33 @@ impl PipelineExecutor {
         document: Option<OutputDocument>,
         wants_copy: bool,
         render_recommendation: Option<RenderRecommendation>,
-        parsed: ParsedPipeline,
+        compiled: CompiledPipeline,
     ) -> Self {
-        Self {
-            items: match items {
+        let items = if let Some(document) = document.as_ref() {
+            // Semantic payloads stay canonical as JSON through the DSL.
+            // Generic rows/groups are derived only when the pipeline needs to
+            // emit the final `OutputResult`.
+            PipelineItems::Semantic(document.value.clone())
+        } else {
+            match items {
                 OutputItems::Rows(rows) => {
                     PipelineItems::RowStream(Box::new(rows.into_iter().map(Ok)))
                 }
                 OutputItems::Groups(groups) => {
                     PipelineItems::Materialized(OutputItems::Groups(groups))
                 }
-            },
+            }
+        };
+        Self {
+            items,
             document,
             wants_copy,
             render_recommendation,
-            parsed,
+            compiled,
         }
     }
 
-    fn new_stream<I>(rows: I, wants_copy: bool, parsed: ParsedPipeline) -> Self
+    fn new_stream<I>(rows: I, wants_copy: bool, compiled: CompiledPipeline) -> Self
     where
         I: Iterator<Item = Row> + 'static,
     {
@@ -127,41 +164,29 @@ impl PipelineExecutor {
             document: None,
             wants_copy,
             render_recommendation: None,
-            parsed,
+            compiled,
         }
     }
 
     fn run(mut self) -> Result<OutputResult> {
-        let stages = self.parsed.stages.clone();
+        let stages = self.compiled.stages.clone();
         for stage in &stages {
-            if stage.verb.is_empty() {
-                continue;
-            }
             self.apply_stage(stage)?;
         }
-
-        let items = self.finish_items()?;
-        let meta = self.build_output_meta(&items);
-
-        Ok(OutputResult {
-            items,
-            document: self.document,
-            meta,
-        })
+        self.into_output_result()
     }
 
-    fn apply_stage(&mut self, stage: &ParsedStage) -> Result<()> {
-        if !stage_preserves_render_recommendation(stage) {
+    fn apply_stage(&mut self, stage: &CompiledStage) -> Result<()> {
+        if !stage.preserves_render_recommendation() {
             self.render_recommendation = None;
         }
-        // Document sidecars are only preserved for non-structural copy. Row
-        // data remains the authoritative pipeline substrate until we have a
-        // proper document-aware DSL story for narrowing and reshaping stages.
-        if !stage_preserves_document(stage) {
-            self.document = None;
+
+        if matches!(self.items, PipelineItems::Semantic(_)) {
+            self.apply_semantic_stage(stage)?;
+            return Ok(());
         }
 
-        if stage_can_stream_rows(stage)
+        if stage.can_stream()
             && let PipelineItems::RowStream(_) = self.items
         {
             self.apply_stream_stage(stage)?;
@@ -169,17 +194,42 @@ impl PipelineExecutor {
         }
 
         let items = self.materialize_items()?;
-        self.items = PipelineItems::Materialized(match stage.kind {
-            ParsedStageKind::Quick => self.apply_quick_stage(items, stage)?,
-            ParsedStageKind::UnknownExplicit => {
-                return Err(anyhow!("unknown DSL verb: {}", stage.verb));
-            }
-            ParsedStageKind::Explicit => self.apply_explicit_stage(items, stage)?,
-        });
+        self.items = PipelineItems::Materialized(self.apply_flat_stage(items, stage)?);
+        self.sync_document_to_items();
         Ok(())
     }
 
-    fn apply_stream_stage(&mut self, stage: &ParsedStage) -> Result<()> {
+    fn apply_semantic_stage(&mut self, stage: &CompiledStage) -> Result<()> {
+        let PipelineItems::Semantic(value) = std::mem::replace(
+            &mut self.items,
+            PipelineItems::Semantic(serde_json::Value::Null),
+        ) else {
+            unreachable!("semantic stage dispatch requires semantic items");
+        };
+
+        if matches!(stage, CompiledStage::Copy) {
+            self.wants_copy = true;
+        }
+
+        let transformed = value_stage::apply_stage(value, stage)?;
+        self.items = PipelineItems::Semantic(transformed);
+        match stage.semantic_effect() {
+            // Preserve/transform both keep the semantic payload attached. The
+            // renderer decides later whether the transformed JSON still
+            // restores as the original semantic kind.
+            SemanticEffect::Preserve | SemanticEffect::Transform => {
+                self.sync_document_to_items();
+            }
+            // Destructive stages like `C`, `Z`, and `JQ` intentionally stop
+            // claiming the result is still guide/help-shaped semantic output.
+            SemanticEffect::Degrade => {
+                self.document = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_stream_stage(&mut self, stage: &CompiledStage) -> Result<()> {
         let stream = match std::mem::replace(
             &mut self.items,
             PipelineItems::RowStream(Box::new(std::iter::empty())),
@@ -193,31 +243,41 @@ impl PipelineExecutor {
                 self.items = PipelineItems::Materialized(items);
                 return Ok(());
             }
+            PipelineItems::Semantic(value) => {
+                debug_assert!(
+                    false,
+                    "apply_stream_stage called for semantic payload execution"
+                );
+                self.items = PipelineItems::Semantic(value);
+                return Ok(());
+            }
         };
 
-        self.items = PipelineItems::RowStream(match stage.verb.as_str() {
-            _ if matches!(stage.kind, ParsedStageKind::Quick) => {
-                let plan = quick::compile(&stage.raw)?;
-                Box::new(quick::stream_rows_with_plan(stream, plan))
+        self.items = PipelineItems::RowStream(match stage {
+            CompiledStage::Quick(plan) => {
+                Box::new(quick::stream_rows_with_plan(stream, plan.clone()))
             }
-            "F" => {
-                let plan = filter::compile(&stage.spec)?;
+            CompiledStage::Filter(plan) => {
+                let plan = plan.clone();
                 Box::new(stream.filter_map(move |row| match row {
                     Ok(row) if plan.matches(&row) => Some(Ok(row)),
                     Ok(_) => None,
                     Err(err) => Some(Err(err)),
                 }))
             }
-            "P" => {
-                let plan = project::compile(&stage.spec)?;
-                stream_row_fanout(stream, move |row| plan.project_row(&row))
+            CompiledStage::Project(plan) => {
+                let plan = plan.clone();
+                stream_row_fanout_result(stream, move |row| plan.project_row(&row))
             }
-            "VAL" | "VALUE" => {
-                let plan = values::compile(&stage.spec)?;
+            CompiledStage::Unroll(plan) => {
+                let plan = plan.clone();
+                stream_row_fanout_result(stream, move |row| plan.expand_row(&row))
+            }
+            CompiledStage::Values(plan) => {
+                let plan = plan.clone();
                 stream_row_fanout(stream, move |row| plan.extract_row(&row))
             }
-            "L" => {
-                let spec = limit::parse_limit_spec(&stage.spec)?;
+            CompiledStage::Limit(spec) => {
                 debug_assert!(spec.is_head_only());
                 Box::new(
                     stream
@@ -225,166 +285,114 @@ impl PipelineExecutor {
                         .take(spec.count.max(0) as usize),
                 )
             }
-            "Y" => {
+            CompiledStage::Copy => {
                 self.wants_copy = true;
                 stream
             }
-            "V" | "K" => {
-                let plan = quick::compile(&format!(
-                    "{}{}{}",
-                    stage.verb,
-                    if stage.spec.is_empty() { "" } else { " " },
-                    stage.spec
-                ))?;
-                Box::new(quick::stream_rows_with_plan(stream, plan))
+            CompiledStage::ValueQuick(plan)
+            | CompiledStage::KeyQuick(plan)
+            | CompiledStage::Question(plan) => {
+                Box::new(quick::stream_rows_with_plan(stream, plan.clone()))
             }
-            "U" => {
-                let field = stage.spec.trim();
-                if field.is_empty() {
-                    return Err(anyhow!("U: missing field name to unroll"));
-                }
-                let plan = project::compile(&format!("{field}[]"))?;
-                stream_row_fanout(stream, move |row| plan.project_row(&row))
+            CompiledStage::Clean => Box::new(stream.filter_map(|row| match row {
+                Ok(row) => question::clean_row(row).map(Ok),
+                Err(err) => Some(Err(err)),
+            })),
+            other => {
+                return Err(anyhow!(
+                    "stream stage not implemented for compiled stage: {:?}",
+                    other
+                ));
             }
-            "?" => {
-                if stage.spec.trim().is_empty() {
-                    Box::new(stream.filter_map(|row| match row {
-                        Ok(row) => question::clean_row(row).map(Ok),
-                        Err(err) => Some(Err(err)),
-                    }))
-                } else {
-                    let plan = quick::compile(&format!("? {}", stage.spec))?;
-                    Box::new(quick::stream_rows_with_plan(stream, plan))
-                }
-            }
-            other => return Err(anyhow!("stream stage not implemented for verb: {other}")),
         });
         Ok(())
     }
 
-    fn apply_quick_stage(&self, items: OutputItems, stage: &ParsedStage) -> Result<OutputItems> {
-        match items {
-            OutputItems::Rows(rows) => quick::apply(rows, &stage.raw).map(OutputItems::Rows),
-            OutputItems::Groups(groups) => {
-                quick::apply_groups(groups, &stage.raw).map(OutputItems::Groups)
-            }
-        }
-    }
-
-    fn apply_explicit_stage(
+    fn apply_flat_stage(
         &mut self,
         items: OutputItems,
-        stage: &ParsedStage,
+        stage: &CompiledStage,
     ) -> Result<OutputItems> {
-        match stage.verb.as_str() {
-            "P" => self.project(items, stage),
-            // `V` is a quick-search scope alias ("value-only"), not a values stage.
-            "V" => self.apply_quick_alias(items, stage, "V"),
-            "K" => self.apply_quick_alias(items, stage, "K"),
-            // `VAL` / `VALUE` produce explicit `{"value": ...}` rows.
-            "VAL" | "VALUE" => match items {
-                OutputItems::Rows(rows) => values::apply(rows, &stage.spec).map(OutputItems::Rows),
+        match stage {
+            CompiledStage::Quick(plan) => match items {
+                OutputItems::Rows(rows) => {
+                    quick::apply_with_plan(rows, plan).map(OutputItems::Rows)
+                }
                 OutputItems::Groups(groups) => {
-                    values::apply_groups(groups, &stage.spec).map(OutputItems::Groups)
+                    quick::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
                 }
             },
-            "F" => self.filter(items, stage),
-            "G" => self.group(items, stage),
-            "A" => aggregate::apply(items, &stage.spec),
-            "S" => sort::apply(items, &stage.spec),
-            "L" => self.limit(items, stage),
-            "Z" => collapse::apply(items),
-            "C" => aggregate::count_macro(items, &stage.spec),
-            "Y" => self.copy(items, stage),
-            "U" => self.unroll(items, stage),
-            "?" => question::apply(items, &stage.spec),
-            "JQ" => jq::apply(items, &stage.spec),
-            _ => Err(anyhow!("unknown DSL verb: {}", stage.verb)),
-        }
-    }
-
-    fn project(&self, items: OutputItems, stage: &ParsedStage) -> Result<OutputItems> {
-        match items {
-            OutputItems::Rows(rows) => Ok(OutputItems::Rows(project::apply(rows, &stage.spec)?)),
-            OutputItems::Groups(groups) => Ok(OutputItems::Groups(project::apply_groups(
-                groups,
-                &stage.spec,
-            )?)),
-        }
-    }
-
-    fn filter(&self, items: OutputItems, stage: &ParsedStage) -> Result<OutputItems> {
-        match items {
-            OutputItems::Rows(rows) => Ok(OutputItems::Rows(filter::apply(rows, &stage.spec)?)),
-            OutputItems::Groups(groups) => Ok(OutputItems::Groups(filter::apply_groups(
-                groups,
-                &stage.spec,
-            )?)),
-        }
-    }
-
-    fn group(&self, items: OutputItems, stage: &ParsedStage) -> Result<OutputItems> {
-        match items {
-            OutputItems::Rows(rows) => {
-                Ok(OutputItems::Groups(group::group_rows(rows, &stage.spec)?))
+            CompiledStage::Filter(plan) => match items {
+                OutputItems::Rows(rows) => {
+                    filter::apply_with_plan(rows, plan).map(OutputItems::Rows)
+                }
+                OutputItems::Groups(groups) => {
+                    filter::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
+                }
+            },
+            CompiledStage::Project(plan) => match items {
+                OutputItems::Rows(rows) => {
+                    project::apply_with_plan(rows, plan).map(OutputItems::Rows)
+                }
+                OutputItems::Groups(groups) => {
+                    project::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
+                }
+            },
+            CompiledStage::Unroll(plan) => match items {
+                OutputItems::Rows(rows) => {
+                    unroll::apply_with_plan(rows, plan).map(OutputItems::Rows)
+                }
+                OutputItems::Groups(groups) => {
+                    unroll::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
+                }
+            },
+            CompiledStage::Values(plan) => match items {
+                OutputItems::Rows(rows) => {
+                    values::apply_with_plan(rows, plan).map(OutputItems::Rows)
+                }
+                OutputItems::Groups(groups) => {
+                    values::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
+                }
+            },
+            CompiledStage::ValueQuick(plan)
+            | CompiledStage::KeyQuick(plan)
+            | CompiledStage::Question(plan) => match items {
+                OutputItems::Rows(rows) => {
+                    quick::apply_with_plan(rows, plan).map(OutputItems::Rows)
+                }
+                OutputItems::Groups(groups) => {
+                    quick::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
+                }
+            },
+            CompiledStage::Limit(spec) => match items {
+                OutputItems::Rows(rows) => {
+                    Ok(OutputItems::Rows(limit::apply_with_spec(rows, *spec)))
+                }
+                OutputItems::Groups(groups) => {
+                    Ok(OutputItems::Groups(limit::apply_with_spec(groups, *spec)))
+                }
+            },
+            CompiledStage::Sort(plan) => sort::apply_with_plan(items, plan),
+            CompiledStage::Group(spec) => match items {
+                OutputItems::Rows(rows) => Ok(OutputItems::Groups(group::group_rows_with_plan(
+                    rows, spec,
+                )?)),
+                OutputItems::Groups(groups) => Ok(OutputItems::Groups(
+                    group::regroup_groups_with_plan(groups, spec)?,
+                )),
+            },
+            CompiledStage::Aggregate(plan) => aggregate::apply_with_plan(items, plan),
+            CompiledStage::Collapse => collapse::apply(items),
+            CompiledStage::CountMacro => aggregate::count_macro(items, ""),
+            CompiledStage::Copy => {
+                self.wants_copy = true;
+                Ok(match items {
+                    OutputItems::Rows(rows) => OutputItems::Rows(copy::apply(rows)),
+                    OutputItems::Groups(groups) => OutputItems::Groups(groups),
+                })
             }
-            OutputItems::Groups(groups) => Ok(OutputItems::Groups(group::regroup_groups(
-                groups,
-                &stage.spec,
-            )?)),
-        }
-    }
-
-    fn limit(&self, items: OutputItems, stage: &ParsedStage) -> Result<OutputItems> {
-        match items {
-            OutputItems::Rows(rows) => Ok(OutputItems::Rows(limit::apply(rows, &stage.spec)?)),
-            OutputItems::Groups(groups) => {
-                Ok(OutputItems::Groups(limit::apply(groups, &stage.spec)?))
-            }
-        }
-    }
-
-    fn copy(&mut self, items: OutputItems, _stage: &ParsedStage) -> Result<OutputItems> {
-        self.wants_copy = true;
-        Ok(match items {
-            OutputItems::Rows(rows) => OutputItems::Rows(copy::apply(rows)),
-            // Copy is metadata-only for grouped output: keep the current groups
-            // intact and carry the copy flag in OutputMeta.
-            OutputItems::Groups(groups) => OutputItems::Groups(groups),
-        })
-    }
-
-    fn unroll(&self, items: OutputItems, stage: &ParsedStage) -> Result<OutputItems> {
-        let field = stage.spec.trim();
-        if field.is_empty() {
-            return Err(anyhow!("U: missing field name to unroll"));
-        }
-
-        let selector = format!("{field}[]");
-        match items {
-            OutputItems::Rows(rows) => Ok(OutputItems::Rows(project::apply(rows, &selector)?)),
-            OutputItems::Groups(groups) => Ok(OutputItems::Groups(project::apply_groups(
-                groups, &selector,
-            )?)),
-        }
-    }
-
-    fn apply_quick_alias(
-        &self,
-        items: OutputItems,
-        stage: &ParsedStage,
-        alias: &str,
-    ) -> Result<OutputItems> {
-        let quick_spec = if stage.spec.is_empty() {
-            alias.to_string()
-        } else {
-            format!("{alias} {}", stage.spec)
-        };
-        match items {
-            OutputItems::Rows(rows) => quick::apply(rows, &quick_spec).map(OutputItems::Rows),
-            OutputItems::Groups(groups) => {
-                quick::apply_groups(groups, &quick_spec).map(OutputItems::Groups)
-            }
+            CompiledStage::Clean => Ok(question::clean_items(items)),
+            CompiledStage::Jq(expr) => jq::apply_with_expr(items, expr),
         }
     }
 
@@ -398,11 +406,52 @@ impl PipelineExecutor {
                 Ok(OutputItems::Rows(rows))
             }
             PipelineItems::Materialized(items) => Ok(items),
+            PipelineItems::Semantic(value) => Ok(output_items_from_value(value)),
         }
     }
 
     fn finish_items(&mut self) -> Result<OutputItems> {
         self.materialize_items()
+    }
+
+    fn into_output_result(mut self) -> Result<OutputResult> {
+        // Capture the semantic value before finish_items replaces self.items via
+        // mem::replace — after that call self.items is always Materialized.
+        let semantic_value = if let PipelineItems::Semantic(ref v) = self.items {
+            Some(v.clone())
+        } else {
+            None
+        };
+        let items = self.finish_items()?;
+        let meta = self.build_output_meta(&items);
+        let document = match semantic_value {
+            Some(value) => self.document.map(|document| OutputDocument {
+                kind: document.kind,
+                value,
+            }),
+            None => self.document,
+        };
+
+        Ok(OutputResult {
+            items,
+            document,
+            meta,
+        })
+    }
+
+    fn sync_document_to_items(&mut self) {
+        let Some(document) = self.document.as_mut() else {
+            return;
+        };
+        match &self.items {
+            PipelineItems::Materialized(items) => {
+                *document = document.project_over_items(items);
+            }
+            PipelineItems::Semantic(value) => {
+                document.value = value.clone();
+            }
+            PipelineItems::RowStream(_) => {}
+        }
     }
 
     fn build_output_meta(&self, items: &OutputItems) -> OutputMeta {
@@ -445,29 +494,31 @@ where
     }))
 }
 
+fn stream_row_fanout_result<I, F>(stream: RowStream, fanout: F) -> RowStream
+where
+    I: IntoIterator<Item = Row>,
+    F: Fn(Row) -> Result<I> + 'static,
+{
+    Box::new(stream.flat_map(move |row| match row {
+        Ok(row) => match fanout(row) {
+            Ok(rows) => rows.into_iter().map(Ok).collect::<Vec<_>>().into_iter(),
+            Err(err) => vec![Err(err)].into_iter(),
+        },
+        Err(err) => vec![Err(err)].into_iter(),
+    }))
+}
+
 fn merged_group_header(group: &crate::core::output_model::Group) -> Row {
     let mut row = group.groups.clone();
     row.extend(group.aggregates.clone());
     row
 }
 
-fn stage_preserves_render_recommendation(stage: &ParsedStage) -> bool {
-    match stage.kind {
-        ParsedStageKind::Quick => true,
-        ParsedStageKind::UnknownExplicit => false,
-        ParsedStageKind::Explicit => matches!(stage.verb.as_str(), "F" | "S" | "L" | "Y" | "?"),
-    }
-}
-
-fn stage_preserves_document(stage: &ParsedStage) -> bool {
-    matches!(stage.kind, ParsedStageKind::Explicit) && stage.verb == "Y"
-}
-
 #[cfg(test)]
 mod tests {
     use crate::core::output::OutputFormat;
     use crate::core::output_model::{
-        OutputDocument, OutputItems, OutputResult, RenderRecommendation,
+        OutputDocument, OutputDocumentKind, OutputItems, OutputResult, RenderRecommendation,
     };
     use crate::guide::GuideView;
     use serde_json::json;
@@ -1084,18 +1135,54 @@ mod tests {
     }
 
     #[test]
-    fn document_sidecar_survives_copy_and_clears_on_transform_unit() {
+    fn semantic_document_tracks_transformed_output_unit() {
         let output =
             GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list  Show\n")
                 .to_output_result();
 
         let copied =
             apply_output_pipeline(output.clone(), &["Y".to_string()]).expect("copy should work");
-        assert!(matches!(copied.document, Some(OutputDocument::Guide(_))));
+        assert!(matches!(
+            copied.document,
+            Some(OutputDocument {
+                kind: OutputDocumentKind::Guide,
+                ..
+            })
+        ));
 
         let filtered =
             apply_output_pipeline(output, &["list".to_string()]).expect("quick should work");
-        assert!(filtered.document.is_none());
+        let filtered_guide =
+            GuideView::try_from_output_result(&filtered).expect("guide should still restore");
+        assert_eq!(filtered_guide.commands.len(), 1);
+        assert_eq!(filtered_guide.commands[0].name, "list");
+    }
+
+    #[test]
+    fn semantic_document_is_source_of_truth_for_initial_items_unit() {
+        let mut output = OutputResult::from_rows(vec![
+            json!({"value": "stale"})
+                .as_object()
+                .cloned()
+                .expect("object"),
+        ]);
+        output.document = GuideView::from_text("Commands:\n  list  Show\n")
+            .to_output_result()
+            .document;
+        output.meta.render_recommendation = Some(RenderRecommendation::Guide);
+
+        let rebuilt = apply_output_pipeline(output, &[]).expect("pipeline should succeed");
+        let guide = GuideView::try_from_output_result(&rebuilt).expect("guide should restore");
+        assert_eq!(guide.commands.len(), 1);
+        assert_eq!(guide.commands[0].name, "list");
+        assert!(
+            rebuilt
+                .as_rows()
+                .expect("rows")
+                .first()
+                .expect("row")
+                .contains_key("commands")
+        );
     }
 
     #[test]

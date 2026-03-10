@@ -1,4 +1,7 @@
 use anyhow::{Result, anyhow};
+use serde_json::{Map, Value};
+
+use super::json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LimitSpec {
@@ -32,25 +35,30 @@ pub(crate) fn parse_limit_spec(spec: &str) -> Result<LimitSpec> {
     Ok(LimitSpec { count, offset })
 }
 
+#[cfg(test)]
 /// Applies `L` limit semantics to `items`.
 ///
 /// Positive counts return a head slice, optionally from an offset. Negative
 /// counts return items from the tail of the selected slice.
 pub fn apply<T>(items: Vec<T>, spec: &str) -> Result<Vec<T>> {
     let spec = parse_limit_spec(spec)?;
+    Ok(apply_with_spec(items, spec))
+}
+
+pub(crate) fn apply_with_spec<T>(items: Vec<T>, spec: LimitSpec) -> Vec<T> {
     let count = spec.count;
     let offset = spec.offset;
 
     if count == 0 {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     if count > 0 && offset >= 0 {
-        return Ok(items
+        return items
             .into_iter()
             .skip(offset as usize)
             .take(count as usize)
-            .collect());
+            .collect();
     }
 
     let length = items.len() as i64;
@@ -63,11 +71,28 @@ pub fn apply<T>(items: Vec<T>, spec: &str) -> Result<Vec<T>> {
     let base: Vec<T> = items.into_iter().skip(start.max(0) as usize).collect();
 
     if count >= 0 {
-        Ok(base.into_iter().take(count as usize).collect())
+        base.into_iter().take(count as usize).collect()
     } else {
         let take = count.unsigned_abs() as usize;
         let skip = base.len().saturating_sub(take);
-        Ok(base.into_iter().skip(skip).collect())
+        base.into_iter().skip(skip).collect()
+    }
+}
+
+pub(crate) fn apply_value_with_spec(value: Value, spec: LimitSpec) -> Result<Value> {
+    match value {
+        Value::Array(items) => Ok(Value::Array(apply_with_spec(items, spec))),
+        Value::Object(map) => {
+            let mut out = Map::new();
+            for (key, child) in map {
+                let limited = apply_value_with_spec(child, spec)?;
+                if !json::is_structurally_empty(&limited) {
+                    out.insert(key, limited);
+                }
+            }
+            Ok(Value::Object(out))
+        }
+        scalar => Ok(scalar),
     }
 }
 

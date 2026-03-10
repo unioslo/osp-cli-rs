@@ -12,6 +12,7 @@ pub fn flatten_row(row: &Row) -> Row {
     out
 }
 
+#[cfg(test)]
 /// Flattens each row independently with [`flatten_row`].
 pub fn flatten_rows(rows: &[Row]) -> Vec<Row> {
     rows.iter().map(flatten_row).collect()

@@ -3,10 +3,9 @@ use crate::completion::model::{
     CommandLine, CompletionAnalysis, CompletionNode, CompletionTree, Suggestion, SuggestionEntry,
     SuggestionOutput, ValueType,
 };
-use fuzzy_matcher::FuzzyMatcher;
-use fuzzy_matcher::skim::SkimMatcherV2;
+use crate::core::fuzzy::{completion_fuzzy_matcher, fold_case};
+use skim::fuzzy_matcher::FuzzyMatcher;
 use std::collections::BTreeSet;
-use std::sync::OnceLock;
 
 const MATCH_SCORE_EXACT: u32 = 0;
 const MATCH_SCORE_EMPTY_STUB: u32 = 1_000;
@@ -45,16 +44,19 @@ enum SuggestionMode<'a> {
     },
 }
 
+/// Generates ranked completion suggestions from a completion tree and cursor analysis.
 #[derive(Debug, Clone)]
 pub struct SuggestionEngine {
     tree: CompletionTree,
 }
 
 impl SuggestionEngine {
+    /// Creates a suggestion engine for the provided completion tree.
     pub fn new(tree: CompletionTree) -> Self {
         Self { tree }
     }
 
+    /// Produces sorted completion outputs for the current cursor analysis.
     pub fn generate(&self, analysis: &CompletionAnalysis) -> Vec<SuggestionOutput> {
         let mode = self.suggestion_mode(analysis);
         self.emit_suggestions(mode, analysis)
@@ -398,7 +400,7 @@ impl SuggestionEngine {
             return Some(MATCH_SCORE_BOUNDARY_PREFIX_BASE + boundary as u32);
         }
 
-        let fuzzy = fuzzy_matcher().fuzzy_match(&candidate_lc, &stub_lc)?;
+        let fuzzy = completion_fuzzy_matcher().fuzzy_match(&candidate_lc, &stub_lc)?;
         let normalized = fuzzy.max(0) as u32;
         let penalty = MATCH_SCORE_FUZZY_NORMALIZED_MAX.saturating_sub(normalized);
         Some(MATCH_SCORE_FUZZY_BASE + penalty)
@@ -553,15 +555,6 @@ fn boundary_prefix_index(candidate: &str, stub: &str) -> Option<usize> {
                     .is_some_and(|byte| matches!(byte, b'-' | b'_' | b'.' | b':' | b'/'))
         })
         .map(|(idx, _)| idx)
-}
-
-fn fold_case(value: &str) -> String {
-    value.chars().flat_map(char::to_lowercase).collect()
-}
-
-fn fuzzy_matcher() -> &'static SkimMatcherV2 {
-    static MATCHER: OnceLock<SkimMatcherV2> = OnceLock::new();
-    MATCHER.get_or_init(SkimMatcherV2::default)
 }
 
 #[cfg(test)]

@@ -2,6 +2,8 @@
 pub mod command_def;
 /// Visibility and access-policy evaluation for commands.
 pub mod command_policy;
+/// Shared Unicode-aware fuzzy matching helpers.
+pub mod fuzzy;
 /// Output-mode and presentation enums shared across the crate.
 pub mod output;
 /// Structured row/group/document output types.

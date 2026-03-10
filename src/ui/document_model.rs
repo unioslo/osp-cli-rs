@@ -38,6 +38,14 @@ pub struct KeyValueBlockModel {
     pub value_header: Option<String>,
     pub rows: Vec<KeyValueRowModel>,
     pub border_override: Option<TableBorderStyle>,
+    pub markdown_style: KeyValueMarkdownStyle,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum KeyValueMarkdownStyle {
+    #[default]
+    Table,
+    Lines,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -239,6 +247,7 @@ fn key_value_block_from_entries(entries: &[GuideEntry]) -> KeyValueBlockModel {
             })
             .collect(),
         border_override: None,
+        markdown_style: KeyValueMarkdownStyle::Lines,
     }
 }
 
@@ -352,6 +361,7 @@ fn key_value_block_from_map(
             })
             .collect(),
         border_override: None,
+        markdown_style: KeyValueMarkdownStyle::Table,
     }
 }
 
@@ -616,6 +626,14 @@ fn render_markdown_blocks(
 
 fn markdown_key_value(block: &KeyValueBlockModel, width: Option<usize>) -> String {
     if let (Some(key_header), Some(value_header)) = (&block.key_header, &block.value_header) {
+        if matches!(block.markdown_style, KeyValueMarkdownStyle::Lines) {
+            return block
+                .rows
+                .iter()
+                .map(markdown_entry_line)
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         let headers = vec![key_header.clone(), value_header.clone()];
         let rows = block
             .rows
@@ -642,6 +660,14 @@ fn markdown_key_value(block: &KeyValueBlockModel, width: Option<usize>) -> Strin
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn markdown_entry_line(row: &KeyValueRowModel) -> String {
+    if row.value.is_empty() {
+        format!("- `{}`", row.key)
+    } else {
+        format!("- `{}` {}", row.key, row.value)
+    }
 }
 
 fn markdown_table(
@@ -672,12 +698,12 @@ fn markdown_table(
         }
     }
 
-    if let Some(total_width) = width {
-        if headers.len() == 2 {
-            let min_second = widths[1].min(UnicodeWidthStr::width(headers[1].as_str()).max(3));
-            let available = total_width.saturating_sub(widths[0] + 7);
-            widths[1] = available.max(min_second).min(widths[1]);
-        }
+    if let Some(total_width) = width
+        && headers.len() == 2
+    {
+        let min_second = widths[1].min(UnicodeWidthStr::width(headers[1].as_str()).max(3));
+        let available = total_width.saturating_sub(widths[0] + 7);
+        widths[1] = available.max(min_second).min(widths[1]);
     }
 
     let aligns = align
@@ -838,11 +864,12 @@ mod tests {
     }
 
     #[test]
-    fn markdown_from_guide_view_uses_two_column_table_unit() {
+    fn markdown_from_guide_view_uses_entry_lines_unit() {
         let view = GuideView::from_text("Commands:\n  help  Show help\n");
         let rendered = DocumentModel::from_guide_view(&view).to_markdown_with_width(Some(80));
-        assert!(rendered.contains("| name"));
+        assert!(rendered.contains("- `help` Show help"));
         assert!(rendered.contains("Show help"));
+        assert!(!rendered.contains("| name"));
     }
 
     #[test]

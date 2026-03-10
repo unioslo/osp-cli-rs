@@ -1,6 +1,6 @@
-//! Grouping stage (`G`).
+//! Grouping stage (`G`) for the canonical DSL.
 //!
-//! Conceptually, grouping works on dimensions rather than structures:
+//! Grouping works on dimensions rather than structures:
 //! - grouping by scalar keys is allowed
 //! - grouping by selectors/fan-out paths is allowed
 //! - grouping by plain objects or arrays of objects should fail and push the
@@ -22,8 +22,10 @@ use crate::dsl::{
         key_spec::{ExactMode, KeySpec},
         path::{PathExpression, expression_to_flat_key, parse_path},
     },
-    stages::common::{parse_optional_alias_after_key, parse_stage_words},
+    verbs::common::{parse_optional_alias_after_key, parse_stage_words},
 };
+
+use super::json;
 
 #[derive(Debug, Clone)]
 struct GroupKeyPlan {
@@ -33,16 +35,23 @@ struct GroupKeyPlan {
     allow_multiple: bool,
 }
 
-/// Groups rows by the key expressions in `spec`.
-///
-/// One input row may produce multiple groups when the grouping key fans out.
-pub fn group_rows(rows: Vec<Row>, spec: &str) -> Result<Vec<Group>> {
-    let plan = parse_group_plan(spec)?;
+#[derive(Debug, Clone)]
+pub(crate) struct GroupPlan {
+    keys: Vec<GroupKeyPlan>,
+}
+
+pub(crate) fn compile(spec: &str) -> Result<GroupPlan> {
+    Ok(GroupPlan {
+        keys: parse_group_plan(spec)?,
+    })
+}
+
+pub(crate) fn group_rows_with_plan(rows: Vec<Row>, plan: &GroupPlan) -> Result<Vec<Group>> {
     let mut buckets = GroupBuckets::default();
 
     for row in rows {
         let flat = flatten_row(&row);
-        let headers = resolve_group_headers(&flat, &plan)?;
+        let headers = resolve_group_headers(&flat, &plan.keys)?;
         for header in headers {
             buckets.push(Group {
                 groups: header,
@@ -55,11 +64,7 @@ pub fn group_rows(rows: Vec<Row>, spec: &str) -> Result<Vec<Group>> {
     Ok(buckets.finish())
 }
 
-/// Regroups existing groups by applying `spec` to each member row.
-///
-/// Existing group headers and aggregates are preserved on regrouped output.
-pub fn regroup_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
-    let plan = parse_group_plan(spec)?;
+pub(crate) fn regroup_groups_with_plan(groups: Vec<Group>, plan: &GroupPlan) -> Result<Vec<Group>> {
     let mut buckets = GroupBuckets::default();
 
     for group in groups {
@@ -67,7 +72,7 @@ pub fn regroup_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
         let base_aggregates = group.aggregates;
         for row in group.rows {
             let flat = flatten_row(&row);
-            let headers = resolve_group_headers(&flat, &plan)?;
+            let headers = resolve_group_headers(&flat, &plan.keys)?;
             for header in headers {
                 let mut merged_headers = base_headers.clone();
                 merged_headers.extend(header);
@@ -295,130 +300,13 @@ impl GroupBuckets {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{group_rows, regroup_groups};
-    use crate::core::output_model::Group;
-
-    #[test]
-    fn group_by_scalar_key() {
-        let rows = vec![
-            json!({"dept": "sales", "id": 1})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"dept": "sales", "id": 2})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"dept": "eng", "id": 3})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let groups = group_rows(rows, "dept").expect("group should work");
-        assert_eq!(groups.len(), 2);
-    }
-
-    #[test]
-    fn group_with_alias() {
-        let rows = vec![
-            json!({"dept": "sales"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let groups = group_rows(rows, "dept AS department").expect("group should work");
-        assert_eq!(groups.len(), 1);
-        assert_eq!(
-            groups[0]
-                .groups
-                .get("department")
-                .and_then(|value| value.as_str()),
-            Some("sales")
-        );
-    }
-
-    #[test]
-    fn group_existence_token() {
-        let rows = vec![
-            json!({"name": "a", "vlan": "100"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"name": "b"}).as_object().cloned().expect("object"),
-        ];
-
-        let groups = group_rows(rows, "?vlan").expect("group should work");
-        assert_eq!(groups.len(), 2);
-    }
-
-    #[test]
-    fn group_fanout_from_list() {
-        let rows = vec![
-            json!({"name": "a", "tags": ["x", "y"]})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let groups = group_rows(rows, "tags[]").expect("group should work");
-        assert_eq!(groups.len(), 2);
-    }
-
-    #[test]
-    fn ambiguous_fuzzy_key_errors() {
-        let rows = vec![
-            json!({"asset.id": 1, "owner.id": 2})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let error = group_rows(rows, "id").expect_err("group should reject ambiguous key");
-        assert!(error.to_string().contains("matched multiple keys"));
-    }
-
-    #[test]
-    fn regroup_preserves_aggregates() {
-        let groups = vec![Group {
-            groups: json!({"dept": "sales"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            aggregates: json!({"total": 300}).as_object().cloned().expect("object"),
-            rows: vec![
-                json!({"team": "ops"}).as_object().cloned().expect("object"),
-                json!({"team": "infra"})
-                    .as_object()
-                    .cloned()
-                    .expect("object"),
-            ],
-        }];
-
-        let regrouped = regroup_groups(groups, "team").expect("regroup should work");
-        assert_eq!(regrouped.len(), 2);
-        assert!(
-            regrouped
-                .iter()
-                .all(|group| group.aggregates.get("total") == Some(&json!(300)))
-        );
-    }
-
-    #[test]
-    fn grouping_structured_container_requires_leaf_or_selector() {
-        let rows = vec![
-            json!({"servers": [{"role": "web"}, {"role": "db"}]})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let error = group_rows(rows, "servers").expect_err("group should reject container token");
-        assert!(error.to_string().contains("structured content"));
-    }
+pub(crate) fn apply_value_with_plan(value: Value, plan: &GroupPlan) -> Result<Value> {
+    json::traverse_collections(value, |items| match items {
+        crate::core::output_model::OutputItems::Rows(rows) => Ok(
+            crate::core::output_model::OutputItems::Groups(group_rows_with_plan(rows, plan)?),
+        ),
+        crate::core::output_model::OutputItems::Groups(groups) => Ok(
+            crate::core::output_model::OutputItems::Groups(regroup_groups_with_plan(groups, plan)?),
+        ),
+    })
 }

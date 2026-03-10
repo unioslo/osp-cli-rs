@@ -36,19 +36,7 @@ pub enum JqError {
     },
 }
 
-/// Runs `jq` on the current output payload and converts the result back into DSL output items.
-///
-/// Row input is passed to jq as a JSON array. Grouped input is processed one
-/// group at a time using `{groups, aggregates, rows}` objects.
-pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
-    let expr = normalize_expression(spec)?;
-    match items {
-        OutputItems::Rows(rows) => Ok(OutputItems::Rows(apply_rows(rows, &expr)?)),
-        OutputItems::Groups(groups) => Ok(OutputItems::Groups(apply_groups(groups, &expr)?)),
-    }
-}
-
-fn normalize_expression(spec: &str) -> std::result::Result<String, JqError> {
+pub(crate) fn compile(spec: &str) -> std::result::Result<String, JqError> {
     let trimmed = spec.trim();
     if trimmed.is_empty() {
         return Err(JqError::MissingExpression);
@@ -69,6 +57,17 @@ fn normalize_expression(spec: &str) -> std::result::Result<String, JqError> {
         return Err(JqError::MissingExpression);
     }
     Ok(expr)
+}
+
+pub(crate) fn apply_with_expr(items: OutputItems, expr: &str) -> Result<OutputItems> {
+    match items {
+        OutputItems::Rows(rows) => Ok(OutputItems::Rows(apply_rows(rows, expr)?)),
+        OutputItems::Groups(groups) => Ok(OutputItems::Groups(apply_groups(groups, expr)?)),
+    }
+}
+
+pub(crate) fn apply_value_with_expr(value: Value, expr: &str) -> Result<Value> {
+    Ok(run_jq(expr, &value)?.unwrap_or(Value::Null))
 }
 
 fn apply_rows(rows: Vec<Row>, expr: &str) -> Result<Vec<Row>> {
@@ -231,6 +230,3 @@ fn run_jq_with_program(
         .map_err(|source| JqError::InvalidJsonOutput { source })?;
     Ok(Some(parsed))
 }
-
-#[cfg(test)]
-mod tests;

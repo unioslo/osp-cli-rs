@@ -16,6 +16,7 @@ pub struct QuickSpec {
     pub scope: QuickScope,
     pub key_spec: KeySpec,
     pub key_not_equals: bool,
+    pub fuzzy: bool,
 }
 
 /// Parse the prefix operators used by the quick-search mini-language.
@@ -30,8 +31,14 @@ pub fn parse_quick_spec(input: &str) -> QuickSpec {
     let mut existence = false;
     let mut exact = ExactMode::None;
     let mut strict_ambiguous = false;
+    let mut fuzzy = false;
 
     loop {
+        if let Some(rest) = remaining.strip_prefix('%') {
+            fuzzy = true;
+            remaining = rest.trim_start();
+            continue;
+        }
         if let Some(rest) = remaining.strip_prefix("!=") {
             negated = true;
             exact = ExactMode::CaseInsensitive;
@@ -98,6 +105,7 @@ pub fn parse_quick_spec(input: &str) -> QuickSpec {
         scope,
         key_spec,
         key_not_equals,
+        fuzzy,
     }
 }
 
@@ -124,5 +132,21 @@ mod tests {
         let parsed = parse_quick_spec("K !=uid");
         assert!(parsed.key_not_equals);
         assert_eq!(parsed.key_spec.token, "uid");
+    }
+
+    #[test]
+    fn parses_fuzzy_prefix_before_token() {
+        let parsed = parse_quick_spec("% docter");
+        assert!(parsed.fuzzy);
+        assert_eq!(parsed.scope, QuickScope::KeyOrValue);
+        assert_eq!(parsed.key_spec.token, "docter");
+    }
+
+    #[test]
+    fn parses_scope_then_fuzzy_prefix() {
+        let parsed = parse_quick_spec("V % verrbose");
+        assert!(parsed.fuzzy);
+        assert_eq!(parsed.scope, QuickScope::ValueOnly);
+        assert_eq!(parsed.key_spec.token, "verrbose");
     }
 }

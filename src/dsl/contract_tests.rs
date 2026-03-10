@@ -191,17 +191,17 @@ fn quick_contract_preserves_matching_parent_objects_in_object_arrays() {
     let rows = vec![row(json!({
         "commands": [
             {
-                "name": "doctor",
-                "short_help": "subcommands: all, config, last, plugins, theme"
+                "name": "alpha",
+                "short_help": "shared help text"
             },
             {
-                "name": "config",
-                "short_help": "subcommands: show, get, explain, set, doctor"
+                "name": "beta",
+                "short_help": "shared help text"
             }
         ]
     }))];
 
-    let output = apply_pipeline(rows, &["config".to_string()])
+    let output = apply_pipeline(rows, &["shared".to_string()])
         .expect("quick should preserve full matching command entries");
     let OutputItems::Rows(result_rows) = output.items else {
         panic!("expected row output");
@@ -211,12 +211,12 @@ fn quick_contract_preserves_matching_parent_objects_in_object_arrays() {
         vec![row(json!({
             "commands": [
                 {
-                    "name": "doctor",
-                    "short_help": "subcommands: all, config, last, plugins, theme"
+                    "name": "alpha",
+                    "short_help": "shared help text"
                 },
                 {
-                    "name": "config",
-                    "short_help": "subcommands: show, get, explain, set, doctor"
+                    "name": "beta",
+                    "short_help": "shared help text"
                 }
             ]
         }))]

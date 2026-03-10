@@ -2,7 +2,7 @@ use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
 use crate::core::output_model::{OutputResult, RenderRecommendation};
 use crate::core::plugin::{ResponseMessageLevelV1, ResponseV1};
-use crate::dsl::apply_output_pipeline;
+use crate::dsl::apply_output_pipeline_with_mode;
 use crate::guide::GuideView;
 use crate::ui::clipboard::ClipboardService;
 use crate::ui::document::{Block, Document, JsonBlock, LineBlock, LinePart};
@@ -250,7 +250,10 @@ pub(crate) fn apply_output_stages(
 
     if !stages.is_empty() {
         tracing::trace!(stage_count = stages.len(), "applying DSL output pipeline");
-        output = apply_output_pipeline(output, stages)?;
+        // This is the central fan-in for staged structured output. Keep all
+        // callers on the canonical DSL entrypoint so semantic/output policy
+        // stays consistent across CLI, REPL, and plugin flows.
+        output = apply_output_pipeline_with_mode(output, stages)?;
         // Once a DSL pipeline runs, producer-side format hints stop being an
         // out-of-band override. Any surviving recommendation now lives on the
         // transformed output metadata itself.

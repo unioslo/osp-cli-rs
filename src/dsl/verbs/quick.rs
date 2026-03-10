@@ -8,18 +8,21 @@ use crate::dsl::{
     eval::{
         flatten::{coalesce_flat_row, flatten_row},
         matchers::{
-            KeyMatches, contains_case_insensitive, eq_case_insensitive, match_row_keys_detailed,
-            render_value,
+            KeyMatches, contains_case_insensitive, eq_case_insensitive,
+            fuzzy_contains_case_insensitive, match_row_keys_detailed,
+            match_row_keys_detailed_fuzzy, render_value,
         },
-        resolve::{resolve_pairs, resolve_values_truthy},
+        resolve::{compact_sparse_arrays, is_truthy, resolve_pairs, resolve_values_truthy},
     },
     parse::{
         key_spec::ExactMode,
         path::{Selector, parse_path},
         quick::{QuickScope, parse_quick_spec},
     },
-    stages::common::map_group_rows,
+    verbs::common::map_group_rows,
 };
+
+use super::{json, selector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MatchMode {
@@ -38,33 +41,89 @@ struct MatchResult {
 
 #[derive(Debug, Clone)]
 pub(crate) struct QuickPlan {
-    spec: crate::dsl::parse::quick::QuickSpec,
+    spec: CompiledQuickSpec,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledQuickSpec {
+    scope: QuickScope,
+    selector: selector::CompiledSelector,
+    key_not_equals: bool,
+    fuzzy: bool,
+}
+
+impl CompiledQuickSpec {
+    fn from_parsed(spec: crate::dsl::parse::quick::QuickSpec) -> Self {
+        Self {
+            scope: spec.scope,
+            selector: selector::CompiledSelector::from_key_spec(spec.key_spec),
+            key_not_equals: spec.key_not_equals,
+            fuzzy: spec.fuzzy,
+        }
+    }
+
+    fn token(&self) -> &str {
+        self.selector.token()
+    }
+
+    fn exact(&self) -> ExactMode {
+        self.selector.exact()
+    }
+
+    fn negated(&self) -> bool {
+        self.selector.key_spec.negated
+    }
+
+    fn existence(&self) -> bool {
+        self.selector.key_spec.existence
+    }
+
+    fn is_structural(&self) -> bool {
+        self.selector.is_structural()
+    }
+
+    fn resolve_matches(&self, root: &Value) -> Vec<crate::dsl::eval::resolve::AddressedValue> {
+        self.selector.resolve_matches(root)
+    }
 }
 
 impl QuickPlan {
     fn apply_row(&self, row: Row, mode: MatchMode) -> Vec<Row> {
         apply_row_with_mode(row, &self.spec, mode)
     }
+
+    pub(crate) fn matches_row_filter_mode(&self, row: &Row) -> bool {
+        !self.apply_row(row.clone(), MatchMode::Multi).is_empty()
+    }
 }
 
 pub(crate) fn compile(raw_stage: &str) -> Result<QuickPlan> {
-    let spec = parse_quick_spec(raw_stage);
-    if spec.key_spec.token.trim().is_empty() {
+    let spec = CompiledQuickSpec::from_parsed(parse_quick_spec(raw_stage));
+    let token = spec.token().trim();
+    if token.is_empty() {
         return Err(anyhow!("quick stage requires a search token"));
+    }
+    if spec.fuzzy {
+        if spec.existence() {
+            return Err(anyhow!(
+                "% quick does not support existence filters; use plain ?path or literal quick"
+            ));
+        }
+        if !matches!(spec.exact(), ExactMode::None) || spec.key_not_equals {
+            return Err(anyhow!(
+                "% quick does not support exact-match key operators; use plain quick operators"
+            ));
+        }
+        if spec.is_structural() {
+            return Err(anyhow!(
+                "% quick does not support path selectors; use plain path quick instead"
+            ));
+        }
     }
     Ok(QuickPlan { spec })
 }
 
-/// Applies quick-stage matching to flat rows.
-///
-/// Multi-row input behaves like filtering. Single-row input may reshape the
-/// row into projected matches.
-pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
-    let plan = compile(raw_stage)?;
-
-    // Quick mode is intentionally dual-purpose:
-    // - multi-row input acts like a row filter
-    // - single-row input acts more like projection/reshaping
+pub(crate) fn apply_with_plan(rows: Vec<Row>, plan: &QuickPlan) -> Result<Vec<Row>> {
     let mode = if rows.len() > 1 {
         MatchMode::Multi
     } else {
@@ -79,9 +138,7 @@ pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
     Ok(out)
 }
 
-/// Applies quick-stage matching to the rows inside each group.
-pub fn apply_groups(groups: Vec<Group>, raw_stage: &str) -> Result<Vec<Group>> {
-    let plan = compile(raw_stage)?;
+pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &QuickPlan) -> Result<Vec<Group>> {
     map_group_rows(groups, |rows| {
         let mode = if rows.len() > 1 {
             MatchMode::Multi
@@ -108,7 +165,7 @@ where
     let second = iter.next();
 
     // Quick semantics depend on whether the current payload is a single row or
-    // a multi-row set. A two-row lookahead preserves that "magic" while still
+    // a multi-row set. A two-row lookahead preserves that magic while still
     // allowing the common multi-row path to continue as a stream.
     let mode = if second.is_some() {
         MatchMode::Multi
@@ -143,19 +200,19 @@ where
     }))
 }
 
-fn apply_row_with_mode(
-    row: Row,
-    spec: &crate::dsl::parse::quick::QuickSpec,
-    mode: MatchMode,
-) -> Vec<Row> {
-    if spec.key_spec.existence {
-        let found = resolve_values_truthy(&row, &spec.key_spec.token, spec.key_spec.exact);
-        let matched = if spec.key_spec.negated { !found } else { found };
+fn apply_row_with_mode(row: Row, spec: &CompiledQuickSpec, mode: MatchMode) -> Vec<Row> {
+    if let Some(transformed) = try_apply_path_scoped_row(&row, spec) {
+        return transformed;
+    }
+
+    if spec.existence() {
+        let found = resolve_values_truthy(&row, spec.token(), spec.exact());
+        let matched = if spec.negated() { !found } else { found };
         return if matched { vec![row] } else { Vec::new() };
     }
 
     let flat = flatten_row(&row);
-    let (pairs, _) = resolve_pairs(&flat, &spec.key_spec.token);
+    let (pairs, _) = resolve_pairs(&flat, spec.token());
     let synthetic = build_synthetic_map(&pairs, &flat);
     let mut result = match_row(&flat, &pairs, synthetic, spec);
 
@@ -164,14 +221,14 @@ fn apply_row_with_mode(
             if matches!(mode, MatchMode::Multi) {
                 result.matched
             } else {
-                spec.key_spec.negated || result.matched
+                spec.negated() || result.matched
             }
         }
         QuickScope::ValueOnly | QuickScope::KeyOrValue => {
             if matches!(mode, MatchMode::Multi) {
                 result.matched
             } else {
-                result.matched || spec.key_spec.negated
+                result.matched || spec.negated()
             }
         }
     };
@@ -191,10 +248,14 @@ fn match_row(
     flat: &Row,
     pairs: &[(String, Value)],
     synthetic: Row,
-    spec: &crate::dsl::parse::quick::QuickSpec,
+    spec: &CompiledQuickSpec,
 ) -> MatchResult {
-    let matches = match_row_keys_detailed(flat, &spec.key_spec.token, spec.key_spec.exact);
-    let mut key_hits = prefer_exact_keys(&matches, spec.key_spec.exact);
+    let matches = if spec.fuzzy {
+        match_row_keys_detailed_fuzzy(flat, spec.token(), spec.exact())
+    } else {
+        match_row_keys_detailed(flat, spec.token(), spec.exact())
+    };
+    let mut key_hits = prefer_exact_keys(&matches, spec.exact());
     let mut value_hits = Vec::new();
     let mut seen_values = HashSet::new();
 
@@ -202,8 +263,8 @@ fn match_row(
         let matched = match value {
             Value::Array(items) => items
                 .iter()
-                .any(|item| value_matches_token(item, &spec.key_spec.token, spec.key_spec.exact)),
-            scalar => value_matches_token(scalar, &spec.key_spec.token, spec.key_spec.exact),
+                .any(|item| value_matches_token(item, spec.token(), spec.exact(), spec.fuzzy)),
+            scalar => value_matches_token(scalar, spec.token(), spec.exact(), spec.fuzzy),
         };
         if matched && seen_values.insert(key.as_str()) {
             value_hits.push(key.clone());
@@ -225,7 +286,7 @@ fn match_row(
         }
     };
 
-    if spec.key_spec.negated {
+    if spec.negated() {
         matched = !matched;
     }
 
@@ -234,7 +295,7 @@ fn match_row(
         QuickScope::KeyOnly => false,
     };
 
-    if key_hits_match_projection_token(&key_hits, &spec.key_spec.token) {
+    if key_hits_match_projection_token(&key_hits, spec.token()) {
         is_projection = true;
     }
 
@@ -254,11 +315,11 @@ fn match_row(
 fn transform_row(
     flat: &Row,
     result: &mut MatchResult,
-    spec: &crate::dsl::parse::quick::QuickSpec,
+    spec: &CompiledQuickSpec,
 ) -> Option<Vec<Row>> {
     let synthetic_keys = result.synthetic.keys().cloned().collect::<Vec<_>>();
 
-    if result.is_projection && !spec.key_spec.negated {
+    if result.is_projection && !spec.negated() {
         if !result.synthetic.is_empty() {
             let mut rows = Vec::new();
             let mut keys = result.synthetic.keys().cloned().collect::<Vec<_>>();
@@ -299,10 +360,14 @@ fn transform_row(
         if projected.is_empty() {
             return None;
         }
-        return Some(vec![coalesce_flat_row(&projected)]);
+        return Some(vec![restore_row_envelope(
+            flat,
+            projected,
+            spec.is_structural(),
+        )]);
     }
 
-    if spec.key_spec.negated {
+    if spec.negated() {
         let mut new_row = flat.clone();
         let mut new_synthetic = result.synthetic.clone();
         let keys = union_keys(&result.key_hits, &result.value_hits);
@@ -313,11 +378,7 @@ fn transform_row(
                         let remaining = items
                             .into_iter()
                             .filter(|item| {
-                                !value_matches_token(
-                                    item,
-                                    &spec.key_spec.token,
-                                    spec.key_spec.exact,
-                                )
+                                !value_matches_token(item, spec.token(), spec.exact(), spec.fuzzy)
                             })
                             .collect::<Vec<_>>();
                         if remaining.is_empty() {
@@ -325,8 +386,7 @@ fn transform_row(
                         } else {
                             new_row.insert(key.clone(), Value::Array(remaining));
                         }
-                    } else if value_matches_token(&value, &spec.key_spec.token, spec.key_spec.exact)
-                    {
+                    } else if value_matches_token(&value, spec.token(), spec.exact(), spec.fuzzy) {
                         new_row.remove(&key);
                     }
                 } else if result.key_hits.contains(&key) {
@@ -337,7 +397,7 @@ fn transform_row(
                     let remaining = items
                         .into_iter()
                         .filter(|item| {
-                            !value_matches_token(item, &spec.key_spec.token, spec.key_spec.exact)
+                            !value_matches_token(item, spec.token(), spec.exact(), spec.fuzzy)
                         })
                         .collect::<Vec<_>>();
                     if remaining.is_empty() {
@@ -345,7 +405,7 @@ fn transform_row(
                     } else {
                         new_synthetic.insert(key.clone(), Value::Array(remaining));
                     }
-                } else if value_matches_token(&value, &spec.key_spec.token, spec.key_spec.exact) {
+                } else if value_matches_token(&value, spec.token(), spec.exact(), spec.fuzzy) {
                     new_synthetic.remove(&key);
                 }
             }
@@ -356,7 +416,11 @@ fn transform_row(
         if new_row.is_empty() {
             return None;
         }
-        return Some(vec![coalesce_flat_row(&new_row)]);
+        return Some(vec![restore_row_envelope(
+            flat,
+            new_row,
+            spec.is_structural(),
+        )]);
     }
 
     let mut filtered = Row::new();
@@ -380,7 +444,7 @@ fn transform_row(
         {
             let filtered_values = items
                 .into_iter()
-                .filter(|item| value_matches_token(item, &spec.key_spec.token, spec.key_spec.exact))
+                .filter(|item| value_matches_token(item, spec.token(), spec.exact(), spec.fuzzy))
                 .collect::<Vec<_>>();
             if filtered_values.is_empty() {
                 continue;
@@ -394,9 +458,22 @@ fn transform_row(
     if filtered.is_empty() {
         None
     } else {
-        let mut coalesced = coalesce_flat_row(&filtered);
+        let mut coalesced = restore_row_envelope(flat, filtered, spec.is_structural());
         compact_sparse_arrays_in_row(&mut coalesced);
         Some(vec![coalesced])
+    }
+}
+
+fn restore_row_envelope(flat: &Row, narrowed: Row, structural: bool) -> Row {
+    if structural {
+        return coalesce_flat_row(&narrowed);
+    }
+
+    let original = Value::Object(coalesce_flat_row(flat));
+    let narrowed = Value::Object(coalesce_flat_row(&narrowed));
+    match json::preserve_envelope_fields(original, narrowed) {
+        Value::Object(map) => map,
+        _ => Row::new(),
     }
 }
 
@@ -506,13 +583,13 @@ fn object_array_parent_prefix(key: &str) -> Option<String> {
     parent
 }
 
-fn value_matches_token(value: &Value, token: &str, exact: ExactMode) -> bool {
+fn value_matches_token(value: &Value, token: &str, exact: ExactMode, fuzzy: bool) -> bool {
     match exact {
         ExactMode::CaseSensitive => {
             if let Value::Array(values) = value {
                 return values
                     .iter()
-                    .any(|item| value_matches_token(item, token, exact));
+                    .any(|item| value_matches_token(item, token, exact, fuzzy));
             }
             render_value(value) == token
         }
@@ -520,7 +597,7 @@ fn value_matches_token(value: &Value, token: &str, exact: ExactMode) -> bool {
             if let Value::Array(values) = value {
                 return values
                     .iter()
-                    .any(|item| value_matches_token(item, token, exact));
+                    .any(|item| value_matches_token(item, token, exact, fuzzy));
             }
             eq_case_insensitive(&render_value(value), token)
         }
@@ -528,7 +605,10 @@ fn value_matches_token(value: &Value, token: &str, exact: ExactMode) -> bool {
             if let Value::Array(values) = value {
                 return values
                     .iter()
-                    .any(|item| value_matches_token(item, token, exact));
+                    .any(|item| value_matches_token(item, token, exact, fuzzy));
+            }
+            if fuzzy {
+                return fuzzy_contains_case_insensitive(&render_value(value), token);
             }
             contains_case_insensitive(&render_value(value), token)
         }
@@ -583,24 +663,84 @@ fn compact_sparse_arrays_in_row(row: &mut Row) {
     }
 }
 
-fn compact_sparse_arrays(value: &mut Value) {
-    match value {
-        Value::Array(items) => {
-            for item in items.iter_mut() {
-                compact_sparse_arrays(item);
-            }
-            if items.iter().any(|item| !item.is_null()) {
-                items.retain(|item| !item.is_null());
-            }
-        }
-        Value::Object(map) => {
-            for item in map.values_mut() {
-                compact_sparse_arrays(item);
-            }
-        }
-        _ => {}
+pub(crate) fn apply_value(value: Value, raw_stage: &str) -> Result<Value> {
+    let plan = compile(raw_stage)?;
+    apply_value_with_plan(value, &plan)
+}
+
+pub(crate) fn apply_value_with_plan(value: Value, plan: &QuickPlan) -> Result<Value> {
+    if let Some(transformed) = try_apply_path_scoped_value(&value, &plan.spec) {
+        return Ok(transformed);
     }
+    selector::filter_descendants(value, |row| plan.matches_row_filter_mode(row))
+}
+
+fn try_apply_path_scoped_row(row: &Row, spec: &CompiledQuickSpec) -> Option<Vec<Row>> {
+    if !spec.is_structural() || spec.key_not_equals {
+        return None;
+    }
+
+    // Canonicalize through flatten/coalesce so path-scoped quick behaves the
+    // same on already-flat rows and nested row-shaped JSON.
+    let canonical = Value::Object(coalesce_flat_row(&flatten_row(row)));
+    let matches = spec.resolve_matches(&canonical);
+
+    if spec.existence() {
+        let found = matches.iter().any(|entry| is_truthy(&entry.value));
+        let keep = if spec.negated() { !found } else { found };
+        return Some(if keep { vec![row.clone()] } else { Vec::new() });
+    }
+
+    if spec.negated() {
+        return Some(match selector::remove_matches(canonical, &matches) {
+            Value::Null => Vec::new(),
+            Value::Object(map) => vec![map],
+            _ => Vec::new(),
+        });
+    }
+
+    if matches.is_empty() {
+        return Some(Vec::new());
+    }
+
+    // Row quick deliberately strips the structural envelope and emits tabular
+    // rows when the addressed hits are array elements. The value-path sibling
+    // keeps the envelope by routing through `selector::project_matches`.
+    Some(selector::project_row_matches(&matches))
+}
+
+fn try_apply_path_scoped_value(root: &Value, spec: &CompiledQuickSpec) -> Option<Value> {
+    if !spec.is_structural() || spec.key_not_equals {
+        return None;
+    }
+
+    let matches = spec.resolve_matches(root);
+
+    if spec.existence() {
+        let found = matches.iter().any(|entry| is_truthy(&entry.value));
+        let keep = if spec.negated() { !found } else { found };
+        return Some(if keep { root.clone() } else { Value::Null });
+    }
+
+    if spec.negated() {
+        return Some(selector::remove_matches(root.clone(), &matches));
+    }
+
+    if matches.is_empty() {
+        return Some(Value::Null);
+    }
+
+    Some(selector::project_matches(root, &matches))
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::compile;
+
+    #[test]
+    fn compile_treats_prefixed_path_quick_as_structural_selector() {
+        let plan = compile("!sections[0].entries[0]").expect("quick should compile");
+
+        assert!(plan.spec.is_structural());
+    }
+}

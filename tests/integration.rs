@@ -3,3 +3,6 @@ mod repl_dsl;
 
 #[path = "integration/aliases.rs"]
 mod aliases;
+
+#[path = "integration/dsl/mod.rs"]
+mod dsl;

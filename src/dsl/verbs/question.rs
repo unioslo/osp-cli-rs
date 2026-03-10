@@ -5,12 +5,13 @@ use crate::core::{
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::dsl::stages::{common::map_group_rows, quick};
+use super::quick;
 
+#[cfg(test)]
 /// Applies the `?` stage to flat or grouped output.
 ///
 /// With an empty spec, empty values are removed from rows. Otherwise the stage
-/// delegates to quick matching using `?`-prefixed semantics.
+/// reuses DSL quick-search semantics with `?`-prefixed matching.
 pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     let trimmed = spec.trim();
     if trimmed.is_empty() {
@@ -18,14 +19,17 @@ pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     }
 
     let raw = format!("?{trimmed}");
+    let plan = quick::compile(&raw)?;
     let out = match items {
-        OutputItems::Rows(rows) => OutputItems::Rows(quick::apply(rows, &raw)?),
-        OutputItems::Groups(groups) => OutputItems::Groups(apply_groups_quick(groups, &raw)?),
+        OutputItems::Rows(rows) => OutputItems::Rows(quick::apply_with_plan(rows, &plan)?),
+        OutputItems::Groups(groups) => {
+            OutputItems::Groups(quick::apply_groups_with_plan(groups, &plan)?)
+        }
     };
     Ok(out)
 }
 
-fn clean_items(items: OutputItems) -> OutputItems {
+pub(crate) fn clean_items(items: OutputItems) -> OutputItems {
     match items {
         OutputItems::Rows(rows) => OutputItems::Rows(clean_rows(rows)),
         OutputItems::Groups(groups) => OutputItems::Groups(
@@ -66,8 +70,12 @@ fn is_empty_value(value: &Value) -> bool {
     }
 }
 
-fn apply_groups_quick(groups: Vec<Group>, raw: &str) -> Result<Vec<Group>> {
-    map_group_rows(groups, |rows| quick::apply(rows, raw))
+pub(crate) fn apply_value(value: Value, spec: &str) -> Result<Value> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return Ok(super::json::clean_value(value).unwrap_or(Value::Null));
+    }
+    quick::apply_value(value, &format!("?{trimmed}"))
 }
 
 #[cfg(test)]

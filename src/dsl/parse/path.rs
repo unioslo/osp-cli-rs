@@ -84,6 +84,19 @@ pub fn requires_materialization(path: &PathExpression) -> bool {
     })
 }
 
+/// Returns whether the original token should use structural path semantics.
+pub fn is_structural_path_token(token: &str, path: &PathExpression) -> bool {
+    let trimmed = token.trim();
+    path.absolute
+        || trimmed.contains('.')
+        || trimmed.contains('[')
+        || trimmed.contains(']')
+        || path
+            .segments
+            .iter()
+            .any(|segment| !segment.selectors.is_empty())
+}
+
 /// Converts a path expression into a flattened key when every segment is concrete.
 ///
 /// Returns `None` for fanout, slices, negative indexes, or unnamed segments.
@@ -237,7 +250,8 @@ fn parse_optional_i64(value: &str) -> Result<Option<i64>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PathParseError, Selector, expression_to_flat_key, parse_path, requires_materialization,
+        PathParseError, Selector, expression_to_flat_key, is_structural_path_token, parse_path,
+        requires_materialization,
     };
 
     #[test]
@@ -275,6 +289,21 @@ mod tests {
 
         let path = parse_path("members[-1].uid").expect("path should parse");
         assert_eq!(expression_to_flat_key(&path), None);
+    }
+
+    #[test]
+    fn structural_path_token_detection_matches_selector_routing_unit() {
+        let name = parse_path("name").expect("path should parse");
+        assert!(!is_structural_path_token("name", &name));
+
+        let dotted = parse_path("members.uid").expect("path should parse");
+        assert!(is_structural_path_token("members.uid", &dotted));
+
+        let indexed = parse_path("members[0]").expect("path should parse");
+        assert!(is_structural_path_token("members[0]", &indexed));
+
+        let absolute = parse_path(".members").expect("path should parse");
+        assert!(is_structural_path_token(".members", &absolute));
     }
 
     #[test]

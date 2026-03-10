@@ -1,6 +1,9 @@
 use crate::core::row::Row;
 
 /// Returns `rows` unchanged.
+///
+/// The canonical DSL keeps this local even though the behavior is trivial so
+/// execution ownership stays in `src/dsl/verbs/*`.
 pub fn apply(rows: Vec<Row>) -> Vec<Row> {
     rows
 }

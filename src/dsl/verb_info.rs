@@ -1,18 +1,29 @@
+#[cfg(test)]
 use crate::dsl::model::{ParsedStage, ParsedStageKind};
 
+/// Streaming behavior for a DSL verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerbStreaming {
+    /// The stage can process rows incrementally.
     Streamable,
+    /// The stage can stream for some inputs but must materialize for others.
     Conditional,
+    /// The stage requires full materialization of its input.
     Materializes,
+    /// The stage is metadata-only and does not participate in data execution.
     Meta,
 }
 
+/// Static metadata for one registered DSL verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerbInfo {
+    /// Canonical verb spelling accepted by the parser.
     pub verb: &'static str,
+    /// Short human-readable summary of the verb.
     pub summary: &'static str,
+    /// Streaming behavior class for the verb.
     pub streaming: VerbStreaming,
+    /// Short note explaining the streaming behavior.
     pub streaming_note: &'static str,
 }
 
@@ -126,6 +137,7 @@ pub fn registered_verbs() -> &'static [VerbInfo] {
     VERBS
 }
 
+#[cfg(test)]
 /// Returns the names of registered verbs that participate in data execution.
 pub fn registered_explicit_verbs() -> Vec<&'static str> {
     VERBS
@@ -159,6 +171,7 @@ pub fn render_streaming_badge(streaming: VerbStreaming) -> Option<&'static str> 
     }
 }
 
+#[cfg(test)]
 pub(crate) fn stage_can_stream_rows(stage: &ParsedStage) -> bool {
     if matches!(stage.kind, ParsedStageKind::Quick) {
         return true;
@@ -169,7 +182,7 @@ pub(crate) fn stage_can_stream_rows(stage: &ParsedStage) -> bool {
 
     match stage.verb.as_str() {
         "F" | "P" | "VAL" | "VALUE" | "Y" | "U" | "V" | "K" | "?" => true,
-        "L" => crate::dsl::stages::limit::parse_limit_spec(&stage.spec)
+        "L" => crate::dsl::verbs::limit::parse_limit_spec(&stage.spec)
             .map(|spec| spec.is_head_only())
             .unwrap_or(false),
         _ => false,
@@ -180,7 +193,7 @@ pub(crate) fn stage_can_stream_rows(stage: &ParsedStage) -> bool {
 mod tests {
     use crate::dsl::{
         model::{ParsedStage, ParsedStageKind},
-        verbs::{
+        verb_info::{
             VerbStreaming, is_registered_explicit_verb, registered_explicit_verbs,
             render_streaming_badge, stage_can_stream_rows, verb_info,
         },

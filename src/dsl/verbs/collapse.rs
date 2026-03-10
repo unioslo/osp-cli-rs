@@ -4,6 +4,8 @@ use crate::core::{
 };
 use anyhow::{Result, anyhow};
 
+use super::json;
+
 /// Collapses grouped output into summary rows of group headers and aggregates.
 ///
 /// Returns an error when called on flat rows.
@@ -22,6 +24,10 @@ fn collapse_group(group: Group) -> Row {
     summary.extend(group.groups);
     summary.extend(group.aggregates);
     summary
+}
+
+pub(crate) fn apply_value(value: serde_json::Value) -> Result<serde_json::Value> {
+    json::traverse_collections(value, apply)
 }
 
 #[cfg(test)]

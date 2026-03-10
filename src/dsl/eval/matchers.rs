@@ -1,4 +1,6 @@
+use crate::core::fuzzy::{fold_case as unicode_fold_case, search_fuzzy_matcher};
 use crate::core::row::Row;
+use skim::fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashSet;
 
 use crate::dsl::parse::key_spec::ExactMode;
@@ -12,7 +14,7 @@ pub struct KeyMatches {
 
 /// Returns matching row keys in input order, preferring exact matches over partial matches.
 pub fn match_row_keys<'a>(row: &'a Row, token: &str, exact: ExactMode) -> Vec<&'a str> {
-    let matches = compute_key_matches(row, token, exact);
+    let matches = compute_key_matches(row, token, exact, false);
     let selected = if !matches.exact.is_empty() {
         matches.exact
     } else {
@@ -36,9 +38,16 @@ pub fn match_row_keys<'a>(row: &'a Row, token: &str, exact: ExactMode) -> Vec<&'
 
 /// Returns exact and partial key matches for `token` without applying preference rules.
 pub fn match_row_keys_detailed(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
-    compute_key_matches(row, token, exact)
+    compute_key_matches(row, token, exact, false)
 }
 
+/// Returns exact and partial key matches for `token`, allowing opt-in fuzzy
+/// fallbacks after literal path/substring matching has failed.
+pub fn match_row_keys_detailed_fuzzy(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
+    compute_key_matches(row, token, exact, true)
+}
+
+#[cfg(test)]
 /// Returns whether `value` contains `query`, recursing into arrays.
 pub fn value_contains(value: &serde_json::Value, query: &str, case_sensitive: bool) -> bool {
     match value {
@@ -159,18 +168,39 @@ fn matches_expression_with_selectors(
     let Ok(key_expr) = parse_path(key) else {
         return false;
     };
-    if key_expr.segments.len() != expr.segments.len() {
-        return false;
+    if expr.absolute {
+        if key_expr.segments.len() != expr.segments.len() {
+            return false;
+        }
+
+        return key_expr.segments.iter().zip(expr.segments.iter()).all(
+            |(key_segment, expr_segment)| {
+                names_match(&key_segment.name, &expr_segment.name, case_sensitive)
+                    && selectors_match(&key_segment.selectors, &expr_segment.selectors)
+            },
+        );
     }
 
-    for (key_segment, expr_segment) in key_expr.segments.iter().zip(expr.segments.iter()) {
-        if !names_match(&key_segment.name, &expr_segment.name, case_sensitive) {
-            return false;
+    let mut position = 0usize;
+    for expr_segment in &expr.segments {
+        let mut matched = false;
+        while position < key_expr.segments.len() {
+            let key_segment = &key_expr.segments[position];
+            if names_match(&key_segment.name, &expr_segment.name, case_sensitive)
+                && selectors_match(&key_segment.selectors, &expr_segment.selectors)
+            {
+                position += 1;
+                matched = true;
+                break;
+            }
+            position += 1;
         }
-        if !selectors_match(&key_segment.selectors, &expr_segment.selectors) {
+
+        if !matched {
             return false;
         }
     }
+
     true
 }
 
@@ -214,7 +244,7 @@ fn selectors_match(keys: &[Selector], exprs: &[Selector]) -> bool {
     key_iter.next().is_none()
 }
 
-fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
+fn compute_key_matches(row: &Row, token: &str, exact: ExactMode, allow_fuzzy: bool) -> KeyMatches {
     let trimmed = token.trim();
     if trimmed.is_empty() {
         return KeyMatches::default();
@@ -300,6 +330,13 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
             };
             if key_cmp.contains(&token_cmp) || last_cmp.contains(&token_cmp) {
                 partial_keys.push(key.clone());
+                continue;
+            }
+            if allow_fuzzy
+                && (fuzzy_contains_case_insensitive(last_segment, trimmed)
+                    || fuzzy_contains_case_insensitive(key, trimmed))
+            {
+                partial_keys.push(key.clone());
             }
         }
     }
@@ -329,7 +366,57 @@ pub fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
 
 /// Lowercases text using Unicode case folding semantics.
 pub fn fold_case(text: &str) -> String {
-    text.chars().flat_map(char::to_lowercase).collect()
+    unicode_fold_case(text)
+}
+
+/// Returns whether `candidate` is a close-enough fuzzy match for `query`.
+///
+/// `%quick` is still a filter, not a ranking system. This helper therefore
+/// accepts only clustered fuzzy matches that look typo-like, and leaves loose
+/// subsequence hits on the floor.
+pub fn fuzzy_contains_case_insensitive(candidate: &str, query: &str) -> bool {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if contains_case_insensitive(candidate, trimmed) {
+        return true;
+    }
+    if trimmed.chars().count() < 3 {
+        return false;
+    }
+
+    let query_lc = fold_case(trimmed);
+    fuzzy_variants(candidate).any(|variant| clustered_fuzzy_match(variant, &query_lc))
+}
+
+fn fuzzy_variants(candidate: &str) -> impl Iterator<Item = &str> {
+    std::iter::once(candidate).chain(wordish_fragments(candidate))
+}
+
+fn wordish_fragments(candidate: &str) -> impl Iterator<Item = &str> {
+    candidate
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(move |fragment| !fragment.is_empty() && *fragment != candidate)
+}
+
+fn clustered_fuzzy_match(candidate: &str, query_lc: &str) -> bool {
+    let candidate_lc = fold_case(candidate);
+    let Some((_, indices)) = search_fuzzy_matcher().fuzzy_indices(&candidate_lc, query_lc) else {
+        return false;
+    };
+    let Some(first) = indices.first().copied() else {
+        return false;
+    };
+    let Some(last) = indices.last().copied() else {
+        return false;
+    };
+
+    let query_len = query_lc.chars().count();
+    let span = last.saturating_sub(first) + 1;
+    let slack = span.saturating_sub(query_len);
+
+    slack <= query_len / 2 + 2
 }
 
 #[cfg(test)]
@@ -338,7 +425,10 @@ mod tests {
 
     use crate::dsl::parse::key_spec::ExactMode;
 
-    use super::{match_row_keys, match_row_keys_detailed, value_contains};
+    use super::{
+        fuzzy_contains_case_insensitive, match_row_keys, match_row_keys_detailed,
+        match_row_keys_detailed_fuzzy, value_contains,
+    };
 
     #[test]
     fn matches_last_segment_case_insensitive() {
@@ -395,6 +485,20 @@ mod tests {
     }
 
     #[test]
+    fn relative_selector_paths_match_descendant_subsequences() {
+        let row = json!({
+            "sections[0].entries[0].name": "help",
+            "sections[0].entries[1].name": "exit"
+        })
+        .as_object()
+        .cloned()
+        .expect("object");
+
+        let matched = match_row_keys(&row, "entries[0].name", ExactMode::None);
+        assert_eq!(matched, vec!["sections[0].entries[0].name"]);
+    }
+
+    #[test]
     fn detailed_matching_reports_partial_hits_when_exact_match_is_absent() {
         let row = json!({
             "metadata.asset.id": 42,
@@ -416,5 +520,28 @@ mod tests {
         assert!(value_contains(&value, "bravo", false));
         assert!(!value_contains(&value, "bravo", true));
         assert!(value_contains(&value, "Alpha", true));
+    }
+
+    #[test]
+    fn fuzzy_key_matching_accepts_typo_like_last_segment_hits() {
+        let row = json!({
+            "commands.name": "doctor",
+            "commands.short_help": "Inspect runtime health"
+        })
+        .as_object()
+        .cloned()
+        .expect("object");
+
+        let matches = match_row_keys_detailed_fuzzy(&row, "naem", ExactMode::None);
+        assert_eq!(matches.partial, vec!["commands.name".to_string()]);
+    }
+
+    #[test]
+    fn fuzzy_text_matching_rejects_loose_subsequence_noise() {
+        assert!(fuzzy_contains_case_insensitive("doctor", "docter"));
+        assert!(!fuzzy_contains_case_insensitive(
+            "subcommands all config last plugins theme",
+            "docter"
+        ));
     }
 }

@@ -3,7 +3,7 @@
 //! - [`app`] for the main CLI entrypoints and stateful host surface
 //! - [`config`] for configuration types and resolution
 //! - [`core`] for shared output, row, and runtime types
-//! - [`dsl`] for pipeline parsing and execution
+//! - [`dsl`] for the canonical pipeline implementation
 //! - [`ui`] for rendering and message formatting
 //! - [`repl`] for REPL engine types
 //! - [`completion`] for command/completion tree types
@@ -25,8 +25,9 @@ pub mod completion;
 pub mod config;
 /// Shared command, output, row, and protocol primitives.
 pub mod core;
-/// Row-oriented pipeline parsing and execution.
+/// Canonical pipeline parsing and execution.
 pub mod dsl;
+mod dsl2;
 /// Structured help/guide view models and conversions.
 pub mod guide;
 /// External plugin discovery, protocol, and dispatch support.

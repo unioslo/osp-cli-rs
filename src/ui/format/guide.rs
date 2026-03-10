@@ -1,6 +1,6 @@
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::core::output_model::{OutputItems, OutputResult};
+use crate::core::output_model::{OutputItems, OutputResult, output_items_to_value};
 use crate::guide::GuideView;
 use crate::ui::document::Document;
 use crate::ui::document_model::{DocumentModel, LowerDocumentOptions};
@@ -43,41 +43,7 @@ pub(super) fn build_guide_document(
 }
 
 fn output_to_value(output: &OutputResult) -> Value {
-    match &output.items {
-        OutputItems::Rows(rows) if rows.len() == 1 => rows
-            .first()
-            .cloned()
-            .map(Value::Object)
-            .unwrap_or_else(|| Value::Array(Vec::new())),
-        OutputItems::Rows(rows) => {
-            Value::Array(rows.iter().cloned().map(Value::Object).collect::<Vec<_>>())
-        }
-        OutputItems::Groups(groups) => Value::Array(
-            groups
-                .iter()
-                .map(|group| {
-                    let mut item = Map::new();
-                    item.insert("groups".to_string(), Value::Object(group.groups.clone()));
-                    item.insert(
-                        "aggregates".to_string(),
-                        Value::Object(group.aggregates.clone()),
-                    );
-                    item.insert(
-                        "rows".to_string(),
-                        Value::Array(
-                            group
-                                .rows
-                                .iter()
-                                .cloned()
-                                .map(Value::Object)
-                                .collect::<Vec<_>>(),
-                        ),
-                    );
-                    Value::Object(item)
-                })
-                .collect::<Vec<_>>(),
-        ),
-    }
+    output_items_to_value(&output.items)
 }
 
 #[cfg(test)]

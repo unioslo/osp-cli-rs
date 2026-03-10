@@ -1,11 +1,13 @@
 pub(crate) mod template;
 
 use crate::core::command_def::{ArgDef, CommandDef, FlagDef};
-use crate::core::output_model::{OutputDocument, OutputItems, OutputResult, RenderRecommendation};
+use crate::core::output_model::{
+    OutputDocument, OutputDocumentKind, OutputItems, OutputResult, RenderRecommendation,
+};
 use crate::ui::document_model::DocumentModel;
 use crate::ui::presentation::HelpLevel;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// Structured help/guide representation used by the CLI, REPL, and docs views.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -33,6 +35,7 @@ pub struct GuideView {
 
 /// One named help entry such as a command, argument, or option row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct GuideEntry {
     /// Display name for the entry.
     pub name: String,
@@ -61,7 +64,7 @@ pub struct GuideSection {
 }
 
 /// Canonical section kinds used by structured help output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuideSectionKind {
     /// Usage synopsis content.
@@ -77,13 +80,8 @@ pub enum GuideSectionKind {
     /// Free-form note content.
     Notes,
     /// Any section outside the built-in guide categories.
+    #[default]
     Custom,
-}
-
-impl Default for GuideSectionKind {
-    fn default() -> Self {
-        Self::Custom
-    }
 }
 
 /// Backward-compatible alias for [`GuideView`].
@@ -111,8 +109,9 @@ impl GuideView {
         // Keep the semantic row form for DSL/history/cache, but attach the
         // first-class guide payload so renderers do not have to reconstruct it
         // from rows when no structural stages have destroyed that intent.
-        let mut output = OutputResult::from_rows(vec![self.to_row()])
-            .with_document(OutputDocument::Guide(self.to_json_value()));
+        let mut output = OutputResult::from_rows(vec![self.to_row()]).with_document(
+            OutputDocument::new(OutputDocumentKind::Guide, self.to_json_value()),
+        );
         output.meta.render_recommendation = Some(RenderRecommendation::Guide);
         output
     }
@@ -124,12 +123,12 @@ impl GuideView {
 
     /// Attempts to recover a guide view from structured output.
     pub fn try_from_output_result(output: &OutputResult) -> Option<Self> {
-        // Prefer the sidecar document when present. The row-based fallback is
-        // still needed after structural DSL stages that clear document intent.
-        if let Some(document) = output.document.as_ref()
-            && let Some(view) = Self::try_from_output_document(document)
-        {
-            return Some(view);
+        // A carried semantic document is authoritative. If the canonical JSON
+        // no longer restores as a guide after DSL, do not silently guess from
+        // the row projection and pretend the payload is still semantic guide
+        // content.
+        if let Some(document) = output.document.as_ref() {
+            return Self::try_from_output_document(document);
         }
 
         let rows = match &output.items {
@@ -244,9 +243,39 @@ impl GuideView {
 
 impl GuideView {
     fn try_from_output_document(document: &OutputDocument) -> Option<Self> {
-        match document {
-            OutputDocument::Guide(value) => serde_json::from_value(value.clone()).ok(),
+        match document.kind {
+            OutputDocumentKind::Guide => {
+                let view = Self::normalize_restored_sections(
+                    serde_json::from_value(document.value.clone()).ok()?,
+                );
+                view.is_semantically_valid().then_some(view)
+            }
         }
+    }
+
+    fn is_semantically_valid(&self) -> bool {
+        let entries_are_valid =
+            |entries: &[GuideEntry]| entries.iter().all(GuideEntry::is_semantically_valid);
+        let sections_are_valid = self
+            .sections
+            .iter()
+            .all(GuideSection::is_semantically_valid);
+        let has_content = !self.preamble.is_empty()
+            || !self.epilogue.is_empty()
+            || !self.usage.is_empty()
+            || !self.notes.is_empty()
+            || !self.commands.is_empty()
+            || !self.arguments.is_empty()
+            || !self.options.is_empty()
+            || !self.common_invocation_options.is_empty()
+            || !self.sections.is_empty();
+
+        has_content
+            && entries_are_valid(&self.commands)
+            && entries_are_valid(&self.arguments)
+            && entries_are_valid(&self.options)
+            && entries_are_valid(&self.common_invocation_options)
+            && sections_are_valid
     }
 
     fn to_row(&self) -> Map<String, Value> {
@@ -294,7 +323,7 @@ impl GuideView {
     }
 
     fn try_from_row(row: &Map<String, Value>) -> Option<Self> {
-        Some(Self {
+        let view = Self::normalize_restored_sections(Self {
             preamble: row_string_array(row.get("preamble"))?,
             usage: row_string_array(row.get("usage"))?,
             commands: payload_entries(row.get("commands"))?,
@@ -304,7 +333,94 @@ impl GuideView {
             notes: row_string_array(row.get("notes"))?,
             sections: payload_sections(row.get("sections"))?,
             epilogue: row_string_array(row.get("epilogue"))?,
-        })
+        });
+        view.is_semantically_valid().then_some(view)
+    }
+
+    fn normalize_restored_sections(mut view: Self) -> Self {
+        // Guide payloads intentionally carry both typed buckets
+        // (`commands/options/...`) and a general `sections` list. After DSL
+        // transforms, one representation may be narrowed before the other. On
+        // restore, fold only canonical built-in sections back into the typed
+        // buckets. That keeps `Usage`/`Commands`/`Options` duplicates out of
+        // the rendered guide while still allowing non-canonical sections like
+        // an `Actions` section with kind `Commands` to remain distinct.
+        let sections = std::mem::take(&mut view.sections);
+        let mut remaining_sections = Vec::new();
+        let mut canonical_usage = Vec::new();
+        let mut canonical_commands = Vec::new();
+        let mut canonical_arguments = Vec::new();
+        let mut canonical_options = Vec::new();
+        let mut canonical_common_invocation_options = Vec::new();
+        let mut canonical_notes = Vec::new();
+
+        for section in sections {
+            if !section.is_canonical_builtin_section() {
+                remaining_sections.push(section);
+                continue;
+            }
+
+            match section.kind {
+                GuideSectionKind::Usage => canonical_usage.extend(section.paragraphs),
+                GuideSectionKind::Commands => canonical_commands.extend(section.entries),
+                GuideSectionKind::Arguments => canonical_arguments.extend(section.entries),
+                GuideSectionKind::Options => canonical_options.extend(section.entries),
+                GuideSectionKind::CommonInvocationOptions => {
+                    canonical_common_invocation_options.extend(section.entries);
+                }
+                GuideSectionKind::Notes => canonical_notes.extend(section.paragraphs),
+                GuideSectionKind::Custom => remaining_sections.push(section),
+            }
+        }
+
+        if !canonical_usage.is_empty() {
+            view.usage = canonical_usage;
+        }
+        if !canonical_commands.is_empty() {
+            view.commands = canonical_commands;
+        }
+        if !canonical_arguments.is_empty() {
+            view.arguments = canonical_arguments;
+        }
+        if !canonical_options.is_empty() {
+            view.options = canonical_options;
+        }
+        if !canonical_common_invocation_options.is_empty() {
+            view.common_invocation_options = canonical_common_invocation_options;
+        }
+        if !canonical_notes.is_empty() {
+            view.notes = canonical_notes;
+        }
+        view.sections = remaining_sections;
+        view
+    }
+}
+
+impl GuideEntry {
+    fn is_semantically_valid(&self) -> bool {
+        !self.name.is_empty() || !self.short_help.is_empty()
+    }
+}
+
+impl GuideSection {
+    fn is_semantically_valid(&self) -> bool {
+        let has_content =
+            !self.title.is_empty() || !self.paragraphs.is_empty() || !self.entries.is_empty();
+        has_content && self.entries.iter().all(GuideEntry::is_semantically_valid)
+    }
+
+    fn is_canonical_builtin_section(&self) -> bool {
+        let expected = match self.kind {
+            GuideSectionKind::Usage => "Usage",
+            GuideSectionKind::Commands => "Commands",
+            GuideSectionKind::Arguments => "Arguments",
+            GuideSectionKind::Options => "Options",
+            GuideSectionKind::CommonInvocationOptions => "Common Invocation Options",
+            GuideSectionKind::Notes => "Notes",
+            GuideSectionKind::Custom => return false,
+        };
+
+        self.title.trim().eq_ignore_ascii_case(expected)
     }
 }
 
@@ -823,10 +939,12 @@ fn help_description_split(kind: GuideSectionKind, line: &str) -> Option<usize> {
 mod tests {
     use super::{GuideEntry, GuideSection, GuideSectionKind, GuideView};
     use crate::core::command_def::{ArgDef, CommandDef, FlagDef};
-    use serde_json::json;
     use serde_json::Value;
+    use serde_json::json;
 
-    use crate::core::output_model::{OutputDocument, OutputResult};
+    use crate::core::output_model::{
+        OutputDocument, OutputDocumentKind, OutputItems, OutputResult,
+    };
     use crate::ui::presentation::HelpLevel;
 
     #[test]
@@ -922,23 +1040,47 @@ mod tests {
 
         assert!(matches!(
             output.document,
-            Some(OutputDocument::Guide(Value::Object(_)))
+            Some(OutputDocument {
+                kind: OutputDocumentKind::Guide,
+                value: Value::Object(_),
+            })
         ));
     }
 
     #[test]
+    fn guide_restore_does_not_guess_from_rows_when_document_is_present_unit() {
+        let output = OutputResult {
+            items: OutputItems::Rows(vec![
+                json!({"commands": [{"name": "list"}]})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ]),
+            document: Some(OutputDocument::new(
+                OutputDocumentKind::Guide,
+                json!([{"commands": [{"name": "list"}]}]),
+            )),
+            meta: Default::default(),
+        };
+
+        assert!(GuideView::try_from_output_result(&output).is_none());
+    }
+
+    #[test]
     fn guide_view_accepts_legacy_summary_field_when_rehydrating_unit() {
-        let output = OutputResult::from_rows(vec![json!({
-            "commands": [
-                {
-                    "name": "list",
-                    "summary": "Show"
-                }
-            ]
-        })
-        .as_object()
-        .cloned()
-        .expect("object")]);
+        let output = OutputResult::from_rows(vec![
+            json!({
+                "commands": [
+                    {
+                        "name": "list",
+                        "summary": "Show"
+                    }
+                ]
+            })
+            .as_object()
+            .cloned()
+            .expect("object"),
+        ]);
 
         let rebuilt = GuideView::try_from_output_result(&output).expect("guide output");
         assert_eq!(rebuilt.commands[0].name, "list");
@@ -968,11 +1110,10 @@ mod tests {
         assert!(rendered.contains("## Usage"));
         assert!(rendered.contains("history <COMMAND>"));
         assert!(rendered.contains("## Commands"));
-        assert!(rendered.contains("| name"));
-        assert!(rendered.contains("short_help |"));
-        assert!(rendered.contains("| list"));
-        assert!(rendered.contains("List history entries |"));
+        assert!(rendered.contains("- `list` List history entries"));
         assert!(rendered.contains("## Options"));
+        assert!(rendered.contains("- `-h, --help` Print help"));
+        assert!(!rendered.contains("| name"));
     }
 
     #[test]
@@ -981,7 +1122,7 @@ mod tests {
             commands: vec![
                 GuideEntry {
                     name: "plugins".to_string(),
-                    short_help: "subcommands: list, commands, enable, disable, doctor".to_string(),
+                    short_help: "Inspect and manage plugin providers".to_string(),
                     display_indent: None,
                     display_gap: None,
                 },
@@ -998,17 +1139,15 @@ mod tests {
         let rendered = view.to_markdown_with_width(Some(90));
         let lines = rendered.lines().collect::<Vec<_>>();
         assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("| name") && line.contains("short_help")),
-            "expected markdown header row in:\n{rendered}"
+            lines.iter().any(|line| line.contains("- `plugins` ")),
+            "expected bullet entry row in:\n{rendered}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("| plugins |")),
+            lines.iter().any(|line| line.contains("- `plugins` ")),
             "expected plugins row in:\n{rendered}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("| options |")),
+            lines.iter().any(|line| line.contains("- `options` ")),
             "expected options row in:\n{rendered}"
         );
     }
