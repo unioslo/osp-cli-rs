@@ -33,7 +33,7 @@ pub(super) struct ParsedReplInvocation {
 
 pub(super) enum ParsedReplDispatch {
     Help {
-        result: crate::app::CliCommandResult,
+        result: Box<crate::app::CliCommandResult>,
         effective: Box<ResolvedInvocation>,
         stages: Vec<String>,
     },
@@ -66,13 +66,13 @@ pub(super) fn parse_repl_invocation(
         && !input::has_valid_help_alias_target(&scanned.tokens, command_index)
     {
         return Ok(ParsedReplDispatch::Help {
-            result: crate::app::CliCommandResult::guide(
+            result: Box::new(crate::app::CliCommandResult::guide(
                 render_invalid_help_alias(input::help_alias_target_at(
                     &scanned.tokens,
                     command_index,
                 ))
                 .filtered_for_help_level(effective.help_level),
-            ),
+            )),
             effective: Box::new(effective.clone()),
             stages: parsed.stages.clone(),
         });
@@ -85,9 +85,8 @@ pub(super) fn parse_repl_invocation(
         Err(err) => {
             if renders_repl_inline_help(err.kind()) {
                 return Ok(ParsedReplDispatch::Help {
-                    result: crate::app::CliCommandResult::guide(render_repl_parse_help(
-                        effective.help_level,
-                        &err.to_string(),
+                    result: Box::new(crate::app::CliCommandResult::guide(
+                        render_repl_parse_help(effective.help_level, &err.to_string()),
                     )),
                     effective: Box::new(effective.clone()),
                     stages: parsed.stages.clone(),

@@ -36,6 +36,20 @@ pub(crate) enum HelpLayout {
     Minimal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum HelpLevel {
+    None,
+    Tiny,
+    Normal,
+    Verbose,
+}
+
+impl Default for HelpLevel {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PresentationEffect {
     pub(crate) preset: UiPresentation,
@@ -57,12 +71,13 @@ impl ReplIntroStyle {
     }
 }
 
-impl HelpLayout {
+impl HelpLevel {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "full" => Some(Self::Full),
-            "compact" => Some(Self::Compact),
-            "minimal" => Some(Self::Minimal),
+            "none" | "off" => Some(Self::None),
+            "tiny" => Some(Self::Tiny),
+            "normal" => Some(Self::Normal),
+            "verbose" => Some(Self::Verbose),
             _ => None,
         }
     }
@@ -199,10 +214,30 @@ pub(crate) fn repl_input_mode(config: &ResolvedConfig) -> ReplInputMode {
 }
 
 pub(crate) fn help_layout(config: &ResolvedConfig) -> HelpLayout {
-    config
-        .get_string("ui.help.layout")
-        .and_then(HelpLayout::parse)
-        .unwrap_or(HelpLayout::Full)
+    match resolve_ui_presentation(config) {
+        UiPresentation::Expressive => HelpLayout::Full,
+        UiPresentation::Compact => HelpLayout::Compact,
+        UiPresentation::Austere => HelpLayout::Minimal,
+    }
+}
+
+pub(crate) fn help_level(config: &ResolvedConfig, verbose: u8, quiet: u8) -> HelpLevel {
+    match config.get_string("ui.help.level") {
+        Some(value) if value != "inherit" => {
+            HelpLevel::parse(value).unwrap_or_else(|| derived_help_level(verbose, quiet))
+        }
+        Some(_) | None => derived_help_level(verbose, quiet),
+    }
+}
+
+pub(crate) fn derived_help_level(verbose: u8, quiet: u8) -> HelpLevel {
+    let rank = (2_i16 + i16::from(verbose) - i16::from(quiet)).clamp(0, 3);
+    match rank {
+        0 => HelpLevel::None,
+        1 => HelpLevel::Tiny,
+        2 => HelpLevel::Normal,
+        _ => HelpLevel::Verbose,
+    }
 }
 
 pub(crate) fn explain_presentation_effect(

@@ -135,7 +135,7 @@ fn execute_repl_plugin_line_inner(
             stages,
         } => {
             let rendered = render_repl_command_output(
-                runtime, session, line, &stages, result, &effective, sink,
+                runtime, session, line, &stages, *result, &effective, sink,
             )?;
             let finished = Instant::now();
             session.record_prompt_timing(

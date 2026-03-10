@@ -3,7 +3,7 @@ use super::manager::{DiscoveredPlugin, PluginManager, PluginSource};
 use crate::completion::CommandSpec;
 use crate::config::{default_cache_root_dir, default_config_root_dir};
 use crate::core::plugin::DescribeV1;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -65,6 +65,12 @@ enum DiscoveryMode {
     Dispatch,
 }
 
+struct DescribeCacheState<'a> {
+    file: &'a mut DescribeCacheFile,
+    seen_paths: &'a mut HashSet<String>,
+    dirty: &'a mut bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(super) struct DescribeCacheFile {
     #[serde(default)]
@@ -81,6 +87,7 @@ pub(super) struct DescribeCacheEntry {
 }
 
 impl PluginManager {
+    /// Clears both passive and dispatch discovery caches.
     pub fn refresh(&self) {
         let mut guard = self
             .discovered_cache
@@ -128,14 +135,17 @@ impl PluginManager {
         let mut describe_cache = self.load_describe_cache_or_warn();
         let mut seen_describe_paths: HashSet<String> = HashSet::new();
         let mut cache_dirty = false;
+        let mut describe_cache_state = DescribeCacheState {
+            file: &mut describe_cache,
+            seen_paths: &mut seen_describe_paths,
+            dirty: &mut cache_dirty,
+        };
 
         for root in &roots {
             plugins.extend(discover_plugins_in_root(
                 root,
                 &mut seen_paths,
-                &mut describe_cache,
-                &mut seen_describe_paths,
-                &mut cache_dirty,
+                &mut describe_cache_state,
                 self.process_timeout,
                 mode,
             ));
@@ -350,9 +360,7 @@ pub(super) fn discover_root_executables(root: &Path) -> Vec<PathBuf> {
 fn discover_plugins_in_root(
     root: &SearchRoot,
     seen_paths: &mut HashSet<PathBuf>,
-    describe_cache: &mut DescribeCacheFile,
-    seen_describe_paths: &mut HashSet<String>,
-    cache_dirty: &mut bool,
+    describe_cache: &mut DescribeCacheState<'_>,
     process_timeout: Duration,
     mode: DiscoveryMode,
 ) -> Vec<DiscoveredPlugin> {
@@ -366,8 +374,6 @@ fn discover_plugins_in_root(
                 executable,
                 &manifest_state,
                 describe_cache,
-                seen_describe_paths,
-                cache_dirty,
                 process_timeout,
                 mode,
             )
@@ -428,13 +434,16 @@ pub(super) fn assemble_discovered_plugin(
     cache_dirty: &mut bool,
     process_timeout: Duration,
 ) -> DiscoveredPlugin {
+    let mut describe_cache_state = DescribeCacheState {
+        file: describe_cache,
+        seen_paths: seen_describe_paths,
+        dirty: cache_dirty,
+    };
     assemble_discovered_plugin_with_mode(
         source,
         executable,
         manifest_state,
-        describe_cache,
-        seen_describe_paths,
-        cache_dirty,
+        &mut describe_cache_state,
         process_timeout,
         DiscoveryMode::Passive,
     )
@@ -444,9 +453,7 @@ fn assemble_discovered_plugin_with_mode(
     source: PluginSource,
     executable: PathBuf,
     manifest_state: &ManifestState,
-    describe_cache: &mut DescribeCacheFile,
-    seen_describe_paths: &mut HashSet<String>,
-    cache_dirty: &mut bool,
+    describe_cache: &mut DescribeCacheState<'_>,
     process_timeout: Duration,
     mode: DiscoveryMode,
 ) -> DiscoveredPlugin {
@@ -467,8 +474,6 @@ fn assemble_discovered_plugin_with_mode(
             source,
             mode,
             describe_cache,
-            seen_describe_paths,
-            cache_dirty,
             process_timeout,
         ) {
             Ok(describe) => {
@@ -790,16 +795,14 @@ fn describe_with_cache(
     path: &Path,
     source: PluginSource,
     mode: DiscoveryMode,
-    cache: &mut DescribeCacheFile,
-    seen_describe_paths: &mut HashSet<String>,
-    cache_dirty: &mut bool,
+    cache: &mut DescribeCacheState<'_>,
     process_timeout: Duration,
 ) -> Result<DescribeV1> {
     let key = describe_cache_key(path);
-    seen_describe_paths.insert(key.clone());
+    cache.seen_paths.insert(key.clone());
     let (size, mtime_secs, mtime_nanos) = file_fingerprint(path)?;
 
-    if let Some(entry) = find_cached_describe(cache, &key, size, mtime_secs, mtime_nanos) {
+    if let Some(entry) = find_cached_describe(cache.file, &key, size, mtime_secs, mtime_nanos) {
         tracing::trace!(path = %path.display(), "describe cache hit");
         return Ok(entry.describe.clone());
     }
@@ -814,8 +817,15 @@ fn describe_with_cache(
     tracing::trace!(path = %path.display(), "describe cache miss");
 
     let describe = super::dispatch::describe_plugin(path, process_timeout)?;
-    upsert_cached_describe(cache, key, size, mtime_secs, mtime_nanos, describe.clone());
-    *cache_dirty = true;
+    upsert_cached_describe(
+        cache.file,
+        key,
+        size,
+        mtime_secs,
+        mtime_nanos,
+        describe.clone(),
+    );
+    *cache.dirty = true;
 
     Ok(describe)
 }
