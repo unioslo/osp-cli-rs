@@ -2,9 +2,13 @@ use crate::completion::model::{CommandLine, CursorState, FlagOccurrence, ParsedL
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Token value with byte offsets into the original input line.
 pub struct TokenSpan {
+    /// Unescaped token text.
     pub value: String,
+    /// Inclusive start byte offset.
     pub start: usize,
+    /// Exclusive end byte offset.
     pub end: usize,
 }
 
@@ -147,11 +151,15 @@ impl ParseState {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Shell-like parser used by the completion engine.
 pub struct CommandLineParser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Parsed command-line state for the full line and the cursor position.
 pub struct ParsedCursorLine {
+    /// Parsed tokens and command structure.
     pub parsed: ParsedLine,
+    /// Cursor-local replacement information.
     pub cursor: CursorState,
 }
 
@@ -174,6 +182,7 @@ impl CommandLineParser {
             .unwrap_or_else(|| line.split_whitespace().map(str::to_string).collect())
     }
 
+    /// Tokenizes `line` and preserves byte spans for each token when possible.
     pub fn tokenize_with_spans(&self, line: &str) -> Vec<TokenSpan> {
         self.tokenize_with_spans_inner(line)
             .or_else(|| self.tokenize_with_spans_fallback(line))
@@ -373,6 +382,7 @@ impl CommandLineParser {
         Some(out)
     }
 
+    /// Parses tokens into command-path, flag, positional, and pipe segments.
     pub fn parse(&self, tokens: &[String]) -> CommandLine {
         let mut state = ParseState::default();
         let mut iter = tokens.iter().peekable();
@@ -396,6 +406,7 @@ impl CommandLineParser {
         state.finish()
     }
 
+    /// Computes the cursor replacement range and current token stub.
     pub fn cursor_state(&self, text_before_cursor: &str, safe_cursor: usize) -> CursorState {
         let tokens = self.tokenize(text_before_cursor);
         self.build_cursor_state(
@@ -518,6 +529,7 @@ impl CommandLineParser {
         last.clone()
     }
 
+    /// Returns the active quote style for the token being edited, if any.
     pub fn compute_stub_quote(&self, text_before_cursor: &str) -> Option<QuoteStyle> {
         current_quote_state(text_before_cursor)
     }

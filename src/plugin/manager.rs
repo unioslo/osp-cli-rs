@@ -86,6 +86,7 @@ pub struct CommandCatalogEntry {
 }
 
 impl CommandCatalogEntry {
+    /// Returns the optional auth hint rendered in help and catalog views.
     pub fn auth_hint(&self) -> Option<String> {
         self.auth.as_ref().and_then(|auth| auth.hint())
     }
@@ -261,6 +262,7 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
+    /// Creates a plugin manager with the provided explicit search roots.
     pub fn new(explicit_dirs: Vec<PathBuf>) -> Self {
         Self {
             explicit_dirs,
@@ -274,17 +276,20 @@ impl PluginManager {
         }
     }
 
+    /// Sets config and cache roots used for persisted plugin metadata and preferences.
     pub fn with_roots(mut self, config_root: Option<PathBuf>, cache_root: Option<PathBuf>) -> Self {
         self.config_root = config_root;
         self.cache_root = cache_root;
         self
     }
 
+    /// Sets the subprocess timeout used for plugin describe and dispatch calls.
     pub fn with_process_timeout(mut self, timeout: Duration) -> Self {
         self.process_timeout = timeout.max(Duration::from_millis(1));
         self
     }
 
+    /// Enables or disables fallback discovery through the process `PATH`.
     pub fn with_path_discovery(mut self, allow_path_discovery: bool) -> Self {
         self.allow_path_discovery = allow_path_discovery;
         self

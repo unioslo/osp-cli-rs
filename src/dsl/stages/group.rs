@@ -33,6 +33,9 @@ struct GroupKeyPlan {
     allow_multiple: bool,
 }
 
+/// Groups rows by the key expressions in `spec`.
+///
+/// One input row may produce multiple groups when the grouping key fans out.
 pub fn group_rows(rows: Vec<Row>, spec: &str) -> Result<Vec<Group>> {
     let plan = parse_group_plan(spec)?;
     let mut buckets = GroupBuckets::default();
@@ -52,6 +55,9 @@ pub fn group_rows(rows: Vec<Row>, spec: &str) -> Result<Vec<Group>> {
     Ok(buckets.finish())
 }
 
+/// Regroups existing groups by applying `spec` to each member row.
+///
+/// Existing group headers and aggregates are preserved on regrouped output.
 pub fn regroup_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
     let plan = parse_group_plan(spec)?;
     let mut buckets = GroupBuckets::default();

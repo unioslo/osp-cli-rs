@@ -4,6 +4,7 @@ use crate::core::{output_model::Group, row::Row};
 
 use crate::dsl::parse::lexer::{Span, StageSegment, tokenize_stage, tokenize_stage_terms};
 
+/// Splits a stage spec into comma- or whitespace-separated terms.
 pub fn parse_terms(spec: &str) -> Result<Vec<String>> {
     let trimmed = spec.trim();
     if trimmed.is_empty() {
@@ -40,6 +41,7 @@ pub(crate) fn map_group_rows(
     Ok(out)
 }
 
+/// Splits a stage spec into shell-like words without comma handling.
 pub fn parse_stage_words(spec: &str) -> Result<Vec<String>> {
     let trimmed = spec.trim();
     if trimmed.is_empty() {
@@ -57,6 +59,9 @@ pub fn parse_stage_words(spec: &str) -> Result<Vec<String>> {
     Ok(tokens.into_iter().map(|token| token.text).collect())
 }
 
+/// Parses an optional `key AS alias` sequence starting at `index`.
+///
+/// Returns the alias and the number of consumed tokens.
 pub fn parse_optional_alias_after_key(
     words: &[String],
     index: usize,
@@ -74,6 +79,9 @@ pub fn parse_optional_alias_after_key(
     Ok((None, 1))
 }
 
+/// Parses an alias from an `AS alias` sequence at `index`.
+///
+/// Returns `Ok(None)` when the token at `index` is not `AS`.
 pub fn parse_alias_after_as(words: &[String], index: usize, verb: &str) -> Result<Option<String>> {
     let Some(token) = words.get(index) else {
         return Ok(None);

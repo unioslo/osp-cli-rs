@@ -27,6 +27,7 @@ pub(crate) fn compile(spec: &str) -> Result<FilterPlan> {
     })
 }
 
+/// Filters flat rows according to the predicate in `spec`.
 pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     let plan = compile(spec)?;
     let mut out = Vec::new();
@@ -40,6 +41,10 @@ pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     Ok(out)
 }
 
+/// Filters grouped output according to `spec`.
+///
+/// Group headers and aggregates are tested first. Otherwise the predicate is
+/// applied to member rows and empty groups are dropped.
 pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
     let plan = compile(spec)?;
     let mut out = Vec::new();

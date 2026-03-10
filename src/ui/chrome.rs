@@ -13,6 +13,7 @@ pub enum SectionFrameStyle {
 }
 
 impl SectionFrameStyle {
+    /// Parses a section frame style from configuration input.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "none" | "plain" => Some(Self::None),
@@ -33,6 +34,7 @@ pub struct SectionStyleTokens {
 }
 
 impl SectionStyleTokens {
+    /// Uses the same style token for both the border and the title.
     pub const fn same(token: StyleToken) -> Self {
         Self {
             border: token,
@@ -58,6 +60,7 @@ impl SectionRenderContext<'_> {
     }
 }
 
+/// Renders a single section divider line for the given title and width hint.
 pub fn render_section_divider(
     title: &str,
     unicode: bool,
@@ -79,6 +82,9 @@ pub fn render_section_divider(
     )
 }
 
+/// Renders a section divider line using explicit style overrides.
+///
+/// Returns an unstyled divider when `render.color` is `false`.
 pub fn render_section_divider_with_overrides(
     title: &str,
     unicode: bool,
@@ -137,6 +143,9 @@ pub fn render_section_divider_with_overrides(
     format!("{styled_prefix}{styled_title}{styled_suffix}")
 }
 
+/// Renders a titled section body using the requested frame style.
+///
+/// Returns the formatted section text without appending a trailing newline.
 pub fn render_section_block_with_overrides(
     title: &str,
     body: &str,

@@ -5,6 +5,11 @@ use crate::ports::{LdapDirectory, apply_filter_and_projection};
 use anyhow::Result;
 use serde_json::json;
 
+/// In-memory LDAP test double used by examples, unit tests, and service tests.
+///
+/// The fixture data intentionally stays small and deterministic so callers can
+/// exercise filtering, wildcard lookup, and projection behavior without
+/// talking to a real directory.
 #[derive(Debug, Clone)]
 pub struct MockLdapClient {
     users: HashMap<String, Row>,

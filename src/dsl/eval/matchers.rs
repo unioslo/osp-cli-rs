@@ -10,6 +10,7 @@ pub struct KeyMatches {
     pub partial: Vec<String>,
 }
 
+/// Returns matching row keys in input order, preferring exact matches over partial matches.
 pub fn match_row_keys<'a>(row: &'a Row, token: &str, exact: ExactMode) -> Vec<&'a str> {
     let matches = compute_key_matches(row, token, exact);
     let selected = if !matches.exact.is_empty() {
@@ -33,10 +34,12 @@ pub fn match_row_keys<'a>(row: &'a Row, token: &str, exact: ExactMode) -> Vec<&'
         .collect()
 }
 
+/// Returns exact and partial key matches for `token` without applying preference rules.
 pub fn match_row_keys_detailed(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
     compute_key_matches(row, token, exact)
 }
 
+/// Returns whether `value` contains `query`, recursing into arrays.
 pub fn value_contains(value: &serde_json::Value, query: &str, case_sensitive: bool) -> bool {
     match value {
         serde_json::Value::Array(values) => values
@@ -53,6 +56,7 @@ pub fn value_contains(value: &serde_json::Value, query: &str, case_sensitive: bo
     }
 }
 
+/// Renders a JSON value into the text form used for matching and display.
 pub fn render_value(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "null".to_string(),
@@ -313,14 +317,17 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
     }
 }
 
+/// Compares two strings after Unicode lowercase folding.
 pub fn eq_case_insensitive(left: &str, right: &str) -> bool {
     fold_case(left) == fold_case(right)
 }
 
+/// Returns whether `haystack` contains `needle` after Unicode lowercase folding.
 pub fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     fold_case(haystack).contains(&fold_case(needle))
 }
 
+/// Lowercases text using Unicode case folding semantics.
 pub fn fold_case(text: &str) -> String {
     text.chars().flat_map(char::to_lowercase).collect()
 }

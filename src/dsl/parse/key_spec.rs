@@ -15,6 +15,7 @@ pub struct KeySpec {
 }
 
 impl KeySpec {
+    /// Parses key-spec prefixes such as `!`, `?`, `=` and `==`.
     pub fn parse(input: &str) -> Self {
         let mut remaining = input.trim();
         let mut negated = false;

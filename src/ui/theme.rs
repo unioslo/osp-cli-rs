@@ -1,6 +1,7 @@
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 
+/// Palette entries used by the built-in terminal themes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemePalette {
     pub text: String,
@@ -18,6 +19,7 @@ pub struct ThemePalette {
     pub bg_alt: Option<String>,
 }
 
+/// Concrete theme data shared by theme handles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeData {
     pub id: String,
@@ -27,9 +29,11 @@ pub struct ThemeData {
     pub overrides: ThemeOverrides,
 }
 
+/// Shared handle to resolved theme data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeDefinition(Arc<ThemeData>);
 
+/// Optional theme-specific overrides for derived style tokens.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ThemeOverrides {
     pub value_number: Option<String>,
@@ -39,6 +43,7 @@ pub struct ThemeOverrides {
 }
 
 impl ThemeDefinition {
+    /// Builds a theme definition from palette data and optional overrides.
     pub fn new(
         id: impl Into<String>,
         name: impl Into<String>,
@@ -55,6 +60,7 @@ impl ThemeDefinition {
         }))
     }
 
+    /// Returns the style specification used for numeric values.
     pub fn value_number_spec(&self) -> &str {
         self.overrides
             .value_number
@@ -62,6 +68,7 @@ impl ThemeDefinition {
             .unwrap_or(&self.palette.success)
     }
 
+    /// Returns the style specification used for REPL completion text.
     pub fn repl_completion_text_spec(&self) -> &str {
         self.overrides
             .repl_completion_text
@@ -69,6 +76,7 @@ impl ThemeDefinition {
             .unwrap_or("#000000")
     }
 
+    /// Returns the style specification used for REPL completion backgrounds.
     pub fn repl_completion_background_spec(&self) -> &str {
         self.overrides
             .repl_completion_background
@@ -76,6 +84,7 @@ impl ThemeDefinition {
             .unwrap_or(&self.palette.accent)
     }
 
+    /// Returns the style specification used for the highlighted completion entry.
     pub fn repl_completion_highlight_spec(&self) -> &str {
         self.overrides
             .repl_completion_highlight
@@ -83,6 +92,7 @@ impl ThemeDefinition {
             .unwrap_or(&self.palette.border)
     }
 
+    /// Returns the display name shown to users.
     pub fn display_name(&self) -> &str {
         self.name.as_str()
     }
@@ -96,6 +106,7 @@ impl Deref for ThemeDefinition {
     }
 }
 
+/// Default theme identifier used when no valid theme is configured.
 pub const DEFAULT_THEME_NAME: &str = "rose-pine-moon";
 
 struct PaletteSpec<'a> {
@@ -276,10 +287,12 @@ fn builtin_theme_defs() -> &'static [ThemeDefinition] {
     })
 }
 
+/// Returns the built-in theme catalog.
 pub fn builtin_themes() -> Vec<ThemeDefinition> {
     builtin_theme_defs().to_vec()
 }
 
+/// Normalizes a theme name for lookup.
 pub fn normalize_theme_name(value: &str) -> String {
     let mut out = String::new();
     let mut pending_dash = false;
@@ -297,6 +310,7 @@ pub fn normalize_theme_name(value: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
+/// Converts a theme identifier into a user-facing display name.
 pub fn display_name_from_id(value: &str) -> String {
     let trimmed = value.trim_matches('-');
     let mut out = String::new();
@@ -322,10 +336,12 @@ pub fn display_name_from_id(value: &str) -> String {
     }
 }
 
+/// Returns all available themes.
 pub fn all_themes() -> Vec<ThemeDefinition> {
     builtin_theme_defs().to_vec()
 }
 
+/// Returns the identifiers of all available themes.
 pub fn available_theme_names() -> Vec<String> {
     all_themes()
         .into_iter()
@@ -333,6 +349,7 @@ pub fn available_theme_names() -> Vec<String> {
         .collect()
 }
 
+/// Finds a built-in theme by name after normalization.
 pub fn find_builtin_theme(name: &str) -> Option<ThemeDefinition> {
     let normalized = normalize_theme_name(name);
     if normalized.is_empty() {
@@ -344,6 +361,7 @@ pub fn find_builtin_theme(name: &str) -> Option<ThemeDefinition> {
         .cloned()
 }
 
+/// Finds a theme by name after normalization.
 pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
     let normalized = normalize_theme_name(name);
     if normalized.is_empty() {
@@ -355,6 +373,7 @@ pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
         .cloned()
 }
 
+/// Resolves a theme by name, falling back to the default theme.
 pub fn resolve_theme(name: &str) -> ThemeDefinition {
     find_theme(name).unwrap_or_else(|| {
         builtin_theme_defs()
@@ -365,6 +384,7 @@ pub fn resolve_theme(name: &str) -> ThemeDefinition {
     })
 }
 
+/// Returns whether a theme name resolves to a known theme.
 pub fn is_known_theme(name: &str) -> bool {
     find_theme(name).is_some()
 }

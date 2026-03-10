@@ -5,6 +5,7 @@ use crate::dsl::{apply_pipeline, parse_pipeline};
 use crate::ports::{LdapDirectory, parse_attributes};
 use anyhow::{Result, anyhow};
 
+/// Execution context for the small service-layer command API.
 pub struct ServiceContext<L: LdapDirectory> {
     pub user: Option<String>,
     pub ldap: L,
@@ -12,11 +13,14 @@ pub struct ServiceContext<L: LdapDirectory> {
 }
 
 impl<L: LdapDirectory> ServiceContext<L> {
+    /// Creates a new service context with the active user, directory port, and
+    /// resolved runtime config.
     pub fn new(user: Option<String>, ldap: L, config: RuntimeConfig) -> Self {
         Self { user, ldap, config }
     }
 }
 
+/// Parsed subset of commands understood by [`execute_line`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedCommand {
     LdapUser {
@@ -31,6 +35,7 @@ pub enum ParsedCommand {
     },
 }
 
+/// Parses and executes one service-layer command line, including any DSL pipe.
 pub fn execute_line<L: LdapDirectory>(ctx: &ServiceContext<L>, line: &str) -> Result<OutputResult> {
     let parsed_pipeline = parse_pipeline(line)?;
     if parsed_pipeline.command.is_empty() {
@@ -43,6 +48,7 @@ pub fn execute_line<L: LdapDirectory>(ctx: &ServiceContext<L>, line: &str) -> Re
     apply_pipeline(execute_command(ctx, &command)?, &parsed_pipeline.stages)
 }
 
+/// Parses command tokens into the service-layer command model.
 pub fn parse_repl_command(tokens: &[String]) -> Result<ParsedCommand> {
     if tokens.is_empty() {
         return Err(anyhow!("empty command"));
@@ -143,6 +149,7 @@ fn parse_ldap_netgroup_tokens(tokens: &[String]) -> Result<ParsedCommand> {
     })
 }
 
+/// Executes a parsed service-layer command against the configured LDAP port.
 pub fn execute_command<L: LdapDirectory>(
     ctx: &ServiceContext<L>,
     command: &ParsedCommand,

@@ -6,12 +6,14 @@ pub struct RowContext {
 }
 
 impl RowContext {
+    /// Builds row-level context from the key ordering observed across `rows`.
     pub fn from_rows(rows: &[Row]) -> Self {
         Self {
             key_index: compute_key_index(rows),
         }
     }
 
+    /// Returns the cached key index in first-seen order.
     pub fn key_index(&self) -> &[String] {
         &self.key_index
     }

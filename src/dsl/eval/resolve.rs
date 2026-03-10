@@ -14,6 +14,10 @@ use crate::dsl::{
     },
 };
 
+/// Resolves all values addressed by `token` from `row`.
+///
+/// Direct path traversal is attempted first. If that yields no result for a
+/// relative path, the resolver falls back to flattened-key matching.
 pub fn resolve_values(row: &Row, token: &str, exact: ExactMode) -> Vec<Value> {
     let trimmed = token.trim();
     if trimmed.is_empty() {
@@ -42,10 +46,12 @@ pub fn resolve_values(row: &Row, token: &str, exact: ExactMode) -> Vec<Value> {
     dedup_values(values)
 }
 
+/// Returns whether any resolved value for `token` is truthy.
 pub fn resolve_values_truthy(row: &Row, token: &str, exact: ExactMode) -> bool {
     resolve_values(row, token, exact).iter().any(is_truthy)
 }
 
+/// Returns the first resolved scalar value for `token`, flattening one array level.
 pub fn resolve_first_value(row: &Row, token: &str, exact: ExactMode) -> Option<Value> {
     let value = resolve_values(row, token, exact).into_iter().next()?;
     match value {
@@ -54,6 +60,7 @@ pub fn resolve_first_value(row: &Row, token: &str, exact: ExactMode) -> Option<V
     }
 }
 
+/// Evaluates a parsed path against `root` and returns all matched values.
 pub fn evaluate_path(root: &Value, path: &PathExpression) -> Vec<Value> {
     let mut current: Vec<Value> = vec![root.clone()];
 
@@ -91,6 +98,7 @@ pub fn evaluate_path(root: &Value, path: &PathExpression) -> Vec<Value> {
     current
 }
 
+/// Evaluates `path` and returns matched values together with their flattened keys.
 pub fn enumerate_path_values(root: &Value, path: &PathExpression) -> Vec<(String, Value)> {
     if path.segments.is_empty() {
         return Vec::new();
@@ -101,6 +109,10 @@ pub fn enumerate_path_values(root: &Value, path: &PathExpression) -> Vec<(String
     out
 }
 
+/// Resolves flattened key/value pairs for `token`.
+///
+/// The boolean return value indicates whether resolving the token required
+/// materializing nested structure rather than simple flat-key matching.
 pub fn resolve_pairs(flat_row: &Row, token: &str) -> (Vec<(String, Value)>, bool) {
     let trimmed = token.trim();
     if trimmed.is_empty() {
@@ -343,6 +355,7 @@ fn append_index(base: &str, index: usize) -> String {
     }
 }
 
+/// Applies the DSL's truthiness rules to a JSON value.
 pub fn is_truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,

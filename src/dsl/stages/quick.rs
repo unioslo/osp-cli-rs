@@ -55,6 +55,10 @@ pub(crate) fn compile(raw_stage: &str) -> Result<QuickPlan> {
     Ok(QuickPlan { spec })
 }
 
+/// Applies quick-stage matching to flat rows.
+///
+/// Multi-row input behaves like filtering. Single-row input may reshape the
+/// row into projected matches.
 pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
     let plan = compile(raw_stage)?;
 
@@ -75,6 +79,7 @@ pub fn apply(rows: Vec<Row>, raw_stage: &str) -> Result<Vec<Row>> {
     Ok(out)
 }
 
+/// Applies quick-stage matching to the rows inside each group.
 pub fn apply_groups(groups: Vec<Group>, raw_stage: &str) -> Result<Vec<Group>> {
     let plan = compile(raw_stage)?;
     map_group_rows(groups, |rows| {

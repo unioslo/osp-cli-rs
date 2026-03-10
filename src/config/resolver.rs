@@ -15,6 +15,7 @@ use crate::config::{
     is_bootstrap_only_key,
 };
 
+/// Resolves loaded config layers into a runtime config view.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigResolver {
     layers: LoadedLayers,
@@ -32,6 +33,7 @@ struct ResolvedMaps {
 }
 
 impl ConfigResolver {
+    /// Creates a resolver from pre-loaded config layers.
     pub fn from_loaded_layers(layers: LoadedLayers) -> Self {
         Self {
             layers,
@@ -39,70 +41,87 @@ impl ConfigResolver {
         }
     }
 
+    /// Replaces the schema used for validation and adaptation.
     pub fn set_schema(&mut self, schema: ConfigSchema) {
         self.schema = schema;
     }
 
+    /// Returns mutable access to the active schema.
     pub fn schema_mut(&mut self) -> &mut ConfigSchema {
         &mut self.schema
     }
 
+    /// Returns mutable access to the built-in defaults layer.
     pub fn defaults_mut(&mut self) -> &mut ConfigLayer {
         &mut self.layers.defaults
     }
 
+    /// Returns mutable access to the config file layer.
     pub fn file_mut(&mut self) -> &mut ConfigLayer {
         &mut self.layers.file
     }
 
+    /// Returns mutable access to the presentation defaults layer.
     pub fn presentation_mut(&mut self) -> &mut ConfigLayer {
         &mut self.layers.presentation
     }
 
+    /// Returns mutable access to the secrets layer.
     pub fn secrets_mut(&mut self) -> &mut ConfigLayer {
         &mut self.layers.secrets
     }
 
+    /// Returns mutable access to the environment layer.
     pub fn env_mut(&mut self) -> &mut ConfigLayer {
         &mut self.layers.env
     }
 
+    /// Returns mutable access to the CLI layer.
     pub fn cli_mut(&mut self) -> &mut ConfigLayer {
         &mut self.layers.cli
     }
 
+    /// Returns mutable access to the session layer.
     pub fn session_mut(&mut self) -> &mut ConfigLayer {
         &mut self.layers.session
     }
 
+    /// Replaces the built-in defaults layer.
     pub fn set_defaults(&mut self, layer: ConfigLayer) {
         self.layers.defaults = layer;
     }
 
+    /// Replaces the config file layer.
     pub fn set_file(&mut self, layer: ConfigLayer) {
         self.layers.file = layer;
     }
 
+    /// Replaces the presentation defaults layer.
     pub fn set_presentation(&mut self, layer: ConfigLayer) {
         self.layers.presentation = layer;
     }
 
+    /// Replaces the secrets layer.
     pub fn set_secrets(&mut self, layer: ConfigLayer) {
         self.layers.secrets = layer;
     }
 
+    /// Replaces the environment layer.
     pub fn set_env(&mut self, layer: ConfigLayer) {
         self.layers.env = layer;
     }
 
+    /// Replaces the CLI layer.
     pub fn set_cli(&mut self, layer: ConfigLayer) {
         self.layers.cli = layer;
     }
 
+    /// Replaces the session layer.
     pub fn set_session(&mut self, layer: ConfigLayer) {
         self.layers.session = layer;
     }
 
+    /// Resolves all layers into a final runtime config.
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
         tracing::debug!(
             profile_override = ?options.profile_override,
@@ -128,6 +147,7 @@ impl ConfigResolver {
         Ok(config)
     }
 
+    /// Explains how a runtime key was selected, interpolated, and adapted.
     pub fn explain_key(
         &self,
         key: &str,
@@ -164,6 +184,7 @@ impl ConfigResolver {
         ))
     }
 
+    /// Explains bootstrap resolution for a bootstrap-only key.
     pub fn explain_bootstrap_key(
         &self,
         key: &str,

@@ -26,6 +26,10 @@ struct AggregateSpec {
     alias: String,
 }
 
+/// Applies an aggregate stage to flat rows or grouped output.
+///
+/// Row input is reduced to a single output row. Grouped input stores the
+/// aggregate result in each group's aggregate map.
 pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     let parsed = parse_aggregate_spec(spec)?;
     match items {
@@ -49,6 +53,10 @@ pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     }
 }
 
+/// Implements the `C` count macro.
+///
+/// Flat rows become a single `{count}` row. Grouped input becomes one summary
+/// row per group with the original group headers plus `count`.
 pub fn count_macro(items: OutputItems, spec: &str) -> Result<OutputItems> {
     if !spec.trim().is_empty() {
         return Err(anyhow!("C takes no arguments"));

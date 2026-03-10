@@ -10,6 +10,7 @@ use crate::completion::{
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
+/// High-level entry point for parsing and completing command lines.
 pub struct CompletionEngine {
     parser: CommandLineParser,
     suggester: SuggestionEngine,
@@ -18,6 +19,7 @@ pub struct CompletionEngine {
 }
 
 impl CompletionEngine {
+    /// Creates an engine for a prebuilt completion tree.
     pub fn new(tree: CompletionTree) -> Self {
         let global_context_flags = collect_global_context_flags(&tree.root);
         Self {
@@ -28,22 +30,29 @@ impl CompletionEngine {
         }
     }
 
+    /// Parses `line` at `cursor` and returns the cursor state with suggestions.
     pub fn complete(&self, line: &str, cursor: usize) -> (CursorState, Vec<SuggestionOutput>) {
         let analysis = self.analyze(line, cursor);
         let suggestions = self.suggestions_for_analysis(&analysis);
         (analysis.cursor, suggestions)
     }
 
+    /// Generates suggestions for a previously computed completion analysis.
     pub fn suggestions_for_analysis(&self, analysis: &CompletionAnalysis) -> Vec<SuggestionOutput> {
         self.suggester.generate(analysis)
     }
 
+    /// Parses `line` and resolves completion context at `cursor`.
     pub fn analyze(&self, line: &str, cursor: usize) -> CompletionAnalysis {
         let parsed = self.parser.analyze(line, cursor);
 
         self.analyze_command_parts(parsed.parsed, parsed.cursor)
     }
 
+    /// Resolves completion state from pre-parsed command representations.
+    ///
+    /// This is mainly useful for tests or callers that already have split
+    /// command state for the full line and the cursor-local prefix.
     pub fn analyze_command(
         &self,
         full_cmd: CommandLine,
@@ -90,14 +99,17 @@ impl CompletionEngine {
         }
     }
 
+    /// Tokenizes a shell-like command line using the parser's permissive rules.
     pub fn tokenize(&self, line: &str) -> Vec<String> {
         self.parser.tokenize(line)
     }
 
+    /// Returns how many leading tokens resolve to a command path in the tree.
     pub fn matched_command_len_tokens(&self, tokens: &[String]) -> usize {
         TreeResolver::new(&self.tree).matched_command_len_tokens(tokens)
     }
 
+    /// Classifies a candidate value relative to the current completion analysis.
     pub fn classify_match(&self, analysis: &CompletionAnalysis, value: &str) -> MatchKind {
         if analysis.parsed.cursor_cmd.has_pipe() {
             return MatchKind::Pipe;

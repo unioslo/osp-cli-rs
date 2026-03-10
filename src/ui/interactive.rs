@@ -32,10 +32,12 @@ impl InteractiveRuntime {
         }
     }
 
+    /// Returns `true` when both stdin and stderr can support interactive prompts.
     pub fn allows_prompting(&self) -> bool {
         self.stdin_is_tty && self.stderr_is_tty
     }
 
+    /// Returns `true` when transient terminal output such as spinners is safe to show.
     pub fn allows_live_output(&self) -> bool {
         self.stderr_is_tty && !matches!(self.terminal.as_deref(), Some("dumb"))
     }
@@ -60,14 +62,17 @@ impl Interactive {
         Self::new(InteractiveRuntime::detect())
     }
 
+    /// Creates an interaction helper from an explicit runtime description.
     pub fn new(runtime: InteractiveRuntime) -> Self {
         Self { runtime }
     }
 
+    /// Returns the runtime hints used by this helper.
     pub fn runtime(&self) -> &InteractiveRuntime {
         &self.runtime
     }
 
+    /// Prompts for confirmation with a default answer of `false`.
     pub fn confirm(&self, prompt: &str) -> InteractiveResult<bool> {
         self.confirm_default(prompt, false)
     }
@@ -87,10 +92,12 @@ impl Interactive {
         self.password_with_options(prompt, false)
     }
 
+    /// Prompts for a secret value and permits empty input.
     pub fn password_allow_empty(&self, prompt: &str) -> InteractiveResult<String> {
         self.password_with_options(prompt, true)
     }
 
+    /// Creates a spinner that follows the current runtime policy.
     pub fn spinner(&self, message: impl Into<String>) -> Spinner {
         Spinner::with_runtime(&self.runtime, message)
     }
@@ -154,10 +161,12 @@ impl Spinner {
         Self { pb }
     }
 
+    /// Updates the spinner message.
     pub fn set_message(&self, message: impl Into<String>) {
         self.pb.set_message(message.into());
     }
 
+    /// Runs `f` while temporarily suspending the spinner from the terminal.
     pub fn suspend<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R,
@@ -165,18 +174,22 @@ impl Spinner {
         self.pb.suspend(f)
     }
 
+    /// Marks the spinner as successfully finished and leaves the final message visible.
     pub fn finish_success(&self, message: impl Into<String>) {
         self.pb.finish_with_message(message.into());
     }
 
+    /// Marks the spinner as failed and leaves the final message visible.
     pub fn finish_failure(&self, message: impl Into<String>) {
         self.pb.abandon_with_message(message.into());
     }
 
+    /// Alias for [`Spinner::finish_success`].
     pub fn finish_with_message(&self, message: impl Into<String>) {
         self.finish_success(message);
     }
 
+    /// Finishes the spinner and clears it from the terminal.
     pub fn finish_and_clear(&self) {
         self.pb.finish_and_clear();
     }

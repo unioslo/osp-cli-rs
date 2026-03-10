@@ -20,6 +20,7 @@ pub struct ParsedStage {
 }
 
 impl ParsedStage {
+    /// Creates a parsed stage with explicit kind, verb, spec, and raw text.
     pub fn new(
         kind: ParsedStageKind,
         verb: impl Into<String>,

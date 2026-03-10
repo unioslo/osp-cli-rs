@@ -7,6 +7,10 @@ use serde_json::Value;
 
 use crate::dsl::stages::{common::map_group_rows, quick};
 
+/// Applies the `?` stage to flat or grouped output.
+///
+/// With an empty spec, empty values are removed from rows. Otherwise the stage
+/// delegates to quick matching using `?`-prefixed semantics.
 pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     let trimmed = spec.trim();
     if trimmed.is_empty() {

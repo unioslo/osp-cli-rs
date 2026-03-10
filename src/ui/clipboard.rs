@@ -71,15 +71,20 @@ impl Display for ClipboardError {
 impl std::error::Error for ClipboardError {}
 
 impl ClipboardService {
+    /// Creates a clipboard service with the default backend order.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Enables or disables OSC 52 before falling back to external commands.
     pub fn with_osc52(mut self, enabled: bool) -> Self {
         self.prefer_osc52 = enabled;
         self
     }
 
+    /// Copies raw text to the clipboard.
+    ///
+    /// Returns an error if no backend succeeds or if a backend fails after starting.
     pub fn copy_text(&self, text: &str) -> Result<(), ClipboardError> {
         let mut attempts = Vec::new();
 
@@ -106,6 +111,7 @@ impl ClipboardService {
         Err(ClipboardError::NoBackendAvailable { attempts })
     }
 
+    /// Renders a document for copy/paste and writes the resulting text to the clipboard.
     pub fn copy_document(
         &self,
         document: &Document,

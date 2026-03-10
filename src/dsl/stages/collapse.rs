@@ -4,6 +4,9 @@ use crate::core::{
 };
 use anyhow::{Result, anyhow};
 
+/// Collapses grouped output into summary rows of group headers and aggregates.
+///
+/// Returns an error when called on flat rows.
 pub fn apply(items: OutputItems) -> Result<OutputItems> {
     match items {
         OutputItems::Rows(_) => Err(anyhow!("Z requires grouped output; use G before Z")),

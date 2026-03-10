@@ -3,4 +3,5 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 
+"$repo_root/scripts/check-public-function-docs.py"
 "$repo_root/scripts/check-rust-fast.sh"

@@ -13,6 +13,7 @@ pub enum MessageKind {
 }
 
 impl MessageKind {
+    /// Returns the lowercase label used in rendered message metadata.
     pub fn as_label(self) -> &'static str {
         match self {
             MessageKind::Error => "error",
@@ -98,6 +99,10 @@ impl From<Document> for MessageContent {
 pub struct MessageFormatter;
 
 impl MessageFormatter {
+    /// Builds a document for the provided message content and presentation options.
+    ///
+    /// Returns a flat document when `options.rules` is [`MessageRules::None`]
+    /// and a panel-wrapped document otherwise.
     pub fn build(content: impl Into<MessageContent>, options: MessageOptions) -> Document {
         let content = content.into();
 

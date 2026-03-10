@@ -2,6 +2,7 @@ use nu_ansi_term::{Color, Style};
 
 use crate::ui::theme::{self, ThemeDefinition};
 
+/// Optional per-token style overrides layered on top of a theme.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyleOverrides {
     pub text: Option<String>,
@@ -27,6 +28,7 @@ pub struct StyleOverrides {
     pub message_trace: Option<String>,
 }
 
+/// Semantic style token used when rendering text fragments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleToken {
     None,
@@ -54,10 +56,12 @@ pub enum StyleToken {
     MessageTrace,
 }
 
+/// Applies a theme token by theme name.
 pub fn apply_style(text: &str, token: StyleToken, color: bool, theme_name: &str) -> String {
     apply_style_with_overrides(text, token, color, theme_name, &StyleOverrides::default())
 }
 
+/// Applies a theme token by theme name with explicit style overrides.
 pub fn apply_style_with_overrides(
     text: &str,
     token: StyleToken,
@@ -69,6 +73,7 @@ pub fn apply_style_with_overrides(
     apply_style_with_theme_overrides(text, token, color, &theme, overrides)
 }
 
+/// Applies a theme token using an already resolved theme.
 pub fn apply_style_with_theme(
     text: &str,
     token: StyleToken,
@@ -78,6 +83,7 @@ pub fn apply_style_with_theme(
     apply_style_with_theme_overrides(text, token, color, theme, &StyleOverrides::default())
 }
 
+/// Applies a theme token using a resolved theme and explicit overrides.
 pub fn apply_style_with_theme_overrides(
     text: &str,
     token: StyleToken,
@@ -92,6 +98,7 @@ pub fn apply_style_with_theme_overrides(
     apply_style_spec(text, resolve_style_spec(token, theme, overrides), color)
 }
 
+/// Applies a raw style specification to a text fragment.
 pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
     if !color {
         return text.to_string();
@@ -106,6 +113,7 @@ pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
     format!("{prefix}{text}{}", style.suffix())
 }
 
+/// Returns whether a style specification can be parsed by the renderer.
 pub fn is_valid_style_spec(value: &str) -> bool {
     let trimmed = value.trim();
     if trimmed.is_empty() {

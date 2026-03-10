@@ -38,6 +38,9 @@ pub(crate) fn compile(spec: &str) -> Result<ValuesPlan> {
     })
 }
 
+/// Extracts values from flat rows and emits `{value: ...}` rows.
+///
+/// With an empty spec, values from every field are emitted in row order.
 pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     let plan = compile(spec)?;
     let mut out: Vec<Row> = Vec::new();
@@ -49,6 +52,7 @@ pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     Ok(out)
 }
 
+/// Extracts values from the rows inside each group while preserving group metadata.
 pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
     let plan = compile(spec)?;
     map_group_rows(groups, |rows| {

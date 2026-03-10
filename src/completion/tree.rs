@@ -6,17 +6,24 @@ use crate::completion::model::{
 use crate::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Declarative command description used to build a completion tree.
 pub struct CommandSpec {
-    /// Declarative command description used to build the plain completion tree.
+    /// Command or subcommand name.
     pub name: String,
+    /// Optional description shown alongside the command.
     pub tooltip: Option<String>,
+    /// Optional hidden sort key for display ordering.
     pub sort: Option<String>,
+    /// Positional arguments accepted by this command.
     pub args: Vec<ArgNode>,
+    /// Flags accepted by this command.
     pub flags: BTreeMap<String, FlagNode>,
+    /// Nested subcommands below this command.
     pub subcommands: Vec<CommandSpec>,
 }
 
 impl CommandSpec {
+    /// Creates a command spec with the given name.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -24,41 +31,49 @@ impl CommandSpec {
         }
     }
 
+    /// Sets the display tooltip for this command.
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
+    /// Sets the hidden sort key for this command.
     pub fn sort(mut self, sort: impl Into<String>) -> Self {
         self.sort = Some(sort.into());
         self
     }
 
+    /// Appends one positional argument definition.
     pub fn arg(mut self, arg: ArgNode) -> Self {
         self.args.push(arg);
         self
     }
 
+    /// Appends positional argument definitions.
     pub fn args(mut self, args: impl IntoIterator<Item = ArgNode>) -> Self {
         self.args.extend(args);
         self
     }
 
+    /// Adds one flag definition keyed by its spelling.
     pub fn flag(mut self, name: impl Into<String>, flag: FlagNode) -> Self {
         self.flags.insert(name.into(), flag);
         self
     }
 
+    /// Extends the command with flag definitions.
     pub fn flags(mut self, flags: impl IntoIterator<Item = (String, FlagNode)>) -> Self {
         self.flags.extend(flags);
         self
     }
 
+    /// Appends one nested subcommand.
     pub fn subcommand(mut self, subcommand: CommandSpec) -> Self {
         self.subcommands.push(subcommand);
         self
     }
 
+    /// Appends nested subcommands.
     pub fn subcommands(mut self, subcommands: impl IntoIterator<Item = CommandSpec>) -> Self {
         self.subcommands.extend(subcommands);
         self
@@ -66,6 +81,7 @@ impl CommandSpec {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Builds immutable completion trees from command and config metadata.
 pub struct CompletionTreeBuilder;
 
 impl CompletionTreeBuilder {
@@ -96,6 +112,7 @@ impl CompletionTreeBuilder {
         }
     }
 
+    /// Injects `config set` key completions into an existing tree.
     pub fn apply_config_set_keys(
         &self,
         tree: &mut CompletionTree,
@@ -245,13 +262,18 @@ fn to_completion_value_type(value_kind: Option<ValueKind>) -> Option<crate::comp
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Declarative `config set` key metadata used for completion nodes.
 pub struct ConfigKeySpec {
+    /// Config key name completed below `config set`.
     pub key: String,
+    /// Optional description shown for the key.
     pub tooltip: Option<String>,
+    /// Suggested values for the key.
     pub value_suggestions: Vec<SuggestionEntry>,
 }
 
 impl ConfigKeySpec {
+    /// Creates a config key spec with the given key name.
     pub fn new(key: impl Into<String>) -> Self {
         Self {
             key: key.into(),
@@ -259,11 +281,13 @@ impl ConfigKeySpec {
         }
     }
 
+    /// Sets the display tooltip for this config key.
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
+    /// Replaces the suggested values for this config key.
     pub fn value_suggestions(
         mut self,
         suggestions: impl IntoIterator<Item = SuggestionEntry>,

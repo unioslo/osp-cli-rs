@@ -2,6 +2,10 @@ use crate::ui::document::{LineBlock, LinePart};
 use crate::ui::style::{StyleOverrides, StyleToken, apply_style_with_theme_overrides};
 use crate::ui::theme::ThemeDefinition;
 
+/// Parses lightweight inline markup into styled line parts.
+///
+/// Recognizes backtick-delimited code, single-asterisk muted text, and
+/// double-asterisk emphasized text. Escaped marker characters are preserved.
 pub fn parts_from_inline(text: &str) -> Vec<LinePart> {
     let mut parts: Vec<LinePart> = Vec::new();
     let mut buf = String::new();
@@ -99,12 +103,16 @@ pub fn parts_from_inline(text: &str) -> Vec<LinePart> {
     parts
 }
 
+/// Parses inline markup and wraps the result in a single [`LineBlock`].
 pub fn line_from_inline(text: &str) -> LineBlock {
     LineBlock {
         parts: parts_from_inline(text),
     }
 }
 
+/// Renders lightweight inline markup to a styled string.
+///
+/// Returns plain text when `color` is `false`.
 pub fn render_inline(
     text: &str,
     color: bool,

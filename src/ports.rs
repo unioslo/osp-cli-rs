@@ -2,7 +2,9 @@ use crate::core::row::Row;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
+/// Minimal LDAP lookup port used by the service layer.
 pub trait LdapDirectory {
+    /// Looks up one or more user rows.
     fn user(
         &self,
         uid: &str,
@@ -10,6 +12,7 @@ pub trait LdapDirectory {
         attributes: Option<&[String]>,
     ) -> Result<Vec<Row>>;
 
+    /// Looks up one or more netgroup rows.
     fn netgroup(
         &self,
         name: &str,
@@ -18,6 +21,10 @@ pub trait LdapDirectory {
     ) -> Result<Vec<Row>>;
 }
 
+/// Parses a comma-separated attribute list from CLI input.
+///
+/// Returns `Ok(None)` when no attribute override was provided and rejects
+/// inputs that only contain empty segments.
 pub fn parse_attributes(raw: Option<&str>) -> Result<Option<Vec<String>>> {
     let Some(raw) = raw else {
         return Ok(None);
@@ -34,6 +41,11 @@ pub fn parse_attributes(raw: Option<&str>) -> Result<Option<Vec<String>>> {
     Ok(Some(attrs))
 }
 
+/// Applies the lightweight LDAP filter/projection semantics used by the demo
+/// service layer.
+///
+/// Filtering happens first, followed by attribute projection when an explicit
+/// attribute list is provided.
 pub fn apply_filter_and_projection(
     rows: Vec<Row>,
     filter: Option<&str>,

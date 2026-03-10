@@ -5,7 +5,9 @@ use crate::config::{
     ResolvedConfig, core::parse_env_key, store::validate_secrets_permissions, with_path_context,
 };
 
+/// Loads a single config layer from some backing source.
 pub trait ConfigLoader: Send + Sync {
+    /// Reads the source and returns it as a config layer.
     fn load(&self) -> Result<ConfigLayer, ConfigError>;
 }
 
@@ -20,12 +22,14 @@ where
         .collect()
 }
 
+/// Loader that returns a prebuilt config layer.
 #[derive(Debug, Clone, Default)]
 pub struct StaticLayerLoader {
     layer: ConfigLayer,
 }
 
 impl StaticLayerLoader {
+    /// Wraps an existing layer so it can participate in a loader pipeline.
     pub fn new(layer: ConfigLayer) -> Self {
         Self { layer }
     }
@@ -41,6 +45,7 @@ impl ConfigLoader for StaticLayerLoader {
     }
 }
 
+/// Loader for ordinary TOML config files.
 #[derive(Debug, Clone)]
 pub struct TomlFileLoader {
     path: PathBuf,
@@ -48,6 +53,7 @@ pub struct TomlFileLoader {
 }
 
 impl TomlFileLoader {
+    /// Creates a loader for the given TOML file path.
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -55,11 +61,13 @@ impl TomlFileLoader {
         }
     }
 
+    /// Requires the file to exist.
     pub fn required(mut self) -> Self {
         self.missing_ok = false;
         self
     }
 
+    /// Allows the file to be absent.
     pub fn optional(mut self) -> Self {
         self.missing_ok = true;
         self
@@ -104,18 +112,21 @@ impl ConfigLoader for TomlFileLoader {
     }
 }
 
+/// Loader for `OSP__...` environment variables.
 #[derive(Debug, Clone, Default)]
 pub struct EnvVarLoader {
     vars: Vec<(String, String)>,
 }
 
 impl EnvVarLoader {
+    /// Captures the current process environment.
     pub fn from_process_env() -> Self {
         Self {
             vars: std::env::vars().collect(),
         }
     }
 
+    /// Creates a loader from explicit key-value pairs.
     pub fn from_pairs<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -153,6 +164,7 @@ impl ConfigLoader for EnvVarLoader {
     }
 }
 
+/// Loader for TOML secrets files whose values are marked secret.
 #[derive(Debug, Clone)]
 pub struct SecretsTomlLoader {
     path: PathBuf,
@@ -161,6 +173,7 @@ pub struct SecretsTomlLoader {
 }
 
 impl SecretsTomlLoader {
+    /// Creates a loader for the given secrets file path.
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -169,16 +182,19 @@ impl SecretsTomlLoader {
         }
     }
 
+    /// Requires the file to exist.
     pub fn required(mut self) -> Self {
         self.missing_ok = false;
         self
     }
 
+    /// Allows the file to be absent.
     pub fn optional(mut self) -> Self {
         self.missing_ok = true;
         self
     }
 
+    /// Enables or disables permission checks before loading.
     pub fn with_strict_permissions(mut self, strict: bool) -> Self {
         self.strict_permissions = strict;
         self
@@ -227,18 +243,21 @@ impl ConfigLoader for SecretsTomlLoader {
     }
 }
 
+/// Loader for `OSP_SECRET__...` environment variables.
 #[derive(Debug, Clone, Default)]
 pub struct EnvSecretsLoader {
     vars: Vec<(String, String)>,
 }
 
 impl EnvSecretsLoader {
+    /// Captures secret variables from the current process environment.
     pub fn from_process_env() -> Self {
         Self {
             vars: std::env::vars().collect(),
         }
     }
 
+    /// Creates a loader from explicit key-value pairs.
     pub fn from_pairs<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -292,12 +311,14 @@ impl ConfigLoader for EnvSecretsLoader {
     }
 }
 
+/// Loader that merges multiple loaders in the order they are added.
 #[derive(Default)]
 pub struct ChainedLoader {
     loaders: Vec<Box<dyn ConfigLoader>>,
 }
 
 impl ChainedLoader {
+    /// Starts a chain with one loader.
     pub fn new<L>(loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -307,6 +328,7 @@ impl ChainedLoader {
         }
     }
 
+    /// Appends another loader to the chain.
     pub fn with<L>(mut self, loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -335,6 +357,7 @@ impl ConfigLoader for ChainedLoader {
     }
 }
 
+/// Materialized config layers grouped by source priority.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedLayers {
     pub defaults: ConfigLayer,
@@ -346,6 +369,7 @@ pub struct LoadedLayers {
     pub session: ConfigLayer,
 }
 
+/// Builder for the standard multi-source config loading pipeline.
 pub struct LoaderPipeline {
     defaults: Box<dyn ConfigLoader>,
     presentation: Option<Box<dyn ConfigLoader>>,
@@ -358,6 +382,7 @@ pub struct LoaderPipeline {
 }
 
 impl LoaderPipeline {
+    /// Creates a pipeline with the required defaults loader.
     pub fn new<L>(defaults: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -374,6 +399,7 @@ impl LoaderPipeline {
         }
     }
 
+    /// Adds the ordinary config file loader.
     pub fn with_file<L>(mut self, loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -382,6 +408,7 @@ impl LoaderPipeline {
         self
     }
 
+    /// Adds the presentation defaults loader.
     pub fn with_presentation<L>(mut self, loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -390,6 +417,7 @@ impl LoaderPipeline {
         self
     }
 
+    /// Adds the secrets loader.
     pub fn with_secrets<L>(mut self, loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -398,6 +426,7 @@ impl LoaderPipeline {
         self
     }
 
+    /// Adds the environment loader.
     pub fn with_env<L>(mut self, loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -406,6 +435,7 @@ impl LoaderPipeline {
         self
     }
 
+    /// Adds the CLI override loader.
     pub fn with_cli<L>(mut self, loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -414,6 +444,7 @@ impl LoaderPipeline {
         self
     }
 
+    /// Adds the session override loader.
     pub fn with_session<L>(mut self, loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -422,11 +453,13 @@ impl LoaderPipeline {
         self
     }
 
+    /// Replaces the schema used during resolution.
     pub fn with_schema(mut self, schema: ConfigSchema) -> Self {
         self.schema = schema;
         self
     }
 
+    /// Loads every configured source into concrete layers.
     pub fn load_layers(&self) -> Result<LoadedLayers, ConfigError> {
         tracing::debug!("loading config layers");
         let layers = LoadedLayers {
@@ -451,6 +484,7 @@ impl LoaderPipeline {
         Ok(layers)
     }
 
+    /// Loads all layers and resolves them into a runtime config.
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
         let layers = self.load_layers()?;
         let mut resolver = ConfigResolver::from_loaded_layers(layers);

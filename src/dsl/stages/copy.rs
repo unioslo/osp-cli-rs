@@ -1,5 +1,6 @@
 use crate::core::row::Row;
 
+/// Returns `rows` unchanged.
 pub fn apply(rows: Vec<Row>) -> Vec<Row> {
     rows
 }

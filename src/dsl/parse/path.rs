@@ -49,6 +49,7 @@ pub enum PathParseError {
 
 type Result<T> = std::result::Result<T, PathParseError>;
 
+/// Parses a dotted path expression with optional list selectors.
 pub fn parse_path(input: &str) -> Result<PathExpression> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -70,6 +71,7 @@ pub fn parse_path(input: &str) -> Result<PathExpression> {
     Ok(PathExpression { absolute, segments })
 }
 
+/// Returns whether evaluating `path` may require materialized list access.
 pub fn requires_materialization(path: &PathExpression) -> bool {
     path.segments.iter().any(|segment| {
         segment.selectors.iter().any(|selector| match selector {
@@ -82,6 +84,9 @@ pub fn requires_materialization(path: &PathExpression) -> bool {
     })
 }
 
+/// Converts a path expression into a flattened key when every segment is concrete.
+///
+/// Returns `None` for fanout, slices, negative indexes, or unnamed segments.
 pub fn expression_to_flat_key(path: &PathExpression) -> Option<String> {
     let mut output = String::new();
 

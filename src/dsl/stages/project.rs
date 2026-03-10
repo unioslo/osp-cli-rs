@@ -42,6 +42,9 @@ pub(crate) fn compile(spec: &str) -> Result<ProjectPlan> {
     Ok(ProjectPlan { keepers, droppers })
 }
 
+/// Projects flat rows according to the keep/drop patterns in `spec`.
+///
+/// Fanout selectors may expand one input row into multiple output rows.
 pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     let plan = compile(spec)?;
 
@@ -52,6 +55,9 @@ pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
     Ok(out)
 }
 
+/// Projects the rows inside each group while preserving group metadata.
+///
+/// Groups with no remaining rows and no aggregates are dropped.
 pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
     let plan = compile(spec)?;
     let mut out = map_group_rows(groups, |rows| {

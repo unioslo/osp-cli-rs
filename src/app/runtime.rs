@@ -17,12 +17,16 @@ use crate::ui::messages::MessageLevel;
 use crate::ui::theme_loader::ThemeCatalog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Terminal mode the application is currently serving.
 pub enum TerminalKind {
+    /// One-shot command execution.
     Cli,
+    /// Interactive REPL execution.
     Repl,
 }
 
 impl TerminalKind {
+    /// Returns the config key fragment used for this terminal mode.
     pub fn as_config_terminal(self) -> &'static str {
         match self {
             TerminalKind::Cli => "cli",
@@ -32,6 +36,7 @@ impl TerminalKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Immutable runtime selection inputs captured at startup.
 pub struct RuntimeContext {
     profile_override: Option<String>,
     terminal_kind: TerminalKind,
@@ -39,6 +44,7 @@ pub struct RuntimeContext {
 }
 
 impl RuntimeContext {
+    /// Creates a runtime context, normalizing the optional profile override.
     pub fn new(
         profile_override: Option<String>,
         terminal_kind: TerminalKind,
@@ -53,25 +59,30 @@ impl RuntimeContext {
         }
     }
 
+    /// Returns the normalized profile override, if one was supplied.
     pub fn profile_override(&self) -> Option<&str> {
         self.profile_override.as_deref()
     }
 
+    /// Returns the active terminal mode.
     pub fn terminal_kind(&self) -> TerminalKind {
         self.terminal_kind
     }
 
+    /// Returns the detected terminal environment string, if available.
     pub fn terminal_env(&self) -> Option<&str> {
         self.terminal_env.as_deref()
     }
 }
 
+/// Tracks the resolved configuration and its in-memory revision.
 pub struct ConfigState {
     resolved: ResolvedConfig,
     revision: u64,
 }
 
 impl ConfigState {
+    /// Creates configuration state with an initial revision of `1`.
     pub fn new(resolved: ResolvedConfig) -> Self {
         Self {
             resolved,
@@ -79,14 +90,17 @@ impl ConfigState {
         }
     }
 
+    /// Returns the current resolved configuration snapshot.
     pub fn resolved(&self) -> &ResolvedConfig {
         &self.resolved
     }
 
+    /// Returns the current configuration revision.
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
+    /// Replaces the resolved configuration and bumps the revision when it changes.
     pub fn replace_resolved(&mut self, next: ResolvedConfig) -> bool {
         if self.resolved == next {
             return false;
@@ -97,6 +111,7 @@ impl ConfigState {
         true
     }
 
+    /// Applies a configuration transform atomically against the current snapshot.
     pub fn transaction<F, E>(&mut self, mutator: F) -> Result<bool, E>
     where
         F: FnOnce(&ResolvedConfig) -> Result<ResolvedConfig, E>,
@@ -108,6 +123,7 @@ impl ConfigState {
 }
 
 #[derive(Debug, Clone)]
+/// User-interface settings derived from the current runtime state.
 pub struct UiState {
     pub render_settings: RenderSettings,
     pub message_verbosity: MessageLevel,
@@ -115,6 +131,7 @@ pub struct UiState {
 }
 
 #[derive(Debug, Clone)]
+/// Startup inputs needed to assemble runtime services and caches.
 pub struct LaunchContext {
     pub plugin_dirs: Vec<PathBuf>,
     pub config_root: Option<PathBuf>,
@@ -135,6 +152,7 @@ impl Default for LaunchContext {
     }
 }
 
+/// Client registries shared across command execution.
 pub struct AppClients {
     pub plugins: PluginManager,
     pub native_commands: NativeCommandRegistry,
@@ -142,6 +160,7 @@ pub struct AppClients {
 }
 
 impl AppClients {
+    /// Creates the shared client registry used by the application.
     pub fn new(plugins: PluginManager, native_commands: NativeCommandRegistry) -> Self {
         Self {
             plugins,
@@ -173,6 +192,7 @@ impl AppClients {
     }
 }
 
+/// Runtime-scoped application state shared across commands.
 pub struct AppRuntime {
     pub context: RuntimeContext,
     pub config: ConfigState,
@@ -182,6 +202,7 @@ pub struct AppRuntime {
     pub launch: LaunchContext,
 }
 
+/// Authorization and command-visibility state derived from configuration.
 pub struct AuthState {
     builtins_allowlist: Option<HashSet<String>>,
     external_allowlist: Option<HashSet<String>>,
@@ -191,6 +212,7 @@ pub struct AuthState {
 }
 
 impl AuthState {
+    /// Builds authorization state from the resolved configuration.
     pub fn from_resolved(config: &ResolvedConfig) -> Self {
         Self {
             builtins_allowlist: parse_allowlist(config.get_string("auth.visible.builtins")),
@@ -205,34 +227,42 @@ impl AuthState {
         }
     }
 
+    /// Returns the context used when evaluating command policies.
     pub fn policy_context(&self) -> &CommandPolicyContext {
         &self.policy_context
     }
 
+    /// Replaces the context used when evaluating command policies.
     pub fn set_policy_context(&mut self, context: CommandPolicyContext) {
         self.policy_context = context;
     }
 
+    /// Returns the policy registry for built-in commands.
     pub fn builtin_policy(&self) -> &CommandPolicyRegistry {
         &self.builtin_policy
     }
 
+    /// Returns the mutable policy registry for built-in commands.
     pub fn builtin_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
         &mut self.builtin_policy
     }
 
+    /// Returns the policy registry for externally dispatched commands.
     pub fn external_policy(&self) -> &CommandPolicyRegistry {
         &self.external_policy
     }
 
+    /// Returns the mutable policy registry for externally dispatched commands.
     pub fn external_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
         &mut self.external_policy
     }
 
+    /// Replaces the policy registry for externally dispatched commands.
     pub fn replace_external_policy(&mut self, registry: CommandPolicyRegistry) {
         self.external_policy = registry;
     }
 
+    /// Evaluates access for a built-in command.
     pub fn builtin_access(&self, command: &str) -> CommandAccess {
         command_access_for(
             command,
@@ -242,6 +272,7 @@ impl AuthState {
         )
     }
 
+    /// Evaluates access for an external command.
     pub fn external_command_access(&self, command: &str) -> CommandAccess {
         command_access_for(
             command,
@@ -251,30 +282,37 @@ impl AuthState {
         )
     }
 
+    /// Returns whether a built-in command should be shown to the user.
     pub fn is_builtin_visible(&self, command: &str) -> bool {
         self.builtin_access(command).is_visible()
     }
 
+    /// Returns whether an external command should be shown to the user.
     pub fn is_external_command_visible(&self, command: &str) -> bool {
         self.external_command_access(command).is_visible()
     }
 
+    /// Alias for [`Self::external_policy`].
     pub fn plugin_policy(&self) -> &CommandPolicyRegistry {
         self.external_policy()
     }
 
+    /// Alias for [`Self::external_policy_mut`].
     pub fn plugin_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
         self.external_policy_mut()
     }
 
+    /// Alias for [`Self::replace_external_policy`].
     pub fn replace_plugin_policy(&mut self, registry: CommandPolicyRegistry) {
         self.replace_external_policy(registry);
     }
 
+    /// Alias for [`Self::external_command_access`].
     pub fn plugin_command_access(&self, command: &str) -> CommandAccess {
         self.external_command_access(command)
     }
 
+    /// Alias for [`Self::is_external_command_visible`].
     pub fn is_plugin_command_visible(&self, command: &str) -> bool {
         self.is_external_command_visible(command)
     }

@@ -28,6 +28,7 @@ struct SortKeySpec {
     cast: SortCast,
 }
 
+/// Sorts flat rows or groups according to the sort keys in `spec`.
 pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     let keys = parse_sort_spec(spec)?;
 

@@ -121,10 +121,12 @@ const VERBS: &[VerbInfo] = &[
     },
 ];
 
+/// Returns metadata for all registered DSL verbs, including meta-only verbs.
 pub fn registered_verbs() -> &'static [VerbInfo] {
     VERBS
 }
 
+/// Returns the names of registered verbs that participate in data execution.
 pub fn registered_explicit_verbs() -> Vec<&'static str> {
     VERBS
         .iter()
@@ -133,12 +135,14 @@ pub fn registered_explicit_verbs() -> Vec<&'static str> {
         .collect()
 }
 
+/// Returns verb metadata for `verb`, matched case-insensitively.
 pub fn verb_info(verb: &str) -> Option<&'static VerbInfo> {
     VERBS
         .iter()
         .find(|info| info.verb.eq_ignore_ascii_case(verb))
 }
 
+/// Returns whether `verb` is a registered non-meta verb.
 pub fn is_registered_explicit_verb(verb: &str) -> bool {
     VERBS
         .iter()
@@ -146,6 +150,7 @@ pub fn is_registered_explicit_verb(verb: &str) -> bool {
         .any(|info| info.verb.eq_ignore_ascii_case(verb))
 }
 
+/// Returns the display badge for a verb's streaming behavior, if any.
 pub fn render_streaming_badge(streaming: VerbStreaming) -> Option<&'static str> {
     match streaming {
         VerbStreaming::Streamable | VerbStreaming::Meta => None,

@@ -3,6 +3,7 @@ use serde_json::{Map, Value};
 
 use crate::dsl::parse::path::{Selector, parse_path};
 
+/// Flattens a nested row into dotted and indexed keys.
 pub fn flatten_row(row: &Row) -> Row {
     let mut out = Map::new();
     for (key, value) in row {
@@ -11,10 +12,14 @@ pub fn flatten_row(row: &Row) -> Row {
     out
 }
 
+/// Flattens each row independently with [`flatten_row`].
 pub fn flatten_rows(rows: &[Row]) -> Vec<Row> {
     rows.iter().map(flatten_row).collect()
 }
 
+/// Rebuilds a nested row from flattened dotted and indexed keys.
+///
+/// Keys that do not parse as supported paths are ignored.
 pub fn coalesce_flat_row(row: &Row) -> Row {
     let mut root = Value::Object(Map::new());
     for (key, value) in row {

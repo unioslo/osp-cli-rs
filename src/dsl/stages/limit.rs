@@ -32,6 +32,10 @@ pub(crate) fn parse_limit_spec(spec: &str) -> Result<LimitSpec> {
     Ok(LimitSpec { count, offset })
 }
 
+/// Applies `L` limit semantics to `items`.
+///
+/// Positive counts return a head slice, optionally from an offset. Negative
+/// counts return items from the tail of the selected slice.
 pub fn apply<T>(items: Vec<T>, spec: &str) -> Result<Vec<T>> {
     let spec = parse_limit_spec(spec)?;
     let count = spec.count;

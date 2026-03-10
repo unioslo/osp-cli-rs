@@ -36,6 +36,10 @@ pub enum JqError {
     },
 }
 
+/// Runs `jq` on the current output payload and converts the result back into DSL output items.
+///
+/// Row input is passed to jq as a JSON array. Grouped input is processed one
+/// group at a time using `{groups, aggregates, rows}` objects.
 pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
     let expr = normalize_expression(spec)?;
     match items {

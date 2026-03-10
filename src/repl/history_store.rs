@@ -11,6 +11,7 @@ use reedline::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Configuration for the REPL history store and its filtering behavior.
 #[derive(Debug, Clone)]
 pub struct HistoryConfig {
     pub path: Option<PathBuf>,
@@ -25,6 +26,7 @@ pub struct HistoryConfig {
 }
 
 impl HistoryConfig {
+    /// Normalizes configured identifiers and exclusion patterns.
     pub fn normalized(mut self) -> Self {
         self.exclude_patterns =
             normalize_exclude_patterns(std::mem::take(&mut self.exclude_patterns));
@@ -38,30 +40,35 @@ impl HistoryConfig {
     }
 }
 
+/// Shared shell prefix state used to scope history to shell integrations.
 #[derive(Clone, Default, Debug)]
 pub struct HistoryShellContext {
     inner: Arc<RwLock<Option<String>>>,
 }
 
 impl HistoryShellContext {
+    /// Creates a shell context with an initial normalized prefix.
     pub fn new(prefix: impl Into<String>) -> Self {
         let context = Self::default();
         context.set_prefix(prefix);
         context
     }
 
+    /// Sets or replaces the normalized shell prefix.
     pub fn set_prefix(&self, prefix: impl Into<String>) {
         if let Ok(mut guard) = self.inner.write() {
             *guard = normalize_shell_prefix(prefix.into());
         }
     }
 
+    /// Clears the current shell prefix.
     pub fn clear(&self) {
         if let Ok(mut guard) = self.inner.write() {
             *guard = None;
         }
     }
 
+    /// Returns the current normalized shell prefix, if one is set.
     pub fn prefix(&self) -> Option<String> {
         self.inner.read().map(|value| value.clone()).unwrap_or(None)
     }
@@ -89,6 +96,7 @@ struct HistoryRecord {
     terminal: Option<String>,
 }
 
+/// Public history entry returned by listing operations.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub id: i64,
@@ -96,18 +104,21 @@ pub struct HistoryEntry {
     pub command: String,
 }
 
+/// Thread-safe wrapper around the REPL history store.
 #[derive(Clone)]
 pub struct SharedHistory {
     inner: Arc<Mutex<OspHistoryStore>>,
 }
 
 impl SharedHistory {
+    /// Creates a shared history store from the provided configuration.
     pub fn new(config: HistoryConfig) -> Result<Self> {
         Ok(Self {
             inner: Arc::new(Mutex::new(OspHistoryStore::new(config)?)),
         })
     }
 
+    /// Returns whether history capture is enabled for the current config.
     pub fn enabled(&self) -> bool {
         self.inner
             .lock()
@@ -115,6 +126,7 @@ impl SharedHistory {
             .unwrap_or(false)
     }
 
+    /// Returns recent commands using the store's active shell scope.
     pub fn recent_commands(&self) -> Vec<String> {
         self.inner
             .lock()
@@ -122,6 +134,7 @@ impl SharedHistory {
             .unwrap_or_default()
     }
 
+    /// Returns recent commands visible to the provided shell prefix.
     pub fn recent_commands_for(&self, shell_prefix: Option<&str>) -> Vec<String> {
         self.inner
             .lock()
@@ -129,6 +142,7 @@ impl SharedHistory {
             .unwrap_or_default()
     }
 
+    /// Returns scoped history entries using the store's active shell scope.
     pub fn list_entries(&self) -> Vec<HistoryEntry> {
         self.inner
             .lock()
@@ -136,6 +150,7 @@ impl SharedHistory {
             .unwrap_or_default()
     }
 
+    /// Returns scoped history entries visible to the provided shell prefix.
     pub fn list_entries_for(&self, shell_prefix: Option<&str>) -> Vec<HistoryEntry> {
         self.inner
             .lock()
@@ -143,6 +158,9 @@ impl SharedHistory {
             .unwrap_or_default()
     }
 
+    /// Removes older entries, keeping at most `keep` scoped entries.
+    ///
+    /// Returns the number of removed entries.
     pub fn prune(&self, keep: usize) -> Result<usize> {
         let mut guard = self
             .inner
@@ -151,6 +169,9 @@ impl SharedHistory {
         guard.prune(keep)
     }
 
+    /// Removes older entries for a specific shell scope, keeping at most `keep`.
+    ///
+    /// Returns the number of removed entries.
     pub fn prune_for(&self, keep: usize, shell_prefix: Option<&str>) -> Result<usize> {
         let mut guard = self
             .inner
@@ -159,6 +180,9 @@ impl SharedHistory {
         guard.prune_for(keep, shell_prefix)
     }
 
+    /// Clears all entries visible in the current scope.
+    ///
+    /// Returns the number of removed entries.
     pub fn clear_scoped(&self) -> Result<usize> {
         let mut guard = self
             .inner
@@ -167,6 +191,9 @@ impl SharedHistory {
         guard.clear_scoped()
     }
 
+    /// Clears all entries visible to the provided shell prefix.
+    ///
+    /// Returns the number of removed entries.
     pub fn clear_for(&self, shell_prefix: Option<&str>) -> Result<usize> {
         let mut guard = self
             .inner
@@ -175,6 +202,7 @@ impl SharedHistory {
         guard.clear_for(shell_prefix)
     }
 
+    /// Saves one command line through the underlying `reedline::History` implementation.
     pub fn save_command_line(&self, command_line: &str) -> Result<()> {
         let mut guard = self
             .inner
@@ -186,12 +214,14 @@ impl SharedHistory {
     }
 }
 
+/// `reedline::History` implementation backed by newline-delimited JSON records.
 pub struct OspHistoryStore {
     config: HistoryConfig,
     records: Vec<HistoryRecord>,
 }
 
 impl OspHistoryStore {
+    /// Creates a history store and eagerly loads persisted records when enabled.
     pub fn new(config: HistoryConfig) -> Result<Self> {
         let mut records = Vec::new();
         if config.persist_enabled()
@@ -204,14 +234,17 @@ impl OspHistoryStore {
         Ok(store)
     }
 
+    /// Returns whether history operations are active for this store.
     pub fn history_enabled(&self) -> bool {
         self.config.enabled && self.config.max_entries > 0
     }
 
+    /// Returns recent commands using the store's active shell scope.
     pub fn recent_commands(&self) -> Vec<String> {
         self.recent_commands_for(self.shell_prefix().as_deref())
     }
 
+    /// Returns recent commands visible to the provided shell prefix.
     pub fn recent_commands_for(&self, shell_prefix: Option<&str>) -> Vec<String> {
         let shell_prefix = normalize_scope_prefix(shell_prefix);
         self.records
@@ -223,10 +256,12 @@ impl OspHistoryStore {
             .collect()
     }
 
+    /// Returns scoped history entries using the store's active shell scope.
     pub fn list_entries(&self) -> Vec<HistoryEntry> {
         self.list_entries_for(self.shell_prefix().as_deref())
     }
 
+    /// Returns scoped history entries visible to the provided shell prefix.
     pub fn list_entries_for(&self, shell_prefix: Option<&str>) -> Vec<HistoryEntry> {
         if !self.history_enabled() {
             return Vec::new();
@@ -249,11 +284,17 @@ impl OspHistoryStore {
         out
     }
 
+    /// Removes older entries, keeping at most `keep` scoped entries.
+    ///
+    /// Returns the number of removed entries.
     pub fn prune(&mut self, keep: usize) -> Result<usize> {
         let shell_prefix = self.shell_prefix();
         self.prune_for(keep, shell_prefix.as_deref())
     }
 
+    /// Removes older entries for a specific shell scope, keeping at most `keep`.
+    ///
+    /// Returns the number of removed entries.
     pub fn prune_for(&mut self, keep: usize, shell_prefix: Option<&str>) -> Result<usize> {
         if !self.history_enabled() {
             return Ok(0);
@@ -282,10 +323,16 @@ impl OspHistoryStore {
         self.remove_records(&to_remove)
     }
 
+    /// Clears all entries visible in the current scope.
+    ///
+    /// Returns the number of removed entries.
     pub fn clear_scoped(&mut self) -> Result<usize> {
         self.prune(0)
     }
 
+    /// Clears all entries visible to the provided shell prefix.
+    ///
+    /// Returns the number of removed entries.
     pub fn clear_for(&mut self, shell_prefix: Option<&str>) -> Result<usize> {
         self.prune_for(0, shell_prefix)
     }
@@ -914,6 +961,9 @@ fn now_ms() -> i64 {
     now.as_millis() as i64
 }
 
+/// Expands shell-style history references against the provided command list.
+///
+/// Supports `!!`, `!-N`, `!N`, and prefix search forms such as `!osp`.
 pub fn expand_history(
     input: &str,
     history: &[String],

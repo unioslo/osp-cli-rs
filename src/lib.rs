@@ -13,20 +13,32 @@
 //! The old multi-crate mirror still lives under `workspace/`, but the root
 //! crate's canonical implementation now lives in the module tree below.
 
+/// Test-friendly API adapters and mock implementations.
 pub mod api;
+/// Main host-facing entrypoints, runtime state, and session types.
 pub mod app;
+/// Command-line argument types and CLI parsing helpers.
 pub mod cli;
+/// Structured command and pipe completion types.
 pub mod completion;
+/// Layered configuration schema, loading, and resolution.
 pub mod config;
+/// Shared command, output, row, and protocol primitives.
 pub mod core;
+/// Row-oriented pipeline parsing and execution.
 pub mod dsl;
+/// Structured help/guide view models and conversions.
 pub mod guide;
+/// External plugin discovery, protocol, and dispatch support.
 pub mod plugin;
+/// Service-layer ports used by command execution.
 pub mod ports;
 pub mod prelude;
 pub mod repl;
 pub mod runtime;
+/// Library-level service entrypoints built on the core ports.
 pub mod services;
+/// Rendering, theming, and structured output helpers.
 pub mod ui;
 
 pub use crate::app::{App, AppBuilder, AppRunner, run_from, run_process};

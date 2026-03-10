@@ -10,6 +10,7 @@ use crate::core::command_policy::CommandPolicyRegistry;
 use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1, ResponseV1};
 use crate::core::runtime::RuntimeHints;
 
+/// Public catalog entry for one registered native command.
 #[derive(Debug, Clone)]
 pub struct NativeCommandCatalogEntry {
     pub name: String,
@@ -19,30 +20,40 @@ pub struct NativeCommandCatalogEntry {
     pub completion: CommandSpec,
 }
 
+/// Runtime context passed to native command implementations.
 pub struct NativeCommandContext<'a> {
     pub config: &'a ResolvedConfig,
     pub runtime_hints: RuntimeHints,
 }
 
+/// Result of executing a native command.
 pub enum NativeCommandOutcome {
+    /// Return rendered help text directly.
     Help(String),
+    /// Return a protocol response payload.
     Response(Box<ResponseV1>),
+    /// Exit immediately with the given status code.
     Exit(i32),
 }
 
+/// Trait implemented by native commands registered directly in-process.
 pub trait NativeCommand: Send + Sync {
+    /// Returns the clap command definition for this command.
     fn command(&self) -> Command;
 
+    /// Returns optional auth/visibility metadata for the command.
     fn auth(&self) -> Option<DescribeCommandAuthV1> {
         None
     }
 
+    /// Builds the plugin-protocol style description for this command.
     fn describe(&self) -> DescribeCommandV1 {
         let mut describe = DescribeCommandV1::from_clap(self.command());
         describe.auth = self.auth();
         describe
     }
 
+    /// Executes the command using already-parsed argument tokens.
     fn execute(
         &self,
         args: &[String],
@@ -50,21 +61,25 @@ pub trait NativeCommand: Send + Sync {
     ) -> Result<NativeCommandOutcome>;
 }
 
+/// Registry of in-process native commands exposed alongside plugin commands.
 #[derive(Clone, Default)]
 pub struct NativeCommandRegistry {
     commands: Arc<BTreeMap<String, Arc<dyn NativeCommand>>>,
 }
 
 impl NativeCommandRegistry {
+    /// Creates an empty native command registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Returns a registry with one additional registered command.
     pub fn with_command(mut self, command: impl NativeCommand + 'static) -> Self {
         self.register(command);
         self
     }
 
+    /// Registers or replaces a native command by normalized command name.
     pub fn register(&mut self, command: impl NativeCommand + 'static) {
         let mut next = (*self.commands).clone();
         let command = Arc::new(command) as Arc<dyn NativeCommand>;
@@ -73,14 +88,17 @@ impl NativeCommandRegistry {
         self.commands = Arc::new(next);
     }
 
+    /// Returns `true` when no native commands are registered.
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
 
+    /// Returns a registered command by normalized name.
     pub fn command(&self, name: &str) -> Option<&Arc<dyn NativeCommand>> {
         self.commands.get(&normalize_name(name))
     }
 
+    /// Returns catalog metadata for all registered native commands.
     pub fn catalog(&self) -> Vec<NativeCommandCatalogEntry> {
         self.commands
             .values()
@@ -98,6 +116,7 @@ impl NativeCommandRegistry {
             .collect()
     }
 
+    /// Builds a command-policy registry derived from command descriptions.
     pub fn command_policy_registry(&self) -> CommandPolicyRegistry {
         let mut registry = CommandPolicyRegistry::new();
         for command in self.commands.values() {
