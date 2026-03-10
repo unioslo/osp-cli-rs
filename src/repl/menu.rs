@@ -1,14 +1,14 @@
 use reedline::{
-    menu_functions::{can_partially_complete, replace_in_buffer},
     Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
+    menu_functions::{can_partially_complete, replace_in_buffer},
 };
 use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
 
-use crate::repl::menu_core::{MenuAction, MenuCore};
 use crate::repl::CompletionTraceMenuState;
+use crate::repl::menu_core::{MenuAction, MenuCore};
 
-pub(crate) use crate::repl::menu_core::{display_text, MenuDebug, MenuStyleDebug};
+pub(crate) use crate::repl::menu_core::{MenuDebug, MenuStyleDebug, display_text};
 
 /// Completion menu with adaptive column layout and an optional meta line.
 ///
@@ -21,9 +21,13 @@ pub struct OspCompletionMenu {
     marker: String,
     // When true, only pass the buffer prefix up to the cursor to the completer.
     only_buffer_difference: bool,
+    quick_complete: bool,
     colors: MenuTextStyle,
     core: MenuCore,
     replace_span: Option<Span>,
+    // Keep popup alignment stable while cycling so repaint follows the token,
+    // not the cursor column drift from accepted candidates.
+    indent_anchor: Option<u16>,
     cursor_col: u16,
     last_available_lines: u16,
     event: Option<MenuEvent>,
@@ -71,9 +75,11 @@ impl Default for OspCompletionMenu {
             name: "completion_menu".to_string(),
             marker: "| ".to_string(),
             only_buffer_difference: false,
+            quick_complete: true,
             colors: MenuTextStyle::default(),
             core: MenuCore::default(),
             replace_span: None,
+            indent_anchor: None,
             cursor_col: 0,
             last_available_lines: 0,
             event: None,
@@ -91,6 +97,12 @@ impl OspCompletionMenu {
     /// Limits completion input to the buffer prefix before the cursor.
     pub fn with_only_buffer_difference(mut self, only_buffer_difference: bool) -> Self {
         self.only_buffer_difference = only_buffer_difference;
+        self
+    }
+
+    /// Controls whether a single menu match may be auto-accepted by reedline.
+    pub fn with_quick_complete(mut self, quick_complete: bool) -> Self {
+        self.quick_complete = quick_complete;
         self
     }
 
@@ -164,6 +176,19 @@ impl OspCompletionMenu {
                 self.apply_selection_in_buffer(editor, ApplyMode::Cycle);
             }
         }
+    }
+
+    fn stable_menu_indent(&mut self, editor: &Editor) -> u16 {
+        if let Some(indent) = self.indent_anchor {
+            return indent;
+        }
+        // Latch the first live indent so cycling across replacements does not
+        // make the menu "walk" horizontally between frames.
+        let indent = compute_menu_indent(self, editor);
+        if self.core.is_active() && !self.core.values().is_empty() {
+            self.indent_anchor = Some(indent);
+        }
+        indent
     }
 
     fn apply_selection_in_buffer(&mut self, editor: &mut Editor, mode: ApplyMode) {
@@ -277,6 +302,21 @@ impl OspCompletionMenu {
 
         Some((start, suggestion.value.len(), prefixed_space))
     }
+
+    fn update_working_details_inner(
+        &mut self,
+        editor: &mut Editor,
+        completer: &mut dyn Completer,
+        screen_width: u16,
+        available_lines: u16,
+    ) {
+        let _active_editor = ActiveEditorGuard::register(editor);
+        self.apply_event(editor, completer);
+        self.last_available_lines = available_lines;
+        let indent = self.stable_menu_indent(editor);
+        self.core.update_layout(screen_width, indent);
+        trace_menu_state_with_available_lines(self, editor, available_lines);
+    }
 }
 
 impl Menu for OspCompletionMenu {
@@ -297,7 +337,7 @@ impl Menu for OspCompletionMenu {
     }
 
     fn can_quick_complete(&self) -> bool {
-        true
+        self.quick_complete
     }
 
     fn can_partially_complete(
@@ -322,6 +362,7 @@ impl Menu for OspCompletionMenu {
         self.core.pre_event(&event);
         if matches!(event, MenuEvent::Activate(_) | MenuEvent::Deactivate) {
             self.replace_span = None;
+            self.indent_anchor = None;
         }
 
         if matches!(
@@ -361,6 +402,9 @@ impl Menu for OspCompletionMenu {
         let values = completer.complete(input, pos);
         self.core.set_values(values);
         self.replace_span = self.core.values().first().map(|item| item.span);
+        if self.core.values().is_empty() {
+            self.indent_anchor = None;
+        }
     }
 
     fn update_working_details(
@@ -369,12 +413,12 @@ impl Menu for OspCompletionMenu {
         completer: &mut dyn Completer,
         painter: &Painter,
     ) {
-        let _active_editor = ActiveEditorGuard::register(editor);
-        self.apply_event(editor, completer);
-        self.last_available_lines = painter.remaining_lines();
-        let indent = compute_menu_indent(self, editor);
-        self.core.update_layout(painter.screen_width(), indent);
-        trace_menu_state(self, editor, painter);
+        self.update_working_details_inner(
+            editor,
+            completer,
+            painter.screen_width(),
+            painter.remaining_lines(),
+        );
     }
 
     fn replace_in_buffer(&self, editor: &mut Editor) {
@@ -415,7 +459,11 @@ pub(crate) fn debug_snapshot(
         .debug_snapshot(&menu.colors, screen_width, screen_height, indent, ansi)
 }
 
-fn trace_menu_state(menu: &OspCompletionMenu, editor: &Editor, painter: &Painter) {
+fn trace_menu_state_with_available_lines(
+    menu: &OspCompletionMenu,
+    editor: &Editor,
+    available_lines: u16,
+) {
     if !crate::repl::trace_completion_enabled() {
         return;
     }
@@ -435,7 +483,6 @@ fn trace_menu_state(menu: &OspCompletionMenu, editor: &Editor, painter: &Painter
         .map(|item| item.value.clone())
         .collect::<Vec<_>>();
 
-    let available_lines = painter.remaining_lines();
     let selected_index = menu
         .core
         .selected_index()
@@ -486,10 +533,14 @@ fn needs_space_prefix(line: &str, start: usize, end: usize) -> bool {
 fn compute_menu_indent(menu: &OspCompletionMenu, editor: &Editor) -> u16 {
     let line = editor.get_buffer();
     let span_start = menu
-        .core
-        .values()
-        .first()
-        .map(|s| s.span.start.min(line.len()))
+        .replace_span
+        .map(|span| span.start.min(line.len()))
+        .or_else(|| {
+            menu.core
+                .values()
+                .first()
+                .map(|suggestion| suggestion.span.start.min(line.len()))
+        })
         .unwrap_or_else(|| editor.line_buffer().insertion_point().min(line.len()));
     let prefix = line.get(0..span_start).unwrap_or("");
     let prefix_width = prefix.width();
@@ -511,10 +562,17 @@ impl OspCompletionMenu {
         completer: &mut dyn Completer,
         screen_width: u16,
     ) {
-        let _active_editor = ActiveEditorGuard::register(editor);
-        self.apply_event(editor, completer);
-        let indent = compute_menu_indent(self, editor);
-        self.core.update_layout(screen_width, indent);
+        self.update_for_test_with_available_lines(editor, completer, screen_width, u16::MAX);
+    }
+
+    fn update_for_test_with_available_lines(
+        &mut self,
+        editor: &mut Editor,
+        completer: &mut dyn Completer,
+        screen_width: u16,
+        available_lines: u16,
+    ) {
+        self.update_working_details_inner(editor, completer, screen_width, available_lines);
     }
 
     fn columns_for_test(&self) -> u16 {
@@ -523,493 +581,4 @@ impl OspCompletionMenu {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{needs_space_prefix, OspCompletionMenu};
-    use nu_ansi_term::{Color, Style};
-    use reedline::{Completer, Editor, Menu, MenuEvent, Span, Suggestion, UndoBehavior};
-    use unicode_width::UnicodeWidthStr;
-
-    #[derive(Clone)]
-    struct FixedCompleter {
-        suggestions: Vec<Suggestion>,
-    }
-
-    impl Completer for FixedCompleter {
-        fn complete(&mut self, _line: &str, _pos: usize) -> Vec<Suggestion> {
-            self.suggestions.clone()
-        }
-    }
-
-    #[derive(Clone)]
-    struct DynamicSpanCompleter;
-
-    impl Completer for DynamicSpanCompleter {
-        fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
-            let start = line
-                .get(..pos)
-                .unwrap_or("")
-                .rfind(|ch: char| ch.is_whitespace())
-                .map(|idx| idx + 1)
-                .unwrap_or(0);
-            let span = Span { start, end: pos };
-            vec![suggestion("config", span), suggestion("doctor", span)]
-        }
-    }
-
-    fn set_buffer(editor: &mut Editor, buffer: &str) {
-        editor.edit_buffer(
-            |buf| buf.set_buffer(buffer.to_string()),
-            UndoBehavior::CreateUndoPoint,
-        );
-    }
-
-    fn suggestion(value: &str, span: Span) -> Suggestion {
-        Suggestion {
-            value: value.to_string(),
-            span,
-            append_whitespace: true,
-            ..Suggestion::default()
-        }
-    }
-
-    fn split_lines(output: &str) -> Vec<&str> {
-        output.split_terminator("\r\n").collect()
-    }
-
-    #[test]
-    fn tab_cycles_selection_replaces_buffer() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "co");
-
-        let mut completer = DynamicSpanCompleter;
-        let mut menu = OspCompletionMenu::default();
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
-        assert_eq!(debug.selected_index, 0);
-        assert_eq!(editor.line_buffer().get_buffer(), "co");
-
-        menu.menu_event(MenuEvent::NextElement);
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
-        assert_eq!(debug.selected_index, 0);
-        assert_eq!(editor.line_buffer().get_buffer(), "config");
-
-        menu.menu_event(MenuEvent::NextElement);
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
-        assert_eq!(debug.selected_index, 1);
-        assert_eq!(editor.line_buffer().get_buffer(), "doctor");
-    }
-
-    #[test]
-    fn explicit_accept_applies_selected_completion() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "doctor ");
-        let insert_at = editor.line_buffer().len();
-
-        let suggestions = vec![
-            suggestion(
-                "all",
-                Span {
-                    start: insert_at,
-                    end: insert_at,
-                },
-            ),
-            suggestion(
-                "config",
-                Span {
-                    start: insert_at,
-                    end: insert_at,
-                },
-            ),
-            suggestion(
-                "plugins",
-                Span {
-                    start: insert_at,
-                    end: insert_at,
-                },
-            ),
-            suggestion(
-                "theme",
-                Span {
-                    start: insert_at,
-                    end: insert_at,
-                },
-            ),
-        ];
-        let mut completer = FixedCompleter { suggestions };
-        let mut menu = OspCompletionMenu::default();
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        menu.accept_selection_in_buffer(&mut editor);
-
-        assert_eq!(editor.line_buffer().get_buffer(), "doctor all ");
-    }
-
-    #[test]
-    fn replace_in_buffer_accepts_selected_completion() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "doctor ");
-        let insert_at = editor.line_buffer().len();
-
-        let suggestions = vec![
-            suggestion(
-                "all",
-                Span {
-                    start: insert_at,
-                    end: insert_at,
-                },
-            ),
-            suggestion(
-                "config",
-                Span {
-                    start: insert_at,
-                    end: insert_at,
-                },
-            ),
-        ];
-        let mut completer = FixedCompleter { suggestions };
-        let mut menu = OspCompletionMenu::default();
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        menu.replace_in_buffer(&mut editor);
-
-        assert_eq!(editor.line_buffer().get_buffer(), "doctor all ");
-    }
-
-    #[test]
-    fn menu_uses_display_text_when_present() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-        let mut menu = OspCompletionMenu::default();
-
-        let mut first = suggestion("config", Span { start: 0, end: 0 });
-        first.extra = Some(vec!["Configure".to_string()]);
-        let second = suggestion("doctor", Span { start: 0, end: 0 });
-
-        let mut completer = FixedCompleter {
-            suggestions: vec![first, second],
-        };
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let output = menu.menu_string(10, false);
-        assert!(output.contains("Configure"));
-        assert!(output.contains("doctor"));
-    }
-
-    #[test]
-    fn menu_shows_description_for_selected_item() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-        let mut menu = OspCompletionMenu::default();
-
-        let mut first = suggestion("config", Span { start: 0, end: 0 });
-        first.description = Some("Inspect and edit runtime config".to_string());
-        let second = suggestion("doctor", Span { start: 0, end: 0 });
-
-        let mut completer = FixedCompleter {
-            suggestions: vec![first, second],
-        };
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        menu.menu_event(MenuEvent::NextElement);
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let output = menu.menu_string(10, false);
-        let lines = split_lines(&output);
-        let last = lines.last().map(|line| line.trim()).unwrap_or_default();
-        assert!(!last.is_empty());
-        assert!("Inspect and edit runtime config".starts_with(last));
-    }
-
-    #[test]
-    fn menu_truncates_description_on_narrow_width() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-        let mut menu = OspCompletionMenu::default();
-
-        let mut first = suggestion("config", Span { start: 0, end: 0 });
-        first.description = Some("this description is very long".to_string());
-
-        let mut completer = FixedCompleter {
-            suggestions: vec![first],
-        };
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 10);
-
-        menu.menu_event(MenuEvent::NextElement);
-        menu.update_for_test(&mut editor, &mut completer, 10);
-
-        let output = menu.menu_string(10, false);
-        assert!(output.contains("this"));
-        assert!(!output.contains("description is very long"));
-    }
-
-    #[test]
-    fn menu_narrows_columns_on_small_width() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-
-        let suggestions = vec![
-            suggestion("alpha", Span { start: 0, end: 0 }),
-            suggestion("bravo", Span { start: 0, end: 0 }),
-            suggestion("charlie", Span { start: 0, end: 0 }),
-            suggestion("delta", Span { start: 0, end: 0 }),
-        ];
-
-        let mut completer = FixedCompleter {
-            suggestions: suggestions.clone(),
-        };
-        let mut menu_small = OspCompletionMenu::default();
-        menu_small.menu_event(MenuEvent::Activate(false));
-        menu_small.update_for_test(&mut editor, &mut completer, 10);
-        assert_eq!(menu_small.columns_for_test(), 1);
-
-        let mut completer = FixedCompleter { suggestions };
-        let mut menu_large = OspCompletionMenu::default();
-        menu_large.menu_event(MenuEvent::Activate(false));
-        menu_large.update_for_test(&mut editor, &mut completer, 80);
-        assert!(menu_large.columns_for_test() > 1);
-    }
-
-    #[test]
-    fn menu_respects_available_lines() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-        let mut menu = OspCompletionMenu::default();
-
-        let mut suggestions = Vec::new();
-        for idx in 0..10 {
-            suggestions.push(suggestion(&format!("item{idx}"), Span { start: 0, end: 0 }));
-        }
-        let mut completer = FixedCompleter { suggestions };
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let output = menu.menu_string(1, false);
-        let lines = split_lines(&output);
-        assert!(!lines.is_empty());
-        assert!(lines.len() <= 1);
-    }
-
-    #[test]
-    fn menu_ansi_coloring_preserves_case_and_resets() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-        let mut menu = OspCompletionMenu::default();
-
-        let suggestions = vec![
-            suggestion("config", Span { start: 0, end: 0 }),
-            suggestion("doctor", Span { start: 0, end: 0 }),
-        ];
-        let mut completer = FixedCompleter { suggestions };
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let output = menu.menu_string(10, true);
-        assert!(output.contains("config"));
-        assert!(!output.contains("CONFIG"));
-        assert!(output.contains("\u{1b}["));
-        assert!(output.contains("\u{1b}[0m"));
-    }
-
-    #[test]
-    fn menu_non_ansi_marks_selected_item() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-        let mut menu = OspCompletionMenu::default();
-
-        let suggestions = vec![
-            suggestion("config", Span { start: 0, end: 0 }),
-            suggestion("doctor", Span { start: 0, end: 0 }),
-        ];
-        let mut completer = FixedCompleter { suggestions };
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        menu.menu_event(MenuEvent::NextElement);
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let output = menu.menu_string(10, false);
-        assert!(output.contains("> config"));
-        assert!(output.contains("  doctor"));
-    }
-
-    #[test]
-    fn menu_width_never_exceeds_screen_width_without_ansi() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-        let mut menu = OspCompletionMenu::default();
-
-        let suggestions = vec![
-            suggestion("alpha", Span { start: 0, end: 0 }),
-            suggestion("bravo", Span { start: 0, end: 0 }),
-            suggestion("charlie", Span { start: 0, end: 0 }),
-        ];
-        let mut completer = FixedCompleter { suggestions };
-
-        let screen_width = 20;
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, screen_width);
-
-        let output = menu.menu_string(10, false);
-        for line in split_lines(&output) {
-            assert!(line.width() <= screen_width as usize);
-        }
-    }
-
-    #[test]
-    fn menu_description_is_omitted_when_no_lines_available() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "");
-        let mut menu = OspCompletionMenu::default();
-
-        let mut first = suggestion("config", Span { start: 0, end: 0 });
-        first.description = Some("Long description".to_string());
-        let mut completer = FixedCompleter {
-            suggestions: vec![first],
-        };
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        menu.menu_event(MenuEvent::NextElement);
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        let output = menu.menu_string(1, false);
-        let lines = split_lines(&output);
-        assert_eq!(lines.len(), 1);
-        assert!(!output.contains("Long description"));
-    }
-
-    #[test]
-    fn menu_debug_reports_styles_and_selection() {
-        let span = Span { start: 0, end: 0 };
-        let suggestions = vec![suggestion("config", span)];
-        let mut menu = OspCompletionMenu::default()
-            .with_text_style(Style::new().fg(Color::Red).on(Color::Black))
-            .with_selected_text_style(Style::new().fg(Color::Green).on(Color::Blue))
-            .with_description_text_style(Style::new().fg(Color::Yellow))
-            .with_match_text_style(Style::new().fg(Color::Cyan))
-            .with_selected_match_text_style(Style::new().fg(Color::Magenta));
-
-        let mut editor = Editor::default();
-        let mut completer = FixedCompleter { suggestions };
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 20);
-
-        let debug = super::debug_snapshot(&mut menu, &editor, 20, 5, false);
-        assert_eq!(debug.styles.text.foreground.as_deref(), Some("red"));
-        assert_eq!(debug.styles.text.background.as_deref(), Some("black"));
-        assert_eq!(
-            debug.styles.selected_text.foreground.as_deref(),
-            Some("green")
-        );
-        assert_eq!(
-            debug.styles.selected_text.background.as_deref(),
-            Some("blue")
-        );
-        assert_eq!(
-            debug.styles.description.foreground.as_deref(),
-            Some("yellow")
-        );
-        assert_eq!(debug.styles.match_text.foreground.as_deref(), Some("cyan"));
-        assert_eq!(
-            debug.styles.selected_match.foreground.as_deref(),
-            Some("magenta")
-        );
-        assert_eq!(debug.selected_index, 0);
-        assert_eq!(debug.selected_row, 0);
-        assert_eq!(debug.selected_col, 0);
-    }
-
-    #[test]
-    fn indicator_is_empty_until_menu_has_values() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "co");
-        let mut completer = DynamicSpanCompleter;
-        let mut menu = OspCompletionMenu::default().with_marker(">> ");
-
-        assert_eq!(menu.indicator(), "");
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-
-        assert_eq!(menu.indicator(), ">> ");
-        assert!(menu.menu_required_lines(80) >= 1);
-    }
-
-    #[test]
-    fn partial_complete_uses_buffer_prefix_when_requested() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "config sh");
-        let cursor = editor.line_buffer().len();
-        let mut completer = FixedCompleter {
-            suggestions: vec![
-                suggestion(
-                    "show",
-                    Span {
-                        start: cursor - 2,
-                        end: cursor,
-                    },
-                ),
-                suggestion(
-                    "shell",
-                    Span {
-                        start: cursor - 2,
-                        end: cursor,
-                    },
-                ),
-            ],
-        };
-        let mut menu = OspCompletionMenu::default().with_only_buffer_difference(true);
-
-        assert!(menu.can_partially_complete(false, &mut editor, &mut completer));
-    }
-
-    #[test]
-    fn replace_in_buffer_inserts_missing_space_before_completion() {
-        let mut editor = Editor::default();
-        set_buffer(&mut editor, "doctor");
-        let cursor = editor.line_buffer().len();
-        let mut completer = FixedCompleter {
-            suggestions: vec![suggestion(
-                "config",
-                Span {
-                    start: cursor,
-                    end: cursor,
-                },
-            )],
-        };
-        let mut menu = OspCompletionMenu::default();
-
-        menu.menu_event(MenuEvent::Activate(false));
-        menu.update_for_test(&mut editor, &mut completer, 80);
-        menu.menu_event(MenuEvent::NextElement);
-        menu.update_for_test(&mut editor, &mut completer, 80);
-        menu.accept_selection_in_buffer(&mut editor);
-
-        assert_eq!(editor.line_buffer().get_buffer(), "doctor config ");
-        assert!(needs_space_prefix("doctor", 6, 6));
-        assert!(!needs_space_prefix("doctor ", 7, 7));
-        assert!(!needs_space_prefix("a=", 2, 2));
-    }
-}
+mod tests;

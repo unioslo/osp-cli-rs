@@ -31,10 +31,7 @@ pub(crate) fn history_command_def(sort_key: impl Into<String>) -> CommandDef {
         ])
 }
 
-pub(crate) fn build_history_config(
-    runtime: &AppRuntime,
-    session: &mut AppSession,
-) -> HistoryConfig {
+pub(crate) fn build_history_config(runtime: &AppRuntime, session: &AppSession) -> HistoryConfig {
     let config = runtime.config.resolved();
     let history_max_entries = config_usize(
         config,

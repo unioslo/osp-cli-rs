@@ -420,7 +420,11 @@ impl MenuCore {
         }
         let cols = self.get_cols();
         let rows = values / cols;
-        if values % cols != 0 { rows + 1 } else { rows }
+        if !values.is_multiple_of(cols) {
+            rows + 1
+        } else {
+            rows
+        }
     }
 
     fn compute_column_layout(
@@ -599,6 +603,9 @@ impl MenuCore {
     }
 
     fn description_line(&self) -> Option<String> {
+        if self.just_activated {
+            return None;
+        }
         let description = self
             .selected_value()
             .and_then(|suggestion| suggestion.description.clone())
@@ -642,7 +649,8 @@ impl MenuCore {
         let display = display_text(suggestion);
         let col_width = self.get_col_width(column);
         let display_width = display.width();
-        let styled = if index == self.index() {
+        let selected = index == self.index() && !self.just_activated;
+        let styled = if selected {
             colors.selected_text_style.prefix()
         } else {
             colors.text_style.prefix()
@@ -660,7 +668,6 @@ impl MenuCore {
                 empty = empty_space,
             )
         } else {
-            let selected = index == self.index();
             let (marker, marker_width) = marker_prefix(selected, col_width);
             let max_text_width = col_width.saturating_sub(marker_width);
             let display = truncate_to_width(display, max_text_width);
@@ -829,90 +836,4 @@ fn menu_styles_debug(colors: &MenuTextStyle) -> MenuStyleDebug {
 }
 
 #[cfg(test)]
-mod tests {
-    use reedline::{MenuEvent, Span, Suggestion};
-
-    use super::{MenuAction, MenuCore};
-
-    fn suggestion(value: &str) -> Suggestion {
-        Suggestion {
-            value: value.to_string(),
-            span: Span { start: 0, end: 0 },
-            ..Suggestion::default()
-        }
-    }
-
-    #[test]
-    fn move_left_wraps_to_rightmost_valid_col_on_short_last_row() {
-        let mut core = MenuCore::default();
-        core.set_columns(4);
-        core.set_values(
-            (0..6)
-                .map(|idx| suggestion(&format!("item{idx}")))
-                .collect::<Vec<_>>(),
-        );
-        core.update_layout(80, 0);
-
-        assert_eq!(
-            core.handle_event(MenuEvent::MoveDown),
-            MenuAction::ApplySelection
-        );
-        assert_eq!(core.selected_row(), 1);
-        assert_eq!(core.selected_col(), 0);
-        assert_eq!(core.selected_index(), Some(4));
-
-        assert_eq!(
-            core.handle_event(MenuEvent::MoveLeft),
-            MenuAction::ApplySelection
-        );
-        assert_eq!(core.selected_row(), 1);
-        assert_eq!(core.selected_col(), 1);
-        assert_eq!(core.selected_index(), Some(5));
-        assert!(core.selected_value().is_some());
-    }
-
-    #[test]
-    fn activation_exposes_first_selection_immediately() {
-        let mut core = MenuCore::default();
-        core.set_values(vec![suggestion("config"), suggestion("doctor")]);
-
-        core.pre_event(&MenuEvent::Activate(false));
-        assert_eq!(
-            core.handle_event(MenuEvent::Activate(false)),
-            MenuAction::UpdateValues
-        );
-        core.set_values(vec![suggestion("config"), suggestion("doctor")]);
-
-        assert_eq!(core.selected_index(), Some(0));
-        assert_eq!(
-            core.selected_value().map(|item| item.value.as_str()),
-            Some("config")
-        );
-    }
-
-    #[test]
-    fn page_events_move_by_configured_page_size() {
-        let mut core = MenuCore::default();
-        core.set_columns(1);
-        core.set_max_rows(3);
-        core.set_values(
-            (0..8)
-                .map(|idx| suggestion(&format!("item{idx}")))
-                .collect::<Vec<_>>(),
-        );
-
-        assert_eq!(
-            core.handle_event(MenuEvent::NextPage),
-            MenuAction::ApplySelection
-        );
-        assert_eq!(core.selected_row(), 3);
-        assert_eq!(core.selected_index(), Some(3));
-
-        assert_eq!(
-            core.handle_event(MenuEvent::PreviousPage),
-            MenuAction::ApplySelection
-        );
-        assert_eq!(core.selected_row(), 0);
-        assert_eq!(core.selected_index(), Some(0));
-    }
-}
+mod tests;

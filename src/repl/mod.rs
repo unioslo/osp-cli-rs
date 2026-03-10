@@ -23,7 +23,7 @@ pub use engine::{
     LineProjector, OspHistoryStore, PromptRightRenderer, ReplAppearance, ReplInputMode,
     ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunConfig, ReplRunResult, SharedHistory,
     color_from_style_spec, debug_completion, debug_completion_steps, debug_highlight,
-    default_pipe_verbs, expand_history, run_repl,
+    debug_history_menu, debug_history_menu_steps, default_pipe_verbs, expand_history, run_repl,
 };
 pub(crate) use engine::{
     CompletionTraceEvent, CompletionTraceMenuState, trace_completion, trace_completion_enabled,

@@ -19,25 +19,36 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::highlight::ReplHighlighter;
-pub use super::highlight::{debug_highlight, HighlightDebugSpan};
+pub use super::highlight::{HighlightDebugSpan, debug_highlight};
 pub use super::history_store::{
-    expand_history, HistoryConfig, HistoryEntry, HistoryShellContext, OspHistoryStore,
-    SharedHistory,
+    HistoryConfig, HistoryEntry, HistoryShellContext, OspHistoryStore, SharedHistory,
+    expand_history,
 };
-use super::menu::{debug_snapshot, display_text, MenuDebug, MenuStyleDebug, OspCompletionMenu};
+use super::menu::{MenuDebug, MenuStyleDebug, OspCompletionMenu, debug_snapshot, display_text};
 use crate::completion::{
     ArgNode, CompletionEngine, CompletionNode, CompletionTree, SuggestionEntry, SuggestionOutput,
 };
-use crate::core::shell_words::{escape_for_shell, quote_for_shell, QuoteStyle};
+use crate::core::fuzzy::fold_case;
+use crate::core::shell_words::{QuoteStyle, escape_for_shell, quote_for_shell};
 use anyhow::Result;
 use nu_ansi_term::{Color, Style};
 use reedline::{
-    default_emacs_keybindings, Completer, EditCommand, EditMode, Editor, Emacs, KeyCode,
-    KeyModifiers, Menu, MenuEvent, Prompt, PromptEditMode, PromptHistorySearch,
-    PromptHistorySearchStatus, Reedline, ReedlineEvent, ReedlineMenu, ReedlineRawEvent, Signal,
-    Span, Suggestion, UndoBehavior,
+    Completer, EditCommand, EditMode, Editor, Emacs, KeyCode, KeyModifiers, Menu, MenuEvent,
+    Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, Reedline,
+    ReedlineEvent, ReedlineMenu, ReedlineRawEvent, Signal, Span, Suggestion, UndoBehavior,
+    default_emacs_keybindings,
 };
 use serde::Serialize;
+use skim::options::MatchScheme;
+use skim::prelude::{
+    Skim, SkimItem, SkimItemReceiver, SkimItemSender, SkimOptionsBuilder,
+    unbounded as skim_unbounded,
+};
+
+const COMPLETION_MENU_NAME: &str = "completion_menu";
+const HISTORY_MENU_NAME: &str = "history_menu";
+const HISTORY_MENU_LIMIT: usize = 5;
+const HOST_COMMAND_HISTORY_PICKER: &str = "\u{0}osp-repl-history-picker";
 
 /// Static prompt text shown by the interactive editor.
 ///
@@ -337,12 +348,37 @@ pub fn debug_completion(
     let mut editor = editor;
 
     menu.menu_event(MenuEvent::Activate(false));
-    menu.apply_event(&mut editor, &mut completer);
+    menu.apply_event(&mut editor, completer.as_mut());
 
     snapshot_completion_debug(
         tree,
         &mut menu,
         &editor,
+        options.width,
+        options.height,
+        options.ansi,
+        options.unicode,
+    )
+}
+
+/// Builds a single history-menu debug snapshot for `line` at `cursor`.
+pub fn debug_history_menu(
+    history: &SharedHistory,
+    line: &str,
+    cursor: usize,
+    options: CompletionDebugOptions<'_>,
+) -> CompletionDebug {
+    let (editor, mut completer, mut menu) =
+        build_debug_history_session(history, line, cursor, options.appearance);
+    let mut editor = editor;
+
+    menu.menu_event(MenuEvent::Activate(false));
+    menu.apply_event(&mut editor, completer.as_mut());
+
+    snapshot_history_debug(
+        &mut menu,
+        &editor,
+        cursor,
         options.width,
         options.height,
         options.ansi,
@@ -368,11 +404,48 @@ pub fn debug_completion_steps(
 
     let mut frames = Vec::with_capacity(steps.len());
     for step in steps {
-        apply_debug_step(step, &mut menu, &mut editor, &mut completer);
+        apply_debug_step(step, &mut menu, &mut editor, completer.as_mut());
         let state = snapshot_completion_debug(
             tree,
             &mut menu,
             &editor,
+            options.width,
+            options.height,
+            options.ansi,
+            options.unicode,
+        );
+        frames.push(CompletionDebugFrame {
+            step: step.as_str().to_string(),
+            state,
+        });
+    }
+
+    frames
+}
+
+/// Replays synthetic editor actions for the history menu and captures each frame.
+pub fn debug_history_menu_steps(
+    history: &SharedHistory,
+    line: &str,
+    cursor: usize,
+    options: CompletionDebugOptions<'_>,
+    steps: &[DebugStep],
+) -> Vec<CompletionDebugFrame> {
+    let (mut editor, mut completer, mut menu) =
+        build_debug_history_session(history, line, cursor, options.appearance);
+
+    let steps = steps.to_vec();
+    if steps.is_empty() {
+        return Vec::new();
+    }
+
+    let mut frames = Vec::with_capacity(steps.len());
+    for step in steps {
+        apply_debug_step(step, &mut menu, &mut editor, completer.as_mut());
+        let state = snapshot_history_debug(
+            &mut menu,
+            &editor,
+            cursor,
             options.width,
             options.height,
             options.ansi,
@@ -392,7 +465,7 @@ fn build_debug_completion_session(
     line: &str,
     cursor: usize,
     appearance: Option<&ReplAppearance>,
-) -> (Editor, ReplCompleter, OspCompletionMenu) {
+) -> (Editor, Box<dyn Completer>, OspCompletionMenu) {
     let mut editor = Editor::default();
     editor.edit_buffer(
         |buf| {
@@ -402,7 +475,7 @@ fn build_debug_completion_session(
         UndoBehavior::CreateUndoPoint,
     );
 
-    let completer = ReplCompleter::new(Vec::new(), Some(tree.clone()), None);
+    let completer = Box::new(ReplCompleter::new(Vec::new(), Some(tree.clone()), None));
     let menu = if let Some(appearance) = appearance {
         build_completion_menu(appearance)
     } else {
@@ -412,11 +485,40 @@ fn build_debug_completion_session(
     (editor, completer, menu)
 }
 
+fn build_debug_history_session(
+    history: &SharedHistory,
+    line: &str,
+    cursor: usize,
+    appearance: Option<&ReplAppearance>,
+) -> (Editor, Box<dyn Completer>, OspCompletionMenu) {
+    let mut editor = Editor::default();
+    editor.edit_buffer(
+        |buf| {
+            buf.set_buffer(line.to_string());
+            buf.set_insertion_point(cursor.min(buf.get_buffer().len()));
+        },
+        UndoBehavior::CreateUndoPoint,
+    );
+
+    let completer = Box::new(ReplHistoryCompleter::new(history.clone()));
+    let menu = if let Some(appearance) = appearance {
+        build_history_menu(appearance)
+    } else {
+        OspCompletionMenu::default()
+            .with_name(HISTORY_MENU_NAME)
+            .with_quick_complete(false)
+            .with_columns(1)
+            .with_max_rows(HISTORY_MENU_LIMIT as u16)
+    };
+
+    (editor, completer, menu)
+}
+
 fn apply_debug_step(
     step: DebugStep,
     menu: &mut OspCompletionMenu,
     editor: &mut Editor,
-    completer: &mut ReplCompleter,
+    completer: &mut dyn Completer,
 ) {
     match step {
         DebugStep::Tab => {
@@ -468,7 +570,7 @@ fn apply_debug_step(
 fn dispatch_menu_event(
     menu: &mut OspCompletionMenu,
     editor: &mut Editor,
-    completer: &mut ReplCompleter,
+    completer: &mut dyn Completer,
     event: MenuEvent,
 ) {
     menu.menu_event(event);
@@ -562,6 +664,85 @@ fn snapshot_completion_debug(
     }
 }
 
+fn snapshot_history_debug(
+    menu: &mut OspCompletionMenu,
+    editor: &Editor,
+    cursor: usize,
+    width: u16,
+    height: u16,
+    ansi: bool,
+    unicode: bool,
+) -> CompletionDebug {
+    let line = editor.get_buffer().to_string();
+    let cursor = cursor
+        .min(editor.line_buffer().insertion_point())
+        .min(line.len());
+    let values = menu.get_values();
+    let query = line.get(..cursor).unwrap_or(&line).trim().to_string();
+
+    let (stub, replace_range) = if let Some(first) = values.first() {
+        let start = first.span.start;
+        let end = first.span.end;
+        let stub = line.get(start..end).unwrap_or("").to_string();
+        (stub, [start, end])
+    } else {
+        (query, [0, line.len()])
+    };
+
+    let matches = values
+        .iter()
+        .map(|item| CompletionDebugMatch {
+            id: item.value.clone(),
+            label: display_text(item).to_string(),
+            description: item.description.clone(),
+            kind: "history".to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    let MenuDebug {
+        columns,
+        rows,
+        visible_rows,
+        indent,
+        selected_index,
+        selected_row,
+        selected_col,
+        description,
+        description_rendered,
+        styles,
+        rendered,
+    } = debug_snapshot(menu, editor, width, height, ansi);
+
+    let selected = if matches.is_empty() {
+        -1
+    } else {
+        selected_index
+    };
+
+    CompletionDebug {
+        line,
+        cursor,
+        replace_range,
+        stub,
+        matches,
+        selected,
+        selected_row,
+        selected_col,
+        columns,
+        rows,
+        visible_rows,
+        menu_indent: indent,
+        menu_styles: styles,
+        menu_description: description,
+        menu_description_rendered: description_rendered,
+        width,
+        height,
+        unicode,
+        color: ansi,
+        rendered,
+    }
+}
+
 impl ReplPrompt {
     /// Builds a prompt with no indicator suffix.
     pub fn simple(left: impl Into<String>) -> Self {
@@ -573,7 +754,7 @@ impl ReplPrompt {
 }
 
 /// Style overrides for REPL-only completion and highlighting chrome.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ReplAppearance {
     /// Style applied to non-selected completion text.
     pub completion_text_style: Option<String>,
@@ -583,6 +764,20 @@ pub struct ReplAppearance {
     pub completion_highlight_style: Option<String>,
     /// Style applied to recognized command segments in the input line.
     pub command_highlight_style: Option<String>,
+    /// Maximum number of visible rows in the history search menu.
+    pub history_menu_rows: u16,
+}
+
+impl Default for ReplAppearance {
+    fn default() -> Self {
+        Self {
+            completion_text_style: None,
+            completion_background_style: None,
+            completion_highlight_style: None,
+            command_highlight_style: None,
+            history_menu_rows: HISTORY_MENU_LIMIT as u16,
+        }
+    }
 }
 
 struct AutoCompleteEmacs {
@@ -749,7 +944,7 @@ where
         KeyModifiers::NONE,
         KeyCode::Tab,
         ReedlineEvent::UntilFound(vec![
-            ReedlineEvent::Menu("completion_menu".to_string()),
+            ReedlineEvent::Menu(COMPLETION_MENU_NAME.to_string()),
             ReedlineEvent::MenuNext,
         ]),
     );
@@ -757,18 +952,23 @@ where
         KeyModifiers::SHIFT,
         KeyCode::BackTab,
         ReedlineEvent::UntilFound(vec![
-            ReedlineEvent::Menu("completion_menu".to_string()),
+            ReedlineEvent::Menu(COMPLETION_MENU_NAME.to_string()),
             ReedlineEvent::MenuPrevious,
         ]),
     );
     keybindings.add_binding(
         KeyModifiers::CONTROL,
         KeyCode::Char(' '),
-        ReedlineEvent::Menu("completion_menu".to_string()),
+        ReedlineEvent::Menu(COMPLETION_MENU_NAME.to_string()),
+    );
+    keybindings.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('r'),
+        ReedlineEvent::ExecuteHostCommand(HOST_COMMAND_HISTORY_PICKER.to_string()),
     );
     let edit_mode = Box::new(AutoCompleteEmacs::new(
         Emacs::new(keybindings),
-        "completion_menu",
+        COMPLETION_MENU_NAME,
     ));
 
     let mut editor = Reedline::create()
@@ -797,6 +997,17 @@ falling back to basic input mode."
         };
 
         match signal {
+            Signal::Success(line) if line == HOST_COMMAND_HISTORY_PICKER => {
+                let current_line = editor.current_buffer_contents().to_string();
+                let selected = launch_history_picker(&history_store, &appearance, &current_line)?;
+                if let Some(command) = selected {
+                    editor.run_edit_commands(&[
+                        EditCommand::Clear,
+                        EditCommand::InsertString(command),
+                    ]);
+                }
+                continue;
+            }
             Signal::Success(line) => match process_submission(&line, &mut submission)? {
                 SubmissionResult::Noop => continue,
                 SubmissionResult::Print(output) => print!("{output}"),
@@ -1078,6 +1289,269 @@ impl Completer for ReplCompleter {
     }
 }
 
+struct ReplHistoryCompleter {
+    history: SharedHistory,
+}
+
+impl ReplHistoryCompleter {
+    fn new(history: SharedHistory) -> Self {
+        Self { history }
+    }
+}
+
+impl Completer for ReplHistoryCompleter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        let query = line
+            .get(..pos.min(line.len()))
+            .unwrap_or(line)
+            .trim()
+            .to_string();
+        let query_folded = fold_case(&query);
+        let replace_span = Span {
+            start: 0,
+            end: line.len(),
+        };
+
+        let mut seen = BTreeSet::new();
+        let mut exact = Vec::new();
+        let mut prefix = Vec::new();
+        let mut substring = Vec::new();
+        let mut recent = Vec::new();
+
+        for entry in self.history.list_entries().into_iter().rev() {
+            if !seen.insert(entry.command.clone()) {
+                continue;
+            }
+
+            if query_folded.is_empty() {
+                recent.push(history_suggestion(entry, replace_span));
+                if recent.len() >= HISTORY_MENU_LIMIT {
+                    break;
+                }
+                continue;
+            }
+
+            let command_folded = fold_case(&entry.command);
+            let suggestion = history_suggestion(entry.clone(), replace_span);
+            if command_folded == query_folded {
+                exact.push(suggestion);
+            } else if command_folded.starts_with(&query_folded) {
+                prefix.push(suggestion);
+            } else if command_folded.contains(&query_folded) {
+                substring.push(suggestion);
+            }
+        }
+
+        if query_folded.is_empty() {
+            return recent;
+        }
+
+        exact
+            .into_iter()
+            .chain(prefix)
+            .chain(substring)
+            .take(HISTORY_MENU_LIMIT)
+            .collect()
+    }
+}
+
+fn history_suggestion(entry: HistoryEntry, span: Span) -> Suggestion {
+    Suggestion {
+        value: entry.command.clone(),
+        extra: Some(vec![format!("{}  {}", entry.id, entry.command)]),
+        span,
+        append_whitespace: false,
+        ..Suggestion::default()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HistoryPickerItem {
+    label: String,
+    command: String,
+    matching_range: [(usize, usize); 1],
+}
+
+impl SkimItem for HistoryPickerItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.label)
+    }
+
+    fn output(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.command)
+    }
+
+    fn get_matching_ranges(&self) -> Option<&[(usize, usize)]> {
+        Some(&self.matching_range)
+    }
+}
+
+fn launch_history_picker(
+    history: &SharedHistory,
+    appearance: &ReplAppearance,
+    current_line: &str,
+) -> Result<Option<String>> {
+    let items = history_picker_items(history);
+    if items.is_empty() {
+        return Ok(None);
+    }
+
+    let options = build_history_picker_options(appearance, current_line.trim());
+    let (tx, rx): (SkimItemSender, SkimItemReceiver) = skim_unbounded();
+    let payload = items
+        .into_iter()
+        .map(|item| Arc::new(item) as Arc<dyn SkimItem>)
+        .collect::<Vec<_>>();
+    let _ = tx.send(payload);
+    drop(tx);
+
+    let output =
+        Skim::run_with(options, Some(rx)).map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    if output.is_abort {
+        return Ok(None);
+    }
+
+    Ok(output
+        .selected_items
+        .first()
+        .map(|item| item.output().into_owned())
+        .or_else(|| output.current.map(|item| item.output().into_owned())))
+}
+
+fn history_picker_items(history: &SharedHistory) -> Vec<HistoryPickerItem> {
+    let mut seen = BTreeSet::new();
+    let mut entries = Vec::new();
+
+    for entry in history.list_entries().into_iter().rev() {
+        if seen.insert(entry.command.clone()) {
+            entries.push(entry);
+        }
+    }
+
+    let number_width = entries
+        .iter()
+        .map(|entry| entry.id.to_string().len())
+        .max()
+        .unwrap_or(1);
+
+    entries
+        .into_iter()
+        .map(|entry| {
+            let display_command = single_line_history_label(&entry.command);
+            let label = format!("{:>number_width$}  {}", entry.id, display_command);
+            let command_start = number_width + 2;
+            HistoryPickerItem {
+                label,
+                command: entry.command,
+                matching_range: [(command_start, command_start + display_command.len())],
+            }
+        })
+        .collect()
+}
+
+fn single_line_history_label(command: &str) -> String {
+    command.replace("\r\n", " \\n ").replace('\n', " \\n ")
+}
+
+fn build_history_picker_options(
+    appearance: &ReplAppearance,
+    initial_query: &str,
+) -> skim::SkimOptions {
+    let height = appearance
+        .history_menu_rows
+        .max(1)
+        .saturating_add(1)
+        .to_string();
+    let mut builder = SkimOptionsBuilder::default();
+    builder
+        .height(height)
+        .min_height("2")
+        .reverse(true)
+        .no_info(true)
+        .multi(false)
+        .no_mouse(true)
+        .prompt("(reverse-i-search)> ")
+        .query(initial_query)
+        .scheme(MatchScheme::History)
+        .bind(vec!["ctrl-r:toggle-sort".to_string()]);
+
+    if let Some(color) = build_history_picker_color(appearance) {
+        builder.color(color);
+    }
+
+    builder
+        .build()
+        .expect("history picker options should be valid")
+}
+
+fn build_history_picker_color(appearance: &ReplAppearance) -> Option<String> {
+    let text = appearance
+        .completion_text_style
+        .as_deref()
+        .and_then(color_from_style_spec)
+        .and_then(skim_color_value);
+    let background = appearance
+        .completion_background_style
+        .as_deref()
+        .and_then(color_from_style_spec)
+        .and_then(skim_color_value);
+    let highlight = appearance
+        .completion_highlight_style
+        .as_deref()
+        .and_then(color_from_style_spec)
+        .and_then(skim_color_value);
+
+    let mut parts = Vec::new();
+    if let Some(text) = text.as_deref() {
+        parts.push(format!("normal:{text}"));
+        parts.push(format!("matched:{text}"));
+        parts.push(format!("current:{text}"));
+        parts.push(format!("current_match:{text}"));
+        parts.push(format!("query:{text}"));
+        parts.push(format!("prompt:{text}"));
+        parts.push(format!("cursor:{text}"));
+        parts.push(format!("selected:{text}"));
+        parts.push(format!("info:{text}"));
+        parts.push(format!("header:{text}"));
+        parts.push(format!("spinner:{text}"));
+        parts.push(format!("border:{text}"));
+    }
+    if let Some(background) = background.as_deref() {
+        parts.push(format!("bg:{background}"));
+        parts.push(format!("matched_bg:{background}"));
+    }
+    if let Some(highlight) = highlight.as_deref() {
+        parts.push(format!("current_bg:{highlight}"));
+        parts.push(format!("current_match_bg:{highlight}"));
+    }
+
+    (parts.len() > 1).then(|| parts.join(","))
+}
+
+fn skim_color_value(color: Color) -> Option<String> {
+    match color {
+        Color::Black => Some("0".to_string()),
+        Color::DarkGray => Some("8".to_string()),
+        Color::Red => Some("1".to_string()),
+        Color::LightRed => Some("9".to_string()),
+        Color::Green => Some("2".to_string()),
+        Color::LightGreen => Some("10".to_string()),
+        Color::Yellow => Some("3".to_string()),
+        Color::LightYellow => Some("11".to_string()),
+        Color::Blue => Some("4".to_string()),
+        Color::LightBlue => Some("12".to_string()),
+        Color::Purple | Color::Magenta => Some("5".to_string()),
+        Color::LightPurple | Color::LightMagenta => Some("13".to_string()),
+        Color::Cyan => Some("6".to_string()),
+        Color::LightCyan => Some("14".to_string()),
+        Color::White => Some("7".to_string()),
+        Color::LightGray => Some("15".to_string()),
+        Color::Fixed(value) => Some(value.to_string()),
+        Color::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
+        Color::Default => None,
+    }
+}
+
 /// Returns the default DSL verbs exposed after `|` in the REPL.
 pub fn default_pipe_verbs() -> BTreeMap<String, String> {
     BTreeMap::from([
@@ -1123,6 +1597,22 @@ fn build_repl_tree(words: &[String]) -> CompletionTree {
 }
 
 fn build_completion_menu(appearance: &ReplAppearance) -> OspCompletionMenu {
+    build_candidate_menu(appearance, COMPLETION_MENU_NAME)
+        .with_only_buffer_difference(false)
+        .with_quick_complete(true)
+        .with_columns(u16::MAX)
+        .with_max_rows(u16::MAX)
+}
+
+fn build_history_menu(appearance: &ReplAppearance) -> OspCompletionMenu {
+    build_candidate_menu(appearance, HISTORY_MENU_NAME)
+        .with_only_buffer_difference(false)
+        .with_quick_complete(false)
+        .with_columns(1)
+        .with_max_rows(appearance.history_menu_rows.max(1))
+}
+
+fn build_candidate_menu(appearance: &ReplAppearance, name: &str) -> OspCompletionMenu {
     let text_color = appearance
         .completion_text_style
         .as_deref()
@@ -1137,18 +1627,15 @@ fn build_completion_menu(appearance: &ReplAppearance) -> OspCompletionMenu {
         .and_then(color_from_style_spec);
 
     OspCompletionMenu::default()
-        .with_name("completion_menu")
-        .with_only_buffer_difference(false)
+        .with_name(name)
         .with_marker("")
-        .with_columns(u16::MAX)
-        .with_max_rows(u16::MAX)
         .with_description_rows(1)
         .with_column_padding(2)
         .with_text_style(style_with_fg_bg(text_color, background_color))
         .with_description_text_style(style_with_fg_bg(text_color, highlight_color))
-        .with_match_text_style(style_with_fg_bg(highlight_color, background_color))
-        .with_selected_text_style(style_with_fg_bg(highlight_color, text_color))
-        .with_selected_match_text_style(style_with_fg_bg(highlight_color, text_color))
+        .with_match_text_style(style_with_fg_bg(text_color, background_color))
+        .with_selected_text_style(style_with_fg_bg(text_color, highlight_color))
+        .with_selected_match_text_style(style_with_fg_bg(text_color, highlight_color))
 }
 
 fn build_repl_highlighter(
@@ -1619,8 +2106,9 @@ impl Prompt for OspPrompt {
 mod tests {
     use crate::completion::{CompletionNode, CompletionTree, FlagNode};
     use nu_ansi_term::Color;
+    use reedline::Span;
     use reedline::{
-        Completer, EditCommand, Prompt, PromptEditMode, PromptHistorySearch,
+        Completer, EditCommand, Menu, Prompt, PromptEditMode, PromptHistorySearch,
         PromptHistorySearchStatus,
     };
     use std::collections::BTreeSet;
@@ -1629,15 +2117,16 @@ mod tests {
     use std::sync::{Arc, Mutex, OnceLock};
 
     use super::{
-        basic_input_reason, build_repl_highlighter, color_from_style_spec,
-        contains_cursor_position_report, debug_completion, debug_completion_steps,
-        default_pipe_verbs, expand_history, expand_home, is_cursor_position_error,
-        parse_cursor_position_report, path_suggestions, process_submission, split_path_stub,
-        trace_completion, trace_completion_enabled, AutoCompleteEmacs, BasicInputReason,
-        CompletionDebugOptions, DebugStep, HistoryConfig, HistoryShellContext, OspPrompt,
-        PromptRightRenderer, ReplAppearance, ReplCompleter, ReplInputMode, ReplLineResult,
-        ReplPrompt, ReplReloadKind, ReplRunResult, SharedHistory, SubmissionContext,
-        SubmissionResult,
+        AutoCompleteEmacs, BasicInputReason, CompletionDebugOptions, DebugStep, HISTORY_MENU_NAME,
+        HistoryConfig, HistoryShellContext, OspPrompt, PromptRightRenderer, ReplAppearance,
+        ReplCompleter, ReplHistoryCompleter, ReplInputMode, ReplLineResult, ReplPrompt,
+        ReplReloadKind, ReplRunResult, SharedHistory, SubmissionContext, SubmissionResult,
+        basic_input_reason, build_history_menu, build_history_picker_options,
+        build_repl_highlighter, color_from_style_spec, contains_cursor_position_report,
+        debug_completion, debug_completion_steps, debug_history_menu, debug_history_menu_steps,
+        default_pipe_verbs, expand_history, expand_home, history_picker_items,
+        is_cursor_position_error, parse_cursor_position_report, path_suggestions,
+        process_submission, split_path_stub, trace_completion, trace_completion_enabled,
     };
     use crate::core::shell_words::QuoteStyle;
     use crate::repl::LineProjection;
@@ -1967,57 +2456,6 @@ mod tests {
     }
 
     #[test]
-    fn debug_completion_options_and_empty_steps_cover_builder_paths_unit() {
-        let appearance = ReplAppearance {
-            completion_text_style: Some("white".to_string()),
-            completion_background_style: Some("black".to_string()),
-            completion_highlight_style: Some("cyan".to_string()),
-            command_highlight_style: Some("green".to_string()),
-        };
-        let options = CompletionDebugOptions::new(90, 12)
-            .ansi(true)
-            .unicode(true)
-            .appearance(Some(&appearance));
-
-        assert!(options.ansi);
-        assert!(options.unicode);
-        assert!(options.appearance.is_some());
-
-        let tree = completion_tree_with_config_show();
-        let frames = debug_completion_steps(&tree, "config sh", 9, options, &[]);
-        assert!(frames.is_empty());
-    }
-
-    #[test]
-    fn debug_completion_navigation_variants_and_empty_matches_are_stable_unit() {
-        let tree = completion_tree_with_config_show();
-        let frames = debug_completion_steps(
-            &tree,
-            "config sh",
-            "config sh".len(),
-            CompletionDebugOptions::new(80, 6),
-            &[
-                DebugStep::Tab,
-                DebugStep::Down,
-                DebugStep::Right,
-                DebugStep::Left,
-                DebugStep::Up,
-                DebugStep::BackTab,
-                DebugStep::Close,
-            ],
-        );
-        assert_eq!(frames.len(), 7);
-        assert_eq!(
-            frames.last().map(|frame| frame.step.as_str()),
-            Some("close")
-        );
-
-        let debug = debug_completion(&tree, "zzz", 3, CompletionDebugOptions::new(80, 6));
-        assert!(debug.matches.is_empty());
-        assert_eq!(debug.selected, -1);
-    }
-
-    #[test]
     fn autocomplete_policy_and_path_helpers_cover_non_happy_paths_unit() {
         assert!(AutoCompleteEmacs::should_reopen_menu(&[
             EditCommand::InsertChar('x')
@@ -2041,10 +2479,13 @@ mod tests {
     }
 
     #[test]
-    fn completion_debug_options_builders_and_empty_steps_unit() {
+    fn completion_debug_options_builders_cover_appearance_and_empty_steps_unit() {
         let appearance = super::ReplAppearance {
-            completion_text_style: Some("cyan".to_string()),
-            ..Default::default()
+            completion_text_style: Some("white".to_string()),
+            completion_background_style: Some("black".to_string()),
+            completion_highlight_style: Some("cyan".to_string()),
+            command_highlight_style: Some("green".to_string()),
+            history_menu_rows: 5,
         };
         let options = CompletionDebugOptions::new(120, 40)
             .ansi(true)
@@ -2063,7 +2504,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_completion_navigation_steps_cover_menu_branches_unit() {
+    fn debug_completion_navigation_and_empty_match_states_unit() {
         let tree = completion_tree_with_config_show();
         let frames = debug_completion_steps(
             &tree,
@@ -2089,11 +2530,6 @@ mod tests {
         assert_eq!(frames[4].step, "up");
         assert_eq!(frames[5].step, "backtab");
         assert_eq!(frames[6].step, "close");
-    }
-
-    #[test]
-    fn debug_completion_without_matches_reports_unmatched_cursor_state_unit() {
-        let tree = completion_tree_with_config_show();
         let debug = debug_completion(&tree, "zzz", 99, CompletionDebugOptions::new(80, 6));
 
         assert_eq!(debug.line, "zzz");
@@ -2235,9 +2671,11 @@ mod tests {
             },
         );
 
-        assert!(suggestions
-            .iter()
-            .any(|item| item.value.ends_with("team\\ docs.txt")));
+        assert!(
+            suggestions
+                .iter()
+                .any(|item| item.value.ends_with("team\\ docs.txt"))
+        );
     }
 
     #[test]
@@ -2257,9 +2695,11 @@ mod tests {
             },
         );
 
-        assert!(suggestions
-            .iter()
-            .any(|item| item.value.ends_with("team docs.txt\"")));
+        assert!(
+            suggestions
+                .iter()
+                .any(|item| item.value.ends_with("team docs.txt\""))
+        );
     }
 
     #[test]
@@ -2391,6 +2831,172 @@ mod tests {
         restore_env("HOME", previous_home);
     }
 
+    #[test]
+    fn history_completer_returns_latest_unique_entries_for_empty_query_unit() {
+        let history = test_history(&[
+            "ldap user alice",
+            "mreg host foo",
+            "ldap user alice",
+            "config get theme",
+            "help ldap",
+            "doctor",
+        ]);
+        let mut completer = ReplHistoryCompleter::new(history);
+
+        let suggestions = completer.complete("", 0);
+        let values = suggestions
+            .iter()
+            .map(|suggestion| suggestion.value.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            values,
+            vec![
+                "doctor",
+                "help ldap",
+                "config get theme",
+                "ldap user alice",
+                "mreg host foo",
+            ]
+        );
+        assert!(
+            suggestions
+                .iter()
+                .all(|suggestion| suggestion.span == (Span { start: 0, end: 0 }))
+        );
+        assert_eq!(
+            suggestions[0]
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.first())
+                .cloned(),
+            Some("6  doctor".to_string())
+        );
+    }
+
+    #[test]
+    fn history_completer_ranks_exact_prefix_then_substring_unit() {
+        let history = test_history(&[
+            "config list",
+            "ldap config",
+            "config get theme",
+            "show config",
+            "CONFIG",
+            "config",
+        ]);
+        let mut completer = ReplHistoryCompleter::new(history);
+
+        let suggestions = completer.complete("config", "config".len());
+        let values = suggestions
+            .iter()
+            .map(|suggestion| suggestion.value.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            values,
+            vec![
+                "config",
+                "CONFIG",
+                "config get theme",
+                "config list",
+                "show config",
+            ]
+        );
+        assert!(suggestions.iter().all(|suggestion| {
+            suggestion.span
+                == (Span {
+                    start: 0,
+                    end: "config".len(),
+                })
+        }));
+        assert_eq!(
+            suggestions[0]
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.first())
+                .cloned(),
+            Some("6  config".to_string())
+        );
+    }
+
+    #[test]
+    fn history_menu_disables_single_match_quick_accept_unit() {
+        let menu = build_history_menu(&ReplAppearance::default());
+
+        assert_eq!(menu.name(), HISTORY_MENU_NAME);
+        assert!(!menu.can_quick_complete());
+    }
+
+    #[test]
+    fn debug_history_menu_surfaces_numbered_labels_and_steps_unit() {
+        let history = test_history(&["ldap user alice", "config get theme", "config"]);
+
+        let debug = debug_history_menu(
+            &history,
+            "config",
+            "config".len(),
+            CompletionDebugOptions::new(80, 6),
+        );
+        assert_eq!(debug.stub, "config");
+        assert_eq!(debug.matches[0].label, "3  config");
+        assert_eq!(debug.matches[0].id, "config");
+        assert!(debug.matches.iter().all(|item| item.kind == "history"));
+
+        let frames = debug_history_menu_steps(
+            &history,
+            "config",
+            "config".len(),
+            CompletionDebugOptions::new(80, 6),
+            &[DebugStep::Tab, DebugStep::Accept],
+        );
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].state.matches[0].label, "3  config");
+        assert_eq!(frames[1].state.line, "config");
+    }
+
+    #[test]
+    fn history_picker_items_keep_latest_unique_commands_and_flatten_multiline_unit() {
+        let history = test_history(&[
+            "doctor all",
+            "help doctor --mreg",
+            "doctor all",
+            "first line\nsecond line",
+        ]);
+
+        let items = history_picker_items(&history);
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].command, "first line\nsecond line");
+        assert!(items[0].label.contains("4  first line \\n second line"));
+        assert_eq!(items[1].command, "doctor all");
+        assert_eq!(items[2].command, "help doctor --mreg");
+        assert_eq!(items[1].matching_range[0].1, items[1].label.len());
+    }
+
+    #[test]
+    fn history_picker_options_use_configured_rows_query_and_skin_unit() {
+        let appearance = ReplAppearance {
+            completion_text_style: Some("white".to_string()),
+            completion_background_style: Some("black".to_string()),
+            completion_highlight_style: Some("cyan".to_string()),
+            command_highlight_style: Some("green".to_string()),
+            history_menu_rows: 7,
+        };
+
+        let options = build_history_picker_options(&appearance, "doctor mreg");
+
+        assert_eq!(options.height, "8");
+        assert_eq!(options.query.as_deref(), Some("doctor mreg"));
+        assert_eq!(options.prompt, "(reverse-i-search)> ");
+        assert!(options.no_info);
+        assert_eq!(
+            options.color.as_deref(),
+            Some(
+                "normal:7,matched:7,current:7,current_match:7,query:7,prompt:7,cursor:7,selected:7,info:7,header:7,spinner:7,border:7,bg:0,matched_bg:0,current_bg:6,current_match_bg:6"
+            )
+        );
+    }
+
     fn make_temp_dir(prefix: &str) -> PathBuf {
         let mut dir = std::env::temp_dir();
         let nonce = std::time::SystemTime::now()
@@ -2425,5 +3031,31 @@ mod tests {
         unsafe {
             std::env::remove_var(key);
         }
+    }
+
+    fn test_history(commands: &[&str]) -> SharedHistory {
+        let history = SharedHistory::new(
+            HistoryConfig {
+                path: None,
+                max_entries: 32,
+                enabled: true,
+                dedupe: false,
+                profile_scoped: false,
+                exclude_patterns: Vec::new(),
+                profile: None,
+                terminal: None,
+                shell_context: HistoryShellContext::default(),
+            }
+            .normalized(),
+        )
+        .expect("history should initialize");
+
+        for command in commands {
+            history
+                .save_command_line(command)
+                .expect("history save should succeed");
+        }
+
+        history
     }
 }

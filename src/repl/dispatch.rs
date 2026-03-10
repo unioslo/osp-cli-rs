@@ -186,7 +186,7 @@ fn execute_repl_plugin_line_inner(
 }
 
 fn base_repl_invocation(runtime: &AppRuntime) -> ResolvedInvocation {
-    resolve_invocation_ui(&runtime.ui, &Default::default())
+    resolve_invocation_ui(runtime.config.resolved(), &runtime.ui, &Default::default())
 }
 
 #[cfg(test)]
@@ -211,8 +211,8 @@ mod tests {
     use crate::app::{CliCommandResult, ReplCommandOutput};
     use crate::cli::{
         Commands, ConfigArgs, ConfigCommands, ConfigSetArgs, ConfigUnsetArgs, DebugCompleteArgs,
-        HistoryArgs, HistoryCommands, PluginsArgs, PluginsCommands, ReplArgs, ReplCommands,
-        ThemeArgs, ThemeCommands, ThemeUseArgs,
+        HistoryArgs, HistoryCommands, IntroArgs, PluginsArgs, PluginsCommands, ReplArgs,
+        ReplCommands, ThemeArgs, ThemeCommands, ThemeUseArgs,
     };
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
 
@@ -542,6 +542,21 @@ For more information, try '--help'.\n";
         })
     }
 
+    fn test_history() -> SharedHistory {
+        SharedHistory::new(HistoryConfig {
+            path: None,
+            max_entries: 8,
+            enabled: true,
+            dedupe: true,
+            profile_scoped: false,
+            exclude_patterns: Vec::new(),
+            profile: None,
+            terminal: None,
+            shell_context: Default::default(),
+        })
+        .expect("history should initialize")
+    }
+
     #[test]
     fn root_help_rendering_and_shell_prefix_helpers_cover_root_paths_unit() {
         let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
@@ -568,10 +583,44 @@ For more information, try '--help'.\n";
     }
 
     #[test]
+    fn intro_pipeline_keeps_filtered_guide_structure_unit() {
+        let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+        let invocation = super::base_repl_invocation(&state.runtime);
+        let result = run_repl_command(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            Commands::Intro(IntroArgs::default()),
+            &invocation,
+            &test_history(),
+            None,
+        )
+        .expect("intro command should succeed");
+
+        let mut sink = crate::app::sink::BufferedUiSink::default();
+        let rendered = render_repl_command_output(
+            &state.runtime,
+            &mut state.session,
+            "intro | show",
+            &["show".to_string()],
+            result,
+            &invocation,
+            &mut sink,
+        )
+        .expect("intro pipeline should render");
+
+        assert!(rendered.contains("Commands"));
+        assert!(rendered.contains("help"));
+        assert!(!rendered.contains("Sections"));
+        assert!(!rendered.contains("Entries"));
+    }
+
+    #[test]
     fn repl_command_spec_covers_repl_variant_and_builtin_dsl_matrix_unit() {
         let repl = repl_command_spec(&Commands::Repl(ReplArgs {
             command: ReplCommands::DebugComplete(DebugCompleteArgs {
                 line: String::new(),
+                menu: crate::cli::DebugMenuArg::Completion,
                 cursor: None,
                 width: 80,
                 height: 24,

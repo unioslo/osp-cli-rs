@@ -572,6 +572,7 @@ impl ConfigSchema {
         schema.insert("repl.history.enabled", SchemaEntry::boolean());
         schema.insert("repl.history.dedupe", SchemaEntry::boolean());
         schema.insert("repl.history.profile_scoped", SchemaEntry::boolean());
+        schema.insert("repl.history.menu_rows", SchemaEntry::integer());
         schema.insert("repl.history.exclude", SchemaEntry::string_list());
         schema.insert("session.cache.max_results", SchemaEntry::integer());
         schema.insert("color.prompt.text", SchemaEntry::string());

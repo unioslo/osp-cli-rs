@@ -3,6 +3,7 @@ use crate::app::format_timing_badge;
 use crate::app::is_sensitive_key;
 use crate::app::{CMD_HELP, DEFAULT_REPL_PROMPT};
 use crate::config::ConfigValue;
+use crate::config::DEFAULT_REPL_HISTORY_MENU_ROWS;
 use crate::guide::template::{GuideTemplateBlock, GuideTemplateInclude, parse_markdown_template};
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::repl::{ReplAppearance, ReplPrompt};
@@ -34,12 +35,12 @@ const DEFAULT_FULL_INTRO_TEMPLATE: &str = r#"## OSP
 ## Keybindings
   Ctrl-D    exit
   Ctrl-L    clear screen
-  Ctrl-R    reverse search history
+  Ctrl-R    history search
 
 ## Pipes
   F key>3 | P col1 col2 | S sort_key | G group_by_k1 k2
   | A metric() | L limit offset | C count
-  K key | V value | contains | !not | ?exist | !?not_exist (= exact, == case-sens.)
+  K key | V value | %fuzzy | contains | !not | ?exist | !?not_exist (= exact, == case-sens.)
   Help: | H or | H <verb> e.g. | H F
 
 {{ help }}"#;
@@ -432,12 +433,20 @@ pub(crate) fn build_repl_appearance(view: ReplViewContext<'_>) -> ReplAppearance
         .unwrap_or_else(|| theme.repl_completion_highlight_spec().to_string());
     let command_highlight_style =
         config_style("color.prompt.command").unwrap_or_else(|| theme.palette.success.to_string());
+    let history_menu_rows = match config
+        .get("repl.history.menu_rows")
+        .map(ConfigValue::reveal)
+    {
+        Some(ConfigValue::Integer(value)) => (*value).clamp(1, u16::MAX as i64) as u16,
+        _ => DEFAULT_REPL_HISTORY_MENU_ROWS as u16,
+    };
 
     ReplAppearance {
         completion_text_style: Some(completion_text_style),
         completion_background_style: Some(completion_background_style),
         completion_highlight_style: Some(completion_highlight_style),
         command_highlight_style: Some(command_highlight_style),
+        history_menu_rows,
     }
 }
 

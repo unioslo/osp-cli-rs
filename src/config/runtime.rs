@@ -15,6 +15,8 @@ pub const DEFAULT_REPL_HISTORY_ENABLED: bool = true;
 pub const DEFAULT_REPL_HISTORY_DEDUPE: bool = true;
 /// Default toggle for profile-scoped REPL history storage.
 pub const DEFAULT_REPL_HISTORY_PROFILE_SCOPED: bool = true;
+/// Default maximum number of rows shown in the REPL history search menu.
+pub const DEFAULT_REPL_HISTORY_MENU_ROWS: i64 = 5;
 /// Default upper bound for cached session results.
 pub const DEFAULT_SESSION_CACHE_MAX_RESULTS: i64 = 64;
 /// Default debug verbosity level.
@@ -175,6 +177,7 @@ impl RuntimeDefaults {
             "repl.history.enabled" => DEFAULT_REPL_HISTORY_ENABLED,
             "repl.history.dedupe" => DEFAULT_REPL_HISTORY_DEDUPE,
             "repl.history.profile_scoped" => DEFAULT_REPL_HISTORY_PROFILE_SCOPED,
+            "repl.history.menu_rows" => DEFAULT_REPL_HISTORY_MENU_ROWS,
             "session.cache.max_results" => DEFAULT_SESSION_CACHE_MAX_RESULTS,
             "debug.level" => DEFAULT_DEBUG_LEVEL,
             "log.file.enabled" => DEFAULT_LOG_FILE_ENABLED,
@@ -446,7 +449,7 @@ fn join_path(mut root: PathBuf, segments: &[&str]) -> PathBuf {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{RuntimeConfigPaths, RuntimeDefaults, RuntimeEnvironment, DEFAULT_PROFILE_NAME};
+    use super::{DEFAULT_PROFILE_NAME, RuntimeConfigPaths, RuntimeDefaults, RuntimeEnvironment};
     use crate::config::{ConfigLayer, ConfigValue, Scope};
 
     fn find_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {
@@ -483,6 +486,10 @@ mod tests {
             Some(&ConfigValue::Integer(
                 super::DEFAULT_REPL_HISTORY_MAX_ENTRIES
             ))
+        );
+        assert_eq!(
+            find_value(&defaults, "repl.history.menu_rows"),
+            Some(&ConfigValue::Integer(super::DEFAULT_REPL_HISTORY_MENU_ROWS))
         );
         assert_eq!(
             find_value(&defaults, "ui.width"),

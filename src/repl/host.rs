@@ -10,9 +10,10 @@ use crate::app::{AppRuntime, AppSession, AppState};
 use crate::app::{AuthState, ReplScopeStack, UiState};
 use crate::ui::theme_loader::ThemeCatalog;
 
+use super::history;
 use crate::app;
 use crate::app::{CliCommandResult, document_from_json};
-use crate::cli::{DebugCompleteArgs, DebugHighlightArgs, ReplArgs, ReplCommands};
+use crate::cli::{DebugCompleteArgs, DebugHighlightArgs, DebugMenuArg, ReplArgs, ReplCommands};
 use crate::completion::CompletionTree;
 use crate::ui::messages::MessageLevel;
 use crate::ui::presentation::{
@@ -157,28 +158,54 @@ fn run_repl_debug_complete(
 
     let payload = if steps.is_empty() {
         let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
-        let debug = crate::repl::debug_completion(
-            &completion_tree,
-            &projected_line.line,
-            cursor,
-            crate::repl::CompletionDebugOptions::new(args.width, args.height)
-                .ansi(args.menu_ansi)
-                .unicode(args.menu_unicode)
-                .appearance(Some(&appearance)),
-        );
+        let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
+            .ansi(args.menu_ansi)
+            .unicode(args.menu_unicode)
+            .appearance(Some(&appearance));
+        let debug = match args.menu {
+            DebugMenuArg::Completion => crate::repl::debug_completion(
+                &completion_tree,
+                &projected_line.line,
+                cursor,
+                options,
+            ),
+            DebugMenuArg::History => {
+                let history = crate::repl::SharedHistory::new(history::build_history_config(
+                    runtime, session,
+                ))
+                .map_err(|err| miette!("{err:#}"))?;
+                crate::repl::debug_history_menu(&history, &projected_line.line, cursor, options)
+            }
+        };
         serde_json::to_string_pretty(&debug).map_err(|err| miette!("{err:#}"))?
     } else {
         let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
-        let frames = crate::repl::debug_completion_steps(
-            &completion_tree,
-            &projected_line.line,
-            cursor,
-            crate::repl::CompletionDebugOptions::new(args.width, args.height)
-                .ansi(args.menu_ansi)
-                .unicode(args.menu_unicode)
-                .appearance(Some(&appearance)),
-            &steps,
-        );
+        let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
+            .ansi(args.menu_ansi)
+            .unicode(args.menu_unicode)
+            .appearance(Some(&appearance));
+        let frames = match args.menu {
+            DebugMenuArg::Completion => crate::repl::debug_completion_steps(
+                &completion_tree,
+                &projected_line.line,
+                cursor,
+                options,
+                &steps,
+            ),
+            DebugMenuArg::History => {
+                let history = crate::repl::SharedHistory::new(history::build_history_config(
+                    runtime, session,
+                ))
+                .map_err(|err| miette!("{err:#}"))?;
+                crate::repl::debug_history_menu_steps(
+                    &history,
+                    &projected_line.line,
+                    cursor,
+                    options,
+                    &steps,
+                )
+            }
+        };
         serde_json::to_string_pretty(&frames).map_err(|err| miette!("{err:#}"))?
     };
     let payload = serde_json::from_str(&payload).map_err(|err| miette!("{err:#}"))?;
@@ -244,7 +271,7 @@ mod tests {
         AppClients, AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext,
         TerminalKind,
     };
-    use crate::cli::{DebugCompleteArgs, DebugHighlightArgs, ReplArgs, ReplCommands};
+    use crate::cli::{DebugCompleteArgs, DebugHighlightArgs, DebugMenuArg, ReplArgs, ReplCommands};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
     use crate::repl::lifecycle::build_cycle_chrome_output;
@@ -361,6 +388,7 @@ mod tests {
             ReplArgs {
                 command: ReplCommands::DebugComplete(DebugCompleteArgs {
                     line: "co".to_string(),
+                    menu: DebugMenuArg::Completion,
                     cursor: None,
                     width: 80,
                     height: 8,
@@ -373,6 +401,29 @@ mod tests {
         .expect("debug complete should succeed");
         assert!(matches!(
             complete.output,
+            Some(crate::app::ReplCommandOutput::Document(_))
+        ));
+
+        let history_complete = run_repl_debug_command_for(
+            &runtime,
+            &session,
+            &clients,
+            ReplArgs {
+                command: ReplCommands::DebugComplete(DebugCompleteArgs {
+                    line: "co".to_string(),
+                    menu: DebugMenuArg::History,
+                    cursor: None,
+                    width: 80,
+                    height: 8,
+                    menu_ansi: false,
+                    menu_unicode: false,
+                    steps: vec!["tab".to_string()],
+                }),
+            },
+        )
+        .expect("history debug complete should succeed");
+        assert!(matches!(
+            history_complete.output,
             Some(crate::app::ReplCommandOutput::Document(_))
         ));
 
