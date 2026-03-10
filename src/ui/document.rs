@@ -1,8 +1,8 @@
 use serde_json::Value;
 
+use crate::ui::TableBorderStyle;
 use crate::ui::chrome::SectionFrameStyle;
 use crate::ui::style::StyleToken;
-use crate::ui::TableBorderStyle;
 
 /// Renderable document composed of high-level display blocks.
 #[derive(Debug, Clone, Default)]

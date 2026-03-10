@@ -308,6 +308,28 @@ fn rebuild_repl_state_preserves_session_defaults_and_shell_context_unit() {
 }
 
 #[test]
+fn rebuild_repl_state_preserves_rich_terminal_render_runtime_unit() {
+    let mut state = make_test_state(Vec::new());
+    state.session.config_overrides.set("theme.name", "dracula");
+    state.runtime.ui.render_settings.mode = crate::core::output::RenderMode::Auto;
+    state.runtime.ui.render_settings.color = crate::core::output::ColorMode::Auto;
+    state.runtime.ui.render_settings.unicode = crate::core::output::UnicodeMode::Auto;
+    state.runtime.ui.render_settings.runtime.stdout_is_tty = true;
+    state.runtime.ui.render_settings.runtime.locale_utf8 = Some(true);
+    state.runtime.ui.render_settings.runtime.terminal = Some("xterm-256color".to_string());
+
+    let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+    let resolved = next.runtime.ui.render_settings.resolve_render_settings();
+
+    assert_eq!(next.runtime.ui.render_settings.theme_name, "dracula");
+    assert!(resolved.color);
+    assert!(resolved.unicode);
+    assert_eq!(resolved.backend, crate::ui::RenderBackend::Rich);
+    assert_eq!(resolved.theme.id, "dracula");
+    assert_eq!(resolved.theme.repl_completion_text_spec(), "#000000");
+}
+
+#[test]
 fn rebuild_repl_state_preserves_session_render_defaults_unit() {
     let mut state = make_test_state(Vec::new());
     state.session.config_overrides.set("ui.format", "table");

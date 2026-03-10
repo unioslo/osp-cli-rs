@@ -9,9 +9,8 @@ expression: help
 - Commands -
   exit     Exit application.
   help     Show this command overview.
-  options  per invocation: --format/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --cache, --plugin-provider
-  plugins  subcommands: list, commands, enable, disable, doctor
-  doctor   subcommands: all, config, last, plugins, theme
-  theme    subcommands: list, show, use
-  config   subcommands: show, get, explain, set, doctor
-  history  subcommands: list, prune, clear
+  plugins  Inspect and manage plugin providers
+  doctor   Run diagnostics checks
+  theme    Inspect and apply themes
+  config   Inspect and edit runtime config
+  history  Inspect or prune REPL history

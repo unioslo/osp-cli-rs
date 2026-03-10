@@ -9,7 +9,7 @@ use crate::app::{
     CURRENT_TERMINAL_SENTINEL,
 };
 use crate::plugin::CommandCatalogEntry;
-use crate::ui::presentation::{HelpLayout, help_layout};
+use crate::ui::presentation::{HelpLayout, HelpLevel, help_layout, help_level};
 
 use super::ReplViewContext;
 use super::history;
@@ -44,6 +44,7 @@ pub(crate) fn build_repl_surface(
     let history_enabled = history::repl_history_enabled(view.config);
     let aliases = collect_alias_entries(view.config);
     let help_layout = help_layout(view.config);
+    let help_level = help_level(view.config, 0, 0);
 
     let mut root_words = catalog_completion_words(catalog);
     let mut specs = vec![
@@ -67,10 +68,10 @@ pub(crate) fn build_repl_surface(
             summary: "Show this command overview.".to_string(),
         },
     ];
-    if shows_invocation_options_overview(help_layout) {
+    if shows_invocation_options_overview(help_level) {
         overview_entries.push(ReplOverviewEntry {
             name: "options".to_string(),
-            summary: "per invocation: --format/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --cache, --plugin-provider".to_string(),
+            summary: "per invocation: --format/--guide/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --cache, --plugin-provider".to_string(),
         });
     }
 
@@ -86,7 +87,7 @@ pub(crate) fn build_repl_surface(
         specs.push(plugins_command_spec(catalog, help_layout));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_PLUGINS.to_string(),
-            summary: "subcommands: list, commands, enable, disable, doctor".to_string(),
+            summary: "Inspect and manage plugin providers".to_string(),
         });
     }
     if view.auth.is_builtin_visible(CMD_DOCTOR) {
@@ -119,7 +120,7 @@ pub(crate) fn build_repl_surface(
         specs.push(config_command_spec(view));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_CONFIG.to_string(),
-            summary: "subcommands: show, get, explain, set, doctor".to_string(),
+            summary: "Inspect and edit runtime config".to_string(),
         });
     }
     if history_enabled && view.auth.is_builtin_visible(CMD_HISTORY) {
@@ -156,8 +157,8 @@ pub(crate) fn build_repl_surface(
     }
 }
 
-fn shows_invocation_options_overview(help_layout: HelpLayout) -> bool {
-    matches!(help_layout, HelpLayout::Full)
+fn shows_invocation_options_overview(help_level: HelpLevel) -> bool {
+    help_level >= HelpLevel::Verbose
 }
 
 fn normalize_root_words(root_words: &mut Vec<String>) {
@@ -297,22 +298,11 @@ fn command_spec_from_catalog(entry: &CommandCatalogEntry) -> Option<CommandSpec>
 fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
     let summary = if entry.about.trim().is_empty() {
         "Plugin command".to_string()
-    } else if entry.subcommands.is_empty() {
+    } else {
         if entry.conflicted || entry.requires_selection {
             provider_selection_summary(entry, Some(&entry.about))
         } else {
             entry.about.clone()
-        }
-    } else {
-        let base = format!(
-            "{} (subcommands: {})",
-            entry.about,
-            entry.subcommands.join(", ")
-        );
-        if entry.conflicted || entry.requires_selection {
-            provider_selection_summary(entry, Some(&base))
-        } else {
-            base
         }
     };
     let summary = entry
@@ -366,18 +356,13 @@ fn provider_selection_summary(entry: &CommandCatalogEntry, base: Option<&str>) -
 }
 
 fn overview_entry_from_command_def(def: &CommandDef) -> ReplOverviewEntry {
-    let summary = if def.subcommands.is_empty() {
-        def.about.clone().unwrap_or_else(|| "Command".to_string())
-    } else {
-        format!(
-            "subcommands: {}",
-            def.subcommands
-                .iter()
-                .map(|subcommand| subcommand.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    };
+    let summary = def
+        .about
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Command")
+        .to_string();
 
     ReplOverviewEntry {
         name: def.name.clone(),

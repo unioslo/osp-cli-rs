@@ -2,11 +2,14 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+use crate::guide::GuideView;
+use crate::ui::presentation::HelpLevel;
 use miette::{Result, miette};
 
 pub(crate) const INVOCATION_HELP_SECTION: &str = r#"Common Invocation Options:
-  --format <auto|json|table|mreg|value|md>  Format this invocation only
-  --json | --table | --mreg | --value | --md
+  --format <auto|guide|json|table|mreg|value|md>
+                                            Format this invocation only
+  --guide | --json | --table | --mreg | --value | --md
                                             Convenience aliases for --format
   --mode <auto|plain|rich>                  Render mode for this invocation
   --plain | --rich                          Convenience aliases for --mode
@@ -24,6 +27,7 @@ These flags may appear anywhere before `--` and affect only the current command.
 
 const INVOCATION_COMPLETION_FLAGS: &[&str] = &[
     "--format",
+    "--guide",
     "--json",
     "--table",
     "--mreg",
@@ -42,8 +46,9 @@ const INVOCATION_COMPLETION_FLAGS: &[&str] = &[
     "--plugin-provider",
 ];
 
-const FORMAT_COMPLETION_FLAGS: &[&str] =
-    &["--format", "--json", "--table", "--mreg", "--value", "--md"];
+const FORMAT_COMPLETION_FLAGS: &[&str] = &[
+    "--format", "--guide", "--json", "--table", "--mreg", "--value", "--md",
+];
 const MODE_COMPLETION_FLAGS: &[&str] = &["--mode", "--plain", "--rich"];
 const UNICODE_COMPLETION_FLAGS: &[&str] = &["--unicode", "--ascii"];
 
@@ -295,23 +300,13 @@ pub(crate) fn scan_command_tokens_with_trace(
     })
 }
 
-pub(crate) fn append_invocation_help(help_text: &str) -> String {
-    if help_text.contains("Common Invocation Options:") {
-        return help_text.to_string();
-    }
-
-    let trimmed = help_text.trim_end_matches('\n');
-    format!("{trimmed}\n\n{INVOCATION_HELP_SECTION}\n")
+pub(crate) fn invocation_help_view() -> GuideView {
+    GuideView::from_text(INVOCATION_HELP_SECTION)
 }
 
-pub(crate) fn append_invocation_help_if_verbose(
-    help_text: &str,
-    invocation: &InvocationOptions,
-) -> String {
-    if should_show_invocation_help(invocation) {
-        append_invocation_help(help_text)
-    } else {
-        help_text.to_string()
+pub(crate) fn extend_with_invocation_help(view: &mut GuideView, level: HelpLevel) {
+    if level >= HelpLevel::Verbose {
+        view.merge(invocation_help_view());
     }
 }
 
@@ -429,6 +424,7 @@ fn set_plugin_provider(options: &mut InvocationOptions, value: &str, source: &st
 
 #[derive(Clone, Copy)]
 enum FormatAlias {
+    Guide,
     Json,
     Table,
     Value,
@@ -439,6 +435,7 @@ enum FormatAlias {
 impl FormatAlias {
     fn parse(token: &str) -> Option<Self> {
         match token {
+            "--guide" => Some(Self::Guide),
             "--json" => Some(Self::Json),
             "--table" => Some(Self::Table),
             "--value" => Some(Self::Value),
@@ -450,6 +447,7 @@ impl FormatAlias {
 
     fn format(self) -> OutputFormat {
         match self {
+            Self::Guide => OutputFormat::Guide,
             Self::Json => OutputFormat::Json,
             Self::Table => OutputFormat::Table,
             Self::Value => OutputFormat::Value,
@@ -485,11 +483,13 @@ impl RenderAlias {
 #[cfg(test)]
 mod tests {
     use super::{
-        INVOCATION_HELP_SECTION, InvocationOptions, append_invocation_help,
-        append_invocation_help_if_verbose, hidden_invocation_completion_flags, scan_cli_argv,
+        INVOCATION_HELP_SECTION, InvocationOptions, extend_with_invocation_help,
+        hidden_invocation_completion_flags, invocation_help_view, scan_cli_argv,
         scan_command_tokens, scan_command_tokens_with_trace, should_show_invocation_help,
     };
     use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+    use crate::guide::GuideView;
+    use crate::ui::presentation::HelpLevel;
     use std::ffi::OsString;
 
     #[test]
@@ -593,12 +593,21 @@ mod tests {
     }
 
     #[test]
-    fn appends_invocation_help_once() {
-        let rendered = append_invocation_help("Usage: osp [COMMAND]\n");
-        assert!(rendered.contains("Common Invocation Options:"));
-
-        let twice = append_invocation_help(&rendered);
-        assert_eq!(rendered, twice);
+    fn invocation_help_view_contains_common_section_unit() {
+        let rendered = invocation_help_view();
+        assert!(!rendered.common_invocation_options.is_empty());
+        assert!(
+            rendered
+                .common_invocation_options
+                .iter()
+                .any(|entry| entry.name.contains("--guide"))
+        );
+        assert!(
+            rendered
+                .common_invocation_options
+                .iter()
+                .any(|entry| entry.name.contains("--json"))
+        );
     }
 
     #[test]
@@ -608,28 +617,19 @@ mod tests {
             verbose: 1,
             ..InvocationOptions::default()
         }));
-        assert_eq!(
-            append_invocation_help_if_verbose(
-                "Usage: osp [COMMAND]\n",
-                &InvocationOptions::default()
-            ),
-            "Usage: osp [COMMAND]\n"
-        );
-        assert!(
-            append_invocation_help_if_verbose(
-                "Usage: osp [COMMAND]\n",
-                &InvocationOptions {
-                    verbose: 1,
-                    ..InvocationOptions::default()
-                }
-            )
-            .contains("Common Invocation Options:")
-        );
+        let mut hidden = GuideView::from_text("Usage: osp [COMMAND]\n");
+        extend_with_invocation_help(&mut hidden, HelpLevel::Normal);
+        assert!(hidden.common_invocation_options.is_empty());
+
+        let mut visible = GuideView::from_text("Usage: osp [COMMAND]\n");
+        extend_with_invocation_help(&mut visible, HelpLevel::Verbose);
+        assert!(!visible.common_invocation_options.is_empty());
     }
 
     #[test]
     fn hidden_completion_flags_follow_verbose_and_used_one_shots_unit() {
         let hidden = hidden_invocation_completion_flags(&InvocationOptions::default());
+        assert!(hidden.contains("--guide"));
         assert!(hidden.contains("--json"));
         assert!(hidden.contains("--plugin-provider"));
         assert!(hidden.contains("--debug"));
@@ -650,6 +650,7 @@ mod tests {
             ..InvocationOptions::default()
         });
         assert!(hidden.contains("--format"));
+        assert!(hidden.contains("--guide"));
         assert!(hidden.contains("--json"));
         assert!(hidden.contains("--table"));
         assert!(hidden.contains("--cache"));
@@ -844,5 +845,19 @@ mod tests {
         ])
         .expect_err("duplicate format selectors should fail");
         assert!(err.to_string().contains("conflicting output format flags"));
+    }
+
+    #[test]
+    fn guide_alias_selects_guide_output_format_unit() {
+        let scanned = scan_command_tokens(&["ldap".to_string(), "--guide".to_string()])
+            .expect("guide alias should parse");
+
+        assert_eq!(scanned.invocation.format, Some(OutputFormat::Guide));
+    }
+
+    #[test]
+    fn invocation_help_mentions_guide_alias_unit() {
+        assert!(INVOCATION_HELP_SECTION.contains("--guide"));
+        assert!(INVOCATION_HELP_SECTION.contains("guide|json|table"));
     }
 }

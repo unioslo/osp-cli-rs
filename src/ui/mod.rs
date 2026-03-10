@@ -1,17 +1,17 @@
-pub mod chrome;
-pub mod clipboard;
+pub(crate) mod chrome;
+pub(crate) mod clipboard;
 mod display;
-pub mod document;
+pub(crate) mod document;
 pub(crate) mod document_model;
-pub mod format;
-pub mod inline;
-pub mod interactive;
+pub(crate) mod format;
+pub(crate) mod inline;
+pub(crate) mod interactive;
 mod layout;
-pub mod messages;
+pub(crate) mod messages;
 pub(crate) mod presentation;
 mod renderer;
-pub mod style;
-pub mod theme;
+pub(crate) mod style;
+pub(crate) mod theme;
 pub(crate) mod theme_loader;
 mod width;
 
@@ -19,64 +19,104 @@ use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::output_model::{OutputItems, OutputResult};
 use crate::core::row::Row;
 use crate::guide::GuideView;
-use crate::ui::chrome::SectionFrameStyle;
 
+pub use chrome::{SectionFrameStyle, SectionRenderContext, SectionStyleTokens};
+pub use clipboard::{ClipboardError, ClipboardService};
 pub use document::{
     CodeBlock, Document, JsonBlock, LineBlock, LinePart, MregBlock, MregEntry, MregRow, MregValue,
     PanelBlock, PanelRules, TableAlign, TableBlock, TableStyle, ValueBlock,
 };
 pub use inline::{line_from_inline, parts_from_inline, render_inline};
 pub use interactive::{Interactive, InteractiveResult, InteractiveRuntime, Spinner};
-pub use style::StyleOverrides;
-use theme::ThemeDefinition;
+pub use messages::{GroupedRenderOptions, MessageBuffer, MessageLayout, MessageLevel, UiMessage};
+pub use style::{StyleOverrides, StyleToken};
+pub use theme::{
+    DEFAULT_THEME_NAME, ThemeDefinition, ThemeOverrides, ThemePalette, all_themes,
+    available_theme_names, builtin_themes, display_name_from_id, find_builtin_theme, find_theme,
+    is_known_theme, normalize_theme_name, resolve_theme,
+};
 
 /// Runtime terminal characteristics used when resolving render behavior.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RenderRuntime {
+    /// Whether standard output is attached to a TTY.
     pub stdout_is_tty: bool,
+    /// Terminal program identifier when known.
     pub terminal: Option<String>,
+    /// Whether color should be suppressed regardless of theme.
     pub no_color: bool,
+    /// Measured terminal width, when available.
     pub width: Option<usize>,
+    /// Whether the locale is known to support UTF-8.
     pub locale_utf8: Option<bool>,
 }
 
 /// User-configurable settings for rendering CLI output.
 #[derive(Debug, Clone)]
 pub struct RenderSettings {
+    /// Preferred output format.
     pub format: OutputFormat,
+    /// Whether `format` was chosen explicitly by the caller.
     pub format_explicit: bool,
+    /// Preferred rendering mode.
     pub mode: RenderMode,
+    /// Color behavior selection.
     pub color: ColorMode,
+    /// Unicode behavior selection.
     pub unicode: UnicodeMode,
+    /// Explicit width override for rendering.
     pub width: Option<usize>,
+    /// Left margin applied to rendered blocks.
     pub margin: usize,
+    /// Indentation width used for nested structures.
     pub indent_size: usize,
+    /// Maximum list length rendered in compact form.
     pub short_list_max: usize,
+    /// Maximum list length rendered in medium form before expanding further.
     pub medium_list_max: usize,
+    /// Horizontal padding between grid columns.
     pub grid_padding: usize,
+    /// Explicit grid column count override.
     pub grid_columns: Option<usize>,
+    /// Relative weighting for adaptive grid columns.
     pub column_weight: usize,
+    /// Overflow policy for table cells.
     pub table_overflow: TableOverflow,
+    /// Border style for general table rendering.
     pub table_border: TableBorderStyle,
+    /// Border style override for help tables.
     pub help_table_chrome: HelpTableChrome,
+    /// Explicit indentation override for help entries.
     pub help_entry_indent: Option<usize>,
+    /// Explicit gap override between help entry columns.
     pub help_entry_gap: Option<usize>,
+    /// Explicit spacing override between help sections.
     pub help_section_spacing: Option<usize>,
+    /// Minimum width before stacked MREG columns are used.
     pub mreg_stack_min_col_width: usize,
+    /// Threshold controlling when MREG content overflows into stacked mode.
     pub mreg_stack_overflow_ratio: usize,
+    /// Selected theme name.
     pub theme_name: String,
+    /// Resolved theme override, when provided directly.
     pub theme: Option<ThemeDefinition>,
+    /// Per-token style overrides layered on top of the theme.
     pub style_overrides: StyleOverrides,
+    /// Section frame style used for grouped chrome.
     pub chrome_frame: SectionFrameStyle,
+    /// Fallback behavior for semantic guide output.
     pub guide_default_format: GuideDefaultFormat,
+    /// Runtime terminal facts used during auto-resolution.
     pub runtime: RenderRuntime,
 }
 
 /// Default output format to use when guide rendering is not explicitly requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GuideDefaultFormat {
+    /// Prefer semantic guide output when the caller did not request a format.
     #[default]
     Guide,
+    /// Inherit the caller-selected format without forcing guide mode.
     Inherit,
 }
 
@@ -94,16 +134,22 @@ impl GuideDefaultFormat {
 /// Rendering backend selected for the current output pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderBackend {
+    /// Render without terminal-rich features.
     Plain,
+    /// Render using ANSI and richer terminal affordances.
     Rich,
 }
 
 /// Overflow strategy for table cell content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableOverflow {
+    /// Leave overflow management to the terminal.
     None,
+    /// Hard-clip overflowing cell content.
     Clip,
+    /// Truncate overflowing content with an ellipsis marker.
     Ellipsis,
+    /// Wrap overflowing content onto multiple lines.
     Wrap,
 }
 
@@ -123,9 +169,12 @@ impl TableOverflow {
 /// Border style applied to rendered tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TableBorderStyle {
+    /// Render tables without outer borders.
     None,
+    /// Render tables with square box-drawing borders.
     #[default]
     Square,
+    /// Render tables with rounded box-drawing borders.
     Round,
 }
 
@@ -144,10 +193,14 @@ impl TableBorderStyle {
 /// Border style override for help tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HelpTableChrome {
+    /// Reuse the normal table border style.
     Inherit,
+    /// Render help tables without box chrome.
     #[default]
     None,
+    /// Render help tables with square box-drawing borders.
     Square,
+    /// Render help tables with rounded box-drawing borders.
     Round,
 }
 
@@ -177,23 +230,41 @@ impl HelpTableChrome {
 /// Fully resolved rendering settings used by the document renderer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRenderSettings {
+    /// Concrete renderer backend selected for this render pass.
     pub backend: RenderBackend,
+    /// Whether ANSI styling is enabled.
     pub color: bool,
+    /// Whether Unicode rendering is enabled.
     pub unicode: bool,
+    /// Effective width constraint, if any.
     pub width: Option<usize>,
+    /// Effective left margin.
     pub margin: usize,
+    /// Effective indentation width.
     pub indent_size: usize,
+    /// Effective short-list threshold.
     pub short_list_max: usize,
+    /// Effective medium-list threshold.
     pub medium_list_max: usize,
+    /// Effective grid padding.
     pub grid_padding: usize,
+    /// Effective grid column override.
     pub grid_columns: Option<usize>,
+    /// Effective adaptive grid weight.
     pub column_weight: usize,
+    /// Effective table overflow policy.
     pub table_overflow: TableOverflow,
+    /// Effective general table border style.
     pub table_border: TableBorderStyle,
+    /// Effective help-table border style.
     pub help_table_border: TableBorderStyle,
+    /// Effective theme name.
     pub theme_name: String,
+    /// Effective resolved theme.
     pub theme: ThemeDefinition,
+    /// Effective style overrides layered over the theme.
     pub style_overrides: StyleOverrides,
+    /// Effective section frame style.
     pub chrome_frame: SectionFrameStyle,
 }
 
@@ -702,7 +773,8 @@ mod tests {
 
         assert!(rendered.contains("## Usage"));
         assert!(rendered.contains("## Commands"));
-        assert!(rendered.contains("| name"));
+        assert!(rendered.contains("- `list` Show"));
+        assert!(!rendered.contains("| name"));
     }
 
     #[test]
@@ -720,7 +792,8 @@ mod tests {
 
         assert!(copied.contains("## Usage"));
         assert!(copied.contains("## Commands"));
-        assert!(copied.contains("| name"));
+        assert!(copied.contains("- `list` Show"));
+        assert!(!copied.contains("| name"));
         assert!(!copied.contains("\x1b["));
     }
 

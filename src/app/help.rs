@@ -7,7 +7,9 @@ use crate::ui::theme::DEFAULT_THEME_NAME;
 use clap::Parser;
 
 use crate::cli::Cli;
-use crate::ui::presentation::{HelpLayout, UiPresentation, help_layout};
+use crate::ui::presentation::{
+    HelpLayout, HelpLevel, UiPresentation, derived_help_level, help_layout, help_level,
+};
 use crate::ui::theme_loader;
 
 use super::{
@@ -28,6 +30,8 @@ pub(crate) struct HelpRenderOverrides {
     pub(crate) gammel_og_bitter: bool,
     pub(crate) no_env: bool,
     pub(crate) no_config_file: bool,
+    pub(crate) verbose: u8,
+    pub(crate) quiet: u8,
 }
 
 impl HelpRenderOverrides {
@@ -42,6 +46,7 @@ impl HelpRenderOverrides {
 pub(crate) struct HelpRenderContext {
     pub(crate) settings: RenderSettings,
     pub(crate) layout: HelpLayout,
+    pub(crate) help_level: HelpLevel,
 }
 
 pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
@@ -59,11 +64,13 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
     let default_cli = Cli::try_parse_from(["osp"]).expect("default cli parse should succeed");
     let mut settings = default_cli.render_settings();
     let mut layout = HelpLayout::Full;
+    let effective_help_level;
     settings.runtime = build_render_runtime(std::env::var("TERM").ok().as_deref());
     if let Some(config) = config.as_ref() {
         let loaded = theme_loader::load_theme_catalog(config);
         default_cli.seed_render_settings_from_config(&mut settings, config);
         layout = help_layout(config);
+        effective_help_level = help_level(config, overrides.verbose, overrides.quiet);
         settings.width = Some(resolve_default_render_width(config));
         let selected = default_cli.selected_theme_name(config);
         settings.theme_name = resolve_known_theme_name(selected.as_str(), &loaded)
@@ -71,13 +78,19 @@ pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
         settings.theme = loaded
             .resolve(&settings.theme_name)
             .map(|entry| entry.theme.clone());
+    } else {
+        effective_help_level = derived_help_level(overrides.verbose, overrides.quiet);
     }
     if let Some(format) = overrides.format {
         settings.format = format;
         settings.format_explicit = true;
     }
 
-    HelpRenderContext { settings, layout }
+    HelpRenderContext {
+        settings,
+        layout,
+        help_level: effective_help_level,
+    }
 }
 
 fn build_help_override_layer(overrides: &HelpRenderOverrides) -> ConfigLayer {
@@ -141,6 +154,18 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
 
     while let Some(token) = iter.next() {
         match token {
+            "--guide" => {
+                out.format = Some(OutputFormat::Guide);
+                continue;
+            }
+            "--verbose" => {
+                out.verbose = out.verbose.saturating_add(1);
+                continue;
+            }
+            "--quiet" => {
+                out.quiet = out.quiet.saturating_add(1);
+                continue;
+            }
             "--json" => {
                 out.format = Some(OutputFormat::Json);
                 continue;
@@ -263,6 +288,19 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
             "--no-config" | "--no-config-file" => out.no_config_file = true,
             "--ascii" => out.ascii_legacy = true,
             "--gammel-og-bitter" => out.gammel_og_bitter = true,
+            token
+                if token.starts_with('-')
+                    && !token.starts_with("--")
+                    && token.chars().skip(1).all(|ch| matches!(ch, 'v' | 'q')) =>
+            {
+                for ch in token.chars().skip(1) {
+                    match ch {
+                        'v' => out.verbose = out.verbose.saturating_add(1),
+                        'q' => out.quiet = out.quiet.saturating_add(1),
+                        _ => unreachable!("guard only allows v/q"),
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -304,7 +342,7 @@ mod tests {
         parse_unicode_mode_arg, render_settings_for_help,
     };
     use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-    use crate::ui::presentation::HelpLayout;
+    use crate::ui::presentation::{HelpLayout, HelpLevel};
     use std::ffi::OsString;
 
     #[test]
@@ -317,6 +355,7 @@ mod tests {
         ]);
 
         assert_eq!(context.layout, HelpLayout::Minimal);
+        assert_eq!(context.help_level, HelpLevel::Normal);
         assert_eq!(context.settings.mode, RenderMode::Plain);
         assert_eq!(context.settings.color, ColorMode::Never);
         assert_eq!(context.settings.unicode, UnicodeMode::Never);
@@ -339,6 +378,7 @@ mod tests {
         ]);
 
         assert_eq!(context.layout, HelpLayout::Compact);
+        assert_eq!(context.help_level, HelpLevel::Normal);
         assert_eq!(context.settings.mode, RenderMode::Rich);
         assert_eq!(context.settings.color, ColorMode::Always);
         assert_eq!(context.settings.unicode, UnicodeMode::Always);
@@ -355,6 +395,45 @@ mod tests {
         ]);
 
         assert_eq!(context.settings.format, OutputFormat::Json);
+        assert!(context.settings.format_explicit);
+    }
+
+    #[test]
+    fn render_settings_for_help_maps_quiet_and_verbose_to_help_level_unit() {
+        let verbose = render_settings_for_help(&[
+            OsString::from("osp"),
+            OsString::from("-v"),
+            OsString::from("--no-env"),
+            OsString::from("--no-config-file"),
+        ]);
+        let quiet = render_settings_for_help(&[
+            OsString::from("osp"),
+            OsString::from("-q"),
+            OsString::from("--no-env"),
+            OsString::from("--no-config-file"),
+        ]);
+        let none = render_settings_for_help(&[
+            OsString::from("osp"),
+            OsString::from("-qq"),
+            OsString::from("--no-env"),
+            OsString::from("--no-config-file"),
+        ]);
+
+        assert_eq!(verbose.help_level, HelpLevel::Verbose);
+        assert_eq!(quiet.help_level, HelpLevel::Tiny);
+        assert_eq!(none.help_level, HelpLevel::None);
+    }
+
+    #[test]
+    fn render_settings_for_help_accepts_guide_alias_unit() {
+        let context = render_settings_for_help(&[
+            OsString::from("osp"),
+            OsString::from("--guide"),
+            OsString::from("--no-env"),
+            OsString::from("--no-config-file"),
+        ]);
+
+        assert_eq!(context.settings.format, OutputFormat::Guide);
         assert!(context.settings.format_explicit);
     }
 

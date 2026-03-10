@@ -1,6 +1,6 @@
 ---
 source: src/app/tests/repl_runtime.rs
-assertion_line: 1131
+assertion_line: 1130
 expression: text
 ---
 invalid help target: --help

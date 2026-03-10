@@ -1,4 +1,4 @@
-use super::command_output::parse_output_format_hint;
+use super::command_output::{apply_output_stages, parse_output_format_hint};
 use super::help::parse_help_render_overrides;
 use super::{
     EXIT_CODE_CONFIG, EXIT_CODE_PLUGIN, EXIT_CODE_USAGE, PluginConfigEntry, PluginConfigScope,
@@ -20,6 +20,7 @@ use crate::core::plugin::{
     DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, PLUGIN_PROTOCOL_V1,
     ResponseErrorV1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
 };
+use crate::guide::GuideView;
 use crate::plugin::{
     CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchError, PluginManager,
     PluginSource,
@@ -112,6 +113,8 @@ fn top_level_help_supports_all_explicit_output_formats_unit() {
     let markdown = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--md", "--help"]);
     assert!(markdown.contains("## Usage"));
     assert!(markdown.contains("## Commands"));
+    assert!(markdown.contains("- `help` "));
+    assert!(!markdown.contains("| name"));
 
     let table = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--table", "--help"]);
     assert!(table.contains("preamble"));
@@ -146,6 +149,8 @@ fn intro_command_supports_all_explicit_output_formats_unit() {
     let markdown = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--md", "intro"]);
     assert!(markdown.contains("## OSP"));
     assert!(markdown.contains("## Commands"));
+    assert!(markdown.contains("- `help` Show this command overview."));
+    assert!(!markdown.contains("| name"));
 
     let table = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--table", "intro"]);
     assert!(table.contains("sections"));
@@ -158,6 +163,27 @@ fn intro_command_supports_all_explicit_output_formats_unit() {
     assert!(value.contains("OSP"));
     assert!(value.contains("Welcome"));
     assert!(value.contains("Commands"));
+}
+
+#[test]
+fn staged_semantic_quick_search_preserves_guide_shape_by_default_unit() {
+    let guide = GuideView::from_text(
+        "Usage: osp [COMMAND]\n\nCommands:\n  help  Show this command overview.\n  theme  Inspect and apply themes\n  config  Inspect and edit runtime config\n",
+    );
+
+    let (output, format_hint) =
+        apply_output_stages(guide.to_output_result(), &["inspect".to_string()], None)
+            .expect("staged guide output should succeed");
+
+    assert!(format_hint.is_none());
+    let rebuilt = GuideView::try_from_output_result(&output).expect("guide should still restore");
+    assert_eq!(rebuilt.usage, vec!["osp [COMMAND]".to_string()]);
+    assert_eq!(rebuilt.commands.len(), 2);
+
+    let rendered = render_output(&output, &RenderSettings::test_plain(OutputFormat::Guide));
+    assert!(rendered.contains("Commands"));
+    assert!(!rendered.contains("Sections"));
+    assert!(!rendered.contains("Entries"));
 }
 
 fn make_completion_state(auth_visible_builtins: Option<&str>) -> AppState {

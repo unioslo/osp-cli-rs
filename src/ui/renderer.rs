@@ -1,3 +1,11 @@
+//! Document renderer for CLI and REPL output.
+//!
+//! The renderer walks the structured [`crate::ui::document::Document`] model
+//! and turns it into terminal text according to [`ResolvedRenderSettings`].
+//! Most of the complexity here is format-specific rendering behavior:
+//! tables, panels, JSON, and MREG-style key/value layouts all need slightly
+//! different width, alignment, and chrome handling.
+
 use comfy_table::{
     Cell, CellAlignment, ColumnConstraint, ContentArrangement, Table, Width, presets,
 };
@@ -17,6 +25,11 @@ use crate::ui::style::{StyleToken, apply_style_spec, apply_style_with_theme_over
 use crate::ui::width::{display_width, mreg_alignment_key_width};
 use crate::ui::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 
+/// Renders a structured UI document using the resolved terminal settings.
+///
+/// The renderer precomputes shared layout metrics once and then renders block
+/// by block. This keeps width-sensitive formats such as tables and MREG views
+/// internally consistent across the full document.
 pub fn render_document(document: &Document, settings: ResolvedRenderSettings) -> String {
     DocumentRenderer::new(document, &settings).render(document)
 }
@@ -30,6 +43,8 @@ impl<'a> DocumentRenderer<'a> {
     fn new(document: &Document, settings: &'a ResolvedRenderSettings) -> Self {
         Self {
             settings,
+            // Layout is computed once for the whole document so repeated blocks
+            // can share stable widths instead of each block guessing locally.
             layout: prepare_layout_context(document, settings),
         }
     }
@@ -49,6 +64,9 @@ impl<'a> DocumentRenderer<'a> {
             Block::Code(code) => self.render_code_block(code),
             Block::Json(json) => {
                 if matches!(self.settings.backend, RenderBackend::Plain) {
+                    // Plain mode favors predictable, copy-friendly JSON over
+                    // token styling; rich mode renders the same structure with
+                    // semantic coloring.
                     indent_lines(
                         &serde_json::to_string_pretty(&json.payload)
                             .unwrap_or_else(|_| "[]".to_string()),
@@ -391,6 +409,7 @@ impl<'a> DocumentRenderer<'a> {
 
         let table_body = match block.style {
             TableStyle::Grid => self.render_grid_table(block, layout_margin, column_widths),
+            TableStyle::Guide => self.render_guide_table(block, layout_margin, column_widths),
             TableStyle::Markdown => self.render_markdown_table(block, layout_margin, column_widths),
         };
 
@@ -436,6 +455,8 @@ impl<'a> DocumentRenderer<'a> {
             out.push_str(&value_text);
         }
         out.push_str(&sep);
+        // Header pairs act as a compact grouped summary, so include the row
+        // count here instead of forcing the table body to carry that context.
         out.push_str(&format!("count: {}", block.rows.len()));
         out.push('\n');
         out
@@ -451,6 +472,9 @@ impl<'a> DocumentRenderer<'a> {
             return String::new();
         }
 
+        // Width truncation happens before handing cells to comfy-table so the
+        // final output respects the renderer's overflow policy instead of the
+        // table library making its own wrapping decisions.
         let table_data = truncate_table_to_widths(
             &block.headers,
             &block.rows,
@@ -462,7 +486,8 @@ impl<'a> DocumentRenderer<'a> {
 
         let mut table = Table::new();
         table.set_content_arrangement(ContentArrangement::Disabled);
-        match (self.settings.unicode, self.settings.table_border) {
+        let border_style = block.border_override.unwrap_or(self.settings.table_border);
+        match (self.settings.unicode, border_style) {
             (true, TableBorderStyle::None) => {
                 table.load_preset(presets::UTF8_NO_BORDERS);
             }
@@ -505,9 +530,9 @@ impl<'a> DocumentRenderer<'a> {
 
         let rendered = format!("{table}");
         let rendered = if self.settings.unicode {
-            normalize_rich_table_chrome(&rendered, self.settings.table_border)
+            normalize_rich_table_chrome(&rendered, border_style)
         } else {
-            normalize_ascii_table_chrome(&rendered, self.settings.table_border)
+            normalize_ascii_table_chrome(&rendered, border_style)
         };
         indent_lines(&rendered, margin)
     }
@@ -582,6 +607,116 @@ impl<'a> DocumentRenderer<'a> {
         }
 
         indent_lines(&out, margin)
+    }
+
+    fn render_guide_table(
+        &self,
+        block: &TableBlock,
+        margin: usize,
+        column_widths: Option<&[usize]>,
+    ) -> String {
+        if matches!(
+            block
+                .border_override
+                .unwrap_or(self.settings.help_table_border),
+            TableBorderStyle::Square | TableBorderStyle::Round
+        ) {
+            // Guide tables are normally borderless. If the caller explicitly
+            // requests boxed chrome, reuse the grid renderer instead of
+            // maintaining a second bordered-help path.
+            let mut bordered = block.clone();
+            bordered.border_override = Some(
+                block
+                    .border_override
+                    .unwrap_or(self.settings.help_table_border),
+            );
+            return self.render_grid_table(&bordered, margin, column_widths);
+        }
+
+        let table_data = truncate_table_to_widths(
+            &block.headers,
+            &block.rows,
+            column_widths,
+            self.settings.unicode,
+            self.settings.table_overflow,
+        );
+        if table_data.headers.is_empty() {
+            return String::new();
+        }
+
+        let aligns = resolve_table_alignments(table_data.headers.len(), block.align.as_deref());
+        let mut widths = table_data
+            .headers
+            .iter()
+            .map(|header| display_width(header))
+            .collect::<Vec<usize>>();
+        for row in &table_data.rows {
+            for (index, cell) in row.iter().enumerate() {
+                if let Some(width) = widths.get_mut(index) {
+                    *width = (*width).max(display_width(&cell.text));
+                }
+            }
+        }
+
+        let mut out = String::new();
+        out.push_str(
+            &self.render_guide_table_row(
+                &table_data
+                    .headers
+                    .iter()
+                    .enumerate()
+                    .map(|(index, header)| {
+                        let align = aligns.get(index).copied().unwrap_or(TableAlign::Default);
+                        (
+                            pad_plain_cell(header, widths[index], align),
+                            Some(StyleToken::TableHeader),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        out.push('\n');
+
+        for row in &table_data.rows {
+            out.push_str(
+                &self.render_guide_table_row(
+                    &row.iter()
+                        .enumerate()
+                        .map(|(index, cell)| {
+                            let align = aligns.get(index).copied().unwrap_or(TableAlign::Default);
+                            (
+                                pad_plain_cell(&cell.text, widths[index], align),
+                                Some(value_style_token(&cell.value)),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+            );
+            out.push('\n');
+        }
+
+        indent_lines(&out, margin)
+    }
+
+    fn render_guide_table_row(&self, cells: &[(String, Option<StyleToken>)]) -> String {
+        let mut out = String::new();
+        for (index, (text, token)) in cells.iter().enumerate() {
+            if index > 0 {
+                out.push_str("  ");
+            }
+            if let Some(token) = token {
+                out.push_str(&apply_style_with_theme_overrides(
+                    text,
+                    *token,
+                    self.settings.color,
+                    &self.settings.theme,
+                    &self.settings.style_overrides,
+                ));
+            } else {
+                out.push_str(text);
+            }
+        }
+        out
     }
 
     fn render_mreg_vertical_list(
@@ -703,6 +838,8 @@ fn normalize_rich_table_chrome(rendered: &str, border_style: TableBorderStyle) -
         return rendered.to_string();
     }
 
+    // comfy-table gets close to the desired heavy/light border mix, but the
+    // final chrome still needs a normalization pass to match the CLI theme.
     let mut out = String::new();
     let lines = rendered.lines().collect::<Vec<&str>>();
     for (index, line) in lines.iter().enumerate() {
@@ -887,6 +1024,35 @@ fn compute_fallback_widths(
     }
 
     widths
+}
+
+fn pad_plain_cell(value: &str, width: usize, align: TableAlign) -> String {
+    let rendered_width = display_width(value);
+    if rendered_width >= width {
+        return value.to_string();
+    }
+
+    let gap = width - rendered_width;
+    match align {
+        TableAlign::Right => format!("{}{}", " ".repeat(gap), value),
+        TableAlign::Center => {
+            let left = gap / 2;
+            let right = gap - left;
+            format!("{}{}{}", " ".repeat(left), value, " ".repeat(right))
+        }
+        TableAlign::Default | TableAlign::Left => format!("{}{}", value, " ".repeat(gap)),
+    }
+}
+
+fn value_style_token(value: &Value) -> StyleToken {
+    match value {
+        Value::Bool(true) => StyleToken::BoolTrue,
+        Value::Bool(false) => StyleToken::BoolFalse,
+        Value::Null => StyleToken::Null,
+        Value::Number(_) => StyleToken::Number,
+        Value::String(raw) => value_style_token_for_string(raw).unwrap_or(StyleToken::Value),
+        _ => StyleToken::Value,
+    }
 }
 
 fn is_hex_color(value: &str) -> bool {
@@ -1204,6 +1370,7 @@ mod tests {
             column_weight: 3,
             table_overflow: TableOverflow::Clip,
             table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
             theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
             theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
             style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -1234,6 +1401,10 @@ mod tests {
             column_weight: 3,
             table_overflow: TableOverflow::Clip,
             table_border: crate::ui::TableBorderStyle::Square,
+            help_table_chrome: crate::ui::HelpTableChrome::None,
+            help_entry_indent: None,
+            help_entry_gap: None,
+            help_section_spacing: None,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
@@ -1357,6 +1528,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -1400,6 +1572,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -1447,6 +1620,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string()],
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: Vec::new(),
@@ -1480,6 +1654,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string()],
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: vec![("group".to_string(), json!("ops"))],
@@ -1760,6 +1935,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string()],
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: Vec::new(),
@@ -1779,6 +1955,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string()],
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: Vec::new(),
@@ -1800,6 +1977,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string()],
                 rows: vec![vec![json!("oistes")]],
                 header_pairs: Vec::new(),
@@ -1854,6 +2032,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Markdown,
+                border_override: None,
                 headers: vec!["uid".to_string(), "group".to_string()],
                 rows: vec![vec![json!("oistes"), json!("uio")]],
                 header_pairs: Vec::new(),
@@ -1875,6 +2054,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Markdown,
+                border_override: None,
                 headers: vec!["name".to_string(), "count".to_string()],
                 rows: vec![vec![json!("alice"), json!(42)]],
                 header_pairs: Vec::new(),
@@ -1897,6 +2077,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string(), "description".to_string()],
                 rows: vec![vec![
                     json!("oistes"),
@@ -1925,6 +2106,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -1943,6 +2125,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string()],
                 rows: vec![vec![json!(long)]],
                 header_pairs: Vec::new(),
@@ -1968,6 +2151,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::None,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -1985,6 +2169,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string()],
                 rows: vec![vec![json!(long)]],
                 header_pairs: Vec::new(),
@@ -2010,6 +2195,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Ellipsis,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -2028,6 +2214,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["uid".to_string()],
                 rows: vec![vec![json!(long)]],
                 header_pairs: Vec::new(),
@@ -2053,6 +2240,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Wrap,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -2095,6 +2283,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: "plain".to_string(),
                 theme: crate::ui::theme::resolve_theme("plain"),
                 style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -2135,6 +2324,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -2170,6 +2360,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides {
@@ -2208,6 +2399,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides {
@@ -2227,6 +2419,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["name".to_string()],
                 rows: vec![vec![serde_json::json!("alice")]],
                 header_pairs: Vec::new(),
@@ -2252,6 +2445,7 @@ mod tests {
                 column_weight: 3,
                 table_overflow: TableOverflow::Clip,
                 table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
                 theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
                 theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
                 style_overrides: crate::ui::style::StyleOverrides {

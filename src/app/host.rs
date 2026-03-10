@@ -1,21 +1,21 @@
-use crate::config::{ConfigValue, ResolvedConfig, DEFAULT_UI_WIDTH};
+use crate::config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
 use crate::core::output::OutputFormat;
 use crate::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use crate::native::{NativeCommandCatalogEntry, NativeCommandRegistry};
 use crate::repl::{self, SharedHistory};
 use clap::Parser;
-use miette::{miette, IntoDiagnostic, Result, WrapErr};
+use miette::{IntoDiagnostic, Result, WrapErr, miette};
 
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::ui::messages::MessageLevel;
-use crate::ui::presentation::{help_level, HelpLevel};
+use crate::ui::presentation::{HelpLevel, help_level};
 use crate::ui::theme::normalize_theme_name;
-use crate::ui::{render_guide_payload_with_layout, RenderRuntime, RenderSettings};
+use crate::ui::{RenderRuntime, RenderSettings, render_guide_payload_with_layout};
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::time::Instant;
-use terminal_size::{terminal_size, Width};
+use terminal_size::{Width, terminal_size};
 
 use super::help;
 use crate::app::logging::{bootstrap_logging_config, init_developer_logging};
@@ -27,39 +27,39 @@ use crate::cli::commands::{
     config as config_cmd, doctor as doctor_cmd, history as history_cmd, intro as intro_cmd,
     plugins as plugins_cmd, theme as theme_cmd,
 };
-use crate::cli::invocation::{extend_with_invocation_help, scan_cli_argv, InvocationOptions};
+use crate::cli::invocation::{InvocationOptions, extend_with_invocation_help, scan_cli_argv};
 use crate::cli::{Cli, Commands};
 use crate::plugin::{
-    CommandCatalogEntry, PluginDispatchContext, PluginDispatchError, PluginManager,
-    DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
+    CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
+    PluginDispatchError, PluginManager,
 };
 
 pub(crate) use super::bootstrap::{
-    build_app_state, build_cli_session_layer, build_logging_config, build_runtime_context,
-    debug_verbosity_from_config, message_verbosity_from_config, resolve_runtime_config,
-    RuntimeConfigRequest,
+    RuntimeConfigRequest, build_app_state, build_cli_session_layer, build_logging_config,
+    build_runtime_context, debug_verbosity_from_config, message_verbosity_from_config,
+    resolve_runtime_config,
 };
-pub(crate) use super::command_output::{run_cli_command, CliCommandResult, CommandRenderRuntime};
+pub(crate) use super::command_output::{CliCommandResult, CommandRenderRuntime, run_cli_command};
 pub(crate) use super::config_explain::{
-    config_explain_json, config_explain_result, config_value_to_json, explain_runtime_config,
-    format_scope, is_sensitive_key, render_config_explain_text, ConfigExplainContext,
+    ConfigExplainContext, config_explain_json, config_explain_result, config_value_to_json,
+    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
 };
 pub(crate) use super::dispatch::{
-    build_dispatch_plan, ensure_builtin_visible_for, ensure_dispatch_visibility,
-    ensure_plugin_visible_for, normalize_cli_profile, normalize_profile_override, RunAction,
+    RunAction, build_dispatch_plan, ensure_builtin_visible_for, ensure_dispatch_visibility,
+    ensure_plugin_visible_for, normalize_cli_profile, normalize_profile_override,
 };
 pub(crate) use super::external::run_external_command_with_help_renderer;
-use super::external::{run_external_command, ExternalCommandRuntime};
+use super::external::{ExternalCommandRuntime, run_external_command};
 pub(crate) use super::repl_lifecycle::rebuild_repl_parts;
 #[cfg(test)]
 pub(crate) use super::repl_lifecycle::rebuild_repl_state;
-pub(crate) use super::timing::{format_timing_badge, right_align_timing_line, TimingSummary};
+pub(crate) use super::timing::{TimingSummary, format_timing_badge, right_align_timing_line};
+pub(crate) use crate::plugin::config::{
+    PluginConfigEntry, PluginConfigScope, plugin_config_entries,
+};
 #[cfg(test)]
 pub(crate) use crate::plugin::config::{
     collect_plugin_config_env, config_value_to_plugin_env, plugin_config_env_name,
-};
-pub(crate) use crate::plugin::config::{
-    plugin_config_entries, PluginConfigEntry, PluginConfigScope,
 };
 use crate::ui::theme_loader;
 

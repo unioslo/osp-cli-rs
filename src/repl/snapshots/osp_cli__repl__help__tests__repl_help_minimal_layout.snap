@@ -1,6 +1,6 @@
 ---
 source: src/repl/help.rs
-assertion_line: 323
+assertion_line: 132
 expression: rendered
 ---
 Usage:
@@ -9,4 +9,5 @@ Commands:
   help
 Options:
   -h, --help
+
 Use `osp plugins commands` to list plugin-provided commands.

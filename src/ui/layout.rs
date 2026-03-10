@@ -34,6 +34,10 @@ pub struct MregMetrics {
     pub entry_metrics: Vec<Option<MregEntryMetrics>>,
 }
 
+/// Precomputes layout metadata needed by renderers for a document.
+///
+/// Returns table column widths and MREG alignment metrics derived from the
+/// supplied render settings.
 pub fn prepare_layout_context(
     document: &Document,
     settings: &ResolvedRenderSettings,
@@ -328,6 +332,7 @@ mod tests {
             column_weight: 3,
             table_overflow: crate::ui::TableOverflow::Clip,
             table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: crate::ui::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -350,6 +355,7 @@ mod tests {
             column_weight: 3,
             table_overflow: crate::ui::TableOverflow::Clip,
             table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: crate::ui::theme::resolve_theme(DEFAULT_THEME_NAME),
             style_overrides: crate::ui::style::StyleOverrides::default(),
@@ -364,6 +370,7 @@ mod tests {
                 Block::Table(TableBlock {
                     block_id: 1,
                     style: TableStyle::Grid,
+                    border_override: None,
                     headers: vec!["name".to_string(), "value".to_string()],
                     rows: vec![vec![json!("short"), json!("abc")]],
                     header_pairs: Vec::new(),
@@ -374,6 +381,7 @@ mod tests {
                 Block::Table(TableBlock {
                     block_id: 2,
                     style: TableStyle::Grid,
+                    border_override: None,
                     headers: vec!["name".to_string(), "value".to_string()],
                     rows: vec![vec![json!("very-long-name"), json!("x")]],
                     header_pairs: Vec::new(),
@@ -404,6 +412,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["name".to_string(), "description".to_string()],
                 rows: vec![vec![
                     json!("alpha"),
@@ -432,6 +441,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["name".to_string(), "description".to_string()],
                 rows: vec![vec![
                     json!("alpha"),
@@ -467,6 +477,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["left".to_string(), "right".to_string()],
                 rows: vec![vec![json!("abcdefghijk"), json!("mnopqrstuvw")]],
                 header_pairs: Vec::new(),
@@ -558,6 +569,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 7,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: Vec::new(),
                 rows: vec![Vec::new()],
                 header_pairs: Vec::new(),
@@ -582,6 +594,7 @@ mod tests {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 9,
                 style: TableStyle::Grid,
+                border_override: None,
                 headers: vec!["a".to_string(), "b".to_string()],
                 rows: vec![vec![json!("x"), json!("y")]],
                 header_pairs: Vec::new(),
@@ -613,6 +626,7 @@ mod tests {
         let table = TableBlock {
             block_id: 1,
             style: TableStyle::Grid,
+            border_override: None,
             headers: vec!["name".to_string(), "value".to_string()],
             rows: vec![vec![
                 json!("alice"),

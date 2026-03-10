@@ -36,18 +36,13 @@ pub(crate) enum HelpLayout {
     Minimal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum HelpLevel {
     None,
     Tiny,
+    #[default]
     Normal,
     Verbose,
-}
-
-impl Default for HelpLevel {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -272,7 +267,6 @@ const PRESENTATION_KEYS: &[&str] = &[
     "ui.table.border",
     "ui.messages.layout",
     "repl.simple_prompt",
-    "ui.help.layout",
     "repl.intro",
 ];
 
@@ -308,11 +302,6 @@ fn presentation_seeded_value(presentation: UiPresentation, key: &str) -> Option<
         "repl.simple_prompt" => match presentation {
             UiPresentation::Expressive => Some(ConfigValue::Bool(false)),
             UiPresentation::Compact | UiPresentation::Austere => Some(ConfigValue::Bool(true)),
-        },
-        "ui.help.layout" => match presentation {
-            UiPresentation::Expressive => Some(ConfigValue::from("full")),
-            UiPresentation::Compact => Some(ConfigValue::from("compact")),
-            UiPresentation::Austere => Some(ConfigValue::from("minimal")),
         },
         "repl.intro" => match presentation {
             UiPresentation::Austere => Some(ConfigValue::from("minimal")),
@@ -547,16 +536,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_help_layout_beats_presentation_unit() {
-        let config = resolved_config(
-            &[("ui.presentation", "austere")],
-            &[("ui.help.layout", "full")],
-            &[],
-        );
-        assert_eq!(help_layout(&config), HelpLayout::Full);
-    }
-
-    #[test]
     fn config_value_name_stays_canonical_unit() {
         assert_eq!(UiPresentation::Austere.as_config_value(), "austere");
         assert_eq!(
@@ -566,19 +545,15 @@ mod tests {
     }
 
     #[test]
-    fn explain_presentation_effect_reports_seeded_help_layout_unit() {
-        let config = resolved_config(
-            &[("ui.presentation", "austere"), ("ui.help.layout", "full")],
-            &[],
-            &[],
-        );
-        let effect = explain_presentation_effect(&config, "ui.help.layout")
-            .expect("austere should seed minimal help layout");
+    fn explain_presentation_effect_reports_seeded_chrome_frame_unit() {
+        let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
+        let effect = explain_presentation_effect(&config, "ui.chrome.frame")
+            .expect("austere should seed chrome frame");
 
         assert_eq!(effect.preset, UiPresentation::Austere);
         assert_eq!(effect.preset_source, ConfigSource::BuiltinDefaults);
         assert_eq!(effect.preset_scope, Scope::global());
-        assert_eq!(effect.seeded_value, ConfigValue::from("minimal"));
+        assert_eq!(effect.seeded_value, ConfigValue::from("none"));
     }
 
     #[test]
@@ -591,9 +566,33 @@ mod tests {
     fn explain_presentation_effect_respects_explicit_key_override_unit() {
         let config = resolved_config(
             &[("ui.presentation", "austere")],
-            &[("ui.help.layout", "compact")],
+            &[("ui.chrome.frame", "top-bottom")],
             &[],
         );
-        assert_eq!(explain_presentation_effect(&config, "ui.help.layout"), None);
+        assert_eq!(
+            explain_presentation_effect(&config, "ui.chrome.frame"),
+            None
+        );
+    }
+
+    #[test]
+    fn derived_help_level_maps_quiet_and_verbose_flags_unit() {
+        assert_eq!(derived_help_level(0, 0), HelpLevel::Normal);
+        assert_eq!(derived_help_level(1, 0), HelpLevel::Verbose);
+        assert_eq!(derived_help_level(2, 0), HelpLevel::Verbose);
+        assert_eq!(derived_help_level(0, 1), HelpLevel::Tiny);
+        assert_eq!(derived_help_level(0, 2), HelpLevel::None);
+        assert_eq!(derived_help_level(1, 1), HelpLevel::Normal);
+    }
+
+    #[test]
+    fn explicit_help_level_beats_invocation_flags_unit() {
+        let config = resolved_config(
+            &[("ui.presentation", "expressive")],
+            &[("ui.help.level", "tiny")],
+            &[],
+        );
+
+        assert_eq!(help_level(&config, 1, 0), HelpLevel::Tiny);
     }
 }

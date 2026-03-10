@@ -5,11 +5,9 @@ use crate::ui::style::{StyleOverrides, StyleToken};
 use crate::ui::theme::ThemeDefinition;
 use crate::ui::{RenderBackend, ResolvedRenderSettings};
 
-pub use crate::ui::chrome::{
+use crate::ui::chrome::{
     SectionFrameStyle, SectionRenderContext, SectionStyleTokens,
     render_section_block_with_overrides,
-    render_section_block_with_overrides as render_section_block, render_section_divider,
-    render_section_divider_with_overrides,
 };
 
 const ORDERED_MESSAGE_LEVELS: [MessageLevel; 5] = [
@@ -20,20 +18,39 @@ const ORDERED_MESSAGE_LEVELS: [MessageLevel; 5] = [
     MessageLevel::Trace,
 ];
 
+/// Severity level for buffered UI messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MessageLevel {
+    /// Error output that should remain visible at every verbosity.
     Error,
+    /// Warning output for degraded or surprising behavior.
     Warning,
+    /// Success output for completed operations.
     Success,
+    /// Informational output for normal command progress.
     Info,
+    /// Trace or debug-style output.
     Trace,
 }
 
 impl MessageLevel {
+    /// Parses a message level from configuration or environment input.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "error" => Some(MessageLevel::Error),
+            "warning" | "warn" => Some(MessageLevel::Warning),
+            "success" => Some(MessageLevel::Success),
+            "info" => Some(MessageLevel::Info),
+            "trace" => Some(MessageLevel::Trace),
+            _ => None,
+        }
+    }
+
     fn ordered() -> impl Iterator<Item = Self> {
         ORDERED_MESSAGE_LEVELS.into_iter()
     }
 
+    /// Returns the section title used for grouped rendering.
     pub fn title(self) -> &'static str {
         match self {
             MessageLevel::Error => "Errors",
@@ -54,6 +71,7 @@ impl MessageLevel {
         }
     }
 
+    /// Returns the lowercase identifier used in environment-style output.
     pub fn as_env_str(self) -> &'static str {
         match self {
             MessageLevel::Error => "error",
@@ -85,13 +103,17 @@ impl MessageLevel {
     }
 }
 
+/// Layout style used when rendering buffered messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageLayout {
+    /// Render each message inline without grouped section chrome.
     Minimal,
+    /// Group messages by severity and render section chrome.
     Grouped,
 }
 
 impl MessageLayout {
+    /// Parses a message layout from configuration input.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "minimal" => Some(Self::Minimal),
@@ -101,30 +123,44 @@ impl MessageLayout {
     }
 }
 
+/// A single UI message with its associated severity.
 #[derive(Debug, Clone)]
 pub struct UiMessage {
+    /// Severity assigned to the message.
     pub level: MessageLevel,
+    /// Renderable message text.
     pub text: String,
 }
 
+/// In-memory buffer for messages collected during command execution.
 #[derive(Debug, Clone, Default)]
 pub struct MessageBuffer {
     entries: Vec<UiMessage>,
 }
 
+/// Options for rendering grouped message output.
 #[derive(Debug, Clone)]
 pub struct GroupedRenderOptions<'a> {
+    /// Highest message level that should be included in the output.
     pub max_level: MessageLevel,
+    /// Whether ANSI color output is enabled.
     pub color: bool,
+    /// Whether Unicode box-drawing and symbols are enabled.
     pub unicode: bool,
+    /// Optional output width constraint.
     pub width: Option<usize>,
+    /// Active theme used for semantic styling.
     pub theme: &'a ThemeDefinition,
+    /// Message layout mode.
     pub layout: MessageLayout,
+    /// Frame style used for grouped section chrome.
     pub chrome_frame: SectionFrameStyle,
+    /// Explicit semantic style overrides layered above the theme.
     pub style_overrides: StyleOverrides,
 }
 
 impl MessageBuffer {
+    /// Appends a message to the buffer.
     pub fn push<T: Into<String>>(&mut self, level: MessageLevel, text: T) {
         self.entries.push(UiMessage {
             level,
@@ -132,26 +168,32 @@ impl MessageBuffer {
         });
     }
 
+    /// Appends an error message to the buffer.
     pub fn error<T: Into<String>>(&mut self, text: T) {
         self.push(MessageLevel::Error, text);
     }
 
+    /// Appends a warning message to the buffer.
     pub fn warning<T: Into<String>>(&mut self, text: T) {
         self.push(MessageLevel::Warning, text);
     }
 
+    /// Appends a success message to the buffer.
     pub fn success<T: Into<String>>(&mut self, text: T) {
         self.push(MessageLevel::Success, text);
     }
 
+    /// Appends an informational message to the buffer.
     pub fn info<T: Into<String>>(&mut self, text: T) {
         self.push(MessageLevel::Info, text);
     }
 
+    /// Appends a trace message to the buffer.
     pub fn trace<T: Into<String>>(&mut self, text: T) {
         self.push(MessageLevel::Trace, text);
     }
 
+    /// Returns `true` when the buffer contains no messages.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -162,6 +204,7 @@ impl MessageBuffer {
             .filter(move |entry| entry.level == level)
     }
 
+    /// Renders messages with the default plain grouped layout.
     pub fn render_grouped(&self, max_level: MessageLevel) -> String {
         let theme = crate::ui::theme::resolve_theme("plain");
         self.render_grouped_styled(
@@ -174,6 +217,7 @@ impl MessageBuffer {
         )
     }
 
+    /// Renders messages with explicit theme and layout settings.
     pub fn render_grouped_styled(
         &self,
         max_level: MessageLevel,
@@ -195,6 +239,7 @@ impl MessageBuffer {
         })
     }
 
+    /// Renders messages using a preassembled options struct.
     pub fn render_grouped_with_options(&self, options: GroupedRenderOptions<'_>) -> String {
         if matches!(options.layout, MessageLayout::Grouped) {
             return self.render_grouped_sections(&options);
@@ -223,6 +268,7 @@ impl MessageBuffer {
             column_weight: 3,
             table_overflow: crate::ui::TableOverflow::Clip,
             table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
             theme_name: options.theme.id.clone(),
             theme: options.theme.clone(),
             style_overrides: options.style_overrides,
@@ -309,6 +355,7 @@ fn default_message_chrome_frame(layout: MessageLayout) -> SectionFrameStyle {
     }
 }
 
+/// Adjusts a base verbosity level using `-v` and `-q` style counts.
 pub fn adjust_verbosity(base: MessageLevel, verbose: u8, quiet: u8) -> MessageLevel {
     let rank = base.as_rank() + verbose as i8 - quiet as i8;
     MessageLevel::from_rank(rank)

@@ -1,19 +1,24 @@
 pub(crate) mod commands;
 pub(crate) mod invocation;
-pub mod pipeline;
+pub(crate) mod pipeline;
 pub(crate) mod rows;
 use crate::config::{ConfigLayer, ConfigValue, ResolvedConfig, RuntimeLoadOptions};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::ui::chrome::SectionFrameStyle;
 use crate::ui::theme::DEFAULT_THEME_NAME;
 use crate::ui::{
-    GuideDefaultFormat, RenderRuntime, RenderSettings, StyleOverrides, TableBorderStyle,
-    TableOverflow,
+    GuideDefaultFormat, HelpTableChrome, RenderRuntime, RenderSettings, StyleOverrides,
+    TableBorderStyle, TableOverflow,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use crate::ui::presentation::UiPresentation;
+
+pub use pipeline::{
+    ParsedCommandLine, is_cli_help_stage, parse_command_text_with_aliases,
+    parse_command_tokens_with_aliases, validate_cli_dsl_stages,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum PresentationArg {
@@ -33,6 +38,7 @@ impl From<PresentationArg> for UiPresentation {
     }
 }
 
+/// Top-level CLI parser for the `osp` command.
 #[derive(Debug, Parser)]
 #[command(
     name = "osp",
@@ -41,24 +47,31 @@ impl From<PresentationArg> for UiPresentation {
     after_help = "Use `osp plugins commands` to list plugin-provided commands."
 )]
 pub struct Cli {
+    /// Override the effective user name for this invocation.
     #[arg(short = 'u', long = "user")]
     pub user: Option<String>,
 
+    /// Disable persistent REPL history and other identity-linked behavior.
     #[arg(short = 'i', long = "incognito", global = true)]
     pub incognito: bool,
 
+    /// Select the active config profile for the invocation.
     #[arg(long = "profile", global = true)]
     pub profile: Option<String>,
 
+    /// Skip environment-derived config sources.
     #[arg(long = "no-env", global = true)]
     pub no_env: bool,
 
+    /// Skip config-file-derived sources.
     #[arg(long = "no-config-file", alias = "no-config", global = true)]
     pub no_config_file: bool,
 
+    /// Add one or more plugin discovery directories.
     #[arg(long = "plugin-dir", global = true)]
     pub plugin_dirs: Vec<PathBuf>,
 
+    /// Override the selected output theme.
     #[arg(long = "theme", global = true)]
     pub theme: Option<String>,
 
@@ -72,11 +85,13 @@ pub struct Cli {
     )]
     gammel_og_bitter: bool,
 
+    /// Top-level built-in or plugin command selection.
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
 
 impl Cli {
+    /// Returns the runtime source-loading options implied by global CLI flags.
     pub fn runtime_load_options(&self) -> RuntimeLoadOptions {
         RuntimeLoadOptions {
             include_env: !self.no_env,
@@ -85,140 +100,212 @@ impl Cli {
     }
 }
 
+/// Top-level commands accepted by `osp`.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Inspect and manage discovered plugins.
     Plugins(PluginsArgs),
+    /// Run local diagnostics and health checks.
     Doctor(DoctorArgs),
+    /// Inspect and change output themes.
     Theme(ThemeArgs),
+    /// Inspect and mutate CLI configuration.
     Config(ConfigArgs),
+    /// Manage persisted REPL history.
     History(HistoryArgs),
     #[command(hide = true)]
+    /// Render the legacy intro/help experience.
     Intro(IntroArgs),
     #[command(hide = true)]
+    /// Access hidden REPL debugging and support commands.
     Repl(ReplArgs),
     #[command(external_subcommand)]
+    /// Dispatch an external or plugin-provided command line.
     External(Vec<String>),
 }
 
+/// Parser used for inline command execution without the binary name prefix.
 #[derive(Debug, Parser)]
 #[command(name = "osp", no_binary_name = true)]
 pub struct InlineCommandCli {
+    /// Parsed command payload, if any.
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
 
+/// Hidden REPL-only command namespace.
 #[derive(Debug, Args)]
 pub struct ReplArgs {
+    /// Hidden REPL subcommand to run.
     #[command(subcommand)]
     pub command: ReplCommands,
 }
 
+/// Hidden REPL debugging commands.
 #[derive(Debug, Subcommand)]
 pub enum ReplCommands {
     #[command(name = "debug-complete", hide = true)]
+    /// Trace completion candidates for a partially typed line.
     DebugComplete(DebugCompleteArgs),
     #[command(name = "debug-highlight", hide = true)]
+    /// Trace syntax-highlighting output for a line.
     DebugHighlight(DebugHighlightArgs),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DebugMenuArg {
+    Completion,
+    History,
+}
+
+/// Arguments for REPL completion debugging.
 #[derive(Debug, Args)]
 pub struct DebugCompleteArgs {
+    /// Input line to complete.
     #[arg(long)]
     pub line: String,
 
+    /// Selects which REPL popup menu to debug.
+    #[arg(long = "menu", value_enum, default_value_t = DebugMenuArg::Completion)]
+    pub menu: DebugMenuArg,
+
+    /// Cursor position within `line`; defaults to the end of the line.
     #[arg(long)]
     pub cursor: Option<usize>,
 
+    /// Virtual menu width to use when rendering completion output.
     #[arg(long, default_value_t = 80)]
     pub width: u16,
 
+    /// Virtual menu height to use when rendering completion output.
     #[arg(long, default_value_t = 24)]
     pub height: u16,
 
+    /// Optional completion trace steps to enable.
     #[arg(long = "step")]
     pub steps: Vec<String>,
 
+    /// Enable ANSI styling in the rendered completion menu.
     #[arg(long = "menu-ansi", default_value_t = false)]
     pub menu_ansi: bool,
 
+    /// Enable Unicode box-drawing in the rendered completion menu.
     #[arg(long = "menu-unicode", default_value_t = false)]
     pub menu_unicode: bool,
 }
 
+/// Arguments for REPL highlighting debugging.
 #[derive(Debug, Args)]
 pub struct DebugHighlightArgs {
+    /// Input line to highlight.
     #[arg(long)]
     pub line: String,
 }
 
+/// Top-level plugin command arguments.
 #[derive(Debug, Args)]
 pub struct PluginsArgs {
+    /// Plugin management action to perform.
     #[command(subcommand)]
     pub command: PluginsCommands,
 }
 
+/// Top-level doctor command arguments.
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
+    /// Optional narrowed diagnostic target.
     #[command(subcommand)]
     pub command: Option<DoctorCommands>,
 }
 
+/// Built-in diagnostic groups exposed through `osp doctor`.
 #[derive(Debug, Subcommand)]
 pub enum DoctorCommands {
+    /// Run every available built-in diagnostic.
     All,
+    /// Validate resolved configuration state.
     Config,
+    /// Show the last run metadata when available.
     Last,
+    /// Validate plugin discovery and state.
     Plugins,
+    /// Validate theme resolution and rendering support.
     Theme,
 }
 
+/// Built-in plugin management subcommands.
 #[derive(Debug, Subcommand)]
 pub enum PluginsCommands {
+    /// List discovered plugins.
     List,
+    /// List commands exported by plugins.
     Commands,
+    /// Show plugin-declared configuration metadata.
     Config(PluginConfigArgs),
+    /// Force a fresh plugin discovery pass.
     Refresh,
+    /// Enable a plugin-backed command.
     Enable(PluginCommandStateArgs),
+    /// Disable a plugin-backed command.
     Disable(PluginCommandStateArgs),
+    /// Clear persisted state for a command.
     ClearState(PluginCommandClearArgs),
+    /// Select the provider implementation used for a command.
     SelectProvider(PluginProviderSelectArgs),
+    /// Clear an explicit provider selection for a command.
     ClearProvider(PluginProviderClearArgs),
+    /// Run plugin-specific diagnostics.
     Doctor,
 }
 
+/// Top-level theme command arguments.
 #[derive(Debug, Args)]
 pub struct ThemeArgs {
+    /// Theme action to perform.
     #[command(subcommand)]
     pub command: ThemeCommands,
 }
 
+/// Theme inspection and selection commands.
 #[derive(Debug, Subcommand)]
 pub enum ThemeCommands {
+    /// List available themes.
     List,
+    /// Show details for a specific theme.
     Show(ThemeShowArgs),
+    /// Persist or apply a selected theme.
     Use(ThemeUseArgs),
 }
 
+/// Arguments for `theme show`.
 #[derive(Debug, Args)]
 pub struct ThemeShowArgs {
+    /// Theme name to inspect; defaults to the active theme.
     pub name: Option<String>,
 }
 
+/// Arguments for `theme use`.
 #[derive(Debug, Args)]
 pub struct ThemeUseArgs {
+    /// Theme name to activate.
     pub name: String,
 }
 
+/// Shared arguments for enabling or disabling a plugin command.
 #[derive(Debug, Args)]
 pub struct PluginCommandStateArgs {
+    /// Command name to enable or disable.
     pub command: String,
 
+    /// Apply the change globally instead of to a profile.
     #[arg(long = "global", conflicts_with = "profile")]
     pub global: bool,
 
+    /// Apply the change to a named profile.
     #[arg(long = "profile")]
     pub profile: Option<String>,
 
+    /// Target a specific terminal context, or the current one when omitted.
     #[arg(
         long = "terminal",
         num_args = 0..=1,
@@ -227,16 +314,21 @@ pub struct PluginCommandStateArgs {
     pub terminal: Option<String>,
 }
 
+/// Arguments for clearing persisted command state.
 #[derive(Debug, Args)]
 pub struct PluginCommandClearArgs {
+    /// Command name whose state should be cleared.
     pub command: String,
 
+    /// Clear global state instead of profile-scoped state.
     #[arg(long = "global", conflicts_with = "profile")]
     pub global: bool,
 
+    /// Clear state for a named profile.
     #[arg(long = "profile")]
     pub profile: Option<String>,
 
+    /// Target a specific terminal context, or the current one when omitted.
     #[arg(
         long = "terminal",
         num_args = 0..=1,
@@ -245,17 +337,23 @@ pub struct PluginCommandClearArgs {
     pub terminal: Option<String>,
 }
 
+/// Arguments for selecting a provider implementation for a command.
 #[derive(Debug, Args)]
 pub struct PluginProviderSelectArgs {
+    /// Command name whose provider should be selected.
     pub command: String,
+    /// Plugin identifier to bind to the command.
     pub plugin_id: String,
 
+    /// Apply the change globally instead of to a profile.
     #[arg(long = "global", conflicts_with = "profile")]
     pub global: bool,
 
+    /// Apply the change to a named profile.
     #[arg(long = "profile")]
     pub profile: Option<String>,
 
+    /// Target a specific terminal context, or the current one when omitted.
     #[arg(
         long = "terminal",
         num_args = 0..=1,
@@ -264,16 +362,21 @@ pub struct PluginProviderSelectArgs {
     pub terminal: Option<String>,
 }
 
+/// Arguments for clearing a provider selection.
 #[derive(Debug, Args)]
 pub struct PluginProviderClearArgs {
+    /// Command name whose provider binding should be removed.
     pub command: String,
 
+    /// Clear the global binding instead of a profile-scoped binding.
     #[arg(long = "global", conflicts_with = "profile")]
     pub global: bool,
 
+    /// Clear the binding for a named profile.
     #[arg(long = "profile")]
     pub profile: Option<String>,
 
+    /// Target a specific terminal context, or the current one when omitted.
     #[arg(
         long = "terminal",
         num_args = 0..=1,
@@ -282,91 +385,128 @@ pub struct PluginProviderClearArgs {
     pub terminal: Option<String>,
 }
 
+/// Arguments for `plugins config`.
 #[derive(Debug, Args)]
 pub struct PluginConfigArgs {
+    /// Plugin identifier whose config schema should be shown.
     pub plugin_id: String,
 }
 
+/// Top-level config command arguments.
 #[derive(Debug, Args)]
 pub struct ConfigArgs {
+    /// Config action to perform.
     #[command(subcommand)]
     pub command: ConfigCommands,
 }
 
+/// Top-level history command arguments.
 #[derive(Debug, Args)]
 pub struct HistoryArgs {
+    /// History action to perform.
     #[command(subcommand)]
     pub command: HistoryCommands,
 }
 
+/// Hidden intro command arguments.
 #[derive(Debug, Args, Clone, Default)]
 pub struct IntroArgs {}
 
+/// History management commands.
 #[derive(Debug, Subcommand)]
 pub enum HistoryCommands {
+    /// List persisted history entries.
     List,
+    /// Retain only the newest `keep` entries.
     Prune(HistoryPruneArgs),
+    /// Remove all persisted history entries.
     Clear,
 }
 
+/// Arguments for `history prune`.
 #[derive(Debug, Args)]
 pub struct HistoryPruneArgs {
+    /// Number of recent entries to keep.
     pub keep: usize,
 }
 
+/// Configuration inspection and mutation commands.
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommands {
+    /// Show the resolved configuration view.
     Show(ConfigShowArgs),
+    /// Read a single resolved config key.
     Get(ConfigGetArgs),
+    /// Explain how a config key was resolved.
     Explain(ConfigExplainArgs),
+    /// Set a config key in one or more writable stores.
     Set(ConfigSetArgs),
+    /// Remove a config key from one or more writable stores.
     Unset(ConfigUnsetArgs),
     #[command(alias = "diagnostics")]
+    /// Run config-specific diagnostics.
     Doctor,
 }
 
+/// Arguments for `config show`.
 #[derive(Debug, Args)]
 pub struct ConfigShowArgs {
+    /// Include source provenance for each returned key.
     #[arg(long = "sources")]
     pub sources: bool,
 
+    /// Emit raw stored values without presentation formatting.
     #[arg(long = "raw")]
     pub raw: bool,
 }
 
+/// Arguments for `config get`.
 #[derive(Debug, Args)]
 pub struct ConfigGetArgs {
+    /// Config key to read.
     pub key: String,
 
+    /// Include source provenance for the resolved key.
     #[arg(long = "sources")]
     pub sources: bool,
 
+    /// Emit the raw stored value without presentation formatting.
     #[arg(long = "raw")]
     pub raw: bool,
 }
 
+/// Arguments for `config explain`.
 #[derive(Debug, Args)]
 pub struct ConfigExplainArgs {
+    /// Config key to explain.
     pub key: String,
 
+    /// Reveal secret values in the explanation output.
     #[arg(long = "show-secrets")]
     pub show_secrets: bool,
 }
 
+/// Arguments for `config set`.
 #[derive(Debug, Args)]
 pub struct ConfigSetArgs {
+    /// Config key to write.
     pub key: String,
+    /// Config value to write.
     pub value: String,
 
+    /// Write to the global store instead of a profile-scoped store.
     #[arg(long = "global", conflicts_with_all = ["profile", "profile_all"])]
     pub global: bool,
 
+    /// Write to a single named profile.
     #[arg(long = "profile", conflicts_with = "profile_all")]
     pub profile: Option<String>,
 
+    /// Write to every known profile store.
     #[arg(long = "profile-all", conflicts_with = "profile")]
     pub profile_all: bool,
 
+    /// Write to a terminal-scoped store, or the current terminal when omitted.
     #[arg(
         long = "terminal",
         num_args = 0..=1,
@@ -374,41 +514,54 @@ pub struct ConfigSetArgs {
     )]
     pub terminal: Option<String>,
 
+    /// Apply the change only to the current in-memory session.
     #[arg(long = "session", conflicts_with_all = ["config_store", "secrets", "save"])]
     pub session: bool,
 
+    /// Force the regular config store as the destination.
     #[arg(long = "config", conflicts_with_all = ["session", "secrets"])]
     pub config_store: bool,
 
+    /// Force the secrets store as the destination.
     #[arg(long = "secrets", conflicts_with_all = ["session", "config_store"])]
     pub secrets: bool,
 
+    /// Persist the change immediately after validation.
     #[arg(long = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
     pub save: bool,
 
+    /// Show the resolved write plan without applying it.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 
+    /// Skip interactive confirmation prompts.
     #[arg(long = "yes")]
     pub yes: bool,
 
+    /// Show an explanation of the resolved write targets.
     #[arg(long = "explain")]
     pub explain: bool,
 }
 
+/// Arguments for `config unset`.
 #[derive(Debug, Args)]
 pub struct ConfigUnsetArgs {
+    /// Config key to remove.
     pub key: String,
 
+    /// Remove the key from the global store instead of a profile-scoped store.
     #[arg(long = "global", conflicts_with_all = ["profile", "profile_all"])]
     pub global: bool,
 
+    /// Remove the key from a single named profile.
     #[arg(long = "profile", conflicts_with = "profile_all")]
     pub profile: Option<String>,
 
+    /// Remove the key from every known profile store.
     #[arg(long = "profile-all", conflicts_with = "profile")]
     pub profile_all: bool,
 
+    /// Remove the key from a terminal-scoped store, or the current terminal when omitted.
     #[arg(
         long = "terminal",
         num_args = 0..=1,
@@ -416,27 +569,34 @@ pub struct ConfigUnsetArgs {
     )]
     pub terminal: Option<String>,
 
+    /// Remove the key only from the current in-memory session.
     #[arg(long = "session", conflicts_with_all = ["config_store", "secrets", "save"])]
     pub session: bool,
 
+    /// Force the regular config store as the source to edit.
     #[arg(long = "config", conflicts_with_all = ["session", "secrets"])]
     pub config_store: bool,
 
+    /// Force the secrets store as the source to edit.
     #[arg(long = "secrets", conflicts_with_all = ["session", "config_store"])]
     pub secrets: bool,
 
+    /// Persist the change immediately after validation.
     #[arg(long = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
     pub save: bool,
 
+    /// Show the resolved removal plan without applying it.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 }
 
 impl Cli {
+    /// Returns the default render settings for this CLI invocation.
     pub fn render_settings(&self) -> RenderSettings {
         default_render_settings()
     }
 
+    /// Applies config-backed render settings to an existing settings struct.
     pub fn seed_render_settings_from_config(
         &self,
         settings: &mut RenderSettings,
@@ -445,6 +605,7 @@ impl Cli {
         apply_render_settings_from_config(settings, config);
     }
 
+    /// Returns the theme name selected by CLI override or resolved config.
     pub fn selected_theme_name(&self, config: &ResolvedConfig) -> String {
         self.theme
             .as_deref()
@@ -501,6 +662,10 @@ pub(crate) fn default_render_settings() -> RenderSettings {
         column_weight: 3,
         table_overflow: TableOverflow::Clip,
         table_border: TableBorderStyle::Square,
+        help_table_chrome: HelpTableChrome::None,
+        help_entry_indent: None,
+        help_entry_gap: None,
+        help_section_spacing: None,
         mreg_stack_min_col_width: 10,
         mreg_stack_overflow_ratio: 200,
         theme_name: DEFAULT_THEME_NAME.to_string(),
@@ -643,6 +808,16 @@ pub(crate) fn sync_render_settings_from_config(
         settings.table_border = parsed;
     }
 
+    if let Some(value) = config.get_string("ui.help.table_chrome")
+        && let Some(parsed) = HelpTableChrome::parse(value)
+    {
+        settings.help_table_chrome = parsed;
+    }
+
+    settings.help_entry_indent = config_usize_override(config, "ui.help.entry_indent");
+    settings.help_entry_gap = config_usize_override(config, "ui.help.entry_gap");
+    settings.help_section_spacing = config_usize_override(config, "ui.help.section_spacing");
+
     settings.style_overrides = StyleOverrides {
         text: config_non_empty_string(config, "color.text"),
         key: config_non_empty_string(config, "color.key"),
@@ -672,6 +847,7 @@ pub(crate) fn sync_render_settings_from_config(
 fn parse_output_format(value: &str) -> Option<OutputFormat> {
     match value.trim().to_ascii_lowercase().as_str() {
         "auto" => Some(OutputFormat::Auto),
+        "guide" => Some(OutputFormat::Guide),
         "json" => Some(OutputFormat::Json),
         "table" => Some(OutputFormat::Table),
         "md" | "markdown" => Some(OutputFormat::Markdown),
@@ -724,6 +900,24 @@ fn config_non_empty_string(config: &ResolvedConfig, key: &str) -> Option<String>
         .map(ToOwned::to_owned)
 }
 
+fn config_usize_override(config: &ResolvedConfig, key: &str) -> Option<usize> {
+    match config.get(key).map(ConfigValue::reveal) {
+        Some(ConfigValue::Integer(value)) if *value >= 0 => Some(*value as usize),
+        Some(ConfigValue::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.eq_ignore_ascii_case("inherit") || trimmed.is_empty() {
+                None
+            } else {
+                trimmed.parse::<usize>().ok()
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Parses inline command tokens using the same subcommand model as the top-level CLI.
+///
+/// Returns `Ok(None)` when the token list does not select a subcommand.
 pub fn parse_inline_command_tokens(tokens: &[String]) -> Result<Option<Commands>, clap::Error> {
     InlineCommandCli::try_parse_from(tokens.iter().map(String::as_str)).map(|parsed| parsed.command)
 }
@@ -733,8 +927,9 @@ mod tests {
     use super::{
         Cli, ColorMode, Commands, ConfigCommands, InlineCommandCli, OutputFormat, RenderMode,
         RuntimeLoadOptions, SectionFrameStyle, TableBorderStyle, TableOverflow, UnicodeMode,
-        apply_render_settings_from_config, config_int, config_non_empty_string, parse_color_mode,
-        parse_inline_command_tokens, parse_output_format, parse_render_mode, parse_unicode_mode,
+        apply_render_settings_from_config, config_int, config_non_empty_string,
+        config_usize_override, parse_color_mode, parse_inline_command_tokens, parse_output_format,
+        parse_render_mode, parse_unicode_mode,
     };
     use crate::config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
     use crate::ui::presentation::build_presentation_defaults_layer;
@@ -790,6 +985,7 @@ mod tests {
 
     #[test]
     fn parse_mode_helpers_accept_aliases_and_trim_input_unit() {
+        assert_eq!(parse_output_format(" guide "), Some(OutputFormat::Guide));
         assert_eq!(
             parse_output_format(" markdown "),
             Some(OutputFormat::Markdown)
@@ -866,6 +1062,26 @@ mod tests {
         apply_render_settings_from_config(&mut settings, &config);
 
         assert_eq!(settings.guide_default_format, GuideDefaultFormat::Inherit);
+    }
+
+    #[test]
+    fn help_spacing_overrides_support_inherit_and_numeric_values_unit() {
+        let config = resolved(&[
+            ("ui.help.entry_indent", "4"),
+            ("ui.help.entry_gap", "3"),
+            ("ui.help.section_spacing", "inherit"),
+        ]);
+        let mut settings = RenderSettings::test_plain(OutputFormat::Guide);
+
+        apply_render_settings_from_config(&mut settings, &config);
+
+        assert_eq!(
+            config_usize_override(&config, "ui.help.entry_indent"),
+            Some(4)
+        );
+        assert_eq!(settings.help_entry_indent, Some(4));
+        assert_eq!(settings.help_entry_gap, Some(3));
+        assert_eq!(settings.help_section_spacing, None);
     }
 
     #[test]

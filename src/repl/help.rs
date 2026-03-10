@@ -448,10 +448,9 @@ mod tests {
         );
 
         assert!(rendered.contains("## Commands"));
-        assert!(rendered.contains("| name"));
-        assert!(rendered.contains("short_help"));
-        assert!(rendered.contains("| list | List history entries |"));
+        assert!(rendered.contains("- `list` List history entries"));
         assert!(!rendered.contains("\"commands\""));
         assert!(!rendered.contains("+---"));
+        assert!(!rendered.contains("| name"));
     }
 }
