@@ -125,18 +125,26 @@ impl ConfigState {
 #[derive(Debug, Clone)]
 /// User-interface settings derived from the current runtime state.
 pub struct UiState {
+    /// Resolved render settings used for command, guide, and help output.
     pub render_settings: RenderSettings,
+    /// Highest message severity emitted by default.
     pub message_verbosity: MessageLevel,
+    /// Numeric debug verbosity used for trace-style host output.
     pub debug_verbosity: u8,
 }
 
 #[derive(Debug, Clone)]
 /// Startup inputs needed to assemble runtime services and caches.
 pub struct LaunchContext {
+    /// Explicit plugin directories requested by the caller.
     pub plugin_dirs: Vec<PathBuf>,
+    /// Optional config-root override for runtime config discovery.
     pub config_root: Option<PathBuf>,
+    /// Optional cache-root override for runtime state and caches.
     pub cache_root: Option<PathBuf>,
+    /// Flags controlling which runtime config sources are consulted.
     pub runtime_load: RuntimeLoadOptions,
+    /// Timestamp captured before startup work begins.
     pub startup_started_at: Instant,
 }
 
@@ -154,7 +162,9 @@ impl Default for LaunchContext {
 
 /// Client registries shared across command execution.
 pub struct AppClients {
+    /// Plugin manager used for discovery, dispatch, and provider metadata.
     pub plugins: PluginManager,
+    /// In-process registry of native commands.
     pub native_commands: NativeCommandRegistry,
     plugin_config_env: PluginConfigEnvCache,
 }
@@ -194,11 +204,16 @@ impl AppClients {
 
 /// Runtime-scoped application state shared across commands.
 pub struct AppRuntime {
+    /// Startup context such as profile override and terminal mode.
     pub context: RuntimeContext,
+    /// Current resolved config snapshot and revision counter.
     pub config: ConfigState,
+    /// Active UI settings derived from runtime config.
     pub ui: UiState,
+    /// Authorization and command-visibility policy state.
     pub auth: AuthState,
     pub(crate) themes: ThemeCatalog,
+    /// Launch-time inputs used to assemble the runtime.
     pub launch: LaunchContext,
 }
 

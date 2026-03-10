@@ -15,7 +15,8 @@ Start here if you are using `osp`.
 
 ## Other References
 
-- DSL pipeline reference: [DSL.md](DSL.md)
+- DSL user guide: [DSL.md](DSL.md)
+- DSL author notes: [DSL_AUTHORS.md](DSL_AUTHORS.md)
 - Completion and history: [COMPLETION.md](COMPLETION.md)
 - Rendering and UI behavior: [UI.md](UI.md)
 - Logging and debug behavior: [LOGGING.md](LOGGING.md)

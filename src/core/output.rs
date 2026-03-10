@@ -1,15 +1,24 @@
+/// Supported output formats for rendered command results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
+    /// Chooses a format based on the command result and terminal context.
     Auto,
+    /// Renders guidance-oriented documents.
     Guide,
+    /// Emits JSON output.
     Json,
+    /// Renders tabular output.
     Table,
+    /// Renders Markdown tables or documents.
     Markdown,
+    /// Renders the legacy mreg text format.
     Mreg,
+    /// Emits a scalar or compact value view.
     Value,
 }
 
 impl OutputFormat {
+    /// Returns the canonical config and CLI string for this format.
     pub fn as_str(self) -> &'static str {
         match self {
             OutputFormat::Auto => "auto",
@@ -22,6 +31,7 @@ impl OutputFormat {
         }
     }
 
+    /// Parses a case-insensitive output format name or alias.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(OutputFormat::Auto),
@@ -36,14 +46,19 @@ impl OutputFormat {
     }
 }
 
+/// Rendering mode preference for terminal output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
+    /// Chooses plain or rich rendering automatically.
     Auto,
+    /// Forces plain rendering.
     Plain,
+    /// Forces rich rendering.
     Rich,
 }
 
 impl RenderMode {
+    /// Returns the canonical config and CLI string for this render mode.
     pub fn as_str(self) -> &'static str {
         match self {
             RenderMode::Auto => "auto",
@@ -52,6 +67,7 @@ impl RenderMode {
         }
     }
 
+    /// Parses a case-insensitive render mode name.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(RenderMode::Auto),
@@ -62,14 +78,19 @@ impl RenderMode {
     }
 }
 
+/// Color handling policy for rendered output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
+    /// Chooses color usage from terminal capabilities.
     Auto,
+    /// Always emits color sequences.
     Always,
+    /// Never emits color sequences.
     Never,
 }
 
 impl ColorMode {
+    /// Returns the canonical config and CLI string for this color mode.
     pub fn as_str(self) -> &'static str {
         match self {
             ColorMode::Auto => "auto",
@@ -78,6 +99,7 @@ impl ColorMode {
         }
     }
 
+    /// Parses a case-insensitive color mode name.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(ColorMode::Auto),
@@ -88,14 +110,19 @@ impl ColorMode {
     }
 }
 
+/// Unicode handling policy for rendered output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnicodeMode {
+    /// Chooses Unicode usage from terminal capabilities.
     Auto,
+    /// Always emits Unicode output.
     Always,
+    /// Never emits Unicode output.
     Never,
 }
 
 impl UnicodeMode {
+    /// Returns the canonical config and CLI string for this Unicode mode.
     pub fn as_str(self) -> &'static str {
         match self {
             UnicodeMode::Auto => "auto",
@@ -104,6 +131,7 @@ impl UnicodeMode {
         }
     }
 
+    /// Parses a case-insensitive Unicode mode name.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(UnicodeMode::Auto),

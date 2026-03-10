@@ -7,6 +7,9 @@ use crate::config::{
     validate_key_scope, with_path_context,
 };
 
+/// Sets a scoped key in a TOML config file.
+///
+/// Returns the previous typed value for the key when one existed.
 pub fn set_scoped_value_in_toml(
     path: &Path,
     key: &str,
@@ -25,6 +28,9 @@ pub fn set_scoped_value_in_toml(
     )
 }
 
+/// Removes a scoped key from a TOML config file.
+///
+/// Returns the previous typed value for the key when one existed.
 pub fn unset_scoped_value_in_toml(
     path: &Path,
     key: &str,
@@ -248,6 +254,7 @@ fn create_temp_file(
 }
 
 #[cfg(unix)]
+/// Returns the Unix permission bits for a secrets file.
 pub fn secret_file_mode(path: &Path) -> Result<u32, ConfigError> {
     use std::os::unix::fs::PermissionsExt;
 

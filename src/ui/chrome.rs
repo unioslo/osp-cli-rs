@@ -1,14 +1,21 @@
 use crate::ui::style::{StyleOverrides, StyleToken, apply_style_with_theme_overrides};
 use crate::ui::theme::ThemeDefinition;
 
+/// Frame style used when rendering section chrome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SectionFrameStyle {
+    /// Render no surrounding frame.
     None,
+    /// Render a top rule only.
     #[default]
     Top,
+    /// Render a bottom rule only.
     Bottom,
+    /// Render both top and bottom rules.
     TopBottom,
+    /// Render a square boxed frame.
     Square,
+    /// Render a rounded boxed frame.
     Round,
 }
 
@@ -27,9 +34,12 @@ impl SectionFrameStyle {
     }
 }
 
+/// Style tokens applied to section borders and titles.
 #[derive(Debug, Clone, Copy)]
 pub struct SectionStyleTokens {
+    /// Style token used for borders and rules.
     pub border: StyleToken,
+    /// Style token used for titles.
     pub title: StyleToken,
 }
 
@@ -43,10 +53,14 @@ impl SectionStyleTokens {
     }
 }
 
+/// Context required to render section chrome with semantic styling.
 #[derive(Clone, Copy)]
 pub struct SectionRenderContext<'a> {
+    /// Whether ANSI color output is enabled.
     pub color: bool,
+    /// Active theme used for style resolution.
     pub theme: &'a ThemeDefinition,
+    /// Explicit style overrides layered over the theme.
     pub style_overrides: &'a StyleOverrides,
 }
 
@@ -60,6 +74,7 @@ impl SectionRenderContext<'_> {
     }
 }
 
+#[cfg(test)]
 /// Renders a single section divider line for the given title and width hint.
 pub fn render_section_divider(
     title: &str,

@@ -3,7 +3,7 @@ use super::manager::{DiscoveredPlugin, PluginManager, PluginSource};
 use crate::completion::CommandSpec;
 use crate::config::{default_cache_root_dir, default_config_root_dir};
 use crate::core::plugin::DescribeV1;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -469,18 +469,14 @@ fn assemble_discovered_plugin_with_mode(
     apply_manifest_discovery_issue(&mut plugin.issue, manifest_state, manifest_entry.as_ref());
 
     match describe_eligibility(source, manifest_state, manifest_entry.as_ref(), &executable) {
-        Ok(DescribeEligibility::Allowed) => match describe_with_cache(
-            &executable,
-            source,
-            mode,
-            describe_cache,
-            process_timeout,
-        ) {
-            Ok(describe) => {
-                apply_describe_metadata(&mut plugin, &describe, manifest_entry.as_ref())
+        Ok(DescribeEligibility::Allowed) => {
+            match describe_with_cache(&executable, source, mode, describe_cache, process_timeout) {
+                Ok(describe) => {
+                    apply_describe_metadata(&mut plugin, &describe, manifest_entry.as_ref())
+                }
+                Err(err) => super::state::merge_issue(&mut plugin.issue, err.to_string()),
             }
-            Err(err) => super::state::merge_issue(&mut plugin.issue, err.to_string()),
-        },
+        }
         Ok(DescribeEligibility::Skip) => {}
         Err(err) => super::state::merge_issue(&mut plugin.issue, err.to_string()),
     }

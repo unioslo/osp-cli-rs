@@ -230,8 +230,8 @@ impl RuntimeHints {
 #[cfg(test)]
 mod tests {
     use super::{
-        RuntimeHints, RuntimeTerminalKind, UiVerbosity, ENV_OSP_COLOR, ENV_OSP_DEBUG_LEVEL,
-        ENV_OSP_FORMAT, ENV_OSP_PROFILE, ENV_OSP_TERMINAL, ENV_OSP_UI_VERBOSITY, ENV_OSP_UNICODE,
+        ENV_OSP_COLOR, ENV_OSP_DEBUG_LEVEL, ENV_OSP_FORMAT, ENV_OSP_PROFILE, ENV_OSP_TERMINAL,
+        ENV_OSP_UI_VERBOSITY, ENV_OSP_UNICODE, RuntimeHints, RuntimeTerminalKind, UiVerbosity,
     };
     use crate::core::output::{ColorMode, OutputFormat, UnicodeMode};
 

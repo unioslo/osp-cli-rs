@@ -21,6 +21,10 @@ pub struct MregBuildOptions<'a> {
     pub stack_overflow_ratio: usize,
 }
 
+/// Builds MREG-style blocks for the provided rows.
+///
+/// The function appends block IDs through `next_block_id` for any generated
+/// table or MREG block and returns the blocks in row order.
 pub fn build_mreg_blocks(
     rows: &[Row],
     options: MregBuildOptions<'_>,
@@ -280,6 +284,7 @@ fn table_block_from_object_list(items: &[Value], depth: usize) -> Option<TableBl
     Some(TableBlock {
         block_id: 0,
         style: TableStyle::Grid,
+        border_override: None,
         headers,
         rows,
         header_pairs: Vec::new(),
@@ -946,6 +951,7 @@ mod tests {
         let table = TableBlock {
             block_id: 1,
             style: crate::ui::document::TableStyle::Grid,
+            border_override: None,
             headers: vec!["a".to_string(), "b".to_string()],
             rows: vec![vec![json!("x"), json!("y")]],
             header_pairs: Vec::new(),
@@ -964,6 +970,7 @@ mod tests {
         let table = TableBlock {
             block_id: 1,
             style: crate::ui::document::TableStyle::Grid,
+            border_override: None,
             headers: Vec::new(),
             rows: vec![Vec::new()],
             header_pairs: Vec::new(),
@@ -982,6 +989,7 @@ mod tests {
         let table = TableBlock {
             block_id: 1,
             style: crate::ui::document::TableStyle::Grid,
+            border_override: None,
             headers: vec!["name".to_string(), "value".to_string()],
             rows: vec![vec![
                 json!("alpha"),

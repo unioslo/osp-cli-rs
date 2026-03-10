@@ -11,12 +11,11 @@ use crate::ui::{RenderBackend, RenderSettings, ResolvedRenderSettings};
 mod common;
 mod guide;
 pub mod help;
-pub mod message;
+#[cfg(test)]
+mod message;
 mod mreg;
 mod table;
 mod value;
-
-pub use message::{MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules};
 
 #[cfg(test)]
 /// Builds a document from row data using the provided render settings.

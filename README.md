@@ -123,6 +123,7 @@ Core guides:
 - [docs/REPL.md](docs/REPL.md)
 - [docs/CONFIG.md](docs/CONFIG.md)
 - [docs/DSL.md](docs/DSL.md)
+- [docs/DSL_AUTHORS.md](docs/DSL_AUTHORS.md)
 - [docs/THEMES.md](docs/THEMES.md)
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 

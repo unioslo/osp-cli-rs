@@ -85,9 +85,10 @@ pub(super) fn parse_repl_invocation(
         Err(err) => {
             if renders_repl_inline_help(err.kind()) {
                 return Ok(ParsedReplDispatch::Help {
-                    result: Box::new(crate::app::CliCommandResult::guide(
-                        render_repl_parse_help(effective.help_level, &err.to_string()),
-                    )),
+                    result: Box::new(crate::app::CliCommandResult::guide(render_repl_parse_help(
+                        effective.help_level,
+                        &err.to_string(),
+                    ))),
                     effective: Box::new(effective.clone()),
                     stages: parsed.stages.clone(),
                 });

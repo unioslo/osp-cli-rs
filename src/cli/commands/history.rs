@@ -1,4 +1,4 @@
-use miette::{miette, Result};
+use miette::{Result, miette};
 
 use crate::app::AppSession;
 use crate::app::CliCommandResult;

@@ -506,6 +506,24 @@ mod tests {
     }
 
     #[test]
+    fn root_help_quick_filter_uses_overview_descriptions_not_subcommand_inventory_unit() {
+        let mut state = app_state();
+        let rendered = render_root_help_line(&mut state, "--json help | doctor");
+        let value: serde_json::Value =
+            serde_json::from_str(&rendered).expect("staged help json should parse");
+        let rows = value
+            .as_array()
+            .expect("staged help json should be row array");
+        assert_eq!(rows.len(), 1);
+        let commands = rows[0]["commands"]
+            .as_array()
+            .expect("help row should contain commands");
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0]["name"], "doctor");
+        assert_eq!(commands[0]["short_help"], "Run diagnostics checks");
+    }
+
+    #[test]
     fn root_help_shortcut_supports_explicit_formats_with_pipeline_unit() {
         let mut json_state = app_state();
         let json = render_root_help_line(&mut json_state, "--json help | L 1");
@@ -526,6 +544,8 @@ mod tests {
         let markdown = render_root_help_line(&mut markdown_state, "--md help | L 1");
         assert!(markdown.contains("## Usage"));
         assert!(markdown.contains("## Commands"));
+        assert!(markdown.contains("- `exit` Exit application."));
+        assert!(!markdown.contains("| name"));
 
         let mut table_state = app_state();
         let table = render_root_help_line(&mut table_state, "--table help | L 1");
@@ -535,6 +555,6 @@ mod tests {
         let mut mreg_state = app_state();
         let mreg = render_root_help_line(&mut mreg_state, "--mreg help | L 1");
         assert!(mreg.contains("usage:") || mreg.contains("Usage"));
-        assert!(mreg.contains("commands ("));
+        assert!(mreg.contains("commands:") || mreg.contains("Commands"));
     }
 }

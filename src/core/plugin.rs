@@ -683,7 +683,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        validate_command_auth, DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1,
+        DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, validate_command_auth,
     };
     use crate::core::command_policy::{CommandPath, VisibilityMode};
 
@@ -706,9 +706,11 @@ mod tests {
             .command_policy(CommandPath::new(["orch", "approval", "decide"]))
             .expect("auth metadata should build a policy");
         assert_eq!(policy.visibility, VisibilityMode::CapabilityGated);
-        assert!(policy
-            .required_capabilities
-            .contains("orch.approval.decide"));
+        assert!(
+            policy
+                .required_capabilities
+                .contains("orch.approval.decide")
+        );
         assert!(policy.feature_flags.contains("orch"));
     }
 

@@ -284,7 +284,7 @@ pub(crate) fn with_path_context(path: String, error: ConfigError) -> ConfigError
 
 #[cfg(test)]
 mod tests {
-    use super::{with_path_context, ConfigError};
+    use super::{ConfigError, with_path_context};
     use crate::config::SchemaValueType;
 
     #[test]
@@ -465,9 +465,11 @@ mod tests {
             ),
         ];
 
-        assert!(cases
-            .into_iter()
-            .all(|(error, expected)| error.to_string().contains(expected)));
+        assert!(
+            cases
+                .into_iter()
+                .all(|(error, expected)| error.to_string().contains(expected))
+        );
     }
 
     #[test]

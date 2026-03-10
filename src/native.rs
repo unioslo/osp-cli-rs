@@ -13,16 +13,23 @@ use crate::core::runtime::RuntimeHints;
 /// Public catalog entry for one registered native command.
 #[derive(Debug, Clone)]
 pub struct NativeCommandCatalogEntry {
+    /// Command name as exposed to the CLI and REPL.
     pub name: String,
+    /// Short help text shown in listings.
     pub about: String,
+    /// Optional auth metadata associated with the command.
     pub auth: Option<DescribeCommandAuthV1>,
+    /// Direct subcommand names available below this command.
     pub subcommands: Vec<String>,
+    /// Completion tree rooted at this command.
     pub completion: CommandSpec,
 }
 
 /// Runtime context passed to native command implementations.
 pub struct NativeCommandContext<'a> {
+    /// Current resolved config snapshot.
     pub config: &'a ResolvedConfig,
+    /// Runtime hints propagated to child processes and integrations.
     pub runtime_hints: RuntimeHints,
 }
 

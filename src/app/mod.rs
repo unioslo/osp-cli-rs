@@ -13,9 +13,10 @@ pub(crate) mod help;
 pub(crate) mod host;
 pub(crate) mod logging;
 pub(crate) mod repl_lifecycle;
-pub mod runtime;
-pub mod session;
-pub mod sink;
+pub(crate) mod runtime;
+pub(crate) mod session;
+/// UI sink abstractions used by the host entrypoints.
+pub(crate) mod sink;
 #[cfg(test)]
 mod tests;
 pub(crate) mod timing;

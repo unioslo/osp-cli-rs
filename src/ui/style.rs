@@ -1,66 +1,114 @@
 use nu_ansi_term::{Color, Style};
 
-use crate::ui::theme::{self, ThemeDefinition};
+#[cfg(test)]
+use crate::ui::theme;
+use crate::ui::theme::ThemeDefinition;
 
 /// Optional per-token style overrides layered on top of a theme.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyleOverrides {
+    /// Override for plain text fragments.
     pub text: Option<String>,
+    /// Override for keys, labels, and headings.
     pub key: Option<String>,
+    /// Override for muted or secondary text.
     pub muted: Option<String>,
+    /// Override for table header cells.
     pub table_header: Option<String>,
+    /// Override for MREG keys.
     pub mreg_key: Option<String>,
+    /// Override for generic scalar values.
     pub value: Option<String>,
+    /// Override for numeric values.
     pub number: Option<String>,
+    /// Override for `true` boolean values.
     pub bool_true: Option<String>,
+    /// Override for `false` boolean values.
     pub bool_false: Option<String>,
+    /// Override for null-like values.
     pub null_value: Option<String>,
+    /// Override for IPv4 addresses.
     pub ipv4: Option<String>,
+    /// Override for IPv6 addresses.
     pub ipv6: Option<String>,
+    /// Override for panel or section border chrome.
     pub panel_border: Option<String>,
+    /// Override for panel or section titles.
     pub panel_title: Option<String>,
+    /// Override for code blocks and inline code.
     pub code: Option<String>,
+    /// Override for JSON keys.
     pub json_key: Option<String>,
+    /// Override for error messages.
     pub message_error: Option<String>,
+    /// Override for warning messages.
     pub message_warning: Option<String>,
+    /// Override for success messages.
     pub message_success: Option<String>,
+    /// Override for informational messages.
     pub message_info: Option<String>,
+    /// Override for trace/debug-style messages.
     pub message_trace: Option<String>,
 }
 
 /// Semantic style token used when rendering text fragments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleToken {
+    /// Disable styling for the fragment.
     None,
+    /// Key or label text.
     Key,
+    /// Muted or secondary text.
     Muted,
+    /// Static prompt text.
     PromptText,
+    /// The active command segment in a prompt.
     PromptCommand,
+    /// Table header cells.
     TableHeader,
+    /// MREG key names.
     MregKey,
+    /// JSON object keys.
     JsonKey,
+    /// Code blocks and inline code.
     Code,
+    /// Section or panel borders.
     PanelBorder,
+    /// Section or panel titles.
     PanelTitle,
+    /// Generic values.
     Value,
+    /// Numeric values.
     Number,
+    /// Boolean true values.
     BoolTrue,
+    /// Boolean false values.
     BoolFalse,
+    /// Null-like values.
     Null,
+    /// IPv4 addresses.
     Ipv4,
+    /// IPv6 addresses.
     Ipv6,
+    /// Error messages.
     MessageError,
+    /// Warning messages.
     MessageWarning,
+    /// Success messages.
     MessageSuccess,
+    /// Informational messages.
     MessageInfo,
+    /// Trace/debug-style messages.
     MessageTrace,
 }
 
+#[cfg(test)]
 /// Applies a theme token by theme name.
 pub fn apply_style(text: &str, token: StyleToken, color: bool, theme_name: &str) -> String {
     apply_style_with_overrides(text, token, color, theme_name, &StyleOverrides::default())
 }
 
+#[cfg(test)]
 /// Applies a theme token by theme name with explicit style overrides.
 pub fn apply_style_with_overrides(
     text: &str,

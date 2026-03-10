@@ -1,7 +1,7 @@
-# DSL Reference
+# DSL Guide
 
-`osp` commands can be followed by a pipe-based DSL for filtering and reshaping
-results.
+`osp` commands can be followed by a small pipe DSL for filtering, reshaping,
+grouping, and extracting structured output.
 
 ## Basic Shape
 
@@ -13,113 +13,905 @@ Examples:
 
 ```bash
 osp ldap user alice | P uid mail
-osp ldap users | F active=true | S uid | L 10
+osp ldap users | F active=true | S !uid | L 10
+osp help | VALUE commands[].name
 ```
 
-## Common Stages
+## Mental Model
 
-- `P`: project fields
-- `F`: filter rows
-- `S`: sort
-- `G`: group
-- `A`: aggregate
-- `L`: limit
-- `Z`: collapse grouped output
-- `C`: count shorthand
-- `VAL` or `VALUE`: extract values
-- `JQ`: run a JSON transform
-- `Y`: mark output for clipboard copy
+- Bare text like `doctor` is quick search over keys and values.
+- Path-shaped selectors like `commands[].name` are strict paths.
+- Selector verbs try to preserve structure when they can.
+- Collection verbs intentionally reshape rows or groups.
+- The DSL runs before final rendering, so the same pipeline can be shown as a
+  table, JSON, markdown, or plain values afterward.
 
-Bare quick-search stages are also supported.
+In practice:
 
-## Examples
+- `name` is permissive.
+- `metadata.owner` means that exact path.
+- `members[].uid` means fan out the `members` array and read each `uid`.
 
-Project fields:
+## Example Inputs
+
+The examples below reuse two small inputs so you can compare stages directly.
+
+Row-shaped input:
+
+```json
+[
+  {
+    "uid": "alice",
+    "dept": "ops",
+    "active": true,
+    "amount": 120,
+    "roles": ["eng", "ops"],
+    "interfaces": [
+      {"mac": "aa:bb", "speed": 1000},
+      {"mac": "cc:dd", "speed": 100}
+    ]
+  },
+  {
+    "uid": "bob",
+    "dept": "eng",
+    "active": false,
+    "amount": 80,
+    "roles": ["eng"],
+    "interfaces": [
+      {"mac": "aa:bb", "speed": 1000}
+    ]
+  },
+  {
+    "uid": "carol",
+    "dept": "ops",
+    "active": true,
+    "amount": 90,
+    "roles": ["ops"],
+    "interfaces": []
+  }
+]
+```
+
+Guide-shaped input:
+
+```json
+{
+  "usage": ["osp help [topic]"],
+  "commands": [
+    {"name": "help", "short_help": "Show command overview"},
+    {"name": "doctor", "short_help": "Run diagnostics"},
+    {"name": "theme", "short_help": "Manage themes"}
+  ]
+}
+```
+
+## Chaining With Pipes
+
+Pipelines are read left to right.
+
+Example:
+
+```bash
+osp ldap users | F active=true | P uid dept amount | S !amount AS num | L 2
+```
+
+Using the row input above, the result is:
+
+```json
+[
+  {"uid": "alice", "dept": "ops", "amount": 120},
+  {"uid": "carol", "dept": "ops", "amount": 90}
+]
+```
+
+Another example on structured help output:
+
+```bash
+osp help | P commands[].name | VALUE name
+```
+
+Result:
+
+```json
+[
+  {"value": "help"},
+  {"value": "doctor"},
+  {"value": "theme"}
+]
+```
+
+## Verb Examples
+
+### Bare Quick Search
+
+Pipeline:
 
 ```text
-| P uid mail
+| ops
 ```
 
-Filter:
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "bob", "dept": "eng"},
+  {"uid": "carol", "dept": "ops"}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "carol", "dept": "ops"}
+]
+```
+
+On a structured document, bare quick keeps the matching parent object instead
+of flattening everything:
+
+Pipeline:
+
+```text
+| doctor
+```
+
+Input:
+
+```json
+{
+  "commands": [
+    {"name": "help", "short_help": "Show command overview"},
+    {"name": "doctor", "short_help": "Run diagnostics"}
+  ]
+}
+```
+
+Output:
+
+```json
+{
+  "commands": [
+    {"name": "doctor", "short_help": "Run diagnostics"}
+  ]
+}
+```
+
+### `F` Filter Rows Or Structure
+
+Pipeline:
+
+```text
+| F active=true
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "active": true},
+  {"uid": "bob", "active": false},
+  {"uid": "carol", "active": true}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice", "active": true},
+  {"uid": "carol", "active": true}
+]
+```
+
+Path filters work on structured documents too:
+
+Pipeline:
+
+```text
+| F commands[].name=doctor
+```
+
+Input:
+
+```json
+{
+  "commands": [
+    {"name": "help", "short_help": "Show command overview"},
+    {"name": "doctor", "short_help": "Run diagnostics"}
+  ]
+}
+```
+
+Output:
+
+```json
+{
+  "commands": [
+    {"name": "doctor", "short_help": "Run diagnostics"}
+  ]
+}
+```
+
+Supported comparison operators:
+
+- `=` or `==`
+- `!=`
+- `>`
+- `>=`
+- `<`
+- `<=`
+- `~` for regex
+
+Examples:
 
 ```text
 | F uid=alice
-| F active=true
-| F created_at>=2024-01-01
+| F amount>=100
+| F uid ~ ^a
+| F ?mail
 ```
 
-Sort and limit:
+### `P` Project Fields
+
+Pipeline:
 
 ```text
-| S uid | L 20
+| P uid dept
 ```
 
-Group and aggregate:
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops", "amount": 120},
+  {"uid": "bob", "dept": "eng", "amount": 80}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "bob", "dept": "eng"}
+]
+```
+
+Exact path projection:
+
+Pipeline:
 
 ```text
-| G department | A count
+| P commands[].name
 ```
 
-Value extraction:
+Input:
+
+```json
+{
+  "usage": ["osp help [topic]"],
+  "commands": [
+    {"name": "help", "short_help": "Show command overview"},
+    {"name": "doctor", "short_help": "Run diagnostics"}
+  ]
+}
+```
+
+Output:
+
+```json
+{
+  "commands": [
+    {"name": "help"},
+    {"name": "doctor"}
+  ]
+}
+```
+
+Droppers can remove fields from the kept result:
+
+```text
+| P uid dept amount !amount
+```
+
+### `S` Sort
+
+Pipeline:
+
+```text
+| S !amount AS num
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "amount": 120},
+  {"uid": "bob", "amount": 80},
+  {"uid": "carol", "amount": 90}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice", "amount": 120},
+  {"uid": "carol", "amount": 90},
+  {"uid": "bob", "amount": 80}
+]
+```
+
+Notes:
+
+- Prefix a key with `!` for descending order.
+- `AS num`, `AS str`, and `AS ip` force a cast.
+- Missing values sort last.
+
+### `G` Group
+
+Pipeline:
+
+```text
+| G dept
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "bob", "dept": "eng"},
+  {"uid": "carol", "dept": "ops"}
+]
+```
+
+Output, shown in the grouped JSON shape:
+
+```json
+[
+  {
+    "groups": {"dept": "ops"},
+    "aggregates": {},
+    "rows": [
+      {"uid": "alice", "dept": "ops"},
+      {"uid": "carol", "dept": "ops"}
+    ]
+  },
+  {
+    "groups": {"dept": "eng"},
+    "aggregates": {},
+    "rows": [
+      {"uid": "bob", "dept": "eng"}
+    ]
+  }
+]
+```
+
+Fanout grouping is allowed:
+
+```text
+| G roles[]
+```
+
+Aliasing is allowed:
+
+```text
+| G dept AS department
+```
+
+### `A` Aggregate
+
+Pipeline:
+
+```text
+| G dept | A sum(amount) AS total
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops", "amount": 120},
+  {"uid": "bob", "dept": "eng", "amount": 80},
+  {"uid": "carol", "dept": "ops", "amount": 90}
+]
+```
+
+Output, again shown in grouped JSON shape:
+
+```json
+[
+  {
+    "groups": {"dept": "ops"},
+    "aggregates": {"total": 210.0},
+    "rows": [
+      {"uid": "alice", "dept": "ops", "amount": 120},
+      {"uid": "carol", "dept": "ops", "amount": 90}
+    ]
+  },
+  {
+    "groups": {"dept": "eng"},
+    "aggregates": {"total": 80.0},
+    "rows": [
+      {"uid": "bob", "dept": "eng", "amount": 80}
+    ]
+  }
+]
+```
+
+Supported aggregate functions:
+
+- `count`
+- `sum(field)`
+- `avg(field)`
+- `min(field)`
+- `max(field)`
+
+### `L` Limit
+
+Pipeline:
+
+```text
+| L 2
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice"},
+  {"uid": "bob"},
+  {"uid": "carol"}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice"},
+  {"uid": "bob"}
+]
+```
+
+Offset form:
+
+```text
+| L 2 1
+```
+
+Result:
+
+```json
+[
+  {"uid": "bob"},
+  {"uid": "carol"}
+]
+```
+
+### `Z` Collapse Grouped Output
+
+Pipeline:
+
+```text
+| G dept | A count AS count | Z
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "bob", "dept": "eng"},
+  {"uid": "carol", "dept": "ops"}
+]
+```
+
+Output:
+
+```json
+[
+  {"dept": "ops", "count": 2},
+  {"dept": "eng", "count": 1}
+]
+```
+
+`Z` only works after grouped output exists.
+
+### `C` Count
+
+Pipeline:
+
+```text
+| C
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice"},
+  {"uid": "bob"},
+  {"uid": "carol"}
+]
+```
+
+Output:
+
+```json
+[
+  {"count": 3}
+]
+```
+
+On grouped input, `C` produces one summary row per group:
+
+Pipeline:
+
+```text
+| G dept | C
+```
+
+Output:
+
+```json
+[
+  {"dept": "ops", "count": 2},
+  {"dept": "eng", "count": 1}
+]
+```
+
+### `Y` Mark Output For Copy
+
+Pipeline:
+
+```text
+| Y
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice"},
+  {"uid": "bob"}
+]
+```
+
+Visible output:
+
+```json
+[
+  {"uid": "alice"},
+  {"uid": "bob"}
+]
+```
+
+`Y` does not change the data. It marks the final rendered output for clipboard
+copy when the current environment supports it.
+
+### `H` Show DSL Help
+
+`H` is a help stage rather than a data stage.
+
+Pipeline:
+
+```text
+| H
+```
+
+Example output:
+
+```text
+F       Filter rows
+P       Project columns
+S       Sort rows
+G       Group rows
+...
+```
+
+Per-verb help:
+
+```text
+| H F
+| H VALUE
+```
+
+### `V` Value-Only Quick Search
+
+Pipeline:
+
+```text
+| V ops
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "bob", "dept": "eng"},
+  {"uid": "carol", "dept": "ops"}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "carol", "dept": "ops"}
+]
+```
+
+`V` only searches values, not keys.
+
+### `K` Key-Only Quick Search
+
+Pipeline:
+
+```text
+| K uid
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"name": "bob", "dept": "eng"}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"}
+]
+```
+
+`K` only searches keys, not values.
+
+### `?` Clean Or Exists Filter
+
+With no argument, `?` removes empty values and drops empty rows.
+
+Pipeline:
+
+```text
+| ?
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "mail": "", "tags": [], "note": null},
+  {"mail": "", "tags": [], "note": null}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice"}
+]
+```
+
+With a selector, `?` becomes an exists filter:
+
+Pipeline:
+
+```text
+| ? uid
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice"},
+  {"mail": "bob@example.org"}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice"}
+]
+```
+
+### `U` Unroll A List Field
+
+Pipeline:
+
+```text
+| U interfaces
+```
+
+Input:
+
+```json
+[
+  {
+    "uid": "alice",
+    "interfaces": [
+      {"mac": "aa:bb", "speed": 1000},
+      {"mac": "cc:dd", "speed": 100}
+    ]
+  },
+  {
+    "uid": "bob",
+    "interfaces": [
+      {"mac": "aa:bb", "speed": 1000}
+    ]
+  }
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice", "interfaces": {"mac": "aa:bb", "speed": 1000}},
+  {"uid": "alice", "interfaces": {"mac": "cc:dd", "speed": 100}},
+  {"uid": "bob", "interfaces": {"mac": "aa:bb", "speed": 1000}}
+]
+```
+
+Common follow-up:
+
+```text
+| U interfaces | P uid mac speed | G mac | A count AS count
+```
+
+### `JQ` Run A jq Expression
+
+Pipeline:
+
+```text
+| JQ 'map({uid, dept})'
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops", "amount": 120},
+  {"uid": "bob", "dept": "eng", "amount": 80}
+]
+```
+
+Output:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "bob", "dept": "eng"}
+]
+```
+
+`JQ` sees the full current payload, not one row at a time.
+
+### `VAL` / `VALUE` Extract Values
+
+`VAL` and `VALUE` are aliases.
+
+Pipeline:
 
 ```text
 | VALUE uid
-| VALUE metadata.owner
+```
+
+Input:
+
+```json
+[
+  {"uid": "alice", "dept": "ops"},
+  {"uid": "bob", "dept": "eng"}
+]
+```
+
+Output:
+
+```json
+[
+  {"value": "alice"},
+  {"value": "bob"}
+]
+```
+
+Path extraction:
+
+Pipeline:
+
+```text
+| VALUE commands[].name
+```
+
+Input:
+
+```json
+{
+  "commands": [
+    {"name": "help", "short_help": "Show command overview"},
+    {"name": "doctor", "short_help": "Run diagnostics"}
+  ]
+}
+```
+
+Output:
+
+```json
+[
+  {"value": "help"},
+  {"value": "doctor"}
+]
+```
+
+## Selectors And Paths
+
+Quoted term lists behave the same in `P`, `VAL`, and `VALUE`:
+
+```text
+| P "display,name" "team ops"
 | VALUE "display,name"
 ```
 
-## Paths
+Path syntax supports:
 
-Paths support:
+- dotted fields like `metadata.owner`
+- fanout like `members[]`
+- indexes like `members[0]`
+- negative indexes like `members[-1]`
+- slices like `members[:2]`
 
-- dotted keys
-- array selectors such as `[]` and `[idx]`
-- nested access such as `interfaces[].mac`
+Important rule:
 
-List values use any-match semantics for filters by default.
+- Bare tokens are permissive descendant selectors.
+- Dotted or indexed selectors are strict path selectors.
 
-## Semantic Contracts
-
-The DSL keeps a few deliberate rules so stages do not drift apart:
-
-- quoted term lists mean the same thing in `P`, `VAL`, and `VALUE`
-- path expressions mean the same thing in `F`, `P`, `VAL`, and `VALUE`
-- row-oriented stages keep group headers/aggregates intact and operate on each
-  group's rows when the current payload is grouped
-- unsupported stage/payload combinations should fail loudly instead of silently
-  acting like a no-op
-- case-insensitive text matching for user data is Unicode-aware, not ASCII-only
+That means `owner` and `metadata.owner` are intentionally different surfaces.
 
 ## Parsing Rules
 
-- shell-style quoting and escaping are supported
-- commas can separate projection/value terms, but quotes keep embedded commas
-- `|` starts a new DSL stage
-- malformed quoted pipelines are errors
-- unknown verb-shaped stages are errors
+- `|` starts a new stage
+- commas and whitespace both separate terms in `P` and `VALUE`
+- quotes keep embedded commas or spaces together
+- malformed quoting is an error
+- mistyped verb-like stages are errors, not silent quick search
 
-Bare search text still works as quick search, but mistyped stage verbs are not
-silently treated as searches.
+Examples:
 
-## Output Pipeline
+```text
+| P uid,mail
+| P "display,name" 'team ops'
+| F note="a=b>=c"
+```
 
-The DSL runs before final formatting. That means the same command can be
-rendered differently after the data has already been filtered or projected.
+## Streaming Notes
 
-## Streaming
-
-The DSL now keeps flat row pipelines on a streaming path where the stage
-semantics allow it.
-
-Stages that typically stream:
+Stages that usually stream on flat rows:
 
 - `F`
 - `P`
-- `VAL` / `VALUE`
+- `VALUE`
+- `VAL`
 - `Y`
 - `U`
-- `L` when used as a normal head limit such as `| L 20`
-- flat-row quick-search stages such as bare search text, `V`, and `K`
+- bare quick search
+- `V`
+- `K`
+- `?`
+- `L` in ordinary head-limit form like `| L 20`
 
 Stages that materialize the current payload:
 
@@ -130,44 +922,5 @@ Stages that materialize the current payload:
 - `Z`
 - `JQ`
 
-Quick-search stages keep flat rows on a streaming path, but they use a
-two-row lookahead to preserve the single-row "projection" behavior. That peek
-is measurable on large multi-row quick searches, but it is not the main cost
-of the stage.
-
-When the current payload is already grouped, row-oriented stages such as bare
-quick search, `V`, `K`, `VALUE`, `F`, `P`, `U`, and `?` run against each
-group's rows and keep the group headers/aggregates intact.
-
-`Z` is the opposite: it requires grouped output and errors on flat rows instead
-of silently passing them through unchanged.
-
-Case-insensitive quick search is Unicode-aware, not ASCII-only, so non-ASCII
-keys and values participate in normal `V` / `K` / bare quick matching.
-
-Streaming here only changes DSL execution. The CLI still renders the final
-`OutputResult` into one complete buffer before printing it. In measured release
-benchmarks of `DSL -> render -> one write`, that meant:
-
-- streamable stages did not make the first terminal output appear earlier
-- time to first output and time to all output were effectively the same
-- end-to-end wins were workload-dependent rather than universal
-
-On the current plain-table benchmark harness:
-
-- `25` input rows were effectively tied
-- `500` input rows were about `9%` faster on the streaming path
-- `20,000` input rows were effectively tied once final rendering dominated
-
-The reproducible harnesses live in:
-
-- `crates/osp-dsl/src/stages/quick/tests.rs`
-- `crates/osp-cli/examples/dsl_e2e_bench.rs`
-
-Use `| H` in the REPL to see the current verb list and `| H <verb>` for per-verb
-streaming notes.
-
-## Clipboard
-
-The `Y` stage marks the final output for clipboard copy behavior when supported
-by the current environment.
+Use `| H` in the REPL to see the current verb list and `| H <verb>` for
+per-verb notes.

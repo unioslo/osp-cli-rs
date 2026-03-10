@@ -116,7 +116,7 @@ pub(crate) fn build_logging_config(
 
 pub(crate) fn message_verbosity_from_config(config: &ResolvedConfig) -> MessageLevel {
     config
-        .get_string("ui.verbosity.level")
+        .get_string("ui.message.verbosity")
         .and_then(parse_message_level)
         .unwrap_or(MessageLevel::Success)
 }
@@ -156,7 +156,7 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
     // Presentation is compiled into a normal config layer instead of being interpreted later in
     // the UI. We first resolve the base config to discover ui.presentation through the normal
     // precedence rules, then synthesize one presentation-defaults layer, then resolve again so
-    // downstream code only reads canonical keys like repl.intro and ui.help.layout.
+    // downstream code only reads canonical keys like repl.intro and ui.chrome.frame.
     let base_resolved = base_pipeline
         .resolve(options.clone())
         .map_err(|err| report_std_error_with_context(err, "config resolution failed"))?;
@@ -239,7 +239,7 @@ mod tests {
             ("log.file.enabled", "true"),
             ("log.file.level", "debug"),
             ("log.file.path", "   "),
-            ("ui.verbosity.level", "warning"),
+            ("ui.message.verbosity", "warning"),
         ]);
 
         let logging = build_logging_config(&config, 2);

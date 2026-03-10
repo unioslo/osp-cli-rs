@@ -2,9 +2,9 @@ use miette::Result;
 
 use crate::app::CliCommandResult;
 use crate::cli::IntroArgs;
+use crate::repl::ReplViewContext;
 use crate::repl::presentation::build_repl_intro_payload;
 use crate::repl::surface::ReplSurface;
-use crate::repl::ReplViewContext;
 
 pub(crate) struct IntroCommandContext<'a> {
     pub(crate) view: ReplViewContext<'a>,

@@ -19,6 +19,7 @@ use super::timing::TimingSummary;
 #[derive(Debug, Clone, Copy, Default)]
 /// Timing badge rendered in the prompt for the most recent command.
 pub struct DebugTimingBadge {
+    /// Prompt detail level used when rendering the badge.
     pub level: u8,
     pub(crate) summary: TimingSummary,
 }
@@ -161,27 +162,41 @@ impl ReplScopeStack {
 
 /// Session-scoped REPL state, caches, and prompt metadata.
 pub struct AppSession {
+    /// Prompt prefix shown before any scope label.
     pub prompt_prefix: String,
+    /// Whether history capture is enabled for this session.
     pub history_enabled: bool,
+    /// Shell-scoped history prefix state shared with the history store.
     pub history_shell: HistoryShellContext,
+    /// Shared prompt timing badge state.
     pub prompt_timing: DebugTimingState,
     pub(crate) startup_prompt_timing_pending: bool,
+    /// Current nested command scope within the REPL.
     pub scope: ReplScopeStack,
+    /// Rows returned by the most recent successful REPL command.
     pub last_rows: Vec<Row>,
+    /// Summary of the most recent failed REPL command.
     pub last_failure: Option<LastFailure>,
+    /// Cached row outputs keyed by command line.
     pub result_cache: HashMap<String, Vec<Row>>,
+    /// Eviction order for the row-result cache.
     pub cache_order: VecDeque<String>,
     pub(crate) command_cache: HashMap<String, CliCommandResult>,
     pub(crate) command_cache_order: VecDeque<String>,
+    /// Maximum number of cached result sets to retain.
     pub max_cached_results: usize,
+    /// Session-scoped config overrides layered above persisted config.
     pub config_overrides: ConfigLayer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Summary of the last failed REPL command.
 pub struct LastFailure {
+    /// Command line that produced the failure.
     pub command_line: String,
+    /// Short failure summary suitable for prompts or status output.
     pub summary: String,
+    /// Longer failure detail for follow-up inspection.
     pub detail: String,
 }
 
@@ -340,8 +355,11 @@ pub(crate) struct AppStateInit {
 
 /// Aggregate application state shared between runtime and session logic.
 pub struct AppState {
+    /// Runtime-scoped services and resolved config state.
     pub runtime: AppRuntime,
+    /// Session-scoped REPL caches and prompt metadata.
     pub session: AppSession,
+    /// Shared client registries used during command execution.
     pub clients: AppClients,
 }
 

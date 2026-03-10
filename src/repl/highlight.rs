@@ -277,7 +277,7 @@ fn debug_kind_rgb(kind: HighlightTokenKind) -> Option<[u8; 3]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{debug_highlight, ReplHighlighter};
+    use super::{ReplHighlighter, debug_highlight};
     use crate::completion::{CompletionNode, CompletionTree};
     use crate::repl::LineProjection;
     use nu_ansi_term::Color;

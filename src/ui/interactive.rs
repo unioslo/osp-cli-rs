@@ -17,8 +17,11 @@ use std::time::Duration;
 /// the boring default for normal CLI entrypoints.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InteractiveRuntime {
+    /// Whether stdin is attached to a terminal.
     pub stdin_is_tty: bool,
+    /// Whether stderr is attached to a terminal.
     pub stderr_is_tty: bool,
+    /// Detected terminal identifier such as `xterm-256color`.
     pub terminal: Option<String>,
 }
 
@@ -43,9 +46,11 @@ impl InteractiveRuntime {
     }
 }
 
+/// Result type used by interactive prompt helpers.
 pub type InteractiveResult<T> = io::Result<T>;
 
 #[derive(Debug, Clone)]
+/// Interactive prompt helper bound to a detected or injected terminal runtime.
 pub struct Interactive {
     runtime: InteractiveRuntime,
 }
@@ -121,6 +126,7 @@ impl Interactive {
     }
 }
 
+/// Handle for a transient spinner shown on stderr.
 pub struct Spinner {
     pb: ProgressBar,
 }

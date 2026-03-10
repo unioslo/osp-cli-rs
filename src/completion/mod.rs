@@ -9,11 +9,11 @@
 //! layers (`osp-cli` / `osp-repl`) and not fetched here.
 
 mod context;
-pub mod engine;
-pub mod model;
-pub mod parse;
-pub mod suggest;
-pub mod tree;
+pub(crate) mod engine;
+pub(crate) mod model;
+pub(crate) mod parse;
+pub(crate) mod suggest;
+pub(crate) mod tree;
 
 pub use engine::CompletionEngine;
 pub use model::{

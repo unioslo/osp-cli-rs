@@ -4,7 +4,7 @@ use crate::dsl::{
     parse::pipeline::parse_stage,
     parse_pipeline,
 };
-use miette::{miette, IntoDiagnostic, Result, WrapErr};
+use miette::{IntoDiagnostic, Result, WrapErr, miette};
 
 use crate::app::is_sensitive_key;
 
@@ -433,9 +433,10 @@ mod tests {
 
         let err = expand_alias_template("danger", "echo ${auth.api_key}", &[], &config)
             .expect_err("sensitive placeholder should be rejected");
-        assert!(err
-            .to_string()
-            .contains("cannot expand sensitive config placeholder"));
+        assert!(
+            err.to_string()
+                .contains("cannot expand sensitive config placeholder")
+        );
     }
 
     #[test]
@@ -548,9 +549,11 @@ mod tests {
 
         let pipeline_err = parse_command_text_with_aliases("ldap user 'oops | P uid", &config)
             .expect_err("invalid pipeline should fail");
-        assert!(pipeline_err
-            .to_string()
-            .contains("failed to parse pipeline"));
+        assert!(
+            pipeline_err
+                .to_string()
+                .contains("failed to parse pipeline")
+        );
     }
 
     #[test]
@@ -558,9 +561,10 @@ mod tests {
         let config = test_config(&[("alias.demo", "ldap user 'oops | P uid")]);
         let err = parse_command_tokens_with_aliases(&["demo".to_string()], &config)
             .expect_err("broken alias command should fail");
-        assert!(err
-            .to_string()
-            .contains("failed to parse alias `demo` expansion"));
+        assert!(
+            err.to_string()
+                .contains("failed to parse alias `demo` expansion")
+        );
 
         let plain = test_config(&[]);
         let err = expand_alias_template("loop", "echo ${next}", &[], &plain)

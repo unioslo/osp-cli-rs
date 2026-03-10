@@ -446,9 +446,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        evaluate_policy, AccessReason, CommandAccess, CommandAvailability, CommandPath,
-        CommandPolicy, CommandPolicyContext, CommandPolicyOverride, CommandPolicyRegistry,
-        CommandRunnable, CommandVisibility, VisibilityMode,
+        AccessReason, CommandAccess, CommandAvailability, CommandPath, CommandPolicy,
+        CommandPolicyContext, CommandPolicyOverride, CommandPolicyRegistry, CommandRunnable,
+        CommandVisibility, VisibilityMode, evaluate_policy,
     };
 
     #[test]

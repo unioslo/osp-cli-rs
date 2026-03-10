@@ -14,18 +14,21 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 static LOGGING_STATE: OnceLock<Option<LoggingState>> = OnceLock::new();
 
+/// File logging destination and minimum level.
 #[derive(Debug, Clone)]
 pub struct FileLoggingConfig {
     pub path: PathBuf,
     pub level: LevelFilter,
 }
 
+/// Logging settings derived from CLI startup state.
 #[derive(Debug, Clone)]
 pub struct DeveloperLoggingConfig {
     pub debug_count: u8,
     pub file: Option<FileLoggingConfig>,
 }
 
+/// Derives the initial developer logging configuration from raw CLI arguments.
 pub fn bootstrap_logging_config(args: &[OsString]) -> DeveloperLoggingConfig {
     DeveloperLoggingConfig {
         debug_count: scan_debug_count(args),
@@ -33,6 +36,7 @@ pub fn bootstrap_logging_config(args: &[OsString]) -> DeveloperLoggingConfig {
     }
 }
 
+/// Initializes or reloads the process-global developer logging subscriber.
 pub fn init_developer_logging(config: DeveloperLoggingConfig) {
     if let Some(state) = LOGGING_STATE
         .get_or_init(|| LoggingState::initialize(&config))
@@ -42,6 +46,9 @@ pub fn init_developer_logging(config: DeveloperLoggingConfig) {
     }
 }
 
+/// Parses a textual log level into a `tracing_subscriber` filter.
+///
+/// Accepts canonical names such as `error`, `warn`, `info`, `debug`, and `trace`.
 pub fn parse_level_filter(value: &str) -> Option<LevelFilter> {
     match value.trim().to_ascii_lowercase().as_str() {
         "error" => Some(LevelFilter::ERROR),

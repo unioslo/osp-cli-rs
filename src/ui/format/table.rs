@@ -5,6 +5,9 @@ use serde_json::Value;
 
 use crate::ui::document::{TableBlock, TableStyle};
 
+/// Builds a table block from rows using the requested header order and style.
+///
+/// Missing cell values are rendered as empty strings in the returned block.
 pub fn build_table_block(
     rows: &[Row],
     style: TableStyle,
@@ -29,6 +32,7 @@ pub fn build_table_block(
     TableBlock {
         block_id,
         style,
+        border_override: None,
         headers,
         rows: rendered_rows,
         header_pairs: Vec::new(),

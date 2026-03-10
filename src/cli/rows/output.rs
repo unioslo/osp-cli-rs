@@ -1,6 +1,6 @@
 use crate::core::output_model::{
-    compute_key_index as core_compute_key_index, ColumnAlignment, Group, OutputItems, OutputMeta,
-    OutputResult,
+    ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult,
+    compute_key_index as core_compute_key_index,
 };
 use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
 use crate::core::row::Row;
@@ -115,8 +115,8 @@ mod tests {
         ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult,
     };
     use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
-    use serde_json::json;
     use serde_json::Value;
+    use serde_json::json;
 
     #[test]
     fn plugin_meta_preserves_column_alignment_unit() {

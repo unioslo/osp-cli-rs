@@ -2,9 +2,9 @@
 
 pub(crate) mod config;
 pub(crate) mod conversion;
-pub mod discovery;
-pub mod dispatch;
-pub mod manager;
+pub(crate) mod discovery;
+pub(crate) mod dispatch;
+pub(crate) mod manager;
 pub(crate) mod state;
 #[cfg(test)]
 mod tests;

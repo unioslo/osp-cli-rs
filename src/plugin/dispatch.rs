@@ -20,6 +20,7 @@ enum CommandRunError {
 }
 
 impl PluginManager {
+    /// Runs a plugin command and returns its validated structured response.
     pub fn dispatch(
         &self,
         command: &str,
@@ -73,6 +74,7 @@ impl PluginManager {
         Ok(response)
     }
 
+    /// Runs a plugin command and returns raw stdout, stderr, and exit status.
     pub fn dispatch_passthrough(
         &self,
         command: &str,

@@ -1,9 +1,13 @@
+/// Quoting style to use when formatting a shell argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuoteStyle {
+    /// Wraps the value in single quotes and escapes embedded single quotes.
     Single,
+    /// Wraps the value in double quotes and escapes shell-sensitive characters.
     Double,
 }
 
+/// Quotes `value` for shell reuse using the requested quoting style.
 pub fn quote_for_shell(value: &str, style: QuoteStyle) -> String {
     match style {
         QuoteStyle::Single => quote_single(value),
@@ -11,6 +15,7 @@ pub fn quote_for_shell(value: &str, style: QuoteStyle) -> String {
     }
 }
 
+/// Escapes shell-sensitive characters without adding surrounding quotes.
 pub fn escape_for_shell(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {

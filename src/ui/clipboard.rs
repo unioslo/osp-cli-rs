@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter};
 use std::io::{IsTerminal, Write};
 use std::process::{Command, Stdio};
 
-use crate::ui::{render_document_for_copy, Document, RenderSettings};
+use crate::ui::{Document, RenderSettings, render_document_for_copy};
 
 /// Clipboard service that tries OSC 52 and platform-specific clipboard helpers.
 #[derive(Debug, Clone)]
@@ -298,13 +298,13 @@ mod tests {
 
     use crate::core::output::OutputFormat;
     use crate::ui::{
-        document::{Block, LineBlock, LinePart},
         Document, RenderSettings,
+        document::{Block, LineBlock, LinePart},
     };
 
     use super::{
-        base64_encode, base64_encoded_len, copy_via_command, osc52_enabled, osc52_max_bytes,
-        platform_backends, ClipboardError, ClipboardService, OSC52_MAX_BYTES_DEFAULT,
+        ClipboardError, ClipboardService, OSC52_MAX_BYTES_DEFAULT, base64_encode,
+        base64_encoded_len, copy_via_command, osc52_enabled, osc52_max_bytes, platform_backends,
     };
 
     fn env_lock() -> &'static Mutex<()> {

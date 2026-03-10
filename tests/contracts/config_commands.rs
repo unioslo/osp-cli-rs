@@ -335,15 +335,15 @@ profile.default = "uio"
             "austere",
             "config",
             "explain",
-            "ui.help.layout",
+            "ui.chrome.frame",
         ]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("\"value\": \"full\""))
+        .stdout(predicate::str::contains("\"value\": \"none\""))
         .stdout(predicate::str::contains("\"presentation\""))
         .stdout(predicate::str::contains("\"preset\": \"austere\""))
         .stdout(predicate::str::contains("\"preset_source\": \"session\""))
-        .stdout(predicate::str::contains("\"seeded_value\": \"minimal\""));
+        .stdout(predicate::str::contains("\"seeded_value\": \"none\""));
 
     let _ = std::fs::remove_dir_all(&home);
 }

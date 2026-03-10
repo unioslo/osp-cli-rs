@@ -125,6 +125,7 @@ enum ProviderResolutionError<'a> {
 }
 
 impl PluginManager {
+    /// Lists discovered plugins with health, command, and enablement status.
     pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
         let discovered = self.discover();
         let preferences = self.command_preferences();
@@ -144,6 +145,7 @@ impl PluginManager {
             .collect())
     }
 
+    /// Builds the effective command catalog after provider resolution and health filtering.
     pub fn command_catalog(&self) -> Result<Vec<CommandCatalogEntry>> {
         let preferences = self.command_preferences();
         let discovered = self.discover();
@@ -218,6 +220,7 @@ impl PluginManager {
         Ok(out)
     }
 
+    /// Builds a command policy registry from active plugin describe metadata.
     pub fn command_policy_registry(&self) -> Result<CommandPolicyRegistry> {
         let preferences = self.command_preferences();
         let discovered = self.discover();
@@ -251,6 +254,7 @@ impl PluginManager {
         Ok(registry)
     }
 
+    /// Returns completion words derived from the current plugin command catalog.
     pub fn completion_words(&self) -> Result<Vec<String>> {
         let catalog = self.command_catalog()?;
         let mut words = vec![
@@ -273,6 +277,7 @@ impl PluginManager {
         Ok(words)
     }
 
+    /// Renders a plain-text help view for plugin commands in the REPL.
     pub fn repl_help_text(&self) -> Result<String> {
         let catalog = self.command_catalog()?;
         let mut out = String::new();
@@ -329,6 +334,7 @@ impl PluginManager {
         Ok(out)
     }
 
+    /// Returns the available provider labels for a command.
     pub fn command_providers(&self, command: &str) -> Result<Vec<String>> {
         let preferences = self.command_preferences();
         let discovered = self.discover();
@@ -338,6 +344,7 @@ impl PluginManager {
             .collect())
     }
 
+    /// Returns the selected provider label when command resolution is unambiguous.
     pub fn selected_provider_label(&self, command: &str) -> Result<Option<String>> {
         let preferences = self.command_preferences();
         let discovered = self.discover();
@@ -352,6 +359,7 @@ impl PluginManager {
         )
     }
 
+    /// Produces a doctor report with plugin health summaries and command conflicts.
     pub fn doctor(&self) -> Result<DoctorReport> {
         let preferences = self.command_preferences();
         let plugins = self.list_plugins()?;
@@ -411,6 +419,7 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Persists an explicit provider preference for a command.
     pub fn set_preferred_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
         let command = command.trim();
         let plugin_id = plugin_id.trim();
@@ -426,6 +435,7 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Clears any stored provider preference for a command.
     pub fn clear_preferred_provider(&self, command: &str) -> Result<bool> {
         let command = command.trim();
         if command.is_empty() {
@@ -439,6 +449,7 @@ impl PluginManager {
         Ok(removed)
     }
 
+    /// Verifies that a plugin is a healthy provider for a command before storing it.
     pub fn validate_preferred_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
         let discovered = self.discover_for_dispatch();
         let healthy = healthy_plugins(discovered.as_ref()).collect::<Vec<_>>();
@@ -533,6 +544,10 @@ impl PluginManager {
             .read()
             .unwrap_or_else(|err| err.into_inner())
             .clone()
+    }
+
+    pub(crate) fn command_preferences_snapshot(&self) -> PluginCommandPreferences {
+        self.command_preferences()
     }
 
     pub(crate) fn replace_command_preferences(&self, preferences: PluginCommandPreferences) {

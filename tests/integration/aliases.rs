@@ -1,5 +1,5 @@
 use osp_cli::api::MockLdapClient;
-use osp_cli::cli::pipeline::parse_command_text_with_aliases;
+use osp_cli::cli::parse_command_text_with_aliases;
 use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use osp_cli::core::output::OutputFormat;
 use osp_cli::dsl::apply_pipeline;

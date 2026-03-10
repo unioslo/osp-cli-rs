@@ -2,8 +2,8 @@ use crate::config::RuntimeConfig;
 use crate::core::output_model::OutputResult;
 use crate::core::row::Row;
 use crate::dsl::{apply_pipeline, parse_pipeline};
-use crate::ports::{parse_attributes, LdapDirectory};
-use anyhow::{anyhow, Result};
+use crate::ports::{LdapDirectory, parse_attributes};
+use anyhow::{Result, anyhow};
 
 /// Execution context for the small service-layer command API.
 pub struct ServiceContext<L: LdapDirectory> {
@@ -199,7 +199,7 @@ mod tests {
     use crate::api::MockLdapClient;
     use crate::core::output_model::OutputResult;
 
-    use super::{execute_command, execute_line, parse_repl_command, ParsedCommand, ServiceContext};
+    use super::{ParsedCommand, ServiceContext, execute_command, execute_line, parse_repl_command};
 
     fn output_rows(output: &OutputResult) -> &[crate::core::row::Row] {
         output.as_rows().expect("expected row output")
@@ -274,9 +274,11 @@ mod tests {
 
         let missing_subcommand = parse_repl_command(&["ldap".to_string()])
             .expect_err("missing ldap subcommand should fail");
-        assert!(missing_subcommand
-            .to_string()
-            .contains("missing ldap subcommand"));
+        assert!(
+            missing_subcommand
+                .to_string()
+                .contains("missing ldap subcommand")
+        );
     }
 
     #[test]
@@ -316,9 +318,11 @@ mod tests {
             "extra".to_string(),
         ])
         .expect_err("extra positional should fail");
-        assert!(extra
-            .to_string()
-            .contains("ldap netgroup accepts one name positional argument"));
+        assert!(
+            extra
+                .to_string()
+                .contains("ldap netgroup accepts one name positional argument")
+        );
     }
 
     #[test]
@@ -337,9 +341,10 @@ mod tests {
             },
         )
         .expect_err("ldap user should require uid when global user is missing");
-        assert!(err
-            .to_string()
-            .contains("ldap user requires <uid> or -u/--user"));
+        assert!(
+            err.to_string()
+                .contains("ldap user requires <uid> or -u/--user")
+        );
 
         let err = execute_command(
             &ctx,
