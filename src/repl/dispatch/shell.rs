@@ -1,5 +1,5 @@
 use crate::repl::ReplLineResult;
-use crate::ui::{render_document, render_output};
+use crate::ui::{render_document, render_structured_output};
 use miette::{Result, miette};
 
 use crate::app;
@@ -80,6 +80,7 @@ fn repl_shortcut_help_invocation(
 ) -> Result<Option<ResolvedInvocation>> {
     if parsed.requests_repl_help() {
         return Ok(Some(app::resolve_invocation_ui(
+            runtime.config.resolved(),
             &runtime.ui,
             &crate::cli::invocation::InvocationOptions::default(),
         )));
@@ -98,6 +99,7 @@ fn repl_shortcut_help_invocation(
             let scanned_suffix = scan_command_tokens(help_suffix)?;
             if scanned_suffix.tokens.is_empty() {
                 return Ok(Some(app::resolve_invocation_ui(
+                    runtime.config.resolved(),
                     &runtime.ui,
                     &scanned_suffix.invocation,
                 )));
@@ -110,6 +112,7 @@ fn repl_shortcut_help_invocation(
         && scanned.tokens.len() == command_index + 1
     {
         return Ok(Some(app::resolve_invocation_ui(
+            runtime.config.resolved(),
             &runtime.ui,
             &scanned.invocation,
         )));
@@ -203,19 +206,6 @@ pub(super) fn repl_help_for_scope(
 ) -> Result<String> {
     match repl_help_command_result_for_scope(runtime, session, clients, invocation)?.output {
         Some(crate::app::ReplCommandOutput::Text(text)) => Ok(text),
-        Some(crate::app::ReplCommandOutput::Guide(guide)) => {
-            let output = guide.to_output_result();
-            Ok(crate::repl::help::render_guide_output(
-                &output,
-                &invocation.ui.render_settings,
-                crate::ui::format::help::GuideRenderOptions {
-                    title_prefix: None,
-                    layout: crate::ui::presentation::help_layout(runtime.config.resolved()),
-                    frame_style: invocation.ui.render_settings.chrome_frame,
-                    panel_kind: None,
-                },
-            ))
-        }
         Some(crate::app::ReplCommandOutput::Document(document)) => {
             Ok(render_document(&document, &invocation.ui.render_settings))
         }
@@ -225,7 +215,11 @@ pub(super) fn repl_help_for_scope(
         }) => {
             let render_settings =
                 app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
-            Ok(render_output(&output, &render_settings))
+            Ok(render_structured_output(
+                runtime.config.resolved(),
+                &render_settings,
+                &output,
+            ))
         }
         None => Ok(String::new()),
     }
@@ -242,7 +236,8 @@ fn repl_help_command_result_for_scope(
         let view = ReplViewContext::from_parts(runtime, session);
         let surface = surface::build_repl_surface(view, &catalog);
         return Ok(CliCommandResult::guide(
-            presentation::build_repl_command_overview_guide(&surface),
+            presentation::build_repl_command_overview_view(&surface)
+                .filtered_for_help_level(invocation.help_level),
         ));
     }
 
@@ -329,6 +324,29 @@ mod tests {
             themes: crate::ui::theme_loader::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         })
+    }
+
+    fn render_root_help_line(state: &mut AppState, line: &str) -> String {
+        let invocation = base_repl_invocation(&state.runtime);
+        let mut sink = BufferedUiSink::default();
+        let parsed = ReplParsedLine::parse(line, state.runtime.config.resolved())
+            .expect("line should parse");
+
+        let rendered = maybe_handle_repl_shortcuts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &parsed,
+            &invocation,
+            line,
+            &mut sink,
+        )
+        .expect("help shortcut should succeed");
+
+        match rendered {
+            Some(ReplLineResult::Continue(text)) => text,
+            other => panic!("unexpected repl result: {other:?}"),
+        }
     }
 
     #[test]
@@ -477,5 +495,46 @@ mod tests {
             rendered,
             Some(ReplLineResult::Continue(text)) if text.contains("help") || text.contains("Show this command overview")
         ));
+    }
+
+    #[test]
+    fn root_help_shortcut_supports_explicit_value_format_with_dsl_unit() {
+        let mut state = app_state();
+        let rendered = render_root_help_line(&mut state, "--value help | help");
+        assert!(rendered.contains("Commands"));
+        assert!(rendered.contains("help"));
+    }
+
+    #[test]
+    fn root_help_shortcut_supports_explicit_formats_with_pipeline_unit() {
+        let mut json_state = app_state();
+        let json = render_root_help_line(&mut json_state, "--json help | L 1");
+        let json_value: serde_json::Value =
+            serde_json::from_str(&json).expect("staged help json should parse");
+        let json_rows = json_value
+            .as_array()
+            .expect("staged help json should be row array");
+        assert_eq!(json_rows.len(), 1);
+        assert!(json_rows[0].get("usage").is_some());
+
+        let mut guide_state = app_state();
+        let guide = render_root_help_line(&mut guide_state, "--guide help | L 1");
+        assert!(guide.contains("Usage"));
+        assert!(guide.contains("Commands"));
+
+        let mut markdown_state = app_state();
+        let markdown = render_root_help_line(&mut markdown_state, "--md help | L 1");
+        assert!(markdown.contains("## Usage"));
+        assert!(markdown.contains("## Commands"));
+
+        let mut table_state = app_state();
+        let table = render_root_help_line(&mut table_state, "--table help | L 1");
+        assert!(table.contains("usage") || table.contains("Usage"));
+        assert!(table.contains("commands"));
+
+        let mut mreg_state = app_state();
+        let mreg = render_root_help_line(&mut mreg_state, "--mreg help | L 1");
+        assert!(mreg.contains("usage:") || mreg.contains("Usage"));
+        assert!(mreg.contains("commands ("));
     }
 }

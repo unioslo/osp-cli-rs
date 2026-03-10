@@ -1,15 +1,14 @@
 use reedline::{
-    Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
     menu_functions::{can_partially_complete, replace_in_buffer},
+    Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
 };
 use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
 
-use crate::repl::CompletionTraceMenuState;
 use crate::repl::menu_core::{MenuAction, MenuCore};
+use crate::repl::CompletionTraceMenuState;
 
-#[allow(unused_imports)]
-pub(crate) use crate::repl::menu_core::{MenuDebug, MenuStyleDebug, StyleDebug, display_text};
+pub(crate) use crate::repl::menu_core::{display_text, MenuDebug, MenuStyleDebug};
 
 /// Completion menu with adaptive column layout and an optional meta line.
 ///
@@ -83,61 +82,73 @@ impl Default for OspCompletionMenu {
 }
 
 impl OspCompletionMenu {
+    /// Sets the menu name used by `reedline`.
     pub fn with_name(mut self, name: &str) -> Self {
         self.name = name.to_string();
         self
     }
 
+    /// Limits completion input to the buffer prefix before the cursor.
     pub fn with_only_buffer_difference(mut self, only_buffer_difference: bool) -> Self {
         self.only_buffer_difference = only_buffer_difference;
         self
     }
 
+    /// Sets the marker shown when the menu is active.
     pub fn with_marker(mut self, marker: &str) -> Self {
         self.marker = marker.to_string();
         self
     }
 
+    /// Sets the preferred column count for menu layout.
     pub fn with_columns(mut self, columns: u16) -> Self {
         self.core.set_columns(columns);
         self
     }
 
+    /// Sets horizontal padding between menu columns.
     pub fn with_column_padding(mut self, col_padding: usize) -> Self {
         self.core.set_column_padding(col_padding);
         self
     }
 
+    /// Sets the maximum number of visible menu rows.
     pub fn with_max_rows(mut self, max_rows: u16) -> Self {
         self.core.set_max_rows(max_rows);
         self
     }
 
+    /// Sets how many wrapped description rows may be rendered.
     pub fn with_description_rows(mut self, description_rows: usize) -> Self {
         self.core.set_description_rows(description_rows);
         self
     }
 
+    /// Sets the base text style for unselected items.
     pub fn with_text_style(mut self, color: nu_ansi_term::Style) -> Self {
         self.colors.text_style = color;
         self
     }
 
+    /// Sets the text style for the selected item.
     pub fn with_selected_text_style(mut self, color: nu_ansi_term::Style) -> Self {
         self.colors.selected_text_style = color;
         self
     }
 
+    /// Sets the style used for item descriptions.
     pub fn with_description_text_style(mut self, color: nu_ansi_term::Style) -> Self {
         self.colors.description_style = color;
         self
     }
 
+    /// Sets the style used for matched text in unselected items.
     pub fn with_match_text_style(mut self, color: nu_ansi_term::Style) -> Self {
         self.colors.match_style = color;
         self
     }
 
+    /// Sets the style used for matched text in the selected item.
     pub fn with_selected_match_text_style(mut self, color: nu_ansi_term::Style) -> Self {
         self.colors.selected_match_style = color;
         self
@@ -513,7 +524,7 @@ impl OspCompletionMenu {
 
 #[cfg(test)]
 mod tests {
-    use super::{OspCompletionMenu, needs_space_prefix};
+    use super::{needs_space_prefix, OspCompletionMenu};
     use nu_ansi_term::{Color, Style};
     use reedline::{Completer, Editor, Menu, MenuEvent, Span, Suggestion, UndoBehavior};
     use unicode_width::UnicodeWidthStr;

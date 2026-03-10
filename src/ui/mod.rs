@@ -2,6 +2,7 @@ pub mod chrome;
 pub mod clipboard;
 mod display;
 pub mod document;
+pub(crate) mod document_model;
 pub mod format;
 pub mod inline;
 pub mod interactive;
@@ -17,6 +18,7 @@ mod width;
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::output_model::{OutputItems, OutputResult};
 use crate::core::row::Row;
+use crate::guide::GuideView;
 use crate::ui::chrome::SectionFrameStyle;
 
 pub use document::{
@@ -28,6 +30,7 @@ pub use interactive::{Interactive, InteractiveResult, InteractiveRuntime, Spinne
 pub use style::StyleOverrides;
 use theme::ThemeDefinition;
 
+/// Runtime terminal characteristics used when resolving render behavior.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RenderRuntime {
     pub stdout_is_tty: bool,
@@ -37,6 +40,7 @@ pub struct RenderRuntime {
     pub locale_utf8: Option<bool>,
 }
 
+/// User-configurable settings for rendering CLI output.
 #[derive(Debug, Clone)]
 pub struct RenderSettings {
     pub format: OutputFormat,
@@ -54,6 +58,10 @@ pub struct RenderSettings {
     pub column_weight: usize,
     pub table_overflow: TableOverflow,
     pub table_border: TableBorderStyle,
+    pub help_table_chrome: HelpTableChrome,
+    pub help_entry_indent: Option<usize>,
+    pub help_entry_gap: Option<usize>,
+    pub help_section_spacing: Option<usize>,
     pub mreg_stack_min_col_width: usize,
     pub mreg_stack_overflow_ratio: usize,
     pub theme_name: String,
@@ -64,6 +72,7 @@ pub struct RenderSettings {
     pub runtime: RenderRuntime,
 }
 
+/// Default output format to use when guide rendering is not explicitly requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GuideDefaultFormat {
     #[default]
@@ -72,6 +81,7 @@ pub enum GuideDefaultFormat {
 }
 
 impl GuideDefaultFormat {
+    /// Parses a guide default format name from configuration input.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "guide" => Some(Self::Guide),
@@ -81,12 +91,14 @@ impl GuideDefaultFormat {
     }
 }
 
+/// Rendering backend selected for the current output pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderBackend {
     Plain,
     Rich,
 }
 
+/// Overflow strategy for table cell content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableOverflow {
     None,
@@ -96,6 +108,7 @@ pub enum TableOverflow {
 }
 
 impl TableOverflow {
+    /// Parses a table overflow mode from configuration input.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "none" | "visible" => Some(Self::None),
@@ -107,6 +120,7 @@ impl TableOverflow {
     }
 }
 
+/// Border style applied to rendered tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TableBorderStyle {
     None,
@@ -116,6 +130,7 @@ pub enum TableBorderStyle {
 }
 
 impl TableBorderStyle {
+    /// Parses a table border style from configuration input.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "none" | "plain" => Some(Self::None),
@@ -126,6 +141,40 @@ impl TableBorderStyle {
     }
 }
 
+/// Border style override for help tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HelpTableChrome {
+    Inherit,
+    #[default]
+    None,
+    Square,
+    Round,
+}
+
+impl HelpTableChrome {
+    /// Parses a help table chrome mode from configuration input.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "inherit" => Some(Self::Inherit),
+            "none" | "plain" => Some(Self::None),
+            "square" | "box" | "boxed" => Some(Self::Square),
+            "round" | "rounded" => Some(Self::Round),
+            _ => None,
+        }
+    }
+
+    /// Resolves the effective help table border style.
+    pub fn resolve(self, table_border: TableBorderStyle) -> TableBorderStyle {
+        match self {
+            Self::Inherit => table_border,
+            Self::None => TableBorderStyle::None,
+            Self::Square => TableBorderStyle::Square,
+            Self::Round => TableBorderStyle::Round,
+        }
+    }
+}
+
+/// Fully resolved rendering settings used by the document renderer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRenderSettings {
     pub backend: RenderBackend,
@@ -141,6 +190,7 @@ pub struct ResolvedRenderSettings {
     pub column_weight: usize,
     pub table_overflow: TableOverflow,
     pub table_border: TableBorderStyle,
+    pub help_table_border: TableBorderStyle,
     pub theme_name: String,
     pub theme: ThemeDefinition,
     pub style_overrides: StyleOverrides,
@@ -166,6 +216,10 @@ impl RenderSettings {
             column_weight: 3,
             table_overflow: TableOverflow::Clip,
             table_border: TableBorderStyle::Square,
+            help_table_chrome: HelpTableChrome::None,
+            help_entry_indent: None,
+            help_entry_gap: None,
+            help_section_spacing: None,
             mreg_stack_min_col_width: 10,
             mreg_stack_overflow_ratio: 200,
             theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
@@ -177,6 +231,7 @@ impl RenderSettings {
         }
     }
 
+    /// Returns whether guide output should be preferred for the current settings.
     pub fn prefers_guide_rendering(&self) -> bool {
         matches!(self.format, OutputFormat::Guide)
             || (!self.format_explicit
@@ -211,6 +266,7 @@ impl RenderSettings {
         }
     }
 
+    /// Resolves terminal-aware rendering settings from the configured preferences.
     pub fn resolve_render_settings(&self) -> ResolvedRenderSettings {
         let backend = match self.mode {
             RenderMode::Plain => RenderBackend::Plain,
@@ -252,6 +308,7 @@ impl RenderSettings {
                 column_weight: self.column_weight.max(1),
                 table_overflow: self.table_overflow,
                 table_border: self.table_border,
+                help_table_border: self.help_table_chrome.resolve(self.table_border),
                 theme_name,
                 theme: theme.clone(),
                 style_overrides: self.style_overrides.clone(),
@@ -271,6 +328,7 @@ impl RenderSettings {
                 column_weight: self.column_weight.max(1),
                 table_overflow: self.table_overflow,
                 table_border: self.table_border,
+                help_table_border: self.help_table_chrome.resolve(self.table_border),
                 theme_name,
                 theme,
                 style_overrides: self.style_overrides.clone(),
@@ -303,6 +361,10 @@ impl RenderSettings {
             column_weight: self.column_weight,
             table_overflow: self.table_overflow,
             table_border: self.table_border,
+            help_table_chrome: self.help_table_chrome,
+            help_entry_indent: self.help_entry_indent,
+            help_entry_gap: self.help_entry_gap,
+            help_section_spacing: self.help_section_spacing,
             mreg_stack_min_col_width: self.mreg_stack_min_col_width,
             mreg_stack_overflow_ratio: self.mreg_stack_overflow_ratio,
             theme_name: self.theme_name.clone(),
@@ -315,22 +377,137 @@ impl RenderSettings {
     }
 }
 
+/// Renders rows using the configured output format.
 pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
     render_output(
         &OutputResult {
             items: OutputItems::Rows(rows.to_vec()),
+            document: None,
             meta: Default::default(),
         },
         settings,
     )
 }
 
+/// Renders a structured output result using the configured output format.
 pub fn render_output(output: &OutputResult, settings: &RenderSettings) -> String {
     let resolved = settings.resolve_render_settings();
+    if matches!(
+        format::resolve_output_format(output, settings),
+        OutputFormat::Markdown
+    ) && let Some(guide) = GuideView::try_from_output_result(output)
+    {
+        return guide.to_markdown_with_width(resolved.width);
+    }
     let document = format::build_document_from_output_resolved(output, settings, &resolved);
     renderer::render_document(&document, resolved)
 }
 
+fn render_guide_document(document: &Document, settings: &RenderSettings) -> String {
+    let mut rendered = render_document_resolved(document, settings.resolve_render_settings());
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+pub(crate) fn render_guide_view_with_options(
+    guide: &GuideView,
+    settings: &RenderSettings,
+    options: crate::ui::format::help::GuideRenderOptions<'_>,
+) -> String {
+    if matches!(
+        format::resolve_output_format(&guide.to_output_result(), settings),
+        OutputFormat::Guide
+    ) {
+        let document = crate::ui::format::help::build_guide_document_from_view(guide, options);
+        return render_guide_document(&document, settings);
+    }
+
+    render_output(&guide.to_output_result(), settings)
+}
+
+pub(crate) fn render_guide_payload(
+    config: &crate::config::ResolvedConfig,
+    settings: &RenderSettings,
+    guide: &GuideView,
+) -> String {
+    render_guide_payload_with_layout(
+        guide,
+        settings,
+        crate::ui::presentation::help_layout(config),
+    )
+}
+
+pub(crate) fn render_guide_payload_with_layout(
+    guide: &GuideView,
+    settings: &RenderSettings,
+    layout: crate::ui::presentation::HelpLayout,
+) -> String {
+    render_guide_view_with_options(
+        guide,
+        settings,
+        crate::ui::format::help::GuideRenderOptions {
+            title_prefix: None,
+            layout,
+            frame_style: settings.chrome_frame,
+            panel_kind: None,
+            help_table_border: settings.help_table_chrome.resolve(settings.table_border),
+            help_entry_indent: settings.help_entry_indent,
+            help_entry_gap: settings.help_entry_gap,
+            help_section_spacing: settings.help_section_spacing,
+        },
+    )
+}
+
+pub(crate) fn render_guide_output_with_options(
+    output: &OutputResult,
+    settings: &RenderSettings,
+    options: crate::ui::format::help::GuideRenderOptions<'_>,
+) -> String {
+    if matches!(
+        format::resolve_output_format(output, settings),
+        OutputFormat::Guide
+    ) && let Some(guide) = GuideView::try_from_output_result(output)
+    {
+        return render_guide_view_with_options(&guide, settings, options);
+    }
+
+    render_output(output, settings)
+}
+
+pub(crate) fn guide_render_options<'a>(
+    config: &'a crate::config::ResolvedConfig,
+    settings: &'a RenderSettings,
+) -> crate::ui::format::help::GuideRenderOptions<'a> {
+    crate::ui::format::help::GuideRenderOptions {
+        title_prefix: None,
+        layout: crate::ui::presentation::help_layout(config),
+        frame_style: settings.chrome_frame,
+        panel_kind: None,
+        help_table_border: settings.help_table_chrome.resolve(settings.table_border),
+        help_entry_indent: settings.help_entry_indent,
+        help_entry_gap: settings.help_entry_gap,
+        help_section_spacing: settings.help_section_spacing,
+    }
+}
+
+pub(crate) fn render_structured_output(
+    config: &crate::config::ResolvedConfig,
+    settings: &RenderSettings,
+    output: &OutputResult,
+) -> String {
+    if GuideView::try_from_output_result(output).is_some() {
+        return render_guide_output_with_options(
+            output,
+            settings,
+            guide_render_options(config, settings),
+        );
+    }
+    render_output(output, settings)
+}
+
+/// Renders a document directly with the resolved UI settings.
 pub fn render_document(document: &Document, settings: &RenderSettings) -> String {
     let resolved = settings.resolve_render_settings();
     renderer::render_document(document, resolved)
@@ -343,29 +520,41 @@ pub(crate) fn render_document_resolved(
     renderer::render_document(document, settings)
 }
 
+/// Renders rows in plain copy-safe form.
 pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {
     render_output_for_copy(
         &OutputResult {
             items: OutputItems::Rows(rows.to_vec()),
+            document: None,
             meta: Default::default(),
         },
         settings,
     )
 }
 
+/// Renders an output result in plain copy-safe form.
 pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) -> String {
     let copy_settings = settings.plain_copy_settings();
     let resolved = copy_settings.resolve_render_settings();
+    if matches!(
+        format::resolve_output_format(output, &copy_settings),
+        OutputFormat::Markdown
+    ) && let Some(guide) = GuideView::try_from_output_result(output)
+    {
+        return guide.to_markdown_with_width(resolved.width);
+    }
     let document = format::build_document_from_output_resolved(output, &copy_settings, &resolved);
     renderer::render_document(&document, resolved)
 }
 
+/// Renders a document in plain copy-safe form.
 pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) -> String {
     let copy_settings = settings.plain_copy_settings();
     let resolved = copy_settings.resolve_render_settings();
     renderer::render_document(document, resolved)
 }
 
+/// Copies rendered rows to the configured clipboard service.
 pub fn copy_rows_to_clipboard(
     rows: &[Row],
     settings: &RenderSettings,
@@ -374,6 +563,7 @@ pub fn copy_rows_to_clipboard(
     copy_output_to_clipboard(
         &OutputResult {
             items: OutputItems::Rows(rows.to_vec()),
+            document: None,
             meta: Default::default(),
         },
         settings,
@@ -381,15 +571,13 @@ pub fn copy_rows_to_clipboard(
     )
 }
 
+/// Copies rendered output to the configured clipboard service.
 pub fn copy_output_to_clipboard(
     output: &OutputResult,
     settings: &RenderSettings,
     clipboard: &clipboard::ClipboardService,
 ) -> Result<(), clipboard::ClipboardError> {
-    let copy_settings = settings.plain_copy_settings();
-    let resolved = copy_settings.resolve_render_settings();
-    let document = format::build_document_from_output_resolved(output, &copy_settings, &resolved);
-    let text = renderer::render_document(&document, resolved);
+    let text = render_output_for_copy(output, settings);
     clipboard.copy_text(&text)
 }
 
@@ -402,6 +590,7 @@ mod tests {
     use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use crate::core::output_model::OutputResult;
     use crate::core::row::Row;
+    use crate::guide::GuideView;
     use crate::ui::document::{Block, MregValue, TableStyle};
     use serde_json::json;
 
@@ -496,6 +685,43 @@ mod tests {
             panic!("expected table block");
         };
         assert_eq!(table.style, TableStyle::Markdown);
+    }
+
+    #[test]
+    fn markdown_output_renders_semantic_guide_payloads_unit() {
+        let output =
+            GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list  Show\n")
+                .to_output_result();
+        let settings = RenderSettings {
+            format: OutputFormat::Markdown,
+            format_explicit: true,
+            ..settings(OutputFormat::Markdown)
+        };
+
+        let rendered = render_output(&output, &settings);
+
+        assert!(rendered.contains("## Usage"));
+        assert!(rendered.contains("## Commands"));
+        assert!(rendered.contains("| name"));
+    }
+
+    #[test]
+    fn markdown_copy_renders_semantic_guide_payloads_unit() {
+        let output =
+            GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list  Show\n")
+                .to_output_result();
+        let settings = RenderSettings {
+            format: OutputFormat::Markdown,
+            format_explicit: true,
+            ..settings(OutputFormat::Markdown)
+        };
+
+        let copied = render_output_for_copy(&output, &settings);
+
+        assert!(copied.contains("## Usage"));
+        assert!(copied.contains("## Commands"));
+        assert!(copied.contains("| name"));
+        assert!(!copied.contains("\x1b["));
     }
 
     #[test]

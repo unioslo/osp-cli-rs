@@ -1,5 +1,5 @@
 use crate::core::{
-    output_model::{OutputItems, OutputMeta, OutputResult, RenderRecommendation},
+    output_model::{OutputDocument, OutputItems, OutputMeta, OutputResult, RenderRecommendation},
     row::Row,
 };
 use anyhow::{Result, anyhow};
@@ -29,6 +29,7 @@ pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult>
 pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<OutputResult> {
     execute_pipeline_items(
         output.items,
+        output.document,
         output.meta.wants_copy,
         output.meta.render_recommendation,
         stages,
@@ -58,6 +59,7 @@ where
 
 fn execute_pipeline_items(
     items: OutputItems,
+    initial_document: Option<OutputDocument>,
     initial_wants_copy: bool,
     initial_render_recommendation: Option<RenderRecommendation>,
     stages: &[String],
@@ -65,6 +67,7 @@ fn execute_pipeline_items(
     let parsed = parse_stage_list(stages)?;
     PipelineExecutor::new(
         items,
+        initial_document,
         initial_wants_copy,
         initial_render_recommendation,
         parsed,
@@ -85,6 +88,7 @@ enum PipelineItems {
 
 struct PipelineExecutor {
     items: PipelineItems,
+    document: Option<OutputDocument>,
     wants_copy: bool,
     render_recommendation: Option<RenderRecommendation>,
     parsed: ParsedPipeline,
@@ -93,6 +97,7 @@ struct PipelineExecutor {
 impl PipelineExecutor {
     fn new(
         items: OutputItems,
+        document: Option<OutputDocument>,
         wants_copy: bool,
         render_recommendation: Option<RenderRecommendation>,
         parsed: ParsedPipeline,
@@ -106,6 +111,7 @@ impl PipelineExecutor {
                     PipelineItems::Materialized(OutputItems::Groups(groups))
                 }
             },
+            document,
             wants_copy,
             render_recommendation,
             parsed,
@@ -118,6 +124,7 @@ impl PipelineExecutor {
     {
         Self {
             items: PipelineItems::RowStream(Box::new(rows.map(Ok))),
+            document: None,
             wants_copy,
             render_recommendation: None,
             parsed,
@@ -136,12 +143,22 @@ impl PipelineExecutor {
         let items = self.finish_items()?;
         let meta = self.build_output_meta(&items);
 
-        Ok(OutputResult { meta, items })
+        Ok(OutputResult {
+            items,
+            document: self.document,
+            meta,
+        })
     }
 
     fn apply_stage(&mut self, stage: &ParsedStage) -> Result<()> {
         if !stage_preserves_render_recommendation(stage) {
             self.render_recommendation = None;
+        }
+        // Document sidecars are only preserved for non-structural copy. Row
+        // data remains the authoritative pipeline substrate until we have a
+        // proper document-aware DSL story for narrowing and reshaping stages.
+        if !stage_preserves_document(stage) {
+            self.document = None;
         }
 
         if stage_can_stream_rows(stage)
@@ -442,10 +459,17 @@ fn stage_preserves_render_recommendation(stage: &ParsedStage) -> bool {
     }
 }
 
+fn stage_preserves_document(stage: &ParsedStage) -> bool {
+    matches!(stage.kind, ParsedStageKind::Explicit) && stage.verb == "Y"
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::output::OutputFormat;
-    use crate::core::output_model::{OutputItems, OutputResult, RenderRecommendation};
+    use crate::core::output_model::{
+        OutputDocument, OutputItems, OutputResult, RenderRecommendation,
+    };
+    use crate::guide::GuideView;
     use serde_json::json;
 
     use super::{
@@ -724,6 +748,7 @@ mod tests {
                     aggregates: json!({"total": 2}).as_object().cloned().expect("object"),
                     rows: vec![],
                 }]),
+                document: None,
                 meta: Default::default(),
             },
             &[],
@@ -750,6 +775,7 @@ mod tests {
                         .expect("object"),
                 ],
             }]),
+            document: None,
             meta: Default::default(),
         };
 
@@ -804,6 +830,7 @@ mod tests {
                         .expect("object"),
                 ],
             }]),
+            document: None,
             meta: Default::default(),
         };
 
@@ -892,6 +919,7 @@ mod tests {
                     ],
                 },
             ]),
+            document: None,
             meta: Default::default(),
         };
 
@@ -1053,6 +1081,21 @@ mod tests {
             copied.meta.render_recommendation,
             Some(RenderRecommendation::Format(OutputFormat::Value))
         );
+    }
+
+    #[test]
+    fn document_sidecar_survives_copy_and_clears_on_transform_unit() {
+        let output =
+            GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list  Show\n")
+                .to_output_result();
+
+        let copied =
+            apply_output_pipeline(output.clone(), &["Y".to_string()]).expect("copy should work");
+        assert!(matches!(copied.document, Some(OutputDocument::Guide(_))));
+
+        let filtered =
+            apply_output_pipeline(output, &["list".to_string()]).expect("quick should work");
+        assert!(filtered.document.is_none());
     }
 
     #[test]

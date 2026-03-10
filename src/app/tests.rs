@@ -85,6 +85,81 @@ fn intro_command_emits_semantic_json_with_explicit_format_unit() {
     );
 }
 
+fn run_app_stdout(args: &[&str]) -> String {
+    let mut sink = BufferedUiSink::default();
+    let code = crate::app::App::new()
+        .run_with_sink(args.iter().copied(), &mut sink)
+        .expect("app invocation should succeed");
+    assert_eq!(code, 0, "unexpected exit code for args: {args:?}");
+    sink.stdout
+}
+
+#[test]
+fn top_level_help_supports_all_explicit_output_formats_unit() {
+    let json = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--json", "--help"]);
+    let json_value: serde_json::Value =
+        serde_json::from_str(&json).expect("help json should parse");
+    let json_rows = json_value
+        .as_array()
+        .expect("help json should be row array");
+    assert_eq!(json_rows.len(), 1);
+    assert!(json_rows[0].get("usage").is_some());
+
+    let guide = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--guide", "--help"]);
+    assert!(guide.contains("Usage"));
+    assert!(guide.contains("Commands"));
+
+    let markdown = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--md", "--help"]);
+    assert!(markdown.contains("## Usage"));
+    assert!(markdown.contains("## Commands"));
+
+    let table = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--table", "--help"]);
+    assert!(table.contains("preamble"));
+    assert!(table.contains("usage"));
+    assert!(table.contains("commands"));
+
+    let mreg = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--mreg", "--help"]);
+    assert!(mreg.contains("preamble:"));
+    assert!(mreg.contains("commands ("));
+
+    let value = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--value", "--help"]);
+    assert!(value.contains("OSP CLI"));
+    assert!(value.contains("Usage"));
+    assert!(value.contains("Commands"));
+}
+
+#[test]
+fn intro_command_supports_all_explicit_output_formats_unit() {
+    let json = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--json", "intro"]);
+    let json_value: serde_json::Value =
+        serde_json::from_str(&json).expect("intro json should parse");
+    let json_rows = json_value
+        .as_array()
+        .expect("intro json should be row array");
+    assert_eq!(json_rows.len(), 1);
+    assert!(json_rows[0].get("sections").is_some());
+
+    let guide = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--guide", "intro"]);
+    assert!(guide.contains("OSP"));
+    assert!(guide.contains("Commands"));
+
+    let markdown = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--md", "intro"]);
+    assert!(markdown.contains("## OSP"));
+    assert!(markdown.contains("## Commands"));
+
+    let table = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--table", "intro"]);
+    assert!(table.contains("sections"));
+
+    let mreg = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--mreg", "intro"]);
+    assert!(mreg.contains("sections ("));
+    assert!(mreg.contains("title:"));
+
+    let value = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--value", "intro"]);
+    assert!(value.contains("OSP"));
+    assert!(value.contains("Welcome"));
+    assert!(value.contains("Commands"));
+}
+
 fn make_completion_state(auth_visible_builtins: Option<&str>) -> AppState {
     make_completion_state_with_entries_and_native(
         auth_visible_builtins,
@@ -543,7 +618,7 @@ fn exit_code_classification_distinguishes_usage_config_and_plugin_unit() {
     assert_eq!(classify_exit_code(&clap_report), EXIT_CODE_USAGE);
 
     let mut invalid_session = ConfigLayer::default();
-    invalid_session.set("ui.verbosity.level", "definitely-invalid");
+    invalid_session.set("ui.message.verbosity", "definitely-invalid");
     let config_report = super::resolve_runtime_config(
         RuntimeConfigRequest::new(None, Some("cli")).with_session_layer(Some(invalid_session)),
     )
@@ -869,6 +944,13 @@ fn cli_scan_extracts_invocation_flags_without_polluting_clap_unit() {
 
 #[test]
 fn invocation_ui_overlays_runtime_defaults_per_command_unit() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    let config = resolver
+        .resolve(ResolveOptions::default().with_terminal("cli"))
+        .expect("config should resolve");
     let ui = crate::app::UiState {
         render_settings: RenderSettings::test_plain(OutputFormat::Table),
         message_verbosity: MessageLevel::Success,
@@ -886,7 +968,7 @@ fn invocation_ui_overlays_runtime_defaults_per_command_unit() {
         plugin_provider: Some("beta".to_string()),
     };
 
-    let resolved = resolve_invocation_ui(&ui, &invocation);
+    let resolved = resolve_invocation_ui(&config, &ui, &invocation);
 
     assert_eq!(resolved.ui.render_settings.format, OutputFormat::Json);
     assert!(resolved.ui.render_settings.format_explicit);

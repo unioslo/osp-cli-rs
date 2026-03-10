@@ -4,54 +4,53 @@ use crate::app::is_sensitive_key;
 use crate::app::{CMD_HELP, DEFAULT_REPL_PROMPT};
 use crate::config::ConfigValue;
 use crate::guide::template::{GuideTemplateBlock, GuideTemplateInclude, parse_markdown_template};
-use crate::guide::{GuideDoc, GuidePayload, GuideSection, GuideSectionKind};
-#[cfg(test)]
-use crate::repl::help::render_guide_doc;
-use crate::repl::help::render_help_payload;
+use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::repl::{ReplAppearance, ReplPrompt};
+use crate::ui::render_guide_payload;
 use crate::ui::style::{
     StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
 };
 use std::borrow::Cow;
 use std::sync::Arc;
+use unicode_width::UnicodeWidthStr;
 
 use super::ReplViewContext;
 use super::history;
 use super::surface::ReplSurface;
 use crate::ui::presentation::{
-    ReplIntroStyle, intro_style, intro_style_with_verbosity, repl_simple_prompt,
+    ReplIntroStyle, help_level, intro_style, intro_style_with_verbosity, repl_simple_prompt,
 };
 
 const DEFAULT_MINIMAL_INTRO_TEMPLATE: &str =
-    "Welcome `{{display_name}}`. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
+    "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
 const DEFAULT_COMPACT_INTRO_TEMPLATE: &str =
-    "Welcome `{{display_name}}`. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
+    "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
 const DEFAULT_FULL_INTRO_TEMPLATE: &str = r#"## OSP
-  Welcome `{{display_name}}`!
-  Logged in as: `{{user.name}}`
-  Theme: `{{theme_display}}`
-  Version: `{{version}}`
+  Welcome {{display_name}}!
+  Logged in as: {{user.name}}
+  Theme: {{theme_display}}
+  Version: {{version}}
 
 ## Keybindings
-  `Ctrl-D`    **exit**
-  `Ctrl-L`    **clear screen**
-  `Ctrl-R`    **reverse search history**
+  Ctrl-D    exit
+  Ctrl-L    clear screen
+  Ctrl-R    reverse search history
 
 ## Pipes
-  `F` key>3 *|* `P` col1 col2 *|* `S` sort_key *|* `G` group_by_k1 k2
-  *|* `A` metric() *|* `L` limit offset *|* `C` count
-  `K` key *|* `V` value *|* contains *|* !not *|* ?exist *|* !?not_exist *(= exact, == case-sens.)*
-  *Help:* `| H` *or* `| H <verb>` *e.g.* `| H F`
+  F key>3 | P col1 col2 | S sort_key | G group_by_k1 k2
+  | A metric() | L limit offset | C count
+  K key | V value | contains | !not | ?exist | !?not_exist (= exact, == case-sens.)
+  Help: | H or | H <verb> e.g. | H F
 
 {{ help }}"#;
 
 pub(crate) fn render_repl_intro(view: ReplViewContext<'_>, surface: &ReplSurface) -> String {
     let intro_style =
         intro_style_with_verbosity(intro_style(view.config), view.ui.message_verbosity);
-    let mut rendered = render_help_payload(
-        &build_repl_intro_payload(view, surface, Some(intro_style)),
-        &view.ui.render_settings,
+    let mut rendered = render_guide_payload(
         view.config,
+        &view.ui.render_settings,
+        &build_repl_intro_payload(view, surface, Some(intro_style)),
     );
     if !rendered.is_empty() {
         rendered.insert(0, '\n');
@@ -64,7 +63,7 @@ pub(crate) fn build_repl_intro_payload(
     view: ReplViewContext<'_>,
     surface: &ReplSurface,
     override_style: Option<ReplIntroStyle>,
-) -> GuidePayload {
+) -> GuideView {
     let config = view.config;
     let intro_style = intro_style_with_verbosity(
         override_style.unwrap_or_else(|| intro_style(config)),
@@ -72,11 +71,18 @@ pub(crate) fn build_repl_intro_payload(
     );
 
     if matches!(intro_style, ReplIntroStyle::None) {
-        return GuidePayload::default();
+        return GuideView::default();
     }
     let template = intro_template(view.config, intro_style);
     let expanded = expand_intro_template(view, &surface.intro_commands, template);
-    parse_intro_template_payload(&expanded, &build_repl_command_overview_payload(surface))
+    parse_intro_template_payload(
+        &expanded,
+        &build_repl_command_overview_view(surface).filtered_for_help_level(help_level(
+            view.config,
+            0,
+            0,
+        )),
+    )
 }
 
 fn intro_template(config: &crate::config::ResolvedConfig, style: ReplIntroStyle) -> &str {
@@ -94,17 +100,17 @@ fn intro_template(config: &crate::config::ResolvedConfig, style: ReplIntroStyle)
     }
 }
 
-fn parse_intro_template_payload(template: &str, help: &GuidePayload) -> GuidePayload {
+fn parse_intro_template_payload(template: &str, help: &GuideView) -> GuideView {
     let trimmed = template.trim();
     if trimmed.is_empty() {
-        return GuidePayload::default();
+        return GuideView::default();
     }
 
-    let mut payload = GuidePayload::default();
+    let mut payload = GuideView::default();
     let mut current_title: Option<String> = None;
     let mut current_lines: Vec<String> = Vec::new();
 
-    let flush_section = |payload: &mut GuidePayload,
+    let flush_section = |payload: &mut GuideView,
                          current_title: &mut Option<String>,
                          current_lines: &mut Vec<String>| {
         let Some(title) = current_title.take() else {
@@ -113,7 +119,7 @@ fn parse_intro_template_payload(template: &str, help: &GuidePayload) -> GuidePay
         if current_lines.is_empty() {
             return;
         }
-        payload.sections.push(crate::guide::GuidePayloadSection {
+        payload.sections.push(GuideSection {
             title,
             kind: GuideSectionKind::Custom,
             paragraphs: std::mem::take(current_lines),
@@ -152,19 +158,19 @@ fn parse_intro_template_payload(template: &str, help: &GuidePayload) -> GuidePay
     payload
 }
 
-fn append_template_include_payload(payload: &mut GuidePayload, included: &GuidePayload) {
+fn append_template_include_payload(payload: &mut GuideView, included: &GuideView) {
     payload.preamble.extend(included.preamble.iter().cloned());
 
     if !included.usage.is_empty() {
-        payload.sections.push(crate::guide::GuidePayloadSection {
+        payload.sections.push(GuideSection {
             title: "Usage".to_string(),
-            kind: GuideSectionKind::Usage,
+            kind: GuideSectionKind::Custom,
             paragraphs: included.usage.clone(),
             entries: Vec::new(),
         });
     }
     if !included.commands.is_empty() {
-        payload.sections.push(crate::guide::GuidePayloadSection {
+        payload.sections.push(GuideSection {
             title: "Commands".to_string(),
             kind: GuideSectionKind::Commands,
             paragraphs: Vec::new(),
@@ -172,7 +178,7 @@ fn append_template_include_payload(payload: &mut GuidePayload, included: &GuideP
         });
     }
     if !included.arguments.is_empty() {
-        payload.sections.push(crate::guide::GuidePayloadSection {
+        payload.sections.push(GuideSection {
             title: "Arguments".to_string(),
             kind: GuideSectionKind::Arguments,
             paragraphs: Vec::new(),
@@ -180,7 +186,7 @@ fn append_template_include_payload(payload: &mut GuidePayload, included: &GuideP
         });
     }
     if !included.options.is_empty() {
-        payload.sections.push(crate::guide::GuidePayloadSection {
+        payload.sections.push(GuideSection {
             title: "Options".to_string(),
             kind: GuideSectionKind::Options,
             paragraphs: Vec::new(),
@@ -188,7 +194,7 @@ fn append_template_include_payload(payload: &mut GuidePayload, included: &GuideP
         });
     }
     if !included.common_invocation_options.is_empty() {
-        payload.sections.push(crate::guide::GuidePayloadSection {
+        payload.sections.push(GuideSection {
             title: "Common Invocation Options".to_string(),
             kind: GuideSectionKind::CommonInvocationOptions,
             paragraphs: Vec::new(),
@@ -196,7 +202,7 @@ fn append_template_include_payload(payload: &mut GuidePayload, included: &GuideP
         });
     }
     if !included.notes.is_empty() {
-        payload.sections.push(crate::guide::GuidePayloadSection {
+        payload.sections.push(GuideSection {
             title: "Notes".to_string(),
             kind: GuideSectionKind::Notes,
             paragraphs: included.notes.clone(),
@@ -298,13 +304,13 @@ fn resolve_intro_placeholder(
         "intro.commands" => {
             return intro_commands
                 .iter()
-                .map(|command| format!("`{command}`"))
+                .map(|command| command.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
         }
         "help_hint" => {
             return if view.auth.is_builtin_visible(CMD_HELP) {
-                "See `help` for more.".to_string()
+                "See help for more.".to_string()
             } else {
                 "Use completion to explore commands.".to_string()
             };
@@ -341,37 +347,43 @@ pub(crate) fn render_repl_command_overview(
     view: ReplViewContext<'_>,
     surface: &ReplSurface,
 ) -> String {
-    render_guide_doc(
-        &build_repl_command_overview_guide(surface),
+    render_guide_payload(
+        view.config,
         &view.ui.render_settings,
-        crate::ui::format::help::GuideRenderOptions {
-            title_prefix: None,
-            layout: crate::ui::presentation::help_layout(view.config),
-            frame_style: view.ui.render_settings.chrome_frame,
-            panel_kind: None,
-        },
+        &build_repl_command_overview_view(surface).filtered_for_help_level(help_level(
+            view.config,
+            0,
+            0,
+        )),
     )
 }
 
-pub(crate) fn build_repl_command_overview_guide(surface: &ReplSurface) -> GuideDoc {
-    let mut commands = GuideSection::new("Commands", GuideSectionKind::Commands);
-    for entry in &surface.overview_entries {
-        commands = commands.entry(format!("{:<12}", entry.name), entry.summary.clone());
+pub(crate) fn build_repl_command_overview_view(surface: &ReplSurface) -> GuideView {
+    let name_width = surface
+        .overview_entries
+        .iter()
+        .map(|entry| UnicodeWidthStr::width(entry.name.as_str()))
+        .max()
+        .unwrap_or(0);
+    GuideView {
+        usage: vec!["[INVOCATION_OPTIONS] COMMAND [ARGS]...".to_string()],
+        commands: surface
+            .overview_entries
+            .iter()
+            .map(|entry| crate::guide::GuideEntry {
+                name: entry.name.clone(),
+                short_help: entry.summary.clone(),
+                display_indent: Some("  ".to_string()),
+                display_gap: Some(format!(
+                    "{}     ",
+                    " ".repeat(
+                        name_width.saturating_sub(UnicodeWidthStr::width(entry.name.as_str()))
+                    )
+                )),
+            })
+            .collect(),
+        ..GuideView::default()
     }
-
-    GuideDoc {
-        preamble: Vec::new(),
-        sections: vec![
-            GuideSection::new("Usage", GuideSectionKind::Usage)
-                .paragraph("  [INVOCATION_OPTIONS] COMMAND [ARGS]..."),
-            commands,
-        ],
-        epilogue: Vec::new(),
-    }
-}
-
-pub(crate) fn build_repl_command_overview_payload(surface: &ReplSurface) -> GuidePayload {
-    build_repl_command_overview_guide(surface).to_payload()
 }
 
 pub(crate) fn theme_display_name(slug: &str) -> String {

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::repl::{ReplLineResult, ReplReloadKind, SharedHistory};
-use crate::ui::{render_document, render_output};
+use crate::ui::{render_document, render_output, render_structured_output};
 use miette::{Result, miette};
 
 use crate::app;
@@ -11,7 +11,7 @@ use crate::app::{
     CMD_CONFIG, CMD_DOCTOR, CMD_HELP, CMD_HISTORY, CMD_INTRO, CMD_PLUGINS, ReplCommandSpec,
     ResolvedInvocation,
 };
-use crate::cli::invocation::{append_invocation_help_if_verbose, scan_command_tokens};
+use crate::cli::invocation::{extend_with_invocation_help, scan_command_tokens};
 use crate::cli::rows::output::{output_to_rows, rows_to_output_result};
 use crate::cli::{
     Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginCommandClearArgs,
@@ -19,7 +19,7 @@ use crate::cli::{
     ThemeArgs, ThemeCommands, parse_inline_command_tokens,
 };
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use crate::guide::{GuideDoc, HelpDoc, HelpSection, HelpSectionKind};
+use crate::guide::{GuideSection, GuideSectionKind, GuideView, HelpView};
 
 use crate::repl::{completion, input};
 
@@ -59,15 +59,21 @@ pub(super) fn parse_repl_invocation(
 ) -> Result<ParsedReplDispatch> {
     let prefixed_tokens = parsed.prefixed_tokens(&session.scope);
     let scanned = scan_command_tokens(&prefixed_tokens)?;
+    let effective =
+        app::resolve_invocation_ui(runtime.config.resolved(), &runtime.ui, &scanned.invocation);
     let command_index = session.scope.commands().len();
     if scanned.tokens.get(command_index).map(String::as_str) == Some(CMD_HELP)
         && !input::has_valid_help_alias_target(&scanned.tokens, command_index)
     {
         return Ok(ParsedReplDispatch::Help {
-            result: crate::app::CliCommandResult::guide(render_invalid_help_alias(
-                input::help_alias_target_at(&scanned.tokens, command_index),
-            )),
-            effective: Box::new(app::resolve_invocation_ui(&runtime.ui, &scanned.invocation)),
+            result: crate::app::CliCommandResult::guide(
+                render_invalid_help_alias(input::help_alias_target_at(
+                    &scanned.tokens,
+                    command_index,
+                ))
+                .filtered_for_help_level(effective.help_level),
+            ),
+            effective: Box::new(effective.clone()),
             stages: parsed.stages.clone(),
         });
     }
@@ -80,13 +86,10 @@ pub(super) fn parse_repl_invocation(
             if renders_repl_inline_help(err.kind()) {
                 return Ok(ParsedReplDispatch::Help {
                     result: crate::app::CliCommandResult::guide(render_repl_parse_help(
-                        &scanned.invocation,
+                        effective.help_level,
                         &err.to_string(),
                     )),
-                    effective: Box::new(app::resolve_invocation_ui(
-                        &runtime.ui,
-                        &scanned.invocation,
-                    )),
+                    effective: Box::new(effective.clone()),
                     stages: parsed.stages.clone(),
                 });
             }
@@ -102,7 +105,7 @@ pub(super) fn parse_repl_invocation(
     Ok(ParsedReplDispatch::Invocation(Box::new(
         ParsedReplInvocation {
             cache_key: repl_cache_key_for_command(runtime, &command, &scanned.invocation),
-            effective: app::resolve_invocation_ui(&runtime.ui, &scanned.invocation),
+            effective,
             side_effects: command_side_effects(&command),
             command,
             stages: parsed.stages.clone(),
@@ -110,18 +113,24 @@ pub(super) fn parse_repl_invocation(
     )))
 }
 
-fn render_invalid_help_alias(target: Option<&str>) -> GuideDoc {
+fn render_invalid_help_alias(target: Option<&str>) -> GuideView {
     let detail = match target {
-        Some(target) => format!("invalid help target: `{target}`"),
+        Some(target) => format!("invalid help target: {target}"),
         None => "help expects a command target".to_string(),
     };
-    HelpDoc {
+    HelpView {
         preamble: vec![detail],
+        usage: Vec::new(),
+        commands: Vec::new(),
+        arguments: Vec::new(),
+        options: Vec::new(),
+        common_invocation_options: Vec::new(),
+        notes: Vec::new(),
         sections: vec![
-            HelpSection::new("Usage", HelpSectionKind::Usage).paragraph("  help <command>"),
-            HelpSection::new("Notes", HelpSectionKind::Notes)
-                .paragraph("  Use bare `help` for the REPL overview.")
-                .paragraph("  `help help` and `help --help` are not valid.")
+            GuideSection::new("Usage", GuideSectionKind::Usage).paragraph("help <command>"),
+            GuideSection::new("Notes", GuideSectionKind::Notes)
+                .paragraph("  Use bare help for the REPL overview.")
+                .paragraph("  help help and help --help are not valid.")
                 .paragraph("  Add -v to include common invocation options."),
         ],
         epilogue: Vec::new(),
@@ -140,15 +149,16 @@ pub(super) fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {
 }
 
 fn render_repl_parse_help(
-    invocation: &crate::cli::invocation::InvocationOptions,
+    help_level: crate::ui::presentation::HelpLevel,
     error_text: &str,
-) -> GuideDoc {
+) -> GuideView {
     let parsed = parse_clap_help(error_text);
-    let mut doc = HelpDoc::from_text(&append_invocation_help_if_verbose(parsed.body, invocation));
+    let mut view = HelpView::from_text(parsed.body);
+    extend_with_invocation_help(&mut view, help_level);
     if let Some(summary) = parsed.summary {
-        doc.preamble.insert(0, summary.to_string());
+        view.preamble.insert(0, summary.to_string());
     }
-    doc
+    view.filtered_for_help_level(help_level)
 }
 
 pub(super) fn parse_clap_help(error_text: &str) -> ParsedClapHelp<'_> {
@@ -315,29 +325,8 @@ pub(super) fn render_repl_command_output(
 
             let render_settings =
                 app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
-            let rendered = render_output(&output, &render_settings);
-            session.record_result(line, output_to_rows(&output));
-            app::maybe_copy_output_with_runtime(
-                &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
-                &output,
-                sink,
-            );
-            rendered
-        }
-        Some(crate::app::ReplCommandOutput::Guide(guide)) => {
-            let output = guide.to_output_result();
-            let (output, _format_hint) =
-                app::apply_output_stages(output, stages, None).map_err(|err| miette!("{err:#}"))?;
-            let rendered = crate::repl::help::render_guide_output(
-                &output,
-                &invocation.ui.render_settings,
-                crate::ui::format::help::GuideRenderOptions {
-                    title_prefix: None,
-                    layout: crate::ui::presentation::help_layout(runtime.config.resolved()),
-                    frame_style: invocation.ui.render_settings.chrome_frame,
-                    panel_kind: None,
-                },
-            );
+            let rendered =
+                render_structured_output(runtime.config.resolved(), &render_settings, &output);
             session.record_result(line, output_to_rows(&output));
             app::maybe_copy_output_with_runtime(
                 &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
@@ -513,7 +502,7 @@ pub(super) fn run_repl_external_command(
         clients,
         &tokens,
         invocation,
-        GuideDoc::from_text,
+        GuideView::from_text,
     )
 }
 

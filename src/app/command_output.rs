@@ -3,11 +3,11 @@ use crate::core::output::OutputFormat;
 use crate::core::output_model::{OutputResult, RenderRecommendation};
 use crate::core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use crate::dsl::apply_output_pipeline;
-use crate::guide::GuidePayload;
+use crate::guide::GuideView;
 use crate::ui::clipboard::ClipboardService;
 use crate::ui::document::{Block, Document, JsonBlock, LineBlock, LinePart};
 use crate::ui::messages::{MessageBuffer, MessageLevel};
-use crate::ui::{copy_output_to_clipboard, render_document, render_output};
+use crate::ui::{copy_output_to_clipboard, render_document, render_structured_output};
 use miette::Result;
 
 use crate::app::UiState;
@@ -22,7 +22,6 @@ pub(crate) enum ReplCommandOutput {
         output: OutputResult,
         format_hint: Option<OutputFormat>,
     },
-    Guide(GuidePayload),
     Document(Document),
     Text(String),
 }
@@ -44,7 +43,6 @@ pub(crate) struct PreparedPluginOutput {
 
 pub(crate) struct FailedPluginOutput {
     pub(crate) messages: MessageBuffer,
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) report: String,
 }
 
@@ -77,6 +75,7 @@ impl CliCommandResult {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn text(text: impl Into<String>) -> Self {
         Self {
             exit_code: 0,
@@ -97,11 +96,15 @@ impl CliCommandResult {
         }
     }
 
-    pub(crate) fn guide(guide: impl Into<GuidePayload>) -> Self {
+    pub(crate) fn guide(guide: impl Into<GuideView>) -> Self {
+        let guide = guide.into();
         Self {
             exit_code: 0,
             messages: MessageBuffer::default(),
-            output: Some(ReplCommandOutput::Guide(guide.into())),
+            output: Some(ReplCommandOutput::Output {
+                output: guide.to_output_result(),
+                format_hint: None,
+            }),
             stderr_text: None,
             failure_report: None,
         }
@@ -325,20 +328,12 @@ fn render_cli_output(
         } => {
             let effective =
                 resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
-            sink.write_stdout(&render_output(&output, &effective));
-            maybe_copy_output_with_runtime(runtime, &output, sink);
-        }
-        ReplCommandOutput::Guide(guide) => {
-            let rendered = crate::repl::help::render_help_payload(
-                &guide,
-                &runtime.ui().render_settings,
+            sink.write_stdout(&render_structured_output(
                 runtime.config(),
-            );
-            sink.write_stdout(&rendered);
-            if !runtime.ui().render_settings.prefers_guide_rendering() {
-                let output = guide.to_output_result();
-                maybe_copy_output_with_runtime(runtime, &output, sink);
-            }
+                &effective,
+                &output,
+            ));
+            maybe_copy_output_with_runtime(runtime, &output, sink);
         }
         ReplCommandOutput::Document(document) => {
             sink.write_stdout(&render_document(&document, &runtime.ui().render_settings));

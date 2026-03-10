@@ -1,9 +1,11 @@
-use crate::completion::{
-    ArgNode, CommandSpec, FlagNode, SuggestionEntry, ValueType, tree::command_spec_from_command_def,
-};
+#[cfg(test)]
+use crate::completion::{ArgNode, FlagNode, SuggestionEntry, ValueType};
+use crate::completion::{CommandSpec, tree::command_spec_from_command_def};
 use crate::core::command_def::CommandDef;
+use crate::core::plugin::DescribeCommandV1;
+#[cfg(test)]
 use crate::core::plugin::{
-    DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1, DescribeValueTypeV1,
+    DescribeArgV1, DescribeFlagV1, DescribeSuggestionV1, DescribeValueTypeV1,
 };
 
 pub(crate) fn to_command_spec(command: &DescribeCommandV1) -> CommandSpec {
@@ -11,6 +13,7 @@ pub(crate) fn to_command_spec(command: &DescribeCommandV1) -> CommandSpec {
     command_spec_from_command_def(&def)
 }
 
+#[cfg(test)]
 pub(super) fn to_arg_node(arg: &DescribeArgV1) -> ArgNode {
     let mut node = ArgNode::default().suggestions(arg.suggestions.iter().map(to_suggestion_entry));
     if let Some(name) = &arg.name {
@@ -28,6 +31,7 @@ pub(super) fn to_arg_node(arg: &DescribeArgV1) -> ArgNode {
     node
 }
 
+#[cfg(test)]
 pub(super) fn to_flag_node(flag: &DescribeFlagV1) -> FlagNode {
     let mut node = FlagNode::new().suggestions(flag.suggestions.iter().map(to_suggestion_entry));
     if let Some(about) = &flag.about {
@@ -45,6 +49,7 @@ pub(super) fn to_flag_node(flag: &DescribeFlagV1) -> FlagNode {
     node
 }
 
+#[cfg(test)]
 pub(super) fn to_suggestion_entry(entry: &DescribeSuggestionV1) -> SuggestionEntry {
     SuggestionEntry {
         value: entry.value.clone(),
@@ -54,6 +59,7 @@ pub(super) fn to_suggestion_entry(entry: &DescribeSuggestionV1) -> SuggestionEnt
     }
 }
 
+#[cfg(test)]
 pub(super) fn to_value_type(value_type: DescribeValueTypeV1) -> Option<ValueType> {
     match value_type {
         DescribeValueTypeV1::Path => Some(ValueType::Path),

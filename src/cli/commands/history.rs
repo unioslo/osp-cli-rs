@@ -1,4 +1,4 @@
-use miette::{Result, miette};
+use miette::{miette, Result};
 
 use crate::app::AppSession;
 use crate::app::CliCommandResult;
@@ -38,9 +38,7 @@ mod tests {
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
         let output = match result.output? {
             ReplCommandOutput::Output { output, .. } => output,
-            ReplCommandOutput::Guide(_)
-            | ReplCommandOutput::Document(_)
-            | ReplCommandOutput::Text(_) => return None,
+            ReplCommandOutput::Document(_) | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
     }

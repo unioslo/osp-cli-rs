@@ -25,6 +25,7 @@ fn grouped_output() -> OutputResult {
                 row(json!({"uid": "bob", "roles": ["sales"], "city": "Oslo"})),
             ],
         }]),
+        document: None,
         meta: Default::default(),
     }
 }

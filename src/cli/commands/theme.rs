@@ -1,14 +1,14 @@
 use crate::app::UiState;
-use crate::app::{CliCommandResult, resolve_known_theme_name};
+use crate::app::{resolve_known_theme_name, CliCommandResult};
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{ThemeArgs, ThemeCommands, ThemeShowArgs, ThemeUseArgs};
 use crate::config::ConfigLayer;
 use crate::core::command_def::{ArgDef, CommandDef, ValueChoice};
 use crate::core::row::Row;
-use crate::ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
+use crate::ui::theme::{normalize_theme_name, DEFAULT_THEME_NAME};
 use crate::ui::theme_loader::{ThemeCatalog, ThemeSource};
-use miette::Result;
 use miette::miette;
+use miette::Result;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ThemeCommandContext<'a> {
@@ -170,7 +170,7 @@ fn theme_show_rows(themes: &ThemeCatalog, name: &str) -> Result<Vec<Row>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ThemeCommandContext, run_theme_command, theme_command_def, theme_list_rows, theme_show_rows,
+        run_theme_command, theme_command_def, theme_list_rows, theme_show_rows, ThemeCommandContext,
     };
     use crate::app::CliCommandResult;
     use crate::app::ReplCommandOutput;
@@ -179,10 +179,10 @@ mod tests {
     use crate::config::ConfigLayer;
     use crate::core::output::OutputFormat;
     use crate::core::row::Row;
-    use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
     use crate::ui::theme::find_builtin_theme;
     use crate::ui::theme_loader::{ThemeCatalog, ThemeEntry, ThemeSource};
+    use crate::ui::RenderSettings;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -225,9 +225,7 @@ mod tests {
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
         let output = match result.output? {
             ReplCommandOutput::Output { output, .. } => output,
-            ReplCommandOutput::Guide(_)
-            | ReplCommandOutput::Document(_)
-            | ReplCommandOutput::Text(_) => return None,
+            ReplCommandOutput::Document(_) | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
     }

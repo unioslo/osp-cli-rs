@@ -2,10 +2,10 @@ use miette::{Result, WrapErr, miette};
 
 use crate::app::{AppClients, AppRuntime, AppSession};
 use crate::app::{AuthState, RuntimeContext, UiState};
-use crate::cli::invocation::{InvocationOptions, append_invocation_help_if_verbose};
+use crate::cli::invocation::extend_with_invocation_help;
 use crate::cli::pipeline::parse_command_tokens_with_aliases;
 use crate::cli::{Commands, parse_inline_command_tokens};
-use crate::guide::GuideDoc;
+use crate::guide::GuideView;
 use crate::native::{NativeCommandContext, NativeCommandOutcome};
 use crate::plugin::PluginManager;
 use crate::repl::ReplViewContext;
@@ -64,13 +64,9 @@ pub(super) fn run_external_command(
         tokens,
         invocation,
         |stdout| {
-            GuideDoc::from_text(&append_invocation_help_if_verbose(
-                stdout,
-                &InvocationOptions {
-                    verbose: u8::from(invocation.show_invocation_help),
-                    ..InvocationOptions::default()
-                },
-            ))
+            let mut guide = GuideView::from_text(stdout);
+            extend_with_invocation_help(&mut guide, invocation.help_level);
+            guide.filtered_for_help_level(invocation.help_level)
         },
     )
 }
@@ -81,13 +77,9 @@ pub(crate) fn run_external_command_with_help_renderer(
     clients: &AppClients,
     tokens: &[String],
     invocation: &ResolvedInvocation,
-    guide_help: impl Fn(&str) -> GuideDoc,
+    guide_help: impl Fn(&str) -> GuideView,
 ) -> Result<CliCommandResult> {
-    let help_invocation = InvocationOptions {
-        verbose: u8::from(invocation.show_invocation_help),
-        ..InvocationOptions::default()
-    };
-    let parsed = match parse_external_invocation(runtime, session, tokens, &help_invocation)
+    let parsed = match parse_external_invocation(runtime, session, tokens, invocation.help_level)
         .wrap_err_with(|| {
             format!(
                 "failed to parse external command invocation for `{}`",
@@ -147,7 +139,7 @@ fn run_native_command(
     runtime: &mut AppRuntime,
     args: &[String],
     stages: &[String],
-    guide_help: impl Fn(&str) -> GuideDoc,
+    guide_help: impl Fn(&str) -> GuideView,
 ) -> Result<CliCommandResult> {
     let context = NativeCommandContext {
         config: runtime.config.resolved(),
@@ -193,7 +185,7 @@ fn parse_external_invocation(
     runtime: &AppRuntime,
     session: &AppSession,
     tokens: &[String],
-    invocation: &InvocationOptions,
+    help_level: crate::ui::presentation::HelpLevel,
 ) -> Result<ExternalParse> {
     let parsed = parse_command_tokens_with_aliases(tokens, runtime.config.resolved())?;
     if parsed.tokens.is_empty() {
@@ -204,7 +196,7 @@ fn parse_external_invocation(
         &parsed.stages,
     ) {
         return Ok(ExternalParse::Handled(CliCommandResult::guide(
-            GuideDoc::from_text(&help),
+            GuideView::from_text(&help),
         )));
     }
 
@@ -214,11 +206,10 @@ fn parse_external_invocation(
             if err.kind() == clap::error::ErrorKind::DisplayHelp
                 || err.kind() == clap::error::ErrorKind::DisplayVersion
             {
+                let mut view = GuideView::from_text(&err.to_string());
+                extend_with_invocation_help(&mut view, help_level);
                 return Ok(ExternalParse::Handled(CliCommandResult::guide(
-                    GuideDoc::from_text(&append_invocation_help_if_verbose(
-                        &err.to_string(),
-                        invocation,
-                    )),
+                    view.filtered_for_help_level(help_level),
                 )));
             }
             return Err(miette!(err.to_string()));
@@ -238,7 +229,7 @@ fn run_external_plugin_command(
     args: &[String],
     stages: &[String],
     invocation: &ResolvedInvocation,
-    guide_help: impl Fn(&str) -> GuideDoc,
+    guide_help: impl Fn(&str) -> GuideView,
 ) -> Result<CliCommandResult> {
     ensure_plugin_visible_for(runtime.auth, command)?;
 
@@ -332,7 +323,7 @@ mod tests {
         DescribeCommandAuthV1, DescribeVisibilityModeV1, PLUGIN_PROTOCOL_V1,
         ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
     };
-    use crate::guide::GuideDoc;
+    use crate::guide::GuideView;
     use crate::native::{
         NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
     };
@@ -432,13 +423,13 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
 
-        let parsed = parse_external_invocation(&runtime, &session, &tokens, &Default::default())
+        let parsed = parse_external_invocation(&runtime, &session, &tokens, Default::default())
             .expect("help should parse");
         assert!(matches!(
             parsed,
             ExternalParse::Handled(CliCommandResult {
                 exit_code: 0,
-                output: Some(ReplCommandOutput::Guide(_)),
+                output: Some(ReplCommandOutput::Output { .. }),
                 ..
             })
         ));
@@ -490,14 +481,18 @@ mod tests {
             NativeOutcomeKind::Response,
         ] {
             let (mut runtime, mut session, clients) = make_test_state_with_native(Some(kind));
-            let invocation = resolve_invocation_ui(&runtime.ui, &InvocationOptions::default());
+            let invocation = resolve_invocation_ui(
+                runtime.config.resolved(),
+                &runtime.ui,
+                &InvocationOptions::default(),
+            );
             let result = run_external_command_with_help_renderer(
                 &mut runtime,
                 &mut session,
                 &clients,
                 &["ldap".to_string(), "user".to_string()],
                 &invocation,
-                |text| GuideDoc::from_text(&format!("HELP::{text}")),
+                |text| GuideView::from_text(&format!("HELP::{text}")),
             )
             .expect("native command should dispatch");
 
@@ -505,8 +500,9 @@ mod tests {
                 NativeOutcomeKind::Help => {
                     assert!(matches!(
                         result.output,
-                        Some(ReplCommandOutput::Guide(guide))
-                            if guide.preamble.iter().any(|line| line.contains("HELP::Usage: osp ldap"))
+                        Some(ReplCommandOutput::Output { output, .. })
+                            if crate::guide::GuideView::try_from_output_result(&output)
+                                .is_some_and(|guide| guide.preamble.iter().any(|line| line.contains("HELP::Usage: osp ldap")))
                     ));
                 }
                 NativeOutcomeKind::Exit => {

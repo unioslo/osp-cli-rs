@@ -1,19 +1,21 @@
-use crate::config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
+use crate::config::{ConfigValue, ResolvedConfig, DEFAULT_UI_WIDTH};
 use crate::core::output::OutputFormat;
 use crate::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use crate::native::{NativeCommandCatalogEntry, NativeCommandRegistry};
-use crate::repl::{self, SharedHistory, help as repl_help};
+use crate::repl::{self, SharedHistory};
 use clap::Parser;
-use miette::{IntoDiagnostic, Result, WrapErr, miette};
+use miette::{miette, IntoDiagnostic, Result, WrapErr};
 
+use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::ui::messages::MessageLevel;
+use crate::ui::presentation::{help_level, HelpLevel};
 use crate::ui::theme::normalize_theme_name;
-use crate::ui::{RenderRuntime, RenderSettings};
+use crate::ui::{render_guide_payload_with_layout, RenderRuntime, RenderSettings};
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::time::Instant;
-use terminal_size::{Width, terminal_size};
+use terminal_size::{terminal_size, Width};
 
 use super::help;
 use crate::app::logging::{bootstrap_logging_config, init_developer_logging};
@@ -25,39 +27,39 @@ use crate::cli::commands::{
     config as config_cmd, doctor as doctor_cmd, history as history_cmd, intro as intro_cmd,
     plugins as plugins_cmd, theme as theme_cmd,
 };
-use crate::cli::invocation::{InvocationOptions, append_invocation_help_if_verbose, scan_cli_argv};
+use crate::cli::invocation::{extend_with_invocation_help, scan_cli_argv, InvocationOptions};
 use crate::cli::{Cli, Commands};
 use crate::plugin::{
-    CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
-    PluginDispatchError, PluginManager,
+    CommandCatalogEntry, PluginDispatchContext, PluginDispatchError, PluginManager,
+    DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
 };
 
 pub(crate) use super::bootstrap::{
-    RuntimeConfigRequest, build_app_state, build_cli_session_layer, build_logging_config,
-    build_runtime_context, debug_verbosity_from_config, message_verbosity_from_config,
-    resolve_runtime_config,
+    build_app_state, build_cli_session_layer, build_logging_config, build_runtime_context,
+    debug_verbosity_from_config, message_verbosity_from_config, resolve_runtime_config,
+    RuntimeConfigRequest,
 };
-pub(crate) use super::command_output::{CliCommandResult, CommandRenderRuntime, run_cli_command};
+pub(crate) use super::command_output::{run_cli_command, CliCommandResult, CommandRenderRuntime};
 pub(crate) use super::config_explain::{
-    ConfigExplainContext, config_explain_json, config_explain_result, config_value_to_json,
-    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
+    config_explain_json, config_explain_result, config_value_to_json, explain_runtime_config,
+    format_scope, is_sensitive_key, render_config_explain_text, ConfigExplainContext,
 };
 pub(crate) use super::dispatch::{
-    RunAction, build_dispatch_plan, ensure_builtin_visible_for, ensure_dispatch_visibility,
-    ensure_plugin_visible_for, normalize_cli_profile, normalize_profile_override,
+    build_dispatch_plan, ensure_builtin_visible_for, ensure_dispatch_visibility,
+    ensure_plugin_visible_for, normalize_cli_profile, normalize_profile_override, RunAction,
 };
 pub(crate) use super::external::run_external_command_with_help_renderer;
-use super::external::{ExternalCommandRuntime, run_external_command};
+use super::external::{run_external_command, ExternalCommandRuntime};
 pub(crate) use super::repl_lifecycle::rebuild_repl_parts;
 #[cfg(test)]
 pub(crate) use super::repl_lifecycle::rebuild_repl_state;
-pub(crate) use super::timing::{TimingSummary, format_timing_badge, right_align_timing_line};
-pub(crate) use crate::plugin::config::{
-    PluginConfigEntry, PluginConfigScope, plugin_config_entries,
-};
+pub(crate) use super::timing::{format_timing_badge, right_align_timing_line, TimingSummary};
 #[cfg(test)]
 pub(crate) use crate::plugin::config::{
     collect_plugin_config_env, config_value_to_plugin_env, plugin_config_env_name,
+};
+pub(crate) use crate::plugin::config::{
+    plugin_config_entries, PluginConfigEntry, PluginConfigScope,
 };
 use crate::ui::theme_loader;
 
@@ -89,7 +91,7 @@ pub(crate) struct ReplCommandSpec {
 pub(crate) struct ResolvedInvocation {
     pub(crate) ui: UiState,
     pub(crate) plugin_provider: Option<String>,
-    pub(crate) show_invocation_help: bool,
+    pub(crate) help_level: HelpLevel,
 }
 
 #[derive(Debug)]
@@ -133,6 +135,9 @@ where
     }
 }
 
+/// Parses CLI arguments and runs the selected command.
+///
+/// Returns the process exit code that should be reported to the caller.
 pub fn run_from<I, T>(args: I) -> Result<i32>
 where
     I: IntoIterator<Item = T>,
@@ -164,13 +169,12 @@ where
     let scanned = scan_cli_argv(&argv)?;
     match Cli::try_parse_from(scanned.argv.iter().cloned()) {
         Ok(cli) => run(cli, scanned.invocation, sink, native_commands),
-        Err(err) => handle_clap_parse_error(&argv, &scanned.invocation, err, sink, native_commands),
+        Err(err) => handle_clap_parse_error(&argv, err, sink, native_commands),
     }
 }
 
 fn handle_clap_parse_error(
     args: &[OsString],
-    invocation: &InvocationOptions,
     err: clap::Error,
     sink: &mut dyn UiSink,
     native_commands: &NativeCommandRegistry,
@@ -178,10 +182,11 @@ fn handle_clap_parse_error(
     match err.kind() {
         clap::error::ErrorKind::DisplayHelp => {
             let help_context = help::render_settings_for_help(args);
-            let body = append_invocation_help_if_verbose(&err.to_string(), invocation);
-            let body = append_native_command_help(body, native_commands);
-            let rendered = repl_help::render_help_doc_with_layout(
-                &crate::guide::GuideDoc::from_text(&body),
+            let mut body = GuideView::from_text(&err.to_string());
+            extend_with_invocation_help(&mut body, help_context.help_level);
+            add_native_command_help(&mut body, native_commands);
+            let rendered = render_guide_payload_with_layout(
+                &body.filtered_for_help_level(help_context.help_level),
                 &help_context.settings,
                 help_context.layout,
             );
@@ -293,7 +298,11 @@ fn run(
         state.session.config_overrides = layer;
     }
     ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
-    let invocation_ui = resolve_invocation_ui(&state.runtime.ui, &invocation);
+    let invocation_ui = resolve_invocation_ui(
+        state.runtime.config.resolved(),
+        &state.runtime.ui,
+        &invocation,
+    );
     init_developer_logging(build_logging_config(
         state.runtime.config.resolved(),
         invocation_ui.ui.debug_verbosity,
@@ -646,6 +655,7 @@ fn ui_state_for_invocation(ui: &UiState, invocation: Option<&ResolvedInvocation>
 }
 
 pub(crate) fn resolve_invocation_ui(
+    config: &ResolvedConfig,
     ui: &UiState,
     invocation: &InvocationOptions,
 ) -> ResolvedInvocation {
@@ -679,7 +689,7 @@ pub(crate) fn resolve_invocation_ui(
             },
         },
         plugin_provider: invocation.plugin_provider.clone(),
-        show_invocation_help: invocation.verbose > 0,
+        help_level: help_level(config, invocation.verbose, invocation.quiet),
     }
 }
 
@@ -720,6 +730,7 @@ pub(crate) fn enrich_dispatch_error(err: PluginDispatchError) -> miette::Report 
     report_std_error_with_context(err, "plugin command failed")
 }
 
+/// Maps a reported error to the CLI exit code family used by OSP.
 pub fn classify_exit_code(err: &miette::Report) -> i32 {
     let known = KnownErrorChain::inspect(err);
     if known.clap.is_some() {
@@ -733,6 +744,9 @@ pub fn classify_exit_code(err: &miette::Report) -> i32 {
     }
 }
 
+/// Renders a user-facing error message for the requested message verbosity.
+///
+/// Higher verbosity levels include more source-chain detail and may append a hint.
 pub fn render_report_message(err: &miette::Report, verbosity: MessageLevel) -> String {
     if verbosity >= MessageLevel::Trace {
         return format!("{err:?}");
@@ -945,7 +959,7 @@ fn to_ui_verbosity(level: MessageLevel) -> UiVerbosity {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn plugin_dispatch_context_for_runtime(
     runtime: &crate::app::AppRuntime,
     clients: &AppClients,
@@ -1048,22 +1062,17 @@ fn native_catalog_entry_to_command_catalog_entry(
     }
 }
 
-fn append_native_command_help(body: String, native_commands: &NativeCommandRegistry) -> String {
+fn add_native_command_help(view: &mut GuideView, native_commands: &NativeCommandRegistry) {
     let catalog = native_commands.catalog();
     if catalog.is_empty() {
-        return body;
+        return;
     }
 
-    let mut out = body.trim_end().to_string();
-    out.push_str("\n\nNative integrations:\n");
+    let mut section = GuideSection::new("Native integrations", GuideSectionKind::Custom);
     for entry in catalog {
-        if entry.about.trim().is_empty() {
-            out.push_str(&format!("  {}\n", entry.name));
-        } else {
-            out.push_str(&format!("  {:<12} {}\n", entry.name, entry.about.trim()));
-        }
+        section = section.entry(entry.name, entry.about.trim());
     }
-    out
+    view.sections.push(section);
 }
 
 pub(crate) fn resolve_render_settings_with_hint(

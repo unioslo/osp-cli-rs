@@ -281,7 +281,7 @@ fn rebuild_repl_state_preserves_session_defaults_and_shell_context_unit() {
     state
         .session
         .config_overrides
-        .set("ui.verbosity.level", "trace");
+        .set("ui.message.verbosity", "trace");
     state.session.config_overrides.set("debug.level", 2i64);
     state.session.config_overrides.set("ui.format", "json");
     state.session.config_overrides.set("theme.name", "dracula");
@@ -826,7 +826,6 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
             assert_eq!(json.payload["status"], "error");
             assert_eq!(json.payload["command"], "missing");
         }
-        Some(ReplCommandOutput::Guide(_)) => panic!("unexpected doctor output variant"),
         Some(ReplCommandOutput::Output { .. }) => panic!("unexpected doctor output variant"),
         Some(ReplCommandOutput::Text(_)) => panic!("unexpected doctor output variant"),
         None => panic!("expected doctor output"),

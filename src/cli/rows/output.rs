@@ -1,6 +1,6 @@
 use crate::core::output_model::{
-    ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult,
-    compute_key_index as core_compute_key_index,
+    compute_key_index as core_compute_key_index, ColumnAlignment, Group, OutputItems, OutputMeta,
+    OutputResult,
 };
 use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
 use crate::core::row::Row;
@@ -39,6 +39,7 @@ pub(crate) fn plugin_data_to_output_result(
         .unwrap_or_else(|| compute_key_index(&rows));
     OutputResult {
         items: OutputItems::Rows(rows),
+        document: None,
         meta: OutputMeta {
             key_index,
             column_align: meta
@@ -114,8 +115,8 @@ mod tests {
         ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult,
     };
     use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
-    use serde_json::Value;
     use serde_json::json;
+    use serde_json::Value;
 
     #[test]
     fn plugin_meta_preserves_column_alignment_unit() {
@@ -204,6 +205,7 @@ mod tests {
                     rows: Vec::new(),
                 },
             ]),
+            document: None,
             meta: OutputMeta {
                 key_index: vec!["team".to_string(), "count".to_string(), "user".to_string()],
                 column_align: Vec::new(),

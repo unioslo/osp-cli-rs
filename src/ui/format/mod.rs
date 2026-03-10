@@ -3,11 +3,13 @@ use crate::core::output_model::{
     ColumnAlignment, Group, OutputItems, OutputResult, RenderRecommendation,
 };
 use crate::core::row::Row;
+use crate::guide::GuideView;
 
-use crate::ui::document::{Block, Document, JsonBlock, TableStyle};
+use crate::ui::document::{Block, Document, JsonBlock, TableStyle, ValueBlock};
 use crate::ui::{RenderBackend, RenderSettings, ResolvedRenderSettings};
 
 mod common;
+mod guide;
 pub mod help;
 pub mod message;
 mod mreg;
@@ -17,21 +19,27 @@ mod value;
 pub use message::{MessageContent, MessageFormatter, MessageKind, MessageOptions, MessageRules};
 
 #[cfg(test)]
+/// Builds a document from row data using the provided render settings.
 pub fn build_document(rows: &[Row], settings: &RenderSettings) -> Document {
     build_document_from_output(
         &OutputResult {
             items: OutputItems::Rows(rows.to_vec()),
+            document: None,
             meta: Default::default(),
         },
         settings,
     )
 }
 
+/// Builds a document from a structured output result.
 pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettings) -> Document {
     let resolved = settings.resolve_render_settings();
     build_document_from_output_resolved(output, settings, &resolved)
 }
 
+/// Builds a document from a structured output result using pre-resolved settings.
+///
+/// The returned document reflects the format selected by [`resolve_output_format`].
 pub fn build_document_from_output_resolved(
     output: &OutputResult,
     settings: &RenderSettings,
@@ -41,7 +49,7 @@ pub fn build_document_from_output_resolved(
     let mut next_block_id = 1u64;
     match format {
         OutputFormat::Guide => {
-            build_guide_fallback_document(output, settings, resolved, &mut next_block_id)
+            guide::build_guide_document(output, settings, resolved, &mut next_block_id)
         }
         OutputFormat::Json => Document {
             blocks: vec![Block::Json(build_json_block_from_output(output))],
@@ -72,6 +80,16 @@ pub fn build_document_from_output_resolved(
             }
         }
         OutputFormat::Value => {
+            if let Some(guide) = GuideView::try_from_output_result(output) {
+                // Value mode should remain useful for semantic help/intro
+                // payloads. Falling back to the generic value block would
+                // print nothing because those rows do not have a `value` key.
+                return Document {
+                    blocks: vec![Block::Value(ValueBlock {
+                        values: guide.to_value_lines(),
+                    })],
+                };
+            }
             let rows = materialize_rows(output);
             Document {
                 blocks: vec![Block::Value(value::build_value_block(&rows))],
@@ -82,16 +100,22 @@ pub fn build_document_from_output_resolved(
 }
 
 #[cfg(test)]
+/// Resolves the output format that would be chosen for the given rows.
 pub fn resolve_format(rows: &[Row], format: OutputFormat) -> OutputFormat {
     resolve_output_format(
         &OutputResult {
             items: OutputItems::Rows(rows.to_vec()),
+            document: None,
             meta: Default::default(),
         },
         &RenderSettings::test_plain(format),
     )
 }
 
+/// Resolves the output format for a result and render settings.
+///
+/// Explicit format settings take precedence, then metadata recommendations,
+/// then automatic inference from the output shape.
 pub fn resolve_output_format(output: &OutputResult, settings: &RenderSettings) -> OutputFormat {
     if settings.format_explicit && !matches!(settings.format, OutputFormat::Auto) {
         return settings.format;
@@ -122,46 +146,6 @@ pub fn resolve_output_format(output: &OutputResult, settings: &RenderSettings) -
         OutputFormat::Mreg
     } else {
         OutputFormat::Table
-    }
-}
-
-fn build_guide_fallback_document(
-    output: &OutputResult,
-    settings: &RenderSettings,
-    resolved: &ResolvedRenderSettings,
-    next_block_id: &mut u64,
-) -> Document {
-    let rows = materialize_rows(output);
-    if rows
-        .iter()
-        .all(|row| row.len() == 1 && row.contains_key("value"))
-    {
-        return Document {
-            blocks: vec![Block::Value(value::build_value_block(&rows))],
-        };
-    }
-
-    if matches!(output.items, OutputItems::Groups(_)) || rows.len() > 1 {
-        return build_table_document(output, TableStyle::Grid, next_block_id);
-    }
-
-    let width_hint = resolved.width.unwrap_or(100).max(24);
-    let prefer_stacked_object_lists = resolved.backend == RenderBackend::Rich;
-    Document {
-        blocks: mreg::build_mreg_blocks(
-            &rows,
-            mreg::MregBuildOptions {
-                key_order: Some(&output.meta.key_index),
-                short_list_max: settings.short_list_max,
-                medium_list_max: settings.medium_list_max,
-                width_hint,
-                indent_size: settings.indent_size.max(1),
-                prefer_stacked_object_lists,
-                stack_min_col_width: settings.mreg_stack_min_col_width.max(1),
-                stack_overflow_ratio: settings.mreg_stack_overflow_ratio.max(100),
-            },
-            next_block_id,
-        ),
     }
 }
 
@@ -421,6 +405,7 @@ mod tests {
                 aggregates: Row::new(),
                 rows: vec![row],
             }]),
+            document: None,
             meta: OutputMeta::default(),
         };
 
@@ -444,6 +429,7 @@ mod tests {
                 aggregates,
                 rows: vec![row],
             }]),
+            document: None,
             meta: OutputMeta {
                 key_index: vec!["group".to_string(), "count".to_string(), "uid".to_string()],
                 column_align: Vec::new(),
@@ -480,6 +466,7 @@ mod tests {
                 aggregates: Row::new(),
                 rows: vec![row],
             }]),
+            document: None,
             meta: OutputMeta::default(),
         };
         let document = build_document_from_output(&output, &settings(OutputFormat::Json));
@@ -499,6 +486,7 @@ mod tests {
         row.insert("count".to_string(), json!(2));
         let output = OutputResult {
             items: OutputItems::Rows(vec![row]),
+            document: None,
             meta: OutputMeta {
                 key_index: vec!["name".to_string(), "count".to_string()],
                 column_align: vec![ColumnAlignment::Left, ColumnAlignment::Right],
@@ -534,6 +522,7 @@ mod tests {
                 aggregates: Row::new(),
                 rows: vec![row],
             }]),
+            document: None,
             meta: OutputMeta {
                 key_index: vec!["group".to_string(), "uid".to_string(), "count".to_string()],
                 column_align: vec![
@@ -575,6 +564,7 @@ mod tests {
                 aggregates,
                 rows: vec![row],
             }]),
+            document: None,
             meta: OutputMeta {
                 key_index: vec![
                     "group".to_string(),
@@ -672,6 +662,7 @@ mod tests {
         };
         let output = OutputResult {
             items: OutputItems::Groups(vec![group.clone()]),
+            document: None,
             meta: OutputMeta {
                 key_index: vec!["group".to_string(), "count".to_string()],
                 ..OutputMeta::default()
@@ -685,6 +676,7 @@ mod tests {
 
         let value_output = OutputResult {
             items: OutputItems::Groups(vec![group]),
+            document: None,
             meta: OutputMeta::default(),
         };
         let value_document =
