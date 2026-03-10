@@ -132,12 +132,14 @@ fn repl_appearance_respects_color_toggle_and_overrides() {
     assert_eq!(plain.completion_background_style, None);
     assert_eq!(plain.completion_highlight_style, None);
     assert_eq!(plain.command_highlight_style, None);
+    assert_eq!(plain.history_menu_rows, 5);
 
     let mut rich_state = make_state(&[
         ("color.prompt.completion.text", "red"),
         ("color.prompt.completion.background", "blue"),
         ("color.prompt.completion.highlight", "bold green"),
         ("color.prompt.command", "yellow"),
+        ("repl.history.menu_rows", "7"),
     ]);
     rich_state.runtime.ui.render_settings.mode = crate::core::output::RenderMode::Rich;
     rich_state.runtime.ui.render_settings.color = crate::core::output::ColorMode::Always;
@@ -158,6 +160,30 @@ fn repl_appearance_respects_color_toggle_and_overrides() {
     assert_eq!(
         appearance.command_highlight_style.as_deref(),
         Some("yellow")
+    );
+    assert_eq!(appearance.history_menu_rows, 7);
+}
+
+#[test]
+fn repl_appearance_uses_black_popup_text_for_dracula_theme() {
+    let mut state = make_state(&[("theme.name", "dracula")]);
+    state.runtime.ui.render_settings.mode = crate::core::output::RenderMode::Rich;
+    state.runtime.ui.render_settings.color = crate::core::output::ColorMode::Always;
+    state.runtime.ui.render_settings.unicode = crate::core::output::UnicodeMode::Always;
+    state.runtime.ui.render_settings.runtime.stdout_is_tty = true;
+    state.runtime.ui.render_settings.runtime.locale_utf8 = Some(true);
+    state.runtime.ui.render_settings.theme_name = "dracula".to_string();
+    state.runtime.ui.render_settings.theme = Some(crate::ui::theme::resolve_theme("dracula"));
+
+    let appearance = build_repl_appearance(repl_view(&state));
+    assert_eq!(appearance.completion_text_style.as_deref(), Some("#000000"));
+    assert_eq!(
+        appearance.completion_background_style.as_deref(),
+        Some("#bd93f9")
+    );
+    assert_eq!(
+        appearance.completion_highlight_style.as_deref(),
+        Some("#ff79c6")
     );
 }
 

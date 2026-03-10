@@ -85,7 +85,10 @@ pub(crate) fn rebuild_repl_parts(
     )
     .wrap_err("failed to resolve config for REPL rebuild")?;
     let theme_catalog = theme_loader::load_theme_catalog(&config);
-    let mut render_settings = crate::cli::default_render_settings();
+    let mut render_settings = runtime.ui.render_settings.clone();
+    if !render_settings.format_explicit && config.get_string("ui.format").is_none() {
+        render_settings.format = crate::core::output::OutputFormat::Auto;
+    }
     crate::cli::apply_render_settings_from_config(&mut render_settings, &config);
     render_settings.width = Some(resolve_default_render_width(&config));
     render_settings.theme_name = resolve_known_theme_name(
@@ -106,6 +109,7 @@ pub(crate) fn rebuild_repl_parts(
 
     let context = snapshot.context.clone();
     let launch = snapshot.launch.clone();
+    let existing_preferences = clients.plugins.command_preferences_snapshot();
     let plugin_manager = PluginManager::new(launch.plugin_dirs.clone())
         .with_roots(launch.config_root.clone(), launch.cache_root.clone())
         .with_process_timeout(plugin_process_timeout(&config))
@@ -113,6 +117,7 @@ pub(crate) fn rebuild_repl_parts(
         .with_command_preferences(
             crate::plugin::state::PluginCommandPreferences::from_resolved(&config),
         );
+    plugin_manager.replace_command_preferences(existing_preferences);
     let mut next = build_app_state(crate::app::AppStateInit {
         context,
         config,

@@ -1,6 +1,8 @@
 #[cfg(unix)]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(unix)]
+use serde_json::Value;
+#[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
@@ -158,6 +160,15 @@ fn output_snapshot(output: &Arc<Mutex<String>>, max_len: usize) -> String {
     } else {
         buf[buf.len().saturating_sub(max_len)..].to_string()
     }
+}
+
+#[cfg(unix)]
+fn trace_events(output: &str) -> Vec<Value> {
+    output
+        .lines()
+        .filter_map(|line| line.find('{').map(|idx| &line[idx..]))
+        .filter_map(|json| serde_json::from_str::<Value>(json).ok())
+        .collect()
 }
 
 #[cfg(unix)]
@@ -415,6 +426,132 @@ fn repl_enter_submits_current_line_without_accepting_menu_completion() {
         !output_snapshot(&session.output, 4000).contains("History is disabled."),
         "expected Enter not to accept the first completion; output:\n{}",
         output_snapshot(&session.output, 4000),
+    );
+
+    write_bytes(&mut session, b"\x03");
+    write_bytes(&mut session, b"exit\r\r");
+    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_theme_show_menu_omits_global_flags_end_to_end() {
+    let mut session = spawn_repl(true);
+
+    write_bytes(&mut session, b"theme show ");
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\t");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\"selected_index\":0",
+            Duration::from_secs(3)
+        ),
+        "expected menu activation trace; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+
+    let output = output_snapshot(&session.output, 4000);
+    assert!(
+        output.contains("\"matches\":[\"catppuccin\",\"dracula\",\"gruvbox\",\"molokai\",\"nord\",\"plain\",\"rose-pine-moon\",\"tokyonight\"]"),
+        "expected only theme names after `theme show `; output:\n{}",
+        output,
+    );
+
+    write_bytes(&mut session, b"\x03");
+    write_bytes(&mut session, b"exit\r\r");
+    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_theme_show_tab_cycle_keeps_menu_anchor_stable_end_to_end() {
+    let mut session = spawn_repl(true);
+
+    write_bytes(&mut session, b"theme show ");
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\t");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\"selected_index\":0",
+            Duration::from_secs(3)
+        ),
+        "expected menu activation trace; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\t\t");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\"buffer_after\":\"theme show dracula\"",
+            Duration::from_secs(3)
+        ),
+        "expected third Tab to cycle to the next theme value; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+
+    let output = output_snapshot(&session.output, 8000);
+    let traces = trace_events(&output);
+    let activation_indent = traces
+        .iter()
+        .find(|event| {
+            event.get("event").and_then(Value::as_str) == Some("complete")
+                && event.get("line").and_then(Value::as_str) == Some("theme show ")
+                && event
+                    .get("matches")
+                    .and_then(Value::as_array)
+                    .map(|matches| {
+                        matches
+                            .iter()
+                            .any(|item| item.as_str() == Some("catppuccin"))
+                    })
+                    .unwrap_or(false)
+        })
+        .and_then(|event| event.get("menu_indent"))
+        .and_then(Value::as_u64)
+        .expect("activation trace should include menu_indent");
+    let dracula_cycle_indent = traces
+        .iter()
+        .find(|event| {
+            event.get("buffer_after").and_then(Value::as_str) == Some("theme show dracula")
+        })
+        .and_then(|event| event.get("menu_indent"))
+        .and_then(Value::as_u64)
+        .expect("dracula cycle trace should include menu_indent");
+    let dracula_complete_indent = traces
+        .iter()
+        .rev()
+        .find(|event| {
+            event.get("event").and_then(Value::as_str) == Some("complete")
+                && event.get("line").and_then(Value::as_str) == Some("theme show dracula")
+        })
+        .and_then(|event| event.get("menu_indent"))
+        .and_then(Value::as_u64)
+        .expect("dracula complete trace should include menu_indent");
+
+    assert_eq!(
+        dracula_cycle_indent, activation_indent,
+        "expected tab-cycling to keep the menu anchor fixed; output:\n{}",
+        output,
+    );
+    assert_eq!(
+        dracula_complete_indent, activation_indent,
+        "expected follow-up render after cycling to keep the same menu anchor; output:\n{}",
+        output,
     );
 
     write_bytes(&mut session, b"\x03");

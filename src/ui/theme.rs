@@ -4,28 +4,46 @@ use std::sync::{Arc, OnceLock};
 /// Palette entries used by the built-in terminal themes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemePalette {
+    /// Base foreground color for plain text.
     pub text: String,
+    /// Secondary or de-emphasized foreground color.
     pub muted: String,
+    /// Accent color used for keys and highlights.
     pub accent: String,
+    /// Informational message color.
     pub info: String,
+    /// Warning message color.
     pub warning: String,
+    /// Success message color.
     pub success: String,
+    /// Error message color.
     pub error: String,
+    /// Border and chrome color.
     pub border: String,
+    /// Title and heading color.
     pub title: String,
+    /// Selection/highlight color.
     pub selection: String,
+    /// Link color.
     pub link: String,
+    /// Optional primary background color.
     pub bg: Option<String>,
+    /// Optional alternate background color.
     pub bg_alt: Option<String>,
 }
 
 /// Concrete theme data shared by theme handles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeData {
+    /// Stable theme identifier used for config and lookup.
     pub id: String,
+    /// User-facing display name.
     pub name: String,
+    /// Optional parent theme identifier.
     pub base: Option<String>,
+    /// Core palette values for the theme.
     pub palette: ThemePalette,
+    /// Optional overrides for derived semantic tokens.
     pub overrides: ThemeOverrides,
 }
 
@@ -36,9 +54,13 @@ pub struct ThemeDefinition(Arc<ThemeData>);
 /// Optional theme-specific overrides for derived style tokens.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ThemeOverrides {
+    /// Override for numeric values.
     pub value_number: Option<String>,
+    /// Override for completion menu text.
     pub repl_completion_text: Option<String>,
+    /// Override for completion menu backgrounds.
     pub repl_completion_background: Option<String>,
+    /// Override for the active completion entry highlight.
     pub repl_completion_highlight: Option<String>,
 }
 
@@ -413,6 +435,14 @@ mod tests {
             theme.palette.accent
         );
         assert_eq!(theme.repl_completion_highlight_spec(), theme.palette.border);
+    }
+
+    #[test]
+    fn repl_completion_text_defaults_to_black_for_all_themes() {
+        for theme_id in ["rose-pine-moon", "dracula", "tokyonight", "catppuccin"] {
+            let theme = resolve_theme(theme_id);
+            assert_eq!(theme.repl_completion_text_spec(), "#000000");
+        }
     }
 
     #[test]
