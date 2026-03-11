@@ -81,9 +81,13 @@ pub struct TableModel {
 
 #[derive(Debug, Clone, Default)]
 pub struct ListModel {
+    /// Shaped display strings before final renderer layout.
     pub items: Vec<String>,
+    /// Leading spaces emitted when the list lowers to one line per item.
     pub indent: usize,
+    /// Whether inline markdown-style spans should become styled line parts.
     pub inline_markup: bool,
+    /// Preferred renderer layout for the list payload.
     pub layout: ValueLayout,
 }
 
@@ -101,7 +105,11 @@ impl DocumentModel {
     /// Builds a semantic document model from a parsed guide view.
     ///
     /// This preserves guide sections and entry groupings until a later lowering
-    /// step decides how they should appear in terminal output.
+    /// step decides how they should appear in terminal output. Canonical
+    /// top-level buckets (`usage`, `commands`, ...) are treated as synthetic
+    /// defaults: when ordered `sections[]` already contains a builtin section
+    /// of that kind, the ordered section wins and the synthetic default is
+    /// suppressed so author order is preserved without duplication.
     pub fn from_guide_view(view: &GuideView) -> Self {
         let mut blocks = Vec::new();
         let use_ordered_sections = view.uses_ordered_section_representation();
@@ -302,6 +310,10 @@ fn guide_entries(entries: &[GuideEntry]) -> Vec<BlockModel> {
     vec![BlockModel::KeyValue(key_value_block_from_entries(entries))]
 }
 
+// Section `data` is the semantic escape hatch used by intro/help templates.
+// Known row-shaped payloads lower into help-style entries, scalar arrays lower
+// into the generic value/grid path, and anything more complex falls back to
+// recursive value formatting instead of inventing a new section-specific shape.
 fn guide_section_data_blocks(value: &Value) -> Vec<BlockModel> {
     if let Some(entries) = guide_entries_from_value(value) {
         return guide_entries(&entries);
@@ -588,6 +600,8 @@ fn lower_section_chrome(
     ruled_section_policy: RuledSectionPolicy,
     is_last_section: bool,
 ) -> (PanelRules, Option<SectionFrameStyle>) {
+    // Shared ruled sections suppress per-panel framing and let the surrounding
+    // panel rules carry the section dividers between adjacent sections.
     if matches!(ruled_section_policy, RuledSectionPolicy::Shared) {
         match frame_style {
             SectionFrameStyle::Top => return (PanelRules::Top, None),

@@ -60,3 +60,41 @@ fn markdown_template_parses_osp_code_blocks_as_semantic_data_unit() {
         ]
     );
 }
+
+#[test]
+fn markdown_template_keeps_non_osp_json_fences_literal_unit() {
+    let parsed = parse_markdown_template("## Data\n\n```json\n[{\"name\":\"Ctrl-D\"}]\n```\n");
+
+    assert_eq!(
+        parsed,
+        vec![
+            GuideTemplateBlock::Heading("Data".to_string()),
+            GuideTemplateBlock::Paragraph("`[{\"name\":\"Ctrl-D\"}]`".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn markdown_template_keeps_invalid_osp_fences_literal_unit() {
+    let parsed = parse_markdown_template("## Data\n\n```osp\n[{name:\"Ctrl-D\"}]\n```\n");
+
+    assert_eq!(
+        parsed,
+        vec![
+            GuideTemplateBlock::Heading("Data".to_string()),
+            GuideTemplateBlock::Paragraph("`[{name:\"Ctrl-D\"}]`".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn markdown_template_keeps_invalid_osp_blocks_visible_as_literal_code_unit() {
+    let parsed = parse_markdown_template("```osp\n[{\"name\":\"Ctrl-D\"\n```\n");
+
+    assert_eq!(
+        parsed,
+        vec![GuideTemplateBlock::Paragraph(
+            "`[{\"name\":\"Ctrl-D\"`".to_string()
+        )]
+    );
+}

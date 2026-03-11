@@ -252,3 +252,80 @@ fn build_candidate_menu(appearance: &ReplAppearance, name: &str) -> OspCompletio
         .with_selected_text_style(style_with_fg_bg(text_color, highlight_color))
         .with_selected_match_text_style(style_with_fg_bg(text_color, highlight_color))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repl::engine::HistoryConfig;
+    use reedline::Menu;
+
+    fn empty_history() -> SharedHistory {
+        SharedHistory::new(
+            HistoryConfig::builder()
+                .with_enabled(false)
+                .with_max_entries(0)
+                .build(),
+        )
+        .expect("history config should build")
+    }
+
+    #[test]
+    fn launch_history_picker_skips_empty_history_unit() {
+        let result = launch_history_picker(&empty_history(), &ReplAppearance::default(), "doctor")
+            .expect("empty history should not launch skim");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn overlay_color_and_menu_helpers_cover_completion_and_history_paths_unit() {
+        let appearance = ReplAppearance::builder()
+            .with_completion_text_style(Some("white".to_string()))
+            .with_completion_background_style(Some("black".to_string()))
+            .with_completion_highlight_style(Some("cyan".to_string()))
+            .with_history_menu_rows(7)
+            .build();
+
+        let completion_menu = build_completion_menu(&appearance);
+        assert_eq!(completion_menu.name(), COMPLETION_MENU_NAME);
+        assert!(completion_menu.can_quick_complete());
+
+        let history_menu = build_history_menu(&appearance);
+        assert_eq!(history_menu.name(), HISTORY_MENU_NAME);
+        assert!(!history_menu.can_quick_complete());
+
+        let options = build_history_picker_options(&appearance, "needle");
+        assert_eq!(options.height, "8");
+        assert_eq!(options.query.as_deref(), Some("needle"));
+
+        let cases = [
+            (Color::Black, Some("0")),
+            (Color::DarkGray, Some("8")),
+            (Color::Red, Some("1")),
+            (Color::LightRed, Some("9")),
+            (Color::Green, Some("2")),
+            (Color::LightGreen, Some("10")),
+            (Color::Yellow, Some("3")),
+            (Color::LightYellow, Some("11")),
+            (Color::Blue, Some("4")),
+            (Color::LightBlue, Some("12")),
+            (Color::Purple, Some("5")),
+            (Color::Magenta, Some("5")),
+            (Color::LightPurple, Some("13")),
+            (Color::LightMagenta, Some("13")),
+            (Color::Cyan, Some("6")),
+            (Color::LightCyan, Some("14")),
+            (Color::White, Some("7")),
+            (Color::LightGray, Some("15")),
+            (Color::Fixed(141), Some("141")),
+            (Color::Rgb(1, 2, 3), Some("#010203")),
+            (Color::Default, None),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(skim_color_value(input).as_deref(), expected);
+        }
+
+        let plain_options = build_history_picker_options(&ReplAppearance::default(), "needle");
+        assert!(plain_options.color.is_none());
+    }
+}

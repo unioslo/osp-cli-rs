@@ -257,6 +257,26 @@ fn trace_events(output: &str) -> Vec<Value> {
 }
 
 #[cfg(unix)]
+fn wait_for_trace_event<F>(output: &Arc<Mutex<String>>, predicate: F, timeout: Duration) -> bool
+where
+    F: Fn(&Value) -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        {
+            let buf = output.lock().expect("output lock");
+            if trace_events(&buf).iter().any(&predicate) {
+                return true;
+            }
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
 fn write_bytes(session: &mut PtySession, bytes: &[u8]) {
     let mut writer = session.writer.lock().expect("writer lock");
     writer.write_all(bytes).expect("write to pty");
@@ -320,7 +340,6 @@ fn repl_tab_opens_menu_and_moves_selection() {
         output_snapshot(&session.output, 2000),
     );
 
-    let start = output_len(&session.output);
     write_bytes(&mut session, b"\t");
     assert!(
         wait_for_output_since(
@@ -535,17 +554,27 @@ fn repl_theme_show_menu_omits_global_flags_end_to_end() {
         output_snapshot(&session.output, 4000),
     );
 
-    let start = output_len(&session.output);
     write_bytes(&mut session, b"\t");
     assert!(
-        wait_for_output_since(
+        wait_for_trace_event(
             &session.output,
-            start,
-            "\"selected_index\":0",
-            Duration::from_secs(3)
+            |event| {
+                event.get("event").and_then(Value::as_str) == Some("complete")
+                    && event.get("line").and_then(Value::as_str) == Some("theme show ")
+                    && event
+                        .get("matches")
+                        .and_then(Value::as_array)
+                        .map(|matches| {
+                            matches
+                                .iter()
+                                .any(|item| item.as_str() == Some("catppuccin"))
+                        })
+                        .unwrap_or(false)
+            },
+            Duration::from_secs(5),
         ),
-        "expected menu activation trace; output:\n{}",
-        output_snapshot(&session.output, 4000),
+        "expected theme-name completion trace for `theme show `; output:\n{}",
+        output_snapshot(&session.output, 8000),
     );
 
     let output = output_snapshot(&session.output, 4000);
@@ -581,17 +610,27 @@ fn repl_theme_show_tab_cycle_keeps_menu_anchor_stable_end_to_end() {
         output_snapshot(&session.output, 4000),
     );
 
-    let start = output_len(&session.output);
     write_bytes(&mut session, b"\t");
     assert!(
-        wait_for_output_since(
+        wait_for_trace_event(
             &session.output,
-            start,
-            "\"selected_index\":0",
-            Duration::from_secs(3)
+            |event| {
+                event.get("event").and_then(Value::as_str) == Some("complete")
+                    && event.get("line").and_then(Value::as_str) == Some("theme show ")
+                    && event
+                        .get("matches")
+                        .and_then(Value::as_array)
+                        .map(|matches| {
+                            matches
+                                .iter()
+                                .any(|item| item.as_str() == Some("catppuccin"))
+                        })
+                        .unwrap_or(false)
+            },
+            Duration::from_secs(5),
         ),
-        "expected menu activation trace; output:\n{}",
-        output_snapshot(&session.output, 4000),
+        "expected theme-name completion trace for `theme show `; output:\n{}",
+        output_snapshot(&session.output, 8000),
     );
 
     let start = output_len(&session.output);

@@ -27,6 +27,9 @@ const DEFAULT_MINIMAL_INTRO_TEMPLATE: &str =
     "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
 const DEFAULT_COMPACT_INTRO_TEMPLATE: &str =
     "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
+// The full intro is authored as markdown plus semantic `osp` blocks. Prose
+// stays as paragraphs, but structured sections like keybindings and pipes flow
+// through the same data/document path as help and other guide output.
 const DEFAULT_FULL_INTRO_TEMPLATE: &str = r#"## OSP
 Welcome `{{display_name}}`!
 
@@ -127,6 +130,10 @@ fn intro_template(config: &crate::config::ResolvedConfig, style: ReplIntroStyle)
     }
 }
 
+// Intro templates are authored like lightweight markdown, but the payload they
+// produce must stay semantic. Headings create explicit sections, `osp` fences
+// attach semantic data to the current section, and `{{ help }}` expands into
+// canonical help sections in template order instead of being re-derived later.
 fn parse_intro_template_payload(template: &str, help: &GuideView) -> GuideView {
     let trimmed = template.trim();
     if trimmed.is_empty() {
@@ -163,6 +170,9 @@ fn parse_intro_template_payload(template: &str, help: &GuideView) -> GuideView {
                 }
             }
             GuideTemplateBlock::Data(data) => {
+                // Fenced `osp` blocks attach semantic data to the current
+                // section so intro authoring can opt into list/key-value/grid
+                // rendering without hardcoding presentation cases here.
                 let section = current_section
                     .get_or_insert_with(|| GuideSection::new("", GuideSectionKind::Custom));
                 attach_intro_data_block(section, data);
@@ -192,10 +202,16 @@ fn intro_section_has_content(section: &GuideSection) -> bool {
 fn attach_intro_data_block(section: &mut GuideSection, data: Value) {
     section.data = Some(match section.data.take() {
         None => data,
+        // Keep repeated data fences inside the authored section instead of
+        // inventing sibling sections during parsing.
         Some(existing) => Value::Array(vec![existing, data]),
     });
 }
 
+// Help/overview includes are expanded at parse time, in authored order. This
+// is the boundary where `{{ help }}` / `{{ overview }}` stop being placeholders
+// and become concrete builtin sections followed by any surrounding custom
+// sections, so later quick/filter/render code does not reorder them.
 fn append_template_include_payload(payload: &mut GuideView, included: &GuideView) {
     payload.preamble.extend(included.preamble.iter().cloned());
 

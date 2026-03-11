@@ -34,6 +34,7 @@ pub(crate) use super::history_store::expand_history;
 pub use super::history_store::{
     HistoryConfig, HistoryConfigBuilder, HistoryEntry, HistoryShellContext, SharedHistory,
 };
+use crate::completion::CompletionTree;
 use anyhow::Result;
 
 mod adapter;
@@ -77,6 +78,15 @@ const COMPLETION_MENU_NAME: &str = "completion_menu";
 const HISTORY_MENU_NAME: &str = "history_menu";
 const HOST_COMMAND_HISTORY_PICKER: &str = "\u{0}osp-repl-history-picker";
 
+struct ReplRunContext {
+    prompt: OspPrompt,
+    completion_words: Vec<String>,
+    completion_tree: Option<CompletionTree>,
+    appearance: ReplAppearance,
+    line_projector: Option<LineProjector>,
+    history_store: SharedHistory,
+}
+
 /// Runs the interactive REPL and delegates submitted lines to `execute`.
 pub fn run_repl<F>(config: ReplRunConfig, mut execute: F) -> Result<ReplRunResult>
 where
@@ -98,8 +108,50 @@ where
         execute: &mut execute,
     };
     let prompt = OspPrompt::new(prompt.left, prompt.indicator, prompt_right);
+    let basic_reason = basic_input_reason(input_mode);
 
-    if let Some(reason) = basic_input_reason(input_mode) {
+    run_repl_with_reason(
+        ReplRunContext {
+            prompt,
+            completion_words,
+            completion_tree,
+            appearance,
+            line_projector,
+            history_store: history_store.clone(),
+        },
+        basic_reason,
+        &mut submission,
+        run_repl_basic,
+        run_repl_interactive,
+    )
+}
+
+fn run_repl_with_reason<F, B, I>(
+    context: ReplRunContext,
+    basic_reason: Option<BasicInputReason>,
+    submission: &mut SubmissionContext<'_, F>,
+    mut run_basic_fn: B,
+    mut run_interactive_fn: I,
+) -> Result<ReplRunResult>
+where
+    F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
+    B: FnMut(&OspPrompt, &mut SubmissionContext<'_, F>) -> Result<()>,
+    I: FnMut(
+        InteractiveLoopConfig<'_>,
+        SharedHistory,
+        &mut SubmissionContext<'_, F>,
+    ) -> Result<ReplRunResult>,
+{
+    let ReplRunContext {
+        prompt,
+        completion_words,
+        completion_tree,
+        appearance,
+        line_projector,
+        history_store,
+    } = context;
+
+    if let Some(reason) = basic_reason {
         match reason {
             BasicInputReason::NotATerminal => {
                 eprintln!("Warning: Input is not a terminal (fd=0).");
@@ -111,11 +163,11 @@ where
             }
             BasicInputReason::Explicit => {}
         }
-        run_repl_basic(&prompt, &mut submission)?;
+        run_basic_fn(&prompt, submission)?;
         return Ok(ReplRunResult::Exit(0));
     }
 
-    run_repl_interactive(
+    run_interactive_fn(
         InteractiveLoopConfig {
             prompt: &prompt,
             completion_words,
@@ -123,8 +175,8 @@ where
             appearance,
             line_projector,
         },
-        history_store.clone(),
-        &mut submission,
+        history_store,
+        submission,
     )
 }
 

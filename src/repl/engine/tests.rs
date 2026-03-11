@@ -14,12 +14,13 @@ use super::{
     AutoCompleteEmacs, BasicInputReason, CompletionDebugOptions, DebugStep, HISTORY_MENU_NAME,
     HistoryConfig, HistoryShellContext, OspPrompt, PromptRightRenderer, ReplAppearance,
     ReplCompleter, ReplHistoryCompleter, ReplInputMode, ReplLineResult, ReplReloadKind,
-    SharedHistory, SubmissionContext, SubmissionResult, basic_input_reason, build_history_menu,
-    build_history_picker_options, build_repl_highlighter, color_from_style_spec,
-    contains_cursor_position_report, debug_completion, debug_completion_steps, debug_history_menu,
-    debug_history_menu_steps, default_pipe_verbs, expand_history, expand_home,
-    history_picker_items, is_cursor_position_error, parse_cursor_position_report, path_suggestions,
-    process_submission, split_path_stub, trace_completion, trace_completion_enabled,
+    ReplRunResult, SharedHistory, SubmissionContext, SubmissionResult, basic_input_reason,
+    build_history_menu, build_history_picker_options, build_repl_highlighter,
+    color_from_style_spec, contains_cursor_position_report, debug_completion,
+    debug_completion_steps, debug_history_menu, debug_history_menu_steps, default_pipe_verbs,
+    expand_history, expand_home, history_picker_items, is_cursor_position_error,
+    parse_cursor_position_report, path_suggestions, process_submission, split_path_stub,
+    trace_completion, trace_completion_enabled,
 };
 use crate::core::shell_words::QuoteStyle;
 use crate::repl::LineProjection;
@@ -452,7 +453,7 @@ fn process_submission_handles_restart_and_error_paths_unit() {
     ));
 
     let mut failing_execute = |_line: &str, _: &SharedHistory| -> anyhow::Result<ReplLineResult> {
-        Err(anyhow::anyhow!("boom"))
+        Err(anyhow::anyhow!("submit failed"))
     };
     let mut failing_submission = SubmissionContext {
         history_store: &history,
@@ -639,6 +640,105 @@ fn explicit_basic_input_mode_short_circuits_unit() {
         basic_input_reason(ReplInputMode::Basic),
         Some(BasicInputReason::Explicit)
     );
+}
+
+#[test]
+fn run_repl_with_reason_routes_basic_reasons_to_basic_handler_unit() {
+    for reason in [
+        BasicInputReason::Explicit,
+        BasicInputReason::NotATerminal,
+        BasicInputReason::CursorProbeUnsupported,
+    ] {
+        let history =
+            SharedHistory::new(history_config().build()).expect("history config should build");
+        let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), None);
+        let mut execute =
+            |_line: &str, _history: &SharedHistory| Ok(ReplLineResult::Continue(String::new()));
+        let mut submission = SubmissionContext {
+            history_store: &history,
+            execute: &mut execute,
+        };
+        let mut basic_calls = 0usize;
+        let mut interactive_calls = 0usize;
+
+        let result = super::run_repl_with_reason(
+            super::ReplRunContext {
+                prompt,
+                completion_words: vec!["help".to_string()],
+                completion_tree: Some(completion_tree_with_config_show()),
+                appearance: test_appearance(),
+                line_projector: None,
+                history_store: history.clone(),
+            },
+            Some(reason),
+            &mut submission,
+            |prompt, _submission| {
+                basic_calls += 1;
+                assert_eq!(prompt.left(), "left");
+                Ok(())
+            },
+            |_config, _history, _submission| {
+                interactive_calls += 1;
+                Ok(ReplRunResult::Exit(9))
+            },
+        )
+        .expect("basic path should succeed");
+
+        assert_eq!(result, ReplRunResult::Exit(0));
+        assert_eq!(basic_calls, 1);
+        assert_eq!(interactive_calls, 0);
+    }
+}
+
+#[test]
+fn run_repl_with_reason_routes_none_to_interactive_handler_unit() {
+    let history =
+        SharedHistory::new(history_config().build()).expect("history config should build");
+    let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), None);
+    let tree = completion_tree_with_config_show();
+    let mut execute =
+        |_line: &str, _history: &SharedHistory| Ok(ReplLineResult::Continue(String::new()));
+    let mut submission = SubmissionContext {
+        history_store: &history,
+        execute: &mut execute,
+    };
+    let mut basic_calls = 0usize;
+    let mut interactive_calls = 0usize;
+
+    let result = super::run_repl_with_reason(
+        super::ReplRunContext {
+            prompt,
+            completion_words: vec!["help".to_string(), "exit".to_string()],
+            completion_tree: Some(tree),
+            appearance: test_appearance(),
+            line_projector: None,
+            history_store: history.clone(),
+        },
+        None,
+        &mut submission,
+        |_prompt, _submission| {
+            basic_calls += 1;
+            Ok(())
+        },
+        |config, interactive_history, _submission| {
+            interactive_calls += 1;
+            assert_eq!(config.prompt.left(), "left");
+            assert_eq!(config.completion_words, vec!["help", "exit"]);
+            assert!(config.completion_tree.is_some());
+            assert_eq!(config.appearance.history_menu_rows, 5);
+            assert_eq!(interactive_history.enabled(), history.enabled());
+            assert_eq!(
+                interactive_history.recent_commands(),
+                history.recent_commands()
+            );
+            Ok(ReplRunResult::Exit(7))
+        },
+    )
+    .expect("interactive path should succeed");
+
+    assert_eq!(result, ReplRunResult::Exit(7));
+    assert_eq!(basic_calls, 0);
+    assert_eq!(interactive_calls, 1);
 }
 
 #[test]

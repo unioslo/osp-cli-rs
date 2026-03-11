@@ -836,6 +836,50 @@ fn repl_intro_payload_help_placeholder_merges_overview_entries_unit() {
 }
 
 #[test]
+fn repl_intro_payload_overview_placeholder_preserves_authored_order_and_surrounding_copy_unit() {
+    let state = make_state(&[
+        ("ui.presentation", "expressive"),
+        (
+            "repl.intro_template.full",
+            "Before overview\n## Summary\n{{ overview }}\n## Footer\nAfter overview",
+        ),
+    ]);
+    let surface = ReplSurface {
+        root_words: intro_commands(&["help", "config", "theme"]),
+        intro_commands: intro_commands(&["help", "config", "theme"]),
+        specs: Vec::new(),
+        aliases: Vec::new(),
+        overview_entries: vec![
+            ReplOverviewEntry {
+                name: "config".to_string(),
+                summary: "Show and change config".to_string(),
+            },
+            ReplOverviewEntry {
+                name: "theme".to_string(),
+                summary: "List and use themes".to_string(),
+            },
+        ],
+    };
+
+    let payload = build_repl_intro_payload(repl_view(&state), &surface, None);
+
+    assert_eq!(payload.preamble, vec!["Before overview"]);
+    assert_eq!(payload.sections.len(), 3);
+    assert_eq!(payload.sections[0].title, "Usage");
+    assert_eq!(payload.sections[1].title, "Commands");
+    assert_eq!(
+        payload.sections[1]
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["config", "theme"]
+    );
+    assert_eq!(payload.sections[2].title, "Footer");
+    assert_eq!(payload.sections[2].paragraphs, vec!["  After overview"]);
+}
+
+#[test]
 fn repl_prompt_renders_custom_template_with_prompt_style() {
     let mut state = make_state(&[
         ("repl.prompt", "{user}@{domain} {indicator} {profile}> "),

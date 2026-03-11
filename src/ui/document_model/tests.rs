@@ -143,7 +143,15 @@ fn guide_view_section_data_lowers_entry_arrays_and_scalar_lists_unit() {
         panic!("expected pipes section");
     };
     assert_eq!(pipes.title.as_deref(), Some("Pipes"));
-    assert!(matches!(pipes.blocks[0], BlockModel::List(_)));
+    let BlockModel::List(list) = &pipes.blocks[0] else {
+        panic!("expected scalar section data to lower to a list");
+    };
+    assert_eq!(list.items, vec!["F", "P", "S"]);
+    assert!(list.inline_markup);
+    assert!(matches!(
+        list.layout,
+        crate::ui::document::ValueLayout::AutoGrid
+    ));
 }
 
 #[test]
@@ -164,6 +172,58 @@ fn value_arrays_lower_to_tables_lists_and_blank_separated_blocks_unit() {
     assert!(matches!(mixed_model.blocks[0], BlockModel::KeyValue(_)));
     assert!(matches!(mixed_model.blocks[1], BlockModel::Blank));
     assert!(matches!(mixed_model.blocks[2], BlockModel::Paragraph(_)));
+}
+
+#[test]
+fn from_value_classifies_root_shapes_and_respects_preferred_key_order_unit() {
+    let preferred = vec!["uid".to_string(), "city".to_string()];
+    let object_model = DocumentModel::from_value(
+        &json!({"mail": "a@uio.no", "city": "Oslo", "uid": "alice"}),
+        Some(&preferred),
+    );
+    let BlockModel::KeyValue(key_values) = &object_model.blocks[0] else {
+        panic!("expected scalar object to lower to key/value rows");
+    };
+    assert_eq!(
+        key_values
+            .rows
+            .iter()
+            .map(|row| row.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["uid", "city", "mail"]
+    );
+
+    let list_model = DocumentModel::from_value(&json!(["alice", "bob"]), None);
+    assert!(matches!(
+        list_model.blocks.as_slice(),
+        [BlockModel::List(_)]
+    ));
+
+    let table_model = DocumentModel::from_value(
+        &json!([
+            {"uid": "alice", "city": "Oslo"},
+            {"uid": "bob", "city": "Bergen"}
+        ]),
+        None,
+    );
+    assert!(matches!(
+        table_model.blocks.as_slice(),
+        [BlockModel::Table(_)]
+    ));
+
+    let mixed_model = DocumentModel::from_value(
+        &json!([
+            {"uid": "alice"},
+            ["nested", "array"],
+            7
+        ]),
+        None,
+    );
+    assert!(matches!(mixed_model.blocks[0], BlockModel::KeyValue(_)));
+    assert!(matches!(mixed_model.blocks[1], BlockModel::Blank));
+    assert!(matches!(mixed_model.blocks[2], BlockModel::List(_)));
+    assert!(matches!(mixed_model.blocks[3], BlockModel::Blank));
+    assert!(matches!(mixed_model.blocks[4], BlockModel::Paragraph(_)));
 }
 
 #[test]

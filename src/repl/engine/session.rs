@@ -246,3 +246,175 @@ fn handle_submission_result(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repl::engine::HistoryConfig;
+    use reedline::{KeyCode, KeyModifiers, ReedlineEvent};
+    use std::sync::{Arc, Mutex};
+
+    fn disabled_history() -> SharedHistory {
+        SharedHistory::new(
+            HistoryConfig::builder()
+                .with_enabled(false)
+                .with_max_entries(0)
+                .build(),
+        )
+        .expect("history config should build")
+    }
+
+    fn test_appearance() -> ReplAppearance {
+        ReplAppearance::builder()
+            .with_completion_text_style(Some("white".to_string()))
+            .with_completion_background_style(Some("black".to_string()))
+            .with_completion_highlight_style(Some("cyan".to_string()))
+            .with_history_menu_rows(5)
+            .build()
+    }
+
+    #[test]
+    fn repl_keybindings_wire_completion_and_history_shortcuts_unit() {
+        let keybindings = build_repl_keybindings();
+
+        assert!(matches!(
+            keybindings.find_binding(KeyModifiers::NONE, KeyCode::Enter),
+            Some(ReedlineEvent::Multiple(_))
+        ));
+        assert!(matches!(
+            keybindings.find_binding(KeyModifiers::NONE, KeyCode::Tab),
+            Some(ReedlineEvent::UntilFound(_))
+        ));
+        assert!(matches!(
+            keybindings.find_binding(KeyModifiers::SHIFT, KeyCode::BackTab),
+            Some(ReedlineEvent::UntilFound(_))
+        ));
+        assert!(matches!(
+            keybindings.find_binding(KeyModifiers::CONTROL, KeyCode::Char(' ')),
+            Some(ReedlineEvent::Menu(name)) if name == COMPLETION_MENU_NAME
+        ));
+        assert!(matches!(
+            keybindings.find_binding(KeyModifiers::CONTROL, KeyCode::Char('r')),
+            Some(ReedlineEvent::ExecuteHostCommand(name)) if name == HOST_COMMAND_HISTORY_PICKER
+        ));
+    }
+
+    #[test]
+    fn handle_submission_result_covers_editor_update_and_terminal_outcomes_unit() {
+        let mut editor = Reedline::create();
+
+        assert!(
+            handle_submission_result(SubmissionResult::Noop, &mut editor)
+                .expect("noop should succeed")
+                .is_none()
+        );
+        assert!(
+            handle_submission_result(SubmissionResult::Print("printed".to_string()), &mut editor)
+                .expect("print should succeed")
+                .is_none()
+        );
+
+        assert!(
+            handle_submission_result(
+                SubmissionResult::ReplaceInput("config show".to_string()),
+                &mut editor,
+            )
+            .expect("replace should succeed")
+            .is_none()
+        );
+        assert_eq!(editor.current_buffer_contents(), "config show");
+
+        assert!(matches!(
+            handle_submission_result(SubmissionResult::Exit(7), &mut editor)
+                .expect("exit should succeed"),
+            Some(ReplRunResult::Exit(7))
+        ));
+        assert!(matches!(
+            handle_submission_result(
+                SubmissionResult::Restart {
+                    output: "reload".to_string(),
+                    reload: ReplReloadKind::Default,
+                },
+                &mut editor,
+            )
+            .expect("restart should succeed"),
+            Some(ReplRunResult::Restart { output, reload: ReplReloadKind::Default })
+                if output == "reload"
+        ));
+    }
+
+    #[test]
+    fn interactive_signal_paths_cover_host_picker_submit_and_ctrl_events_unit() {
+        let history = disabled_history();
+        let appearance = test_appearance();
+        let mut editor = Reedline::create();
+        editor.run_edit_commands(&[EditCommand::InsertString("typed".to_string())]);
+
+        let executed = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&executed);
+        let mut execute = move |line: &str, _: &SharedHistory| {
+            seen.lock()
+                .expect("executed command log should not be poisoned")
+                .push(line.to_string());
+            Ok(ReplLineResult::Continue(String::new()))
+        };
+        let mut submission = SubmissionContext {
+            history_store: &history,
+            execute: &mut execute,
+        };
+
+        assert!(
+            handle_interactive_signal(
+                Signal::Success(HOST_COMMAND_HISTORY_PICKER.to_string()),
+                &mut editor,
+                &history,
+                &appearance,
+                &mut submission,
+            )
+            .expect("host picker should succeed")
+            .is_none()
+        );
+        assert_eq!(editor.current_buffer_contents(), "typed");
+
+        assert!(
+            handle_interactive_signal(
+                Signal::Success("help".to_string()),
+                &mut editor,
+                &history,
+                &appearance,
+                &mut submission,
+            )
+            .expect("submission should succeed")
+            .is_none()
+        );
+        assert_eq!(
+            *executed
+                .lock()
+                .expect("executed command log should not be poisoned"),
+            vec!["help".to_string()]
+        );
+
+        assert!(matches!(
+            handle_interactive_signal(
+                Signal::CtrlD,
+                &mut editor,
+                &history,
+                &appearance,
+                &mut submission,
+            )
+            .expect("ctrl-d should succeed"),
+            Some(ReplRunResult::Exit(0))
+        ));
+        assert!(
+            handle_interactive_signal(
+                Signal::CtrlC,
+                &mut editor,
+                &history,
+                &appearance,
+                &mut submission,
+            )
+            .expect("ctrl-c should succeed")
+            .is_none()
+        );
+    }
+}

@@ -237,6 +237,14 @@ fn apply_row_with_mode(row: Row, spec: &CompiledQuickSpec, mode: MatchMode) -> V
         return Vec::new();
     }
 
+    // Quick has two modes:
+    // - multi-row: selection-oriented. Once a row matched, keep the row shape
+    //   unless the quick spec is a projection (`K`, `V`, explicit path scope).
+    // - single-row: shaping-oriented. Narrow the row down to matched branches
+    //   so bare `| token` acts like a coarse selector instead of a no-op echo.
+    // Negated and projection quick can still rewrite the surviving row(s), but
+    // plain positive quick should only decide between "keep whole row" and
+    // "return narrowed row".
     if matches!(mode, MatchMode::Multi) && !result.is_projection {
         return vec![row];
     }
@@ -464,6 +472,12 @@ fn restore_row_envelope(flat: &Row, narrowed: Row, structural: bool) -> Row {
         return coalesce_flat_row(&narrowed);
     }
 
+    // Bare quick is allowed to preserve container shape around narrowed
+    // matches, but only via the generic envelope helper:
+    // - objects stay narrowed to matched fields
+    // - arrays keep original matching elements
+    // - parent containers may survive so the result still has usable shape
+    // - unrelated siblings must not be reintroduced here
     let original = Value::Object(coalesce_flat_row(flat));
     let narrowed = Value::Object(coalesce_flat_row(&narrowed));
     match json::preserve_envelope_fields(original, narrowed) {

@@ -1,3 +1,17 @@
+//! Restricted markdown template parsing for semantic guide and intro authoring.
+//!
+//! The template surface is intentionally small:
+//! - headings and paragraphs for prose
+//! - `{{ help }}` / `{{ overview }}` placeholders for semantic includes
+//! - fenced `osp` blocks for embedded JSON data that should flow through the
+//!   normal document/data renderer instead of rendering as literal code
+//!
+//! Markdown list items are still treated as prose paragraphs here; they do not
+//! become semantic lists. `osp` fences are the explicit data authoring path.
+//!
+//! Ordinary code fences remain literal paragraph/code content. Invalid `osp`
+//! fences also fall back to literal content so author mistakes stay visible.
+
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use serde_json::Value;
 
@@ -5,6 +19,9 @@ use serde_json::Value;
 pub(crate) enum GuideTemplateBlock {
     Heading(String),
     Paragraph(String),
+    // `osp` fences are authoring syntax for semantic JSON payloads. They are
+    // parsed here so later guide/intro code can lower the data through the
+    // normal document pipeline instead of treating the fence as literal code.
     Data(Value),
     Include(GuideTemplateInclude),
 }
@@ -15,6 +32,14 @@ pub(crate) enum GuideTemplateInclude {
     Overview,
 }
 
+/// Parses markdown-like template authoring into semantic guide blocks.
+///
+/// This stays intentionally small: headings and paragraphs are preserved as
+/// author text, `{{ help }}` / `{{ overview }}` become semantic includes, and
+/// fenced `osp` blocks are decoded as JSON data. Non-`osp` code blocks fall
+/// back to literal paragraph lines so ordinary code fences still render as
+/// prose/code content instead of disappearing. Markdown list items also stay as
+/// paragraph text here; only `osp` fences author semantic list/table data.
 pub(crate) fn parse_markdown_template(template: &str) -> Vec<GuideTemplateBlock> {
     let parser = Parser::new_ext(template, Options::all());
     let mut out = Vec::new();
@@ -109,6 +134,8 @@ fn flush_active_block(out: &mut Vec<GuideTemplateBlock>, active: Option<ActiveBl
         ActiveBlock::Paragraph(text) => push_text_block(out, &text, false),
         ActiveBlock::Item(text) => push_text_block(out, &text, true),
         ActiveBlock::CodeBlock { language, text } => {
+            // `osp` fences are semantic data blocks. Invalid JSON falls back to
+            // literal code-line paragraphs so broken authoring is still visible.
             if language.as_deref() == Some("osp")
                 && let Ok(value) = serde_json::from_str::<Value>(&text)
             {
@@ -137,6 +164,9 @@ fn push_text_block(out: &mut Vec<GuideTemplateBlock>, text: &str, item: bool) {
         return;
     }
 
+    // Markdown items remain author prose here. They are prefixed so the later
+    // guide renderer preserves the authored list look, but they do not become
+    // semantic lists the way `osp` data blocks do.
     let text = if item {
         format!("- {trimmed}")
     } else {

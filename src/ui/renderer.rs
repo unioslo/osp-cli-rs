@@ -167,6 +167,11 @@ impl<'a> DocumentRenderer<'a> {
                 first = false;
 
                 let mut rendered = if block.inline_markup && visible_cell == &visible[value_index] {
+                    // Preserve inline span styling only when the arranged grid
+                    // cell text still matches the original visible value.
+                    // Once layout truncates or rewrites the cell, fall back to
+                    // uniform value styling so we do not color the wrong
+                    // fragments inside a shortened grid cell.
                     self.render_inline_value(&block.values[value_index])
                 } else {
                     self.style_token(visible_cell, StyleToken::Value)
