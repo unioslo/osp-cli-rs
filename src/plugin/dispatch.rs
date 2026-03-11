@@ -1,3 +1,23 @@
+//! Plugin process dispatch and validation boundary.
+//!
+//! This module exists so the rest of the app can treat plugin commands as
+//! structured responses instead of hand-managing child processes, timeouts, and
+//! payload validation everywhere.
+//!
+//! High-level flow:
+//!
+//! - resolve the provider that should handle a command
+//! - execute it with the correct environment and timeout policy
+//! - capture stdout/stderr and exit status
+//! - validate the returned JSON payload before handing it back to the host
+//!
+//! Contract:
+//!
+//! - subprocess spawning and timeout policy live here
+//! - higher layers should consume validated plugin results instead of shelling
+//!   out directly
+//! - plugin DTO validation should stay aligned with [`crate::core::plugin`]
+
 use super::manager::{
     DiscoveredPlugin, PluginDispatchContext, PluginDispatchError, PluginManager, RawPluginOutput,
 };

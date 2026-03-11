@@ -223,3 +223,6 @@ pub(crate) fn apply_value_with_plan(value: Value, plan: &SortPlan) -> Result<Val
         scalar => Ok(scalar),
     }
 }
+
+#[cfg(test)]
+mod tests;

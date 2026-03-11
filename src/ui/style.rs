@@ -4,7 +4,10 @@ use nu_ansi_term::{Color, Style};
 use crate::ui::theme;
 use crate::ui::theme::ThemeDefinition;
 
-/// Optional per-token style overrides layered on top of a theme.
+/// Per-token style overrides layered on top of theme-derived defaults.
+///
+/// `None` means "inherit the theme result for this token" rather than "disable
+/// styling entirely".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyleOverrides {
     /// Override for plain text fragments.
@@ -161,7 +164,7 @@ pub fn apply_style_spec(text: &str, spec: &str, color: bool) -> String {
     format!("{prefix}{text}{}", style.suffix())
 }
 
-/// Returns whether a style specification can be parsed by the renderer.
+/// Validates that a style specification uses syntax the renderer understands.
 pub fn is_valid_style_spec(value: &str) -> bool {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -313,40 +316,38 @@ mod tests {
     };
 
     #[test]
-    fn plain_theme_disables_styling_even_with_color_enabled() {
-        let out = apply_style("hello", StyleToken::MessageInfo, true, "plain");
-        assert_eq!(out, "hello");
-    }
+    fn theme_defaults_and_color_toggle_cover_plain_nord_and_dracula_unit() {
+        assert_eq!(
+            apply_style("hello", StyleToken::MessageInfo, true, "plain"),
+            "hello"
+        );
 
-    #[test]
-    fn dracula_error_uses_bold_truecolor_escape() {
-        let out = apply_style("oops", StyleToken::MessageError, true, "dracula");
-        assert!(out.starts_with("\x1b[1;38;2;255;85;85m"));
-        assert!(out.ends_with("\x1b[0m"));
-    }
+        let dracula_error = apply_style("oops", StyleToken::MessageError, true, "dracula");
+        assert!(dracula_error.starts_with("\x1b[1;38;2;255;85;85m"));
+        assert!(dracula_error.ends_with("\x1b[0m"));
 
-    #[test]
-    fn nord_and_dracula_produce_different_info_colors() {
         let nord = apply_style("info", StyleToken::MessageInfo, true, "nord");
         let dracula = apply_style("info", StyleToken::MessageInfo, true, "dracula");
         assert_ne!(nord, dracula);
+
+        let number = apply_style("42", StyleToken::Number, true, "dracula");
+        assert!(number.starts_with("\x1b[38;2;255;121;198m"));
+
+        assert_eq!(
+            apply_style("warn", StyleToken::MessageWarning, false, "nord"),
+            "warn"
+        );
+
+        let theme = theme::resolve_theme("dracula");
+        let prompt = apply_style_with_theme("osp>", StyleToken::PromptText, true, &theme);
+        let trace = apply_style_with_theme("trace", StyleToken::MessageTrace, true, &theme);
+        assert_ne!(prompt, "osp>");
+        assert_ne!(trace, "trace");
     }
 
     #[test]
-    fn dracula_number_uses_theme_override_color() {
-        let out = apply_style("42", StyleToken::Number, true, "dracula");
-        assert!(out.starts_with("\x1b[38;2;255;121;198m"));
-    }
-
-    #[test]
-    fn color_toggle_off_returns_plain_text() {
-        let out = apply_style("warn", StyleToken::MessageWarning, false, "nord");
-        assert_eq!(out, "warn");
-    }
-
-    #[test]
-    fn explicit_override_takes_precedence_over_theme_token() {
-        let out = apply_style_with_overrides(
+    fn overrides_propagate_from_generic_specific_and_panel_tokens_unit() {
+        let explicit_header = apply_style_with_overrides(
             "head",
             StyleToken::TableHeader,
             true,
@@ -356,72 +357,58 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(out.starts_with("\x1b[38;2;255;0;0m"));
-    }
+        assert!(explicit_header.starts_with("\x1b[38;2;255;0;0m"));
 
-    #[test]
-    fn generic_text_override_reaches_value_and_code_tokens_unit() {
-        let overrides = StyleOverrides {
+        let text_overrides = StyleOverrides {
             text: Some("#112233".to_string()),
             ..Default::default()
         };
         let value =
-            apply_style_with_overrides("hello", StyleToken::Value, true, "nord", &overrides);
-        let code =
-            apply_style_with_overrides("let x = 1;", StyleToken::Code, true, "nord", &overrides);
-
+            apply_style_with_overrides("hello", StyleToken::Value, true, "nord", &text_overrides);
+        let code = apply_style_with_overrides(
+            "let x = 1;",
+            StyleToken::Code,
+            true,
+            "nord",
+            &text_overrides,
+        );
         assert!(value.starts_with("\x1b[38;2;17;34;51m"));
         assert!(code.starts_with("\x1b[38;2;17;34;51m"));
-    }
 
-    #[test]
-    fn generic_key_override_reaches_key_like_tokens_unit() {
-        let overrides = StyleOverrides {
+        let key_overrides = StyleOverrides {
             key: Some("#abcdef".to_string()),
             ..Default::default()
         };
-        let table =
-            apply_style_with_overrides("host", StyleToken::TableHeader, true, "nord", &overrides);
-        let json =
-            apply_style_with_overrides("\"uid\"", StyleToken::JsonKey, true, "nord", &overrides);
-
+        let table = apply_style_with_overrides(
+            "host",
+            StyleToken::TableHeader,
+            true,
+            "nord",
+            &key_overrides,
+        );
+        let json = apply_style_with_overrides(
+            "\"uid\"",
+            StyleToken::JsonKey,
+            true,
+            "nord",
+            &key_overrides,
+        );
         assert!(table.starts_with("\x1b[38;2;171;205;239m"));
         assert!(json.starts_with("\x1b[38;2;171;205;239m"));
-    }
 
-    #[test]
-    fn message_override_reaches_message_tokens_unit() {
-        let overrides = StyleOverrides {
-            message_warning: Some("#ffaa00".to_string()),
-            ..Default::default()
-        };
-        let out = apply_style_with_overrides(
+        let warning = apply_style_with_overrides(
             "careful",
             StyleToken::MessageWarning,
             true,
             "nord",
-            &overrides,
+            &StyleOverrides {
+                message_warning: Some("#ffaa00".to_string()),
+                ..Default::default()
+            },
         );
-        assert!(out.starts_with("\x1b[38;2;255;170;0m"));
-    }
+        assert!(warning.starts_with("\x1b[38;2;255;170;0m"));
 
-    #[test]
-    fn none_token_and_invalid_specs_fall_back_to_plain_text_unit() {
-        assert_eq!(
-            apply_style("plain", StyleToken::None, true, "nord"),
-            "plain"
-        );
-        assert_eq!(apply_style_spec("plain", "mystery-token", true), "plain");
-        assert_eq!(
-            apply_style_spec("plain", "bold #zzzzzz", true),
-            "\x1b[1mplain\x1b[0m"
-        );
-    }
-
-    #[test]
-    fn theme_and_override_helpers_cover_prompt_panel_and_ip_tokens_unit() {
         let theme = theme::resolve_theme("nord");
-
         let prompt = apply_style_with_theme("osp", StyleToken::PromptCommand, true, &theme);
         let ipv6 = apply_style_with_theme("::1", StyleToken::Ipv6, true, &theme);
         assert_ne!(prompt, "osp");
@@ -483,12 +470,15 @@ mod tests {
     }
 
     #[test]
-    fn prompt_text_and_trace_tokens_cover_theme_defaults_unit() {
-        let theme = theme::resolve_theme("dracula");
-        let prompt = apply_style_with_theme("osp>", StyleToken::PromptText, true, &theme);
-        let trace = apply_style_with_theme("trace", StyleToken::MessageTrace, true, &theme);
-
-        assert_ne!(prompt, "osp>");
-        assert_ne!(trace, "trace");
+    fn none_token_and_invalid_specs_fall_back_safely_unit() {
+        assert_eq!(
+            apply_style("plain", StyleToken::None, true, "nord"),
+            "plain"
+        );
+        assert_eq!(apply_style_spec("plain", "mystery-token", true), "plain");
+        assert_eq!(
+            apply_style_spec("plain", "bold #zzzzzz", true),
+            "\x1b[1mplain\x1b[0m"
+        );
     }
 }

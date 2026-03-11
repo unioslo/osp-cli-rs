@@ -11,6 +11,7 @@ use super::engine;
 /// single production mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dsl2Mode {
+    /// Use the canonical document-first DSL engine.
     Enabled,
 }
 

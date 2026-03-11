@@ -19,10 +19,11 @@ use crate::cli::{
     ThemeArgs, ThemeCommands, parse_inline_command_tokens,
 };
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use crate::guide::{GuideSection, GuideSectionKind, GuideView, HelpView};
+use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 
 use crate::repl::{completion, input};
 
+#[derive(Debug)]
 pub(super) struct ParsedReplInvocation {
     pub(super) command: Commands,
     pub(super) effective: ResolvedInvocation,
@@ -62,9 +63,19 @@ pub(super) fn parse_repl_invocation(
     let effective =
         app::resolve_invocation_ui(runtime.config.resolved(), &runtime.ui, &scanned.invocation);
     let command_index = session.scope.commands().len();
+    // `help` is a REPL alias layered on top of shell scope. Handle it before
+    // clap parsing so `help user` inside `ldap` resolves as scoped inline help
+    // instead of a normal `help` subcommand invocation.
     if scanned.tokens.get(command_index).map(String::as_str) == Some(CMD_HELP)
         && !input::has_valid_help_alias_target(&scanned.tokens, command_index)
     {
+        if !parsed.stages.is_empty() {
+            let detail = match input::help_alias_target_at(&scanned.tokens, command_index) {
+                Some(target) => format!("invalid help target: {target}"),
+                None => "help expects a command target".to_string(),
+            };
+            return Err(miette!("{detail}"));
+        }
         return Ok(ParsedReplDispatch::Help {
             result: Box::new(crate::app::CliCommandResult::guide(
                 render_invalid_help_alias(input::help_alias_target_at(
@@ -77,6 +88,8 @@ pub(super) fn parse_repl_invocation(
             stages: parsed.stages.clone(),
         });
     }
+    // Rewrite scoped help aliases back into ordinary command tokens before
+    // clap parsing so the rest of dispatch only has to reason about one shape.
     let scoped_tokens = input::rewrite_help_alias_tokens_at(&scanned.tokens, command_index)
         .unwrap_or_else(|| scanned.tokens.clone());
     let command = match parse_inline_command_tokens(&scoped_tokens) {
@@ -84,6 +97,9 @@ pub(super) fn parse_repl_invocation(
         Ok(None) => return Err(miette!("missing command")),
         Err(err) => {
             if renders_repl_inline_help(err.kind()) {
+                if !parsed.stages.is_empty() {
+                    return Err(miette!(err.to_string()));
+                }
                 return Ok(ParsedReplDispatch::Help {
                     result: Box::new(crate::app::CliCommandResult::guide(render_repl_parse_help(
                         effective.help_level,
@@ -118,7 +134,7 @@ fn render_invalid_help_alias(target: Option<&str>) -> GuideView {
         Some(target) => format!("invalid help target: {target}"),
         None => "help expects a command target".to_string(),
     };
-    HelpView {
+    GuideView {
         preamble: vec![detail],
         usage: Vec::new(),
         commands: Vec::new(),
@@ -153,7 +169,7 @@ fn render_repl_parse_help(
     error_text: &str,
 ) -> GuideView {
     let parsed = parse_clap_help(error_text);
-    let mut view = HelpView::from_text(parsed.body);
+    let mut view = GuideView::from_text(parsed.body);
     extend_with_invocation_help(&mut view, help_level);
     if let Some(summary) = parsed.summary {
         view.preamble.insert(0, summary.to_string());
@@ -228,6 +244,9 @@ fn repl_cache_key_for_command(
     let encoded_tokens =
         serde_json::to_string(tokens).expect("external command tokens should serialize");
 
+    // Cache entries are tied to config revision and active profile so REPL
+    // `--cache` never replays output across theme/profile/provider changes that
+    // could make the command semantically different.
     Some(format!(
         "rev:{}|profile:{}|provider:{}|tokens:{}",
         runtime.config.revision(),
@@ -320,6 +339,9 @@ pub(super) fn render_repl_command_output(
             output,
             format_hint,
         }) => {
+            // Structured output is the only path where pipes operate on the
+            // semantic payload. Record the post-pipeline rows so history/cache
+            // introspection reflects what the user actually saw.
             let (output, format_hint) = app::apply_output_stages(output, stages, format_hint)
                 .map_err(|err| miette!("{err:#}"))?;
 
@@ -339,6 +361,9 @@ pub(super) fn render_repl_command_output(
             if stages.is_empty() {
                 render_document(&document, &invocation.ui.render_settings)
             } else {
+                // Textual/document outputs are re-rendered through a plain
+                // value projection before piping so DSL stages operate on
+                // stable rows instead of ANSI/rendering artifacts.
                 render_staged_textual_output(
                     runtime,
                     session,
@@ -380,6 +405,9 @@ fn render_staged_textual_output(
     invocation: &ResolvedInvocation,
     sink: &mut dyn UiSink,
 ) -> Result<String> {
+    // Once output is textual, the REPL can only offer row-wise DSL stages by
+    // treating each visible line as a `value` row. This keeps the feature
+    // useful without pretending the original structure still exists.
     let (output, format_hint) = app::apply_output_stages(
         text_output_to_rows(&text),
         stages,
@@ -425,6 +453,8 @@ pub(super) fn finalize_repl_command(
     restart_repl: bool,
     show_intro_on_reload: bool,
 ) -> ReplLineResult {
+    // Sync shell scope before deciding the final control flow so history
+    // expansion and the next prompt both see the post-command scope.
     session.sync_history_shell_context();
     if restart_repl {
         tracing::debug!(
@@ -443,6 +473,9 @@ pub(super) fn finalize_repl_command(
         ReplLineResult::Continue(rendered)
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 pub(super) fn run_repl_command(
     runtime: &mut AppRuntime,
@@ -482,6 +515,9 @@ pub(super) fn run_repl_command(
             Some(crate::app::ReplCommandOutput::Output { .. })
         )
     {
+        // Only cache successful structured payloads. Text/help/error output is
+        // cheap to recompute and too presentation-dependent to be a good cache
+        // contract for `--cache`.
         tracing::trace!(cache_key = %cache_key, "REPL command cached");
         session.record_cached_command(cache_key, &result);
     }

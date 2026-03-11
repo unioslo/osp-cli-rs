@@ -1,15 +1,30 @@
+//! Data structures shared across completion parsing, analysis, and ranking.
+//!
+//! This module exists to give the completion engine a stable vocabulary for
+//! cursor state, command-line structure, command-tree metadata, and ranked
+//! suggestions. The parser and suggester can evolve independently as long as
+//! they keep exchanging these values.
+//!
+//! Contract:
+//!
+//! - types here should stay pure data and small helpers
+//! - this layer may depend on shell tokenization details, but not on terminal
+//!   painting or REPL host state
+//! - public builders should describe the stable completion contract, not
+//!   internal parser quirks
+
 pub use crate::core::shell_words::QuoteStyle;
 use std::{collections::BTreeMap, ops::Range};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// Semantic type for values completed by the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueType {
     /// Filesystem path value.
     Path,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// Replacement details for the token currently being completed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorState {
     /// Normalized token text used for matching suggestions.
     pub token_stub: String,
@@ -23,6 +38,9 @@ pub struct CursorState {
 
 impl CursorState {
     /// Creates a cursor state from explicit replacement data.
+    ///
+    /// `raw_stub` keeps the exact buffer slice that will be replaced, while
+    /// `token_stub` keeps the normalized text used for matching.
     pub fn new(
         token_stub: impl Into<String>,
         raw_stub: impl Into<String>,
@@ -38,6 +56,20 @@ impl CursorState {
     }
 
     /// Creates a synthetic cursor state for a standalone token stub.
+    ///
+    /// This is useful in tests and non-editor callers that only care about a
+    /// single token rather than a full input buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::CursorState;
+    ///
+    /// let state = CursorState::synthetic("ldap");
+    ///
+    /// assert_eq!(state.raw_stub, "ldap");
+    /// assert_eq!(state.replace_range, 0..4);
+    /// ```
     pub fn synthetic(token_stub: impl Into<String>) -> Self {
         let token_stub = token_stub.into();
         let len = token_stub.len();
@@ -56,8 +88,8 @@ impl Default for CursorState {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 /// Scope used when merging context-only flags into the cursor view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContextScope {
     /// Merge the flag regardless of the matched command path.
     Global,
@@ -66,8 +98,11 @@ pub enum ContextScope {
     Subtree,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// Suggestion payload shown to the user and inserted on accept.
+///
+/// This separates the inserted value from the optional display label so menu
+/// UIs can stay human-friendly without changing what lands in the buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SuggestionEntry {
     /// Text inserted into the buffer if this suggestion is accepted.
     pub value: String,
@@ -161,8 +196,12 @@ pub struct FlagHints {
     pub required_by_provider: BTreeMap<String, Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Positional argument definition for one command slot.
+///
+/// This is declarative completion metadata, not parser state. One `ArgNode`
+/// says what a command slot expects once command-path resolution has reached the
+/// owning node.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ArgNode {
     /// Argument name shown in completion UIs.
     pub name: Option<String>,
@@ -210,8 +249,12 @@ impl ArgNode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Completion metadata for a flag spelling.
+///
+/// Flags can contribute both direct value suggestions and context that affects
+/// later completion. `context_only` flags are the bridge for options that shape
+/// suggestion scope even when the cursor is not currently editing that flag.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FlagNode {
     /// Optional description shown alongside the flag.
     pub tooltip: Option<String>,
@@ -285,8 +328,12 @@ impl FlagNode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// One node in the immutable completion tree.
+///
+/// A node owns the completion contract for one resolved command scope:
+/// subcommands, flags, positional arguments, and any hidden defaults inherited
+/// through aliases or shell scope.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionNode {
     /// Optional description shown alongside the node.
     pub tooltip: Option<String>,
@@ -436,7 +483,8 @@ impl CommandLine {
     }
 
     /// Appends a flag occurrence and merges its values into the lookup map.
-    pub fn push_flag_occurrence(&mut self, occurrence: FlagOccurrence) {
+    #[cfg(test)]
+    pub(crate) fn push_flag_occurrence(&mut self, occurrence: FlagOccurrence) {
         self.flag_values
             .entry(occurrence.name.clone())
             .or_default()
@@ -445,12 +493,13 @@ impl CommandLine {
     }
 
     /// Appends a positional argument to the tail.
-    pub fn push_positional(&mut self, value: impl Into<String>) {
+    #[cfg(test)]
+    pub(crate) fn push_positional(&mut self, value: impl Into<String>) {
         self.tail.push(TailItem::Positional(value.into()));
     }
 
     /// Merges additional values for a flag spelling.
-    pub fn merge_flag_values(&mut self, name: impl Into<String>, values: Vec<String>) {
+    pub(crate) fn merge_flag_values(&mut self, name: impl Into<String>, values: Vec<String>) {
         self.flag_values
             .entry(name.into())
             .or_default()
@@ -458,7 +507,7 @@ impl CommandLine {
     }
 
     /// Inserts positional values ahead of the existing tail.
-    pub fn prepend_positional_values(&mut self, values: impl IntoIterator<Item = String>) {
+    pub(crate) fn prepend_positional_values(&mut self, values: impl IntoIterator<Item = String>) {
         let mut values = values
             .into_iter()
             .filter(|value| !value.trim().is_empty())
@@ -472,13 +521,15 @@ impl CommandLine {
     }
 
     /// Marks the command line as piped and stores the pipe tokens.
-    pub fn set_pipe(&mut self, pipes: Vec<String>) {
+    #[cfg(test)]
+    pub(crate) fn set_pipe(&mut self, pipes: Vec<String>) {
         self.has_pipe = true;
         self.pipes = pipes;
     }
 
     /// Appends one segment to the command path.
-    pub fn push_head(&mut self, segment: impl Into<String>) {
+    #[cfg(test)]
+    pub(crate) fn push_head(&mut self, segment: impl Into<String>) {
         self.head.push(segment.into());
     }
 }
@@ -498,6 +549,66 @@ pub struct ParsedLine {
     pub cursor_cmd: CommandLine,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Explicit request kind for the current cursor position.
+pub enum CompletionRequest {
+    /// Completing a DSL pipe verb.
+    Pipe,
+    /// Completing a flag spelling in the current flag scope.
+    FlagNames {
+        /// Command path that contributes visible flags.
+        flag_scope_path: Vec<String>,
+    },
+    /// Completing values for a specific flag.
+    FlagValues {
+        /// Command path that contributes the flag definition.
+        flag_scope_path: Vec<String>,
+        /// Flag currently requesting values.
+        flag: String,
+    },
+    /// Completing subcommands, positional values, or empty-stub flags.
+    Positionals {
+        /// Command path contributing subcommands or positional args.
+        context_path: Vec<String>,
+        /// Command path that contributes visible flags.
+        flag_scope_path: Vec<String>,
+        /// Positional argument index relative to the resolved command path.
+        arg_index: usize,
+        /// Whether subcommand names should be suggested.
+        show_subcommands: bool,
+        /// Whether empty-stub flag spellings should also be suggested.
+        show_flag_names: bool,
+    },
+}
+
+impl Default for CompletionRequest {
+    fn default() -> Self {
+        Self::Positionals {
+            context_path: Vec::new(),
+            flag_scope_path: Vec::new(),
+            arg_index: 0,
+            show_subcommands: false,
+            show_flag_names: false,
+        }
+    }
+}
+
+impl CompletionRequest {
+    /// Returns the stable request-kind label used by tests and debug surfaces.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Pipe => "pipe",
+            Self::FlagNames { .. } => "flag-names",
+            Self::FlagValues { .. } => "flag-values",
+            Self::Positionals {
+                show_subcommands: true,
+                ..
+            } => "subcommands",
+            Self::Positionals { .. } => "positionals",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Full completion analysis derived from parsing and context resolution.
 pub struct CompletionAnalysis {
@@ -507,6 +618,8 @@ pub struct CompletionAnalysis {
     pub cursor: CursorState,
     /// Resolved command context used for suggestion generation.
     pub context: CompletionContext,
+    /// Explicit request kind for suggestion generation.
+    pub request: CompletionRequest,
 }
 
 /// Resolved completion state for the cursor position.
@@ -525,8 +638,8 @@ pub struct CompletionContext {
     pub subcommand_context: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// High-level classification for a completion candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchKind {
     /// Candidate belongs to pipe-mode completion.
     Pipe,

@@ -1,4 +1,27 @@
-//! Runtime-scoped host state.
+//! Runtime-scoped host state shared across invocations.
+//!
+//! This module exists to hold the long-lived state that belongs to the running
+//! host rather than to any single command submission.
+//!
+//! High-level flow:
+//!
+//! - capture startup-time runtime context such as terminal kind and profile
+//!   override
+//! - keep the current resolved config and derived UI/plugin state together
+//! - expose one place where host code can read the active runtime snapshot
+//!
+//! Contract:
+//!
+//! - runtime state here is broader-lived than session/request state
+//! - per-command or per-REPL-line details should not accumulate here unless
+//!   they truly affect the whole running host
+//!
+//! Public API shape:
+//!
+//! - these types model host machinery, not lightweight semantic payloads
+//! - constructors/accessors are the preferred way to create and inspect them
+//! - callers usually receive [`AppRuntime`] and [`AppClients`] from host
+//!   bootstrap rather than assembling them field-by-field
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -16,8 +39,11 @@ use crate::ui::RenderSettings;
 use crate::ui::messages::MessageLevel;
 use crate::ui::theme_loader::ThemeCatalog;
 
+/// Identifies which top-level host surface is currently active.
+///
+/// This lets config selection and runtime behavior distinguish between
+/// one-shot CLI execution and the long-lived REPL host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Terminal mode the application is currently serving.
 pub enum TerminalKind {
     /// One-shot command execution.
     Cli,
@@ -27,6 +53,15 @@ pub enum TerminalKind {
 
 impl TerminalKind {
     /// Returns the config key fragment used for this terminal mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::TerminalKind;
+    ///
+    /// assert_eq!(TerminalKind::Cli.as_config_terminal(), "cli");
+    /// assert_eq!(TerminalKind::Repl.as_config_terminal(), "repl");
+    /// ```
     pub fn as_config_terminal(self) -> &'static str {
         match self {
             TerminalKind::Cli => "cli",
@@ -35,8 +70,11 @@ impl TerminalKind {
     }
 }
 
+/// Startup-time selection inputs that shape runtime config resolution.
+///
+/// This keeps the profile override and terminal identity together so later
+/// runtime rebuilds can resolve config against the same host context.
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Immutable runtime selection inputs captured at startup.
 pub struct RuntimeContext {
     profile_override: Option<String>,
     terminal_kind: TerminalKind,
@@ -45,6 +83,22 @@ pub struct RuntimeContext {
 
 impl RuntimeContext {
     /// Creates a runtime context, normalizing the optional profile override.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::{RuntimeContext, TerminalKind};
+    ///
+    /// let ctx = RuntimeContext::new(
+    ///     Some("  Work  ".to_string()),
+    ///     TerminalKind::Repl,
+    ///     Some("xterm-256color".to_string()),
+    /// );
+    ///
+    /// assert_eq!(ctx.profile_override(), Some("work"));
+    /// assert_eq!(ctx.terminal_kind(), TerminalKind::Repl);
+    /// assert_eq!(ctx.terminal_env(), Some("xterm-256color"));
+    /// ```
     pub fn new(
         profile_override: Option<String>,
         terminal_kind: TerminalKind,
@@ -75,7 +129,10 @@ impl RuntimeContext {
     }
 }
 
-/// Tracks the resolved configuration and its in-memory revision.
+/// Holds the current resolved config plus a monotonic in-memory revision.
+///
+/// The revision gives caches and rebuild logic a cheap way to notice when the
+/// effective config actually changed.
 pub struct ConfigState {
     resolved: ResolvedConfig,
     revision: u64,
@@ -83,6 +140,25 @@ pub struct ConfigState {
 
 impl ConfigState {
     /// Creates configuration state with an initial revision of `1`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::ConfigState;
+    /// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    ///
+    /// let mut resolver = ConfigResolver::default();
+    /// resolver.set_defaults(defaults);
+    /// let resolved = resolver.resolve(ResolveOptions::default()).unwrap();
+    ///
+    /// let mut state = ConfigState::new(resolved.clone());
+    /// assert_eq!(state.revision(), 1);
+    /// assert!(!state.replace_resolved(resolved));
+    /// assert_eq!(state.revision(), 1);
+    /// ```
     pub fn new(resolved: ResolvedConfig) -> Self {
         Self {
             resolved,
@@ -122,21 +198,161 @@ impl ConfigState {
     }
 }
 
+/// Derived presentation/runtime state for the active config snapshot.
+///
+/// This is cached host state, not a second source of truth. Recompute it when
+/// the resolved config changes so renderers and message surfaces all read the
+/// same derived values.
 #[derive(Debug, Clone)]
-/// User-interface settings derived from the current runtime state.
+#[non_exhaustive]
 pub struct UiState {
-    /// Resolved render settings used for command, guide, and help output.
+    /// Render settings derived from the current config snapshot.
     pub render_settings: RenderSettings,
-    /// Highest message severity emitted by default.
+    /// Default message verbosity derived from the current runtime config.
     pub message_verbosity: MessageLevel,
     /// Numeric debug verbosity used for trace-style host output.
     pub debug_verbosity: u8,
 }
 
+impl UiState {
+    /// Starts a builder for UI state derived from a render-settings baseline.
+    pub fn builder(render_settings: RenderSettings) -> UiStateBuilder {
+        UiStateBuilder::new(render_settings)
+    }
+
+    /// Derives UI state from a resolved config snapshot and runtime context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::{RuntimeContext, TerminalKind, UiState};
+    /// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    /// defaults.set("ui.message.verbosity", "info");
+    ///
+    /// let mut resolver = ConfigResolver::default();
+    /// resolver.set_defaults(defaults);
+    /// let config = resolver.resolve(ResolveOptions::new().with_terminal("cli")).unwrap();
+    ///
+    /// let ui = UiState::from_resolved_config(
+    ///     &RuntimeContext::new(None, TerminalKind::Cli, Some("xterm-256color".to_string())),
+    ///     &config,
+    /// )
+    /// .unwrap();
+    ///
+    /// assert_eq!(ui.message_verbosity.as_env_str(), "info");
+    /// assert_eq!(ui.render_settings.runtime.terminal.as_deref(), Some("xterm-256color"));
+    /// ```
+    pub fn from_resolved_config(
+        context: &RuntimeContext,
+        config: &ResolvedConfig,
+    ) -> miette::Result<Self> {
+        UiStateBuilder::from_resolved_config(context, config).map(UiStateBuilder::build)
+    }
+
+    /// Creates the UI state snapshot used for one resolved config revision.
+    pub fn new(
+        render_settings: RenderSettings,
+        message_verbosity: MessageLevel,
+        debug_verbosity: u8,
+    ) -> Self {
+        Self {
+            render_settings,
+            message_verbosity,
+            debug_verbosity,
+        }
+    }
+}
+
+/// Builder for [`UiState`].
+///
+/// This is the guided construction path for host-facing UI state.
+pub struct UiStateBuilder {
+    render_settings: RenderSettings,
+    message_verbosity: MessageLevel,
+    debug_verbosity: u8,
+}
+
+impl UiStateBuilder {
+    /// Starts building UI state from the provided render settings.
+    pub fn new(render_settings: RenderSettings) -> Self {
+        Self {
+            render_settings,
+            message_verbosity: MessageLevel::Success,
+            debug_verbosity: 0,
+        }
+    }
+
+    /// Derives UI-state defaults from resolved config and runtime context.
+    pub fn from_resolved_config(
+        context: &RuntimeContext,
+        config: &ResolvedConfig,
+    ) -> miette::Result<Self> {
+        let themes = crate::ui::theme_loader::load_theme_catalog(config);
+        Self::from_resolved_config_with_themes(context, config, &themes)
+    }
+
+    pub(crate) fn from_resolved_config_with_themes(
+        context: &RuntimeContext,
+        config: &ResolvedConfig,
+        themes: &ThemeCatalog,
+    ) -> miette::Result<Self> {
+        // Rebuild/startup paths can preserve an existing render runtime, but
+        // fresh derivation should probe from the runtime context once here.
+        let ui = crate::app::assembly::derive_ui_state(
+            context,
+            config,
+            themes,
+            crate::app::assembly::RenderSettingsSeed::DefaultAuto,
+            None,
+        )?;
+
+        Ok(Self {
+            render_settings: ui.render_settings,
+            message_verbosity: ui.message_verbosity,
+            debug_verbosity: ui.debug_verbosity,
+        })
+    }
+
+    /// Replaces the render-settings baseline used by the built UI state.
+    pub fn with_render_settings(mut self, render_settings: RenderSettings) -> Self {
+        self.render_settings = render_settings;
+        self
+    }
+
+    /// Replaces the message verbosity used for buffered UI messages.
+    pub fn with_message_verbosity(mut self, message_verbosity: MessageLevel) -> Self {
+        self.message_verbosity = message_verbosity;
+        self
+    }
+
+    /// Replaces the numeric debug verbosity.
+    pub fn with_debug_verbosity(mut self, debug_verbosity: u8) -> Self {
+        self.debug_verbosity = debug_verbosity;
+        self
+    }
+
+    /// Builds the configured [`UiState`].
+    pub fn build(self) -> UiState {
+        UiState::new(
+            self.render_settings,
+            self.message_verbosity,
+            self.debug_verbosity,
+        )
+    }
+}
+
+/// Startup inputs used to assemble runtime services and locate on-disk state.
+///
+/// This is launch-time provenance for the running host. It is kept separate
+/// from [`RuntimeContext`] because callers may need to rebuild caches or plugin
+/// services from the same startup inputs after config changes.
 #[derive(Debug, Clone)]
-/// Startup inputs needed to assemble runtime services and caches.
+#[non_exhaustive]
 pub struct LaunchContext {
-    /// Explicit plugin directories requested by the caller.
+    /// Explicit plugin directories requested by the caller at launch time.
     pub plugin_dirs: Vec<PathBuf>,
     /// Optional config-root override for runtime config discovery.
     pub config_root: Option<PathBuf>,
@@ -148,8 +364,61 @@ pub struct LaunchContext {
     pub startup_started_at: Instant,
 }
 
+impl LaunchContext {
+    /// Starts a builder for launch-time host provenance.
+    pub fn builder() -> LaunchContextBuilder {
+        LaunchContextBuilder::new()
+    }
+
+    /// Creates launch-time provenance for one host bootstrap attempt.
+    pub fn new(
+        plugin_dirs: Vec<PathBuf>,
+        config_root: Option<PathBuf>,
+        cache_root: Option<PathBuf>,
+        runtime_load: RuntimeLoadOptions,
+    ) -> Self {
+        Self {
+            plugin_dirs,
+            config_root,
+            cache_root,
+            runtime_load,
+            startup_started_at: Instant::now(),
+        }
+    }
+
+    /// Replaces the captured startup timestamp.
+    pub fn with_startup_started_at(mut self, startup_started_at: Instant) -> Self {
+        self.startup_started_at = startup_started_at;
+        self
+    }
+}
+
 impl Default for LaunchContext {
     fn default() -> Self {
+        Self::new(Vec::new(), None, None, RuntimeLoadOptions::default())
+    }
+}
+
+/// Builder for [`LaunchContext`].
+///
+/// This keeps launch-time bootstrap knobs grouped in one guided surface.
+pub struct LaunchContextBuilder {
+    plugin_dirs: Vec<PathBuf>,
+    config_root: Option<PathBuf>,
+    cache_root: Option<PathBuf>,
+    runtime_load: RuntimeLoadOptions,
+    startup_started_at: Instant,
+}
+
+impl Default for LaunchContextBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LaunchContextBuilder {
+    /// Starts a builder with empty plugin roots and default runtime loading.
+    pub fn new() -> Self {
         Self {
             plugin_dirs: Vec::new(),
             config_root: None,
@@ -158,14 +427,69 @@ impl Default for LaunchContext {
             startup_started_at: Instant::now(),
         }
     }
+
+    /// Appends one explicit plugin directory.
+    pub fn with_plugin_dir(mut self, plugin_dir: impl Into<PathBuf>) -> Self {
+        self.plugin_dirs.push(plugin_dir.into());
+        self
+    }
+
+    /// Replaces the explicit plugin directory list.
+    pub fn with_plugin_dirs(mut self, plugin_dirs: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.plugin_dirs = plugin_dirs.into_iter().collect();
+        self
+    }
+
+    /// Sets the config root override.
+    pub fn with_config_root(mut self, config_root: Option<PathBuf>) -> Self {
+        self.config_root = config_root;
+        self
+    }
+
+    /// Sets the cache root override.
+    pub fn with_cache_root(mut self, cache_root: Option<PathBuf>) -> Self {
+        self.cache_root = cache_root;
+        self
+    }
+
+    /// Replaces the runtime-load flags carried by the launch context.
+    pub fn with_runtime_load(mut self, runtime_load: RuntimeLoadOptions) -> Self {
+        self.runtime_load = runtime_load;
+        self
+    }
+
+    /// Replaces the captured startup timestamp.
+    pub fn with_startup_started_at(mut self, startup_started_at: Instant) -> Self {
+        self.startup_started_at = startup_started_at;
+        self
+    }
+
+    /// Builds the configured [`LaunchContext`].
+    pub fn build(self) -> LaunchContext {
+        LaunchContext {
+            plugin_dirs: self.plugin_dirs,
+            config_root: self.config_root,
+            cache_root: self.cache_root,
+            runtime_load: self.runtime_load,
+            startup_started_at: self.startup_started_at,
+        }
+    }
 }
 
-/// Client registries shared across command execution.
+/// Long-lived client registries shared across command execution.
+///
+/// This bundles expensive or stateful clients so they do not have to be
+/// recreated on every command dispatch.
+///
+/// Public API note: this is intentionally constructor/accessor driven. The
+/// internal registries stay private so the host can grow additional cached
+/// machinery without breaking callers.
+#[non_exhaustive]
 pub struct AppClients {
     /// Plugin manager used for discovery, dispatch, and provider metadata.
-    pub plugins: PluginManager,
+    plugins: PluginManager,
     /// In-process registry of native commands.
-    pub native_commands: NativeCommandRegistry,
+    native_commands: NativeCommandRegistry,
     plugin_config_env: PluginConfigEnvCache,
 }
 
@@ -177,6 +501,21 @@ impl AppClients {
             native_commands,
             plugin_config_env: PluginConfigEnvCache::default(),
         }
+    }
+
+    /// Returns the shared plugin manager.
+    pub fn plugins(&self) -> &PluginManager {
+        &self.plugins
+    }
+
+    /// Returns the shared registry of native commands.
+    pub fn native_commands(&self) -> &NativeCommandRegistry {
+        &self.native_commands
+    }
+
+    /// Starts a builder for shared client registries.
+    pub fn builder() -> AppClientsBuilder {
+        AppClientsBuilder::new()
     }
 
     pub(crate) fn plugin_config_env(&self, config: &ConfigState) -> PluginConfigEnv {
@@ -202,19 +541,156 @@ impl AppClients {
     }
 }
 
+/// Builder for [`AppClients`].
+///
+/// This is the guided construction path for shared plugin/native registries.
+pub struct AppClientsBuilder {
+    plugins: PluginManager,
+    native_commands: NativeCommandRegistry,
+}
+
+impl Default for AppClientsBuilder {
+    fn default() -> Self {
+        Self {
+            plugins: PluginManager::new(Vec::new()),
+            native_commands: NativeCommandRegistry::default(),
+        }
+    }
+}
+
+impl AppClientsBuilder {
+    /// Starts a builder with empty plugin and native-command registries.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replaces the plugin manager used by the built client registry.
+    pub fn with_plugins(mut self, plugins: PluginManager) -> Self {
+        self.plugins = plugins;
+        self
+    }
+
+    /// Replaces the native-command registry used by the built client registry.
+    pub fn with_native_commands(mut self, native_commands: NativeCommandRegistry) -> Self {
+        self.native_commands = native_commands;
+        self
+    }
+
+    /// Builds the configured [`AppClients`].
+    pub fn build(self) -> AppClients {
+        AppClients::new(self.plugins, self.native_commands)
+    }
+}
+
 /// Runtime-scoped application state shared across commands.
+///
+/// This is the assembled host snapshot that command and REPL code read while
+/// the process is running. The fields here are intended to move together: when
+/// config changes, callers should rebuild the derived UI/auth/theme state
+/// rather than mixing old and new snapshots.
+///
+/// Public API note: this is a host snapshot you usually receive from app
+/// bootstrap, not a semantic DTO meant for arbitrary external construction.
+#[non_exhaustive]
 pub struct AppRuntime {
-    /// Startup context such as profile override and terminal mode.
+    /// Startup-time runtime identity used for config selection and rebuilds.
     pub context: RuntimeContext,
-    /// Current resolved config snapshot and revision counter.
+    /// Authoritative resolved config snapshot and its in-memory revision.
     pub config: ConfigState,
-    /// Active UI settings derived from runtime config.
+    /// UI-facing state derived from the current resolved config.
     pub ui: UiState,
-    /// Authorization and command-visibility policy state.
+    /// Authorization and command-visibility policy state derived from config.
     pub auth: AuthState,
     pub(crate) themes: ThemeCatalog,
-    /// Launch-time inputs used to assemble the runtime.
+    /// Launch-time inputs used to assemble caches and external services.
     pub launch: LaunchContext,
+}
+
+impl AppRuntime {
+    /// Derives the runtime snapshot from resolved config plus shared client registries.
+    pub(crate) fn from_resolved_parts(
+        context: RuntimeContext,
+        resolved_config: ResolvedConfig,
+        render_settings: RenderSettings,
+        message_verbosity: MessageLevel,
+        debug_verbosity: u8,
+        plugins: &PluginManager,
+        native_commands: &NativeCommandRegistry,
+        themes: ThemeCatalog,
+        launch: LaunchContext,
+    ) -> Self {
+        let config = ConfigState::new(resolved_config);
+        let ui = UiState::builder(render_settings)
+            .with_message_verbosity(message_verbosity)
+            .with_debug_verbosity(debug_verbosity)
+            .build();
+        let auth = AuthState::from_resolved_with_external_policies(
+            config.resolved(),
+            plugins,
+            native_commands,
+        );
+
+        Self::new(context, config, ui, auth, themes, launch)
+    }
+
+    /// Creates the runtime snapshot shared across CLI and REPL execution.
+    pub(crate) fn new(
+        context: RuntimeContext,
+        config: ConfigState,
+        ui: UiState,
+        auth: AuthState,
+        themes: ThemeCatalog,
+        launch: LaunchContext,
+    ) -> Self {
+        Self {
+            context,
+            config,
+            ui,
+            auth,
+            themes,
+            launch,
+        }
+    }
+
+    /// Returns the runtime context used for config selection and rebuilds.
+    pub fn context(&self) -> &RuntimeContext {
+        &self.context
+    }
+
+    /// Returns the authoritative resolved-config state.
+    pub fn config_state(&self) -> &ConfigState {
+        &self.config
+    }
+
+    /// Returns mutable resolved-config state.
+    pub fn config_state_mut(&mut self) -> &mut ConfigState {
+        &mut self.config
+    }
+
+    /// Returns the UI state derived from the current config snapshot.
+    pub fn ui(&self) -> &UiState {
+        &self.ui
+    }
+
+    /// Returns mutable UI state for in-process adjustments.
+    pub fn ui_mut(&mut self) -> &mut UiState {
+        &mut self.ui
+    }
+
+    /// Returns the command-visibility/auth state.
+    pub fn auth(&self) -> &AuthState {
+        &self.auth
+    }
+
+    /// Returns mutable command-visibility/auth state.
+    pub fn auth_mut(&mut self) -> &mut AuthState {
+        &mut self.auth
+    }
+
+    /// Returns the launch-time provenance used to assemble the runtime.
+    pub fn launch(&self) -> &LaunchContext {
+        &self.launch
+    }
 }
 
 /// Authorization and command-visibility state derived from configuration.
@@ -240,6 +716,24 @@ impl AuthState {
             builtin_policy: CommandPolicyRegistry::default(),
             external_policy: CommandPolicyRegistry::default(),
         }
+    }
+
+    /// Builds authorization state and external policy from the current config
+    /// and active command registries.
+    pub(crate) fn from_resolved_with_external_policies(
+        config: &ResolvedConfig,
+        plugins: &PluginManager,
+        native_commands: &NativeCommandRegistry,
+    ) -> Self {
+        let mut auth = Self::from_resolved(config);
+        let plugin_policy = plugins.command_policy_registry().unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "failed to build plugin command policy registry");
+            CommandPolicyRegistry::default()
+        });
+        let external_policy =
+            merge_policy_registries(plugin_policy, native_commands.command_policy_registry());
+        auth.replace_external_policy(external_policy);
+        auth
     }
 
     /// Returns the context used when evaluating command policies.
@@ -306,31 +800,6 @@ impl AuthState {
     pub fn is_external_command_visible(&self, command: &str) -> bool {
         self.external_command_access(command).is_visible()
     }
-
-    /// Alias for [`Self::external_policy`].
-    pub fn plugin_policy(&self) -> &CommandPolicyRegistry {
-        self.external_policy()
-    }
-
-    /// Alias for [`Self::external_policy_mut`].
-    pub fn plugin_policy_mut(&mut self) -> &mut CommandPolicyRegistry {
-        self.external_policy_mut()
-    }
-
-    /// Alias for [`Self::replace_external_policy`].
-    pub fn replace_plugin_policy(&mut self, registry: CommandPolicyRegistry) {
-        self.replace_external_policy(registry);
-    }
-
-    /// Alias for [`Self::external_command_access`].
-    pub fn plugin_command_access(&self, command: &str) -> CommandAccess {
-        self.external_command_access(command)
-    }
-
-    /// Alias for [`Self::is_external_command_visible`].
-    pub fn is_plugin_command_visible(&self, command: &str) -> bool {
-        self.is_external_command_visible(command)
-    }
 }
 
 fn parse_allowlist(raw: Option<&str>) -> Option<HashSet<String>> {
@@ -380,6 +849,16 @@ fn command_access_for(
     }
 
     access
+}
+
+fn merge_policy_registries(
+    mut left: CommandPolicyRegistry,
+    right: CommandPolicyRegistry,
+) -> CommandPolicyRegistry {
+    for policy in right.entries() {
+        left.register(policy.clone());
+    }
+    left
 }
 
 #[cfg(test)]
@@ -494,17 +973,17 @@ mod tests {
             CommandPolicy::new(CommandPath::new(["orch"]))
                 .visibility(VisibilityMode::Authenticated),
         );
-        auth.replace_plugin_policy(plugin_registry);
+        auth.replace_external_policy(plugin_registry);
 
-        assert!(auth.plugin_policy().contains(&CommandPath::new(["ldap"])));
+        assert!(auth.external_policy().contains(&CommandPath::new(["ldap"])));
         assert!(
-            auth.plugin_policy_mut()
+            auth.external_policy_mut()
                 .contains(&CommandPath::new(["ldap"]))
         );
-        assert!(auth.plugin_command_access("ldap").is_runnable());
-        assert!(auth.is_plugin_command_visible("ldap"));
+        assert!(auth.external_command_access("ldap").is_runnable());
+        assert!(auth.is_external_command_visible("ldap"));
 
-        let hidden = auth.plugin_command_access("orch");
+        let hidden = auth.external_command_access("orch");
         assert_eq!(hidden.reasons, vec![AccessReason::HiddenByPolicy]);
         assert!(!hidden.is_visible());
     }

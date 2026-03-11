@@ -297,3 +297,6 @@ pub(crate) fn apply_value_with_plan(value: Value, plan: &AggregatePlan) -> Resul
 pub(crate) fn count_macro_value(value: Value, spec: &str) -> Result<Value> {
     json::traverse_collections(value, |items| count_macro(items, spec))
 }
+
+#[cfg(test)]
+mod tests;

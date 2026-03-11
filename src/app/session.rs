@@ -1,19 +1,41 @@
-//! Session-scoped host state.
+//! Session-scoped host state for one logical app run.
+//!
+//! This module exists to hold mutable state that should survive across commands
+//! within the same session, but should not be promoted to global runtime
+//! state.
+//!
+//! High-level flow:
+//!
+//! - track prompt timing and last-failure details
+//! - maintain REPL scope stack and small in-memory caches
+//! - bundle session state that host code needs to carry between dispatches
+//!
+//! Contract:
+//!
+//! - session data here is narrower-lived than the runtime state in
+//!   [`super::runtime`]
+//! - long-lived environment/config/plugin bootstrap state should not drift into
+//!   this module
+//!
+//! Public API shape:
+//!
+//! - use [`AppSessionBuilder`] for session-scoped REPL state
+//! - use [`AppStateBuilder`] when you need a fully assembled runtime/session
+//!   snapshot outside the full CLI bootstrap
+//! - these types are host machinery, not lightweight semantic DTOs
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::config::{ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS};
-use crate::core::command_policy::CommandPolicyRegistry;
 use crate::core::row::Row;
 use crate::native::NativeCommandRegistry;
+use crate::plugin::PluginManager;
 use crate::repl::HistoryShellContext;
 
 use super::command_output::CliCommandResult;
-use super::runtime::{
-    AppClients, AppRuntime, AuthState, ConfigState, LaunchContext, RuntimeContext, UiState,
-};
+use super::runtime::{AppClients, AppRuntime, LaunchContext, RuntimeContext, UiState};
 use super::timing::TimingSummary;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -24,8 +46,9 @@ pub struct DebugTimingBadge {
     pub(crate) summary: TimingSummary,
 }
 
+/// Shared prompt-timing storage that dispatch code can update and prompt
+/// rendering can read.
 #[derive(Clone, Default, Debug)]
-/// Shared storage for the current prompt timing badge.
 pub struct DebugTimingState {
     inner: Arc<RwLock<Option<DebugTimingBadge>>>,
 }
@@ -51,14 +74,23 @@ impl DebugTimingState {
     }
 }
 
+/// One entered command scope inside the interactive REPL shell stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// One scope level in the REPL command stack.
 pub struct ReplScopeFrame {
     command: String,
 }
 
 impl ReplScopeFrame {
     /// Creates a frame for the given command name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::ReplScopeFrame;
+    ///
+    /// let frame = ReplScopeFrame::new("theme");
+    /// assert_eq!(frame.command(), "theme");
+    /// ```
     pub fn new(command: impl Into<String>) -> Self {
         Self {
             command: command.into(),
@@ -71,8 +103,11 @@ impl ReplScopeFrame {
     }
 }
 
+/// Nested REPL command-scope stack used for shell-style scoped interaction.
+///
+/// This is what lets the REPL stay "inside" a command family while still
+/// rendering scope labels, help targets, and history prefixes consistently.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-/// Stack of nested REPL command scopes.
 pub struct ReplScopeStack {
     frames: Vec<ReplScopeFrame>,
 }
@@ -109,6 +144,19 @@ impl ReplScopeStack {
     }
 
     /// Returns a human-readable label for the current scope path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::ReplScopeStack;
+    ///
+    /// let mut scope = ReplScopeStack::default();
+    /// assert_eq!(scope.display_label(), None);
+    ///
+    /// scope.enter("theme");
+    /// scope.enter("show");
+    /// assert_eq!(scope.display_label(), Some("theme / show".to_string()));
+    /// ```
     pub fn display_label(&self) -> Option<String> {
         if self.is_root() {
             None
@@ -124,6 +172,18 @@ impl ReplScopeStack {
     }
 
     /// Returns the history prefix used for shell-backed history entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::ReplScopeStack;
+    ///
+    /// let mut scope = ReplScopeStack::default();
+    /// scope.enter("theme");
+    /// scope.enter("show");
+    ///
+    /// assert_eq!(scope.history_prefix(), "theme show ");
+    /// ```
     pub fn history_prefix(&self) -> String {
         if self.is_root() {
             String::new()
@@ -140,6 +200,20 @@ impl ReplScopeStack {
     }
 
     /// Prepends the active scope path unless the tokens are already scoped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::ReplScopeStack;
+    ///
+    /// let mut scope = ReplScopeStack::default();
+    /// scope.enter("theme");
+    ///
+    /// assert_eq!(
+    ///     scope.prefixed_tokens(&["show".to_string(), "dracula".to_string()]),
+    ///     vec!["theme".to_string(), "show".to_string(), "dracula".to_string()]
+    /// );
+    /// ```
     pub fn prefixed_tokens(&self, tokens: &[String]) -> Vec<String> {
         let prefix = self.commands();
         if prefix.is_empty() || tokens.starts_with(&prefix) {
@@ -151,6 +225,17 @@ impl ReplScopeStack {
     }
 
     /// Returns help tokens for the current scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::ReplScopeStack;
+    ///
+    /// let mut scope = ReplScopeStack::default();
+    /// scope.enter("theme");
+    ///
+    /// assert_eq!(scope.help_tokens(), vec!["theme".to_string(), "--help".to_string()]);
+    /// ```
     pub fn help_tokens(&self) -> Vec<String> {
         let mut tokens = self.commands();
         if !tokens.is_empty() {
@@ -161,6 +246,7 @@ impl ReplScopeStack {
 }
 
 /// Session-scoped REPL state, caches, and prompt metadata.
+#[non_exhaustive]
 pub struct AppSession {
     /// Prompt prefix shown before any scope label.
     pub prompt_prefix: String,
@@ -201,6 +287,11 @@ pub struct LastFailure {
 }
 
 impl AppSession {
+    /// Starts a builder for session-scoped host state.
+    pub fn builder() -> AppSessionBuilder {
+        AppSessionBuilder::new()
+    }
+
     /// Creates a session with bounded caches for row and command results.
     pub fn with_cache_limit(max_cached_results: usize) -> Self {
         let bounded = max_cached_results.max(1);
@@ -220,6 +311,34 @@ impl AppSession {
             max_cached_results: bounded,
             config_overrides: ConfigLayer::default(),
         }
+    }
+
+    /// Creates the default session snapshot for the current resolved config.
+    pub(crate) fn from_resolved_config(config: &crate::config::ResolvedConfig) -> Self {
+        let session_cache_max_results = crate::app::host::config_usize(
+            config,
+            "session.cache.max_results",
+            DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
+        );
+        Self::builder()
+            .with_cache_limit(session_cache_max_results)
+            .build()
+    }
+
+    /// Creates the default session snapshot for the current resolved config
+    /// and attaches the supplied session-layer overrides.
+    pub(crate) fn from_resolved_config_with_overrides(
+        config: &crate::config::ResolvedConfig,
+        config_overrides: ConfigLayer,
+    ) -> Self {
+        Self::builder()
+            .with_cache_limit(crate::app::host::config_usize(
+                config,
+                "session.cache.max_results",
+                DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
+            ))
+            .with_config_overrides(config_overrides)
+            .build()
     }
 
     /// Stores the latest successful row output and updates the result cache.
@@ -341,6 +460,76 @@ impl AppSession {
     }
 }
 
+/// Builder for [`AppSession`].
+///
+/// This is the guided construction path for session-scoped REPL state.
+pub struct AppSessionBuilder {
+    prompt_prefix: String,
+    history_enabled: bool,
+    history_shell: HistoryShellContext,
+    max_cached_results: usize,
+    config_overrides: ConfigLayer,
+}
+
+impl Default for AppSessionBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AppSessionBuilder {
+    /// Starts a session builder with the crate's default prompt and cache size.
+    pub fn new() -> Self {
+        Self {
+            prompt_prefix: "osp".to_string(),
+            history_enabled: true,
+            history_shell: HistoryShellContext::default(),
+            max_cached_results: DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
+            config_overrides: ConfigLayer::default(),
+        }
+    }
+
+    /// Replaces the prompt prefix shown ahead of any scope label.
+    pub fn with_prompt_prefix(mut self, prompt_prefix: impl Into<String>) -> Self {
+        self.prompt_prefix = prompt_prefix.into();
+        self
+    }
+
+    /// Enables or disables history capture for the built session.
+    pub fn with_history_enabled(mut self, history_enabled: bool) -> Self {
+        self.history_enabled = history_enabled;
+        self
+    }
+
+    /// Replaces the shell-scoped history context shared with the history store.
+    pub fn with_history_shell(mut self, history_shell: HistoryShellContext) -> Self {
+        self.history_shell = history_shell;
+        self
+    }
+
+    /// Replaces the maximum number of cached row/command results.
+    pub fn with_cache_limit(mut self, max_cached_results: usize) -> Self {
+        self.max_cached_results = max_cached_results;
+        self
+    }
+
+    /// Replaces the session-scoped config overrides layered above persisted config.
+    pub fn with_config_overrides(mut self, config_overrides: ConfigLayer) -> Self {
+        self.config_overrides = config_overrides;
+        self
+    }
+
+    /// Builds the configured [`AppSession`].
+    pub fn build(self) -> AppSession {
+        let mut session = AppSession::with_cache_limit(self.max_cached_results);
+        session.prompt_prefix = self.prompt_prefix;
+        session.history_enabled = self.history_enabled;
+        session.history_shell = self.history_shell;
+        session.config_overrides = self.config_overrides;
+        session
+    }
+}
+
 pub(crate) struct AppStateInit {
     pub context: RuntimeContext,
     pub config: crate::config::ResolvedConfig,
@@ -353,7 +542,39 @@ pub(crate) struct AppStateInit {
     pub launch: LaunchContext,
 }
 
+pub(crate) struct AppStateParts {
+    pub runtime: AppRuntime,
+    pub session: AppSession,
+    pub clients: AppClients,
+}
+
+impl AppStateParts {
+    fn from_init(init: AppStateInit, session_override: Option<AppSession>) -> Self {
+        let clients = AppClients::new(init.plugins, init.native_commands);
+        let runtime = AppRuntime::from_resolved_parts(
+            init.context,
+            init.config,
+            init.render_settings,
+            init.message_verbosity,
+            init.debug_verbosity,
+            clients.plugins(),
+            clients.native_commands(),
+            init.themes,
+            init.launch,
+        );
+        let session = session_override
+            .unwrap_or_else(|| AppSession::from_resolved_config(runtime.config.resolved()));
+
+        Self {
+            runtime,
+            session,
+            clients,
+        }
+    }
+}
+
 /// Aggregate application state shared between runtime and session logic.
+#[non_exhaustive]
 pub struct AppState {
     /// Runtime-scoped services and resolved config state.
     pub runtime: AppRuntime,
@@ -364,43 +585,66 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub(crate) fn new(init: AppStateInit) -> Self {
-        let config_state = ConfigState::new(init.config);
-        let mut auth_state = AuthState::from_resolved(config_state.resolved());
-        let plugin_policy = init
-            .plugins
-            .command_policy_registry()
-            .unwrap_or_else(|err| {
-                tracing::warn!(error = %err, "failed to build plugin command policy registry");
-                CommandPolicyRegistry::default()
-            });
-        let external_policy = merge_policy_registries(
-            plugin_policy,
-            init.native_commands.command_policy_registry(),
-        );
-        auth_state.replace_external_policy(external_policy);
-        let session_cache_max_results = crate::app::host::config_usize(
-            config_state.resolved(),
-            "session.cache.max_results",
-            DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
-        );
+    /// Starts a builder for a fully assembled application state snapshot.
+    pub fn builder(
+        context: RuntimeContext,
+        config: crate::config::ResolvedConfig,
+        ui: UiState,
+    ) -> AppStateBuilder {
+        AppStateBuilder::new(context, config, ui)
+    }
 
+    /// Builds a full application-state snapshot by deriving UI state from the
+    /// resolved config and runtime context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::{AppState, RuntimeContext, TerminalKind};
+    /// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    /// defaults.set("ui.message.verbosity", "warning");
+    ///
+    /// let mut resolver = ConfigResolver::default();
+    /// resolver.set_defaults(defaults);
+    /// let config = resolver.resolve(ResolveOptions::new().with_terminal("repl")).unwrap();
+    ///
+    /// let state = AppState::from_resolved_config(
+    ///     RuntimeContext::new(None, TerminalKind::Repl, None),
+    ///     config,
+    /// )
+    /// .unwrap();
+    ///
+    /// assert_eq!(state.runtime.config.resolved().active_profile(), "default");
+    /// assert_eq!(state.runtime.ui.message_verbosity.as_env_str(), "warning");
+    /// assert!(state.clients.plugins().explicit_dirs().is_empty());
+    /// ```
+    pub fn from_resolved_config(
+        context: RuntimeContext,
+        config: crate::config::ResolvedConfig,
+    ) -> miette::Result<Self> {
+        AppStateBuilder::from_resolved_config(context, config).map(AppStateBuilder::build)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(init: AppStateInit) -> Self {
+        Self::from_parts(AppStateParts::from_init(init, None))
+    }
+
+    pub(crate) fn from_parts(parts: AppStateParts) -> Self {
         Self {
-            runtime: AppRuntime {
-                context: init.context,
-                config: config_state,
-                ui: UiState {
-                    render_settings: init.render_settings,
-                    message_verbosity: init.message_verbosity,
-                    debug_verbosity: init.debug_verbosity,
-                },
-                auth: auth_state,
-                themes: init.themes,
-                launch: init.launch,
-            },
-            session: AppSession::with_cache_limit(session_cache_max_results),
-            clients: AppClients::new(init.plugins, init.native_commands),
+            runtime: parts.runtime,
+            session: parts.session,
+            clients: parts.clients,
         }
+    }
+
+    pub(crate) fn replace_parts(&mut self, parts: AppStateParts) {
+        self.runtime = parts.runtime;
+        self.session = parts.session;
+        self.clients = parts.clients;
     }
 
     /// Returns the prompt prefix configured for the current session.
@@ -451,12 +695,139 @@ impl AppState {
     }
 }
 
-fn merge_policy_registries(
-    mut left: CommandPolicyRegistry,
-    right: CommandPolicyRegistry,
-) -> CommandPolicyRegistry {
-    for policy in right.entries() {
-        left.register(policy.clone());
+/// Builder for [`AppState`].
+///
+/// This is the canonical embedder-facing factory for runtime/session/client
+/// state when callers need a snapshot without going through full CLI bootstrap.
+pub struct AppStateBuilder {
+    context: RuntimeContext,
+    config: crate::config::ResolvedConfig,
+    ui: UiState,
+    launch: LaunchContext,
+    plugins: Option<PluginManager>,
+    native_commands: NativeCommandRegistry,
+    session: Option<AppSession>,
+    themes: Option<crate::ui::theme_loader::ThemeCatalog>,
+}
+
+impl AppStateBuilder {
+    /// Starts building an application-state snapshot from the resolved config
+    /// and UI state the caller wants to expose.
+    pub fn new(
+        context: RuntimeContext,
+        config: crate::config::ResolvedConfig,
+        ui: UiState,
+    ) -> Self {
+        Self {
+            context,
+            config,
+            ui,
+            launch: LaunchContext::default(),
+            plugins: None,
+            native_commands: NativeCommandRegistry::default(),
+            session: None,
+            themes: None,
+        }
     }
-    left
+
+    /// Starts a builder by deriving UI state from the resolved config and
+    /// runtime context.
+    pub fn from_resolved_config(
+        context: RuntimeContext,
+        config: crate::config::ResolvedConfig,
+    ) -> miette::Result<Self> {
+        // This path is the canonical embedder factory: derive host inputs once
+        // and hand callers a coherent runtime/session/client snapshot.
+        let host_inputs = crate::app::assembly::ResolvedHostInputs::derive(
+            &context,
+            &config,
+            &LaunchContext::default(),
+            crate::app::assembly::RenderSettingsSeed::DefaultAuto,
+            None,
+            None,
+            None,
+        )?;
+        crate::ui::theme_loader::log_theme_issues(&host_inputs.themes.issues);
+        Ok(Self {
+            context,
+            config,
+            ui: host_inputs.ui,
+            launch: LaunchContext::default(),
+            plugins: None,
+            native_commands: NativeCommandRegistry::default(),
+            session: Some(host_inputs.default_session),
+            themes: Some(host_inputs.themes),
+        })
+    }
+
+    /// Replaces the launch-time provenance used for cache and plugin setup.
+    pub fn with_launch(mut self, launch: LaunchContext) -> Self {
+        self.launch = launch;
+        self
+    }
+
+    /// Replaces the plugin manager used when assembling shared clients.
+    pub fn with_plugins(mut self, plugins: PluginManager) -> Self {
+        self.plugins = Some(plugins);
+        self
+    }
+
+    /// Replaces the native command registry used when assembling shared clients.
+    pub fn with_native_commands(mut self, native_commands: NativeCommandRegistry) -> Self {
+        self.native_commands = native_commands;
+        self
+    }
+
+    /// Replaces the session snapshot carried by the built app state.
+    pub fn with_session(mut self, session: AppSession) -> Self {
+        self.session = Some(session);
+        self
+    }
+
+    /// Replaces the loaded theme catalog used during state assembly.
+    pub(crate) fn with_themes(mut self, themes: crate::ui::theme_loader::ThemeCatalog) -> Self {
+        self.themes = Some(themes);
+        self
+    }
+
+    /// Builds the configured [`AppState`].
+    pub fn build(self) -> AppState {
+        let themes = self.themes.unwrap_or_else(|| {
+            let themes = crate::ui::theme_loader::load_theme_catalog(&self.config);
+            crate::ui::theme_loader::log_theme_issues(&themes.issues);
+            themes
+        });
+        let plugins = self
+            .plugins
+            .unwrap_or_else(|| default_plugin_manager(&self.config, &self.launch));
+
+        let crate::app::UiState {
+            render_settings,
+            message_verbosity,
+            debug_verbosity,
+            ..
+        } = self.ui;
+
+        AppState::from_parts(AppStateParts::from_init(
+            AppStateInit {
+                context: self.context,
+                config: self.config,
+                render_settings,
+                message_verbosity,
+                debug_verbosity,
+                plugins,
+                native_commands: self.native_commands,
+                themes,
+                launch: self.launch,
+            },
+            self.session,
+        ))
+    }
+}
+
+fn default_plugin_manager(
+    config: &crate::config::ResolvedConfig,
+    launch: &LaunchContext,
+) -> PluginManager {
+    crate::app::assembly::build_plugin_manager(config, launch, None)
 }

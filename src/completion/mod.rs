@@ -1,26 +1,51 @@
-//! Completion engine for OSP CLI/REPL.
+//! Completion exists to turn a partially typed line plus cursor position into a
+//! ranked suggestion set.
 //!
-//! The crate is intentionally split into three pure phases:
-//! - `tree`: build a plain completion tree
-//! - `parse`: parse line input into a structured `CommandLine`
-//! - `suggest`: generate candidates from `CommandLine + CompletionTree`
+//! This module stays deliberately free of terminal state, network access, and
+//! REPL/editor concerns. The core flow is:
 //!
-//! Dynamic hints (network/provider/openapi derived) are injected by outer
-//! layers (`osp-cli` / `osp-repl`) and not fetched here.
+//! - `tree`: build a static command/config completion tree
+//! - `parse`: tokenize and analyze a partially typed command line
+//! - `suggest`: rank and shape suggestions from the parsed cursor context
+//!
+//! Outer layers such as [`crate::cli`] and [`crate::repl`] inject dynamic
+//! command catalogs, shell scope, alias expansion, and live prompt behavior on
+//! top of this pure engine.
+//!
+//! Contract:
+//!
+//! - completion logic may depend on structured command metadata and cursor
+//!   state
+//! - it should not depend on terminal painting, network I/O, plugin process
+//!   execution, or interactive host state
+//!
+//! Public API shape:
+//!
+//! - `tree` exposes builder/factory-style entrypoints such as
+//!   [`crate::completion::CompletionTreeBuilder`] and
+//!   [`crate::completion::CommandSpec`]
+//! - `model` stays mostly plain semantic data so parsers, suggesters, and
+//!   embedders can exchange completion state without hauling builder objects
+//!   around
+//! - terminal/editor integration belongs in outer layers like [`crate::repl`]
 
 mod context;
-pub(crate) mod engine;
-pub(crate) mod model;
-pub(crate) mod parse;
-pub(crate) mod suggest;
-pub(crate) mod tree;
+/// High-level orchestration that combines parsing, context resolution, and suggestion ranking.
+pub mod engine;
+/// Shared completion data structures passed between the parser and suggester.
+pub mod model;
+pub mod parse;
+pub mod suggest;
+/// Declarative completion-tree builders derived from command and config metadata.
+pub mod tree;
 
 pub use engine::CompletionEngine;
 pub use model::{
-    ArgNode, CommandLine, CompletionAnalysis, CompletionContext, CompletionNode, CompletionTree,
-    ContextScope, CursorState, FlagNode, FlagOccurrence, MatchKind, ParsedLine, QuoteStyle,
-    Suggestion, SuggestionEntry, SuggestionOutput, TailItem, ValueType,
+    ArgNode, CommandLine, CompletionAnalysis, CompletionContext, CompletionNode, CompletionRequest,
+    CompletionTree, ContextScope, CursorState, FlagHints, FlagNode, FlagOccurrence, MatchKind,
+    OsVersions, ParsedLine, QuoteStyle, RequestHintSet, RequestHints, Suggestion, SuggestionEntry,
+    SuggestionOutput, TailItem, ValueType,
 };
-pub use parse::{CommandLineParser, TokenSpan};
+pub use parse::{CommandLineParser, ParsedCursorLine, TokenSpan};
 pub use suggest::SuggestionEngine;
 pub use tree::{CommandSpec, CompletionTreeBuilder, ConfigKeySpec};

@@ -34,7 +34,28 @@ pub struct ParsedCommandLine {
     pub stages: Vec<String>,
 }
 
-/// Parses a command line, expands aliases, and separates trailing DSL stages.
+/// Parses a raw command line, expands aliases, and separates trailing DSL stages.
+///
+/// This is the text-entry path used by CLI and REPL surfaces when they need
+/// one parser pass that understands both shell words and trailing pipes.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::cli::parse_command_text_with_aliases;
+/// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+///
+/// let mut defaults = ConfigLayer::default();
+/// defaults.set("profile.default", "default");
+///
+/// let mut resolver = ConfigResolver::default();
+/// resolver.set_defaults(defaults);
+/// let config = resolver.resolve(ResolveOptions::default()).unwrap();
+///
+/// let parsed = parse_command_text_with_aliases("theme show dracula | H P", &config).unwrap();
+/// assert_eq!(parsed.tokens, vec!["theme", "show", "dracula"]);
+/// assert_eq!(parsed.stages, vec!["H P"]);
+/// ```
 pub fn parse_command_text_with_aliases(
     text: &str,
     config: &ResolvedConfig,
@@ -54,6 +75,35 @@ pub fn parse_command_text_with_aliases(
 }
 
 /// Finalizes already-tokenized input into command tokens plus DSL stages.
+///
+/// This is the caller-facing path when tokenization already happened elsewhere
+/// and only alias expansion plus pipe splitting are still needed.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::cli::parse_command_tokens_with_aliases;
+/// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+///
+/// let mut defaults = ConfigLayer::default();
+/// defaults.set("profile.default", "default");
+///
+/// let mut resolver = ConfigResolver::default();
+/// resolver.set_defaults(defaults);
+/// let config = resolver.resolve(ResolveOptions::default()).unwrap();
+///
+/// let tokens = vec![
+///     "config".to_string(),
+///     "show".to_string(),
+///     "|".to_string(),
+///     "P".to_string(),
+///     "ui.format".to_string(),
+/// ];
+///
+/// let parsed = parse_command_tokens_with_aliases(&tokens, &config).unwrap();
+/// assert_eq!(parsed.tokens, vec!["config", "show"]);
+/// assert_eq!(parsed.stages, vec!["P ui.format"]);
+/// ```
 pub fn parse_command_tokens_with_aliases(
     tokens: &[String],
     config: &ResolvedConfig,
@@ -166,6 +216,18 @@ fn merge_orch_os_tokens(tokens: Vec<String>) -> Vec<String> {
 }
 
 /// Validates that every CLI pipe stage is known to the DSL surface.
+///
+/// Unknown explicit verbs are rejected here so callers can surface a clear
+/// "use `| H <verb>` for help" message before execution.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::cli::validate_cli_dsl_stages;
+///
+/// validate_cli_dsl_stages(&["P uid".to_string(), "H P".to_string()]).unwrap();
+/// assert!(validate_cli_dsl_stages(&["R nope".to_string()]).is_err());
+/// ```
 pub fn validate_cli_dsl_stages(stages: &[String]) -> Result<()> {
     for raw in stages {
         let parsed = parse_stage(raw).into_diagnostic().wrap_err_with(|| {
@@ -192,7 +254,7 @@ pub fn validate_cli_dsl_stages(stages: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Returns `true` when a parsed stage represents CLI help for a DSL verb.
+/// Reports whether a parsed stage is the special CLI help form `| H <verb>`.
 pub fn is_cli_help_stage(parsed: &ParsedStage) -> bool {
     matches!(parsed.kind, ParsedStageKind::UnknownExplicit) && parsed.verb.eq_ignore_ascii_case("H")
 }

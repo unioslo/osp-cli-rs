@@ -103,10 +103,11 @@ pub(crate) fn explain_runtime_config(
     // presentation preset, synthesize that into a normal config layer, and then explain against
     // the fully shaped config so `config explain` matches the runtime users actually get.
     let base_config = base_pipeline
-        .resolve(ResolveOptions {
-            profile_override: request.profile_override.clone(),
-            terminal: request.terminal.clone(),
-        })
+        .resolve(
+            ResolveOptions::new()
+                .with_profile_override(request.profile_override.clone())
+                .with_terminal_override(request.terminal.clone()),
+        )
         .into_diagnostic()
         .wrap_err("failed to resolve config before explaining presentation defaults")?;
     let pipeline = build_runtime_pipeline(
@@ -126,10 +127,9 @@ pub(crate) fn explain_runtime_config(
     resolver
         .explain_key(
             key,
-            ResolveOptions {
-                profile_override: request.profile_override,
-                terminal: request.terminal,
-            },
+            ResolveOptions::new()
+                .with_profile_override(request.profile_override)
+                .with_terminal_override(request.terminal),
         )
         .into_diagnostic()
         .wrap_err_with(|| format!("failed to explain config key `{key}`"))

@@ -1,3 +1,18 @@
+//! Semantic intermediate model used before lowering into renderable UI blocks.
+//!
+//! This module exists to bridge rich semantic inputs, like guides and generic
+//! JSON values, into a layout-oriented shape that is still independent from the
+//! final terminal renderer. It sits between "raw semantic payload" and
+//! [`crate::ui::document`] so formatting code can make structure decisions
+//! without dealing with ANSI, width probing, or renderer chrome directly.
+//!
+//! Contract:
+//!
+//! - this layer owns semantic block shaping and markdown lowering
+//! - it should not own terminal capability detection or theme resolution
+//! - callers should use it when they need guide/value formatting decisions, not
+//!   as a general-purpose public document API
+
 use serde_json::{Map, Value};
 use unicode_width::UnicodeWidthStr;
 
@@ -80,6 +95,9 @@ pub struct LowerDocumentOptions<'a> {
 
 impl DocumentModel {
     /// Builds a semantic document model from a parsed guide view.
+    ///
+    /// This preserves guide sections and entry groupings until a later lowering
+    /// step decides how they should appear in terminal output.
     pub fn from_guide_view(view: &GuideView) -> Self {
         let mut blocks = Vec::new();
 
@@ -139,7 +157,9 @@ impl DocumentModel {
 
     /// Builds a document model from a JSON value.
     ///
-    /// Object keys follow `preferred_keys` first when that ordering is applicable.
+    /// Object keys follow `preferred_keys` first when that ordering is
+    /// applicable. Arrays and nested objects are normalized into the block
+    /// shapes the UI formatter understands.
     pub fn from_value(value: &Value, preferred_keys: Option<&[String]>) -> Self {
         match value {
             Value::Object(map) => root_object_model(map, preferred_keys),
@@ -150,7 +170,8 @@ impl DocumentModel {
         }
     }
 
-    /// Renders the model as Markdown, wrapping prose blocks to the optional width.
+    /// Renders the model as Markdown, wrapping prose blocks to the optional
+    /// width.
     ///
     /// Returns an empty string when the model contains no renderable blocks.
     pub fn to_markdown_with_width(&self, width: Option<usize>) -> String {
@@ -165,7 +186,8 @@ impl DocumentModel {
 
     /// Lowers the semantic model into a renderable document tree.
     ///
-    /// Advances `next_block_id` for any generated blocks that require stable IDs.
+    /// Advances `next_block_id` for any generated blocks that require stable
+    /// IDs.
     pub fn lower_to_render_document(
         &self,
         options: LowerDocumentOptions<'_>,
@@ -844,61 +866,4 @@ fn allocate_block_id(next_block_id: &mut u64) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{BlockModel, DocumentModel, LowerDocumentOptions};
-    use crate::guide::GuideView;
-    use crate::ui::TableBorderStyle;
-    use crate::ui::chrome::SectionFrameStyle;
-
-    #[test]
-    fn guide_view_lowers_commands_to_key_value_sections_unit() {
-        let view = GuideView::from_text("Commands:\n  help  Show help\n");
-        let model = DocumentModel::from_guide_view(&view);
-        let BlockModel::Section(section) = &model.blocks[0] else {
-            panic!("expected section");
-        };
-        assert_eq!(section.title.as_deref(), Some("Commands"));
-        assert!(matches!(section.blocks[0], BlockModel::KeyValue(_)));
-    }
-
-    #[test]
-    fn markdown_from_guide_view_uses_entry_lines_unit() {
-        let view = GuideView::from_text("Commands:\n  help  Show help\n");
-        let rendered = DocumentModel::from_guide_view(&view).to_markdown_with_width(Some(80));
-        assert!(rendered.contains("- `help` Show help"));
-        assert!(rendered.contains("Show help"));
-        assert!(!rendered.contains("| name"));
-    }
-
-    #[test]
-    fn scalar_object_value_renders_as_key_value_group_unit() {
-        let value = json!({"uid": "alice", "mail": "a@uio.no"});
-        let model = DocumentModel::from_value(&value, None);
-        assert!(matches!(model.blocks[0], BlockModel::KeyValue(_)));
-    }
-
-    #[test]
-    fn help_key_values_can_lower_to_bordered_tables_unit() {
-        let view = GuideView::from_text("Commands:\n  help  Show help\n");
-        let model = DocumentModel::from_guide_view(&view);
-        let document = model.lower_to_render_document(
-            LowerDocumentOptions {
-                frame_style: SectionFrameStyle::Top,
-                panel_kind: Some("help"),
-                key_value_border: TableBorderStyle::Round,
-                key_value_indent: None,
-                key_value_gap: None,
-            },
-            &mut 1,
-        );
-        let crate::ui::document::Block::Panel(panel) = &document.blocks[0] else {
-            panic!("expected panel");
-        };
-        assert!(matches!(
-            panel.body.blocks[0],
-            crate::ui::document::Block::Table(_)
-        ));
-    }
-}
+mod tests;

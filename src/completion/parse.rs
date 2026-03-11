@@ -1,8 +1,21 @@
+//! Shell-like tokenization and cursor analysis for completion.
+//!
+//! This module exists to turn a partially typed input line plus a cursor offset
+//! into the structured data the completion engine actually needs: command path,
+//! tail items, pipe mode, and the active replacement span.
+//!
+//! Contract:
+//!
+//! - parsing here stays permissive for interactive use
+//! - the parser owns lexical structure, not suggestion ranking
+//! - callers should rely on `ParsedCursorLine` and `CursorState` rather than
+//!   re-deriving cursor spans themselves
+
 use crate::completion::model::{CommandLine, CursorState, FlagOccurrence, ParsedLine, QuoteStyle};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// Token value with byte offsets into the original input line.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenSpan {
     /// Unescaped token text.
     pub value: String,
@@ -150,12 +163,12 @@ impl ParseState {
     }
 }
 
-#[derive(Debug, Clone, Default)]
 /// Shell-like parser used by the completion engine.
+#[derive(Debug, Clone, Default)]
 pub struct CommandLineParser;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// Parsed command-line state for the full line and the cursor position.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCursorLine {
     /// Parsed tokens and command structure.
     pub parsed: ParsedLine,
@@ -171,10 +184,24 @@ struct CursorTokenization {
 }
 
 impl CommandLineParser {
-    /// Tokenization is intentionally permissive for interactive use.
+    /// Tokenizes a line using shell-like quoting rules.
     ///
-    /// If the user is mid-quote while pressing tab, we retry with a synthetic
-    /// closing quote before finally falling back to whitespace splitting.
+    /// Tokenization is intentionally permissive for interactive use. If the
+    /// user is mid-quote while pressing tab, we retry with a synthetic closing
+    /// quote before finally falling back to whitespace splitting.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::CommandLineParser;
+    ///
+    /// let parser = CommandLineParser;
+    ///
+    /// assert_eq!(
+    ///     parser.tokenize(r#"ldap user "alice smith""#),
+    ///     vec!["ldap", "user", "alice smith"]
+    /// );
+    /// ```
     pub fn tokenize(&self, line: &str) -> Vec<String> {
         self.tokenize_inner(line)
             .or_else(|| self.tokenize_inner(&format!("{line}\"")))
@@ -183,6 +210,18 @@ impl CommandLineParser {
     }
 
     /// Tokenizes `line` and preserves byte spans for each token when possible.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::CommandLineParser;
+    ///
+    /// let spans = CommandLineParser.tokenize_with_spans("ldap user alice");
+    ///
+    /// assert_eq!(spans[0].value, "ldap");
+    /// assert_eq!(spans[1].start, 5);
+    /// assert_eq!(spans[2].end, 15);
+    /// ```
     pub fn tokenize_with_spans(&self, line: &str) -> Vec<TokenSpan> {
         self.tokenize_with_spans_inner(line)
             .or_else(|| self.tokenize_with_spans_fallback(line))
@@ -194,6 +233,17 @@ impl CommandLineParser {
     /// The common case keeps completion analysis in one tokenization pass. If
     /// the line ends in an unmatched quote we fall back to the permissive
     /// tokenization path so interactive behavior stays unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::CommandLineParser;
+    ///
+    /// let parsed = CommandLineParser.analyze("ldap user ali", 13);
+    ///
+    /// assert_eq!(parsed.parsed.cursor_tokens, vec!["ldap", "user", "ali"]);
+    /// assert_eq!(parsed.cursor.token_stub, "ali");
+    /// ```
     pub fn analyze(&self, line: &str, cursor: usize) -> ParsedCursorLine {
         let safe_cursor = clamp_to_char_boundary(line, cursor.min(line.len()));
         let before_cursor = &line[..safe_cursor];
@@ -383,6 +433,24 @@ impl CommandLineParser {
     }
 
     /// Parses tokens into command-path, flag, positional, and pipe segments.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::CommandLineParser;
+    ///
+    /// let tokens = vec![
+    ///     "ldap".to_string(),
+    ///     "user".to_string(),
+    ///     "--json".to_string(),
+    ///     "|".to_string(),
+    ///     "P".to_string(),
+    /// ];
+    /// let parsed = CommandLineParser.parse(&tokens);
+    ///
+    /// assert_eq!(parsed.head(), &["ldap".to_string(), "user".to_string()]);
+    /// assert!(parsed.has_pipe());
+    /// ```
     pub fn parse(&self, tokens: &[String]) -> CommandLine {
         let mut state = ParseState::default();
         let mut iter = tokens.iter().peekable();
@@ -407,6 +475,17 @@ impl CommandLineParser {
     }
 
     /// Computes the cursor replacement range and current token stub.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::CommandLineParser;
+    ///
+    /// let cursor = CommandLineParser.cursor_state("ldap user ali", 13);
+    ///
+    /// assert_eq!(cursor.token_stub, "ali");
+    /// assert_eq!(cursor.replace_range, 10..13);
+    /// ```
     pub fn cursor_state(&self, text_before_cursor: &str, safe_cursor: usize) -> CursorState {
         let tokens = self.tokenize(text_before_cursor);
         self.build_cursor_state(
@@ -530,6 +609,17 @@ impl CommandLineParser {
     }
 
     /// Returns the active quote style for the token being edited, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::{CommandLineParser, QuoteStyle};
+    ///
+    /// assert_eq!(
+    ///     CommandLineParser.compute_stub_quote(r#"ldap user "ali"#),
+    ///     Some(QuoteStyle::Double)
+    /// );
+    /// ```
     pub fn compute_stub_quote(&self, text_before_cursor: &str) -> Option<QuoteStyle> {
         current_quote_state(text_before_cursor)
     }
@@ -706,265 +796,244 @@ mod tests {
 
     use super::CommandLineParser;
 
-    #[test]
-    fn tokenize_handles_pipes_and_quotes() {
-        let parser = CommandLineParser;
-        let tokens = parser.tokenize("orch provision --request 'name=a|b' | F name");
-        assert_eq!(
-            tokens,
-            vec![
-                "orch",
-                "provision",
-                "--request",
-                "name=a|b",
-                "|",
-                "F",
-                "name"
-            ]
-        );
+    fn parser() -> CommandLineParser {
+        CommandLineParser
     }
 
-    #[test]
-    fn tokenize_falls_back_for_unmatched_quotes() {
-        let parser = CommandLineParser;
-        let tokens = parser.tokenize("--os 'alma");
-        assert_eq!(tokens, vec!["--os", "alma"]);
+    mod scanner_contracts {
+        use super::*;
+
+        #[test]
+        fn tokenization_preserves_pipes_and_recovers_from_unmatched_quotes() {
+            let parser = parser();
+
+            assert_eq!(
+                parser.tokenize("orch provision --request 'name=a|b' | F name"),
+                vec![
+                    "orch",
+                    "provision",
+                    "--request",
+                    "name=a|b",
+                    "|",
+                    "F",
+                    "name",
+                ]
+            );
+            assert_eq!(parser.tokenize("--os 'alma"), vec!["--os", "alma"]);
+
+            let spans = parser.tokenize_with_spans("cmd --name 'alice");
+            assert_eq!(spans.len(), 3);
+            assert_eq!(spans[0].value, "cmd");
+            assert_eq!(spans[1].value, "--name");
+            assert_eq!(spans[2].value, "'alice");
+        }
+
+        #[test]
+        fn span_tracking_preserves_offsets_for_balanced_quotes_and_pipes() {
+            let parser = parser();
+            let source = r#"ldap user "alice smith" | P uid"#;
+            let spans = parser.tokenize_with_spans(source);
+
+            assert_eq!(spans[0].value, "ldap");
+            assert_eq!(spans[0].start, 0);
+            assert_eq!(spans[2].value, "alice smith");
+            assert_eq!(&source[spans[2].start..spans[2].end], "\"alice smith\"");
+            assert_eq!(spans[3].value, "|");
+        }
     }
 
-    #[test]
-    fn parse_handles_flags_and_pipes() {
-        let parser = CommandLineParser;
-        let tokens = parser.tokenize("orch provision --provider vmware --os rhel | F name");
-        let cmd = parser.parse(&tokens);
-        assert_eq!(cmd.head(), ["orch".to_string(), "provision".to_string()]);
-        assert_eq!(
-            cmd.flag_values("--provider"),
-            Some(&["vmware".to_string()][..])
-        );
-        assert_eq!(cmd.flag_values("--os"), Some(&vec!["rhel".to_string()][..]));
-        assert!(cmd.has_pipe());
-        assert_eq!(cmd.pipes(), ["F".to_string(), "name".to_string()]);
+    mod command_shape_contracts {
+        use super::*;
+
+        #[test]
+        fn parse_tracks_flag_values_pipes_and_repeated_occurrence_boundaries() {
+            let parser = parser();
+
+            let tokens = parser.tokenize("orch provision --provider vmware --os rhel | F name");
+            let cmd = parser.parse(&tokens);
+            assert_eq!(cmd.head(), ["orch".to_string(), "provision".to_string()]);
+            assert_eq!(
+                cmd.flag_values("--provider"),
+                Some(&["vmware".to_string()][..])
+            );
+            assert_eq!(cmd.flag_values("--os"), Some(&["rhel".to_string()][..]));
+            assert!(cmd.has_pipe());
+            assert_eq!(cmd.pipes(), ["F".to_string(), "name".to_string()]);
+
+            let repeated = parser.parse(&parser.tokenize("cmd --tag red --mode fast --tag blue"));
+            assert_eq!(
+                repeated.flag_occurrences().cloned().collect::<Vec<_>>(),
+                vec![
+                    FlagOccurrence {
+                        name: "--tag".to_string(),
+                        values: vec!["red".to_string()],
+                    },
+                    FlagOccurrence {
+                        name: "--mode".to_string(),
+                        values: vec!["fast".to_string()],
+                    },
+                    FlagOccurrence {
+                        name: "--tag".to_string(),
+                        values: vec!["blue".to_string()],
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn parse_respects_option_boundaries_inline_values_and_negative_numbers() {
+            let parser = parser();
+
+            let after_double_dash = parser.parse(&parser.tokenize("cmd -- --not-a-flag"));
+            assert_eq!(after_double_dash.head(), ["cmd".to_string()]);
+            assert_eq!(
+                after_double_dash
+                    .positional_args()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec!["--not-a-flag".to_string()]
+            );
+
+            let negative_value = parser.parse(&parser.tokenize("cmd --count -5"));
+            assert_eq!(
+                negative_value.flag_values("--count"),
+                Some(&["-5".to_string()][..])
+            );
+
+            let inline = parser.parse(&parser.tokenize("cmd --format=json --os= --format=table"));
+            assert_eq!(inline.flag_values("--os"), Some(&[][..]));
+            assert_eq!(
+                inline.flag_occurrences().cloned().collect::<Vec<_>>(),
+                vec![
+                    FlagOccurrence {
+                        name: "--format".to_string(),
+                        values: vec!["json".to_string()],
+                    },
+                    FlagOccurrence {
+                        name: "--os".to_string(),
+                        values: vec![],
+                    },
+                    FlagOccurrence {
+                        name: "--format".to_string(),
+                        values: vec!["table".to_string()],
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn parse_distinguishes_tail_mode_from_dsl_boundaries() {
+            let parser = parser();
+
+            let tail =
+                parser.parse(&parser.tokenize("ldap user --provider vmware region eu-central"));
+            assert_eq!(tail.head(), ["ldap".to_string(), "user".to_string()]);
+            assert_eq!(
+                tail.flag_values("--provider"),
+                Some(
+                    &[
+                        "vmware".to_string(),
+                        "region".to_string(),
+                        "eu-central".to_string(),
+                    ][..]
+                )
+            );
+
+            let dsl = parser.parse(&parser.tokenize("cmd -- literal | F name"));
+            assert_eq!(dsl.head(), ["cmd".to_string()]);
+            assert_eq!(
+                dsl.positional_args().cloned().collect::<Vec<_>>(),
+                vec!["literal".to_string()]
+            );
+            assert!(dsl.has_pipe());
+            assert_eq!(dsl.pipes(), ["F".to_string(), "name".to_string()]);
+        }
     }
 
-    #[test]
-    fn parse_handles_end_of_options_and_negative_numbers() {
-        let parser = CommandLineParser;
+    mod cursor_analysis_contracts {
+        use super::*;
 
-        let tokens = parser.tokenize("cmd -- --not-a-flag");
-        let cmd = parser.parse(&tokens);
-        assert_eq!(cmd.head(), ["cmd".to_string()]);
-        assert_eq!(
-            cmd.positional_args().cloned().collect::<Vec<_>>(),
-            vec!["--not-a-flag".to_string()]
-        );
+        #[test]
+        fn cursor_state_tracks_equals_boundaries_and_open_quote_ranges() {
+            let parser = parser();
 
-        let tokens = parser.tokenize("cmd --count -5");
-        let cmd = parser.parse(&tokens);
-        assert_eq!(
-            cmd.flag_values("--count"),
-            Some(&vec!["-5".to_string()][..])
-        );
+            let cursor = parser.cursor_state("cmd --flag=", "cmd --flag=".len());
+            assert_eq!(cursor.token_stub, "");
 
-        let tokens = parser.tokenize("cmd --os=");
-        let cmd = parser.parse(&tokens);
-        assert_eq!(cmd.flag_values("--os"), Some(&[][..]));
-    }
+            assert_eq!(
+                parser.compute_stub_quote("cmd --name \"al"),
+                Some(QuoteStyle::Double)
+            );
+            assert_eq!(
+                parser.compute_stub_quote("cmd --name 'al"),
+                Some(QuoteStyle::Single)
+            );
+            assert_eq!(parser.compute_stub_quote("cmd --name al"), None);
 
-    #[test]
-    fn parse_preserves_repeated_flag_occurrence_boundaries() {
-        let parser = CommandLineParser;
-        let tokens = parser.tokenize("cmd --tag red --mode fast --tag blue");
-        let cmd = parser.parse(&tokens);
-        let occurrences = cmd.flag_occurrences().cloned().collect::<Vec<_>>();
+            let line = "ldap user \"oi";
+            let cursor = parser.cursor_state(line, line.len());
+            assert_eq!(cursor.token_stub, "oi");
+            assert_eq!(cursor.raw_stub, "oi");
+            assert_eq!(cursor.replace_range, 11..13);
+            assert_eq!(cursor.quote_style, Some(QuoteStyle::Double));
+        }
 
-        assert_eq!(occurrences.len(), 3);
-        assert_eq!(occurrences[0].name, "--tag");
-        assert_eq!(occurrences[0].values, vec!["red".to_string()]);
-        assert_eq!(occurrences[1].name, "--mode");
-        assert_eq!(occurrences[1].values, vec!["fast".to_string()]);
-        assert_eq!(occurrences[2].name, "--tag");
-        assert_eq!(occurrences[2].values, vec!["blue".to_string()]);
-    }
+        #[test]
+        fn analyze_reuses_safe_cursor_snapshots_for_prefix_and_balanced_quotes() {
+            let parser = parser();
 
-    #[test]
-    fn compute_stub_respects_equals_boundary() {
-        let parser = CommandLineParser;
-        let before = "cmd --flag=";
-        let cursor = parser.cursor_state(before, before.len());
-        assert_eq!(cursor.token_stub, "");
-    }
+            let line = "orch provision --provider vmware --os rhel | F name";
+            let cursor = "orch provision --provider vmware".len();
+            let analyzed = parser.analyze(line, cursor);
+            assert_eq!(
+                analyzed.parsed.full_tokens,
+                vec![
+                    "orch",
+                    "provision",
+                    "--provider",
+                    "vmware",
+                    "--os",
+                    "rhel",
+                    "|",
+                    "F",
+                    "name",
+                ]
+            );
+            assert_eq!(
+                analyzed.parsed.cursor_tokens,
+                vec!["orch", "provision", "--provider", "vmware"]
+            );
+            assert_eq!(
+                analyzed.parsed.cursor_cmd.flag_values("--provider"),
+                Some(&["vmware".to_string()][..])
+            );
 
-    #[test]
-    fn compute_stub_quote_tracks_unfinished_quotes() {
-        let parser = CommandLineParser;
-        assert_eq!(
-            parser.compute_stub_quote("cmd --name \"al"),
-            Some(QuoteStyle::Double)
-        );
-        assert_eq!(
-            parser.compute_stub_quote("cmd --name 'al"),
-            Some(QuoteStyle::Single)
-        );
-        assert_eq!(parser.compute_stub_quote("cmd --name al"), None);
-    }
+            let balanced = parser.analyze(
+                r#"ldap user "oi ste" --format json"#,
+                r#"ldap user "oi"#.len(),
+            );
+            assert_eq!(balanced.cursor.token_stub, "oi");
+            assert_eq!(balanced.cursor.raw_stub, "oi");
+            assert_eq!(balanced.cursor.quote_style, Some(QuoteStyle::Double));
+        }
 
-    #[test]
-    fn cursor_state_tracks_replace_range_inside_open_quotes() {
-        let parser = CommandLineParser;
-        let line = "ldap user \"oi";
-        let cursor = parser.cursor_state(line, line.len());
+        #[test]
+        fn analyze_recovers_from_unbalanced_quotes_and_non_char_boundaries() {
+            let parser = parser();
 
-        assert_eq!(cursor.token_stub, "oi");
-        assert_eq!(cursor.raw_stub, "oi");
-        assert_eq!(cursor.replace_range, 11..13);
-        assert_eq!(cursor.quote_style, Some(QuoteStyle::Double));
-    }
+            let unbalanced = parser.analyze(r#"ldap user "alice"#, r#"ldap user "alice"#.len());
+            assert_eq!(unbalanced.parsed.full_tokens, vec!["ldap", "user", "alice"]);
+            assert_eq!(
+                unbalanced.parsed.cursor_tokens,
+                vec!["ldap", "user", "alice"]
+            );
+            assert_eq!(unbalanced.cursor.quote_style, Some(QuoteStyle::Double));
+            assert_eq!(unbalanced.cursor.token_stub, "alice");
 
-    #[test]
-    fn analyze_reuses_one_cursor_snapshot_for_full_and_prefix_parse() {
-        let parser = CommandLineParser;
-        let line = "orch provision --provider vmware --os rhel | F name";
-        let cursor = "orch provision --provider vmware".len();
-        let analyzed = parser.analyze(line, cursor);
-
-        assert_eq!(
-            analyzed.parsed.full_tokens,
-            vec![
-                "orch",
-                "provision",
-                "--provider",
-                "vmware",
-                "--os",
-                "rhel",
-                "|",
-                "F",
-                "name",
-            ]
-        );
-        assert_eq!(
-            analyzed.parsed.cursor_tokens,
-            vec!["orch", "provision", "--provider", "vmware"]
-        );
-        assert_eq!(
-            analyzed.parsed.cursor_cmd.flag_values("--provider"),
-            Some(&["vmware".to_string()][..])
-        );
-    }
-
-    #[test]
-    fn analyze_preserves_cursor_quote_state_inside_balanced_line() {
-        let parser = CommandLineParser;
-        let line = r#"ldap user "oi ste" --format json"#;
-        let cursor = r#"ldap user "oi"#.len();
-        let analyzed = parser.analyze(line, cursor);
-
-        assert_eq!(analyzed.cursor.token_stub, "oi");
-        assert_eq!(analyzed.cursor.raw_stub, "oi");
-        assert_eq!(analyzed.cursor.quote_style, Some(QuoteStyle::Double));
-    }
-
-    #[test]
-    fn tokenize_with_spans_preserves_offsets_for_quotes_and_pipes() {
-        let parser = CommandLineParser;
-        let source = r#"ldap user "alice smith" | P uid"#;
-        let spans = parser.tokenize_with_spans(source);
-
-        assert_eq!(spans[0].value, "ldap");
-        assert_eq!(spans[0].start, 0);
-        assert_eq!(spans[2].value, "alice smith");
-        assert_eq!(&source[spans[2].start..spans[2].end], "\"alice smith\"");
-        assert_eq!(spans[3].value, "|");
-    }
-
-    #[test]
-    fn parse_keeps_inline_flag_values_and_repeated_empty_occurrences() {
-        let parser = CommandLineParser;
-        let tokens = parser.tokenize("cmd --format=json --os= --format=table");
-        let cmd = parser.parse(&tokens);
-
-        assert_eq!(
-            cmd.flag_occurrences().cloned().collect::<Vec<_>>(),
-            vec![
-                FlagOccurrence {
-                    name: "--format".to_string(),
-                    values: vec!["json".to_string()],
-                },
-                FlagOccurrence {
-                    name: "--os".to_string(),
-                    values: vec![],
-                },
-                FlagOccurrence {
-                    name: "--format".to_string(),
-                    values: vec!["table".to_string()],
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn analyze_clamps_non_char_boundary_cursor_back_to_safe_boundary() {
-        let parser = CommandLineParser;
-        let line = "ldap user å";
-        let analyzed = parser.analyze(line, line.len() - 1);
-
-        assert!(analyzed.parsed.safe_cursor < line.len());
-        assert_eq!(analyzed.cursor.token_stub, "");
-    }
-
-    #[test]
-    fn parse_switches_to_tail_mode_after_first_flag_like_token() {
-        let parser = CommandLineParser;
-        let tokens = parser.tokenize("ldap user --provider vmware region eu-central");
-        let cmd = parser.parse(&tokens);
-
-        assert_eq!(cmd.head(), ["ldap".to_string(), "user".to_string()]);
-        assert_eq!(
-            cmd.flag_values("--provider"),
-            Some(
-                &[
-                    "vmware".to_string(),
-                    "region".to_string(),
-                    "eu-central".to_string()
-                ][..]
-            )
-        );
-    }
-
-    #[test]
-    fn parse_treats_pipe_after_double_dash_as_dsl_boundary() {
-        let parser = CommandLineParser;
-        let tokens = parser.tokenize("cmd -- literal | F name");
-        let cmd = parser.parse(&tokens);
-
-        assert_eq!(cmd.head(), ["cmd".to_string()]);
-        assert_eq!(
-            cmd.positional_args().cloned().collect::<Vec<_>>(),
-            vec!["literal".to_string()]
-        );
-        assert!(cmd.has_pipe());
-        assert_eq!(cmd.pipes(), ["F".to_string(), "name".to_string()]);
-    }
-
-    #[test]
-    fn tokenize_with_spans_falls_back_for_unmatched_quotes() {
-        let parser = CommandLineParser;
-        let spans = parser.tokenize_with_spans("cmd --name 'alice");
-
-        assert_eq!(spans.len(), 3);
-        assert_eq!(spans[0].value, "cmd");
-        assert_eq!(spans[1].value, "--name");
-        assert_eq!(spans[2].value, "'alice");
-    }
-
-    #[test]
-    fn analyze_falls_back_when_cursor_is_inside_unbalanced_quote() {
-        let parser = CommandLineParser;
-        let line = r#"ldap user "alice"#;
-        let analyzed = parser.analyze(line, line.len());
-
-        assert_eq!(analyzed.parsed.full_tokens, vec!["ldap", "user", "alice"]);
-        assert_eq!(analyzed.parsed.cursor_tokens, vec!["ldap", "user", "alice"]);
-        assert_eq!(analyzed.cursor.quote_style, Some(QuoteStyle::Double));
-        assert_eq!(analyzed.cursor.token_stub, "alice");
+            let line = "ldap user å";
+            let analyzed = parser.analyze(line, line.len() - 1);
+            assert!(analyzed.parsed.safe_cursor < line.len());
+            assert_eq!(analyzed.cursor.token_stub, "");
+        }
     }
 }

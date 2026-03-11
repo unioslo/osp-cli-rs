@@ -1,9 +1,33 @@
-//! Main host-facing entrypoints plus bootstrap/runtime state.
+//! The app module exists to turn the library pieces into a running program.
+//!
+//! This is the process-facing layer of the crate. It wires together CLI
+//! parsing, config loading, plugin/catalog setup, rendering, and REPL startup
+//! into the public [`App`] entrypoints. Lower-level modules like
+//! [`crate::config`], [`crate::ui`], and [`crate::repl`] stay reusable because
+//! this module is where the product-level orchestration happens.
+//!
+//! Contract:
+//!
+//! - this is allowed to depend on the rest of the crate because it is the host
+//!   composition layer
+//! - the dependency should not point the other way; lower-level modules should
+//!   not import [`crate::app`] to get work done
+//!
+//! Public API shape:
+//!
+//! - most callers should start with [`App`] or [`AppBuilder`]
+//! - embedders may inspect runtime/session state, but the preferred
+//!   construction path still flows through builders and constructors here such
+//!   as [`crate::app::AppStateBuilder`], [`crate::app::UiStateBuilder`], and
+//!   [`crate::app::LaunchContextBuilder`]
+//! - lower-level semantic payloads live in modules like [`crate::guide`] and
+//!   [`crate::completion`]; this module owns the heavier host machinery
 
 use crate::native::NativeCommandRegistry;
 use crate::ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity};
 use std::ffi::OsString;
 
+pub(crate) mod assembly;
 pub(crate) mod bootstrap;
 pub(crate) mod command_output;
 pub(crate) mod config_explain;
@@ -12,6 +36,7 @@ pub(crate) mod external;
 pub(crate) mod help;
 pub(crate) mod host;
 pub(crate) mod logging;
+pub(crate) mod rebuild;
 pub(crate) mod repl_lifecycle;
 pub(crate) mod runtime;
 pub(crate) mod session;
@@ -25,19 +50,24 @@ pub(crate) use bootstrap::*;
 pub(crate) use command_output::*;
 pub use host::run_from;
 pub(crate) use host::*;
+pub(crate) use repl_lifecycle::rebuild_repl_in_place;
 pub use runtime::{
-    AppClients, AppRuntime, AuthState, ConfigState, LaunchContext, RuntimeContext, TerminalKind,
-    UiState,
+    AppClients, AppClientsBuilder, AppRuntime, AuthState, ConfigState, LaunchContext,
+    LaunchContextBuilder, RuntimeContext, TerminalKind, UiState, UiStateBuilder,
 };
+#[cfg(test)]
 pub(crate) use session::AppStateInit;
 pub use session::{
-    AppSession, AppState, DebugTimingBadge, DebugTimingState, LastFailure, ReplScopeFrame,
-    ReplScopeStack,
+    AppSession, AppSessionBuilder, AppState, AppStateBuilder, DebugTimingBadge, DebugTimingState,
+    LastFailure, ReplScopeFrame, ReplScopeStack,
 };
 pub use sink::{BufferedUiSink, StdIoUiSink, UiSink};
 
 #[derive(Clone, Default)]
 /// Top-level application entrypoint for CLI and REPL execution.
+///
+/// Most embedders should start here or with [`AppBuilder`] instead of trying
+/// to assemble runtime/session machinery directly.
 pub struct App {
     native_commands: NativeCommandRegistry,
 }
@@ -138,6 +168,8 @@ impl<'a> AppRunner<'a> {
 
 #[derive(Clone, Default)]
 /// Builder for configuring an [`App`] before construction.
+///
+/// This is the canonical public composition surface for host-level setup.
 pub struct AppBuilder {
     native_commands: NativeCommandRegistry,
 }

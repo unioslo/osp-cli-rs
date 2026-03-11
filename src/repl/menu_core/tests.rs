@@ -206,7 +206,12 @@ fn debug_snapshot_scrolls_descriptions_and_hides_when_inactive() {
     assert!(snapshot.description_rendered.is_some());
     assert_eq!(snapshot.rendered.len(), 3);
     assert!(snapshot.rendered.iter().any(|line| line.contains("bravo")));
-    assert!(snapshot.rendered.iter().any(|line| line.contains("charlie")));
+    assert!(
+        snapshot
+            .rendered
+            .iter()
+            .any(|line| line.contains("charlie"))
+    );
     assert!(!snapshot.rendered.iter().any(|line| line.contains("alpha")));
 
     let tight = core.debug_snapshot(&colors, 40, 1, 3, false);
@@ -280,12 +285,17 @@ fn layout_and_render_helpers_cover_empty_narrow_and_ansi_paths() {
     ]);
     core.update_layout(8, 0);
     assert_eq!(core.columns_for_test(), 1);
-    assert_eq!(core.description_line().as_deref(), Some("Inspect runtime configuration"));
+    assert_eq!(
+        core.description_line().as_deref(),
+        Some("Inspect runtime configuration")
+    );
 
-    let mut colors = MenuTextStyle::default();
-    colors.text_style = Style::new().fg(Color::Cyan);
-    colors.selected_text_style = Style::new().fg(Color::Black).on(Color::White);
-    colors.description_style = Style::new().fg(Color::Yellow);
+    let colors = MenuTextStyle {
+        text_style: Style::new().fg(Color::Cyan),
+        selected_text_style: Style::new().fg(Color::Black).on(Color::White),
+        description_style: Style::new().fg(Color::Yellow),
+        ..MenuTextStyle::default()
+    };
 
     let ansi_entry = core.create_entry_string(&core.values()[0], 0, 0, 1, true, &colors);
     let ascii_entry = core.create_entry_string(&core.values()[0], 0, 0, 1, false, &colors);

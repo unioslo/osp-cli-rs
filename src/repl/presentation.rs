@@ -441,13 +441,13 @@ pub(crate) fn build_repl_appearance(view: ReplViewContext<'_>) -> ReplAppearance
         _ => DEFAULT_REPL_HISTORY_MENU_ROWS as u16,
     };
 
-    ReplAppearance {
-        completion_text_style: Some(completion_text_style),
-        completion_background_style: Some(completion_background_style),
-        completion_highlight_style: Some(completion_highlight_style),
-        command_highlight_style: Some(command_highlight_style),
-        history_menu_rows,
-    }
+    ReplAppearance::builder()
+        .with_completion_text_style(Some(completion_text_style))
+        .with_completion_background_style(Some(completion_background_style))
+        .with_completion_highlight_style(Some(completion_highlight_style))
+        .with_command_highlight_style(Some(command_highlight_style))
+        .with_history_menu_rows(history_menu_rows)
+        .build()
 }
 
 pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {

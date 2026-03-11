@@ -230,3 +230,6 @@ fn run_jq_with_program(
         .map_err(|source| JqError::InvalidJsonOutput { source })?;
     Ok(Some(parsed))
 }
+
+#[cfg(test)]
+mod tests;

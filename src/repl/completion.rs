@@ -1,3 +1,12 @@
+//! REPL-specific completion tree shaping and metadata injection.
+//!
+//! The pure completion engine only knows about command trees and cursor state.
+//! This module adapts live REPL behavior into that model by:
+//! - projecting the visible command catalog into a completion tree
+//! - injecting invocation flags that remain legal in REPL mode
+//! - expanding aliases into prefilled command and flag state
+//! - re-rooting the tree when the REPL is inside a shell scope
+
 use crate::app::CMD_CONFIG;
 use crate::cli::invocation::scan_command_tokens;
 use crate::cli::pipeline::{is_cli_help_stage, validate_cli_dsl_stages};
@@ -124,6 +133,9 @@ fn alias_completion_node(
 }
 
 fn alias_completion_command(template: &str) -> Option<AliasCompletionCommand> {
+    // Alias templates may contain `${...}` placeholders that are meaningful at
+    // execution time but would break completion parsing. Replace them with a
+    // stable sentinel so the completer can still resolve the alias shape.
     let sanitized = sanitize_alias_template_for_completion(template);
     let parsed = crate::dsl::parse_pipeline(&sanitized).ok()?;
     let tokens = shell_words::split(&parsed.command).ok()?;
@@ -183,6 +195,8 @@ fn resolved_alias_target_node(
         if segment == ALIAS_PLACEHOLDER_TOKEN {
             break;
         }
+        // Keep concrete alias arguments as already-filled positionals so
+        // completion lands on the next user-editable slot.
         prefilled_positionals.push(segment.clone());
     }
 
@@ -225,6 +239,9 @@ fn invocation_prefilled_flags(
 ) -> BTreeMap<String, Vec<String>> {
     let mut out = BTreeMap::new();
 
+    // Invocation flags typed before the command proper should still shape
+    // completion inside aliases and shell scopes, so the tree carries them as
+    // prefilled values rather than treating them as out-of-band state.
     if let Some(format) = invocation.format {
         out.insert("--format".to_string(), vec![format.as_str().to_string()]);
     }
@@ -297,8 +314,8 @@ fn apply_shell_root_controls(root: &mut CompletionNode) {
     });
     suggestions.dedup_by(|left, right| left.value == right.value);
 
-    // Keep root args in sync with current child commands so "no stub yet"
-    // completion can suggest shell commands from this scoped root.
+    // Keep root args in sync with current child commands so an empty stub
+    // still suggests shell-local commands from the scoped root.
     root.args = vec![ArgNode {
         name: Some("command".to_string()),
         suggestions,
@@ -552,7 +569,7 @@ mod tests {
         sanitize_alias_template_for_completion, scope_completion_tree,
     };
     use crate::app::{
-        AppState, AppStateInit, LaunchContext, ReplScopeStack, RuntimeContext, TerminalKind,
+        AppState, LaunchContext, ReplScopeStack, RuntimeContext, TerminalKind, UiState,
     };
     use crate::completion::{CompletionNode, CompletionTree, ContextScope, FlagNode};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
@@ -572,17 +589,16 @@ mod tests {
             .resolve(ResolveOptions::default().with_terminal("repl"))
             .expect("test config should resolve");
 
-        AppState::new(AppStateInit {
-            context: RuntimeContext::new(None, TerminalKind::Repl, None),
+        AppState::builder(
+            RuntimeContext::new(None, TerminalKind::Repl, None),
             config,
-            render_settings: RenderSettings::test_plain(OutputFormat::Json),
-            message_verbosity: MessageLevel::Success,
-            debug_verbosity: 0,
-            plugins: PluginManager::new(Vec::new()),
-            native_commands: crate::native::NativeCommandRegistry::default(),
-            themes: crate::ui::theme_loader::ThemeCatalog::default(),
-            launch: LaunchContext::default(),
-        })
+            UiState::builder(RenderSettings::test_plain(OutputFormat::Json))
+                .with_message_verbosity(MessageLevel::Success)
+                .build(),
+        )
+        .with_launch(LaunchContext::default())
+        .with_plugins(PluginManager::new(Vec::new()))
+        .build()
     }
 
     #[test]

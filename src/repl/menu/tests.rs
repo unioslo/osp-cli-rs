@@ -2,7 +2,7 @@ use super::{OspCompletionMenu, needs_space_prefix};
 use nu_ansi_term::{Color, Style};
 use reedline::{Completer, Editor, Menu, MenuEvent, Span, Suggestion, UndoBehavior};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone)]
@@ -53,8 +53,7 @@ fn split_lines(output: &str) -> Vec<&str> {
 }
 
 fn env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    crate::tests::env_lock()
 }
 
 fn make_temp_dir(prefix: &str) -> PathBuf {

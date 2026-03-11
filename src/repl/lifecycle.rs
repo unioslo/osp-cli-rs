@@ -4,7 +4,7 @@ use miette::Result;
 
 use crate::app;
 use crate::app::sink::UiSink;
-use crate::app::{AppClients, AppRuntime, AppSession};
+use crate::app::{AppClients, AppRuntime, AppSession, AppState};
 
 use super::ReplViewContext;
 use super::completion;
@@ -27,20 +27,16 @@ impl ReplLoopState {
         }
     }
 
-    pub(super) fn prepare_cycle(
-        &mut self,
-        runtime: &mut AppRuntime,
-        session: &mut AppSession,
-        clients: &mut AppClients,
-    ) -> Result<ReplCycle> {
+    pub(super) fn prepare_cycle(&mut self, state: &mut AppState) -> Result<ReplCycle> {
         if std::mem::take(&mut self.pending_reload) {
-            let (next_runtime, next_session, next_clients) =
-                app::rebuild_repl_parts(runtime, session, clients)?;
-            *runtime = next_runtime;
-            *session = next_session;
-            *clients = next_clients;
+            app::rebuild_repl_in_place(state)?;
         }
-        ReplCycle::prepare(runtime, session, clients, self.show_intro)
+        ReplCycle::prepare(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            self.show_intro,
+        )
     }
 
     pub(super) fn render_cycle_chrome(
@@ -200,11 +196,10 @@ mod tests {
             .resolve(ResolveOptions::default())
             .expect("config should resolve");
         let themes = ThemeCatalog::default();
-        let ui = UiState {
-            render_settings: RenderSettings::test_plain(OutputFormat::Table),
-            message_verbosity: MessageLevel::Success,
-            debug_verbosity: 0,
-        };
+        let ui = UiState::builder(RenderSettings::test_plain(OutputFormat::Table))
+            .with_message_verbosity(MessageLevel::Success)
+            .with_debug_verbosity(0)
+            .build();
         let auth = AuthState::from_resolved(&resolved);
         let scope = ReplScopeStack::default();
         let view = ReplViewContext {
@@ -231,11 +226,10 @@ mod tests {
             .resolve(ResolveOptions::default())
             .expect("config should resolve");
         let themes = ThemeCatalog::default();
-        let ui = UiState {
-            render_settings: RenderSettings::test_plain(OutputFormat::Table),
-            message_verbosity: MessageLevel::Success,
-            debug_verbosity: 0,
-        };
+        let ui = UiState::builder(RenderSettings::test_plain(OutputFormat::Table))
+            .with_message_verbosity(MessageLevel::Success)
+            .with_debug_verbosity(0)
+            .build();
         let auth = AuthState::from_resolved(&resolved);
         let scope = ReplScopeStack::default();
         let view = ReplViewContext {
@@ -274,7 +268,7 @@ mod tests {
 
         let mut loop_state = ReplLoopState::new(true);
         let first = loop_state
-            .prepare_cycle(&mut state.runtime, &mut state.session, &mut state.clients)
+            .prepare_cycle(&mut state)
             .expect("initial cycle should build");
         assert!(!first.root_words.is_empty());
         assert!(first.help_text.contains("help") || first.help_text.contains("config"));
@@ -288,7 +282,7 @@ mod tests {
         );
 
         let second = loop_state
-            .prepare_cycle(&mut state.runtime, &mut state.session, &mut state.clients)
+            .prepare_cycle(&mut state)
             .expect("reloaded cycle should build");
         assert!(!second.root_words.is_empty());
     }

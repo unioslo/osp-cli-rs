@@ -1,3 +1,25 @@
+//! Structured display blocks used as the boundary between formatting and
+//! terminal rendering.
+//!
+//! This module exists so higher-level code can describe *what* should be shown
+//! without deciding *how* it should be painted in a terminal. Formatters build
+//! documents out of semantic blocks, and the renderer later turns those blocks
+//! into themed terminal text.
+//!
+//! In practice, this keeps rendering bugs easier to localize:
+//!
+//! - if the document shape is wrong, the formatter is wrong
+//! - if the document is right but the terminal output is wrong, the renderer is
+//!   wrong
+//!
+//! Contract:
+//!
+//! - document types may carry semantic styling hints and layout intent
+//! - they should not depend on terminal width probing, theme resolution, or
+//!   config precedence
+//! - block variants are intentionally higher-level than raw ANSI/text spans so
+//!   multiple renderers can share the same model
+
 use serde_json::Value;
 
 use crate::ui::TableBorderStyle;
@@ -5,6 +27,27 @@ use crate::ui::chrome::SectionFrameStyle;
 use crate::ui::style::StyleToken;
 
 /// Renderable document composed of high-level display blocks.
+///
+/// The document model is the handoff point between semantic formatting and
+/// terminal rendering. Callers populate it with blocks; renderers decide how
+/// those blocks map onto plain or rich terminal output.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::{Block, Document, LineBlock, LinePart};
+///
+/// let document = Document {
+///     blocks: vec![Block::Line(LineBlock {
+///         parts: vec![LinePart {
+///             text: "hello".to_string(),
+///             token: None,
+///         }],
+///     })],
+/// };
+///
+/// assert_eq!(document.blocks.len(), 1);
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct Document {
     /// Ordered blocks to render.
@@ -47,6 +90,10 @@ pub struct LinePart {
 }
 
 /// Framed panel containing a nested document.
+///
+/// Panels carry grouping intent without hard-coding terminal chrome. The
+/// renderer is free to honor that intent with ASCII, Unicode, or theme-aware
+/// borders.
 #[derive(Debug, Clone)]
 pub struct PanelBlock {
     /// Optional title displayed in the panel chrome.
@@ -95,6 +142,9 @@ pub struct JsonBlock {
 }
 
 /// Tabular document block.
+///
+/// Table blocks preserve row/column structure until the final render pass so
+/// width-aware layout decisions stay inside the renderer.
 #[derive(Debug, Clone)]
 pub struct TableBlock {
     /// Stable identifier used for interactive table state.

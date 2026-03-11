@@ -215,11 +215,10 @@ mod tests {
     }
 
     fn test_ui_state() -> UiState {
-        UiState {
-            render_settings: RenderSettings::test_plain(OutputFormat::Table),
-            message_verbosity: MessageLevel::Info,
-            debug_verbosity: 0,
-        }
+        UiState::builder(RenderSettings::test_plain(OutputFormat::Table))
+            .with_message_verbosity(MessageLevel::Info)
+            .with_debug_verbosity(0)
+            .build()
     }
 
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {

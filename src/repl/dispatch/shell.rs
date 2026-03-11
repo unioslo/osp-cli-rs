@@ -11,65 +11,60 @@ use super::command::{render_repl_command_output, run_repl_external_command};
 use crate::app::sink::UiSink;
 use crate::repl::{ReplViewContext, input, presentation, surface};
 
-pub(super) fn maybe_handle_repl_shortcuts(
-    runtime: &mut AppRuntime,
-    session: &mut AppSession,
-    clients: &AppClients,
+#[derive(Debug)]
+pub(super) enum ReplShortcutPlan {
+    Help {
+        invocation: ResolvedInvocation,
+    },
+    ShellEntry {
+        command: String,
+        invocation: ResolvedInvocation,
+    },
+}
+
+pub(super) fn classify_repl_shortcut(
+    runtime: &AppRuntime,
+    session: &AppSession,
     parsed: &input::ReplParsedLine,
     base_invocation: &ResolvedInvocation,
-    line: &str,
-    sink: &mut dyn UiSink,
-) -> Result<Option<ReplLineResult>> {
+) -> Result<Option<ReplShortcutPlan>> {
     if let Some(help_invocation) = repl_shortcut_help_invocation(runtime, session, parsed)? {
-        return repl_help_result(
-            runtime,
-            session,
-            clients,
-            parsed,
-            &help_invocation,
-            line,
-            sink,
-        )
-        .map(Some);
-    }
-
-    if let Some(result) = maybe_handle_single_token_shortcut(
-        runtime,
-        session,
-        clients,
-        parsed,
-        base_invocation,
-        line,
-        sink,
-    )? {
-        return Ok(Some(result));
+        return Ok(Some(ReplShortcutPlan::Help {
+            invocation: help_invocation,
+        }));
     }
 
     if let Some(command) = parsed.shell_entry_command(&session.scope) {
-        let entered = enter_repl_shell(runtime, session, clients, command, base_invocation)?;
-        session.sync_history_shell_context();
-        return Ok(Some(ReplLineResult::Continue(entered)));
+        return Ok(Some(ReplShortcutPlan::ShellEntry {
+            command: command.to_string(),
+            invocation: base_invocation.clone(),
+        }));
     }
 
     Ok(None)
 }
 
-fn maybe_handle_single_token_shortcut(
-    _runtime: &mut AppRuntime,
+pub(super) fn execute_repl_shortcut(
+    runtime: &mut AppRuntime,
     session: &mut AppSession,
-    _clients: &AppClients,
+    clients: &AppClients,
     parsed: &input::ReplParsedLine,
-    _base_invocation: &ResolvedInvocation,
-    _line: &str,
-    _sink: &mut dyn UiSink,
-) -> Result<Option<ReplLineResult>> {
-    if parsed.dispatch_tokens.len() != 1 {
-        return Ok(None);
-    }
-
-    match parsed.dispatch_tokens[0].as_str() {
-        "exit" | "quit" => Ok(handle_repl_exit_request(session)),
-        _ => Ok(None),
+    shortcut: ReplShortcutPlan,
+    line: &str,
+    sink: &mut dyn UiSink,
+) -> Result<ReplLineResult> {
+    match shortcut {
+        ReplShortcutPlan::Help { invocation } => {
+            repl_help_result(runtime, session, clients, parsed, &invocation, line, sink)
+        }
+        ReplShortcutPlan::ShellEntry {
+            command,
+            invocation,
+        } => {
+            let entered = enter_repl_shell(runtime, session, clients, &command, &invocation)?;
+            session.sync_history_shell_context();
+            Ok(ReplLineResult::Continue(entered))
+        }
     }
 }
 
@@ -248,8 +243,8 @@ fn repl_help_command_result_for_scope(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_repl_shell_prefix, enter_repl_shell, handle_repl_exit_request,
-        maybe_handle_repl_shortcuts, repl_help_for_scope,
+        ReplShortcutPlan, apply_repl_shell_prefix, classify_repl_shortcut, enter_repl_shell,
+        execute_repl_shortcut, handle_repl_exit_request, repl_help_for_scope,
     };
     use crate::app::sink::BufferedUiSink;
     use crate::app::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
@@ -332,19 +327,22 @@ mod tests {
         let parsed = ReplParsedLine::parse(line, state.runtime.config.resolved())
             .expect("line should parse");
 
-        let rendered = maybe_handle_repl_shortcuts(
+        let shortcut = classify_repl_shortcut(&state.runtime, &state.session, &parsed, &invocation)
+            .expect("help shortcut should classify")
+            .expect("help shortcut should exist");
+        let rendered = execute_repl_shortcut(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
             &parsed,
-            &invocation,
+            shortcut,
             line,
             &mut sink,
         )
         .expect("help shortcut should succeed");
 
         match rendered {
-            Some(ReplLineResult::Continue(text)) => text,
+            ReplLineResult::Continue(text) => text,
             other => panic!("unexpected repl result: {other:?}"),
         }
     }
@@ -383,51 +381,56 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_handling_covers_help_none_and_shell_entry_error_unit() {
+    fn shortcut_classification_and_execution_cover_help_none_and_shell_entry_error_unit() {
         let mut state = app_state();
         let invocation = base_repl_invocation(&state.runtime);
         let mut sink = BufferedUiSink::default();
 
         let help = ReplParsedLine::parse("--help", state.runtime.config.resolved())
             .expect("help should parse");
+        let help_shortcut =
+            classify_repl_shortcut(&state.runtime, &state.session, &help, &invocation)
+                .expect("help shortcut should classify")
+                .expect("help shortcut should exist");
+        assert!(matches!(help_shortcut, ReplShortcutPlan::Help { .. }));
         assert!(matches!(
-            maybe_handle_repl_shortcuts(
+            execute_repl_shortcut(
                 &mut state.runtime,
                 &mut state.session,
                 &state.clients,
                 &help,
-                &invocation,
+                help_shortcut,
                 "--help",
                 &mut sink,
             )
             .expect("help shortcut should succeed"),
-            Some(ReplLineResult::Continue(text)) if text.contains("help") || text.contains("config")
+            ReplLineResult::Continue(text) if text.contains("help") || text.contains("config")
         ));
 
         let ordinary = ReplParsedLine::parse("config show", state.runtime.config.resolved())
             .expect("ordinary command should parse");
-        assert_eq!(
-            maybe_handle_repl_shortcuts(
-                &mut state.runtime,
-                &mut state.session,
-                &state.clients,
-                &ordinary,
-                &invocation,
-                "config show",
-                &mut sink,
-            )
-            .expect("ordinary command should not shortcut"),
-            None
+        assert!(
+            classify_repl_shortcut(&state.runtime, &state.session, &ordinary, &invocation)
+                .expect("ordinary command should not shortcut")
+                .is_none()
         );
 
         let shell_entry =
             ReplParsedLine::parse("ldap", state.runtime.config.resolved()).expect("ldap parses");
-        let err = maybe_handle_repl_shortcuts(
+        let shell_shortcut =
+            classify_repl_shortcut(&state.runtime, &state.session, &shell_entry, &invocation)
+                .expect("shell entry should classify")
+                .expect("shell entry should exist");
+        assert!(matches!(
+            shell_shortcut,
+            ReplShortcutPlan::ShellEntry { .. }
+        ));
+        let err = execute_repl_shortcut(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
             &shell_entry,
-            &invocation,
+            shell_shortcut,
             "ldap",
             &mut sink,
         )
@@ -479,13 +482,15 @@ mod tests {
         let mut sink = BufferedUiSink::default();
         let help = ReplParsedLine::parse("help | help", state.runtime.config.resolved())
             .expect("staged help should parse");
-
-        let rendered = maybe_handle_repl_shortcuts(
+        let shortcut = classify_repl_shortcut(&state.runtime, &state.session, &help, &invocation)
+            .expect("staged help shortcut should classify")
+            .expect("staged help shortcut should exist");
+        let rendered = execute_repl_shortcut(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
             &help,
-            &invocation,
+            shortcut,
             "help | help",
             &mut sink,
         )
@@ -493,7 +498,7 @@ mod tests {
 
         assert!(matches!(
             rendered,
-            Some(ReplLineResult::Continue(text)) if text.contains("help") || text.contains("Show this command overview")
+            ReplLineResult::Continue(text) if text.contains("help") || text.contains("Show this command overview")
         ));
     }
 
@@ -501,8 +506,10 @@ mod tests {
     fn root_help_shortcut_supports_explicit_value_format_with_dsl_unit() {
         let mut state = app_state();
         let rendered = render_root_help_line(&mut state, "--value help | help");
-        assert!(rendered.contains("Commands"));
-        assert!(rendered.contains("help"));
+        assert!(rendered.contains("[INVOCATION_OPTIONS] COMMAND [ARGS]..."));
+        assert!(rendered.contains("Show this command overview."));
+        assert!(rendered.contains("Inspect and edit runtime config"));
+        assert!(!rendered.contains("Commands"));
     }
 
     #[test]

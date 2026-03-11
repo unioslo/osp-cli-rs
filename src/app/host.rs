@@ -31,13 +31,11 @@ use crate::cli::invocation::{InvocationOptions, extend_with_invocation_help, sca
 use crate::cli::{Cli, Commands};
 use crate::plugin::{
     CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
-    PluginDispatchError, PluginManager,
+    PluginDispatchError,
 };
 
 pub(crate) use super::bootstrap::{
-    RuntimeConfigRequest, build_app_state, build_cli_session_layer, build_logging_config,
-    build_runtime_context, debug_verbosity_from_config, message_verbosity_from_config,
-    resolve_runtime_config,
+    RuntimeConfigRequest, build_cli_session_layer, build_runtime_context, resolve_runtime_config,
 };
 pub(crate) use super::command_output::{CliCommandResult, CommandRenderRuntime, run_cli_command};
 pub(crate) use super::config_explain::{
@@ -50,7 +48,6 @@ pub(crate) use super::dispatch::{
 };
 pub(crate) use super::external::run_external_command_with_help_renderer;
 use super::external::{ExternalCommandRuntime, run_external_command};
-pub(crate) use super::repl_lifecycle::rebuild_repl_parts;
 #[cfg(test)]
 pub(crate) use super::repl_lifecycle::rebuild_repl_state;
 pub(crate) use super::timing::{TimingSummary, format_timing_badge, right_align_timing_line};
@@ -135,9 +132,10 @@ where
     }
 }
 
-/// Parses CLI arguments and runs the selected command.
+/// Runs the top-level CLI entrypoint from an argv-like iterator.
 ///
-/// Returns the process exit code that should be reported to the caller.
+/// This is the library-friendly wrapper around the binary entrypoint and
+/// returns the process exit code that should be reported to the caller.
 pub fn run_from<I, T>(args: I) -> Result<i32>
 where
     I: IntoIterator<Item = T>,
@@ -247,13 +245,11 @@ fn run(
         runtime_context.terminal_kind(),
         runtime_load,
     )?;
-    let launch_context = LaunchContext {
-        plugin_dirs: cli.plugin_dirs.clone(),
-        config_root: None,
-        cache_root: None,
-        runtime_load,
-        startup_started_at: run_started,
-    };
+    let launch_context = LaunchContext::builder()
+        .with_plugin_dirs(cli.plugin_dirs.clone())
+        .with_runtime_load(runtime_load)
+        .with_startup_started_at(run_started)
+        .build();
 
     let config = resolve_runtime_config(
         RuntimeConfigRequest::new(
@@ -264,50 +260,34 @@ fn run(
         .with_session_layer(session_layer.clone()),
     )
     .wrap_err("failed to resolve config with session layer")?;
-    let theme_catalog = theme_loader::load_theme_catalog(&config);
-    let mut render_settings = cli.render_settings();
-    render_settings.runtime = build_render_runtime(runtime_context.terminal_env());
-    crate::cli::apply_render_settings_from_config(&mut render_settings, &config);
-    render_settings.width = Some(resolve_default_render_width(&config));
-    render_settings.theme_name = resolve_theme_name(&cli, &config, &theme_catalog)?;
-    render_settings.theme = theme_catalog
-        .resolve(&render_settings.theme_name)
-        .map(|entry| entry.theme.clone());
-    let message_verbosity = message_verbosity_from_config(&config);
-    let debug_verbosity = debug_verbosity_from_config(&config);
-
-    let plugin_manager = PluginManager::new(cli.plugin_dirs.clone())
-        .with_process_timeout(plugin_process_timeout(&config))
-        .with_path_discovery(plugin_path_discovery_enabled(&config))
-        .with_command_preferences(
-            crate::plugin::state::PluginCommandPreferences::from_resolved(&config),
-        );
-
-    let mut state = build_app_state(crate::app::AppStateInit {
-        context: runtime_context,
-        config,
-        render_settings,
-        message_verbosity,
-        debug_verbosity,
-        plugins: plugin_manager,
-        native_commands: native_commands.clone(),
-        themes: theme_catalog.clone(),
-        launch: launch_context,
-    });
-    if let Some(layer) = session_layer {
-        state.session.config_overrides = layer;
-    }
+    let host_inputs = super::assembly::ResolvedHostInputs::derive(
+        &runtime_context,
+        &config,
+        &launch_context,
+        super::assembly::RenderSettingsSeed::Existing(cli.render_settings()),
+        None,
+        None,
+        session_layer.clone(),
+    )
+    .wrap_err("failed to derive host runtime inputs for startup")?;
+    let mut state = crate::app::AppState::builder(runtime_context, config, host_inputs.ui)
+        .with_launch(launch_context)
+        .with_plugins(host_inputs.plugins)
+        .with_native_commands(native_commands.clone())
+        .with_session(host_inputs.default_session)
+        .with_themes(host_inputs.themes)
+        .build();
     ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
     let invocation_ui = resolve_invocation_ui(
         state.runtime.config.resolved(),
         &state.runtime.ui,
         &invocation,
     );
-    init_developer_logging(build_logging_config(
+    super::assembly::apply_runtime_side_effects(
         state.runtime.config.resolved(),
         invocation_ui.ui.debug_verbosity,
-    ));
-    theme_loader::log_theme_issues(&theme_catalog.issues);
+        &state.runtime.themes,
+    );
     tracing::debug!(
         debug_count = invocation_ui.ui.debug_verbosity,
         "developer logging initialized"
@@ -436,12 +416,12 @@ pub(crate) fn authorized_command_catalog_for(
     clients: &AppClients,
 ) -> Result<Vec<CommandCatalogEntry>> {
     let mut all = clients
-        .plugins
+        .plugins()
         .command_catalog()
         .map_err(|err| miette!("{err:#}"))?;
     all.extend(
         clients
-            .native_commands
+            .native_commands()
             .catalog()
             .into_iter()
             .map(native_catalog_entry_to_command_catalog_entry),
@@ -565,7 +545,7 @@ fn plugins_command_context<'a>(
         config_state: Some(&runtime.config),
         auth: &runtime.auth,
         clients: Some(clients),
-        plugin_manager: &clients.plugins,
+        plugin_manager: clients.plugins(),
         runtime_load: runtime.launch.runtime_load,
     }
 }
@@ -645,11 +625,7 @@ fn intro_command_context<'a>(
 
 fn ui_state_for_invocation(ui: &UiState, invocation: Option<&ResolvedInvocation>) -> UiState {
     let Some(invocation) = invocation else {
-        return UiState {
-            render_settings: ui.render_settings.clone(),
-            message_verbosity: ui.message_verbosity,
-            debug_verbosity: ui.debug_verbosity,
-        };
+        return ui.clone();
     };
     invocation.ui.clone()
 }
@@ -675,19 +651,18 @@ pub(crate) fn resolve_invocation_ui(
     }
 
     ResolvedInvocation {
-        ui: UiState {
-            render_settings,
-            message_verbosity: crate::ui::messages::adjust_verbosity(
+        ui: UiState::builder(render_settings)
+            .with_message_verbosity(crate::ui::messages::adjust_verbosity(
                 ui.message_verbosity,
                 invocation.verbose,
                 invocation.quiet,
-            ),
-            debug_verbosity: if invocation.debug > 0 {
+            ))
+            .with_debug_verbosity(if invocation.debug > 0 {
                 invocation.debug.min(3)
             } else {
                 ui.debug_verbosity
-            },
-        },
+            })
+            .build(),
         plugin_provider: invocation.plugin_provider.clone(),
         help_level: help_level(config, invocation.verbose, invocation.quiet),
     }
@@ -702,15 +677,6 @@ pub(crate) fn ensure_command_supports_dsl(spec: &ReplCommandSpec, stages: &[Stri
         "`{}` does not support DSL pipeline stages",
         spec.name
     ))
-}
-
-fn resolve_theme_name(
-    cli: &Cli,
-    config: &ResolvedConfig,
-    catalog: &theme_loader::ThemeCatalog,
-) -> Result<String> {
-    let selected = cli.selected_theme_name(config);
-    resolve_known_theme_name(&selected, catalog)
 }
 
 pub(crate) fn resolve_known_theme_name(
@@ -865,7 +831,25 @@ fn base_error_message(err: &miette::Report, known: &KnownErrorChain<'_>) -> Stri
         return clap_err.to_string();
     }
 
-    err.to_string()
+    let outer = err.to_string();
+    let mut deepest_source = None;
+    let mut current = err.source();
+    while let Some(source) = current {
+        let text = source.to_string();
+        if !text.is_empty() {
+            deepest_source = Some(text);
+        }
+        current = source.source();
+    }
+
+    match deepest_source {
+        // Context wrappers are still useful for verbose output, but at default
+        // message levels users usually need the concrete actionable cause.
+        Some(source) if outer.starts_with("failed to ") || outer.starts_with("unable to ") => {
+            source
+        }
+        _ => outer,
+    }
 }
 
 pub(crate) fn report_std_error_with_context<E>(err: E, context: &'static str) -> miette::Report
@@ -992,26 +976,30 @@ fn build_plugin_dispatch_context(
     ui: &crate::app::UiState,
 ) -> PluginDispatchContext {
     let config_env = clients.plugin_config_env(config);
-    PluginDispatchContext {
-        runtime_hints: RuntimeHints {
-            ui_verbosity: to_ui_verbosity(ui.message_verbosity),
-            debug_level: ui.debug_verbosity.min(3),
-            format: ui.render_settings.format,
-            color: ui.render_settings.color,
-            unicode: ui.render_settings.unicode,
-            profile: Some(config.resolved().active_profile().to_string()),
-            terminal: context.terminal_env().map(ToOwned::to_owned),
-            terminal_kind: match context.terminal_kind() {
-                TerminalKind::Cli => RuntimeTerminalKind::Cli,
-                TerminalKind::Repl => RuntimeTerminalKind::Repl,
-            },
-        },
-        shared_env: config_env
+    PluginDispatchContext::new(
+        RuntimeHints::new(
+            to_ui_verbosity(ui.message_verbosity),
+            ui.debug_verbosity.min(3),
+            ui.render_settings.format,
+            ui.render_settings.color,
+            ui.render_settings.unicode,
+        )
+        .with_profile(Some(config.resolved().active_profile().to_string()))
+        .with_terminal(context.terminal_env().map(ToOwned::to_owned))
+        .with_terminal_kind(match context.terminal_kind() {
+            TerminalKind::Cli => RuntimeTerminalKind::Cli,
+            TerminalKind::Repl => RuntimeTerminalKind::Repl,
+        }),
+    )
+    .with_shared_env(
+        config_env
             .shared
             .iter()
             .map(|entry| (entry.env_key.clone(), entry.value.clone()))
-            .collect(),
-        plugin_env: config_env
+            .collect::<Vec<_>>(),
+    )
+    .with_plugin_env(
+        config_env
             .by_plugin_id
             .into_iter()
             .map(|(plugin_id, entries)| {
@@ -1024,24 +1012,23 @@ fn build_plugin_dispatch_context(
                 )
             })
             .collect(),
-        provider_override: None,
-    }
+    )
 }
 
 pub(crate) fn runtime_hints_for_runtime(runtime: &crate::app::AppRuntime) -> RuntimeHints {
-    RuntimeHints {
-        ui_verbosity: to_ui_verbosity(runtime.ui.message_verbosity),
-        debug_level: runtime.ui.debug_verbosity.min(3),
-        format: runtime.ui.render_settings.format,
-        color: runtime.ui.render_settings.color,
-        unicode: runtime.ui.render_settings.unicode,
-        profile: Some(runtime.config.resolved().active_profile().to_string()),
-        terminal: runtime.context.terminal_env().map(ToOwned::to_owned),
-        terminal_kind: match runtime.context.terminal_kind() {
-            TerminalKind::Cli => RuntimeTerminalKind::Cli,
-            TerminalKind::Repl => RuntimeTerminalKind::Repl,
-        },
-    }
+    RuntimeHints::new(
+        to_ui_verbosity(runtime.ui.message_verbosity),
+        runtime.ui.debug_verbosity.min(3),
+        runtime.ui.render_settings.format,
+        runtime.ui.render_settings.color,
+        runtime.ui.render_settings.unicode,
+    )
+    .with_profile(Some(runtime.config.resolved().active_profile().to_string()))
+    .with_terminal(runtime.context.terminal_env().map(ToOwned::to_owned))
+    .with_terminal_kind(match runtime.context.terminal_kind() {
+        TerminalKind::Cli => RuntimeTerminalKind::Cli,
+        TerminalKind::Repl => RuntimeTerminalKind::Repl,
+    })
 }
 
 fn native_catalog_entry_to_command_catalog_entry(

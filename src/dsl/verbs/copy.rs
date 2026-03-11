@@ -1,9 +1,9 @@
 use crate::core::row::Row;
 
-/// Returns `rows` unchanged.
+/// Identity stage for row payloads.
 ///
-/// The canonical DSL keeps this local even though the behavior is trivial so
-/// execution ownership stays in `src/dsl/verbs/*`.
+/// Keeping even the trivial copy verb in `src/dsl/verbs/*` preserves one clear
+/// execution owner per DSL verb.
 pub fn apply(rows: Vec<Row>) -> Vec<Row> {
     rows
 }

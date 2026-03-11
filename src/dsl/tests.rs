@@ -1,3 +1,5 @@
+mod contracts;
+
 use serde_json::json;
 
 use crate::core::output_model::{OutputResult, RenderRecommendation};

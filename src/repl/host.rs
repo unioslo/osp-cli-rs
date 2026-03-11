@@ -44,8 +44,8 @@ impl<'a> ReplViewContext<'a> {
     }
 }
 
-// The REPL loop is intentionally boring at this level:
-// prepare one cycle, render the shell chrome, run the line editor, apply the result.
+// Keep the host loop as orchestration only so editor/runtime details stay in
+// `repl::engine` and command semantics stay in `repl::dispatch`.
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     let mut loop_state = lifecycle::ReplLoopState::new(should_show_repl_intro(
         state.runtime.config.resolved(),
@@ -54,8 +54,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     let mut sink = StdIoUiSink;
 
     loop {
-        let cycle =
-            loop_state.prepare_cycle(&mut state.runtime, &mut state.session, &mut state.clients)?;
+        let cycle = loop_state.prepare_cycle(state)?;
         loop_state.render_cycle_chrome(
             &mut sink,
             ReplViewContext::from_parts(&state.runtime, &state.session),
@@ -68,21 +67,21 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
         );
 
         let result = run_repl(
-            ReplRunConfig {
-                prompt: cycle.prompt,
-                completion_words: cycle.root_words,
-                completion_tree: Some(cycle.completion_tree),
-                appearance: cycle.appearance,
-                history_config: cycle.history_config,
-                input_mode: map_repl_input_mode(repl_input_mode(state.runtime.config.resolved())),
-                prompt_right: Some(build_repl_prompt_right_renderer(
+            ReplRunConfig::builder(cycle.prompt, cycle.history_config)
+                .with_completion_words(cycle.root_words)
+                .with_completion_tree(Some(cycle.completion_tree))
+                .with_appearance(cycle.appearance)
+                .with_input_mode(map_repl_input_mode(repl_input_mode(
+                    state.runtime.config.resolved(),
+                )))
+                .with_prompt_right(Some(build_repl_prompt_right_renderer(
                     ReplViewContext::from_parts(&state.runtime, &state.session),
                     state.session.prompt_timing.clone(),
-                )),
-                line_projector: Some(build_repl_ui_line_projector(
+                )))
+                .with_line_projector(Some(build_repl_ui_line_projector(
                     state.runtime.config.resolved(),
-                )),
-            },
+                )))
+                .build(),
             |line, history| {
                 dispatch::execute_repl_plugin_line(
                     &mut state.runtime,
@@ -159,9 +158,9 @@ fn run_repl_debug_complete(
     let payload = if steps.is_empty() {
         let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
         let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
-            .ansi(args.menu_ansi)
-            .unicode(args.menu_unicode)
-            .appearance(Some(&appearance));
+            .with_ansi(args.menu_ansi)
+            .with_unicode(args.menu_unicode)
+            .with_appearance(Some(&appearance));
         let debug = match args.menu {
             DebugMenuArg::Completion => crate::repl::debug_completion(
                 &completion_tree,
@@ -181,9 +180,9 @@ fn run_repl_debug_complete(
     } else {
         let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
         let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
-            .ansi(args.menu_ansi)
-            .unicode(args.menu_unicode)
-            .appearance(Some(&appearance));
+            .with_ansi(args.menu_ansi)
+            .with_unicode(args.menu_unicode)
+            .with_appearance(Some(&appearance));
         let frames = match args.menu {
             DebugMenuArg::Completion => crate::repl::debug_completion_steps(
                 &completion_tree,

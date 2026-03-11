@@ -57,18 +57,14 @@ mod tests {
     fn history_repl_command_wraps_repl_output_for_cli_unit() {
         let temp_dir = make_temp_dir("osp-cli-history-wrapper");
         let history = crate::repl::SharedHistory::new(
-            HistoryConfig {
-                path: Some(temp_dir.join("history.jsonl")),
-                max_entries: 32,
-                enabled: true,
-                dedupe: true,
-                profile_scoped: false,
-                exclude_patterns: Vec::new(),
-                profile: None,
-                terminal: None,
-                shell_context: crate::repl::HistoryShellContext::default(),
-            }
-            .normalized(),
+            HistoryConfig::builder()
+                .with_path(Some(temp_dir.join("history.jsonl")))
+                .with_max_entries(32)
+                .with_enabled(true)
+                .with_dedupe(true)
+                .with_profile_scoped(false)
+                .with_shell_context(crate::repl::HistoryShellContext::default())
+                .build(),
         )
         .expect("history should initialize");
         history

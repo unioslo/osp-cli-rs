@@ -1,3 +1,20 @@
+//! Document-lowering stage of the UI pipeline.
+//!
+//! This module exists to convert rows and semantic outputs into a structured
+//! document model before terminal rendering happens.
+//!
+//! High level flow:
+//!
+//! - choose an output format from explicit settings, metadata, or shape
+//! - lower the input into a [`crate::ui::Document`]
+//! - leave terminal-specific styling and width-sensitive text rendering to the
+//!   renderer layer
+//!
+//! Contract:
+//!
+//! - this module shapes documents
+//! - it should not emit ANSI strings directly or depend on terminal I/O
+
 use crate::core::output::OutputFormat;
 use crate::core::output_model::{
     ColumnAlignment, Group, OutputItems, OutputResult, RenderRecommendation,
@@ -6,7 +23,7 @@ use crate::core::row::Row;
 use crate::guide::GuideView;
 
 use crate::ui::document::{Block, Document, JsonBlock, TableStyle, ValueBlock};
-use crate::ui::{RenderBackend, RenderSettings, ResolvedRenderSettings};
+use crate::ui::{RenderBackend, RenderSettings, ResolvedRenderPlan};
 
 mod common;
 mod guide;
@@ -32,24 +49,20 @@ pub fn build_document(rows: &[Row], settings: &RenderSettings) -> Document {
 
 /// Builds a document from a structured output result.
 pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettings) -> Document {
-    let resolved = settings.resolve_render_settings();
-    build_document_from_output_resolved(output, settings, &resolved)
+    let plan = settings.resolve_render_plan(output);
+    build_document_from_output_plan(output, &plan)
 }
 
-/// Builds a document from a structured output result using pre-resolved settings.
+/// Builds a document from a structured output result using a pre-resolved plan.
 ///
 /// The returned document reflects the format selected by [`resolve_output_format`].
-pub fn build_document_from_output_resolved(
+pub fn build_document_from_output_plan(
     output: &OutputResult,
-    settings: &RenderSettings,
-    resolved: &ResolvedRenderSettings,
+    plan: &ResolvedRenderPlan,
 ) -> Document {
-    let format = resolve_output_format(output, settings);
     let mut next_block_id = 1u64;
-    match format {
-        OutputFormat::Guide => {
-            guide::build_guide_document(output, settings, resolved, &mut next_block_id)
-        }
+    match plan.format {
+        OutputFormat::Guide => guide::build_guide_document(output, plan.guide, &mut next_block_id),
         OutputFormat::Json => Document {
             blocks: vec![Block::Json(build_json_block_from_output(output))],
         },
@@ -59,20 +72,20 @@ pub fn build_document_from_output_resolved(
         }
         OutputFormat::Mreg => {
             let rows = materialize_rows(output);
-            let width_hint = resolved.width.unwrap_or(100).max(24);
-            let prefer_stacked_object_lists = resolved.backend == RenderBackend::Rich;
+            let width_hint = plan.render.width.unwrap_or(100).max(24);
+            let prefer_stacked_object_lists = plan.render.backend == RenderBackend::Rich;
             Document {
                 blocks: mreg::build_mreg_blocks(
                     &rows,
                     mreg::MregBuildOptions {
                         key_order: Some(&output.meta.key_index),
-                        short_list_max: settings.short_list_max,
-                        medium_list_max: settings.medium_list_max,
+                        short_list_max: plan.mreg.short_list_max,
+                        medium_list_max: plan.mreg.medium_list_max,
                         width_hint,
-                        indent_size: settings.indent_size.max(1),
+                        indent_size: plan.mreg.indent_size,
                         prefer_stacked_object_lists,
-                        stack_min_col_width: settings.mreg_stack_min_col_width.max(1),
-                        stack_overflow_ratio: settings.mreg_stack_overflow_ratio.max(100),
+                        stack_min_col_width: plan.mreg.stack_min_col_width,
+                        stack_overflow_ratio: plan.mreg.stack_overflow_ratio,
                     },
                     &mut next_block_id,
                 ),
@@ -91,7 +104,10 @@ pub fn build_document_from_output_resolved(
             }
             let rows = materialize_rows(output);
             Document {
-                blocks: vec![Block::Value(value::build_value_block(&rows))],
+                blocks: vec![Block::Value(value::build_value_block(
+                    &rows,
+                    Some(&output.meta.key_index),
+                ))],
             }
         }
         OutputFormat::Auto => unreachable!("auto format is resolved above"),
@@ -369,7 +385,7 @@ fn group_header_pairs(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_document, build_document_from_output, build_document_from_output_resolved,
+        build_document, build_document_from_output, build_document_from_output_plan,
         group_header_pairs, materialize_rows, resolve_format, resolve_output_format,
         table_alignments_for_headers,
     };
@@ -668,9 +684,8 @@ mod tests {
             },
         };
 
-        let resolved = settings(OutputFormat::Mreg).resolve_render_settings();
-        let document =
-            build_document_from_output_resolved(&output, &settings(OutputFormat::Mreg), &resolved);
+        let plan = settings(OutputFormat::Mreg).resolve_render_plan(&output);
+        let document = build_document_from_output_plan(&output, &plan);
         assert!(!document.blocks.is_empty());
 
         let value_output = OutputResult {

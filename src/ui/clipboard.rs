@@ -294,7 +294,7 @@ fn base64_encode(input: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
 
     use crate::core::output::OutputFormat;
     use crate::ui::{
@@ -308,8 +308,7 @@ mod tests {
     };
 
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::tests::env_lock()
     }
 
     fn acquire_env_lock() -> std::sync::MutexGuard<'static, ()> {

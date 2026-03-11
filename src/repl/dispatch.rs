@@ -1,3 +1,22 @@
+//! REPL line dispatch and shell-scope control flow.
+//!
+//! This module exists to turn an accepted REPL line into the right next action:
+//! builtin handling, shell-scope transitions, ordinary command execution, or
+//! inline help/DSL affordances.
+//!
+//! High-level flow:
+//!
+//! - classify builtins and bang requests before normal command parsing
+//! - parse the REPL line into command and stage components
+//! - handle shell shortcuts and scoped help before normal dispatch
+//! - run the resolved command and package the next REPL action/result
+//!
+//! Contract:
+//!
+//! - this is where REPL-specific dispatch semantics live
+//! - editor/menu behavior belongs in `repl::engine`
+//! - generic non-interactive command execution should not drift into this layer
+
 mod builtins;
 mod command;
 mod shell;
@@ -12,17 +31,17 @@ use crate::app::{ResolvedInvocation, resolve_invocation_ui};
 
 use super::{ReplViewContext, completion, input};
 
-use builtins::{is_repl_bang_request, maybe_execute_repl_builtin};
+use builtins::{ReplBuiltin, execute_repl_builtin, is_repl_bang_request, parse_repl_builtin};
 use command::{
-    ParsedReplDispatch, finalize_repl_command, parse_repl_invocation, render_repl_command_output,
-    run_repl_command,
+    ParsedReplDispatch, ParsedReplInvocation, finalize_repl_command, parse_repl_invocation,
+    render_repl_command_output, run_repl_command,
 };
-use shell::maybe_handle_repl_shortcuts;
+use shell::{ReplShortcutPlan, classify_repl_shortcut, execute_repl_shortcut};
 
 #[cfg(test)]
 use builtins::{
-    BangCommand, ReplBuiltin, current_history_scope, execute_bang_command, parse_bang_command,
-    parse_repl_builtin, strip_history_scope,
+    BangCommand, current_history_scope, execute_bang_command, parse_bang_command,
+    strip_history_scope,
 };
 pub(crate) use command::repl_command_spec;
 #[cfg(test)]
@@ -37,6 +56,73 @@ pub(crate) use shell::leave_repl_shell;
 #[cfg(test)]
 use shell::{enter_repl_shell, handle_repl_exit_request, repl_help_for_scope};
 
+#[derive(Debug)]
+enum ReplLinePlan {
+    Builtin {
+        raw: String,
+        builtin: ReplBuiltin,
+    },
+    Blank,
+    DslHelp {
+        help: String,
+    },
+    Shortcut {
+        parsed: input::ReplParsedLine,
+        shortcut: ReplShortcutPlan,
+    },
+    Help {
+        result: Box<crate::app::CliCommandResult>,
+        effective: Box<ResolvedInvocation>,
+        stages: Vec<String>,
+    },
+    Invocation(Box<ParsedReplInvocation>),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReplTimingPlan {
+    Flat {
+        debug_verbosity: u8,
+    },
+    ParseOnly {
+        debug_verbosity: u8,
+    },
+    Invocation {
+        debug_verbosity: u8,
+        parse_finished: Instant,
+        execute_finished: Instant,
+    },
+}
+
+struct ExecutedReplLine {
+    result: ReplLineResult,
+    timing: ReplTimingPlan,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplLinePlanKind {
+    Builtin,
+    Blank,
+    DslHelp,
+    Shortcut,
+    Help,
+    Invocation,
+}
+
+impl ReplLinePlan {
+    #[cfg(test)]
+    fn kind(&self) -> ReplLinePlanKind {
+        match self {
+            ReplLinePlan::Builtin { .. } => ReplLinePlanKind::Builtin,
+            ReplLinePlan::Blank => ReplLinePlanKind::Blank,
+            ReplLinePlan::DslHelp { .. } => ReplLinePlanKind::DslHelp,
+            ReplLinePlan::Shortcut { .. } => ReplLinePlanKind::Shortcut,
+            ReplLinePlan::Help { .. } => ReplLinePlanKind::Help,
+            ReplLinePlan::Invocation(_) => ReplLinePlanKind::Invocation,
+        }
+    }
+}
+
 pub(crate) fn execute_repl_plugin_line(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
@@ -47,7 +133,10 @@ pub(crate) fn execute_repl_plugin_line(
     let started = Instant::now();
     let mut sink = StdIoUiSink;
     match execute_repl_plugin_line_inner(runtime, session, clients, history, line, &mut sink) {
-        Ok(result) => Ok(result),
+        Ok(executed) => {
+            record_repl_timing(session, started, executed.timing);
+            Ok(executed.result)
+        }
         Err(err) => {
             if runtime.ui.debug_verbosity > 0 {
                 session.record_prompt_timing(
@@ -75,61 +164,115 @@ fn execute_repl_plugin_line_inner(
     history: &SharedHistory,
     line: &str,
     sink: &mut dyn UiSink,
-) -> Result<ReplLineResult> {
-    let started = Instant::now();
+) -> Result<ExecutedReplLine> {
+    let plan = classify_repl_line(runtime, session, line)?;
+    let parse_finished = Instant::now();
+    execute_repl_line_plan(
+        runtime,
+        session,
+        clients,
+        history,
+        line,
+        sink,
+        plan,
+        parse_finished,
+    )
+}
+
+fn classify_repl_line(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    line: &str,
+) -> Result<ReplLinePlan> {
     let raw = line.trim();
-    if let Some(result) = maybe_execute_repl_builtin(runtime, session, clients, history, raw)? {
-        session.record_prompt_timing(
-            runtime.ui.debug_verbosity,
-            started.elapsed(),
-            None,
-            None,
-            None,
-        );
-        return Ok(result);
+    // Builtins and bang expansion must run before full line parsing so REPL
+    // control verbs keep working even when the rest of the line is not a valid
+    // command invocation.
+    if let Some(builtin) = parse_repl_builtin(raw)? {
+        return Ok(ReplLinePlan::Builtin {
+            raw: raw.to_string(),
+            builtin,
+        });
     }
 
     let parsed = input::ReplParsedLine::parse(line, runtime.config.resolved())?;
     if parsed.is_empty() {
-        return Ok(ReplLineResult::Continue(String::new()));
+        return Ok(ReplLinePlan::Blank);
     }
+    // DSL help is a REPL-local affordance over raw stage text, so surface it
+    // before command dispatch rather than forcing it through normal execution.
     if let Some(help) = completion::maybe_render_dsl_help(
         ReplViewContext::from_parts(runtime, session),
         &parsed.stages,
     ) {
-        session.sync_history_shell_context();
-        session.record_prompt_timing(
-            runtime.ui.debug_verbosity,
-            started.elapsed(),
-            None,
-            None,
-            None,
-        );
-        return Ok(ReplLineResult::Continue(help));
+        return Ok(ReplLinePlan::DslHelp { help });
     }
 
     let base_invocation = base_repl_invocation(runtime);
-    if let Some(result) = maybe_handle_repl_shortcuts(
-        runtime,
-        session,
-        clients,
-        &parsed,
-        &base_invocation,
-        line,
-        sink,
-    )? {
-        session.record_prompt_timing(
-            runtime.ui.debug_verbosity,
-            started.elapsed(),
-            None,
-            None,
-            None,
-        );
-        return Ok(result);
+    if let Some(shortcut) = classify_repl_shortcut(runtime, session, &parsed, &base_invocation)? {
+        return Ok(ReplLinePlan::Shortcut { parsed, shortcut });
     }
 
-    let invocation = match parse_repl_invocation(runtime, session, &parsed)? {
+    match parse_repl_invocation(runtime, session, &parsed)? {
         ParsedReplDispatch::Help {
+            result,
+            effective,
+            stages,
+        } => Ok(ReplLinePlan::Help {
+            result,
+            effective,
+            stages,
+        }),
+        ParsedReplDispatch::Invocation(invocation) => Ok(ReplLinePlan::Invocation(invocation)),
+    }
+}
+
+fn execute_repl_line_plan(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    line: &str,
+    sink: &mut dyn UiSink,
+    plan: ReplLinePlan,
+    parse_finished: Instant,
+) -> Result<ExecutedReplLine> {
+    match plan {
+        ReplLinePlan::Builtin { raw, builtin } => {
+            let result = execute_repl_builtin(runtime, session, clients, history, &raw, builtin)?;
+            Ok(ExecutedReplLine {
+                result,
+                timing: ReplTimingPlan::Flat {
+                    debug_verbosity: runtime.ui.debug_verbosity,
+                },
+            })
+        }
+        ReplLinePlan::Blank => Ok(ExecutedReplLine {
+            result: ReplLineResult::Continue(String::new()),
+            timing: ReplTimingPlan::Flat {
+                debug_verbosity: runtime.ui.debug_verbosity,
+            },
+        }),
+        ReplLinePlan::DslHelp { help } => {
+            session.sync_history_shell_context();
+            Ok(ExecutedReplLine {
+                result: ReplLineResult::Continue(help),
+                timing: ReplTimingPlan::Flat {
+                    debug_verbosity: runtime.ui.debug_verbosity,
+                },
+            })
+        }
+        ReplLinePlan::Shortcut { parsed, shortcut } => {
+            let result =
+                execute_repl_shortcut(runtime, session, clients, &parsed, shortcut, line, sink)?;
+            Ok(ExecutedReplLine {
+                result,
+                timing: ReplTimingPlan::Flat {
+                    debug_verbosity: runtime.ui.debug_verbosity,
+                },
+            })
+        }
+        ReplLinePlan::Help {
             result,
             effective,
             stages,
@@ -137,655 +280,101 @@ fn execute_repl_plugin_line_inner(
             let rendered = render_repl_command_output(
                 runtime, session, line, &stages, *result, &effective, sink,
             )?;
-            let finished = Instant::now();
+            Ok(ExecutedReplLine {
+                result: ReplLineResult::Continue(rendered),
+                timing: ReplTimingPlan::ParseOnly {
+                    debug_verbosity: effective.ui.debug_verbosity,
+                },
+            })
+        }
+        ReplLinePlan::Invocation(invocation) => {
+            let output = run_repl_command(
+                runtime,
+                session,
+                clients,
+                invocation.command,
+                &invocation.effective,
+                history,
+                invocation.cache_key.as_deref(),
+            )?;
+            let execute_finished = Instant::now();
+            let rendered = render_repl_command_output(
+                runtime,
+                session,
+                line,
+                &invocation.stages,
+                output,
+                &invocation.effective,
+                sink,
+            )?;
+            Ok(ExecutedReplLine {
+                result: finalize_repl_command(
+                    session,
+                    rendered,
+                    invocation.side_effects.restart_repl,
+                    invocation.side_effects.show_intro_on_reload,
+                ),
+                timing: ReplTimingPlan::Invocation {
+                    debug_verbosity: invocation.effective.ui.debug_verbosity,
+                    parse_finished,
+                    execute_finished,
+                },
+            })
+        }
+    }
+}
+
+fn record_repl_timing(session: &AppSession, started: Instant, timing: ReplTimingPlan) {
+    let finished = Instant::now();
+    match timing {
+        ReplTimingPlan::Flat { debug_verbosity } => {
             session.record_prompt_timing(
-                effective.ui.debug_verbosity,
+                debug_verbosity,
+                finished.saturating_duration_since(started),
+                None,
+                None,
+                None,
+            );
+        }
+        ReplTimingPlan::ParseOnly { debug_verbosity } => {
+            session.record_prompt_timing(
+                debug_verbosity,
                 finished.saturating_duration_since(started),
                 Some(finished.saturating_duration_since(started)),
                 None,
                 None,
             );
-            return Ok(ReplLineResult::Continue(rendered));
         }
-        ParsedReplDispatch::Invocation(invocation) => invocation,
-    };
-    let parse_finished = Instant::now();
-    let output = run_repl_command(
-        runtime,
-        session,
-        clients,
-        invocation.command,
-        &invocation.effective,
-        history,
-        invocation.cache_key.as_deref(),
-    )?;
-    let execute_finished = Instant::now();
-    let rendered = render_repl_command_output(
-        runtime,
-        session,
-        line,
-        &invocation.stages,
-        output,
-        &invocation.effective,
-        sink,
-    )?;
-    let finished = Instant::now();
-    session.record_prompt_timing(
-        invocation.effective.ui.debug_verbosity,
-        finished.saturating_duration_since(started),
-        Some(parse_finished.saturating_duration_since(started)),
-        Some(execute_finished.saturating_duration_since(parse_finished)),
-        Some(finished.saturating_duration_since(execute_finished)),
-    );
-    Ok(finalize_repl_command(
-        session,
-        rendered,
-        invocation.side_effects.restart_repl,
-        invocation.side_effects.show_intro_on_reload,
-    ))
+        ReplTimingPlan::Invocation {
+            debug_verbosity,
+            parse_finished,
+            execute_finished,
+        } => {
+            session.record_prompt_timing(
+                debug_verbosity,
+                finished.saturating_duration_since(started),
+                Some(parse_finished.saturating_duration_since(started)),
+                Some(execute_finished.saturating_duration_since(parse_finished)),
+                Some(finished.saturating_duration_since(execute_finished)),
+            );
+        }
+    }
 }
 
 fn base_repl_invocation(runtime: &AppRuntime) -> ResolvedInvocation {
+    // Shortcut/help rendering starts from the ambient REPL UI state, not from
+    // per-command flags, because no concrete command has been resolved yet.
     resolve_invocation_ui(runtime.config.resolved(), &runtime.ui, &Default::default())
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::core::output::OutputFormat;
-    use crate::repl::{HistoryConfig, ReplLineResult, ReplReloadKind, SharedHistory};
-    use crate::ui::RenderSettings;
-    use crate::ui::messages::MessageLevel;
-    use clap::error::ErrorKind;
-    use insta::assert_snapshot;
-
-    use super::{
-        BangCommand, command_side_effects, config_key_change_requires_intro, current_history_scope,
-        enter_repl_shell, execute_bang_command, finalize_repl_command, handle_repl_exit_request,
-        is_repl_bang_request, leave_repl_shell, parse_bang_command, parse_clap_help,
-        parse_repl_builtin, render_repl_command_output, renders_repl_inline_help,
-        repl_command_spec, repl_help_for_scope, run_repl_command, strip_history_scope,
-    };
-    use crate::app::{
-        AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
-    };
-    use crate::app::{CliCommandResult, ReplCommandOutput};
-    use crate::cli::{
-        Commands, ConfigArgs, ConfigCommands, ConfigSetArgs, ConfigUnsetArgs, DebugCompleteArgs,
-        HistoryArgs, HistoryCommands, IntroArgs, PluginsArgs, PluginsCommands, ReplArgs,
-        ReplCommands, ThemeArgs, ThemeCommands, ThemeUseArgs,
-    };
-    use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
-
-    #[test]
-    fn clap_error_helpers_extract_summary_and_body_unit() {
-        let error = "\
-error: unknown argument '--wat'\n\
-\n\
-Usage: osp config show [OPTIONS]\n\
-\n\
-tip: try --help\n\
-For more information, try '--help'.\n";
-
-        let parsed = parse_clap_help(error);
-        assert_eq!(parsed.summary, Some("unknown argument '--wat'"));
-        assert_eq!(parsed.body, "Usage: osp config show [OPTIONS]");
-    }
-
-    #[test]
-    fn repl_exit_behaves_differently_for_root_and_nested_shells_unit() {
-        let mut root = AppSession::with_cache_limit(4);
-        assert!(matches!(
-            handle_repl_exit_request(&mut root),
-            Some(ReplLineResult::Exit(0))
-        ));
-
-        let mut nested = AppSession::with_cache_limit(4);
-        nested.scope.enter("ldap");
-        assert!(matches!(
-            handle_repl_exit_request(&mut nested),
-            Some(ReplLineResult::Continue(message))
-                if message == "Leaving ldap shell. Back at root.\n"
-        ));
-        assert!(nested.scope.is_root());
-
-        let mut deep = AppSession::with_cache_limit(4);
-        deep.scope.enter("ldap");
-        deep.scope.enter("user");
-        let message = leave_repl_shell(&mut deep).expect("nested shell should leave");
-        assert_eq!(message, "Leaving user shell.\n");
-        assert_eq!(deep.scope.commands(), vec!["ldap".to_string()]);
-    }
-
-    #[test]
-    fn repl_restart_detection_covers_mutating_commands_unit() {
-        let theme = Commands::Theme(ThemeArgs {
-            command: ThemeCommands::Use(ThemeUseArgs {
-                name: "dracula".to_string(),
-            }),
-        });
-        let theme_effects = command_side_effects(&theme);
-        assert!(theme_effects.restart_repl);
-        assert!(theme_effects.show_intro_on_reload);
-
-        let config_set = Commands::Config(ConfigArgs {
-            command: ConfigCommands::Set(ConfigSetArgs {
-                key: "ui.format".to_string(),
-                value: "json".to_string(),
-                global: false,
-                profile: None,
-                profile_all: false,
-                terminal: None,
-                session: false,
-                config_store: false,
-                secrets: false,
-                save: false,
-                dry_run: false,
-                yes: false,
-                explain: false,
-            }),
-        });
-        let config_set_effects = command_side_effects(&config_set);
-        assert!(config_set_effects.restart_repl);
-        assert!(!config_set_effects.show_intro_on_reload);
-
-        let config_unset_dry_run = Commands::Config(ConfigArgs {
-            command: ConfigCommands::Unset(ConfigUnsetArgs {
-                key: "ui.format".to_string(),
-                global: false,
-                profile: None,
-                profile_all: false,
-                terminal: None,
-                session: false,
-                config_store: false,
-                secrets: false,
-                save: false,
-                dry_run: true,
-            }),
-        });
-        assert_eq!(
-            command_side_effects(&config_unset_dry_run),
-            Default::default()
-        );
-
-        let plugins_enable = Commands::Plugins(PluginsArgs {
-            command: PluginsCommands::Enable(crate::cli::PluginCommandStateArgs {
-                command: "orch".to_string(),
-                global: false,
-                profile: None,
-                terminal: None,
-            }),
-        });
-        let plugins_enable_effects = command_side_effects(&plugins_enable);
-        assert!(plugins_enable_effects.restart_repl);
-        assert!(!plugins_enable_effects.show_intro_on_reload);
-
-        let plugins_refresh = Commands::Plugins(PluginsArgs {
-            command: PluginsCommands::Refresh,
-        });
-        let plugins_refresh_effects = command_side_effects(&plugins_refresh);
-        assert!(plugins_refresh_effects.restart_repl);
-        assert!(!plugins_refresh_effects.show_intro_on_reload);
-    }
-
-    #[test]
-    fn repl_inline_help_kinds_match_supported_clap_errors_unit() {
-        assert!(renders_repl_inline_help(ErrorKind::DisplayHelp));
-        assert!(renders_repl_inline_help(ErrorKind::UnknownArgument));
-        assert!(renders_repl_inline_help(ErrorKind::InvalidSubcommand));
-        assert!(!renders_repl_inline_help(ErrorKind::ValueValidation));
-    }
-
-    #[test]
-    fn leave_repl_shell_returns_none_at_root_unit() {
-        let mut session = AppSession::with_cache_limit(4);
-        assert!(leave_repl_shell(&mut session).is_none());
-        assert!(matches!(
-            finalize_repl_command(&session, String::new(), true, false),
-            ReplLineResult::Restart {
-                output,
-                reload: ReplReloadKind::Default
-            } if output.is_empty()
-        ));
-    }
-
-    #[test]
-    fn finalize_repl_command_uses_intro_reload_when_requested_unit() {
-        let session = AppSession::with_cache_limit(4);
-        assert!(matches!(
-            finalize_repl_command(&session, "saved\n".to_string(), true, true),
-            ReplLineResult::Restart {
-                output,
-                reload: ReplReloadKind::WithIntro
-            } if output == "saved\n"
-        ));
-    }
-
-    #[test]
-    fn clap_error_helpers_handle_missing_summary_gracefully_unit() {
-        let error = "\nUsage: osp ldap user\nFor more information, try '--help'.\n";
-        let parsed = parse_clap_help(error);
-        assert_eq!(parsed.summary, None);
-        assert_eq!(parsed.body, "Usage: osp ldap user");
-    }
-
-    #[test]
-    fn repl_builtin_and_bang_parsers_cover_shortcuts_unit() {
-        assert!(matches!(
-            parse_repl_builtin("--help").expect("help parses"),
-            Some(super::ReplBuiltin::Help)
-        ));
-        assert!(matches!(
-            parse_repl_builtin("quit").expect("exit parses"),
-            Some(super::ReplBuiltin::Exit)
-        ));
-        assert!(matches!(
-            parse_repl_builtin("!?ops").expect("contains parses"),
-            Some(super::ReplBuiltin::Bang(BangCommand::Contains(term))) if term == "ops"
-        ));
-        assert!(matches!(
-            parse_bang_command("!!").expect("last parses"),
-            Some(BangCommand::Last)
-        ));
-        assert!(matches!(
-            parse_bang_command("!-2").expect("relative parses"),
-            Some(BangCommand::Relative(2))
-        ));
-        assert!(matches!(
-            parse_bang_command("!7").expect("absolute parses"),
-            Some(BangCommand::Absolute(7))
-        ));
-        assert!(matches!(
-            parse_bang_command("!pref").expect("prefix parses"),
-            Some(BangCommand::Prefix(prefix)) if prefix == "pref"
-        ));
-        assert!(
-            parse_bang_command("!?   ")
-                .expect_err("contains search requires text")
-                .to_string()
-                .contains("expects search text")
-        );
-        assert!(
-            parse_bang_command("!-0")
-                .expect_err("relative bang ids must be positive")
-                .to_string()
-                .contains("N >= 1")
-        );
-        assert!(
-            parse_bang_command("!0")
-                .expect_err("absolute bang ids must be positive")
-                .to_string()
-                .contains("N >= 1")
-        );
-    }
-
-    #[test]
-    fn bang_execution_and_scope_helpers_cover_help_matches_and_replace_unit() {
-        let history = SharedHistory::new(HistoryConfig {
-            path: None,
-            max_entries: 20,
-            enabled: true,
-            dedupe: true,
-            profile_scoped: false,
-            exclude_patterns: Vec::new(),
-            profile: None,
-            terminal: None,
-            shell_context: Default::default(),
-        })
-        .expect("history should initialize");
-        history
-            .save_command_line("ldap user alice")
-            .expect("first command saves");
-        history
-            .save_command_line("ldap netgroup ops")
-            .expect("second command saves");
-        history
-            .save_command_line("config show")
-            .expect("third command saves");
-
-        let mut session = AppSession::with_cache_limit(4);
-        session.scope.enter("ldap");
-        assert_eq!(current_history_scope(&session).as_deref(), Some("ldap "));
-        assert_eq!(
-            strip_history_scope("ldap user alice", Some("ldap")),
-            "user alice".to_string()
-        );
-        assert_eq!(
-            strip_history_scope("config show", Some("ldap")),
-            "config show".to_string()
-        );
-
-        assert!(matches!(
-            execute_bang_command(&mut session, &history, "!", BangCommand::Prefix(String::new()))
-                .expect("empty prefix renders help"),
-            ReplLineResult::Continue(help) if help.contains("Bang history shortcuts")
-        ));
-        assert!(matches!(
-            execute_bang_command(
-                &mut session,
-                &history,
-                "!?ops",
-                BangCommand::Contains("ops".to_string())
-            )
-            .expect("contains search should expand"),
-            ReplLineResult::ReplaceInput(value) if value == "netgroup ops"
-        ));
-        assert!(matches!(
-            execute_bang_command(
-                &mut session,
-                &history,
-                "!user",
-                BangCommand::Prefix("user".to_string())
-            )
-            .expect("prefix search should expand"),
-            ReplLineResult::ReplaceInput(value) if value == "user alice"
-        ));
-        assert!(matches!(
-            execute_bang_command(
-                &mut session,
-                &history,
-                "!missing",
-                BangCommand::Prefix("missing".to_string())
-            )
-            .expect("missing bang match should still succeed"),
-            ReplLineResult::Continue(value) if value.contains("No history match")
-        ));
-        assert!(is_repl_bang_request(" !prefix"));
-        assert!(!is_repl_bang_request("help"));
-    }
-
-    #[test]
-    fn intro_reload_keys_cover_theme_color_and_palette_mutations_unit() {
-        assert!(config_key_change_requires_intro("theme.name"));
-        assert!(config_key_change_requires_intro(" color.message.info "));
-        assert!(config_key_change_requires_intro("palette.custom"));
-        assert!(!config_key_change_requires_intro("ui.format"));
-
-        let config_unset = Commands::Config(ConfigArgs {
-            command: ConfigCommands::Unset(ConfigUnsetArgs {
-                key: "color.message.info".to_string(),
-                global: false,
-                profile: None,
-                profile_all: false,
-                terminal: None,
-                session: false,
-                config_store: false,
-                secrets: false,
-                save: false,
-                dry_run: false,
-            }),
-        });
-        let side_effects = command_side_effects(&config_unset);
-        assert!(side_effects.restart_repl);
-        assert!(side_effects.show_intro_on_reload);
-    }
-
-    fn make_state_with_plugins(plugins: crate::plugin::PluginManager) -> AppState {
-        let mut defaults = ConfigLayer::default();
-        defaults.set("profile.default", "default");
-        let mut resolver = ConfigResolver::default();
-        resolver.set_defaults(defaults);
-        let config = resolver
-            .resolve(ResolveOptions::default().with_terminal("repl"))
-            .expect("test config should resolve");
-
-        let settings = RenderSettings::test_plain(OutputFormat::Json);
-        AppState::new(AppStateInit {
-            context: RuntimeContext::new(None, TerminalKind::Repl, None),
-            config,
-            render_settings: settings,
-            message_verbosity: MessageLevel::Success,
-            debug_verbosity: 0,
-            plugins,
-            native_commands: crate::native::NativeCommandRegistry::default(),
-            themes: crate::ui::theme_loader::ThemeCatalog::default(),
-            launch: LaunchContext::default(),
-        })
-    }
-
-    fn test_history() -> SharedHistory {
-        SharedHistory::new(HistoryConfig {
-            path: None,
-            max_entries: 8,
-            enabled: true,
-            dedupe: true,
-            profile_scoped: false,
-            exclude_patterns: Vec::new(),
-            profile: None,
-            terminal: None,
-            shell_context: Default::default(),
-        })
-        .expect("history should initialize")
-    }
-
-    #[test]
-    fn root_help_rendering_and_shell_prefix_helpers_cover_root_paths_unit() {
-        let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
-        let invocation = super::base_repl_invocation(&state.runtime);
-        let help = repl_help_for_scope(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &invocation,
-        )
-        .expect("root help should render");
-        assert!(help.contains("help"));
-        assert_snapshot!("repl_root_help", help);
-        assert_eq!(
-            super::apply_repl_shell_prefix(&state.session.scope, &["config".to_string()]),
-            vec!["config".to_string()]
-        );
-
-        state.session.scope.enter("ldap");
-        assert_eq!(
-            super::apply_repl_shell_prefix(&state.session.scope, &["user".to_string()]),
-            vec!["ldap".to_string(), "user".to_string()]
-        );
-    }
-
-    #[test]
-    fn intro_pipeline_keeps_filtered_guide_structure_unit() {
-        let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
-        let invocation = super::base_repl_invocation(&state.runtime);
-        let result = run_repl_command(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            Commands::Intro(IntroArgs::default()),
-            &invocation,
-            &test_history(),
-            None,
-        )
-        .expect("intro command should succeed");
-
-        let mut sink = crate::app::sink::BufferedUiSink::default();
-        let rendered = render_repl_command_output(
-            &state.runtime,
-            &mut state.session,
-            "intro | show",
-            &["show".to_string()],
-            result,
-            &invocation,
-            &mut sink,
-        )
-        .expect("intro pipeline should render");
-
-        assert!(rendered.contains("Commands"));
-        assert!(rendered.contains("help"));
-        assert!(!rendered.contains("Sections"));
-        assert!(!rendered.contains("Entries"));
-    }
-
-    #[test]
-    fn repl_command_spec_covers_repl_variant_and_builtin_dsl_matrix_unit() {
-        let repl = repl_command_spec(&Commands::Repl(ReplArgs {
-            command: ReplCommands::DebugComplete(DebugCompleteArgs {
-                line: String::new(),
-                menu: crate::cli::DebugMenuArg::Completion,
-                cursor: None,
-                width: 80,
-                height: 24,
-                steps: Vec::new(),
-                menu_ansi: false,
-                menu_unicode: false,
-            }),
-        }));
-        assert_eq!(repl.name.as_ref(), "repl");
-        assert!(!repl.supports_dsl);
-
-        let plugins = repl_command_spec(&Commands::Plugins(PluginsArgs {
-            command: PluginsCommands::Doctor,
-        }));
-        assert!(plugins.supports_dsl);
-
-        let history = repl_command_spec(&Commands::History(HistoryArgs {
-            command: HistoryCommands::Clear,
-        }));
-        assert!(!history.supports_dsl);
-    }
-
-    #[test]
-    fn render_repl_command_output_handles_text_none_and_stderr_unit() {
-        use crate::app::sink::BufferedUiSink;
-
-        let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
-        let invocation = super::base_repl_invocation(&state.runtime);
-        let mut sink = BufferedUiSink::default();
-
-        let rendered = render_repl_command_output(
-            &state.runtime,
-            &mut state.session,
-            "doctor last",
-            &[],
-            CliCommandResult {
-                exit_code: 0,
-                messages: Default::default(),
-                output: Some(ReplCommandOutput::Text("hello".to_string())),
-                stderr_text: Some("\nwarn\n".to_string()),
-                failure_report: None,
-            },
-            &invocation,
-            &mut sink,
-        )
-        .expect("text output should render");
-        assert_eq!(rendered, "hello");
-        assert_eq!(sink.stderr, "\nwarn\n");
-
-        let empty = render_repl_command_output(
-            &state.runtime,
-            &mut state.session,
-            "doctor last",
-            &[],
-            CliCommandResult::exit(0),
-            &invocation,
-            &mut sink,
-        )
-        .expect("empty result should render");
-        assert!(empty.is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn shell_entry_help_and_repl_command_cache_paths_cover_external_flow_unit() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = std::env::temp_dir().join(format!(
-            "osp-cli-repl-dispatch-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time should be valid")
-                .as_nanos()
-        ));
-        let plugins_dir = root.join("plugins");
-        std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-        let plugin_path = plugins_dir.join("osp-cache");
-        std::fs::write(
-            &plugin_path,
-            r#"#!/bin/sh
-PATH=/usr/bin:/bin:$PATH
-if [ "$1" = "--describe" ]; then
-  printf '%s\n' '{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","args":[],"flags":{},"subcommands":[]}]}'
-  exit 0
-fi
-printf '%s\n' '{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}'
-"#,
-        )
-        .expect("plugin script should be written");
-        let mut perms = std::fs::metadata(&plugin_path)
-            .expect("plugin metadata should be readable")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
-
-        let mut state =
-            make_state_with_plugins(crate::plugin::PluginManager::new(vec![plugins_dir.clone()]));
-        let invocation = super::base_repl_invocation(&state.runtime);
-
-        let entered = enter_repl_shell(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            "cache",
-            &invocation,
-        )
-        .expect("shell entry should succeed");
-        assert!(entered.contains("Entering cache shell"));
-        assert!(!state.session.scope.is_root());
-
-        let nested_help = repl_help_for_scope(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &invocation,
-        )
-        .expect("nested help should render");
-        assert!(!nested_help.is_empty());
-
-        let first = run_repl_command(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            Commands::External(vec!["cache".to_string()]),
-            &invocation,
-            &SharedHistory::new(HistoryConfig {
-                path: None,
-                max_entries: 8,
-                enabled: true,
-                dedupe: true,
-                profile_scoped: false,
-                exclude_patterns: Vec::new(),
-                profile: None,
-                terminal: None,
-                shell_context: Default::default(),
-            })
-            .expect("history should initialize"),
-            Some("cache-key"),
-        )
-        .expect("first external run should succeed");
-        assert_eq!(first.exit_code, 0);
-
-        let cached = run_repl_command(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            Commands::External(vec!["cache".to_string()]),
-            &invocation,
-            &SharedHistory::new(HistoryConfig {
-                path: None,
-                max_entries: 8,
-                enabled: true,
-                dedupe: true,
-                profile_scoped: false,
-                exclude_patterns: Vec::new(),
-                profile: None,
-                terminal: None,
-                shell_context: Default::default(),
-            })
-            .expect("history should initialize"),
-            Some("cache-key"),
-        )
-        .expect("cached external run should succeed");
-        assert_eq!(cached.exit_code, 0);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
+pub(crate) fn classify_repl_line_kind(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    line: &str,
+) -> Result<ReplLinePlanKind> {
+    Ok(classify_repl_line(runtime, session, line)?.kind())
 }
+
+#[cfg(test)]
+mod tests;

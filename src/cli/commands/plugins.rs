@@ -47,7 +47,7 @@ pub(crate) fn run_plugins_command(
                 .command_catalog()
                 .map_err(|err| miette::miette!("{err:#}"))?
                 .into_iter()
-                .filter(|entry| context.auth.is_plugin_command_visible(&entry.name))
+                .filter(|entry| context.auth.is_external_command_visible(&entry.name))
                 .collect::<Vec<_>>();
             commands.sort_by(|a, b| a.name.cmp(&b.name));
             Ok(CliCommandResult::output(

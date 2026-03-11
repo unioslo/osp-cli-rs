@@ -38,9 +38,7 @@ use crate::dsl::{
     eval::{matchers::match_row_keys, resolve::evaluate_path},
     parse::{
         key_spec::{ExactMode, KeySpec},
-        path::{
-            PathExpression, expression_to_flat_key, is_structural_path_token, parse_path,
-        },
+        path::{PathExpression, expression_to_flat_key, is_structural_path_token, parse_path},
     },
 };
 

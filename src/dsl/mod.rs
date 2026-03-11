@@ -26,6 +26,4 @@ pub use verb_info::{
 };
 
 #[cfg(test)]
-mod contract_tests;
-#[cfg(test)]
 mod tests;

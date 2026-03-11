@@ -34,7 +34,7 @@ impl<'a> ExternalCommandRuntime<'a> {
             ui: &runtime.ui,
             auth: &runtime.auth,
             clients,
-            plugins: &clients.plugins,
+            plugins: clients.plugins(),
         }
     }
 }
@@ -113,7 +113,7 @@ pub(crate) fn run_external_command_with_help_renderer(
         .ok_or_else(|| miette!("missing external command"))?;
     let external_runtime = ExternalCommandRuntime::from_parts(runtime, clients);
 
-    if let Some(native_command) = clients.native_commands.command(command) {
+    if let Some(native_command) = clients.native_commands().command(command) {
         ensure_plugin_visible_for(&runtime.auth, command)?;
         return run_native_command(
             native_command.as_ref(),
@@ -141,10 +141,10 @@ fn run_native_command(
     stages: &[String],
     guide_help: impl Fn(&str) -> GuideView,
 ) -> Result<CliCommandResult> {
-    let context = NativeCommandContext {
-        config: runtime.config.resolved(),
-        runtime_hints: runtime_hints_for_runtime(runtime),
-    };
+    let context = NativeCommandContext::new(
+        runtime.config.resolved(),
+        runtime_hints_for_runtime(runtime),
+    );
 
     match command
         .execute(args, &context)
@@ -240,8 +240,8 @@ fn run_external_plugin_command(
     );
 
     if is_help_passthrough(args) {
-        let mut dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation));
-        dispatch_context.provider_override = invocation.plugin_provider.clone();
+        let dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation))
+            .with_provider_override(invocation.plugin_provider.clone());
         let raw = runtime
             .plugins
             .dispatch_passthrough(command, args, &dispatch_context)
@@ -258,8 +258,8 @@ fn run_external_plugin_command(
         return Ok(result);
     }
 
-    let mut dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation));
-    dispatch_context.provider_override = invocation.plugin_provider.clone();
+    let dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation))
+        .with_provider_override(invocation.plugin_provider.clone());
     let response = runtime
         .plugins
         .dispatch(command, args, &dispatch_context)
@@ -312,8 +312,8 @@ mod tests {
         render_external_plugin_response, run_external_command_with_help_renderer,
     };
     use crate::app::{
-        AppClients, AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext,
-        TerminalKind, resolve_invocation_ui,
+        AppClients, AppRuntime, AppSession, AppState, LaunchContext, RuntimeContext, TerminalKind,
+        UiState, resolve_invocation_ui,
     };
     use crate::app::{CliCommandResult, ReplCommandOutput};
     use crate::cli::invocation::InvocationOptions;
@@ -399,19 +399,20 @@ mod tests {
             .resolve(ResolveOptions::default())
             .expect("test config should resolve");
 
-        let state = AppState::new(AppStateInit {
-            context: RuntimeContext::new(None, TerminalKind::Cli, None),
+        let state = AppState::builder(
+            RuntimeContext::new(None, TerminalKind::Cli, None),
             config,
-            render_settings: RenderSettings::test_plain(OutputFormat::Json),
-            message_verbosity: MessageLevel::Success,
-            debug_verbosity: 0,
-            plugins: PluginManager::new(Vec::new()),
-            native_commands: kind
-                .map(|kind| NativeCommandRegistry::new().with_command(TestNativeCommand { kind }))
+            UiState::builder(RenderSettings::test_plain(OutputFormat::Json))
+                .with_message_verbosity(MessageLevel::Success)
+                .build(),
+        )
+        .with_launch(LaunchContext::default())
+        .with_plugins(PluginManager::new(Vec::new()))
+        .with_native_commands(
+            kind.map(|kind| NativeCommandRegistry::new().with_command(TestNativeCommand { kind }))
                 .unwrap_or_default(),
-            themes: crate::ui::theme_loader::ThemeCatalog::default(),
-            launch: LaunchContext::default(),
-        });
+        )
+        .build();
         (state.runtime, state.session, state.clients)
     }
 

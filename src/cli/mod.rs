@@ -1,3 +1,17 @@
+//! The CLI module exists to define the public command-line grammar of `osp`.
+//!
+//! This module owns the public command-line grammar for `osp`: top-level
+//! commands, shared flags, inline parsing helpers, and the bridge from CLI
+//! arguments into render/config runtime settings. It does not execute commands;
+//! that handoff happens in [`crate::app`].
+//!
+//! Contract:
+//!
+//! - this module defines what users are allowed to type
+//! - it may translate flags into config/render settings
+//! - it should not dispatch commands, query external systems, or own REPL
+//!   editor behavior
+
 pub(crate) mod commands;
 pub(crate) mod invocation;
 pub(crate) mod pipeline;
@@ -7,8 +21,8 @@ use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::ui::chrome::SectionFrameStyle;
 use crate::ui::theme::DEFAULT_THEME_NAME;
 use crate::ui::{
-    GuideDefaultFormat, HelpTableChrome, RenderRuntime, RenderSettings, StyleOverrides,
-    TableBorderStyle, TableOverflow,
+    GuideDefaultFormat, HelpTableChrome, RenderSettings, StyleOverrides, TableBorderStyle,
+    TableOverflow,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -93,10 +107,9 @@ pub struct Cli {
 impl Cli {
     /// Returns the runtime source-loading options implied by global CLI flags.
     pub fn runtime_load_options(&self) -> RuntimeLoadOptions {
-        RuntimeLoadOptions {
-            include_env: !self.no_env,
-            include_config_file: !self.no_config_file,
-        }
+        RuntimeLoadOptions::new()
+            .with_env(!self.no_env)
+            .with_config_file(!self.no_config_file)
     }
 }
 
@@ -152,9 +165,12 @@ pub enum ReplCommands {
     DebugHighlight(DebugHighlightArgs),
 }
 
+/// Popup menu target to inspect through the hidden REPL debug surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DebugMenuArg {
+    /// Trace the normal completion popup.
     Completion,
+    /// Trace the history-search popup used by `Ctrl-R`.
     History,
 }
 
@@ -646,35 +662,7 @@ impl Cli {
 }
 
 pub(crate) fn default_render_settings() -> RenderSettings {
-    RenderSettings {
-        format: OutputFormat::Auto,
-        format_explicit: false,
-        mode: RenderMode::Auto,
-        color: ColorMode::Auto,
-        unicode: UnicodeMode::Auto,
-        width: None,
-        margin: 0,
-        indent_size: 2,
-        short_list_max: 1,
-        medium_list_max: 5,
-        grid_padding: 4,
-        grid_columns: None,
-        column_weight: 3,
-        table_overflow: TableOverflow::Clip,
-        table_border: TableBorderStyle::Square,
-        help_table_chrome: HelpTableChrome::None,
-        help_entry_indent: None,
-        help_entry_gap: None,
-        help_section_spacing: None,
-        mreg_stack_min_col_width: 10,
-        mreg_stack_overflow_ratio: 200,
-        theme_name: DEFAULT_THEME_NAME.to_string(),
-        theme: None,
-        style_overrides: StyleOverrides::default(),
-        chrome_frame: SectionFrameStyle::Top,
-        guide_default_format: GuideDefaultFormat::Guide,
-        runtime: RenderRuntime::default(),
-    }
+    RenderSettings::default()
 }
 
 pub(crate) fn apply_render_settings_from_config(
@@ -811,12 +799,12 @@ pub(crate) fn sync_render_settings_from_config(
     if let Some(value) = config.get_string("ui.help.table_chrome")
         && let Some(parsed) = HelpTableChrome::parse(value)
     {
-        settings.help_table_chrome = parsed;
+        settings.help_chrome.table_chrome = parsed;
     }
 
-    settings.help_entry_indent = config_usize_override(config, "ui.help.entry_indent");
-    settings.help_entry_gap = config_usize_override(config, "ui.help.entry_gap");
-    settings.help_section_spacing = config_usize_override(config, "ui.help.section_spacing");
+    settings.help_chrome.entry_indent = config_usize_override(config, "ui.help.entry_indent");
+    settings.help_chrome.entry_gap = config_usize_override(config, "ui.help.entry_gap");
+    settings.help_chrome.section_spacing = config_usize_override(config, "ui.help.section_spacing");
 
     settings.style_overrides = StyleOverrides {
         text: config_non_empty_string(config, "color.text"),
@@ -915,9 +903,34 @@ fn config_usize_override(config: &ResolvedConfig, key: &str) -> Option<usize> {
     }
 }
 
-/// Parses inline command tokens using the same subcommand model as the top-level CLI.
+/// Parses inline command tokens with the same clap model as the top-level CLI.
 ///
-/// Returns `Ok(None)` when the token list does not select a subcommand.
+/// This is the REPL-facing path for turning already-tokenized input into a
+/// concrete builtin command, and it returns `Ok(None)` when no subcommand has
+/// been selected yet.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::cli::{Commands, ThemeCommands, parse_inline_command_tokens};
+///
+/// let tokens = vec![
+///     "theme".to_string(),
+///     "show".to_string(),
+///     "dracula".to_string(),
+/// ];
+///
+/// let command = parse_inline_command_tokens(&tokens).unwrap().unwrap();
+/// match command {
+///     Commands::Theme(args) => match args.command {
+///         ThemeCommands::Show(show) => {
+///             assert_eq!(show.name.as_deref(), Some("dracula"));
+///         }
+///         other => panic!("unexpected theme command: {other:?}"),
+///     },
+///     other => panic!("unexpected command: {other:?}"),
+/// }
+/// ```
 pub fn parse_inline_command_tokens(tokens: &[String]) -> Result<Option<Commands>, clap::Error> {
     InlineCommandCli::try_parse_from(tokens.iter().map(String::as_str)).map(|parsed| parsed.command)
 }
@@ -1079,9 +1092,9 @@ mod tests {
             config_usize_override(&config, "ui.help.entry_indent"),
             Some(4)
         );
-        assert_eq!(settings.help_entry_indent, Some(4));
-        assert_eq!(settings.help_entry_gap, Some(3));
-        assert_eq!(settings.help_section_spacing, None);
+        assert_eq!(settings.help_chrome.entry_indent, Some(4));
+        assert_eq!(settings.help_chrome.entry_gap, Some(3));
+        assert_eq!(settings.help_chrome.section_spacing, None);
     }
 
     #[test]
@@ -1105,10 +1118,9 @@ mod tests {
         let cli = Cli::parse_from(["osp", "--no-env", "--no-config-file", "theme", "list"]);
         assert_eq!(
             cli.runtime_load_options(),
-            RuntimeLoadOptions {
-                include_env: false,
-                include_config_file: false,
-            }
+            RuntimeLoadOptions::new()
+                .with_env(false)
+                .with_config_file(false)
         );
 
         let inline = InlineCommandCli::try_parse_from(["theme", "list"])

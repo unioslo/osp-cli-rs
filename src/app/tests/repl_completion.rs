@@ -1,77 +1,44 @@
 use super::*;
 
-#[test]
-fn repl_help_alias_rewrites_to_command_help_unit() {
-    let state = make_completion_state(None);
-    let rewritten = repl::ReplParsedLine::parse("help ldap user", state.runtime.config.resolved())
-        .expect("help alias should parse");
-    assert_eq!(
-        rewritten.dispatch_tokens,
-        vec!["ldap".to_string(), "user".to_string(), "--help".to_string()]
-    );
+fn completion_tree_for(
+    state: &AppState,
+    catalog: &[CommandCatalogEntry],
+) -> crate::completion::CompletionTree {
+    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), catalog);
+    completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface)
 }
 
-#[test]
-fn repl_help_alias_preserves_existing_help_flag_unit() {
-    let state = make_completion_state(None);
-    let rewritten =
-        repl::ReplParsedLine::parse("help ldap --help", state.runtime.config.resolved())
-            .expect("help alias should parse");
-    assert_eq!(
-        rewritten.dispatch_tokens,
-        vec!["ldap".to_string(), "--help".to_string()]
-    );
+fn completion_engine_for(
+    state: &AppState,
+    catalog: &[CommandCatalogEntry],
+) -> crate::completion::CompletionEngine {
+    crate::completion::CompletionEngine::new(completion_tree_for(state, catalog))
 }
 
-#[test]
-fn repl_help_alias_skips_bare_help_unit() {
-    let state = make_completion_state(None);
-    let parsed = repl::ReplParsedLine::parse("help", state.runtime.config.resolved())
-        .expect("bare help should parse");
-    assert_eq!(parsed.command_tokens, vec!["help".to_string()]);
-    assert_eq!(parsed.dispatch_tokens, vec!["help".to_string()]);
+fn suggestion_values(output: Vec<crate::completion::SuggestionOutput>) -> Vec<String> {
+    output
+        .into_iter()
+        .filter_map(|entry| match entry {
+            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
+            crate::completion::SuggestionOutput::PathSentinel => None,
+        })
+        .collect()
 }
 
-#[test]
-fn repl_ui_projection_supports_flag_prefixed_help_and_completion_unit() {
-    let state = make_completion_state(None);
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
+fn complete_values(engine: &crate::completion::CompletionEngine, line: &str) -> Vec<String> {
+    let (_, suggestions) = engine.complete(line, line.len());
+    suggestion_values(suggestions)
+}
 
-    let projected = crate::repl::input::project_repl_ui_line(
-        "--json help orch prov",
-        state.runtime.config.resolved(),
-    )
-    .expect("projection should succeed");
-
+fn projected_visible_values(
+    engine: &crate::completion::CompletionEngine,
+    config: &crate::config::ResolvedConfig,
+    line: &str,
+) -> Vec<String> {
+    let projected =
+        crate::repl::input::project_repl_ui_line(line, config).expect("projection should succeed");
     let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
-    assert!(suggestions.into_iter().any(|entry| matches!(
-        entry,
-        crate::completion::SuggestionOutput::Item(item) if item.text == "provision"
-    )));
-}
-
-#[test]
-fn repl_scoped_help_alias_uses_relative_target_completion_unit() {
-    let mut state = make_completion_state(None);
-    state.session.scope.enter("orch");
-    let catalog = sample_catalog_with_provision_context();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let projected = crate::repl::input::project_repl_ui_line(
-        "help provision --p",
-        state.runtime.config.resolved(),
-    )
-    .expect("projection should succeed");
-
-    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
-    let values = suggestions
+    suggestions
         .into_iter()
         .filter_map(|entry| match entry {
             crate::completion::SuggestionOutput::Item(item)
@@ -79,22 +46,75 @@ fn repl_scoped_help_alias_uses_relative_target_completion_unit() {
             {
                 Some(item.text)
             }
-            _ => None,
+            crate::completion::SuggestionOutput::PathSentinel => None,
+            crate::completion::SuggestionOutput::Item(_) => None,
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
 
+#[test]
+fn repl_help_alias_parsing_and_completion_cover_root_and_scoped_paths_unit() {
+    let state = make_completion_state(None);
+    for (line, expected_dispatch) in [
+        (
+            "help ldap user",
+            vec!["ldap".to_string(), "user".to_string(), "--help".to_string()],
+        ),
+        (
+            "help ldap --help",
+            vec!["ldap".to_string(), "--help".to_string()],
+        ),
+    ] {
+        let parsed =
+            repl::ReplParsedLine::parse(line, state.runtime.config.resolved()).expect("parse");
+        assert_eq!(parsed.dispatch_tokens, expected_dispatch);
+    }
+
+    let parsed = repl::ReplParsedLine::parse("help", state.runtime.config.resolved())
+        .expect("bare help should parse");
+    assert_eq!(parsed.command_tokens, vec!["help".to_string()]);
+    assert_eq!(parsed.dispatch_tokens, vec!["help".to_string()]);
+
+    let catalog = sample_catalog();
+    let engine = completion_engine_for(&state, &catalog);
+    let values = projected_visible_values(
+        &engine,
+        state.runtime.config.resolved(),
+        "--json help orch prov",
+    );
+    assert!(values.contains(&"provision".to_string()));
+
+    assert_eq!(
+        projected_visible_values(&engine, state.runtime.config.resolved(), "help history "),
+        vec!["list", "prune", "clear"]
+    );
+    assert_eq!(
+        projected_visible_values(&engine, state.runtime.config.resolved(), "help history -"),
+        vec!["--verbose"]
+    );
+
+    let root_values = projected_visible_values(&engine, state.runtime.config.resolved(), "help ");
+    assert!(!root_values.contains(&"help".to_string()));
+    assert!(!root_values.iter().any(|value| value.starts_with("--")));
+
+    let mut state = make_completion_state(None);
+    state.session.scope.enter("orch");
+    let catalog = sample_catalog_with_provision_context();
+    let engine = completion_engine_for(&state, &catalog);
+    let values = projected_visible_values(
+        &engine,
+        state.runtime.config.resolved(),
+        "help provision --p",
+    );
     assert!(values.contains(&"--provider".to_string()));
 }
 
 #[test]
-fn repl_shellable_commands_include_ldap_unit() {
+fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
     assert!(repl::is_repl_shellable_command("ldap"));
     assert!(repl::is_repl_shellable_command("LDAP"));
     assert!(!repl::is_repl_shellable_command("theme"));
-}
 
-#[test]
-fn repl_shell_prefix_applies_once_unit() {
     let mut stack = crate::app::ReplScopeStack::default();
     stack.enter("ldap");
     let bare = repl::apply_repl_shell_prefix(&stack, &["user".to_string(), "oistes".to_string()]);
@@ -111,20 +131,13 @@ fn repl_shell_prefix_applies_once_unit() {
         already_prefixed,
         vec!["ldap".to_string(), "user".to_string(), "oistes".to_string()]
     );
-}
 
-#[test]
-fn repl_shell_leave_message_unit() {
     let mut state = make_completion_state(None);
     state.session.scope.enter("ldap");
     let message = repl_dispatch::leave_repl_shell(&mut state.session).expect("shell should leave");
     assert_eq!(message, "Leaving ldap shell. Back at root.\n");
     assert!(state.session.scope.is_root());
-}
 
-#[test]
-fn repl_shell_enter_only_from_root_unit() {
-    let mut state = make_completion_state(None);
     let ldap = repl::ReplParsedLine::parse("ldap", state.runtime.config.resolved())
         .expect("ldap should parse");
     assert_eq!(ldap.shell_entry_command(&state.session.scope), Some("ldap"));
@@ -133,43 +146,21 @@ fn repl_shell_enter_only_from_root_unit() {
         .expect("mreg should parse");
     assert_eq!(mreg.shell_entry_command(&state.session.scope), Some("mreg"));
     assert_eq!(ldap.shell_entry_command(&state.session.scope), None);
-}
 
-#[test]
-fn repl_partial_root_completion_does_not_enter_shell_unit() {
-    let state = make_completion_state(None);
+    let mut state = make_completion_state(None);
     let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("or", 2);
-    assert!(suggestions.into_iter().any(|entry| matches!(
-        entry,
-        crate::completion::SuggestionOutput::Item(item) if item.text == "orch"
-    )));
+    let engine = completion_engine_for(&state, &catalog);
+    let values = complete_values(&engine, "or");
+    assert!(values.contains(&"orch".to_string()));
 
     let parsed = repl::ReplParsedLine::parse("or", state.runtime.config.resolved())
         .expect("partial command should parse");
     assert_eq!(parsed.shell_entry_command(&state.session.scope), None);
-}
 
-#[test]
-fn repl_shell_scoped_completion_and_dispatch_prefix_align_unit() {
-    let mut state = make_completion_state(None);
     state.session.scope.enter("orch");
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("prov", 4);
-    assert!(suggestions.into_iter().any(|entry| matches!(
-        entry,
-        crate::completion::SuggestionOutput::Item(item) if item.text == "provision"
-    )));
+    let engine = completion_engine_for(&state, &catalog);
+    let values = complete_values(&engine, "prov");
+    assert!(values.contains(&"provision".to_string()));
 
     let parsed =
         repl::ReplParsedLine::parse("provision --os alma", state.runtime.config.resolved())
@@ -183,410 +174,112 @@ fn repl_shell_scoped_completion_and_dispatch_prefix_align_unit() {
             "alma".to_string()
         ]
     );
-}
-
-#[test]
-fn repl_alias_partial_completion_does_not_trigger_shell_entry_unit() {
     let state = make_completion_state_with_entries(
         None,
         &[("alias.ops", "orch provision --provider vmware")],
     );
     let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("op", 2);
-    assert!(suggestions.into_iter().any(|entry| matches!(
-        entry,
-        crate::completion::SuggestionOutput::Item(item) if item.text == "ops"
-    )));
+    let engine = completion_engine_for(&state, &catalog);
+    let values = complete_values(&engine, "op");
+    assert!(values.contains(&"ops".to_string()));
 
     let parsed = repl::ReplParsedLine::parse("op", state.runtime.config.resolved())
         .expect("partial alias should parse");
     assert_eq!(parsed.shell_entry_command(&state.session.scope), None);
-}
 
-#[test]
-fn repl_structural_alias_exposes_underlying_subcommands_unit() {
-    let state = make_completion_state_with_entries(None, &[("alias.ops", "orch")]);
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("ops prov", "ops prov".len());
-    assert!(suggestions.into_iter().any(|entry| matches!(
-        entry,
-        crate::completion::SuggestionOutput::Item(item) if item.text == "provision"
-    )));
-}
-
-#[test]
-fn repl_alias_with_invocation_flags_exposes_underlying_subcommands_unit() {
-    let state = make_completion_state_with_entries(None, &[("alias.ops", "--json orch")]);
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("ops prov", "ops prov".len());
-    assert!(suggestions.into_iter().any(|entry| matches!(
-        entry,
-        crate::completion::SuggestionOutput::Item(item) if item.text == "provision"
-    )));
-}
-
-#[test]
-fn repl_alias_with_prefilled_positional_args_inherits_target_flags_unit() {
-    let state = make_completion_state_with_entries(None, &[("alias.me", "orch provision guest")]);
-    let catalog = sample_catalog_with_provision_context();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree.clone());
-
-    let alias_node = tree
-        .root
-        .children
-        .get("me")
-        .expect("alias node should exist");
-    assert_eq!(alias_node.prefilled_positionals, vec!["guest".to_string()]);
-
-    let (_, suggestions) = engine.complete("me --", "me --".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert!(values.contains(&"--provider".to_string()));
-    assert!(values.contains(&"--os".to_string()));
-}
-
-#[test]
-fn repl_trailing_space_prefers_subcommands_over_flags_unit() {
-    let state = make_completion_state(None);
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("history ", "history ".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(values, vec!["list", "prune", "clear"]);
-}
-
-#[test]
-fn repl_dash_prefix_switches_from_subcommands_to_flags_unit() {
-    let state = make_completion_state(None);
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("history -", "history -".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert!(values.contains(&"--json".to_string()));
-    assert!(values.contains(&"--color".to_string()));
-    assert!(!values.contains(&"list".to_string()));
-}
-
-#[test]
-fn repl_help_alias_trailing_space_exposes_target_subcommands_unit() {
-    let state = make_completion_state(None);
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let projected =
-        crate::repl::input::project_repl_ui_line("help history ", state.runtime.config.resolved())
-            .expect("projection should succeed");
-
-    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item)
-                if !projected.hidden_suggestions.contains(&item.text) =>
-            {
-                Some(item.text)
-            }
-            crate::completion::SuggestionOutput::PathSentinel => None,
-            crate::completion::SuggestionOutput::Item(_) => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(values, vec!["list", "prune", "clear"]);
-}
-
-#[test]
-fn repl_help_alias_dash_prefix_exposes_target_flags_unit() {
-    let state = make_completion_state(None);
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let projected =
-        crate::repl::input::project_repl_ui_line("help history -", state.runtime.config.resolved())
-            .expect("projection should succeed");
-
-    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item)
-                if !projected.hidden_suggestions.contains(&item.text) =>
-            {
-                Some(item.text)
-            }
-            crate::completion::SuggestionOutput::PathSentinel => None,
-            crate::completion::SuggestionOutput::Item(_) => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(values, vec!["--verbose"]);
-    assert!(!values.contains(&"list".to_string()));
-}
-
-#[test]
-fn repl_help_root_does_not_suggest_help_or_flags_unit() {
-    let state = make_completion_state(None);
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let projected =
-        crate::repl::input::project_repl_ui_line("help ", state.runtime.config.resolved())
-            .expect("projection should succeed");
-
-    let (_, suggestions) = engine.complete(&projected.line, projected.line.len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert!(!values.contains(&"help".to_string()));
-    assert!(!values.iter().any(|value| value.starts_with("--")));
-}
-
-#[test]
-fn repl_alias_with_invocation_flags_inherits_target_flags_unit() {
-    let state =
-        make_completion_state_with_entries(None, &[("alias.me", "--json orch provision guest")]);
-    let catalog = sample_catalog_with_provision_context();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree.clone());
-
-    let alias_node = tree
-        .root
-        .children
-        .get("me")
-        .expect("alias node should exist");
-    assert_eq!(alias_node.prefilled_positionals, vec!["guest".to_string()]);
-    assert_eq!(
-        alias_node.prefilled_flags.get("--format"),
-        Some(&vec!["json".to_string()])
-    );
-
-    let (_, suggestions) = engine.complete("me --", "me --".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert!(values.contains(&"--provider".to_string()));
-    assert!(values.contains(&"--os".to_string()));
-}
-
-#[test]
-fn repl_alias_prefilled_context_filters_provider_scoped_values_unit() {
-    let state = make_completion_state_with_entries(
-        None,
-        &[("alias.me", "orch provision guest --provider vmware")],
-    );
-    let catalog = sample_catalog_with_provision_context();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("me --os ", "me --os ".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert!(values.contains(&"rhel".to_string()));
-    assert!(!values.contains(&"alma".to_string()));
-}
-
-#[test]
-fn repl_alias_with_invocation_flags_filters_provider_scoped_values_unit() {
-    let state = make_completion_state_with_entries(
-        None,
-        &[("alias.me", "--json orch provision guest --provider vmware")],
-    );
-    let catalog = sample_catalog_with_provision_context();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("me --os ", "me --os ".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert!(values.contains(&"rhel".to_string()));
-    assert!(!values.contains(&"alma".to_string()));
-}
-
-#[test]
-fn repl_alias_placeholder_keeps_following_arg_slot_open_unit() {
-    let state =
-        make_completion_state_with_entries(None, &[("alias.me", "orch provision guest ${1}")]);
-    let catalog = sample_catalog_with_provision_context();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("me ", "me ".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
-    assert!(values.contains(&"ubuntu".to_string()));
-    assert!(values.contains(&"alma".to_string()));
-}
-
-#[test]
-fn repl_scoped_relative_alias_keeps_alias_name_in_root_suggestions_unit() {
     let mut state = make_completion_state_with_entries(None, &[("alias.st", "status")]);
     state.session.scope.enter("orch");
     let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-
+    let tree = completion_tree_for(&state, &catalog);
     let values = tree.root.args[0]
         .suggestions
         .iter()
         .map(|entry| entry.value.clone())
         .collect::<Vec<_>>();
-
     assert!(values.contains(&"st".to_string()));
-}
 
-#[test]
-fn repl_scoped_relative_alias_exposes_shell_subcommands_unit() {
-    let mut state = make_completion_state_with_entries(None, &[("alias.st", "status")]);
-    state.session.scope.enter("orch");
-    let catalog = sample_catalog();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
     let engine = crate::completion::CompletionEngine::new(tree);
-
     let (_, suggestions) = engine.complete("st", "st".len());
     assert!(
         suggestions.is_empty(),
         "relative alias should resolve as a complete shell command, got {suggestions:?}"
     );
-}
 
-#[test]
-fn repl_scoped_relative_alias_preserves_provider_scoped_values_unit() {
     let mut state = make_completion_state_with_entries(
         None,
         &[("alias.vm", "provision guest --provider vmware")],
     );
     state.session.scope.enter("orch");
     let catalog = sample_catalog_with_provision_context();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
-
-    let (_, suggestions) = engine.complete("vm --os ", "vm --os ".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
-
+    let engine = completion_engine_for(&state, &catalog);
+    let values = complete_values(&engine, "vm --os ");
     assert!(values.contains(&"rhel".to_string()));
     assert!(!values.contains(&"alma".to_string()));
-}
 
-#[test]
-fn repl_scoped_global_alias_falls_back_to_full_command_resolution_unit() {
     let mut state = make_completion_state_with_entries(None, &[("alias.ops", "orch provision")]);
     state.session.scope.enter("orch");
     let catalog = sample_catalog_with_provision_context();
-    let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
-    let engine = crate::completion::CompletionEngine::new(tree);
+    let engine = completion_engine_for(&state, &catalog);
+    let values = complete_values(&engine, "ops guest ");
+    assert!(values.contains(&"ubuntu".to_string()));
+    assert!(values.contains(&"alma".to_string()));
+}
 
-    let (_, suggestions) = engine.complete("ops guest ", "ops guest ".len());
-    let values = suggestions
-        .into_iter()
-        .filter_map(|entry| match entry {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect::<Vec<_>>();
+#[test]
+fn repl_alias_completion_inherits_prefilled_context_unit() {
+    for alias in ["orch", "--json orch"] {
+        let state = make_completion_state_with_entries(None, &[("alias.ops", alias)]);
+        let catalog = sample_catalog();
+        let engine = completion_engine_for(&state, &catalog);
+        let values = complete_values(&engine, "ops prov");
+        assert!(values.contains(&"provision".to_string()));
+    }
 
+    for (alias, expected_flags) in [
+        ("orch provision guest", None),
+        (
+            "--json orch provision guest",
+            Some(vec!["json".to_string()]),
+        ),
+    ] {
+        let state = make_completion_state_with_entries(None, &[("alias.me", alias)]);
+        let catalog = sample_catalog_with_provision_context();
+        let tree = completion_tree_for(&state, &catalog);
+        let alias_node = tree
+            .root
+            .children
+            .get("me")
+            .expect("alias node should exist");
+        assert_eq!(alias_node.prefilled_positionals, vec!["guest".to_string()]);
+        if let Some(expected) = expected_flags {
+            assert_eq!(alias_node.prefilled_flags.get("--format"), Some(&expected));
+        } else {
+            assert!(!alias_node.prefilled_flags.contains_key("--format"));
+        }
+
+        let engine = crate::completion::CompletionEngine::new(tree);
+        let values = complete_values(&engine, "me --");
+        assert!(values.contains(&"--provider".to_string()));
+        assert!(values.contains(&"--os".to_string()));
+    }
+
+    for alias in [
+        "orch provision guest --provider vmware",
+        "--json orch provision guest --provider vmware",
+    ] {
+        let state = make_completion_state_with_entries(None, &[("alias.me", alias)]);
+        let catalog = sample_catalog_with_provision_context();
+        let engine = completion_engine_for(&state, &catalog);
+        let values = complete_values(&engine, "me --os ");
+        assert!(values.contains(&"rhel".to_string()));
+        assert!(!values.contains(&"alma".to_string()));
+    }
+
+    let state =
+        make_completion_state_with_entries(None, &[("alias.me", "orch provision guest ${1}")]);
+    let catalog = sample_catalog_with_provision_context();
+    let engine = completion_engine_for(&state, &catalog);
+    let values = complete_values(&engine, "me ");
     assert!(values.contains(&"ubuntu".to_string()));
     assert!(values.contains(&"alma".to_string()));
 }

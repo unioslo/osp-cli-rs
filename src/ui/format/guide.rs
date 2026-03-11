@@ -4,22 +4,21 @@ use crate::core::output_model::{OutputItems, OutputResult, output_items_to_value
 use crate::guide::GuideView;
 use crate::ui::document::Document;
 use crate::ui::document_model::{DocumentModel, LowerDocumentOptions};
-use crate::ui::{RenderSettings, ResolvedRenderSettings};
+use crate::ui::resolution::ResolvedGuideRenderSettings;
 
 pub(super) fn build_guide_document(
     output: &OutputResult,
-    settings: &RenderSettings,
-    resolved: &ResolvedRenderSettings,
+    guide_settings: ResolvedGuideRenderSettings,
     next_block_id: &mut u64,
 ) -> Document {
     if let Some(guide) = GuideView::try_from_output_result(output) {
         return DocumentModel::from_guide_view(&guide).lower_to_render_document(
             LowerDocumentOptions {
-                frame_style: settings.chrome_frame,
+                frame_style: guide_settings.frame_style,
                 panel_kind: Some("guide"),
-                key_value_border: resolved.help_table_border,
-                key_value_indent: settings.help_entry_indent,
-                key_value_gap: settings.help_entry_gap,
+                key_value_border: guide_settings.help_chrome.table_border,
+                key_value_indent: guide_settings.help_chrome.entry_indent,
+                key_value_gap: guide_settings.help_chrome.entry_gap,
             },
             next_block_id,
         );
@@ -32,9 +31,9 @@ pub(super) fn build_guide_document(
     };
     DocumentModel::from_value(&value, preferred_root_keys).lower_to_render_document(
         LowerDocumentOptions {
-            frame_style: settings.chrome_frame,
+            frame_style: guide_settings.frame_style,
             panel_kind: Some("guide"),
-            key_value_border: resolved.help_table_border,
+            key_value_border: guide_settings.help_chrome.table_border,
             key_value_indent: None,
             key_value_gap: None,
         },
@@ -91,12 +90,11 @@ mod tests {
             .cloned()
             .expect("object"),
         ]);
-        let resolved = RenderSettings::test_plain(OutputFormat::Guide).resolve_render_settings();
+        let settings = RenderSettings::test_plain(OutputFormat::Guide);
         let mut next_block_id = 1u64;
         let document = build_guide_document(
             &output,
-            &RenderSettings::test_plain(OutputFormat::Guide),
-            &resolved,
+            settings.resolve_guide_render_settings(),
             &mut next_block_id,
         );
 

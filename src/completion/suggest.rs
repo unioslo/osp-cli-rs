@@ -1,7 +1,19 @@
+//! Suggestion ranking and shaping for completion results.
+//!
+//! This module exists to turn parsed cursor context plus a static completion
+//! tree into ranked suggestion outputs. It is deliberately separate from
+//! tokenization so ranking rules can evolve without changing the parser.
+//!
+//! Contract:
+//!
+//! - suggestion ranking lives here
+//! - this layer may depend on fuzzy matching and provider context helpers
+//! - it should not own shell parsing or terminal rendering
+
 use crate::completion::context::{ProviderSelection, TreeResolver};
 use crate::completion::model::{
-    CommandLine, CompletionAnalysis, CompletionNode, CompletionTree, Suggestion, SuggestionEntry,
-    SuggestionOutput, ValueType,
+    CommandLine, CompletionAnalysis, CompletionNode, CompletionRequest, CompletionTree, Suggestion,
+    SuggestionEntry, SuggestionOutput, ValueType,
 };
 use crate::core::fuzzy::{completion_fuzzy_matcher, fold_case};
 use skim::fuzzy_matcher::FuzzyMatcher;
@@ -26,24 +38,6 @@ struct PositionalRequest<'a> {
     show_flag_names: bool,
 }
 
-enum SuggestionMode<'a> {
-    Pipe,
-    FlagNames {
-        flag_scope_node: &'a CompletionNode,
-    },
-    FlagValues {
-        flag_scope_node: &'a CompletionNode,
-        flag: String,
-    },
-    Positionals {
-        context_node: &'a CompletionNode,
-        flag_scope_node: &'a CompletionNode,
-        arg_index: usize,
-        show_subcommands: bool,
-        show_flag_names: bool,
-    },
-}
-
 /// Generates ranked completion suggestions from a completion tree and cursor analysis.
 #[derive(Debug, Clone)]
 pub struct SuggestionEngine {
@@ -57,78 +51,106 @@ impl SuggestionEngine {
     }
 
     /// Produces sorted completion outputs for the current cursor analysis.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::{
+    ///     CommandLine, CompletionAnalysis, CompletionContext, CompletionNode,
+    ///     CompletionRequest, CompletionTree, CursorState, ParsedLine,
+    ///     SuggestionEngine, SuggestionOutput,
+    /// };
+    /// use std::collections::BTreeMap;
+    ///
+    /// let tree = CompletionTree {
+    ///     root: CompletionNode::default()
+    ///         .with_child("ldap", CompletionNode::default()),
+    ///     pipe_verbs: BTreeMap::new(),
+    /// };
+    /// let analysis = CompletionAnalysis {
+    ///     parsed: ParsedLine {
+    ///         safe_cursor: 2,
+    ///         full_tokens: vec!["ld".to_string()],
+    ///         cursor_tokens: vec!["ld".to_string()],
+    ///         full_cmd: CommandLine::default(),
+    ///         cursor_cmd: CommandLine::default(),
+    ///     },
+    ///     cursor: CursorState::synthetic("ld"),
+    ///     context: CompletionContext {
+    ///         matched_path: Vec::new(),
+    ///         flag_scope_path: Vec::new(),
+    ///         subcommand_context: true,
+    ///     },
+    ///     request: CompletionRequest::Positionals {
+    ///         context_path: Vec::new(),
+    ///         flag_scope_path: Vec::new(),
+    ///         arg_index: 0,
+    ///         show_subcommands: true,
+    ///         show_flag_names: false,
+    ///     },
+    /// };
+    ///
+    /// let suggestions = SuggestionEngine::new(tree).generate(&analysis);
+    ///
+    /// assert!(matches!(
+    ///     suggestions.first(),
+    ///     Some(SuggestionOutput::Item(item)) if item.text == "ldap"
+    /// ));
+    /// ```
     pub fn generate(&self, analysis: &CompletionAnalysis) -> Vec<SuggestionOutput> {
-        let mode = self.suggestion_mode(analysis);
-        self.emit_suggestions(mode, analysis)
-    }
-
-    fn suggestion_mode<'a>(&'a self, analysis: &'a CompletionAnalysis) -> SuggestionMode<'a> {
-        let cmd = &analysis.parsed.cursor_cmd;
-        let stub = analysis.cursor.token_stub.as_str();
-
-        if cmd.has_pipe() {
-            return SuggestionMode::Pipe;
-        }
-
-        let nodes = TreeResolver::new(&self.tree).resolved_nodes(&analysis.context);
-        if stub.starts_with('-') {
-            return SuggestionMode::FlagNames {
-                flag_scope_node: nodes.flag_scope_node,
-            };
-        }
-
-        let (needs_flag_value, last_flag) =
-            self.last_flag_needs_value(nodes.flag_scope_node, cmd, stub);
-        if needs_flag_value && let Some(flag) = last_flag {
-            return SuggestionMode::FlagValues {
-                flag_scope_node: nodes.flag_scope_node,
-                flag,
-            };
-        }
-
-        SuggestionMode::Positionals {
-            context_node: nodes.context_node,
-            flag_scope_node: nodes.flag_scope_node,
-            arg_index: self.arg_index(cmd, stub, analysis.context.matched_path.len()),
-            show_subcommands: analysis.context.subcommand_context,
-            show_flag_names: stub.is_empty() && !analysis.context.subcommand_context,
-        }
+        self.emit_suggestions(&analysis.request, analysis)
     }
 
     fn emit_suggestions(
         &self,
-        mode: SuggestionMode<'_>,
+        request: &CompletionRequest,
         analysis: &CompletionAnalysis,
     ) -> Vec<SuggestionOutput> {
         let cmd = &analysis.parsed.cursor_cmd;
         let stub = analysis.cursor.token_stub.as_str();
+        let resolver = TreeResolver::new(&self.tree);
 
-        let mut out = match mode {
-            SuggestionMode::Pipe => self.pipe_suggestions(stub),
-            SuggestionMode::FlagNames { flag_scope_node } => self
-                .flag_name_suggestions(flag_scope_node, stub, cmd)
-                .into_iter()
-                .map(SuggestionOutput::Item)
-                .collect(),
-            SuggestionMode::FlagValues {
-                flag_scope_node,
+        let mut out = match request {
+            CompletionRequest::Pipe => self.pipe_suggestions(stub),
+            CompletionRequest::FlagNames { flag_scope_path } => {
+                let flag_scope_node = resolver
+                    .resolve_exact(flag_scope_path)
+                    .unwrap_or(&self.tree.root);
+                self.flag_name_suggestions(flag_scope_node, stub, cmd)
+                    .into_iter()
+                    .map(SuggestionOutput::Item)
+                    .collect()
+            }
+            CompletionRequest::FlagValues {
+                flag_scope_path,
                 flag,
-            } => self.flag_value_suggestions(flag_scope_node, &flag, stub, cmd),
-            SuggestionMode::Positionals {
-                context_node,
-                flag_scope_node,
+            } => {
+                let flag_scope_node = resolver
+                    .resolve_exact(flag_scope_path)
+                    .unwrap_or(&self.tree.root);
+                self.flag_value_suggestions(flag_scope_node, flag, stub, cmd)
+            }
+            CompletionRequest::Positionals {
+                context_path,
+                flag_scope_path,
                 arg_index,
                 show_subcommands,
                 show_flag_names,
             } => {
+                let context_node = resolver
+                    .resolve_exact(context_path)
+                    .unwrap_or(&self.tree.root);
+                let flag_scope_node = resolver
+                    .resolve_exact(flag_scope_path)
+                    .unwrap_or(&self.tree.root);
                 let request = PositionalRequest {
                     context_node,
                     flag_scope_node,
-                    arg_index,
+                    arg_index: *arg_index,
                     stub,
                     cmd,
-                    show_subcommands,
-                    show_flag_names,
+                    show_subcommands: *show_subcommands,
+                    show_flag_names: *show_flag_names,
                 };
                 let mut out = self.positional_suggestions(request);
                 sort_suggestion_outputs(&mut out);
@@ -279,51 +301,6 @@ impl SuggestionEngine {
             })
             .collect()
     }
-
-    fn last_flag_needs_value(
-        &self,
-        node: &CompletionNode,
-        cmd: &CommandLine,
-        stub: &str,
-    ) -> (bool, Option<String>) {
-        let Some(last_occurrence) = cmd.last_flag_occurrence() else {
-            return (false, None);
-        };
-        let last_flag = &last_occurrence.name;
-
-        let Some(flag_node) = node.flags.get(last_flag) else {
-            return (false, None);
-        };
-
-        if flag_node.flag_only {
-            return (false, None);
-        }
-
-        if last_occurrence.values.is_empty() {
-            return (true, Some(last_flag.clone()));
-        }
-
-        if !stub.is_empty()
-            && last_occurrence
-                .values
-                .last()
-                .is_some_and(|value| fold_case(value).starts_with(&fold_case(stub)))
-        {
-            return (true, Some(last_flag.clone()));
-        }
-
-        (flag_node.multi, Some(last_flag.clone()))
-    }
-
-    fn arg_index(&self, cmd: &CommandLine, stub: &str, matched_head_len: usize) -> usize {
-        cmd.head()
-            .iter()
-            .skip(matched_head_len)
-            .chain(cmd.positional_args())
-            .filter(|token| token.as_str() != stub)
-            .count()
-    }
-
     fn provider_specific_flag_value_suggestions(
         &self,
         flag_node: &crate::completion::model::FlagNode,
@@ -392,6 +369,8 @@ impl SuggestionEngine {
         if stub_lc == candidate_lc {
             return Some(MATCH_SCORE_EXACT);
         }
+        // Prefer deterministic prefix classes before fuzzy fallback so short
+        // tab-completion stubs stay predictable.
         if candidate_lc.starts_with(&stub_lc) {
             return Some(MATCH_SCORE_PREFIX_BASE + (candidate_lc.len() - stub_lc.len()) as u32);
         }
@@ -400,6 +379,8 @@ impl SuggestionEngine {
             return Some(MATCH_SCORE_BOUNDARY_PREFIX_BASE + boundary as u32);
         }
 
+        // Fuzzy matching is the rescue path, not the primary ranking model.
+        // Its normalized penalty keeps rescues behind explicit prefix matches.
         let fuzzy = completion_fuzzy_matcher().fuzzy_match(&candidate_lc, &stub_lc)?;
         let normalized = fuzzy.max(0) as u32;
         let penalty = MATCH_SCORE_FUZZY_NORMALIZED_MAX.saturating_sub(normalized);
@@ -494,7 +475,8 @@ fn sort_suggestion_outputs(outputs: &mut Vec<SuggestionOutput>) {
 
     // Path sentinels are not ranked suggestions; they are control markers that
     // tell the caller to ask the shell for filesystem completion after all
-    // normal ranked suggestions have been shown.
+    // normal ranked suggestions have been shown. Keep item ordering text-stable
+    // before reattaching the sentinels so redraws do not jump between ties.
     outputs.clear();
     outputs.extend(items.into_iter().map(SuggestionOutput::Item));
     outputs.extend(std::iter::repeat_n(
@@ -558,639 +540,4 @@ fn boundary_prefix_index(candidate: &str, stub: &str) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use crate::completion::model::{
-        ArgNode, CommandLine, CompletionNode, CompletionTree, CursorState, FlagHints, FlagNode,
-        FlagOccurrence, SuggestionEntry, SuggestionOutput, ValueType,
-    };
-
-    use crate::completion::CompletionEngine;
-
-    fn tree() -> CompletionTree {
-        let mut provision = CompletionNode::default();
-        provision.flags.insert(
-            "--provider".to_string(),
-            FlagNode {
-                suggestions: vec![
-                    SuggestionEntry::from("nrec"),
-                    SuggestionEntry::from("vmware"),
-                ],
-                os_provider_map: BTreeMap::from([
-                    ("alma".to_string(), vec!["nrec".to_string()]),
-                    ("rhel".to_string(), vec!["vmware".to_string()]),
-                ]),
-                ..FlagNode::default()
-            },
-        );
-        provision.flags.insert(
-            "--os".to_string(),
-            FlagNode {
-                suggestions: vec![SuggestionEntry::from("alma"), SuggestionEntry::from("rhel")],
-                ..FlagNode::default()
-            },
-        );
-
-        let mut orch = CompletionNode::default();
-        orch.children.insert("provision".to_string(), provision);
-
-        CompletionTree {
-            root: CompletionNode::default().with_child("orch", orch),
-            pipe_verbs: BTreeMap::from([("F".to_string(), "Filter".to_string())]),
-        }
-    }
-
-    fn values(output: Vec<SuggestionOutput>) -> Vec<String> {
-        output
-            .into_iter()
-            .filter_map(|entry| match entry {
-                SuggestionOutput::Item(item) => Some(item.text),
-                SuggestionOutput::PathSentinel => None,
-            })
-            .collect()
-    }
-
-    fn generate(engine: &CompletionEngine, cmd: CommandLine, stub: &str) -> Vec<SuggestionOutput> {
-        let analysis = engine.analyze_command(cmd.clone(), cmd, CursorState::synthetic(stub));
-        engine.suggestions_for_analysis(&analysis)
-    }
-
-    fn values_for_line(engine: &CompletionEngine, line: &str) -> Vec<String> {
-        let (_, output) = engine.complete(line, line.len());
-        values(output)
-    }
-
-    fn command(head: &[&str]) -> CommandLine {
-        let mut cmd = CommandLine::default();
-        for segment in head {
-            cmd.push_head(*segment);
-        }
-        cmd
-    }
-
-    fn with_flag(mut cmd: CommandLine, name: &str, values: &[&str]) -> CommandLine {
-        cmd.push_flag_occurrence(FlagOccurrence {
-            name: name.to_string(),
-            values: values.iter().map(|value| (*value).to_string()).collect(),
-        });
-        cmd
-    }
-
-    #[test]
-    fn suggests_flags_in_scope() {
-        let engine = CompletionEngine::new(tree());
-        let cmd = command(&["orch", "provision"]);
-
-        let values = values(generate(&engine, cmd, "--"));
-        assert!(values.contains(&"--provider".to_string()));
-        assert!(values.contains(&"--os".to_string()));
-    }
-
-    #[test]
-    fn fuzzy_matches_flag_names() {
-        let engine = CompletionEngine::new(tree());
-        let cmd = command(&["orch", "provision"]);
-
-        let values = values(generate(&engine, cmd, "--prv"));
-        assert!(values.contains(&"--provider".to_string()));
-    }
-
-    #[test]
-    fn suggests_flag_values() {
-        let engine = CompletionEngine::new(tree());
-        let cmd = with_flag(command(&["orch", "provision"]), "--provider", &[]);
-
-        let values = values(generate(&engine, cmd, ""));
-
-        assert!(values.contains(&"nrec".to_string()));
-        assert!(values.contains(&"vmware".to_string()));
-    }
-
-    #[test]
-    fn filters_provider_values_by_os() {
-        let engine = CompletionEngine::new(tree());
-        let cmd = with_flag(
-            with_flag(command(&["orch", "provision"]), "--os", &["alma"]),
-            "--provider",
-            &[],
-        );
-
-        let values = values(generate(&engine, cmd, ""));
-
-        assert!(values.contains(&"nrec".to_string()));
-        assert!(!values.contains(&"vmware".to_string()));
-    }
-
-    #[test]
-    fn suggests_pipe_verbs_after_pipe() {
-        let engine = CompletionEngine::new(tree());
-        let mut cmd = CommandLine::default();
-        cmd.set_pipe(Vec::new());
-
-        let output = generate(&engine, cmd, "F");
-        assert!(
-            output
-                .iter()
-                .any(|entry| matches!(entry, SuggestionOutput::Item(item) if item.text == "F"))
-        );
-    }
-
-    #[test]
-    fn fuzzy_matches_long_pipe_verbs() {
-        let mut tree = tree();
-        tree.pipe_verbs
-            .insert("VALUE".to_string(), "Extract values".to_string());
-        tree.pipe_verbs
-            .insert("VAL".to_string(), "Extract".to_string());
-        let engine = CompletionEngine::new(tree);
-        let mut cmd = CommandLine::default();
-        cmd.set_pipe(Vec::new());
-
-        let output = generate(&engine, cmd, "vlu");
-        assert!(
-            output
-                .iter()
-                .any(|entry| matches!(entry, SuggestionOutput::Item(item) if item.text == "VALUE"))
-        );
-        let values = values(output);
-        assert_eq!(values.first().map(String::as_str), Some("VALUE"));
-    }
-
-    #[test]
-    fn single_value_flag_switches_to_other_flags_after_value() {
-        let mut cmd_node = CompletionNode::default();
-        cmd_node.flags.insert(
-            "--context".to_string(),
-            FlagNode {
-                suggestions: vec![
-                    SuggestionEntry::from("uio"),
-                    SuggestionEntry::from("tsd"),
-                    SuggestionEntry::from("edu"),
-                ],
-                ..FlagNode::default()
-            },
-        );
-        cmd_node.flags.insert(
-            "--terminal".to_string(),
-            FlagNode {
-                suggestions: vec![SuggestionEntry::from("cli"), SuggestionEntry::from("repl")],
-                ..FlagNode::default()
-            },
-        );
-
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("alias", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-
-        let cmd = with_flag(command(&["alias"]), "--context", &["uio"]);
-        let values = values(generate(&engine, cmd, ""));
-        assert!(!values.contains(&"uio".to_string()));
-        assert!(values.contains(&"--terminal".to_string()));
-    }
-
-    #[test]
-    fn multi_value_flag_stays_in_value_mode_until_dash() {
-        let mut cmd_node = CompletionNode::default();
-        cmd_node.flags.insert(
-            "--tags".to_string(),
-            FlagNode {
-                multi: true,
-                suggestions: vec![
-                    SuggestionEntry::from("red"),
-                    SuggestionEntry::from("green"),
-                    SuggestionEntry::from("blue"),
-                ],
-                ..FlagNode::default()
-            },
-        );
-        cmd_node.flags.insert(
-            "--mode".to_string(),
-            FlagNode {
-                suggestions: vec![SuggestionEntry::from("fast"), SuggestionEntry::from("full")],
-                ..FlagNode::default()
-            },
-        );
-
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("tag", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-
-        let cmd = with_flag(command(&["tag"]), "--tags", &["red"]);
-        let values_for_space = values(generate(&engine, cmd.clone(), ""));
-        assert!(values_for_space.contains(&"red".to_string()));
-        assert!(!values_for_space.contains(&"--mode".to_string()));
-
-        let values_for_dash = values(generate(&engine, cmd, "-"));
-        assert!(values_for_dash.contains(&"--mode".to_string()));
-    }
-
-    #[test]
-    fn repeated_flag_without_value_stays_in_value_mode_for_last_occurrence() {
-        let mut cmd_node = CompletionNode::default();
-        cmd_node.flags.insert(
-            "--tags".to_string(),
-            FlagNode {
-                multi: true,
-                suggestions: vec![
-                    SuggestionEntry::from("red"),
-                    SuggestionEntry::from("green"),
-                    SuggestionEntry::from("blue"),
-                ],
-                ..FlagNode::default()
-            },
-        );
-        cmd_node.flags.insert(
-            "--mode".to_string(),
-            FlagNode {
-                suggestions: vec![SuggestionEntry::from("fast"), SuggestionEntry::from("full")],
-                ..FlagNode::default()
-            },
-        );
-
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("tag", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-
-        let values = values_for_line(&engine, "tag --tags red --mode fast --tags ");
-        assert!(values.contains(&"red".to_string()));
-        assert!(values.contains(&"green".to_string()));
-        assert!(!values.contains(&"--mode".to_string()));
-    }
-
-    #[test]
-    fn repeated_flag_partial_value_uses_last_occurrence_context() {
-        let mut cmd_node = CompletionNode::default();
-        cmd_node.flags.insert(
-            "--tags".to_string(),
-            FlagNode {
-                multi: true,
-                suggestions: vec![
-                    SuggestionEntry::from("red"),
-                    SuggestionEntry::from("green"),
-                    SuggestionEntry::from("blue"),
-                ],
-                ..FlagNode::default()
-            },
-        );
-
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("tag", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-
-        let values = values_for_line(&engine, "tag --tags red --tags bl");
-        assert!(values.contains(&"blue".to_string()));
-    }
-
-    #[test]
-    fn repeatable_flags_remain_suggestible_after_first_use() {
-        let mut cmd_node = CompletionNode::default();
-        cmd_node.flags.insert(
-            "--tags".to_string(),
-            FlagNode {
-                multi: true,
-                suggestions: vec![
-                    SuggestionEntry::from("red"),
-                    SuggestionEntry::from("green"),
-                    SuggestionEntry::from("blue"),
-                ],
-                ..FlagNode::default()
-            },
-        );
-        cmd_node.flags.insert(
-            "--mode".to_string(),
-            FlagNode {
-                suggestions: vec![SuggestionEntry::from("fast"), SuggestionEntry::from("full")],
-                ..FlagNode::default()
-            },
-        );
-
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("tag", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-        let cmd = with_flag(command(&["tag"]), "--tags", &["red"]);
-
-        let values = values(generate(&engine, cmd, "--"));
-        assert!(values.contains(&"--tags".to_string()));
-        assert!(values.contains(&"--mode".to_string()));
-    }
-
-    #[test]
-    fn args_after_double_dash_advance_index() {
-        let cmd_node = CompletionNode {
-            args: vec![
-                ArgNode {
-                    suggestions: vec![SuggestionEntry::from("one")],
-                    ..ArgNode::default()
-                },
-                ArgNode {
-                    suggestions: vec![SuggestionEntry::from("two"), SuggestionEntry::from("three")],
-                    ..ArgNode::default()
-                },
-            ],
-            ..CompletionNode::default()
-        };
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("cmd", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-        let mut cmd = command(&["cmd"]);
-        cmd.push_positional("one");
-
-        let values = values(generate(&engine, cmd, ""));
-        assert!(values.contains(&"two".to_string()));
-        assert!(values.contains(&"three".to_string()));
-        assert!(!values.contains(&"one".to_string()));
-    }
-
-    #[test]
-    fn path_arg_emits_path_sentinel() {
-        let cmd_node = CompletionNode {
-            args: vec![ArgNode {
-                value_type: Some(ValueType::Path),
-                ..ArgNode::default()
-            }],
-            ..CompletionNode::default()
-        };
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("cmd", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-        let cmd = command(&["cmd"]);
-
-        let output = generate(&engine, cmd, "");
-        assert!(
-            output
-                .iter()
-                .any(|entry| matches!(entry, SuggestionOutput::PathSentinel))
-        );
-    }
-
-    #[test]
-    fn flag_hints_filter_provider_specific_flags_and_hide_selectors() {
-        let mut node = CompletionNode::default();
-        node.flags
-            .insert("--provider".to_string(), FlagNode::default());
-        node.flags.insert(
-            "--nrec".to_string(),
-            FlagNode {
-                flag_only: true,
-                ..FlagNode::default()
-            },
-        );
-        node.flags.insert(
-            "--vmware".to_string(),
-            FlagNode {
-                flag_only: true,
-                ..FlagNode::default()
-            },
-        );
-        node.flags
-            .insert("--comment".to_string(), FlagNode::default());
-        node.flags
-            .insert("--flavor".to_string(), FlagNode::default());
-        node.flags
-            .insert("--vcenter".to_string(), FlagNode::default());
-        node.flag_hints = Some(FlagHints {
-            common: vec![
-                "--provider".to_string(),
-                "--nrec".to_string(),
-                "--vmware".to_string(),
-                "--comment".to_string(),
-            ],
-            by_provider: BTreeMap::from([
-                ("nrec".to_string(), vec!["--flavor".to_string()]),
-                ("vmware".to_string(), vec!["--vcenter".to_string()]),
-            ]),
-            required_common: vec!["--comment".to_string()],
-            required_by_provider: BTreeMap::from([(
-                "nrec".to_string(),
-                vec!["--flavor".to_string()],
-            )]),
-        });
-
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("provision", node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-
-        let cmd = with_flag(command(&["provision"]), "--provider", &["nrec"]);
-        let output = generate(&engine, cmd, "--");
-        let values = values(output.clone());
-        assert!(values.contains(&"--comment".to_string()));
-        assert!(values.contains(&"--flavor".to_string()));
-        assert!(!values.contains(&"--provider".to_string()));
-        assert!(!values.contains(&"--nrec".to_string()));
-        assert!(!values.contains(&"--vmware".to_string()));
-        assert!(!values.contains(&"--vcenter".to_string()));
-
-        let items = output
-            .into_iter()
-            .filter_map(|entry| match entry {
-                SuggestionOutput::Item(item) => Some(item),
-                SuggestionOutput::PathSentinel => None,
-            })
-            .collect::<Vec<_>>();
-        let by_text = items
-            .into_iter()
-            .map(|item| (item.text.clone(), item))
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(
-            by_text
-                .get("--comment")
-                .and_then(|item| item.display.as_deref()),
-            Some("--comment*")
-        );
-        assert_eq!(
-            by_text
-                .get("--flavor")
-                .and_then(|item| item.display.as_deref()),
-            Some("--flavor*")
-        );
-    }
-
-    #[test]
-    fn provider_alias_flag_enables_provider_specific_allowlist() {
-        let mut node = CompletionNode::default();
-        node.flags
-            .insert("--provider".to_string(), FlagNode::default());
-        node.flags.insert(
-            "--nrec".to_string(),
-            FlagNode {
-                flag_only: true,
-                ..FlagNode::default()
-            },
-        );
-        node.flags
-            .insert("--flavor".to_string(), FlagNode::default());
-        node.flag_hints = Some(FlagHints {
-            common: vec!["--provider".to_string(), "--nrec".to_string()],
-            by_provider: BTreeMap::from([("nrec".to_string(), vec!["--flavor".to_string()])]),
-            ..FlagHints::default()
-        });
-
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("provision", node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-        let cmd = with_flag(command(&["provision"]), "--nrec", &[]);
-
-        let values = values(generate(&engine, cmd, "--"));
-        assert!(values.contains(&"--flavor".to_string()));
-        assert!(!values.contains(&"--provider".to_string()));
-    }
-
-    #[test]
-    fn path_flag_emits_path_sentinel() {
-        let mut node = CompletionNode::default();
-        node.flags.insert(
-            "--file".to_string(),
-            FlagNode {
-                value_type: Some(ValueType::Path),
-                ..FlagNode::default()
-            },
-        );
-
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("cmd", node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-        let cmd = with_flag(command(&["cmd"]), "--file", &[]);
-
-        let output = generate(&engine, cmd, "");
-        assert!(
-            output
-                .iter()
-                .any(|entry| matches!(entry, SuggestionOutput::PathSentinel))
-        );
-    }
-
-    #[test]
-    fn flag_suggestions_preserve_meta_and_display_fields() {
-        let mut node = CompletionNode::default();
-        node.flags.insert(
-            "--flavor".to_string(),
-            FlagNode {
-                suggestions: vec![
-                    SuggestionEntry {
-                        value: "m1.small".to_string(),
-                        meta: Some("1 vCPU".to_string()),
-                        display: Some("small".to_string()),
-                        sort: Some("10".to_string()),
-                    },
-                    SuggestionEntry::from("m1.medium"),
-                ],
-                ..FlagNode::default()
-            },
-        );
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("orch", node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-        let cmd = with_flag(command(&["orch"]), "--flavor", &[]);
-
-        let output = generate(&engine, cmd, "");
-        let items = output
-            .into_iter()
-            .filter_map(|entry| match entry {
-                SuggestionOutput::Item(item) => Some(item),
-                SuggestionOutput::PathSentinel => None,
-            })
-            .collect::<Vec<_>>();
-
-        let rich = items
-            .iter()
-            .find(|item| item.text == "m1.small")
-            .expect("m1.small suggestion should exist");
-        assert_eq!(rich.meta.as_deref(), Some("1 vCPU"));
-        assert_eq!(rich.display.as_deref(), Some("small"));
-        assert_eq!(rich.sort.as_deref(), Some("10"));
-    }
-
-    #[test]
-    fn arg_suggestions_honor_numeric_sort_after_match_score() {
-        let cmd_node = CompletionNode {
-            args: vec![ArgNode {
-                suggestions: vec![
-                    SuggestionEntry {
-                        value: "v10".to_string(),
-                        meta: None,
-                        display: None,
-                        sort: Some("10".to_string()),
-                    },
-                    SuggestionEntry {
-                        value: "v2".to_string(),
-                        meta: None,
-                        display: None,
-                        sort: Some("2".to_string()),
-                    },
-                ],
-                ..ArgNode::default()
-            }],
-            ..CompletionNode::default()
-        };
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("cmd", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-        let cmd = command(&["cmd"]);
-
-        let values = values(generate(&engine, cmd, ""));
-        assert_eq!(values, vec!["v2".to_string(), "v10".to_string()]);
-    }
-
-    #[test]
-    fn subcommand_suggestions_honor_child_sort_after_match_score() {
-        let tree = CompletionTree {
-            root: CompletionNode::default()
-                .with_child("orch", CompletionNode::default().sort("20"))
-                .with_child("config", CompletionNode::default().sort("10")),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-
-        let output = values(generate(&engine, CommandLine::default(), ""));
-
-        assert_eq!(output[..2], ["config", "orch"]);
-    }
-
-    #[test]
-    fn suggestions_match_unicode_case_insensitively() {
-        let cmd_node = CompletionNode {
-            args: vec![ArgNode {
-                suggestions: vec![
-                    SuggestionEntry::from("Ålesund"),
-                    SuggestionEntry::from("Oslo"),
-                ],
-                ..ArgNode::default()
-            }],
-            ..CompletionNode::default()
-        };
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("city", cmd_node),
-            ..CompletionTree::default()
-        };
-        let engine = CompletionEngine::new(tree);
-        let cmd = command(&["city"]);
-
-        let values = values(generate(&engine, cmd, "å"));
-        assert_eq!(values, vec!["Ålesund".to_string()]);
-    }
-}
+mod tests;

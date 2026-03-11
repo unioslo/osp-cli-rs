@@ -309,12 +309,21 @@ fn builtin_theme_defs() -> &'static [ThemeDefinition] {
     })
 }
 
-/// Returns the built-in theme catalog.
+/// Returns the shipped theme catalog as owned theme definitions.
 pub fn builtin_themes() -> Vec<ThemeDefinition> {
     builtin_theme_defs().to_vec()
 }
 
 /// Normalizes a theme name for lookup.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::normalize_theme_name;
+///
+/// assert_eq!(normalize_theme_name(" Rose Pine Moon "), "rose-pine-moon");
+/// assert_eq!(normalize_theme_name("tokyo_night"), "tokyo-night");
+/// ```
 pub fn normalize_theme_name(value: &str) -> String {
     let mut out = String::new();
     let mut pending_dash = false;
@@ -333,6 +342,15 @@ pub fn normalize_theme_name(value: &str) -> String {
 }
 
 /// Converts a theme identifier into a user-facing display name.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::display_name_from_id;
+///
+/// assert_eq!(display_name_from_id("rose-pine-moon"), "Rose Pine Moon");
+/// assert_eq!(display_name_from_id("dracula"), "Dracula");
+/// ```
 pub fn display_name_from_id(value: &str) -> String {
     let trimmed = value.trim_matches('-');
     let mut out = String::new();
@@ -358,12 +376,15 @@ pub fn display_name_from_id(value: &str) -> String {
     }
 }
 
-/// Returns all available themes.
+/// Returns all currently available built-in themes.
+///
+/// This mirrors [`builtin_themes`] but makes the intent clearer at call sites
+/// that treat the shipped theme catalog as the full available set.
 pub fn all_themes() -> Vec<ThemeDefinition> {
     builtin_theme_defs().to_vec()
 }
 
-/// Returns the identifiers of all available themes.
+/// Returns the normalized identifiers of all available built-in themes.
 pub fn available_theme_names() -> Vec<String> {
     all_themes()
         .into_iter()
@@ -396,6 +417,15 @@ pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
 }
 
 /// Resolves a theme by name, falling back to the default theme.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::{DEFAULT_THEME_NAME, resolve_theme};
+///
+/// assert_eq!(resolve_theme("dracula").id, "dracula");
+/// assert_eq!(resolve_theme("missing-theme").id, DEFAULT_THEME_NAME);
+/// ```
 pub fn resolve_theme(name: &str) -> ThemeDefinition {
     find_theme(name).unwrap_or_else(|| {
         builtin_theme_defs()

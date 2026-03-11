@@ -155,7 +155,7 @@ pub(crate) fn ensure_plugin_visible_for(auth: &AuthState, command: &str) -> Resu
     ensure_command_access(
         command,
         "plugin command",
-        auth.plugin_command_access(command),
+        auth.external_command_access(command),
     )
 }
 
@@ -476,7 +476,7 @@ mod tests {
                 .allow_profiles(["dev"])
                 .feature_flag("config-ui"),
         );
-        auth.plugin_policy_mut().register(
+        auth.external_policy_mut().register(
             CommandPolicy::new(CommandPath::new(["orch"]))
                 .visibility(VisibilityMode::CapabilityGated)
                 .require_capability("orch.approval.decide"),

@@ -22,28 +22,25 @@ pub(super) enum BangCommand {
     Contains(String),
 }
 
-pub(super) fn maybe_execute_repl_builtin(
+pub(super) fn execute_repl_builtin(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
     history: &SharedHistory,
     raw: &str,
-) -> Result<Option<ReplLineResult>> {
-    let Some(builtin) = parse_repl_builtin(raw)? else {
-        return Ok(None);
-    };
-
+    builtin: ReplBuiltin,
+) -> Result<ReplLineResult> {
     match builtin {
-        ReplBuiltin::Help => Ok(Some(ReplLineResult::Continue(repl_help_for_scope(
+        ReplBuiltin::Help => Ok(ReplLineResult::Continue(repl_help_for_scope(
             runtime,
             session,
             clients,
             &super::base_repl_invocation(runtime),
-        )?))),
-        ReplBuiltin::Exit => Ok(handle_repl_exit_request(session)),
-        ReplBuiltin::Bang(command) => {
-            execute_bang_command(session, history, raw, command).map(Some)
-        }
+        )?)),
+        ReplBuiltin::Exit => Ok(
+            handle_repl_exit_request(session).unwrap_or(ReplLineResult::Continue(String::new()))
+        ),
+        ReplBuiltin::Bang(command) => execute_bang_command(session, history, raw, command),
     }
 }
 
@@ -190,7 +187,7 @@ pub(super) fn is_repl_bang_request(raw: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BangCommand, maybe_execute_repl_builtin, parse_repl_builtin};
+    use super::{BangCommand, execute_repl_builtin, parse_repl_builtin};
     use crate::app::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
@@ -221,17 +218,15 @@ mod tests {
     }
 
     fn history() -> SharedHistory {
-        SharedHistory::new(HistoryConfig {
-            path: None,
-            max_entries: 20,
-            enabled: true,
-            dedupe: true,
-            profile_scoped: false,
-            exclude_patterns: Vec::new(),
-            profile: None,
-            terminal: None,
-            shell_context: Default::default(),
-        })
+        SharedHistory::new(
+            HistoryConfig::builder()
+                .with_max_entries(20)
+                .with_enabled(true)
+                .with_dedupe(true)
+                .with_profile_scoped(false)
+                .with_shell_context(Default::default())
+                .build(),
+        )
         .expect("history should initialize")
     }
 
@@ -253,45 +248,44 @@ mod tests {
     }
 
     #[test]
-    fn maybe_execute_repl_builtin_covers_none_exit_and_help_unit() {
+    fn execute_repl_builtin_covers_exit_and_help_unit() {
         let mut state = app_state();
         let history = history();
 
         assert_eq!(
-            maybe_execute_repl_builtin(
-                &mut state.runtime,
-                &mut state.session,
-                &state.clients,
-                &history,
-                "ldap user alice",
-            )
-            .expect("non-builtin should return none"),
+            parse_repl_builtin("ldap user alice").expect("non-builtin"),
             None
         );
 
         assert!(matches!(
-            maybe_execute_repl_builtin(
+            execute_repl_builtin(
                 &mut state.runtime,
                 &mut state.session,
                 &state.clients,
                 &history,
                 "exit",
+                parse_repl_builtin("exit")
+                    .expect("exit should parse")
+                    .expect("exit should classify"),
             )
             .expect("exit should succeed"),
-            Some(ReplLineResult::Exit(0))
+            ReplLineResult::Exit(0)
         ));
 
         let mut state = app_state();
         assert!(matches!(
-            maybe_execute_repl_builtin(
+            execute_repl_builtin(
                 &mut state.runtime,
                 &mut state.session,
                 &state.clients,
                 &history,
                 "help",
+                parse_repl_builtin("help")
+                    .expect("help should parse")
+                    .expect("help should classify"),
             )
             .expect("help should succeed"),
-            Some(ReplLineResult::Continue(text)) if text.contains("help") || text.contains("config")
+            ReplLineResult::Continue(text) if text.contains("help") || text.contains("config")
         ));
     }
 }

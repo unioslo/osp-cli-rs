@@ -416,11 +416,9 @@ fn transform_row(
         if new_row.is_empty() {
             return None;
         }
-        return Some(vec![restore_row_envelope(
-            flat,
-            new_row,
-            spec.is_structural(),
-        )]);
+        let mut restored = restore_row_envelope(flat, new_row, spec.is_structural());
+        compact_sparse_arrays_in_row(&mut restored);
+        return Some(vec![restored]);
     }
 
     let mut filtered = Row::new();
@@ -734,13 +732,4 @@ fn try_apply_path_scoped_value(root: &Value, spec: &CompiledQuickSpec) -> Option
 }
 
 #[cfg(test)]
-mod tests {
-    use super::compile;
-
-    #[test]
-    fn compile_treats_prefixed_path_quick_as_structural_selector() {
-        let plan = compile("!sections[0].entries[0]").expect("quick should compile");
-
-        assert!(plan.spec.is_structural());
-    }
-}
+mod tests;

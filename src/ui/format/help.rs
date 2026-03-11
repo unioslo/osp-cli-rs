@@ -1,5 +1,8 @@
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
+use crate::ui::ResolvedGuideRenderSettings;
+#[cfg(test)]
 use crate::ui::TableBorderStyle;
+#[cfg(test)]
 use crate::ui::chrome::SectionFrameStyle;
 use crate::ui::document::{Block, Document, LineBlock, LinePart};
 use crate::ui::document_model::{BlockModel, DocumentModel, LowerDocumentOptions};
@@ -8,12 +11,8 @@ use crate::ui::presentation::HelpLayout;
 pub(crate) struct GuideRenderOptions<'a> {
     pub(crate) title_prefix: Option<&'a str>,
     pub(crate) layout: HelpLayout,
-    pub(crate) frame_style: SectionFrameStyle,
+    pub(crate) guide: ResolvedGuideRenderSettings,
     pub(crate) panel_kind: Option<&'a str>,
-    pub(crate) help_table_border: TableBorderStyle,
-    pub(crate) help_entry_indent: Option<usize>,
-    pub(crate) help_entry_gap: Option<usize>,
-    pub(crate) help_section_spacing: Option<usize>,
 }
 
 #[cfg(test)]
@@ -28,8 +27,7 @@ pub(crate) fn build_help_document(
         &GuideView::from_text(raw),
         title_prefix,
         layout,
-        frame_style,
-        help_table_border,
+        ResolvedGuideRenderSettings::plain_help(frame_style, help_table_border),
     )
 }
 
@@ -38,20 +36,15 @@ pub(crate) fn build_help_document_from_view(
     view: &GuideView,
     title_prefix: Option<&str>,
     layout: HelpLayout,
-    frame_style: SectionFrameStyle,
-    help_table_border: TableBorderStyle,
+    guide: ResolvedGuideRenderSettings,
 ) -> Document {
     build_guide_document_from_view(
         view,
         GuideRenderOptions {
             title_prefix,
             layout,
-            frame_style,
+            guide,
             panel_kind: Some("help"),
-            help_table_border,
-            help_entry_indent: None,
-            help_entry_gap: None,
-            help_section_spacing: None,
         },
     )
 }
@@ -67,16 +60,16 @@ pub(crate) fn build_guide_document_from_view(
     let mut model = DocumentModel::from_guide_view(&view);
     normalize_section_spacing(
         &mut model.blocks,
-        separator_lines(options.layout, options.help_section_spacing),
+        separator_lines(options.layout, options.guide.help_chrome.section_spacing),
     );
     let mut next_block_id = 1_u64;
     model.lower_to_render_document(
         LowerDocumentOptions {
-            frame_style: options.frame_style,
+            frame_style: options.guide.frame_style,
             panel_kind: options.panel_kind,
-            key_value_border: options.help_table_border,
-            key_value_indent: options.help_entry_indent,
-            key_value_gap: options.help_entry_gap,
+            key_value_border: options.guide.help_chrome.table_border,
+            key_value_indent: options.guide.help_chrome.entry_indent,
+            key_value_gap: options.guide.help_chrome.entry_gap,
         },
         &mut next_block_id,
     )
@@ -181,6 +174,7 @@ mod tests {
     use crate::ui::chrome::SectionFrameStyle;
     use crate::ui::document::Block;
     use crate::ui::presentation::HelpLayout;
+    use crate::ui::{ResolvedGuideRenderSettings, ResolvedHelpChromeSettings};
 
     #[test]
     fn builds_panel_sections_from_help_text() {
@@ -246,12 +240,11 @@ mod tests {
             GuideRenderOptions {
                 title_prefix: None,
                 layout: HelpLayout::Compact,
-                frame_style: SectionFrameStyle::Top,
+                guide: ResolvedGuideRenderSettings::plain_help(
+                    SectionFrameStyle::Top,
+                    TableBorderStyle::None,
+                ),
                 panel_kind: Some("help"),
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
             },
         );
         assert_eq!(rendered_view.blocks.len(), 4);
@@ -269,12 +262,11 @@ mod tests {
             GuideRenderOptions {
                 title_prefix: None,
                 layout: HelpLayout::Compact,
-                frame_style: SectionFrameStyle::Top,
+                guide: ResolvedGuideRenderSettings::plain_help(
+                    SectionFrameStyle::Top,
+                    TableBorderStyle::None,
+                ),
                 panel_kind: Some("intro"),
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
             },
         );
 
@@ -295,12 +287,16 @@ mod tests {
             GuideRenderOptions {
                 title_prefix: None,
                 layout: HelpLayout::Compact,
-                frame_style: SectionFrameStyle::Top,
+                guide: ResolvedGuideRenderSettings {
+                    frame_style: SectionFrameStyle::Top,
+                    help_chrome: ResolvedHelpChromeSettings {
+                        table_border: TableBorderStyle::None,
+                        entry_indent: Some(4),
+                        entry_gap: Some(3),
+                        section_spacing: Some(0),
+                    },
+                },
                 panel_kind: Some("help"),
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: Some(4),
-                help_entry_gap: Some(3),
-                help_section_spacing: Some(0),
             },
         );
 

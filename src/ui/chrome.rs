@@ -1,3 +1,16 @@
+//! Reusable section chrome helpers for messages, help, and guide rendering.
+//!
+//! This module exists so the rest of the UI can ask for titled sections and
+//! framed blocks without duplicating border logic in every renderer. It keeps
+//! section-frame policy, title styling, and ASCII/Unicode fallback behavior in
+//! one place.
+//!
+//! Contract:
+//!
+//! - chrome helpers may depend on theme/style resolution
+//! - they should not decide *when* sections are shown, only how a requested
+//!   section frame is rendered
+
 use crate::ui::style::{StyleOverrides, StyleToken, apply_style_with_theme_overrides};
 use crate::ui::theme::ThemeDefinition;
 
@@ -20,7 +33,17 @@ pub enum SectionFrameStyle {
 }
 
 impl SectionFrameStyle {
-    /// Parses a section frame style from configuration input.
+    /// Parses the section-frame spellings accepted by configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::SectionFrameStyle;
+    ///
+    /// assert_eq!(SectionFrameStyle::parse("rules"), Some(SectionFrameStyle::TopBottom));
+    /// assert_eq!(SectionFrameStyle::parse("boxed"), Some(SectionFrameStyle::Square));
+    /// assert_eq!(SectionFrameStyle::parse("wat"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "none" | "plain" => Some(Self::None),
@@ -45,6 +68,17 @@ pub struct SectionStyleTokens {
 
 impl SectionStyleTokens {
     /// Uses the same style token for both the border and the title.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::{SectionStyleTokens, StyleToken};
+    ///
+    /// let tokens = SectionStyleTokens::same(StyleToken::PanelTitle);
+    ///
+    /// assert_eq!(tokens.border, StyleToken::PanelTitle);
+    /// assert_eq!(tokens.title, StyleToken::PanelTitle);
+    /// ```
     pub const fn same(token: StyleToken) -> Self {
         Self {
             border: token,
@@ -158,9 +192,37 @@ pub fn render_section_divider_with_overrides(
     format!("{styled_prefix}{styled_title}{styled_suffix}")
 }
 
-/// Renders a titled section body using the requested frame style.
+/// Renders one titled section body with the requested frame and style tokens.
 ///
-/// Returns the formatted section text without appending a trailing newline.
+/// The returned text is newline-free at the end so callers can compose several
+/// sections without trimming renderer output.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::{
+///     SectionFrameStyle, SectionRenderContext, SectionStyleTokens, StyleOverrides,
+///     StyleToken, render_section_block_with_overrides,
+/// };
+///
+/// let theme = osp_cli::ui::resolve_theme("plain");
+/// let rendered = render_section_block_with_overrides(
+///     "Errors",
+///     "- bad",
+///     SectionFrameStyle::TopBottom,
+///     false,
+///     Some(18),
+///     SectionRenderContext {
+///         color: false,
+///         theme: &theme,
+///         style_overrides: &StyleOverrides::default(),
+///     },
+///     SectionStyleTokens::same(StyleToken::MessageError),
+/// );
+///
+/// assert!(rendered.contains("Errors"));
+/// assert!(rendered.contains("- bad"));
+/// ```
 pub fn render_section_block_with_overrides(
     title: &str,
     body: &str,
@@ -471,11 +533,10 @@ mod tests {
         render_section_block_with_overrides, render_section_divider,
         render_section_divider_with_overrides,
     };
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::tests::env_lock()
     }
 
     #[test]

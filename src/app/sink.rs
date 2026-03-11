@@ -1,3 +1,14 @@
+//! Terminal-facing output sinks used by the host layer.
+//!
+//! This module exists so host entrypoints can emit stdout/stderr through a
+//! small abstraction that works both for the real terminal and for tests.
+//!
+//! Contract:
+//!
+//! - sinks are intentionally tiny and text-oriented
+//! - buffering, snapshotting, or process stdio forwarding belong here
+//! - higher-level rendering and message formatting belong elsewhere
+
 /// Terminal-facing output sink for stdout/stderr emission.
 pub trait UiSink {
     /// Writes text to the sink's stdout channel.
@@ -7,8 +18,8 @@ pub trait UiSink {
     fn write_stderr(&mut self, text: &str);
 }
 
-#[derive(Default)]
 /// Sink that forwards output directly to the process stdio streams.
+#[derive(Default)]
 pub struct StdIoUiSink;
 
 impl UiSink for StdIoUiSink {
@@ -25,8 +36,21 @@ impl UiSink for StdIoUiSink {
     }
 }
 
-#[derive(Default, Debug)]
 /// Sink that buffers stdout and stderr for assertions and snapshot tests.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::app::{BufferedUiSink, UiSink};
+///
+/// let mut sink = BufferedUiSink::default();
+/// sink.write_stdout("ok");
+/// sink.write_stderr("warn");
+///
+/// assert_eq!(sink.stdout, "ok");
+/// assert_eq!(sink.stderr, "warn");
+/// ```
+#[derive(Default, Debug)]
 pub struct BufferedUiSink {
     /// Buffered stdout content in write order.
     pub stdout: String,

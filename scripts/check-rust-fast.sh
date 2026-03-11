@@ -25,4 +25,4 @@ cargo clippy \
   -D clippy::redundant_closure \
   -D clippy::unnecessary_lazy_evaluations
 
-cargo test --test architecture_import_limits --locked
+cargo test --test architecture --locked

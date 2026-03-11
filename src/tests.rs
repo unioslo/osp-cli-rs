@@ -1,4 +1,10 @@
 use crate::core::output::OutputFormat;
+use std::sync::{Mutex, OnceLock};
+
+pub(crate) fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[test]
 fn stable_top_level_surface_exposes_primary_entrypoints_and_types_unit() {
@@ -15,7 +21,6 @@ fn stable_top_level_surface_exposes_primary_entrypoints_and_types_unit() {
     let _plugins: Option<crate::plugin::PluginManager> = None;
     let _ldap: Option<crate::api::MockLdapClient> = None;
     let _app_runtime: Option<crate::app::AppRuntime> = None;
-    let _runtime: Option<crate::runtime::AppRuntime> = None;
     let _format = OutputFormat::Json;
     let _settings = crate::ui::RenderSettings::test_plain(OutputFormat::Table);
 }

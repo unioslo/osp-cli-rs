@@ -6,6 +6,20 @@ use crate::ui::theme::ThemeDefinition;
 ///
 /// Recognizes backtick-delimited code, single-asterisk muted text, and
 /// double-asterisk emphasized text. Escaped marker characters are preserved.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::{StyleToken, parts_from_inline};
+///
+/// let parts = parts_from_inline("Use `uid` and *optional* **flags**");
+///
+/// assert_eq!(parts[0].text, "Use ");
+/// assert_eq!(parts[1].token, Some(StyleToken::Key));
+/// assert_eq!(parts[1].text, "uid");
+/// assert_eq!(parts[3].token, Some(StyleToken::Muted));
+/// assert_eq!(parts[5].token, Some(StyleToken::PanelBorder));
+/// ```
 pub fn parts_from_inline(text: &str) -> Vec<LinePart> {
     let mut parts: Vec<LinePart> = Vec::new();
     let mut buf = String::new();
@@ -104,6 +118,21 @@ pub fn parts_from_inline(text: &str) -> Vec<LinePart> {
 }
 
 /// Parses inline markup and wraps the result in a single [`LineBlock`].
+///
+/// This keeps the block model aligned with the richer document renderer while
+/// still letting callers use the lightweight inline grammar.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::{StyleToken, line_from_inline};
+///
+/// let line = line_from_inline("`uid`");
+///
+/// assert_eq!(line.parts.len(), 1);
+/// assert_eq!(line.parts[0].token, Some(StyleToken::Key));
+/// assert_eq!(line.parts[0].text, "uid");
+/// ```
 pub fn line_from_inline(text: &str) -> LineBlock {
     LineBlock {
         parts: parts_from_inline(text),
@@ -112,7 +141,23 @@ pub fn line_from_inline(text: &str) -> LineBlock {
 
 /// Renders lightweight inline markup to a styled string.
 ///
-/// Returns plain text when `color` is `false`.
+/// Returns plain text when `color` is `false` so callers can reuse the same
+/// content path for terminals, copy buffers, and test assertions.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::{StyleOverrides, render_inline, resolve_theme};
+///
+/// let rendered = render_inline(
+///     "Use `uid`",
+///     false,
+///     &resolve_theme("dracula"),
+///     &StyleOverrides::default(),
+/// );
+///
+/// assert_eq!(rendered, "Use uid");
+/// ```
 pub fn render_inline(
     text: &str,
     color: bool,
@@ -131,3 +176,6 @@ pub fn render_inline(
     }
     out
 }
+
+#[cfg(test)]
+mod tests;

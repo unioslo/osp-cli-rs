@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn shares_column_widths_by_header_name_across_tables() {
+    fn table_layout_context_shares_and_shrinks_widths_across_rich_and_plain_paths_unit() {
         let document = Document {
             blocks: vec![
                 Block::Table(TableBlock {
@@ -401,14 +401,10 @@ mod tests {
             .table_column_widths
             .get(&2)
             .expect("second table widths should exist");
-
         assert_eq!(first, second);
         assert!(first[0] >= "very-long-name".len());
-    }
 
-    #[test]
-    fn shrinks_global_table_widths_when_terminal_is_narrow() {
-        let document = Document {
+        let narrow = Document {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
@@ -424,20 +420,15 @@ mod tests {
                 depth: 0,
             })],
         };
-
-        let context = prepare_layout_context(&document, &rich_settings(Some(36)));
+        let context = prepare_layout_context(&narrow, &rich_settings(Some(36)));
         let widths = context
             .table_column_widths
             .get(&1)
             .expect("table widths should exist");
-
         let total: usize = widths.iter().sum::<usize>() + widths.len() * 3 + 1;
         assert!(total <= 36);
-    }
 
-    #[test]
-    fn rich_mode_shrinks_even_when_table_opted_out() {
-        let document = Document {
+        let opt_out = Document {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
@@ -453,9 +444,8 @@ mod tests {
                 depth: 0,
             })],
         };
-
-        let rich_context = prepare_layout_context(&document, &rich_settings(Some(36)));
-        let plain_context = prepare_layout_context(&document, &plain_settings(Some(36)));
+        let rich_context = prepare_layout_context(&opt_out, &rich_settings(Some(36)));
+        let plain_context = prepare_layout_context(&opt_out, &plain_settings(Some(36)));
         let rich_widths = rich_context
             .table_column_widths
             .get(&1)
@@ -469,11 +459,8 @@ mod tests {
         let plain_total: usize = plain_widths.iter().sum::<usize>() + plain_widths.len() * 3 + 1;
         assert!(rich_total <= 36);
         assert!(plain_total > 36);
-    }
 
-    #[test]
-    fn tie_widths_shrink_without_starving_one_column() {
-        let document = Document {
+        let tied = Document {
             blocks: vec![Block::Table(TableBlock {
                 block_id: 1,
                 style: TableStyle::Grid,
@@ -486,20 +473,59 @@ mod tests {
                 depth: 0,
             })],
         };
-
-        let context = prepare_layout_context(&document, &rich_settings(Some(27)));
+        let context = prepare_layout_context(&tied, &rich_settings(Some(27)));
         let widths = context
             .table_column_widths
             .get(&1)
             .expect("table widths should exist");
-
         let total: usize = widths.iter().sum::<usize>() + widths.len() * 3 + 1;
         assert!(total <= 27);
         assert!(widths[0].abs_diff(widths[1]) <= 1);
+
+        let empty_headers = Document {
+            blocks: vec![Block::Table(TableBlock {
+                block_id: 7,
+                style: TableStyle::Grid,
+                border_override: None,
+                headers: Vec::new(),
+                rows: vec![Vec::new()],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: true,
+                depth: 0,
+            })],
+        };
+        let empty_context = prepare_layout_context(&empty_headers, &rich_settings(Some(8)));
+        let widths = empty_context
+            .table_column_widths
+            .get(&7)
+            .expect("empty table widths should exist");
+        assert!(widths.is_empty());
+
+        let minimum = Document {
+            blocks: vec![Block::Table(TableBlock {
+                block_id: 9,
+                style: TableStyle::Grid,
+                border_override: None,
+                headers: vec!["a".to_string(), "b".to_string()],
+                rows: vec![vec![json!("x"), json!("y")]],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: true,
+                depth: 0,
+            })],
+        };
+        let minimum_context = prepare_layout_context(&minimum, &rich_settings(Some(10)));
+        let widths = minimum_context
+            .table_column_widths
+            .get(&9)
+            .expect("table widths should exist");
+        assert_eq!(widths, &vec![4, 4]);
+        assert!(widths.iter().sum::<usize>() + widths.len() * 3 + 1 > 10);
     }
 
     #[test]
-    fn computes_per_entry_mreg_alignment_metrics() {
+    fn mreg_metrics_and_width_helpers_cover_alignment_suffix_and_shrink_steps_unit() {
         let document = Document {
             blocks: vec![Block::Mreg(MregBlock {
                 block_id: 1,
@@ -532,11 +558,8 @@ mod tests {
         assert!(uid.gap > 1);
         assert_eq!(list.gap, 1);
         assert!(list.first_pad >= list.render_col);
-    }
 
-    #[test]
-    fn skips_alignment_metrics_for_group_entries() {
-        let document = Document {
+        let grouped = Document {
             blocks: vec![Block::Mreg(MregBlock {
                 block_id: 1,
                 rows: vec![MregRow {
@@ -555,74 +578,16 @@ mod tests {
                 }],
             })],
         };
-
-        let context = prepare_layout_context(&document, &rich_settings(Some(60)));
+        let context = prepare_layout_context(&grouped, &rich_settings(Some(60)));
         let metrics = context.mreg_metrics.get(&1).expect("metrics");
         assert_eq!(metrics.entry_metrics.len(), 2);
         assert!(metrics.entry_metrics[0].is_none());
         assert!(metrics.entry_metrics[1].is_some());
-    }
 
-    #[test]
-    fn leaves_empty_header_tables_with_empty_widths() {
-        let document = Document {
-            blocks: vec![Block::Table(TableBlock {
-                block_id: 7,
-                style: TableStyle::Grid,
-                border_override: None,
-                headers: Vec::new(),
-                rows: vec![Vec::new()],
-                header_pairs: Vec::new(),
-                align: None,
-                shrink_to_fit: true,
-                depth: 0,
-            })],
-        };
-
-        let context = prepare_layout_context(&document, &rich_settings(Some(8)));
-        let widths = context
-            .table_column_widths
-            .get(&7)
-            .expect("empty table widths should exist");
-
-        assert!(widths.is_empty());
-    }
-
-    #[test]
-    fn stops_shrinking_when_columns_have_hit_minimum_width() {
-        let document = Document {
-            blocks: vec![Block::Table(TableBlock {
-                block_id: 9,
-                style: TableStyle::Grid,
-                border_override: None,
-                headers: vec!["a".to_string(), "b".to_string()],
-                rows: vec![vec![json!("x"), json!("y")]],
-                header_pairs: Vec::new(),
-                align: None,
-                shrink_to_fit: true,
-                depth: 0,
-            })],
-        };
-
-        let context = prepare_layout_context(&document, &rich_settings(Some(10)));
-        let widths = context
-            .table_column_widths
-            .get(&9)
-            .expect("table widths should exist");
-
-        assert_eq!(widths, &vec![4, 4]);
-        assert!(widths.iter().sum::<usize>() + widths.len() * 3 + 1 > 10);
-    }
-
-    #[test]
-    fn strip_count_suffix_ignores_numeric_counts_only() {
         assert_eq!(strip_count_suffix("hosts (12)"), "hosts");
         assert_eq!(strip_count_suffix("hosts"), "hosts");
         assert_eq!(strip_count_suffix("hosts (a)"), "hosts (a)");
-    }
 
-    #[test]
-    fn compute_raw_table_widths_expand_for_cell_content() {
         let table = TableBlock {
             block_id: 1,
             style: TableStyle::Grid,
@@ -637,14 +602,9 @@ mod tests {
             shrink_to_fit: true,
             depth: 0,
         };
-
         let widths = compute_raw_table_widths(&table, 4);
-
         assert!(widths[1] > "value".len());
-    }
 
-    #[test]
-    fn next_shrink_step_uses_second_widest_column_gap() {
         let tables = [TableDescriptor {
             block_id: 1,
             headers: vec![
@@ -663,13 +623,9 @@ mod tests {
 
         let (header, amount) =
             next_shrink_step(24, 4, &[&tables[0]], &widths).expect("shrink step");
-
         assert_eq!(header, "name");
         assert_eq!(amount, 3);
-    }
 
-    #[test]
-    fn shrink_global_widths_updates_selected_header_width() {
         let tables = vec![TableDescriptor {
             block_id: 1,
             headers: vec!["name".to_string(), "description".to_string()],
@@ -680,9 +636,7 @@ mod tests {
             ("name".to_string(), 12usize),
             ("description".to_string(), 24usize),
         ]);
-
         shrink_global_widths_to_fit(28, 4, &tables, &mut widths);
-
         assert!(widths["description"] < 24);
     }
 }

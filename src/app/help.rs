@@ -36,10 +36,9 @@ pub(crate) struct HelpRenderOverrides {
 
 impl HelpRenderOverrides {
     fn runtime_load_options(&self) -> RuntimeLoadOptions {
-        RuntimeLoadOptions {
-            include_env: !self.no_env,
-            include_config_file: !self.no_config_file,
-        }
+        RuntimeLoadOptions::new()
+            .with_env(!self.no_env)
+            .with_config_file(!self.no_config_file)
     }
 }
 

@@ -1,4 +1,6 @@
 use crate::guide::GuideView;
+#[cfg(test)]
+use crate::ui::ResolvedGuideRenderSettings;
 use crate::ui::{
     RenderSettings, ResolvedRenderSettings, render_guide_output_with_options,
     render_guide_view_with_options,
@@ -40,8 +42,7 @@ pub(crate) fn render_help_with_chrome(
         &parsed,
         None,
         layout,
-        resolved.chrome_frame,
-        resolved.help_table_border,
+        ResolvedGuideRenderSettings::plain_help(resolved.chrome_frame, resolved.help_table_border),
     );
     render_help_document(document, resolved)
 }
@@ -121,68 +122,80 @@ mod tests {
         }
     }
 
+    fn guide_render_options() -> GuideRenderOptions<'static> {
+        GuideRenderOptions {
+            title_prefix: None,
+            layout: HelpLayout::Compact,
+            guide: ResolvedGuideRenderSettings::plain_help(
+                crate::ui::chrome::SectionFrameStyle::None,
+                TableBorderStyle::None,
+            ),
+            panel_kind: None,
+        }
+    }
+
+    fn filtered_guide_output() -> crate::core::output_model::OutputResult {
+        let output = GuideView {
+            usage: vec!["history <COMMAND>".to_string()],
+            commands: vec![
+                GuideEntry {
+                    name: "list".to_string(),
+                    short_help: "List history entries".to_string(),
+                    display_indent: None,
+                    display_gap: None,
+                },
+                GuideEntry {
+                    name: "prune".to_string(),
+                    short_help: "Remove old history entries".to_string(),
+                    display_indent: None,
+                    display_gap: None,
+                },
+            ],
+            ..GuideView::default()
+        }
+        .to_output_result();
+        apply_output_pipeline(output, &["list".to_string()]).expect("guide quick should work")
+    }
+
     #[test]
-    fn minimal_help_layout_matches_plain_snapshot_unit() {
-        let rendered = render_help_with_chrome(
+    fn help_chrome_layouts_preserve_snapshots_and_custom_sections_unit() {
+        let minimal = render_help_with_chrome(
             "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n\nUse `osp plugins commands` to list plugin-provided commands.\n",
             &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
             HelpLayout::Minimal,
         );
+        assert_snapshot!("repl_help_minimal_layout", minimal);
 
-        assert_snapshot!("repl_help_minimal_layout", rendered);
-    }
-
-    #[test]
-    fn compact_help_layout_preserves_single_section_gap_unit() {
-        let rendered = render_help_with_chrome(
+        let compact = render_help_with_chrome(
             "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
             &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
             HelpLayout::Compact,
         );
+        assert_snapshot!("repl_help_compact_layout", compact);
 
-        assert_snapshot!("repl_help_compact_layout", rendered);
-    }
-
-    #[test]
-    fn help_chrome_preserves_preamble_before_known_sections_unit() {
-        let rendered = render_help_with_chrome(
+        let preamble = render_help_with_chrome(
             "Custom plugin help\nwith two intro lines\n\nUsage: osp sample\n\nCommands:\n  run\n",
             &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
             HelpLayout::Compact,
         );
+        assert!(preamble.contains("Custom plugin help"));
+        assert!(preamble.contains("with two intro lines"));
+        assert!(preamble.contains("Usage:\n  osp sample"));
+        assert!(preamble.contains("Commands:\n  run"));
 
-        assert!(rendered.contains("Custom plugin help"));
-        assert!(rendered.contains("with two intro lines"));
-        assert!(rendered.contains("Usage:\n  osp sample"));
-        assert!(rendered.contains("Commands:\n  run"));
+        for layout in [HelpLayout::Compact, HelpLayout::Minimal] {
+            let rendered = render_help_with_chrome(
+                "Usage: osp sample\n\nExamples:\n  osp sample run\n\nNotes:\n  extra detail\n",
+                &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
+                layout,
+            );
+            assert!(rendered.contains("Examples:\n  osp sample run"));
+            assert!(rendered.contains("Notes:\n  extra detail"));
+        }
     }
 
     #[test]
-    fn help_chrome_preserves_custom_titled_sections_unit() {
-        let rendered = render_help_with_chrome(
-            "Usage: osp sample\n\nExamples:\n  osp sample run\n\nNotes:\n  extra detail\n",
-            &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
-            HelpLayout::Compact,
-        );
-
-        assert!(rendered.contains("Examples:\n  osp sample run"));
-        assert!(rendered.contains("Notes:\n  extra detail"));
-    }
-
-    #[test]
-    fn minimal_help_layout_preserves_custom_titled_sections_unit() {
-        let rendered = render_help_with_chrome(
-            "Usage: osp sample\n\nExamples:\n  osp sample run\n\nNotes:\n  extra detail\n",
-            &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
-            HelpLayout::Minimal,
-        );
-
-        assert!(rendered.contains("Examples:\n  osp sample run"));
-        assert!(rendered.contains("Notes:\n  extra detail"));
-    }
-
-    #[test]
-    fn help_chrome_colors_help_body_keys_and_text_unit() {
+    fn help_chrome_styles_color_text_and_split_command_descriptions_unit() {
         let mut resolved = resolved_settings(crate::ui::chrome::SectionFrameStyle::TopBottom);
         resolved.color = true;
         resolved.style_overrides = help_test_overrides();
@@ -192,261 +205,78 @@ mod tests {
             &resolved,
             HelpLayout::Compact,
         );
-
         assert!(rendered.contains("\u{1b}[32mUsage\u{1b}[0m"));
         assert!(rendered.contains("\u{1b}[31mlist\u{1b}[0m"));
         assert!(rendered.contains("\u{1b}[34m   List stored history entries\u{1b}[0m"));
         assert!(rendered.contains("\u{1b}[34m  osp history <COMMAND>\u{1b}[0m"));
-    }
 
-    #[test]
-    fn help_chrome_splits_single_space_command_descriptions_unit() {
-        let mut resolved = resolved_settings(crate::ui::chrome::SectionFrameStyle::None);
-        resolved.color = true;
-        resolved.style_overrides = help_test_overrides();
-
+        let mut split = resolved_settings(crate::ui::chrome::SectionFrameStyle::None);
+        split.color = true;
+        split.style_overrides = help_test_overrides();
         let rendered = render_help_with_chrome(
             "Commands:\n  list List stored history entries\n",
-            &resolved,
+            &split,
             HelpLayout::Compact,
         );
-
         assert!(rendered.contains("\u{1b}[31mlist\u{1b}[0m"));
         assert!(rendered.contains("\u{1b}[34m List stored history entries\u{1b}[0m"));
     }
 
     #[test]
-    fn guide_default_prefers_chrome_over_inherited_json_unit() {
+    fn guide_rendering_prefers_semantic_help_until_explicit_format_wins_unit() {
         let guide = GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n");
-        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
-        settings.guide_default_format = GuideDefaultFormat::Guide;
 
-        let rendered = render_guide_doc(
-            &guide,
-            &settings,
-            GuideRenderOptions {
-                title_prefix: None,
-                layout: HelpLayout::Compact,
-                frame_style: crate::ui::chrome::SectionFrameStyle::None,
-                panel_kind: None,
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
-            },
-        );
-
+        let mut guide_default = RenderSettings::test_plain(OutputFormat::Json);
+        guide_default.guide_default_format = GuideDefaultFormat::Guide;
+        let rendered = render_guide_doc(&guide, &guide_default, guide_render_options());
         assert!(rendered.contains("Usage:"));
         assert!(!rendered.trim_start().starts_with('['));
-    }
 
-    #[test]
-    fn guide_recommendation_beats_inherited_non_explicit_format_unit() {
-        let guide = GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n");
-        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
-        settings.guide_default_format = GuideDefaultFormat::Inherit;
-
-        let rendered = render_guide_doc(
-            &guide,
-            &settings,
-            GuideRenderOptions {
-                title_prefix: None,
-                layout: HelpLayout::Compact,
-                frame_style: crate::ui::chrome::SectionFrameStyle::None,
-                panel_kind: None,
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
-            },
-        );
-
+        let mut inherited = RenderSettings::test_plain(OutputFormat::Json);
+        inherited.guide_default_format = GuideDefaultFormat::Inherit;
+        let rendered = render_guide_doc(&guide, &inherited, guide_render_options());
         assert!(rendered.contains("Usage"));
         assert!(rendered.contains("list"));
         assert!(!rendered.trim_start().starts_with('['));
-    }
 
-    #[test]
-    fn explicit_format_beats_guide_default_unit() {
-        let guide = GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n");
-        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
-        settings.guide_default_format = GuideDefaultFormat::Guide;
-        settings.format_explicit = true;
-
-        let rendered = render_guide_doc(
-            &guide,
-            &settings,
-            GuideRenderOptions {
-                title_prefix: None,
-                layout: HelpLayout::Compact,
-                frame_style: crate::ui::chrome::SectionFrameStyle::None,
-                panel_kind: None,
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
-            },
-        );
-
+        let mut explicit = RenderSettings::test_plain(OutputFormat::Json);
+        explicit.guide_default_format = GuideDefaultFormat::Guide;
+        explicit.format_explicit = true;
+        let rendered = render_guide_doc(&guide, &explicit, guide_render_options());
         assert!(rendered.trim_start().starts_with('['));
     }
 
     #[test]
-    fn guide_output_rehydrates_when_recommendation_survives_pipeline_unit() {
-        let output = GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n")
+    fn guide_output_after_pipeline_preserves_recommendation_until_explicit_format_or_markdown_overrides_unit()
+     {
+        let from_text = GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n")
             .to_output_result();
-        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
-        settings.guide_default_format = GuideDefaultFormat::Guide;
-
-        let rendered = render_guide_output(
-            &output,
-            &settings,
-            GuideRenderOptions {
-                title_prefix: None,
-                layout: HelpLayout::Compact,
-                frame_style: crate::ui::chrome::SectionFrameStyle::None,
-                panel_kind: None,
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
-            },
-        );
-
+        let mut rehydrated = RenderSettings::test_plain(OutputFormat::Json);
+        rehydrated.guide_default_format = GuideDefaultFormat::Guide;
+        let rendered = render_guide_output(&from_text, &rehydrated, guide_render_options());
         assert!(rendered.contains("Usage:"));
         assert!(!rendered.trim_start().starts_with('['));
-    }
 
-    #[test]
-    fn guide_output_after_quick_filter_keeps_guide_rendering_unit() {
-        let output = GuideView {
-            usage: vec!["history <COMMAND>".to_string()],
-            commands: vec![
-                GuideEntry {
-                    name: "list".to_string(),
-                    short_help: "List history entries".to_string(),
-                    display_indent: None,
-                    display_gap: None,
-                },
-                GuideEntry {
-                    name: "prune".to_string(),
-                    short_help: "Remove old history entries".to_string(),
-                    display_indent: None,
-                    display_gap: None,
-                },
-            ],
-            ..GuideView::default()
-        }
-        .to_output_result();
-        let output =
-            apply_output_pipeline(output, &["list".to_string()]).expect("guide quick should work");
-
-        let mut settings = RenderSettings::test_plain(OutputFormat::Auto);
-        settings.guide_default_format = GuideDefaultFormat::Guide;
-
-        let rendered = render_guide_output(
-            &output,
-            &settings,
-            GuideRenderOptions {
-                title_prefix: None,
-                layout: HelpLayout::Compact,
-                frame_style: crate::ui::chrome::SectionFrameStyle::None,
-                panel_kind: None,
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
-            },
-        );
-
+        let filtered = filtered_guide_output();
+        let mut semantic = RenderSettings::test_plain(OutputFormat::Auto);
+        semantic.guide_default_format = GuideDefaultFormat::Guide;
+        let rendered = render_guide_output(&filtered, &semantic, guide_render_options());
         assert!(rendered.contains("Commands:"));
         assert!(rendered.contains("list"));
         assert!(!rendered.trim_start().starts_with('['));
-    }
 
-    #[test]
-    fn explicit_format_beats_guide_recommendation_after_pipeline_unit() {
-        let output = GuideView {
-            usage: vec!["history <COMMAND>".to_string()],
-            commands: vec![GuideEntry {
-                name: "list".to_string(),
-                short_help: "List history entries".to_string(),
-                display_indent: None,
-                display_gap: None,
-            }],
-            ..GuideView::default()
-        }
-        .to_output_result();
-        let output =
-            apply_output_pipeline(output, &["list".to_string()]).expect("guide quick should work");
-
-        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
-        settings.guide_default_format = GuideDefaultFormat::Guide;
-        settings.format_explicit = true;
-
-        let rendered = render_guide_output(
-            &output,
-            &settings,
-            GuideRenderOptions {
-                title_prefix: None,
-                layout: HelpLayout::Compact,
-                frame_style: crate::ui::chrome::SectionFrameStyle::None,
-                panel_kind: None,
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
-            },
-        );
-
+        let mut explicit_json = RenderSettings::test_plain(OutputFormat::Json);
+        explicit_json.guide_default_format = GuideDefaultFormat::Guide;
+        explicit_json.format_explicit = true;
+        let rendered = render_guide_output(&filtered, &explicit_json, guide_render_options());
         assert!(rendered.trim_start().starts_with('['));
         assert!(rendered.contains("\"commands\""));
         assert!(rendered.contains("\"short_help\""));
-    }
 
-    #[test]
-    fn markdown_guide_output_uses_semantic_sections_after_pipeline_unit() {
-        let output = GuideView {
-            usage: vec!["history <COMMAND>".to_string()],
-            commands: vec![
-                GuideEntry {
-                    name: "list".to_string(),
-                    short_help: "List history entries".to_string(),
-                    display_indent: None,
-                    display_gap: None,
-                },
-                GuideEntry {
-                    name: "prune".to_string(),
-                    short_help: "Remove old history entries".to_string(),
-                    display_indent: None,
-                    display_gap: None,
-                },
-            ],
-            ..GuideView::default()
-        }
-        .to_output_result();
-        let output =
-            apply_output_pipeline(output, &["list".to_string()]).expect("guide quick should work");
-
-        let mut settings = RenderSettings::test_plain(OutputFormat::Markdown);
-        settings.format_explicit = true;
-        settings.guide_default_format = GuideDefaultFormat::Guide;
-
-        let rendered = render_guide_output(
-            &output,
-            &settings,
-            GuideRenderOptions {
-                title_prefix: None,
-                layout: HelpLayout::Compact,
-                frame_style: crate::ui::chrome::SectionFrameStyle::None,
-                panel_kind: None,
-                help_table_border: TableBorderStyle::None,
-                help_entry_indent: None,
-                help_entry_gap: None,
-                help_section_spacing: None,
-            },
-        );
-
+        let mut markdown = RenderSettings::test_plain(OutputFormat::Markdown);
+        markdown.format_explicit = true;
+        markdown.guide_default_format = GuideDefaultFormat::Guide;
+        let rendered = render_guide_output(&filtered, &markdown, guide_render_options());
         assert!(rendered.contains("## Commands"));
         assert!(rendered.contains("- `list` List history entries"));
         assert!(!rendered.contains("\"commands\""));

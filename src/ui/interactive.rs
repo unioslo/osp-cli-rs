@@ -1,21 +1,36 @@
+//! Interactive terminal helpers for prompts and transient status UI.
+//!
+//! This module exists to keep blocking prompts and live terminal widgets behind
+//! a small runtime-aware surface. Callers decide whether prompting is part of
+//! their workflow; this module only answers whether the current terminal makes
+//! that safe and provides the mechanics when it does.
+//!
+//! Contract:
+//!
+//! - this module owns prompt/runtime gating and spinner mechanics
+//! - it should not absorb command policy, validation rules, or higher-level
+//!   workflow decisions
+//!
+//! Public API shape:
+//!
+//! - [`InteractiveRuntime`] uses the crate-wide constructor/factory naming:
+//!   `new(...)` for exact runtime hints and `detect()` for process probing
+//! - [`Interactive`] is a lightweight wrapper over those runtime hints rather
+//!   than another place to encode workflow policy
+
 use dialoguer::{Confirm, Password, theme::ColorfulTheme};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::env;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
 
-/// Blocking prompt helpers and transient status UI for interactive CLI hosts.
-///
-/// This module is intentionally small. It is not a second rendering system and
-/// it should not own command-level policy. Callers decide when prompting is
-/// appropriate, whether blank input is valid, and when a spinner should be
-/// shown; `osp-ui` only provides the terminal primitives.
 /// Interactive runtime hints used to decide whether live terminal UI is safe.
 ///
 /// This mirrors the render/runtime split elsewhere in `osp-ui`: callers can
 /// inject explicit values for tests or special hosts, while `detect()` remains
 /// the boring default for normal CLI entrypoints.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InteractiveRuntime {
     /// Whether stdin is attached to a terminal.
     pub stdin_is_tty: bool,
@@ -26,21 +41,56 @@ pub struct InteractiveRuntime {
 }
 
 impl InteractiveRuntime {
-    /// Detect interactive terminal capabilities from the current process.
-    pub fn detect() -> Self {
+    /// Creates explicit interactive runtime hints.
+    pub fn new(stdin_is_tty: bool, stderr_is_tty: bool, terminal: Option<String>) -> Self {
         Self {
-            stdin_is_tty: io::stdin().is_terminal(),
-            stderr_is_tty: io::stderr().is_terminal(),
-            terminal: env::var("TERM").ok(),
+            stdin_is_tty,
+            stderr_is_tty,
+            terminal,
         }
     }
 
-    /// Returns `true` when both stdin and stderr can support interactive prompts.
+    /// Detect interactive terminal capabilities from the current process.
+    pub fn detect() -> Self {
+        Self::new(
+            io::stdin().is_terminal(),
+            io::stderr().is_terminal(),
+            env::var("TERM").ok(),
+        )
+    }
+
+    /// Returns `true` when both stdin and stderr can support interactive
+    /// prompts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::InteractiveRuntime;
+    ///
+    /// let runtime = InteractiveRuntime::new(
+    ///     true,
+    ///     true,
+    ///     Some("xterm-256color".to_string()),
+    /// );
+    ///
+    /// assert!(runtime.allows_prompting());
+    /// ```
     pub fn allows_prompting(&self) -> bool {
         self.stdin_is_tty && self.stderr_is_tty
     }
 
-    /// Returns `true` when transient terminal output such as spinners is safe to show.
+    /// Returns `true` when transient terminal output such as spinners is safe
+    /// to show.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::InteractiveRuntime;
+    ///
+    /// let runtime = InteractiveRuntime::new(true, true, Some("dumb".to_string()));
+    ///
+    /// assert!(!runtime.allows_live_output());
+    /// ```
     pub fn allows_live_output(&self) -> bool {
         self.stderr_is_tty && !matches!(self.terminal.as_deref(), Some("dumb"))
     }
@@ -68,6 +118,20 @@ impl Interactive {
     }
 
     /// Creates an interaction helper from an explicit runtime description.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::{Interactive, InteractiveRuntime};
+    ///
+    /// let ui = Interactive::new(InteractiveRuntime::new(
+    ///     true,
+    ///     false,
+    ///     Some("xterm-256color".to_string()),
+    /// ));
+    ///
+    /// assert!(!ui.runtime().allows_prompting());
+    /// ```
     pub fn new(runtime: InteractiveRuntime) -> Self {
         Self { runtime }
     }
@@ -190,7 +254,10 @@ impl Spinner {
         self.pb.abandon_with_message(message.into());
     }
 
-    /// Alias for [`Spinner::finish_success`].
+    /// Backward-compatible success alias matching `indicatif` naming.
+    ///
+    /// New callers should prefer [`Spinner::finish_success`] so the public API
+    /// makes the success/failure distinction explicit.
     pub fn finish_with_message(&self, message: impl Into<String>) {
         self.finish_success(message);
     }
@@ -205,39 +272,28 @@ impl Spinner {
 mod tests {
     use super::{Interactive, InteractiveRuntime, Spinner};
 
-    #[test]
-    fn runtime_blocks_live_output_for_dumb_term() {
-        let runtime = InteractiveRuntime {
-            stdin_is_tty: true,
-            stderr_is_tty: true,
-            terminal: Some("dumb".to_string()),
-        };
-
-        assert!(!runtime.allows_live_output());
-        assert!(runtime.allows_prompting());
+    fn runtime(
+        stdin_is_tty: bool,
+        stderr_is_tty: bool,
+        terminal: Option<&str>,
+    ) -> InteractiveRuntime {
+        InteractiveRuntime::new(stdin_is_tty, stderr_is_tty, terminal.map(str::to_string))
     }
 
     #[test]
-    fn runtime_blocks_prompting_without_ttys() {
-        let runtime = InteractiveRuntime {
-            stdin_is_tty: false,
-            stderr_is_tty: true,
-            terminal: Some("xterm-256color".to_string()),
-        };
+    fn runtime_capability_matrix_covers_prompting_and_live_output_unit() {
+        let cases = [
+            (runtime(true, true, Some("xterm-256color")), true, true),
+            (runtime(true, true, Some("dumb")), true, false),
+            (runtime(false, true, Some("xterm-256color")), false, true),
+            (runtime(true, false, Some("xterm-256color")), false, false),
+            (runtime(true, true, None), true, true),
+        ];
 
-        assert!(!runtime.allows_prompting());
-    }
-
-    #[test]
-    fn runtime_blocks_live_output_without_stderr_tty() {
-        let runtime = InteractiveRuntime {
-            stdin_is_tty: true,
-            stderr_is_tty: false,
-            terminal: Some("xterm-256color".to_string()),
-        };
-
-        assert!(!runtime.allows_live_output());
-        assert!(!runtime.allows_prompting());
+        for (runtime, allows_prompting, allows_live_output) in cases {
+            assert_eq!(runtime.allows_prompting(), allows_prompting);
+            assert_eq!(runtime.allows_live_output(), allows_live_output);
+        }
     }
 
     #[test]
@@ -252,16 +308,8 @@ mod tests {
 
     #[test]
     fn spinner_respects_runtime_policy_and_finish_alias() {
-        let live_runtime = InteractiveRuntime {
-            stdin_is_tty: true,
-            stderr_is_tty: true,
-            terminal: Some("xterm-256color".to_string()),
-        };
-        let muted_runtime = InteractiveRuntime {
-            stdin_is_tty: true,
-            stderr_is_tty: true,
-            terminal: Some("dumb".to_string()),
-        };
+        let live_runtime = runtime(true, true, Some("xterm-256color"));
+        let muted_runtime = runtime(true, true, Some("dumb"));
 
         let live = Spinner::with_runtime(&live_runtime, "Working");
         live.set_message("Still working");
@@ -272,29 +320,8 @@ mod tests {
     }
 
     #[test]
-    fn confirm_fails_fast_without_interactive_terminal() {
-        let interactive = Interactive::new(InteractiveRuntime {
-            stdin_is_tty: false,
-            stderr_is_tty: false,
-            terminal: None,
-        });
-
-        let err = interactive
-            .confirm("Proceed?")
-            .expect_err("confirm should fail");
-        assert!(
-            err.to_string().contains("interactive terminal"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn interactive_runtime_accessor_and_spinner_follow_runtime() {
-        let runtime = InteractiveRuntime {
-            stdin_is_tty: true,
-            stderr_is_tty: true,
-            terminal: Some("xterm-256color".to_string()),
-        };
+        let runtime = runtime(true, true, Some("xterm-256color"));
         let interactive = Interactive::new(runtime.clone());
 
         assert_eq!(interactive.runtime(), &runtime);
@@ -302,49 +329,25 @@ mod tests {
     }
 
     #[test]
-    fn password_fails_fast_without_interactive_terminal() {
-        let interactive = Interactive::new(InteractiveRuntime {
-            stdin_is_tty: false,
-            stderr_is_tty: false,
-            terminal: None,
-        });
+    fn prompting_helpers_fail_fast_without_interactive_terminal_unit() {
+        let interactive = Interactive::new(runtime(false, false, None));
 
-        let err = interactive
-            .password("Password")
-            .expect_err("password should fail");
-        assert!(
-            err.to_string().contains("interactive terminal"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn password_allow_empty_fails_fast_without_interactive_terminal() {
-        let interactive = Interactive::new(InteractiveRuntime {
-            stdin_is_tty: false,
-            stderr_is_tty: false,
-            terminal: None,
-        });
-
-        let err = interactive
-            .password_allow_empty("Password")
-            .expect_err("password prompt should still require a TTY");
-        assert!(
-            err.to_string().contains("interactive terminal"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn runtime_allows_live_output_when_term_is_missing_but_stderr_is_tty() {
-        let runtime = InteractiveRuntime {
-            stdin_is_tty: true,
-            stderr_is_tty: true,
-            terminal: None,
-        };
-
-        assert!(runtime.allows_prompting());
-        assert!(runtime.allows_live_output());
+        for err in [
+            interactive
+                .confirm("Proceed?")
+                .expect_err("confirm should fail"),
+            interactive
+                .password("Password")
+                .expect_err("password should fail"),
+            interactive
+                .password_allow_empty("Password")
+                .expect_err("password prompt should still require a TTY"),
+        ] {
+            assert!(
+                err.to_string().contains("interactive terminal"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
@@ -367,17 +370,5 @@ mod tests {
             defaulted.runtime().stderr_is_tty,
             detected.runtime().stderr_is_tty
         );
-    }
-
-    #[test]
-    fn runtime_without_stdin_tty_can_still_allow_live_output() {
-        let runtime = InteractiveRuntime {
-            stdin_is_tty: false,
-            stderr_is_tty: true,
-            terminal: Some("xterm-256color".to_string()),
-        };
-
-        assert!(!runtime.allows_prompting());
-        assert!(runtime.allows_live_output());
     }
 }

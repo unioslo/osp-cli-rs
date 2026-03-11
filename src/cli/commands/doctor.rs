@@ -215,11 +215,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn ui_state(format: OutputFormat, debug_verbosity: u8) -> UiState {
-        UiState {
-            render_settings: RenderSettings::test_plain(format),
-            message_verbosity: MessageLevel::Success,
-            debug_verbosity,
-        }
+        UiState::builder(RenderSettings::test_plain(format))
+            .with_message_verbosity(MessageLevel::Success)
+            .with_debug_verbosity(debug_verbosity)
+            .build()
     }
 
     fn doctor_context(
@@ -271,43 +270,38 @@ mod tests {
     }
 
     #[test]
-    fn doctor_last_without_failure_returns_plain_notice_unit() {
-        let document = render_last_failure_document(&ui_state(OutputFormat::Table, 0), None);
+    fn doctor_last_rendering_covers_empty_text_debug_and_json_modes_unit() {
+        let empty = render_last_failure_document(&ui_state(OutputFormat::Table, 0), None);
+        assert!(render_line_blocks(&empty.blocks).contains("No recorded REPL failure"));
 
-        let rendered = render_line_blocks(&document.blocks);
-        assert!(rendered.contains("No recorded REPL failure"));
-    }
-
-    #[test]
-    fn doctor_last_text_includes_detail_when_debug_is_enabled_unit() {
         let failure = LastFailure {
             command_line: "ldap user nope".to_string(),
             summary: "request failed".to_string(),
             detail: "request failed\nbackend said no".to_string(),
         };
 
-        let document =
+        let verbose =
             render_last_failure_document(&ui_state(OutputFormat::Table, 1), Some(&failure));
+        let verbose_rendered = render_line_blocks(&verbose.blocks);
+        assert!(verbose_rendered.contains("Command: ldap user nope"));
+        assert!(verbose_rendered.contains("Error:   request failed"));
+        assert!(verbose_rendered.contains("Detail:"));
+        assert!(verbose_rendered.contains("backend said no"));
 
-        let rendered = render_line_blocks(&document.blocks);
-        assert!(rendered.contains("Command: ldap user nope"));
-        assert!(rendered.contains("Error:   request failed"));
-        assert!(rendered.contains("Detail:"));
-        assert!(rendered.contains("backend said no"));
-    }
+        let compact =
+            render_last_failure_document(&ui_state(OutputFormat::Table, 0), Some(&failure));
+        let compact_rendered = render_line_blocks(&compact.blocks);
+        assert!(compact_rendered.contains("Error:   request failed"));
+        assert!(!compact_rendered.contains("Detail:"));
 
-    #[test]
-    fn doctor_last_json_shape_is_stable_unit() {
-        let failure = LastFailure {
+        let json_failure = LastFailure {
             command_line: "plugins refresh".to_string(),
             summary: "plugin failed".to_string(),
             detail: "plugin failed".to_string(),
         };
-
-        let document =
-            render_last_failure_document(&ui_state(OutputFormat::Json, 0), Some(&failure));
-
-        let Some(Block::Json(json)) = document.blocks.first() else {
+        let json_document =
+            render_last_failure_document(&ui_state(OutputFormat::Json, 0), Some(&json_failure));
+        let Some(Block::Json(json)) = json_document.blocks.first() else {
             panic!("expected json block");
         };
         assert_eq!(json.payload["status"], Value::String("error".to_string()));
@@ -315,22 +309,6 @@ mod tests {
             json.payload["command"],
             Value::String("plugins refresh".to_string())
         );
-    }
-
-    #[test]
-    fn doctor_last_text_omits_detail_when_debug_is_disabled_unit() {
-        let failure = LastFailure {
-            command_line: "ldap user nope".to_string(),
-            summary: "request failed".to_string(),
-            detail: "request failed\nbackend said no".to_string(),
-        };
-
-        let document =
-            render_last_failure_document(&ui_state(OutputFormat::Table, 0), Some(&failure));
-
-        let rendered = render_line_blocks(&document.blocks);
-        assert!(rendered.contains("Error:   request failed"));
-        assert!(!rendered.contains("Detail:"));
     }
 
     #[test]
@@ -360,16 +338,15 @@ mod tests {
     }
 
     #[test]
-    fn doctor_all_json_includes_visible_sections_unit() {
-        let result = run_doctor_command(
+    fn doctor_commands_respect_visibility_and_output_shapes_unit() {
+        let visible = run_doctor_command(
             doctor_context(OutputFormat::Json, Some("config,plugins,theme")),
             DoctorArgs {
                 command: Some(DoctorCommands::All),
             },
         )
         .expect("doctor all should succeed");
-
-        let Some(ReplCommandOutput::Document(document)) = result.output else {
+        let Some(ReplCommandOutput::Document(document)) = visible.output else {
             panic!("expected document output");
         };
         let Some(Block::Json(json)) = document.blocks.first() else {
@@ -378,19 +355,15 @@ mod tests {
         assert!(json.payload.get("config").is_some());
         assert!(json.payload.get("plugins").is_some());
         assert!(json.payload.get("theme").is_some());
-    }
 
-    #[test]
-    fn doctor_all_respects_builtin_visibility_unit() {
-        let result = run_doctor_command(
+        let filtered = run_doctor_command(
             doctor_context(OutputFormat::Json, Some("theme")),
             DoctorArgs {
                 command: Some(DoctorCommands::All),
             },
         )
         .expect("doctor all should succeed");
-
-        let Some(ReplCommandOutput::Document(document)) = result.output else {
+        let Some(ReplCommandOutput::Document(document)) = filtered.output else {
             panic!("expected document output");
         };
         let Some(Block::Json(json)) = document.blocks.first() else {
@@ -399,46 +372,25 @@ mod tests {
         assert!(json.payload.get("theme").is_some());
         assert!(json.payload.get("config").is_none());
         assert!(json.payload.get("plugins").is_none());
-    }
 
-    #[test]
-    fn doctor_config_requires_builtin_visibility_unit() {
-        let err = run_doctor_command(
-            doctor_context(OutputFormat::Table, Some("theme")),
-            DoctorArgs {
-                command: Some(DoctorCommands::Config),
-            },
-        )
-        .expect_err("hidden config builtin should fail");
-
-        assert!(!err.to_string().trim().is_empty());
-    }
-
-    #[test]
-    fn doctor_theme_returns_output_rows_unit() {
-        let result = run_doctor_command(
+        let theme = run_doctor_command(
             doctor_context(OutputFormat::Table, Some("theme")),
             DoctorArgs {
                 command: Some(DoctorCommands::Theme),
             },
         )
         .expect("doctor theme should succeed");
+        assert!(theme.output.is_some());
+        assert!(theme.messages.is_empty());
 
-        assert!(result.output.is_some());
-        assert!(result.messages.is_empty());
-    }
-
-    #[test]
-    fn doctor_all_table_groups_sections_into_panels_unit() {
-        let result = run_doctor_command(
+        let table = run_doctor_command(
             doctor_context(OutputFormat::Table, Some("config,theme")),
             DoctorArgs {
                 command: Some(DoctorCommands::All),
             },
         )
         .expect("doctor all should succeed");
-
-        let Some(ReplCommandOutput::Document(document)) = result.output else {
+        let Some(ReplCommandOutput::Document(document)) = table.output else {
             panic!("expected document output");
         };
         assert!(
@@ -450,20 +402,25 @@ mod tests {
     }
 
     #[test]
-    fn doctor_theme_requires_builtin_visibility_unit() {
-        let err = run_doctor_command(
+    fn doctor_commands_require_visible_builtins_and_define_expected_subcommands_unit() {
+        let config_err = run_doctor_command(
+            doctor_context(OutputFormat::Table, Some("theme")),
+            DoctorArgs {
+                command: Some(DoctorCommands::Config),
+            },
+        )
+        .expect_err("hidden config builtin should fail");
+        assert!(!config_err.to_string().trim().is_empty());
+
+        let theme_err = run_doctor_command(
             doctor_context(OutputFormat::Table, Some("config")),
             DoctorArgs {
                 command: Some(DoctorCommands::Theme),
             },
         )
         .expect_err("hidden theme builtin should fail");
+        assert!(!theme_err.to_string().trim().is_empty());
 
-        assert!(!err.to_string().trim().is_empty());
-    }
-
-    #[test]
-    fn doctor_command_def_exposes_expected_subcommands_unit() {
         let def = doctor_command_def("30");
         let names = def
             .subcommands

@@ -23,14 +23,27 @@ impl RowBuilder {
 
 #[macro_export]
 /// Builds a [`Row`](crate::core::row::Row) from literal key/value pairs.
+///
+/// This is the terse path for fixed row literals in command/render code.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::row;
+/// use serde_json::json;
+///
+/// let row = row! {
+///     "id" => 7,
+///     "name" => "alice",
+/// };
+///
+/// assert_eq!(row.get("id"), Some(&json!(7)));
+/// assert_eq!(row.get("name"), Some(&json!("alice")));
+/// ```
 macro_rules! row {
     ($($key:expr => $value:expr),* $(,)?) => {{
-        let mut builder = $crate::cli::rows::row::RowBuilder::new();
-        $(builder.insert($key, $value);)*
-        builder.build()
+        let mut row = $crate::core::row::Row::new();
+        $(row.insert(($key).into(), ($value).into());)*
+        row
     }};
 }
-
-// Style: prefer `row!{...}` for short, unconditional rows; use `RowBuilder` when
-// values are conditional or built up across multiple branches.
-// Example: let row = row! { "id" => 1, "name" => "alice" };

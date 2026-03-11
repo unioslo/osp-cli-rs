@@ -352,6 +352,15 @@ mod tests {
             .expect("config should resolve")
     }
 
+    fn auto_settings_from_config(config: &ResolvedConfig) -> RenderSettings {
+        let mut settings = RenderSettings::test_plain(crate::core::output::OutputFormat::Auto);
+        settings.mode = RenderMode::Auto;
+        settings.unicode = UnicodeMode::Auto;
+        settings.color = ColorMode::Auto;
+        crate::cli::apply_render_settings_from_config(&mut settings, config);
+        settings
+    }
+
     #[test]
     fn parses_legacy_gammel_og_bitter_alias_unit() {
         assert_eq!(
@@ -361,117 +370,152 @@ mod tests {
     }
 
     #[test]
-    fn austere_presentation_seeds_plain_render_defaults_unit() {
-        let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        let mut settings = RenderSettings::test_plain(crate::core::output::OutputFormat::Auto);
-        settings.mode = RenderMode::Auto;
-        settings.unicode = UnicodeMode::Auto;
+    fn presentation_presets_and_overrides_shape_runtime_defaults_unit() {
+        struct Case<'a> {
+            label: &'a str,
+            defaults: &'a [(&'a str, &'a str)],
+            file: &'a [(&'a str, &'a str)],
+            session: &'a [(&'a str, &'a str)],
+            mode: RenderMode,
+            unicode: UnicodeMode,
+            color: ColorMode,
+            frame: SectionFrameStyle,
+            border: TableBorderStyle,
+            messages: MessageLayout,
+            simple_prompt: bool,
+            intro: ReplIntroStyle,
+            help: HelpLayout,
+        }
 
-        crate::cli::apply_render_settings_from_config(&mut settings, &config);
+        let cases = [
+            Case {
+                label: "expressive defaults",
+                defaults: &[("ui.presentation", "expressive")],
+                file: &[],
+                session: &[],
+                mode: RenderMode::Auto,
+                unicode: UnicodeMode::Auto,
+                color: ColorMode::Auto,
+                frame: SectionFrameStyle::TopBottom,
+                border: TableBorderStyle::Round,
+                messages: MessageLayout::Grouped,
+                simple_prompt: false,
+                intro: ReplIntroStyle::Full,
+                help: HelpLayout::Full,
+            },
+            Case {
+                label: "compact defaults",
+                defaults: &[("ui.presentation", "compact")],
+                file: &[],
+                session: &[],
+                mode: RenderMode::Auto,
+                unicode: UnicodeMode::Never,
+                color: ColorMode::Auto,
+                frame: SectionFrameStyle::Top,
+                border: TableBorderStyle::Square,
+                messages: MessageLayout::Grouped,
+                simple_prompt: true,
+                intro: ReplIntroStyle::Compact,
+                help: HelpLayout::Compact,
+            },
+            Case {
+                label: "austere defaults",
+                defaults: &[("ui.presentation", "austere")],
+                file: &[],
+                session: &[],
+                mode: RenderMode::Plain,
+                unicode: UnicodeMode::Never,
+                color: ColorMode::Never,
+                frame: SectionFrameStyle::None,
+                border: TableBorderStyle::Square,
+                messages: MessageLayout::Minimal,
+                simple_prompt: true,
+                intro: ReplIntroStyle::Minimal,
+                help: HelpLayout::Minimal,
+            },
+            Case {
+                label: "compact prompt/message overrides",
+                defaults: &[("ui.presentation", "compact")],
+                file: &[
+                    ("repl.simple_prompt", "false"),
+                    ("ui.messages.layout", "minimal"),
+                ],
+                session: &[],
+                mode: RenderMode::Auto,
+                unicode: UnicodeMode::Never,
+                color: ColorMode::Auto,
+                frame: SectionFrameStyle::Top,
+                border: TableBorderStyle::Square,
+                messages: MessageLayout::Minimal,
+                simple_prompt: false,
+                intro: ReplIntroStyle::Compact,
+                help: HelpLayout::Compact,
+            },
+            Case {
+                label: "austere explicit render overrides",
+                defaults: &[("ui.presentation", "austere")],
+                file: &[
+                    ("ui.mode", "rich"),
+                    ("ui.unicode.mode", "always"),
+                    ("ui.color.mode", "always"),
+                    ("ui.chrome.frame", "top"),
+                    ("ui.table.border", "round"),
+                ],
+                session: &[],
+                mode: RenderMode::Rich,
+                unicode: UnicodeMode::Always,
+                color: ColorMode::Always,
+                frame: SectionFrameStyle::Top,
+                border: TableBorderStyle::Round,
+                messages: MessageLayout::Minimal,
+                simple_prompt: true,
+                intro: ReplIntroStyle::Minimal,
+                help: HelpLayout::Minimal,
+            },
+            Case {
+                label: "austere explicit intro override",
+                defaults: &[("ui.presentation", "austere")],
+                file: &[],
+                session: &[("repl.intro", "full")],
+                mode: RenderMode::Plain,
+                unicode: UnicodeMode::Never,
+                color: ColorMode::Never,
+                frame: SectionFrameStyle::None,
+                border: TableBorderStyle::Square,
+                messages: MessageLayout::Minimal,
+                simple_prompt: true,
+                intro: ReplIntroStyle::Full,
+                help: HelpLayout::Minimal,
+            },
+        ];
 
-        assert_eq!(settings.mode, RenderMode::Plain);
-        assert_eq!(settings.unicode, UnicodeMode::Never);
-        assert_eq!(settings.color, ColorMode::Never);
-        assert_eq!(settings.chrome_frame, SectionFrameStyle::None);
-        assert_eq!(settings.table_border, TableBorderStyle::Square);
+        for case in cases {
+            let config = resolved_config(case.defaults, case.file, case.session);
+            let settings = auto_settings_from_config(&config);
+
+            assert_eq!(settings.mode, case.mode, "{}", case.label);
+            assert_eq!(settings.unicode, case.unicode, "{}", case.label);
+            assert_eq!(settings.color, case.color, "{}", case.label);
+            assert_eq!(settings.chrome_frame, case.frame, "{}", case.label);
+            assert_eq!(section_frame_style(&config), case.frame, "{}", case.label);
+            assert_eq!(settings.table_border, case.border, "{}", case.label);
+            assert_eq!(message_layout(&config), case.messages, "{}", case.label);
+            assert_eq!(
+                repl_simple_prompt(&config),
+                case.simple_prompt,
+                "{}",
+                case.label
+            );
+            assert_eq!(intro_style(&config), case.intro, "{}", case.label);
+            assert_eq!(help_layout(&config), case.help, "{}", case.label);
+        }
     }
 
     #[test]
-    fn explicit_render_mode_beats_austere_preset_unit() {
-        let config = resolved_config(
-            &[("ui.presentation", "austere")],
-            &[
-                ("ui.mode", "rich"),
-                ("ui.unicode.mode", "always"),
-                ("ui.color.mode", "always"),
-                ("ui.chrome.frame", "top"),
-                ("ui.table.border", "round"),
-            ],
-            &[],
-        );
-        let mut settings = RenderSettings::test_plain(crate::core::output::OutputFormat::Auto);
-        settings.mode = RenderMode::Auto;
-        settings.unicode = UnicodeMode::Auto;
-        settings.color = ColorMode::Auto;
-
-        crate::cli::apply_render_settings_from_config(&mut settings, &config);
-
-        assert_eq!(settings.mode, RenderMode::Rich);
-        assert_eq!(settings.unicode, UnicodeMode::Always);
-        assert_eq!(settings.color, ColorMode::Always);
-        assert_eq!(settings.chrome_frame, SectionFrameStyle::Top);
-        assert_eq!(settings.table_border, TableBorderStyle::Round);
-    }
-
-    #[test]
-    fn expressive_presentation_prefers_stronger_chrome_by_default_unit() {
-        let config = resolved_config(&[("ui.presentation", "expressive")], &[], &[]);
-        assert_eq!(section_frame_style(&config), SectionFrameStyle::TopBottom);
-        let mut settings = RenderSettings::test_plain(crate::core::output::OutputFormat::Auto);
-        crate::cli::apply_render_settings_from_config(&mut settings, &config);
-        assert_eq!(settings.table_border, TableBorderStyle::Round);
-    }
-
-    #[test]
-    fn compact_presentation_prefers_simple_prompt_and_grouped_messages_unit() {
-        let config = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
-        let mut settings = RenderSettings::test_plain(crate::core::output::OutputFormat::Auto);
-        settings.unicode = UnicodeMode::Auto;
-
-        crate::cli::apply_render_settings_from_config(&mut settings, &config);
-
-        assert!(repl_simple_prompt(&config));
-        assert_eq!(message_layout(&config), MessageLayout::Grouped);
-        assert_eq!(settings.unicode, UnicodeMode::Never);
-        assert_eq!(settings.table_border, TableBorderStyle::Square);
-    }
-
-    #[test]
-    fn austere_presentation_prefers_minimal_messages_unit() {
-        let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-
-        assert_eq!(message_layout(&config), MessageLayout::Minimal);
-    }
-
-    #[test]
-    fn explicit_prompt_and_message_settings_beat_presentation_unit() {
-        let config = resolved_config(
-            &[("ui.presentation", "compact")],
-            &[
-                ("repl.simple_prompt", "false"),
-                ("ui.messages.layout", "minimal"),
-            ],
-            &[],
-        );
-
-        assert!(!repl_simple_prompt(&config));
-        assert_eq!(message_layout(&config), MessageLayout::Minimal);
-    }
-
-    #[test]
-    fn austere_presentation_keeps_intro_by_default_unit() {
-        let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert_eq!(intro_style(&config), ReplIntroStyle::Minimal);
-    }
-
-    #[test]
-    fn explicit_intro_beats_austere_presentation_unit() {
-        let config = resolved_config(
-            &[("ui.presentation", "austere")],
-            &[],
-            &[("repl.intro", "full")],
-        );
-        assert_eq!(intro_style(&config), ReplIntroStyle::Full);
-    }
-
-    #[test]
-    fn explicit_intro_style_none_disables_intro_unit() {
+    fn explicit_intro_and_input_mode_overrides_are_respected_unit() {
         let config = resolved_config(&[], &[("repl.intro", "none")], &[]);
         assert_eq!(intro_style(&config), ReplIntroStyle::None);
-    }
 
-    #[test]
-    fn explicit_repl_input_mode_is_resolved_unit() {
         let config = resolved_config(&[], &[], &[]);
         assert_eq!(repl_input_mode(&config), ReplInputMode::Auto);
 
@@ -480,59 +524,28 @@ mod tests {
     }
 
     #[test]
-    fn compact_presentation_prefers_compact_help_layout_unit() {
-        let config = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
-        assert_eq!(help_layout(&config), HelpLayout::Compact);
-    }
-
-    #[test]
-    fn austere_presentation_prefers_minimal_help_layout_unit() {
-        let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert_eq!(help_layout(&config), HelpLayout::Minimal);
-    }
-
-    #[test]
-    fn compact_presentation_prefers_minimal_intro_style_unit() {
-        let config = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
-        assert_eq!(intro_style(&config), ReplIntroStyle::Compact);
+    fn intro_verbosity_adjustment_and_overview_visibility_cover_compact_and_austere_unit() {
+        let compact = resolved_config(&[("ui.presentation", "compact")], &[], &[]);
+        let compact_intro = intro_style(&compact);
+        assert_eq!(compact_intro, ReplIntroStyle::Compact);
         assert!(repl_intro_includes_overview(intro_style_with_verbosity(
-            intro_style(&config),
-            MessageLevel::Success
+            compact_intro,
+            MessageLevel::Success,
         )));
-    }
 
-    #[test]
-    fn austere_presentation_hides_intro_overview_unit() {
-        let config = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert!(!repl_intro_includes_overview(intro_style_with_verbosity(
-            intro_style(&config),
-            MessageLevel::Success
-        )));
-        assert!(repl_intro_includes_overview(intro_style_with_verbosity(
-            intro_style(&config),
-            MessageLevel::Info
-        )));
-    }
-
-    #[test]
-    fn intro_verbosity_adjustment_bumps_and_suppresses_levels_unit() {
         let austere = resolved_config(&[("ui.presentation", "austere")], &[], &[]);
-        assert_eq!(
-            intro_style_with_verbosity(intro_style(&austere), MessageLevel::Success),
-            ReplIntroStyle::Minimal
-        );
-        assert_eq!(
-            intro_style_with_verbosity(intro_style(&austere), MessageLevel::Info),
-            ReplIntroStyle::Compact
-        );
-        assert_eq!(
-            intro_style_with_verbosity(intro_style(&austere), MessageLevel::Trace),
-            ReplIntroStyle::Full
-        );
-        assert_eq!(
-            intro_style_with_verbosity(intro_style(&austere), MessageLevel::Warning),
-            ReplIntroStyle::None
-        );
+        let austere_intro = intro_style(&austere);
+        assert_eq!(austere_intro, ReplIntroStyle::Minimal);
+        for (verbosity, expected_style, expected_overview) in [
+            (MessageLevel::Success, ReplIntroStyle::Minimal, false),
+            (MessageLevel::Info, ReplIntroStyle::Compact, true),
+            (MessageLevel::Trace, ReplIntroStyle::Full, true),
+            (MessageLevel::Warning, ReplIntroStyle::None, false),
+        ] {
+            let adjusted = intro_style_with_verbosity(austere_intro, verbosity);
+            assert_eq!(adjusted, expected_style);
+            assert_eq!(repl_intro_includes_overview(adjusted), expected_overview);
+        }
     }
 
     #[test]
@@ -576,17 +589,18 @@ mod tests {
     }
 
     #[test]
-    fn derived_help_level_maps_quiet_and_verbose_flags_unit() {
-        assert_eq!(derived_help_level(0, 0), HelpLevel::Normal);
-        assert_eq!(derived_help_level(1, 0), HelpLevel::Verbose);
-        assert_eq!(derived_help_level(2, 0), HelpLevel::Verbose);
-        assert_eq!(derived_help_level(0, 1), HelpLevel::Tiny);
-        assert_eq!(derived_help_level(0, 2), HelpLevel::None);
-        assert_eq!(derived_help_level(1, 1), HelpLevel::Normal);
-    }
+    fn help_level_derivation_and_explicit_override_unit() {
+        for (verbose, quiet, expected) in [
+            (0, 0, HelpLevel::Normal),
+            (1, 0, HelpLevel::Verbose),
+            (2, 0, HelpLevel::Verbose),
+            (0, 1, HelpLevel::Tiny),
+            (0, 2, HelpLevel::None),
+            (1, 1, HelpLevel::Normal),
+        ] {
+            assert_eq!(derived_help_level(verbose, quiet), expected);
+        }
 
-    #[test]
-    fn explicit_help_level_beats_invocation_flags_unit() {
         let config = resolved_config(
             &[("ui.presentation", "expressive")],
             &[("ui.help.level", "tiny")],

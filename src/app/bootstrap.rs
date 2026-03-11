@@ -1,3 +1,21 @@
+//! App bootstrap wiring for config, logging, and startup state.
+//!
+//! This module exists to gather the steps that must happen before the main host
+//! can dispatch commands: resolve config, build runtime state, derive logging
+//! settings, and assemble the initial app session/runtime objects.
+//!
+//! High-level flow:
+//!
+//! - convert CLI/runtime inputs into a config-resolution request
+//! - resolve the effective config and derive presentation/logging state
+//! - build the startup-time app runtime and session objects
+//!
+//! Contract:
+//!
+//! - bootstrap-time assembly lives here
+//! - steady-state command execution belongs in `app::dispatch` and `repl`
+//! - config precedence still belongs to `crate::config`, not to this module
+
 use crate::config::{
     ConfigLayer, ConfigValue, ResolveOptions, ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults,
     RuntimeLoadOptions, build_runtime_pipeline,
@@ -6,7 +24,7 @@ use crate::ui::messages::MessageLevel;
 use miette::{Result, WrapErr};
 
 use crate::app::logging::{DeveloperLoggingConfig, FileLoggingConfig, parse_level_filter};
-use crate::app::{AppState, AppStateInit, RuntimeContext, TerminalKind};
+use crate::app::{RuntimeContext, TerminalKind};
 use crate::cli::Cli;
 use crate::ui::presentation::build_presentation_defaults_layer;
 
@@ -84,10 +102,6 @@ pub(crate) fn build_runtime_context(
     RuntimeContext::new(profile_override, terminal_kind, std::env::var("TERM").ok())
 }
 
-pub(crate) fn build_app_state(init: AppStateInit) -> AppState {
-    AppState::new(init)
-}
-
 pub(crate) fn build_logging_config(
     config: &ResolvedConfig,
     debug_verbosity: u8,
@@ -103,15 +117,12 @@ pub(crate) fn build_logging_config(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(std::path::PathBuf::from);
-        path.map(|path| FileLoggingConfig { path, level })
+        path.map(|path| FileLoggingConfig::new(path, level))
     } else {
         None
     };
 
-    DeveloperLoggingConfig {
-        debug_count: debug_verbosity,
-        file,
-    }
+    DeveloperLoggingConfig::new(debug_verbosity).with_file(file)
 }
 
 pub(crate) fn message_verbosity_from_config(config: &ResolvedConfig) -> MessageLevel {
@@ -148,10 +159,9 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
         request.session_layer.clone(),
     );
 
-    let options = ResolveOptions {
-        profile_override: request.profile_override,
-        terminal: request.terminal,
-    };
+    let options = ResolveOptions::new()
+        .with_profile_override(request.profile_override)
+        .with_terminal_override(request.terminal);
 
     // Presentation is compiled into a normal config layer instead of being interpreted later in
     // the UI. We first resolve the base config to discover ui.presentation through the normal

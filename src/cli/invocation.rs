@@ -492,23 +492,39 @@ mod tests {
     use crate::ui::presentation::HelpLevel;
     use std::ffi::OsString;
 
-    #[test]
-    fn strips_invocation_flags_and_preserves_command_tokens() {
-        let scanned = scan_command_tokens(&[
-            "ldap".to_string(),
-            "user".to_string(),
-            "oistes".to_string(),
-            "--json".to_string(),
-            "-vv".to_string(),
-            "--plugin-provider".to_string(),
-            "uio-ldap".to_string(),
-        ])
-        .expect("scan should succeed");
+    fn scan(tokens: &[&str]) -> super::ScannedCommandTokens {
+        scan_command_tokens(
+            &tokens
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>(),
+        )
+        .expect("scan should succeed")
+    }
 
-        assert_eq!(
-            scanned.tokens,
-            vec!["ldap".to_string(), "user".to_string(), "oistes".to_string(),]
-        );
+    fn scan_error(tokens: &[&str]) -> String {
+        scan_command_tokens(
+            &tokens
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>(),
+        )
+        .expect_err("scan should fail")
+        .to_string()
+    }
+
+    #[test]
+    fn scan_command_tokens_filters_host_flags_and_preserves_command_boundaries_unit() {
+        let scanned = scan(&[
+            "ldap",
+            "user",
+            "oistes",
+            "--json",
+            "-vv",
+            "--plugin-provider",
+            "uio-ldap",
+        ]);
+        assert_eq!(scanned.tokens, vec!["ldap", "user", "oistes"]);
         assert_eq!(
             scanned.invocation,
             InvocationOptions {
@@ -523,77 +539,106 @@ mod tests {
                 plugin_provider: Some("uio-ldap".to_string()),
             }
         );
+
+        let passthrough = scan(&["ldap", "--", "--json", "-vv"]);
+        assert_eq!(passthrough.tokens, vec!["ldap", "--", "--json", "-vv"]);
+        assert_eq!(passthrough.invocation, InvocationOptions::default());
+
+        let cache = scan(&["ldap", "user", "alice", "--cache"]);
+        assert_eq!(cache.tokens, vec!["ldap", "user", "alice"]);
+        assert!(cache.invocation.cache);
+
+        let non_host_short = scan(&["ldap", "-x", "--json", "alice"]);
+        assert_eq!(non_host_short.tokens, vec!["ldap", "-x", "alice"]);
+        assert_eq!(non_host_short.invocation.format, Some(OutputFormat::Json));
+
+        let traced = scan_command_tokens_with_trace(
+            &["ldap", "--json", "user", "alice"]
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>(),
+        )
+        .expect("trace scan should succeed");
+        assert_eq!(traced.tokens, vec!["ldap", "user", "alice"]);
+        assert_eq!(traced.kept_indices, vec![0, 2, 3]);
     }
 
     #[test]
-    fn stops_host_scanning_after_double_dash() {
-        let scanned = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--".to_string(),
-            "--json".to_string(),
-            "-vv".to_string(),
-        ])
-        .expect("scan should succeed");
-
+    fn scan_command_tokens_accept_aliases_inline_assignments_and_short_clusters_unit() {
+        let explicit_aliases = scan(&["ldap", "--plain", "--color", "never", "--ascii"]);
+        assert_eq!(explicit_aliases.invocation.mode, Some(RenderMode::Plain));
+        assert_eq!(explicit_aliases.invocation.color, Some(ColorMode::Never));
         assert_eq!(
-            scanned.tokens,
-            vec![
-                "ldap".to_string(),
-                "--".to_string(),
-                "--json".to_string(),
-                "-vv".to_string(),
-            ]
+            explicit_aliases.invocation.unicode,
+            Some(UnicodeMode::Never)
         );
-        assert_eq!(scanned.invocation, InvocationOptions::default());
+
+        let inline = scan(&[
+            "ldap",
+            "--format=value",
+            "--mode=rich",
+            "--color=always",
+            "--unicode=always",
+        ]);
+        assert_eq!(inline.invocation.format, Some(OutputFormat::Value));
+        assert_eq!(inline.invocation.mode, Some(RenderMode::Rich));
+        assert_eq!(inline.invocation.color, Some(ColorMode::Always));
+        assert_eq!(inline.invocation.unicode, Some(UnicodeMode::Always));
+
+        let clustered = scan(&["ldap", "-vvqd", "user"]);
+        assert_eq!(clustered.invocation.verbose, 2);
+        assert_eq!(clustered.invocation.quiet, 1);
+        assert_eq!(clustered.invocation.debug, 1);
+        assert_eq!(clustered.tokens, vec!["ldap", "user"]);
+
+        let guide = scan(&["ldap", "--guide"]);
+        assert_eq!(guide.invocation.format, Some(OutputFormat::Guide));
     }
 
     #[test]
-    fn rejects_conflicting_format_flags() {
-        let err = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--json".to_string(),
-            "--format".to_string(),
-            "table".to_string(),
-        ])
-        .expect_err("conflicting flags should fail");
-        assert!(err.to_string().contains("conflicting output format flags"));
+    fn scan_command_tokens_report_conflicts_and_missing_values_unit() {
+        for (tokens, expected) in [
+            (
+                vec!["ldap", "--json", "--format", "table"],
+                "conflicting output format flags",
+            ),
+            (
+                vec!["ldap", "--json", "--format", "json"],
+                "conflicting output format flags",
+            ),
+            (
+                vec!["ldap", "--plugin-provider", "one", "--plugin-provider=two"],
+                "specified more than once",
+            ),
+            (vec!["ldap", "--mode", "wat"], "unknown render mode"),
+            (
+                vec!["ldap", "--plugin-provider", "   "],
+                "expects a non-empty value",
+            ),
+            (vec!["ldap", "--format"], "`--format` expects a value"),
+            (vec!["ldap", "--color"], "`--color` expects a value"),
+            (
+                vec!["ldap", "--plain", "--mode", "rich"],
+                "conflicting render mode flags",
+            ),
+            (
+                vec!["ldap", "--color", "never", "--color=always"],
+                "conflicting color mode flags",
+            ),
+            (
+                vec!["ldap", "--ascii", "--unicode", "always"],
+                "conflicting unicode mode flags",
+            ),
+        ] {
+            assert!(
+                scan_error(&tokens).contains(expected),
+                "expected {expected:?} for tokens {tokens:?}"
+            );
+        }
     }
 
     #[test]
-    fn supports_explicit_render_and_ascii_aliases() {
-        let scanned = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--plain".to_string(),
-            "--color".to_string(),
-            "never".to_string(),
-            "--ascii".to_string(),
-        ])
-        .expect("scan should succeed");
-
-        assert_eq!(scanned.invocation.mode, Some(RenderMode::Plain));
-        assert_eq!(scanned.invocation.color, Some(ColorMode::Never));
-        assert_eq!(scanned.invocation.unicode, Some(UnicodeMode::Never));
-    }
-
-    #[test]
-    fn parses_repl_cache_flag_without_touching_command_tokens() {
-        let scanned = scan_command_tokens(&[
-            "ldap".to_string(),
-            "user".to_string(),
-            "alice".to_string(),
-            "--cache".to_string(),
-        ])
-        .expect("scan should succeed");
-
-        assert_eq!(
-            scanned.tokens,
-            vec!["ldap".to_string(), "user".to_string(), "alice".to_string()]
-        );
-        assert!(scanned.invocation.cache);
-    }
-
-    #[test]
-    fn invocation_help_view_contains_common_section_unit() {
+    fn invocation_help_and_hidden_completion_flags_follow_visibility_and_one_shots_unit() {
         let rendered = invocation_help_view();
         assert!(!rendered.common_invocation_options.is_empty());
         assert!(
@@ -608,15 +653,17 @@ mod tests {
                 .iter()
                 .any(|entry| entry.name.contains("--json"))
         );
-    }
+        assert!(INVOCATION_HELP_SECTION.contains("--cache"));
+        assert!(INVOCATION_HELP_SECTION.contains("interactive REPL"));
+        assert!(INVOCATION_HELP_SECTION.contains("--guide"));
+        assert!(INVOCATION_HELP_SECTION.contains("guide|json|table"));
 
-    #[test]
-    fn invocation_help_requires_verbose_unit() {
         assert!(!should_show_invocation_help(&InvocationOptions::default()));
         assert!(should_show_invocation_help(&InvocationOptions {
             verbose: 1,
             ..InvocationOptions::default()
         }));
+
         let mut hidden = GuideView::from_text("Usage: osp [COMMAND]\n");
         extend_with_invocation_help(&mut hidden, HelpLevel::Normal);
         assert!(hidden.common_invocation_options.is_empty());
@@ -624,90 +671,39 @@ mod tests {
         let mut visible = GuideView::from_text("Usage: osp [COMMAND]\n");
         extend_with_invocation_help(&mut visible, HelpLevel::Verbose);
         assert!(!visible.common_invocation_options.is_empty());
-    }
 
-    #[test]
-    fn hidden_completion_flags_follow_verbose_and_used_one_shots_unit() {
         let hidden = hidden_invocation_completion_flags(&InvocationOptions::default());
         assert!(hidden.contains("--guide"));
         assert!(hidden.contains("--json"));
         assert!(hidden.contains("--plugin-provider"));
         assert!(hidden.contains("--debug"));
 
-        let hidden = hidden_invocation_completion_flags(&InvocationOptions {
+        let verbose = hidden_invocation_completion_flags(&InvocationOptions {
             verbose: 1,
             ..InvocationOptions::default()
         });
-        assert!(!hidden.contains("--json"));
-        assert!(!hidden.contains("--plugin-provider"));
-        assert!(!hidden.contains("--debug"));
+        assert!(!verbose.contains("--json"));
+        assert!(!verbose.contains("--plugin-provider"));
+        assert!(!verbose.contains("--debug"));
 
-        let hidden = hidden_invocation_completion_flags(&InvocationOptions {
+        let used_one_shots = hidden_invocation_completion_flags(&InvocationOptions {
             verbose: 1,
             format: Some(OutputFormat::Json),
             cache: true,
             plugin_provider: Some("ldap".to_string()),
             ..InvocationOptions::default()
         });
-        assert!(hidden.contains("--format"));
-        assert!(hidden.contains("--guide"));
-        assert!(hidden.contains("--json"));
-        assert!(hidden.contains("--table"));
-        assert!(hidden.contains("--cache"));
-        assert!(hidden.contains("--plugin-provider"));
-        assert!(!hidden.contains("--debug"));
+        assert!(used_one_shots.contains("--format"));
+        assert!(used_one_shots.contains("--guide"));
+        assert!(used_one_shots.contains("--json"));
+        assert!(used_one_shots.contains("--table"));
+        assert!(used_one_shots.contains("--cache"));
+        assert!(used_one_shots.contains("--plugin-provider"));
+        assert!(!used_one_shots.contains("--debug"));
     }
 
     #[test]
-    fn trace_scanner_reports_kept_token_indices() {
-        let traced = scan_command_tokens_with_trace(&[
-            "ldap".to_string(),
-            "--json".to_string(),
-            "user".to_string(),
-            "alice".to_string(),
-        ])
-        .expect("trace scan should succeed");
-
-        assert_eq!(traced.tokens, vec!["ldap", "user", "alice"]);
-        assert_eq!(traced.kept_indices, vec![0, 2, 3]);
-    }
-
-    #[test]
-    fn duplicate_plugin_provider_is_rejected() {
-        let err = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--plugin-provider".to_string(),
-            "one".to_string(),
-            "--plugin-provider=two".to_string(),
-        ])
-        .expect_err("duplicate provider should fail");
-        assert!(err.to_string().contains("specified more than once"));
-    }
-
-    #[test]
-    fn invalid_mode_and_empty_provider_value_are_rejected() {
-        let err =
-            scan_command_tokens(&["ldap".to_string(), "--mode".to_string(), "wat".to_string()])
-                .expect_err("invalid mode should fail");
-        assert!(err.to_string().contains("unknown render mode"));
-
-        let err = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--plugin-provider".to_string(),
-            "   ".to_string(),
-        ])
-        .expect_err("empty provider should fail");
-        assert!(err.to_string().contains("expects a non-empty value"));
-    }
-
-    #[test]
-    fn invocation_help_section_mentions_cache_scope() {
-        assert!(INVOCATION_HELP_SECTION.contains("--cache"));
-        assert!(INVOCATION_HELP_SECTION.contains("interactive REPL"));
-    }
-
-    #[test]
-    fn scan_cli_argv_preserves_binary_and_strips_invocation_flags() {
+    fn scan_cli_argv_preserves_binary_for_empty_and_flag_only_invocations_unit() {
         let scanned = scan_cli_argv(&[
             OsString::from("osp"),
             OsString::from("--json"),
@@ -715,7 +711,6 @@ mod tests {
             OsString::from("show"),
         ])
         .expect("cli argv scan should succeed");
-
         assert_eq!(
             scanned.argv,
             vec![
@@ -725,139 +720,19 @@ mod tests {
             ]
         );
         assert_eq!(scanned.invocation.format, Some(OutputFormat::Json));
-    }
 
-    #[test]
-    fn scan_cli_argv_handles_empty_input() {
-        let scanned = scan_cli_argv(&[]).expect("empty argv should scan");
-        assert!(scanned.argv.is_empty());
-        assert_eq!(scanned.invocation, InvocationOptions::default());
-    }
+        let empty = scan_cli_argv(&[]).expect("empty argv should scan");
+        assert!(empty.argv.is_empty());
+        assert_eq!(empty.invocation, InvocationOptions::default());
 
-    #[test]
-    fn supports_inline_assignment_forms_for_render_settings() {
-        let scanned = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--format=value".to_string(),
-            "--mode=rich".to_string(),
-            "--color=always".to_string(),
-            "--unicode=always".to_string(),
-        ])
-        .expect("scan should succeed");
-
-        assert_eq!(scanned.invocation.format, Some(OutputFormat::Value));
-        assert_eq!(scanned.invocation.mode, Some(RenderMode::Rich));
-        assert_eq!(scanned.invocation.color, Some(ColorMode::Always));
-        assert_eq!(scanned.invocation.unicode, Some(UnicodeMode::Always));
-    }
-
-    #[test]
-    fn short_clusters_accumulate_verbose_quiet_and_debug_counts() {
-        let scanned =
-            scan_command_tokens(&["ldap".to_string(), "-vvqd".to_string(), "user".to_string()])
-                .expect("scan should succeed");
-
-        assert_eq!(scanned.invocation.verbose, 2);
-        assert_eq!(scanned.invocation.quiet, 1);
-        assert_eq!(scanned.invocation.debug, 1);
-        assert_eq!(scanned.tokens, vec!["ldap".to_string(), "user".to_string()]);
-    }
-
-    #[test]
-    fn missing_values_for_named_flags_are_rejected() {
-        let err = scan_command_tokens(&["ldap".to_string(), "--format".to_string()])
-            .expect_err("missing format value should fail");
-        assert!(err.to_string().contains("`--format` expects a value"));
-
-        let err = scan_command_tokens(&["ldap".to_string(), "--color".to_string()])
-            .expect_err("missing color value should fail");
-        assert!(err.to_string().contains("`--color` expects a value"));
-    }
-
-    #[test]
-    fn scan_cli_argv_can_strip_only_invocation_flags() {
-        let scanned = scan_cli_argv(&[
+        let only_flags = scan_cli_argv(&[
             OsString::from("osp"),
             OsString::from("--json"),
             OsString::from("-vv"),
         ])
         .expect("cli argv scan should succeed");
-
-        assert_eq!(scanned.argv, vec![OsString::from("osp")]);
-        assert_eq!(scanned.invocation.format, Some(OutputFormat::Json));
-        assert_eq!(scanned.invocation.verbose, 2);
-    }
-
-    #[test]
-    fn non_host_short_flags_are_left_in_command_tokens() {
-        let scanned = scan_command_tokens(&[
-            "ldap".to_string(),
-            "-x".to_string(),
-            "--json".to_string(),
-            "alice".to_string(),
-        ])
-        .expect("scan should succeed");
-
-        assert_eq!(
-            scanned.tokens,
-            vec!["ldap".to_string(), "-x".to_string(), "alice".to_string()]
-        );
-        assert_eq!(scanned.invocation.format, Some(OutputFormat::Json));
-    }
-
-    #[test]
-    fn conflicting_mode_color_and_unicode_flags_are_rejected() {
-        let err = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--plain".to_string(),
-            "--mode".to_string(),
-            "rich".to_string(),
-        ])
-        .expect_err("conflicting mode flags should fail");
-        assert!(err.to_string().contains("conflicting render mode flags"));
-
-        let err = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--color".to_string(),
-            "never".to_string(),
-            "--color=always".to_string(),
-        ])
-        .expect_err("conflicting color flags should fail");
-        assert!(err.to_string().contains("conflicting color mode flags"));
-
-        let err = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--ascii".to_string(),
-            "--unicode".to_string(),
-            "always".to_string(),
-        ])
-        .expect_err("conflicting unicode flags should fail");
-        assert!(err.to_string().contains("conflicting unicode mode flags"));
-    }
-
-    #[test]
-    fn duplicate_format_aliases_are_rejected_even_when_equivalent() {
-        let err = scan_command_tokens(&[
-            "ldap".to_string(),
-            "--json".to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-        ])
-        .expect_err("duplicate format selectors should fail");
-        assert!(err.to_string().contains("conflicting output format flags"));
-    }
-
-    #[test]
-    fn guide_alias_selects_guide_output_format_unit() {
-        let scanned = scan_command_tokens(&["ldap".to_string(), "--guide".to_string()])
-            .expect("guide alias should parse");
-
-        assert_eq!(scanned.invocation.format, Some(OutputFormat::Guide));
-    }
-
-    #[test]
-    fn invocation_help_mentions_guide_alias_unit() {
-        assert!(INVOCATION_HELP_SECTION.contains("--guide"));
-        assert!(INVOCATION_HELP_SECTION.contains("guide|json|table"));
+        assert_eq!(only_flags.argv, vec![OsString::from("osp")]);
+        assert_eq!(only_flags.invocation.format, Some(OutputFormat::Json));
+        assert_eq!(only_flags.invocation.verbose, 2);
     }
 }

@@ -1,3 +1,13 @@
+//! Declarative builders for the completion engine's immutable tree model.
+//!
+//! Public API shape:
+//!
+//! - describe command surfaces with [`CommandSpec`]
+//! - lower them into a cached [`crate::completion::CompletionTree`] with
+//!   [`CompletionTreeBuilder`]
+//! - keep the resulting tree as plain data so the engine and embedders can
+//!   reuse it without retaining builder state
+
 use std::collections::BTreeMap;
 
 use crate::completion::model::{
@@ -23,7 +33,7 @@ pub struct CommandSpec {
 }
 
 impl CommandSpec {
-    /// Creates a command spec with the given name.
+    /// Starts a declarative command spec with the given command name.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -31,13 +41,13 @@ impl CommandSpec {
         }
     }
 
-    /// Sets the display tooltip for this command.
+    /// Attaches the description shown alongside this command in completion UIs.
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
-    /// Sets the hidden sort key for this command.
+    /// Attaches a hidden sort key used to stabilize menu ordering.
     pub fn sort(mut self, sort: impl Into<String>) -> Self {
         self.sort = Some(sort.into());
         self
@@ -49,7 +59,7 @@ impl CommandSpec {
         self
     }
 
-    /// Appends positional argument definitions.
+    /// Extends the command with positional argument definitions.
     pub fn args(mut self, args: impl IntoIterator<Item = ArgNode>) -> Self {
         self.args.extend(args);
         self
@@ -61,7 +71,7 @@ impl CommandSpec {
         self
     }
 
-    /// Extends the command with flag definitions.
+    /// Extends the command with multiple flag definitions.
     pub fn flags(mut self, flags: impl IntoIterator<Item = (String, FlagNode)>) -> Self {
         self.flags.extend(flags);
         self
@@ -73,7 +83,7 @@ impl CommandSpec {
         self
     }
 
-    /// Appends nested subcommands.
+    /// Extends the command with nested subcommands.
     pub fn subcommands(mut self, subcommands: impl IntoIterator<Item = CommandSpec>) -> Self {
         self.subcommands.extend(subcommands);
         self
@@ -82,14 +92,30 @@ impl CommandSpec {
 
 #[derive(Debug, Clone, Default)]
 /// Builds immutable completion trees from command and config metadata.
+///
+/// This is the canonical builder surface for completion-tree construction.
 pub struct CompletionTreeBuilder;
 
 impl CompletionTreeBuilder {
-    /// Build the immutable completion tree from higher-level command specs.
+    /// Builds an immutable completion tree from declarative command specs.
     ///
     /// The resulting structure is intentionally plain data so callers can cache
     /// it, augment it with plugin/provider hints, and pass it into the engine
     /// without keeping builder state alive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::{CommandSpec, CompletionTreeBuilder};
+    ///
+    /// let tree = CompletionTreeBuilder.build_from_specs(
+    ///     &[CommandSpec::new("ldap").tooltip("Directory lookups")],
+    ///     [("P".to_string(), "Project fields".to_string())],
+    /// );
+    ///
+    /// assert!(tree.root.children.contains_key("ldap"));
+    /// assert_eq!(tree.pipe_verbs.get("P").map(String::as_str), Some("Project fields"));
+    /// ```
     pub fn build_from_specs(
         &self,
         specs: &[CommandSpec],

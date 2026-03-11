@@ -1,3 +1,17 @@
+//! Buffered user-facing messages and their rendering helpers.
+//!
+//! This module exists so command execution can collect messages without
+//! deciding immediately how they should be shown. Callers push semantic levels
+//! into a [`MessageBuffer`], and the UI later renders that buffer in minimal or
+//! grouped form using the active theme and terminal settings.
+//!
+//! Contract:
+//!
+//! - this module owns message grouping and severity presentation
+//! - it should not own command execution or logging backends
+//! - callers should treat `MessageLevel` as user-facing severity, not as a
+//!   tracing subsystem
+
 use crate::ui::document::{Block, Document, LineBlock, LinePart};
 use crate::ui::inline::render_inline;
 use crate::ui::renderer::render_document;
@@ -34,7 +48,18 @@ pub enum MessageLevel {
 }
 
 impl MessageLevel {
-    /// Parses a message level from configuration or environment input.
+    /// Parses the message-level spellings accepted by config and environment
+    /// inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::MessageLevel;
+    ///
+    /// assert_eq!(MessageLevel::parse("warn"), Some(MessageLevel::Warning));
+    /// assert_eq!(MessageLevel::parse(" INFO "), Some(MessageLevel::Info));
+    /// assert_eq!(MessageLevel::parse("wat"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "error" => Some(MessageLevel::Error),
@@ -72,6 +97,14 @@ impl MessageLevel {
     }
 
     /// Returns the lowercase identifier used in environment-style output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::MessageLevel;
+    ///
+    /// assert_eq!(MessageLevel::Warning.as_env_str(), "warning");
+    /// ```
     pub fn as_env_str(self) -> &'static str {
         match self {
             MessageLevel::Error => "error",
@@ -113,7 +146,17 @@ pub enum MessageLayout {
 }
 
 impl MessageLayout {
-    /// Parses a message layout from configuration input.
+    /// Parses the message layout spellings accepted by configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::MessageLayout;
+    ///
+    /// assert_eq!(MessageLayout::parse("minimal"), Some(MessageLayout::Minimal));
+    /// assert_eq!(MessageLayout::parse("GROUPED"), Some(MessageLayout::Grouped));
+    /// assert_eq!(MessageLayout::parse("dense"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "minimal" => Some(Self::Minimal),
@@ -205,6 +248,22 @@ impl MessageBuffer {
     }
 
     /// Renders messages with the default plain grouped layout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::{MessageBuffer, MessageLevel};
+    ///
+    /// let mut messages = MessageBuffer::default();
+    /// messages.error("bad");
+    /// messages.success("done");
+    ///
+    /// let rendered = messages.render_grouped(MessageLevel::Success);
+    ///
+    /// assert!(rendered.contains("Errors"));
+    /// assert!(rendered.contains("- bad"));
+    /// assert!(rendered.contains("Success"));
+    /// ```
     pub fn render_grouped(&self, max_level: MessageLevel) -> String {
         let theme = crate::ui::theme::resolve_theme("plain");
         self.render_grouped_styled(
@@ -356,6 +415,15 @@ fn default_message_chrome_frame(layout: MessageLayout) -> SectionFrameStyle {
 }
 
 /// Adjusts a base verbosity level using `-v` and `-q` style counts.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ui::{MessageLevel, adjust_verbosity};
+///
+/// assert_eq!(adjust_verbosity(MessageLevel::Success, 1, 0), MessageLevel::Info);
+/// assert_eq!(adjust_verbosity(MessageLevel::Success, 0, 9), MessageLevel::Error);
+/// ```
 pub fn adjust_verbosity(base: MessageLevel, verbose: u8, quiet: u8) -> MessageLevel {
     let rank = base.as_rank() + verbose as i8 - quiet as i8;
     MessageLevel::from_rank(rank)

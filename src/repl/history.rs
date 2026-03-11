@@ -60,24 +60,23 @@ pub(crate) fn build_history_config(runtime: &AppRuntime, session: &AppSession) -
     let history_shell = session.history_shell.clone();
     session.sync_history_shell_context();
 
-    HistoryConfig {
-        path: Some(history_path),
-        max_entries: history_max_entries,
-        enabled: history_enabled,
-        dedupe: history_dedupe,
-        profile_scoped: history_profile_scoped,
-        exclude_patterns: history_exclude,
-        profile: Some(config.active_profile().to_string()),
-        terminal: Some(
+    HistoryConfig::builder()
+        .with_path(Some(history_path))
+        .with_max_entries(history_max_entries)
+        .with_enabled(history_enabled)
+        .with_dedupe(history_dedupe)
+        .with_profile_scoped(history_profile_scoped)
+        .with_exclude_patterns(history_exclude)
+        .with_profile(Some(config.active_profile().to_string()))
+        .with_terminal(Some(
             runtime
                 .context
                 .terminal_kind()
                 .as_config_terminal()
                 .to_string(),
-        ),
-        shell_context: history_shell,
-    }
-    .normalized()
+        ))
+        .with_shell_context(history_shell)
+        .build()
 }
 
 pub(crate) fn repl_history_enabled(config: &ResolvedConfig) -> bool {
@@ -406,18 +405,14 @@ mod tests {
     fn shared_history(enabled: bool) -> SharedHistory {
         let temp_dir = make_temp_dir("osp-cli-repl-history");
         SharedHistory::new(
-            HistoryConfig {
-                path: Some(temp_dir.join("history.jsonl")),
-                max_entries: 32,
-                enabled,
-                dedupe: false,
-                profile_scoped: false,
-                exclude_patterns: Vec::new(),
-                profile: None,
-                terminal: None,
-                shell_context: crate::repl::HistoryShellContext::default(),
-            }
-            .normalized(),
+            HistoryConfig::builder()
+                .with_path(Some(temp_dir.join("history.jsonl")))
+                .with_max_entries(32)
+                .with_enabled(enabled)
+                .with_dedupe(false)
+                .with_profile_scoped(false)
+                .with_shell_context(crate::repl::HistoryShellContext::default())
+                .build(),
         )
         .expect("history should initialize")
     }

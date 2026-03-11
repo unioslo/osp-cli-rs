@@ -298,12 +298,10 @@ fn command_spec_from_catalog(entry: &CommandCatalogEntry) -> Option<CommandSpec>
 fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
     let summary = if entry.about.trim().is_empty() {
         "Plugin command".to_string()
+    } else if entry.conflicted || entry.requires_selection {
+        provider_selection_summary(entry, Some(&entry.about))
     } else {
-        if entry.conflicted || entry.requires_selection {
-            provider_selection_summary(entry, Some(&entry.about))
-        } else {
-            entry.about.clone()
-        }
+        entry.about.clone()
     };
     let summary = entry
         .auth_hint()

@@ -1,3 +1,21 @@
+//! Developer logging bootstrap and reload support.
+//!
+//! This module exists to derive logging behavior from startup-time CLI/config
+//! inputs and apply it to the process-global tracing subscriber.
+//!
+//! Contract:
+//!
+//! - log-level parsing and subscriber wiring live here
+//! - callers should provide desired logging settings rather than configuring
+//!   tracing ad hoc throughout the app
+//!
+//! Public API shape:
+//!
+//! - small logging configs use concrete constructors/factories rather than an
+//!   abstract builder layer
+//! - [`DeveloperLoggingConfig::new`] creates the exact runtime baseline and
+//!   `with_*` setters refine optional outputs
+
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::{IsTerminal, Write};
@@ -16,24 +34,46 @@ static LOGGING_STATE: OnceLock<Option<LoggingState>> = OnceLock::new();
 
 /// File logging destination and minimum level.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FileLoggingConfig {
     pub path: PathBuf,
     pub level: LevelFilter,
 }
 
+impl FileLoggingConfig {
+    /// Creates a file logging destination with the provided minimum level.
+    pub fn new(path: PathBuf, level: LevelFilter) -> Self {
+        Self { path, level }
+    }
+}
+
 /// Logging settings derived from CLI startup state.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DeveloperLoggingConfig {
     pub debug_count: u8,
     pub file: Option<FileLoggingConfig>,
 }
 
+impl DeveloperLoggingConfig {
+    /// Creates developer logging settings with stderr verbosity only.
+    pub fn new(debug_count: u8) -> Self {
+        Self {
+            debug_count,
+            file: None,
+        }
+    }
+
+    /// Replaces the optional file logging destination.
+    pub fn with_file(mut self, file: Option<FileLoggingConfig>) -> Self {
+        self.file = file;
+        self
+    }
+}
+
 /// Derives the initial developer logging configuration from raw CLI arguments.
 pub fn bootstrap_logging_config(args: &[OsString]) -> DeveloperLoggingConfig {
-    DeveloperLoggingConfig {
-        debug_count: scan_debug_count(args),
-        file: None,
-    }
+    DeveloperLoggingConfig::new(scan_debug_count(args))
 }
 
 /// Initializes or reloads the process-global developer logging subscriber.
@@ -280,101 +320,78 @@ mod tests {
     use tracing_subscriber::filter::LevelFilter;
 
     #[test]
-    fn debug_count_maps_to_expected_levels() {
-        assert_eq!(map_debug_count(0), LevelFilter::WARN);
-        assert_eq!(map_debug_count(1), LevelFilter::INFO);
-        assert_eq!(map_debug_count(2), LevelFilter::DEBUG);
-        assert_eq!(map_debug_count(3), LevelFilter::TRACE);
-        assert_eq!(map_debug_count(9), LevelFilter::TRACE);
-    }
+    fn logging_level_parsing_and_debug_scanning_cover_supported_inputs_unit() {
+        for (count, expected) in [
+            (0, LevelFilter::WARN),
+            (1, LevelFilter::INFO),
+            (2, LevelFilter::DEBUG),
+            (3, LevelFilter::TRACE),
+            (9, LevelFilter::TRACE),
+        ] {
+            assert_eq!(map_debug_count(count), expected);
+        }
 
-    #[test]
-    fn parse_level_filter_recognizes_values() {
-        assert_eq!(parse_level_filter("warn"), Some(LevelFilter::WARN));
-        assert_eq!(parse_level_filter("WARNING"), Some(LevelFilter::WARN));
-        assert_eq!(parse_level_filter("info"), Some(LevelFilter::INFO));
-        assert_eq!(parse_level_filter("bad"), None);
-    }
+        for (value, expected) in [
+            ("warn", Some(LevelFilter::WARN)),
+            ("WARNING", Some(LevelFilter::WARN)),
+            ("info", Some(LevelFilter::INFO)),
+            (" error ", Some(LevelFilter::ERROR)),
+            ("debug", Some(LevelFilter::DEBUG)),
+            ("trace", Some(LevelFilter::TRACE)),
+            ("bad", None),
+        ] {
+            assert_eq!(parse_level_filter(value), expected);
+        }
 
-    #[test]
-    fn split_file_path_requires_file_name() {
-        assert!(split_file_path(Path::new("")).is_err());
-    }
-
-    #[test]
-    fn bootstrap_logging_config_counts_debug_flags() {
-        let config = bootstrap_logging_config(&[
+        let counted = bootstrap_logging_config(&[
             OsString::from("osp"),
             OsString::from("-dd"),
             OsString::from("plugins"),
             OsString::from("--debug"),
             OsString::from("list"),
         ]);
+        assert_eq!(counted.debug_count, 3);
+        assert!(counted.file.is_none());
 
-        assert_eq!(config.debug_count, 3);
-        assert!(config.file.is_none());
-    }
-
-    #[test]
-    fn split_file_path_defaults_to_current_directory_for_bare_name() {
-        let (dir, file_name) =
-            split_file_path(Path::new("osp.log")).expect("bare file name should be accepted");
-
-        assert!(dir.as_os_str().is_empty());
-        assert_eq!(file_name, "osp.log");
-    }
-
-    #[test]
-    fn bootstrap_logging_config_stops_scanning_after_double_dash() {
-        let config = bootstrap_logging_config(&[
+        let stopped = bootstrap_logging_config(&[
             OsString::from("osp"),
             OsString::from("-d"),
             OsString::from("--"),
             OsString::from("--debug"),
             OsString::from("-dd"),
         ]);
+        assert_eq!(stopped.debug_count, 1);
 
-        assert_eq!(config.debug_count, 1);
-    }
-
-    #[test]
-    fn bootstrap_logging_config_ignores_non_debug_short_flags() {
-        let config = bootstrap_logging_config(&[
+        let mixed = bootstrap_logging_config(&[
             OsString::from("osp"),
             OsString::from("-vqdd"),
             OsString::from("doctor"),
         ]);
-
-        assert_eq!(config.debug_count, 2);
+        assert_eq!(mixed.debug_count, 2);
     }
 
     #[test]
-    fn parse_level_filter_recognizes_error_debug_and_trace_aliases() {
-        assert_eq!(parse_level_filter(" error "), Some(LevelFilter::ERROR));
-        assert_eq!(parse_level_filter("debug"), Some(LevelFilter::DEBUG));
-        assert_eq!(parse_level_filter("trace"), Some(LevelFilter::TRACE));
-    }
+    fn file_logging_helpers_and_writer_lifecycle_cover_split_open_toggle_and_sink_unit() {
+        assert!(split_file_path(Path::new("")).is_err());
 
-    #[test]
-    fn open_log_file_creates_parent_directories() {
+        let (bare_dir, bare_name) =
+            split_file_path(Path::new("osp.log")).expect("bare file name should be accepted");
+        assert!(bare_dir.as_os_str().is_empty());
+        assert_eq!(bare_name, "osp.log");
+
+        let (nested_dir, nested_name) = split_file_path(Path::new("logs/osp.log"))
+            .expect("nested file path should be accepted");
+        assert_eq!(nested_dir, Path::new("logs"));
+        assert_eq!(nested_name, "osp.log");
+
         let dir = make_temp_dir("osp-cli-logging-open");
-        let path = dir.join("nested").join("osp.log");
+        let nested_path = dir.join("nested").join("osp.log");
+        let _file = open_log_file(&nested_path).expect("log file should open");
+        assert!(nested_path.exists());
 
-        let _file = open_log_file(&path).expect("log file should open");
-
-        assert!(path.exists());
-    }
-
-    #[test]
-    fn dynamic_file_writer_can_toggle_between_sink_and_file() {
-        let dir = make_temp_dir("osp-cli-logging-writer");
         let path = dir.join("writer.log");
-        let config = super::FileLoggingConfig {
-            path: path.clone(),
-            level: LevelFilter::INFO,
-        };
+        let config = super::FileLoggingConfig::new(path.clone(), LevelFilter::INFO);
         let mut writer = DynamicFileWriter::default();
-
         assert_eq!(
             writer
                 .configure(Some(&config))
@@ -397,30 +414,15 @@ mod tests {
             std::fs::read_to_string(&path).expect("log file should still exist"),
             "hello"
         );
-    }
 
-    #[test]
-    fn dynamic_file_writer_without_file_reports_off_and_discards_bytes() {
-        let mut writer = DynamicFileWriter::default();
-
+        let mut sink = DynamicFileWriter::default();
         assert_eq!(
-            writer
-                .configure(None)
-                .expect("sink configure should succeed"),
+            sink.configure(None).expect("sink configure should succeed"),
             LevelFilter::OFF
         );
-        writer
-            .write_all(b"discarded")
+        sink.write_all(b"discarded")
             .expect("sink write should succeed");
-        writer.flush().expect("sink flush should succeed");
-    }
-
-    #[test]
-    fn split_file_path_preserves_nested_directory_and_name() {
-        let (dir, file_name) = split_file_path(Path::new("logs/osp.log"))
-            .expect("nested file path should be accepted");
-        assert_eq!(dir, Path::new("logs"));
-        assert_eq!(file_name, "osp.log");
+        sink.flush().expect("sink flush should succeed");
     }
 
     fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
