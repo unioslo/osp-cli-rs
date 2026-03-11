@@ -5,9 +5,10 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 from datetime import date
 from pathlib import Path
+
+from coverage_workspace import clear_workspace_tmp, coverage_lock, prepare_workspace
 
 
 def fail(message: str) -> None:
@@ -54,8 +55,11 @@ def main() -> None:
         baseline = json.load(handle)
     previous = float(baseline["overall_line_percent"])
 
-    with tempfile.TemporaryDirectory(prefix="osp-cov-baseline-") as tmp_dir:
-        report_path = Path(tmp_dir) / "coverage.json"
+    with coverage_lock():
+        run_dir, env = prepare_workspace("osp-cov-baseline-")
+        report_path = run_dir / "coverage.json"
+        if report_path.exists():
+            report_path.unlink()
         print("Running full root-package coverage for baseline update...")
         subprocess.run(
             [
@@ -67,8 +71,10 @@ def main() -> None:
             ],
             cwd=repo_root,
             check=True,
+            env=env,
         )
         current = parse_overall_line_percent(report_path)
+        clear_workspace_tmp()
 
     baseline["generated_at"] = date.today().isoformat()
     baseline["overall_line_percent"] = round(current, 2)

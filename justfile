@@ -16,7 +16,7 @@ test:
     cargo test --all-features --locked
 
 cov:
-    cargo llvm-cov --all-features --summary-only
+    python3 ./scripts/run-coverage.py --all-features --summary-only
 
 cov-gate:
     ./scripts/check-coverage-gate.py

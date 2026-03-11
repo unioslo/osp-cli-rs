@@ -7,9 +7,10 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
+
+from coverage_workspace import clear_workspace_tmp, coverage_lock, prepare_workspace
 
 
 def fail(message: str) -> None:
@@ -297,6 +298,7 @@ def run_coverage(
     repo_root: Path,
     report_path: Path,
     *,
+    env: dict[str, str],
     fast: bool,
     changed_files: list[str],
 ) -> bool:
@@ -321,7 +323,7 @@ def run_coverage(
             ]
             for package in packages:
                 command.extend(["-p", package])
-            subprocess.run(command, cwd=repo_root, check=True)
+            subprocess.run(command, cwd=repo_root, check=True, env=env)
             return True
 
     print("Running full root-package coverage...")
@@ -335,6 +337,7 @@ def run_coverage(
         ],
         cwd=repo_root,
         check=True,
+        env=env,
     )
     return True
 
@@ -354,16 +357,21 @@ def main() -> None:
 
     overall: float | None = None
     files: dict[str, dict[str, float]] = {}
-    with tempfile.TemporaryDirectory(prefix="osp-cov-") as tmp_dir:
-        report_path = Path(tmp_dir) / "coverage.json"
+    with coverage_lock():
+        run_dir, env = prepare_workspace("osp-cov-")
+        report_path = run_dir / "coverage.json"
+        if report_path.exists():
+            report_path.unlink()
         did_run = run_coverage(
             repo_root,
             report_path,
+            env=env,
             fast=args.fast,
             changed_files=changed_files,
         )
         if did_run:
             overall, files = parse_report(report_path, repo_root)
+            clear_workspace_tmp()
 
     errors: list[str] = []
     notes: list[str] = []
