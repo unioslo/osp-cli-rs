@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 #[path = "unit/dsl_parser.rs"]
 mod dsl_parser;
 

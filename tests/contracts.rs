@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 #[path = "contracts/cli_ldap.rs"]
 mod cli_ldap;
 

@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -162,7 +164,6 @@ fn root_public_facade_stays_curated() {
 
     let expected_modules = [
         "app",
-        "runtime",
         "config",
         "core",
         "dsl",
@@ -175,7 +176,6 @@ fn root_public_facade_stays_curated() {
         "repl",
         "cli",
         "plugin",
-        "prelude",
     ]
     .into_iter()
     .map(str::to_string)

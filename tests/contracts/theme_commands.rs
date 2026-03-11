@@ -1,19 +1,53 @@
 use crate::assert_snapshot_text;
 use assert_cmd::Command;
 use predicates::prelude::*;
+use serde_json::Value;
+
+fn first_row<'a>(payload: &'a Value, context: &str) -> &'a Value {
+    payload
+        .as_array()
+        .unwrap_or_else(|| panic!("{context} should render a JSON array"))
+        .first()
+        .unwrap_or_else(|| panic!("{context} should render at least one row"))
+}
 
 #[cfg(unix)]
 #[test]
 fn theme_list_contract() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("PATH", "/usr/bin:/bin")
-        .args(["--json", "theme", "list"]);
-    cmd.assert()
+    let output = cmd
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "theme", "list"])
+        .assert()
         .success()
-        .stdout(predicate::str::contains("\"id\": \"dracula\""))
-        .stdout(predicate::str::contains("\"name\": \"Dracula\""))
-        .stdout(predicate::str::contains("\"id\": \"rose-pine-moon\""))
-        .stdout(predicate::str::contains("\"name\": \"Rose Pine Moon\""));
+        .get_output()
+        .clone();
+
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should stay empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("theme list stdout should be valid json");
+    let rows = payload
+        .as_array()
+        .expect("theme list should render a JSON array");
+    assert!(
+        rows.iter().any(|row| {
+            row.get("id") == Some(&Value::String("dracula".to_string()))
+                && row.get("name") == Some(&Value::String("Dracula".to_string()))
+        }),
+        "expected dracula theme in payload: {payload}"
+    );
+    assert!(
+        rows.iter().any(|row| {
+            row.get("id") == Some(&Value::String("rose-pine-moon".to_string()))
+                && row.get("name") == Some(&Value::String("Rose Pine Moon".to_string()))
+        }),
+        "expected rose-pine-moon theme in payload: {payload}"
+    );
 }
 
 #[cfg(unix)]
@@ -51,13 +85,29 @@ fn theme_list_human_rich_snapshot_contract() {
 #[test]
 fn theme_show_contract() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("PATH", "/usr/bin:/bin")
-        .args(["--json", "theme", "show", "dracula"]);
-    cmd.assert()
+    let output = cmd
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "theme", "show", "dracula"])
+        .assert()
         .success()
-        .stdout(predicate::str::contains("\"id\": \"dracula\""))
-        .stdout(predicate::str::contains("\"name\": \"Dracula\""))
-        .stdout(predicate::str::contains("\"accent\": \"#bd93f9\""));
+        .get_output()
+        .clone();
+
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should stay empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("theme show stdout should be valid json");
+    let row = first_row(&payload, "theme show");
+    assert_eq!(row.get("id"), Some(&Value::String("dracula".to_string())));
+    assert_eq!(row.get("name"), Some(&Value::String("Dracula".to_string())));
+    assert_eq!(
+        row.get("accent"),
+        Some(&Value::String("#bd93f9".to_string()))
+    );
 }
 
 #[cfg(unix)]
@@ -106,12 +156,23 @@ theme.name = "nord"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.envs(crate::test_env::isolated_env(&home))
+    let output = cmd
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "--theme", "dracula", "theme", "show"]);
-    cmd.assert()
+        .args(["--json", "--theme", "dracula", "theme", "show"])
+        .assert()
         .success()
-        .stdout(predicate::str::contains("\"id\": \"dracula\""));
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should stay empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("theme show stdout should be valid json");
+    let row = first_row(&payload, "theme show override");
+    assert_eq!(row.get("id"), Some(&Value::String("dracula".to_string())));
 
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -130,12 +191,23 @@ theme.name = "nord"
     );
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.envs(crate::test_env::isolated_env(&home))
+    let output = cmd
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "theme", "show"]);
-    cmd.assert()
+        .args(["--json", "theme", "show"])
+        .assert()
         .success()
-        .stdout(predicate::str::contains("\"id\": \"nord\""));
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should stay empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("theme show stdout should be valid json");
+    let row = first_row(&payload, "theme show from config");
+    assert_eq!(row.get("id"), Some(&Value::String("nord".to_string())));
 
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -177,17 +249,43 @@ warning = "#abcdef"
     .expect("child theme should be written");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.envs(crate::test_env::isolated_env(&home))
+    let output = cmd
+        .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "theme", "show"]);
-    cmd.assert()
+        .args(["--json", "theme", "show"])
+        .assert()
         .success()
-        .stdout(predicate::str::contains("\"id\": \"brand-child\""))
-        .stdout(predicate::str::contains("\"base\": \"brand-base\""))
-        .stdout(predicate::str::contains("\"source\": \"custom\""))
-        .stdout(predicate::str::contains("\"accent\": \"#123456\""))
-        .stdout(predicate::str::contains("\"warning\": \"#abcdef\""))
-        .stdout(predicate::str::contains("\"text\": \"#d8dee9\""));
+        .get_output()
+        .clone();
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should stay empty: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("theme show stdout should be valid json");
+    let row = first_row(&payload, "custom theme show");
+    assert_eq!(
+        row.get("id"),
+        Some(&Value::String("brand-child".to_string()))
+    );
+    assert_eq!(
+        row.get("base"),
+        Some(&Value::String("brand-base".to_string()))
+    );
+    assert_eq!(
+        row.get("source"),
+        Some(&Value::String("custom".to_string()))
+    );
+    assert_eq!(
+        row.get("accent"),
+        Some(&Value::String("#123456".to_string()))
+    );
+    assert_eq!(
+        row.get("warning"),
+        Some(&Value::String("#abcdef".to_string()))
+    );
+    assert_eq!(row.get("text"), Some(&Value::String("#d8dee9".to_string())));
 
     let _ = std::fs::remove_dir_all(&home);
 }

@@ -67,10 +67,8 @@ fn dsl_pipeline_markdown_table_format_works() {
     let parsed = parse_pipeline("ldap user oistes | P uid,cn").expect("valid pipeline");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
 
-    let settings = RenderSettings {
-        width: Some(200),
-        ..RenderSettings::test_plain(OutputFormat::Markdown)
-    };
+    let mut settings = RenderSettings::test_plain(OutputFormat::Markdown);
+    settings.width = Some(200);
     let output = render_output(&transformed, &settings);
 
     let mut lines = output.lines();

@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 #[cfg(unix)]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(unix)]
@@ -163,6 +165,89 @@ fn output_snapshot(output: &Arc<Mutex<String>>, max_len: usize) -> String {
 }
 
 #[cfg(unix)]
+fn strip_terminal_noise(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut idx = 0usize;
+
+    while idx < bytes.len() {
+        match bytes[idx] {
+            b'\x1b' => {
+                idx += 1;
+                if idx >= bytes.len() {
+                    break;
+                }
+                match bytes[idx] {
+                    b'[' => {
+                        idx += 1;
+                        while idx < bytes.len() {
+                            let byte = bytes[idx];
+                            idx += 1;
+                            if (b'@'..=b'~').contains(&byte) {
+                                break;
+                            }
+                        }
+                    }
+                    b']' => {
+                        idx += 1;
+                        while idx < bytes.len() {
+                            if bytes[idx] == b'\x07' {
+                                idx += 1;
+                                break;
+                            }
+                            if bytes[idx] == b'\x1b'
+                                && idx + 1 < bytes.len()
+                                && bytes[idx + 1] == b'\\'
+                            {
+                                idx += 2;
+                                break;
+                            }
+                            idx += 1;
+                        }
+                    }
+                    _ => idx += 1,
+                }
+            }
+            b'\r' | b'\n' => {
+                out.push('\n');
+                idx += 1;
+            }
+            byte if byte.is_ascii_control() => {
+                idx += 1;
+            }
+            byte => {
+                out.push(byte as char);
+                idx += 1;
+            }
+        }
+    }
+
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(unix)]
+fn plain_output_snapshot(output: &Arc<Mutex<String>>, max_len: usize) -> String {
+    strip_terminal_noise(&output_snapshot(output, max_len))
+}
+
+#[cfg(unix)]
+fn wait_for_plain_output(output: &Arc<Mutex<String>>, needle: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        {
+            let buf = output.lock().expect("output lock");
+            if strip_terminal_noise(&buf).contains(needle) {
+                return true;
+            }
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
 fn trace_events(output: &str) -> Vec<Value> {
     output
         .lines()
@@ -260,24 +345,17 @@ fn repl_tab_opens_menu_and_moves_selection() {
 #[cfg(unix)]
 #[test]
 fn repl_tab_completes_single_match_and_exits() {
-    let mut session = spawn_repl(true);
+    let mut session = spawn_repl(false);
 
-    let start = output_len(&session.output);
     write_bytes(&mut session, b"ex");
     write_bytes(&mut session, b"\t");
     write_bytes(&mut session, b"\t");
-    write_bytes(&mut session, b"\r");
     assert!(
-        wait_for_output_since(
-            &session.output,
-            start,
-            "\"accepted_value\":\"exit\"",
-            Duration::from_secs(3)
-        ),
-        "expected accept trace; output:\n{}",
-        output_snapshot(&session.output, 2000),
+        wait_for_plain_output(&session.output, "exit default>", Duration::from_secs(5)),
+        "expected tab completion to render `exit` in the prompt; output:\n{}",
+        plain_output_snapshot(&session.output, 4000),
     );
-
+    write_bytes(&mut session, b"\r");
     write_bytes(&mut session, b"\r");
 
     if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
@@ -285,37 +363,29 @@ fn repl_tab_completes_single_match_and_exits() {
         let _ = session.child.wait();
         panic!("expected repl to exit after completion");
     }
+    assert!(
+        !plain_output_snapshot(&session.output, 4000).contains("unrecognized subcommand"),
+        "expected tab completion to turn `ex` into `exit`; output:\n{}",
+        plain_output_snapshot(&session.output, 4000),
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn repl_tab_accepts_single_visible_completion() {
-    let mut session = spawn_repl(true);
+    let mut session = spawn_repl(false);
 
-    let start = output_len(&session.output);
     write_bytes(&mut session, b"the");
-    assert!(
-        wait_for_output_since(
-            &session.output,
-            start,
-            "\"matches\":[\"theme\"]",
-            Duration::from_secs(3)
-        ),
-        "expected single visible completion; output:\n{}",
-        output_snapshot(&session.output, 2000),
-    );
-
-    let start = output_len(&session.output);
     write_bytes(&mut session, b"\t");
+    write_bytes(&mut session, b" show dracula --value\r");
     assert!(
-        wait_for_output_since(
+        wait_for_plain_output(
             &session.output,
-            start,
-            "\"accepted_value\":\"theme\"",
-            Duration::from_secs(3)
+            "theme show dracula --value",
+            Duration::from_secs(5)
         ),
-        "expected tab to accept visible single completion; output:\n{}",
-        output_snapshot(&session.output, 2000),
+        "expected tab to accept `theme` before the follow-up command text; output:\n{}",
+        plain_output_snapshot(&session.output, 4000),
     );
 
     write_bytes(&mut session, b"\x03");
@@ -329,21 +399,38 @@ fn repl_tab_accepts_single_visible_completion() {
 #[cfg(unix)]
 #[test]
 fn repl_completion_respects_leading_invocation_flags() {
-    let mut session = spawn_repl(true);
+    let mut session = spawn_repl(false);
 
     write_bytes(&mut session, b"--json he");
 
-    let start = output_len(&session.output);
     write_bytes(&mut session, b"\t");
+    assert!(
+        wait_for_plain_output(&session.output, "--json help", Duration::from_secs(5)),
+        "expected completion to preserve the invocation flag in the prompt; output:\n{}",
+        plain_output_snapshot(&session.output, 4000),
+    );
+
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"\r");
     assert!(
         wait_for_output_since(
             &session.output,
             start,
-            "\"buffer_after\":\"--json help\"",
-            Duration::from_secs(3)
+            "\"name\": \"config\"",
+            Duration::from_secs(5)
         ),
-        "expected completion to preserve invocation flag and complete command; output:\n{}",
-        output_snapshot(&session.output, 2000),
+        "expected completion to preserve invocation flag and run `--json help`; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\"short_help\": \"Inspect and edit runtime config\"",
+            Duration::from_secs(5)
+        ),
+        "expected JSON help payload after completing `he` to `help`; output:\n{}",
+        output_snapshot(&session.output, 4000),
     );
 
     write_bytes(&mut session, b"\x03");
@@ -358,7 +445,7 @@ fn repl_completion_respects_leading_invocation_flags() {
 #[test]
 fn repl_completion_resolves_fixed_key_aliases_end_to_end() {
     let mut session = spawn_repl_with_config(
-        true,
+        false,
         Some(
             r#"
 [default]
@@ -369,17 +456,11 @@ alias.pres = "config set ui.presentation"
 
     write_bytes(&mut session, b"pres au");
 
-    let start = output_len(&session.output);
     write_bytes(&mut session, b"\t");
     assert!(
-        wait_for_output_since(
-            &session.output,
-            start,
-            "\"buffer_after\":\"pres austere \"",
-            Duration::from_secs(3)
-        ),
-        "expected fixed-key alias completion to resolve through alias context; output:\n{}",
-        output_snapshot(&session.output, 2000),
+        wait_for_plain_output(&session.output, "pres austere", Duration::from_secs(6)),
+        "expected alias completion to resolve through the alias command context; output:\n{}",
+        plain_output_snapshot(&session.output, 4000),
     );
 
     write_bytes(&mut session, b"\x03");
@@ -441,7 +522,18 @@ fn repl_enter_submits_current_line_without_accepting_menu_completion() {
 fn repl_theme_show_menu_omits_global_flags_end_to_end() {
     let mut session = spawn_repl(true);
 
+    let start = output_len(&session.output);
     write_bytes(&mut session, b"theme show ");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "theme show ",
+            Duration::from_secs(3)
+        ),
+        "expected typed input to be echoed before completion; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
 
     let start = output_len(&session.output);
     write_bytes(&mut session, b"\t");
@@ -476,7 +568,18 @@ fn repl_theme_show_menu_omits_global_flags_end_to_end() {
 fn repl_theme_show_tab_cycle_keeps_menu_anchor_stable_end_to_end() {
     let mut session = spawn_repl(true);
 
+    let start = output_len(&session.output);
     write_bytes(&mut session, b"theme show ");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "theme show ",
+            Duration::from_secs(3)
+        ),
+        "expected typed input to be echoed before completion; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
 
     let start = output_len(&session.output);
     write_bytes(&mut session, b"\t");

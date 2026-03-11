@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 #[macro_export]
 macro_rules! assert_snapshot_text {
     ($name:expr, $text:expr $(,)?) => {{
@@ -5,7 +7,8 @@ macro_rules! assert_snapshot_text {
             ::std::convert::Into::<String>::into($text),
             &[],
         );
-        insta::assert_snapshot!($name, sanitized);
+        let settings = $crate::snapshot_support::contract_snapshot_settings();
+        settings.bind(|| insta::assert_snapshot!($name, sanitized));
     }};
 }
 
@@ -16,8 +19,30 @@ macro_rules! assert_snapshot_text_with {
             ::std::convert::Into::<String>::into($text),
             $replacements,
         );
-        insta::assert_snapshot!($name, sanitized);
+        let settings = $crate::snapshot_support::contract_snapshot_settings();
+        settings.bind(|| insta::assert_snapshot!($name, sanitized));
     }};
+}
+
+#[macro_export]
+macro_rules! assert_contract_snapshot {
+    ($name:expr, $value:expr $(,)?) => {{
+        let settings = $crate::snapshot_support::contract_snapshot_settings();
+        settings.bind(|| insta::assert_snapshot!($name, $value));
+    }};
+}
+
+pub(crate) fn contract_snapshot_settings() -> insta::Settings {
+    let mut settings = insta::Settings::clone_current();
+    settings.set_snapshot_path(contract_snapshots_dir());
+    settings
+}
+
+fn contract_snapshots_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("contracts")
+        .join("snapshots")
 }
 
 pub(crate) fn sanitize_snapshot_text(mut text: String, replacements: &[(&str, &str)]) -> String {

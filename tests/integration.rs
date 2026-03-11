@@ -1,5 +1,4 @@
-#[path = "integration/repl_dsl.rs"]
-mod repl_dsl;
+#![allow(missing_docs)]
 
 #[path = "integration/aliases.rs"]
 mod aliases;

@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 #[cfg(unix)]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(unix)]
@@ -31,7 +33,7 @@ fn make_temp_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn spawn_repl_with_color() -> PtySession {
+fn spawn_repl_with_color(simple_prompt: bool) -> PtySession {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -55,12 +57,11 @@ fn spawn_repl_with_color() -> PtySession {
     cmd.env_remove("NO_COLOR");
     cmd.env("OSP__UI__COLOR__MODE", "always");
     cmd.env("OSP__REPL__INTRO", "none");
-    cmd.env("OSP__REPL__SIMPLE_PROMPT", "true");
+    cmd.env(
+        "OSP__REPL__SIMPLE_PROMPT",
+        if simple_prompt { "true" } else { "false" },
+    );
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
-    // These PTY tests verify highlight rendering, not cursor-probe
-    // auto-detection. Force interactive mode so the harness reliably reaches
-    // the rich REPL path.
-    cmd.env("OSP__REPL__INPUT_MODE", "interactive");
     cmd.env("OSP_PLUGIN_PATH", &plugins);
     cmd.env("OSP_BUNDLED_PLUGIN_DIR", &plugins);
     cmd.env("COLUMNS", "80");
@@ -167,48 +168,18 @@ fn wait_for_exit(child: &mut Box<dyn portable_pty::Child + Send>, timeout: Durat
 
 #[cfg(unix)]
 #[test]
-fn repl_highlights_commands_with_success_color() {
-    let mut session = spawn_repl_with_color();
+fn repl_prompt_prefix_uses_prompt_text_color() {
+    let mut session = spawn_repl_with_color(false);
 
     let start = output_len(&session.output);
-    write_bytes(&mut session, b"config");
-
-    // Rose Pine Moon success color: #8bd5ca -> 38;2;139;213;202
-    let expected = "\x1b[38;2;139;213;202mconfig";
+    let expected = "\x1b[38;2;224;222;244m╭─";
     assert!(
         wait_for_output_since(&session.output, start, expected, Duration::from_secs(3)),
-        "expected success-colored command in output; output:\n{}",
+        "expected styled prompt prefix in output; output:\n{}",
         output_snapshot(&session.output, 2000),
     );
 
     write_bytes(&mut session, b"\x03"); // cancel line
-    write_bytes(&mut session, b"exit\r\r");
-    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
-        let _ = session.child.kill();
-        let _ = session.child.wait();
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn repl_help_history_highlights_help_keyword() {
-    let mut session = spawn_repl_with_color();
-
-    write_bytes(&mut session, b"help history");
-
-    let start = output_len(&session.output);
-    assert!(
-        wait_for_output_since(
-            &session.output,
-            start,
-            "\x1b[38;2;139;213;202mhelp\x1b[0m",
-            Duration::from_secs(3)
-        ),
-        "expected `help` to be highlighted with the command color; output:\n{}",
-        output_snapshot(&session.output, 4000),
-    );
-
-    write_bytes(&mut session, b"\x03");
     write_bytes(&mut session, b"exit\r\r");
     if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
         let _ = session.child.kill();

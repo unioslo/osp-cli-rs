@@ -1,9 +1,11 @@
+#![allow(missing_docs)]
+
 #[cfg(unix)]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::{Arc, Mutex};
 #[cfg(unix)]
@@ -31,7 +33,7 @@ fn make_temp_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn spawn_repl_with_color(simple_prompt: bool) -> PtySession {
+fn spawn_repl(plugins: &Path) -> PtySession {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -43,7 +45,6 @@ fn spawn_repl_with_color(simple_prompt: bool) -> PtySession {
         .expect("open pty");
 
     let home = make_temp_dir("osp-cli-pty-home");
-    let plugins = make_temp_dir("osp-cli-pty-plugins");
     let bin = PathBuf::from(env!("CARGO_BIN_EXE_osp"));
 
     let mut cmd = CommandBuilder::new(bin);
@@ -52,16 +53,12 @@ fn spawn_repl_with_color(simple_prompt: bool) -> PtySession {
     cmd.env("XDG_CACHE_HOME", home.join(".cache"));
     cmd.env("XDG_STATE_HOME", home.join(".local/state"));
     cmd.env("TERM", "xterm-256color");
-    cmd.env_remove("NO_COLOR");
-    cmd.env("OSP__UI__COLOR__MODE", "always");
+    cmd.env("NO_COLOR", "1");
     cmd.env("OSP__REPL__INTRO", "none");
-    cmd.env(
-        "OSP__REPL__SIMPLE_PROMPT",
-        if simple_prompt { "true" } else { "false" },
-    );
+    cmd.env("OSP__REPL__SIMPLE_PROMPT", "true");
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
-    cmd.env("OSP_PLUGIN_PATH", &plugins);
-    cmd.env("OSP_BUNDLED_PLUGIN_DIR", &plugins);
+    cmd.env("OSP_PLUGIN_PATH", plugins);
+    cmd.env("OSP_BUNDLED_PLUGIN_DIR", plugins);
     cmd.env("COLUMNS", "80");
     cmd.env("LINES", "24");
 
@@ -100,7 +97,7 @@ fn spawn_repl_with_color(simple_prompt: bool) -> PtySession {
         writer,
         output,
         _home: home,
-        _plugins: plugins,
+        _plugins: plugins.to_path_buf(),
     }
 }
 
@@ -165,22 +162,90 @@ fn wait_for_exit(child: &mut Box<dyn portable_pty::Child + Send>, timeout: Durat
 }
 
 #[cfg(unix)]
-#[test]
-fn repl_prompt_prefix_uses_prompt_text_color() {
-    let mut session = spawn_repl_with_color(false);
+fn write_provider_plugin(
+    dir: &Path,
+    plugin_id: &str,
+    command_name: &str,
+    message: &str,
+) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
 
-    let start = output_len(&session.output);
-    let expected = "\x1b[38;2;224;222;244m╭─";
+    let plugin_path = dir.join(format!("osp-{plugin_id}"));
+    let script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"{message}-from-plugin"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+        plugin_id = plugin_id,
+        command_name = command_name,
+        message = message
+    );
+
+    std::fs::write(&plugin_path, script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_requires_explicit_provider_selection_for_conflicted_commands() {
+    let plugins = make_temp_dir("osp-cli-pty-conflict-plugins");
+    let _alpha = write_provider_plugin(&plugins, "alpha-provider", "hello", "alpha");
+    let _beta = write_provider_plugin(&plugins, "beta-provider", "hello", "beta");
+    let mut session = spawn_repl(&plugins);
+
     assert!(
-        wait_for_output_since(&session.output, start, expected, Duration::from_secs(3)),
-        "expected styled prompt prefix in output; output:\n{}",
+        wait_for_output_since(&session.output, 0, "> ", Duration::from_secs(3)),
+        "expected prompt before dispatch; output:\n{}",
         output_snapshot(&session.output, 2000),
     );
 
-    write_bytes(&mut session, b"\x03"); // cancel line
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"hello\r");
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "command `hello` is provided by multiple plugins",
+            Duration::from_secs(3)
+        ),
+        "expected ambiguity error in repl output; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "--plugin-provider",
+            Duration::from_secs(3)
+        ),
+        "expected provider-selection hint in repl output; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+    assert!(
+        !output_snapshot(&session.output, 4000).contains("alpha-from-plugin"),
+        "did not expect implicit provider execution; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+
     write_bytes(&mut session, b"exit\r\r");
     if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
         let _ = session.child.kill();
         let _ = session.child.wait();
     }
+
+    let _ = std::fs::remove_dir_all(&plugins);
 }

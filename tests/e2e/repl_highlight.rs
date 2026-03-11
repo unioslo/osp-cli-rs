@@ -1,9 +1,11 @@
+#![allow(missing_docs)]
+
 #[cfg(unix)]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 #[cfg(unix)]
 use std::sync::{Arc, Mutex};
 #[cfg(unix)]
@@ -31,7 +33,7 @@ fn make_temp_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn spawn_repl(plugins: &Path) -> PtySession {
+fn spawn_repl_with_color() -> PtySession {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -43,6 +45,7 @@ fn spawn_repl(plugins: &Path) -> PtySession {
         .expect("open pty");
 
     let home = make_temp_dir("osp-cli-pty-home");
+    let plugins = make_temp_dir("osp-cli-pty-plugins");
     let bin = PathBuf::from(env!("CARGO_BIN_EXE_osp"));
 
     let mut cmd = CommandBuilder::new(bin);
@@ -51,12 +54,17 @@ fn spawn_repl(plugins: &Path) -> PtySession {
     cmd.env("XDG_CACHE_HOME", home.join(".cache"));
     cmd.env("XDG_STATE_HOME", home.join(".local/state"));
     cmd.env("TERM", "xterm-256color");
-    cmd.env("NO_COLOR", "1");
+    cmd.env_remove("NO_COLOR");
+    cmd.env("OSP__UI__COLOR__MODE", "always");
     cmd.env("OSP__REPL__INTRO", "none");
     cmd.env("OSP__REPL__SIMPLE_PROMPT", "true");
     cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
-    cmd.env("OSP_PLUGIN_PATH", plugins);
-    cmd.env("OSP_BUNDLED_PLUGIN_DIR", plugins);
+    // These PTY tests verify highlight rendering, not cursor-probe
+    // auto-detection. Force interactive mode so the harness reliably reaches
+    // the rich REPL path.
+    cmd.env("OSP__REPL__INPUT_MODE", "interactive");
+    cmd.env("OSP_PLUGIN_PATH", &plugins);
+    cmd.env("OSP_BUNDLED_PLUGIN_DIR", &plugins);
     cmd.env("COLUMNS", "80");
     cmd.env("LINES", "24");
 
@@ -95,7 +103,7 @@ fn spawn_repl(plugins: &Path) -> PtySession {
         writer,
         output,
         _home: home,
-        _plugins: plugins.to_path_buf(),
+        _plugins: plugins,
     }
 }
 
@@ -160,90 +168,52 @@ fn wait_for_exit(child: &mut Box<dyn portable_pty::Child + Send>, timeout: Durat
 }
 
 #[cfg(unix)]
-fn write_provider_plugin(
-    dir: &Path,
-    plugin_id: &str,
-    command_name: &str,
-    message: &str,
-) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let plugin_path = dir.join(format!("osp-{plugin_id}"));
-    let script = format!(
-        r#"#!/bin/sh
-PATH=/usr/bin:/bin:$PATH
-if [ "$1" = "--describe" ]; then
-  cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
-JSON
-  exit 0
-fi
-
-cat <<'JSON'
-{{"protocol_version":1,"ok":true,"data":{{"message":"{message}-from-plugin"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
-JSON
-"#,
-        plugin_id = plugin_id,
-        command_name = command_name,
-        message = message
-    );
-
-    std::fs::write(&plugin_path, script).expect("plugin script should be written");
-    let mut perms = std::fs::metadata(&plugin_path)
-        .expect("metadata should be readable")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
-    plugin_path
-}
-
-#[cfg(unix)]
 #[test]
-fn repl_requires_explicit_provider_selection_for_conflicted_commands() {
-    let plugins = make_temp_dir("osp-cli-pty-conflict-plugins");
-    let _alpha = write_provider_plugin(&plugins, "alpha-provider", "hello", "alpha");
-    let _beta = write_provider_plugin(&plugins, "beta-provider", "hello", "beta");
-    let mut session = spawn_repl(&plugins);
+fn repl_highlights_commands_with_success_color() {
+    let mut session = spawn_repl_with_color();
 
+    let start = output_len(&session.output);
+    write_bytes(&mut session, b"config");
+
+    // Rose Pine Moon success color: #8bd5ca -> 38;2;139;213;202
+    let expected = "\x1b[38;2;139;213;202mconfig";
     assert!(
-        wait_for_output_since(&session.output, 0, "> ", Duration::from_secs(3)),
-        "expected prompt before dispatch; output:\n{}",
+        wait_for_output_since(&session.output, start, expected, Duration::from_secs(3)),
+        "expected success-colored command in output; output:\n{}",
         output_snapshot(&session.output, 2000),
     );
 
-    let start = output_len(&session.output);
-    write_bytes(&mut session, b"hello\r");
-    assert!(
-        wait_for_output_since(
-            &session.output,
-            start,
-            "command `hello` is provided by multiple plugins",
-            Duration::from_secs(3)
-        ),
-        "expected ambiguity error in repl output; output:\n{}",
-        output_snapshot(&session.output, 4000),
-    );
-    assert!(
-        wait_for_output_since(
-            &session.output,
-            start,
-            "--plugin-provider",
-            Duration::from_secs(3)
-        ),
-        "expected provider-selection hint in repl output; output:\n{}",
-        output_snapshot(&session.output, 4000),
-    );
-    assert!(
-        !output_snapshot(&session.output, 4000).contains("alpha-from-plugin"),
-        "did not expect implicit provider execution; output:\n{}",
-        output_snapshot(&session.output, 4000),
-    );
-
+    write_bytes(&mut session, b"\x03"); // cancel line
     write_bytes(&mut session, b"exit\r\r");
     if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
         let _ = session.child.kill();
         let _ = session.child.wait();
     }
+}
 
-    let _ = std::fs::remove_dir_all(&plugins);
+#[cfg(unix)]
+#[test]
+fn repl_help_history_highlights_help_keyword() {
+    let mut session = spawn_repl_with_color();
+
+    write_bytes(&mut session, b"help history");
+
+    let start = output_len(&session.output);
+    assert!(
+        wait_for_output_since(
+            &session.output,
+            start,
+            "\x1b[38;2;139;213;202mhelp\x1b[0m",
+            Duration::from_secs(3)
+        ),
+        "expected `help` to be highlighted with the command color; output:\n{}",
+        output_snapshot(&session.output, 4000),
+    );
+
+    write_bytes(&mut session, b"\x03");
+    write_bytes(&mut session, b"exit\r\r");
+    if !wait_for_exit(&mut session.child, Duration::from_secs(3)) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
 }

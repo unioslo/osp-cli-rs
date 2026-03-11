@@ -1,5 +1,22 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
+use serde_json::Value;
+
+fn parse_json_stdout(stdout: &[u8]) -> Value {
+    serde_json::from_slice(stdout).unwrap_or_else(|err| {
+        panic!(
+            "stdout should be valid json: {err}\n{}",
+            String::from_utf8_lossy(stdout)
+        )
+    })
+}
+
+fn first_json_row<'a>(payload: &'a Value, context: &str) -> &'a Value {
+    payload
+        .as_array()
+        .unwrap_or_else(|| panic!("{context} should render a JSON array"))
+        .first()
+        .unwrap_or_else(|| panic!("{context} should render at least one row"))
+}
 
 #[cfg(unix)]
 #[test]
@@ -8,10 +25,18 @@ fn ldap_user_json_contract() {
 
     let mut cmd = fixture.osp();
     cmd.args(["--json", "ldap", "user", "oistes"]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("\"uid\": \"oistes\""))
-        .stdout(predicate::str::contains("\"netgroups\""));
+    let output = cmd.assert().success().get_output().clone();
+    let payload = parse_json_stdout(&output.stdout);
+    let row = first_json_row(&payload, "ldap user");
+    assert_eq!(row["uid"], "oistes");
+    assert_eq!(row["cn"], "Mock LDAP User");
+    assert_eq!(row["homeDirectory"], "/mock/home/oistes");
+    assert_eq!(row["netgroups"], serde_json::json!(["ucore", "usit"]));
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(unix)]
@@ -21,9 +46,15 @@ fn ldap_user_defaults_to_global_user() {
 
     let mut cmd = fixture.osp();
     cmd.args(["-u", "oistes", "--json", "ldap", "user"]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("\"uid\": \"oistes\""));
+    let output = cmd.assert().success().get_output().clone();
+    let payload = parse_json_stdout(&output.stdout);
+    let row = first_json_row(&payload, "ldap user default subject");
+    assert_eq!(row["uid"], "oistes");
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(unix)]
@@ -44,11 +75,21 @@ fn ldap_user_supports_attributes_and_filter() {
         "--attributes",
         "uid,cn",
     ]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("\"uid\": \"oistes\""))
-        .stdout(predicate::str::contains("\"cn\""))
-        .stdout(predicate::str::contains("\"homeDirectory\"").not());
+    let output = cmd.assert().success().get_output().clone();
+    let payload = parse_json_stdout(&output.stdout);
+    let row = first_json_row(&payload, "ldap user attribute projection");
+    assert_eq!(row["uid"], "oistes");
+    assert_eq!(row["cn"], "Mock LDAP User");
+    let object = row
+        .as_object()
+        .expect("ldap projected row should render as an object");
+    assert!(!object.contains_key("homeDirectory"));
+    assert!(!object.contains_key("netgroups"));
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(unix)]
@@ -58,10 +99,16 @@ fn ldap_netgroup_json_contract() {
 
     let mut cmd = fixture.osp();
     cmd.args(["--json", "ldap", "netgroup", "ucore"]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("\"cn\": \"ucore\""))
-        .stdout(predicate::str::contains("\"members\""));
+    let output = cmd.assert().success().get_output().clone();
+    let payload = parse_json_stdout(&output.stdout);
+    let row = first_json_row(&payload, "ldap netgroup");
+    assert_eq!(row["cn"], "ucore");
+    assert_eq!(row["members"], serde_json::json!(["oistes", "trondham"]));
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(unix)]
@@ -71,25 +118,43 @@ fn ldap_plugin_completes_subcommands_and_flags_contract() {
 
     let mut subcommands = fixture.osp();
     subcommands.args(["repl", "debug-complete", "--line", "ldap "]);
-    subcommands
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"label\": \"user\""))
-        .stdout(predicate::str::contains("\"label\": \"netgroup\""));
+    let subcommands_output = subcommands.assert().success().get_output().clone();
+    let subcommands_payload = parse_json_stdout(&subcommands_output.stdout);
+    let subcommand_matches = subcommands_payload["matches"]
+        .as_array()
+        .expect("subcommand matches should render as an array");
+    assert!(
+        subcommand_matches
+            .iter()
+            .any(|item| item["label"] == "user")
+    );
+    assert!(
+        subcommand_matches
+            .iter()
+            .any(|item| item["label"] == "netgroup")
+    );
 
     let mut long_flags = fixture.osp();
     long_flags.args(["repl", "debug-complete", "--line", "ldap user --a"]);
-    long_flags
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"label\": \"--attributes\""));
+    let long_flags_output = long_flags.assert().success().get_output().clone();
+    let long_flags_payload = parse_json_stdout(&long_flags_output.stdout);
+    let long_flag_matches = long_flags_payload["matches"]
+        .as_array()
+        .expect("long-flag matches should render as an array");
+    assert!(
+        long_flag_matches
+            .iter()
+            .any(|item| item["label"] == "--attributes")
+    );
 
     let mut short_flags = fixture.osp();
     short_flags.args(["repl", "debug-complete", "--line", "ldap user -"]);
-    short_flags
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"label\": \"-a\""));
+    let short_flags_output = short_flags.assert().success().get_output().clone();
+    let short_flags_payload = parse_json_stdout(&short_flags_output.stdout);
+    let short_flag_matches = short_flags_payload["matches"]
+        .as_array()
+        .expect("short-flag matches should render as an array");
+    assert!(short_flag_matches.iter().any(|item| item["label"] == "-a"));
 }
 
 #[cfg(unix)]
