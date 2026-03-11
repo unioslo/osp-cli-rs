@@ -21,6 +21,9 @@ mod history_commands;
 #[path = "contracts/help_commands.rs"]
 mod help_commands;
 
+#[path = "contracts/command_surfaces.rs"]
+mod command_surfaces;
+
 #[path = "contracts/repl_debug.rs"]
 mod repl_debug;
 

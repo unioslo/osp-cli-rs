@@ -64,18 +64,6 @@ fn repl_view<'a>(
     repl::ReplViewContext::from_parts(runtime, session)
 }
 
-fn run_app_stdout(args: &[&str]) -> String {
-    // Run full-host app tests inside a known process env so explicit format
-    // assertions do not depend on ambient HOME/XDG/PATH/TERM or leaked OSP_*.
-    let _env = crate::tests::TestProcessEnv::new("osp-cli-app-tests");
-    let mut sink = BufferedUiSink::default();
-    let code = crate::app::App::new()
-        .run_with_sink(args.iter().copied(), &mut sink)
-        .expect("app invocation should succeed");
-    assert_eq!(code, 0, "unexpected exit code for args: {args:?}");
-    sink.stdout
-}
-
 fn make_completion_state(auth_visible_builtins: Option<&str>) -> AppState {
     make_completion_state_with_entries_and_native(
         auth_visible_builtins,

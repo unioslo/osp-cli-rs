@@ -23,6 +23,7 @@ target
 # Generated local planning notes and coverage artifacts
 docs/plans/
 lcov.info
+*.profraw
 
 # Python generated artifacts
 __pycache__/
