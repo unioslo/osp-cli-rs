@@ -48,7 +48,7 @@ pub(crate) use adapter::{
     CompletionTraceEvent, CompletionTraceMenuState, trace_completion, trace_completion_enabled,
 };
 #[cfg(test)]
-use adapter::{
+pub(crate) use adapter::{
     ReplCompleter, ReplHistoryCompleter, build_repl_highlighter, expand_home, path_suggestions,
     split_path_stub,
 };

@@ -2,12 +2,17 @@ use reedline::{
     Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
     menu_functions::{can_partially_complete, replace_in_buffer},
 };
+use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
 
 use crate::repl::CompletionTraceMenuState;
 use crate::repl::menu_core::{MenuAction, MenuCore};
 
 pub(crate) use crate::repl::menu_core::{MenuDebug, MenuStyleDebug, display_text};
+
+thread_local! {
+    static ACTIVE_MENU_EDITOR: Cell<*mut Editor> = const { Cell::new(std::ptr::null_mut()) };
+}
 
 /// Completion menu with adaptive column layout and an optional meta line.
 ///
@@ -29,11 +34,12 @@ pub struct OspCompletionMenu {
     indent_anchor: Option<u16>,
     cursor_col: u16,
     last_available_lines: u16,
-    // Queue one reedline menu event so editor mutation, match refresh, and
-    // subsequent render all observe the same step. Applying navigation here in
-    // `menu_event` would let the editor buffer advance before the refresh pass
-    // updates menu state, which is how prompt/menu drift can happen.
+    // Queue menu events that still need the refresh pass. Navigation is
+    // applied eagerly once the menu has seen a live editor in a previous
+    // repaint so reedline paints the selected completion and the prompt line
+    // from the same state.
     event: Option<MenuEvent>,
+    pending_selection_refresh: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +62,7 @@ impl Default for OspCompletionMenu {
             cursor_col: 0,
             last_available_lines: 0,
             event: None,
+            pending_selection_refresh: None,
         }
     }
 }
@@ -141,9 +148,6 @@ impl OspCompletionMenu {
 
     pub(crate) fn apply_event(&mut self, editor: &mut Editor, completer: &mut dyn Completer) {
         if let Some(event) = self.event.take() {
-            // Apply queued menu events from the refresh path so the editor
-            // buffer, candidate set, and rendered menu all advance from the
-            // same state transition.
             let action = self.core.handle_event(event);
             if matches!(action, MenuAction::UpdateValues) {
                 self.update_values(editor, completer);
@@ -286,10 +290,33 @@ impl OspCompletionMenu {
         screen_width: u16,
         available_lines: u16,
     ) {
+        set_active_menu_editor(Some(editor));
+
+        if let Some(selected_value) = self.pending_selection_refresh.take() {
+            let replace_span = self.replace_span;
+            self.update_values(editor, completer);
+            // A same-frame navigation already replaced the active token in the
+            // buffer. Keep replacing that token while the menu stays open
+            // instead of snapping back to the completer's original stub span.
+            self.replace_span = replace_span;
+            self.last_available_lines = available_lines;
+            let indent = self.stable_menu_indent(editor);
+            self.core.update_layout(screen_width, indent);
+            self.core.restore_selection_by_value(&selected_value);
+            if !self.core.is_active() {
+                set_active_menu_editor(None);
+            }
+            trace_menu_state_with_available_lines(self, editor, available_lines);
+            return;
+        }
+
         self.apply_event(editor, completer);
         self.last_available_lines = available_lines;
         let indent = self.stable_menu_indent(editor);
         self.core.update_layout(screen_width, indent);
+        if !self.core.is_active() {
+            set_active_menu_editor(None);
+        }
         trace_menu_state_with_available_lines(self, editor, available_lines);
     }
 }
@@ -338,6 +365,38 @@ impl Menu for OspCompletionMenu {
         if matches!(event, MenuEvent::Activate(_) | MenuEvent::Deactivate) {
             self.replace_span = None;
             self.indent_anchor = None;
+            if matches!(event, MenuEvent::Deactivate) {
+                self.pending_selection_refresh = None;
+                set_active_menu_editor(None);
+            }
+        }
+
+        if matches!(
+            event,
+            MenuEvent::NextElement
+                | MenuEvent::PreviousElement
+                | MenuEvent::MoveUp
+                | MenuEvent::MoveDown
+                | MenuEvent::MoveLeft
+                | MenuEvent::MoveRight
+                | MenuEvent::NextPage
+                | MenuEvent::PreviousPage
+        ) && let Some(selected_value) = with_active_menu_editor(|editor| {
+            let action = self.core.handle_event(event.clone());
+            if matches!(action, MenuAction::ApplySelection) {
+                self.apply_selection_in_buffer(editor, ApplyMode::Cycle);
+                self.core.selected_value().map(|item| item.value.clone())
+            } else {
+                None
+            }
+        })
+        .flatten()
+        {
+            // The selection already changed the live buffer for this frame.
+            // The next refresh only needs to recompute candidates and restore
+            // the same selected value if it still exists.
+            self.pending_selection_refresh = Some(selected_value);
+            return;
         }
         self.event = Some(event);
     }
@@ -503,6 +562,28 @@ fn compute_menu_indent(menu: &OspCompletionMenu, editor: &Editor) -> u16 {
         .saturating_sub(cursor_prefix_width.min(u16::MAX as usize) as u16);
     let width = prompt_width as usize + prefix_width;
     width.min(u16::MAX as usize) as u16
+}
+
+fn set_active_menu_editor(editor: Option<&mut Editor>) {
+    ACTIVE_MENU_EDITOR.with(|active| {
+        active.set(editor.map_or(std::ptr::null_mut(), |editor| editor as *mut Editor));
+    });
+}
+
+fn with_active_menu_editor<R>(f: impl FnOnce(&mut Editor) -> R) -> Option<R> {
+    ACTIVE_MENU_EDITOR.with(|active| {
+        let editor = active.get();
+        if editor.is_null() {
+            None
+        } else {
+            // SAFETY: the pointer is registered from reedline's active
+            // `update_working_details` pass and cleared when the menu
+            // deactivates. Navigation events and repaint happen on the same
+            // thread in a single read-line loop, so the editor remains alive
+            // for the duration of this callback.
+            Some(unsafe { f(&mut *editor) })
+        }
+    })
 }
 
 #[cfg(test)]

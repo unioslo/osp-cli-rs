@@ -72,9 +72,19 @@ impl Completer for ReplCompleter {
             }
         }
 
+        let mut hidden_suggestions = projected.hidden_suggestions.clone();
+        if !cursor_state.token_stub.is_empty() {
+            // Keep the actively edited token visible even when projection-level
+            // policy would normally hide it. This prevents menu refresh from
+            // dropping the exact value that is already inserted in the prompt
+            // until a real delimiter commits the token's scope.
+            hidden_suggestions
+                .retain(|value| !value.eq_ignore_ascii_case(cursor_state.token_stub.as_str()));
+        }
+
         let mut suggestions = ranked
             .into_iter()
-            .filter(|item| !projected.hidden_suggestions.contains(&item.text))
+            .filter(|item| !hidden_suggestions.contains(&item.text))
             .map(|item| Suggestion {
                 value: item.text,
                 description: item.meta,

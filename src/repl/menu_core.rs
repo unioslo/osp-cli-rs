@@ -237,6 +237,14 @@ impl MenuCore {
         self.reset_position();
     }
 
+    pub(crate) fn restore_selection_by_value(&mut self, value: &str) {
+        if let Some(index) = self.values.iter().position(|item| item.value == value) {
+            let cols = self.get_cols().max(1);
+            self.row_pos = index as u16 / cols;
+            self.col_pos = index as u16 % cols;
+        }
+    }
+
     pub(crate) fn set_columns(&mut self, columns: u16) {
         self.default_details.columns = columns.max(1);
     }

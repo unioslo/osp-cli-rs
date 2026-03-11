@@ -121,6 +121,7 @@ fn alias_completion_node(
     };
 
     node.tooltip = Some(alias.tooltip.clone());
+    node.exact_token_commits = true;
     node.prefilled_flags = parsed.prefilled_flags;
     for (flag, values) in parsed.command.flag_values_map() {
         node.prefilled_flags

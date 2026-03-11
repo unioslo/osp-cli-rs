@@ -190,17 +190,28 @@ impl CompletionEngine {
 
     fn resolve_completion_context(&self, cmd: &CommandLine, stub: &str) -> CompletionContext {
         let resolver = TreeResolver::new(&self.tree);
-        let (pre_node, _) = resolver.resolve_context(cmd.head());
-        let has_subcommands = !pre_node.children.is_empty();
-        // When the user is still typing a subcommand, the partial token is the
-        // last `head` element but not yet a resolvable child node. Drop that
-        // partial token so context resolution stays on the parent command.
-        let head_without_partial_subcommand =
-            if !stub.is_empty() && !stub.starts_with('-') && has_subcommands {
-                &cmd.head()[..cmd.head().len().saturating_sub(1)]
-            } else {
-                cmd.head()
-            };
+        let exact_token_commits = if !stub.is_empty() && !stub.starts_with('-') {
+            let parent_path = &cmd.head()[..cmd.head().len().saturating_sub(1)];
+            resolver
+                .resolve_exact(parent_path)
+                .and_then(|node| node.children.get(stub))
+                .is_some_and(|child| child.exact_token_commits)
+        } else {
+            false
+        };
+        // A command token is not committed until the user types a delimiter.
+        // Keep exact and partial head tokens in the parent scope so Tab keeps
+        // cycling sibling commands until a trailing space commits the token,
+        // unless the exact token explicitly commits scope on its own.
+        let head_without_partial_subcommand = if !stub.is_empty()
+            && !stub.starts_with('-')
+            && cmd.head().last().is_some_and(|token| token == stub)
+            && !exact_token_commits
+        {
+            &cmd.head()[..cmd.head().len().saturating_sub(1)]
+        } else {
+            cmd.head()
+        };
         let (_, matched) = resolver.resolve_context(head_without_partial_subcommand);
         let flag_scope_path = resolver.resolve_flag_scope_path(&matched);
 
@@ -220,6 +231,7 @@ impl CompletionEngine {
             .collect();
 
         let context_node = resolver.resolve_exact(&matched).unwrap_or(&self.tree.root);
+        let has_subcommands = !context_node.children.is_empty();
         let subcommand_context =
             context_node.value_key || (has_subcommands && arg_tokens.is_empty());
 

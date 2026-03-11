@@ -166,8 +166,13 @@ impl SuggestionEngine {
         let mut out = Vec::new();
 
         if request.show_subcommands {
+            let subcommand_stub = if request.context_node.children.contains_key(request.stub) {
+                ""
+            } else {
+                request.stub
+            };
             out.extend(
-                self.subcommand_suggestions(request.context_node, request.stub)
+                self.subcommand_suggestions(request.context_node, subcommand_stub)
                     .into_iter()
                     .map(SuggestionOutput::Item),
             );
@@ -216,11 +221,16 @@ impl SuggestionEngine {
     ) -> Vec<Suggestion> {
         let allowlist = self.resolved_flag_allowlist(node, cmd);
         let required = self.required_flags(node, cmd);
+        let flag_stub = if node.flags.contains_key(stub) {
+            ""
+        } else {
+            stub
+        };
 
         node.flags
             .iter()
             .filter_map(|(flag, meta)| {
-                let score = self.match_score(stub, flag)?;
+                let score = self.match_score(flag_stub, flag)?;
                 Some((flag, meta, score))
             })
             .filter(|(flag, _, _)| {
@@ -343,6 +353,14 @@ impl SuggestionEngine {
     }
 
     fn entry_suggestions(&self, entries: &[SuggestionEntry], stub: &str) -> Vec<SuggestionOutput> {
+        let stub = if entries
+            .iter()
+            .any(|entry| fold_case(&entry.value) == fold_case(stub))
+        {
+            ""
+        } else {
+            stub
+        };
         entries
             .iter()
             .filter_map(|entry| {

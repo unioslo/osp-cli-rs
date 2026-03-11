@@ -2,7 +2,7 @@ use super::{OspCompletionMenu, needs_space_prefix};
 use nu_ansi_term::{Color, Style};
 use reedline::{Completer, Editor, Menu, MenuEvent, Span, Suggestion, UndoBehavior};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone)]
@@ -38,24 +38,36 @@ struct ScopedConfigCompleter;
 impl Completer for ScopedConfigCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         let input = line.get(..pos).unwrap_or(line);
-        match input {
-            "config " | "config show" | "config get" | "config explain" => {
-                let span = Span { start: 7, end: pos };
-                vec![
-                    suggestion("show", span),
-                    suggestion("get", span),
-                    suggestion("explain", span),
-                ]
-            }
-            "config show " => {
+        if let Some(rest) = input.strip_prefix("config ") {
+            if let Some(flag_stub) = rest.strip_prefix("show ") {
                 let span = Span {
-                    start: pos,
+                    start: pos.saturating_sub(flag_stub.len()),
                     end: pos,
                 };
-                vec![suggestion("--sources", span), suggestion("--raw", span)]
+                let all_flags = ["--sources", "--raw"];
+                let exact_flag = all_flags.contains(&flag_stub);
+                return ["--sources", "--raw"]
+                    .into_iter()
+                    .filter(|flag| {
+                        flag_stub.is_empty() || exact_flag || flag.starts_with(flag_stub)
+                    })
+                    .map(|flag| suggestion(flag, span))
+                    .collect();
             }
-            _ => Vec::new(),
+
+            if !rest.contains(' ') {
+                let span = Span { start: 7, end: pos };
+                let all_commands = ["show", "get", "explain"];
+                let exact_command = all_commands.contains(&rest);
+                return ["show", "get", "explain"]
+                    .into_iter()
+                    .filter(|command| rest.is_empty() || exact_command || command.starts_with(rest))
+                    .map(|command| suggestion(command, span))
+                    .collect();
+            }
         }
+
+        Vec::new()
     }
 }
 
@@ -77,6 +89,14 @@ fn suggestion(value: &str, span: Span) -> Suggestion {
 
 fn split_lines(output: &str) -> Vec<&str> {
     output.split_terminator("\r\n").collect()
+}
+
+fn dispatch_tab_like_reedline(menu: &mut OspCompletionMenu) {
+    if menu.is_active() {
+        menu.menu_event(MenuEvent::NextElement);
+    } else {
+        menu.menu_event(MenuEvent::Activate(false));
+    }
 }
 
 fn env_lock() -> &'static Mutex<()> {
@@ -678,29 +698,62 @@ fn builders_shape_layout_and_min_rows() {
 }
 
 #[test]
-fn navigation_events_defer_buffer_and_selection_updates_until_refresh_unit() {
+fn second_tab_updates_root_buffer_before_refresh_unit() {
+    let mut editor = Editor::default();
+    set_buffer(&mut editor, "");
+    let mut completer = FixedCompleter {
+        suggestions: vec![
+            suggestion("help", Span { start: 0, end: 0 }),
+            suggestion("exit", Span { start: 0, end: 0 }),
+        ],
+    };
+    let mut menu = OspCompletionMenu::default();
+
+    dispatch_tab_like_reedline(&mut menu);
+    assert_eq!(editor.line_buffer().get_buffer(), "");
+    menu.update_for_test(&mut editor, &mut completer, 80);
+
+    dispatch_tab_like_reedline(&mut menu);
+    assert_eq!(editor.line_buffer().get_buffer(), "help");
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(menu.core.selected_index(), Some(0));
+}
+
+#[test]
+fn second_tab_updates_committed_token_buffer_before_refresh_unit() {
     let mut editor = Editor::default();
     set_buffer(&mut editor, "config ");
     let mut completer = ScopedConfigCompleter;
     let mut menu = OspCompletionMenu::default();
 
-    menu.menu_event(MenuEvent::Activate(false));
-    menu.update_for_test(&mut editor, &mut completer, 80);
-
-    menu.menu_event(MenuEvent::NextElement);
+    dispatch_tab_like_reedline(&mut menu);
     assert_eq!(editor.line_buffer().get_buffer(), "config ");
-    assert!(matches!(menu.event, Some(MenuEvent::NextElement)));
-
     menu.update_for_test(&mut editor, &mut completer, 80);
+
+    dispatch_tab_like_reedline(&mut menu);
     assert_eq!(editor.line_buffer().get_buffer(), "config show");
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(menu.core.selected_index(), Some(0));
+}
+
+#[test]
+fn contract_second_and_later_tab_keep_the_same_slot_without_buffer_menu_drift_unit() {
+    let mut editor = Editor::default();
+    set_buffer(&mut editor, "config ");
+    let mut completer = ScopedConfigCompleter;
+    let mut menu = OspCompletionMenu::default();
+
+    dispatch_tab_like_reedline(&mut menu);
+    menu.update_for_test(&mut editor, &mut completer, 80);
+
+    dispatch_tab_like_reedline(&mut menu);
+    assert_eq!(editor.line_buffer().get_buffer(), "config show");
+    menu.update_for_test(&mut editor, &mut completer, 80);
     assert_eq!(menu.core.selected_index(), Some(0));
 
-    menu.menu_event(MenuEvent::NextElement);
-    assert_eq!(editor.line_buffer().get_buffer(), "config show");
-    assert!(matches!(menu.event, Some(MenuEvent::NextElement)));
-
-    menu.update_for_test(&mut editor, &mut completer, 80);
+    dispatch_tab_like_reedline(&mut menu);
     assert_eq!(editor.line_buffer().get_buffer(), "config get");
+    menu.update_for_test(&mut editor, &mut completer, 80);
     assert_eq!(menu.core.selected_index(), Some(1));
 }
 
@@ -750,6 +803,139 @@ fn space_after_subcommand_switches_completion_to_child_scope_unit() {
     menu.menu_event(MenuEvent::NextElement);
     menu.update_for_test(&mut editor, &mut completer, 80);
     assert_eq!(editor.line_buffer().get_buffer(), "config show --sources");
+}
+
+#[test]
+fn contract_shift_tab_reverses_navigation_in_the_same_slot_without_drift_unit() {
+    let mut editor = Editor::default();
+    set_buffer(&mut editor, "config ");
+    let mut completer = ScopedConfigCompleter;
+    let mut menu = OspCompletionMenu::default();
+
+    dispatch_tab_like_reedline(&mut menu);
+    menu.update_for_test(&mut editor, &mut completer, 80);
+
+    menu.menu_event(MenuEvent::PreviousElement);
+    assert_eq!(editor.line_buffer().get_buffer(), "config explain");
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(menu.core.selected_index(), Some(2));
+
+    menu.menu_event(MenuEvent::PreviousElement);
+    assert_eq!(editor.line_buffer().get_buffer(), "config get");
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(menu.core.selected_index(), Some(1));
+}
+
+#[test]
+fn contract_enter_accepts_esc_closes_and_typing_recomputes_the_same_slot_unit() {
+    let mut editor = Editor::default();
+    set_buffer(&mut editor, "config sh");
+    let mut completer = ScopedConfigCompleter;
+    let mut menu = OspCompletionMenu::default();
+
+    menu.menu_event(MenuEvent::Activate(false));
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    let values = menu
+        .get_values()
+        .iter()
+        .map(|suggestion| suggestion.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec!["show"]);
+
+    menu.accept_selection_in_buffer(&mut editor);
+    menu.menu_event(MenuEvent::Deactivate);
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config show ");
+    assert!(!menu.is_active());
+
+    set_buffer(&mut editor, "config sh");
+    menu.menu_event(MenuEvent::Activate(false));
+    menu.update_for_test(&mut editor, &mut completer, 80);
+
+    set_buffer(&mut editor, "config sho");
+    menu.menu_event(MenuEvent::Edit(false));
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    let narrowed = menu
+        .get_values()
+        .iter()
+        .map(|suggestion| suggestion.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(narrowed, vec!["show"]);
+
+    menu.menu_event(MenuEvent::Deactivate);
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert!(!menu.is_active());
+    assert_eq!(editor.line_buffer().get_buffer(), "config sho");
+}
+
+#[test]
+fn contract_root_menu_refresh_keeps_the_inserted_command_visible_and_selected_unit() {
+    let tree = crate::completion::CompletionTree {
+        root: crate::completion::CompletionNode::default()
+            .with_child(
+                "help",
+                crate::completion::CompletionNode::default().sort("000_help"),
+            )
+            .with_child(
+                "exit",
+                crate::completion::CompletionNode::default().sort("001_exit"),
+            )
+            .with_child(
+                "quit",
+                crate::completion::CompletionNode::default().sort("002_quit"),
+            )
+            .with_child(
+                "config",
+                crate::completion::CompletionNode::default().sort("003_config"),
+            )
+            .with_child(
+                "doctor",
+                crate::completion::CompletionNode::default().sort("004_doctor"),
+            )
+            .with_child(
+                "history",
+                crate::completion::CompletionNode::default().sort("005_history"),
+            )
+            .with_child(
+                "plugins",
+                crate::completion::CompletionNode::default().sort("006_plugins"),
+            )
+            .with_child(
+                "theme",
+                crate::completion::CompletionNode::default().sort("007_theme"),
+            ),
+        ..crate::completion::CompletionTree::default()
+    };
+    let projector = Arc::new(|line: &str| {
+        let hidden = if line.starts_with("help") {
+            std::collections::BTreeSet::from(["help".to_string()])
+        } else {
+            std::collections::BTreeSet::default()
+        };
+        crate::repl::LineProjection::passthrough(line).with_hidden_suggestions(hidden)
+    });
+
+    let mut editor = Editor::default();
+    let mut completer = crate::repl::ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
+    let mut menu = OspCompletionMenu::default();
+
+    dispatch_tab_like_reedline(&mut menu);
+    menu.update_for_test(&mut editor, &mut completer, 80);
+
+    dispatch_tab_like_reedline(&mut menu);
+    assert_eq!(editor.line_buffer().get_buffer(), "help");
+    menu.update_for_test(&mut editor, &mut completer, 80);
+
+    let values = menu
+        .get_values()
+        .iter()
+        .map(|suggestion| suggestion.value.as_str())
+        .collect::<Vec<_>>();
+    assert!(values.contains(&"help"));
+    assert_eq!(
+        menu.core.selected_value().map(|item| item.value.as_str()),
+        Some("help")
+    );
 }
 
 #[test]

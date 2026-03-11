@@ -51,6 +51,8 @@ pub(crate) mod surface;
 
 #[cfg(test)]
 pub(crate) use dispatch::apply_repl_shell_prefix;
+#[cfg(test)]
+pub(crate) use engine::ReplCompleter;
 pub use engine::{
     CompletionDebug, CompletionDebugFrame, CompletionDebugMatch, CompletionDebugOptions, DebugStep,
     HighlightDebugSpan, HistoryConfig, HistoryConfigBuilder, HistoryEntry, HistoryShellContext,

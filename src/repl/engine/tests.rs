@@ -1,4 +1,4 @@
-use crate::completion::{CompletionNode, CompletionTree, FlagNode};
+use crate::completion::{ArgNode, CompletionNode, CompletionTree, FlagNode, SuggestionEntry};
 use nu_ansi_term::Color;
 use reedline::Span;
 use reedline::{
@@ -45,6 +45,70 @@ fn completion_tree_with_config_show() -> CompletionTree {
         root,
         ..CompletionTree::default()
     }
+}
+
+fn completion_tree_with_root_commands() -> CompletionTree {
+    let root = CompletionNode::default()
+        .with_child("help", CompletionNode::default())
+        .with_child("exit", CompletionNode::default())
+        .with_child("quit", CompletionNode::default())
+        .with_child("config", CompletionNode::default());
+
+    CompletionTree {
+        root,
+        ..CompletionTree::default()
+    }
+}
+
+fn completion_tree_with_root_and_config_show() -> CompletionTree {
+    let show = CompletionNode::default()
+        .with_flag("--sources", FlagNode::new().flag_only())
+        .with_flag("--raw", FlagNode::new().flag_only());
+    let config = CompletionNode::default()
+        .with_child("show", show)
+        .with_child("get", CompletionNode::default())
+        .with_child("explain", CompletionNode::default());
+
+    let root = CompletionNode::default()
+        .with_child("help", CompletionNode::default())
+        .with_child("exit", CompletionNode::default())
+        .with_child("quit", CompletionNode::default())
+        .with_child("config", config)
+        .with_child("doctor", CompletionNode::default());
+
+    CompletionTree {
+        root,
+        ..CompletionTree::default()
+    }
+}
+
+fn completion_tree_with_theme_show_values() -> CompletionTree {
+    let show = CompletionNode {
+        args: vec![ArgNode::named("theme").suggestions([
+            SuggestionEntry::value("catppuccin"),
+            SuggestionEntry::value("dracula"),
+            SuggestionEntry::value("gruvbox"),
+        ])],
+        ..CompletionNode::default()
+    };
+
+    let theme = CompletionNode::default().with_child("show", show);
+    let root = CompletionNode::default().with_child("theme", theme);
+
+    CompletionTree {
+        root,
+        ..CompletionTree::default()
+    }
+}
+
+fn suggestion_ids(outputs: Vec<crate::completion::SuggestionOutput>) -> Vec<String> {
+    outputs
+        .into_iter()
+        .filter_map(|output| match output {
+            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
+            crate::completion::SuggestionOutput::PathSentinel => None,
+        })
+        .collect()
 }
 
 fn history_config() -> super::HistoryConfigBuilder {
@@ -502,6 +566,164 @@ fn debug_completion_switches_to_show_flags_once_the_subcommand_is_committed_unit
         .map(|item| item.id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(ids, vec!["--raw", "--sources"]);
+}
+
+#[test]
+fn debug_completion_keeps_root_command_scope_until_space_commits_command_unit() {
+    let tree = completion_tree_with_root_commands();
+    let engine = crate::completion::CompletionEngine::new(tree.clone());
+    let analysis = engine.analyze("help", "help".len());
+    assert_eq!(analysis.cursor.token_stub, "help");
+    assert_eq!(analysis.context.matched_path, Vec::<String>::new());
+    assert!(analysis.context.subcommand_context);
+
+    let debug = debug_completion(
+        &tree,
+        "help",
+        "help".len(),
+        CompletionDebugOptions::new(80, 6),
+    );
+
+    let ids = debug
+        .matches
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["config", "exit", "help", "quit"]);
+}
+
+#[test]
+fn contract_first_tab_opens_the_menu_for_the_current_slot_unit() {
+    let engine =
+        crate::completion::CompletionEngine::new(completion_tree_with_root_and_config_show());
+
+    let root = suggestion_ids(engine.complete("", 0).1);
+    assert!(root.contains(&"help".to_string()));
+    assert!(root.contains(&"config".to_string()));
+    assert!(root.contains(&"doctor".to_string()));
+
+    let config = suggestion_ids(engine.complete("config ", "config ".len()).1);
+    assert_eq!(config, vec!["explain", "get", "show"]);
+
+    let show = suggestion_ids(engine.complete("config show ", "config show ".len()).1);
+    assert_eq!(show, vec!["--raw", "--sources"]);
+}
+
+#[test]
+fn contract_token_is_not_committed_until_there_is_a_delimiter_unit() {
+    let engine = crate::completion::CompletionEngine::new(completion_tree_with_config_show());
+
+    let siblings = suggestion_ids(engine.complete("config show", "config show".len()).1);
+    assert_eq!(siblings, vec!["explain", "get", "show"]);
+
+    let children = suggestion_ids(engine.complete("config show ", "config show ".len()).1);
+    assert_eq!(children, vec!["--raw", "--sources"]);
+}
+
+#[test]
+fn contract_exact_matches_without_trailing_space_stay_in_sibling_scope_unit() {
+    let engine =
+        crate::completion::CompletionEngine::new(completion_tree_with_root_and_config_show());
+
+    let root_siblings = suggestion_ids(engine.complete("config", "config".len()).1);
+    assert_eq!(
+        root_siblings,
+        vec!["config", "doctor", "exit", "help", "quit"]
+    );
+
+    let config_siblings = suggestion_ids(engine.complete("config show", "config show".len()).1);
+    assert_eq!(config_siblings, vec!["explain", "get", "show"]);
+}
+
+#[test]
+fn contract_space_commits_scope_for_the_next_tab_unit() {
+    let engine =
+        crate::completion::CompletionEngine::new(completion_tree_with_root_and_config_show());
+
+    let root_siblings = suggestion_ids(engine.complete("config", "config".len()).1);
+    assert_eq!(
+        root_siblings,
+        vec!["config", "doctor", "exit", "help", "quit"]
+    );
+
+    let committed_children = suggestion_ids(engine.complete("config ", "config ".len()).1);
+    assert_eq!(committed_children, vec!["explain", "get", "show"]);
+
+    let committed_flags = suggestion_ids(engine.complete("config show ", "config show ".len()).1);
+    assert_eq!(committed_flags, vec!["--raw", "--sources"]);
+}
+
+#[test]
+fn contract_used_flags_disappear_once_committed_but_uncommitted_flags_stay_replaceable_unit() {
+    let engine = crate::completion::CompletionEngine::new(completion_tree_with_config_show());
+
+    let uncommitted = suggestion_ids(
+        engine
+            .complete("config show --raw", "config show --raw".len())
+            .1,
+    );
+    assert_eq!(uncommitted, vec!["--raw", "--sources"]);
+
+    let committed = suggestion_ids(
+        engine
+            .complete("config show --raw ", "config show --raw ".len())
+            .1,
+    );
+    assert_eq!(committed, vec!["--sources"]);
+}
+
+#[test]
+fn contract_exact_argument_values_stay_in_sibling_scope_until_delimited_unit() {
+    let engine = crate::completion::CompletionEngine::new(completion_tree_with_theme_show_values());
+
+    let uncommitted = suggestion_ids(
+        engine
+            .complete("theme show catppuccin", "theme show catppuccin".len())
+            .1,
+    );
+    assert_eq!(uncommitted, vec!["catppuccin", "dracula", "gruvbox"]);
+
+    let committed = suggestion_ids(
+        engine
+            .complete("theme show catppuccin ", "theme show catppuccin ".len())
+            .1,
+    );
+    assert!(committed.is_empty());
+}
+
+#[test]
+fn contract_repl_completer_keeps_active_hidden_token_visible_until_a_space_commits_it_unit() {
+    let tree = completion_tree_with_root_commands();
+    let projector = Arc::new(|line: &str| {
+        let hidden = if line.starts_with("help") {
+            BTreeSet::from(["help".to_string()])
+        } else {
+            BTreeSet::default()
+        };
+        LineProjection::passthrough(line).with_hidden_suggestions(hidden)
+    });
+    let mut completer = ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
+
+    let root = completer
+        .complete("", 0)
+        .into_iter()
+        .map(|item| item.value)
+        .collect::<Vec<_>>();
+    assert!(root.contains(&"help".to_string()));
+
+    let exact_uncommitted = completer
+        .complete("help", "help".len())
+        .into_iter()
+        .map(|item| item.value)
+        .collect::<Vec<_>>();
+    assert!(exact_uncommitted.contains(&"help".to_string()));
+
+    let committed = completer
+        .complete("help ", "help ".len())
+        .into_iter()
+        .map(|item| item.value)
+        .collect::<Vec<_>>();
+    assert!(!committed.contains(&"help".to_string()));
 }
 
 #[test]
