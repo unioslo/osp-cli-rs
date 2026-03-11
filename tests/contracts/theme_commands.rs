@@ -14,11 +14,18 @@ fn first_row<'a>(payload: &'a Value, context: &str) -> &'a Value {
 }
 
 #[cfg(unix)]
+fn osp_command(home: &std::path::Path) -> Command {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.envs(crate::test_env::isolated_env(home))
+        .env("PATH", "/usr/bin:/bin");
+    cmd
+}
+
+#[cfg(unix)]
 #[test]
 fn theme_list_contract() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    let output = cmd
-        .env("PATH", "/usr/bin:/bin")
+    let home = make_temp_dir("osp-cli-theme-list");
+    let output = osp_command(&home)
         .args(["--json", "theme", "list"])
         .assert()
         .success()
@@ -55,9 +62,8 @@ fn theme_list_contract() {
 #[cfg(unix)]
 #[test]
 fn theme_list_human_rich_snapshot_contract() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    let output = cmd
-        .env("PATH", "/usr/bin:/bin")
+    let home = make_temp_dir("osp-cli-theme-list-rich");
+    let output = osp_command(&home)
         .args([
             "--mode",
             "rich",
@@ -86,9 +92,8 @@ fn theme_list_human_rich_snapshot_contract() {
 #[cfg(unix)]
 #[test]
 fn theme_show_contract() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    let output = cmd
-        .env("PATH", "/usr/bin:/bin")
+    let home = make_temp_dir("osp-cli-theme-show");
+    let output = osp_command(&home)
         .args(["--json", "theme", "show", "dracula"])
         .assert()
         .success()
@@ -115,9 +120,8 @@ fn theme_show_contract() {
 #[cfg(unix)]
 #[test]
 fn theme_show_plain_snapshot_contract() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    let output = cmd
-        .env("PATH", "/usr/bin:/bin")
+    let home = make_temp_dir("osp-cli-theme-show-plain");
+    let output = osp_command(&home)
         .args([
             "--mode",
             "plain",
@@ -157,10 +161,7 @@ theme.name = "nord"
 "#,
     );
 
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    let output = cmd
-        .envs(crate::test_env::isolated_env(&home))
-        .env("PATH", "/usr/bin:/bin")
+    let output = osp_command(&home)
         .args(["--json", "--theme", "dracula", "theme", "show"])
         .assert()
         .success()
@@ -190,10 +191,7 @@ theme.name = "nord"
 "#,
     );
 
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    let output = cmd
-        .envs(crate::test_env::isolated_env(&home))
-        .env("PATH", "/usr/bin:/bin")
+    let output = osp_command(&home)
         .args(["--json", "theme", "show"])
         .assert()
         .success()
@@ -246,10 +244,7 @@ warning = "#abcdef"
     )
     .expect("child theme should be written");
 
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    let output = cmd
-        .envs(crate::test_env::isolated_env(&home))
-        .env("PATH", "/usr/bin:/bin")
+    let output = osp_command(&home)
         .args(["--json", "theme", "show"])
         .assert()
         .success()
@@ -289,9 +284,9 @@ warning = "#abcdef"
 #[cfg(unix)]
 #[test]
 fn unknown_theme_fails_fast_contract() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("PATH", "/usr/bin:/bin")
-        .args(["--theme", "missing-theme", "theme", "list"]);
+    let home = make_temp_dir("osp-cli-theme-missing");
+    let mut cmd = osp_command(&home);
+    cmd.args(["--theme", "missing-theme", "theme", "list"]);
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("unknown theme: missing-theme"));

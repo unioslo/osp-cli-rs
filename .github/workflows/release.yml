@@ -72,7 +72,7 @@ jobs:
         run: ./scripts/check-release-readiness.py "${RELEASE_TAG}"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.0
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -124,7 +124,7 @@ jobs:
           fi
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.0
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -222,7 +222,7 @@ jobs:
           fi
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.0
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2

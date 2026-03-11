@@ -20,8 +20,12 @@ theme.name = "plain"
 
 #[cfg(unix)]
 fn run_with_config(config_path: &std::path::Path, args: &[&str]) -> String {
+    let home = config_path
+        .parent()
+        .expect("config path should live under an isolated temp home");
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     let output = cmd
+        .envs(crate::test_env::isolated_env(home))
         .env("PATH", "/usr/bin:/bin")
         .env("OSP_CONFIG_FILE", config_path)
         .env_remove("NO_COLOR")
@@ -41,13 +45,18 @@ fn run_with_config_stderr(
     expect_success: bool,
     args: &[&str],
 ) -> String {
+    let home = config_path
+        .parent()
+        .expect("config path should live under an isolated temp home");
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
-    cmd.env("PATH", "/usr/bin:/bin")
+    let env = xdg_config_home.map_or_else(
+        || crate::test_env::isolated_env(home),
+        |path| crate::test_env::isolated_env_with_config_home(home, path),
+    );
+    cmd.envs(env)
+        .env("PATH", "/usr/bin:/bin")
         .env("OSP_CONFIG_FILE", config_path)
         .env_remove("NO_COLOR");
-    if let Some(path) = xdg_config_home {
-        cmd.env("XDG_CONFIG_HOME", path);
-    }
     let assert = cmd.args(args).assert();
     let output = if expect_success {
         assert.success().get_output().stderr.clone()
@@ -59,9 +68,16 @@ fn run_with_config_stderr(
 
 #[cfg(unix)]
 fn run_with_config_tty(config_path: &std::path::Path, args: &[&str]) -> String {
+    let home = config_path
+        .parent()
+        .expect("config path should live under an isolated temp home");
     let bin = assert_cmd::cargo::cargo_bin!("osp");
     let command = format!(
-        "env -u NO_COLOR PATH=/usr/bin:/bin TERM=xterm-256color OSP_CONFIG_FILE={} {} {}",
+        "env -u NO_COLOR HOME={} XDG_CONFIG_HOME={} XDG_CACHE_HOME={} XDG_STATE_HOME={} PATH=/usr/bin:/bin TERM=xterm-256color OSP_CONFIG_FILE={} {} {}",
+        home.display(),
+        home.join(".config").display(),
+        home.join(".cache").display(),
+        home.join(".local").join("state").display(),
         config_path.display(),
         bin.display(),
         args.join(" ")

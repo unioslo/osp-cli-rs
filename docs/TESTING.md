@@ -1,7 +1,7 @@
 # Testing Strategy
 
-`osp-cli-rust` uses behavior-first TDD with explicit tiers.
-This mirrors `osprov-cli`: `unit`, `integration`, `contracts`, `e2e`.
+`osp-cli-rust` uses behavior-first TDD with explicit behavior tiers plus a
+small architecture guardrail suite.
 
 ## Test Layout
 
@@ -9,10 +9,13 @@ Root package tests are currently anchored in `tests/`:
 
 ```text
 tests/
+  architecture.rs
   unit.rs
   integration.rs
   contracts.rs
   e2e.rs
+  architecture/
+    *.rs
   unit/
     *.rs
   integration/
@@ -25,8 +28,8 @@ tests/
     README.md
 ```
 
-Per-crate internal unit tests may also exist in `src/lib.rs` modules
-(e.g. `osp-dsl`, `osp-ports`, `osp-services`, `osp-repl`, `osp-api`).
+Internal unit tests also live next to the code they cover in `src/**/tests.rs`
+and `src/**/tests/*.rs`.
 
 ## Tier Definitions
 
@@ -34,26 +37,34 @@ Per-crate internal unit tests may also exist in `src/lib.rs` modules
   - Pure logic and edge-case parsing.
   - No process spawning.
 - `integration`
-  - Cross-crate in-process flow.
-  - Example: mock LDAP -> DSL -> renderer.
+  - In-process flow across major subsystems.
+  - Example: host assembly -> native/plugin dispatch -> renderer.
 - `contracts`
   - Public CLI behavior through spawned binary.
+  - Prefer isolated roots via `tests/contracts/test_env.rs`.
 - `e2e`
-  - Interactive/PTY behavior.
-  - Can remain `#[ignore]` until PTY harness is stable.
+  - Real process and terminal behavior where subprocess or PTY behavior matters.
+  - Includes PTY-driven REPL flows and a few binary-surface smoke checks.
+- `architecture`
+  - Fast structural guardrails.
+  - Example: import boundaries, public facade limits, and toolchain alignment.
 
 ## TDD Workflow (Required)
 
-1. Add/adjust a failing `contracts` test for user-visible behavior.
-2. Add one `integration` test when behavior crosses crate boundaries.
-3. Add `unit` tests only for branchy/error-prone internals.
-4. Implement minimal code for green.
-5. Refactor without changing behavior.
+1. Add or adjust a failing `contracts` test for user-visible behavior.
+2. Add one `integration` test when the behavior crosses subsystem seams.
+3. Add `unit` tests only for branchy or failure-prone internals.
+4. Add `e2e` only when the behavior depends on real process or PTY semantics.
+5. Add `architecture` coverage when the change introduces or relaxes a structural policy.
+6. Implement minimal code for green.
+7. Refactor without changing behavior.
 
 ## Commands
 
 - Root package: `cargo test`
+- Architecture only: `cargo test --test architecture`
 - CLI contracts only: `cargo test --test contracts`
+- REPL/process e2e only: `cargo test --test e2e`
 - Review snapshots: `cargo insta review`
 - Re-record snapshots during a focused run: `cargo insta test -p osp-cli`
 
@@ -85,20 +96,24 @@ In short:
 - run `just cov` or `just cov-gate` when you need the full coverage check
 - use `cargo insta review` to accept intentional output snapshot changes
 
-## Current Coverage (LDAP Mock + DSL + REPL)
+## Current Coverage Shape
 
 - `contracts`
-  - `ldap` and `mreg` domain commands dispatched via executable plugins.
-  - `osp <plugin-command> --help` and `osp <plugin-command> help` pass through.
-  - `osp plugins list|commands|enable|disable|doctor`.
-  - bundled manifest enforcement and mismatch detection.
+  - plugin discovery, provider selection, and dispatch
+  - config, theme, doctor, help, history, version, and profile command surfaces
+  - stdout/stderr separation and snapshot-backed visible output promises
 - `integration`
-  - `P`, `V`, `F` pipelines over LDAP fixtures.
+  - app assembly, config load/mutate flows, plugin manager behavior, guide UI
+  - DSL parse/eval flows and service execution with test seams
 - `unit`
-  - DSL parser quote behavior.
-  - LDAP filter key/value semantics.
+  - parser, completion, config, UI, plugin, and runtime helpers
 - `e2e`
-  - REPL smoke placeholder (ignored for now).
+  - binary surface smoke coverage
+  - PTY-driven REPL help, completion, intro, prompt, highlight, and plugin flows
+- `architecture`
+  - import limits
+  - intent seams
+  - curated root facade and pinned toolchain alignment
 
 ## Definition Of Done Per Feature
 

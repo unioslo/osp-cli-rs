@@ -67,23 +67,23 @@ GitHub Actions runs two separate lanes:
 
 - `Verify`
   Runs on `pull_request` and pushes to `main`.
+  It runs on the pinned Rust `1.94.0` toolchain from `rust-toolchain.toml`.
   It enforces:
   - `./scripts/check-rust-fast.sh`
   - root package checks
-  - workspace compatibility tests
   - the coverage gate
 
 - `Release`
   Runs when a `v*` tag is pushed.
-  It reruns verification, then builds release artifacts for:
-  - Linux `x86_64-unknown-linux-gnu`
-  - macOS `x86_64-apple-darwin`
-  - Windows `x86_64-pc-windows-msvc`
+  It reruns verification on Rust `1.94.0`, then dry-runs publish and publishes
+  the crate and release notes.
+  Cross-platform packaged binaries are currently disabled while that release
+  story is on hold.
 
 The release workflow publishes both:
 
 - the `osp-cli` crate to crates.io through trusted publishing
-- GitHub release assets for Linux, macOS, and Windows
+- the GitHub release entry and release notes
 
 Release artifacts are built from the root single-crate package.
 

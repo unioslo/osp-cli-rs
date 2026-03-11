@@ -6,3 +6,5 @@ mod guided_construction;
 mod import_limits;
 #[path = "architecture/intent_seams.rs"]
 mod intent_seams;
+#[path = "architecture/toolchain_contract.rs"]
+mod toolchain_contract;
