@@ -135,7 +135,7 @@ impl ReplStateRebuilder {
             &self.context,
             &config,
             &self.launch,
-            super::assembly::RenderSettingsSeed::Existing(render_settings),
+            super::assembly::RenderSettingsSeed::Existing(Box::new(render_settings)),
             None,
             Some(self.plugin_preferences.clone()),
             self.preserved_session.session_layer(),

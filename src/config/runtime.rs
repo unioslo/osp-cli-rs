@@ -268,6 +268,7 @@ impl RuntimeDefaults {
             "ui.messages.layout" => DEFAULT_UI_MESSAGES_LAYOUT.to_string(),
             "ui.message.verbosity" => "success".to_string(),
             "ui.chrome.frame" => DEFAULT_UI_CHROME_FRAME.to_string(),
+            "ui.chrome.rule_policy" => "per-section".to_string(),
             "ui.table.overflow" => DEFAULT_UI_TABLE_OVERFLOW.to_string(),
             "ui.table.border" => DEFAULT_UI_TABLE_BORDER.to_string(),
             "ui.help.table_chrome" => "none".to_string(),

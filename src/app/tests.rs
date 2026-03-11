@@ -453,6 +453,36 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
 }
 
 #[cfg(unix)]
+fn with_temp_config_paths<T>(callback: impl FnOnce() -> T) -> T {
+    let _guard = crate::tests::env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = make_temp_dir("osp-cli-test-config-paths");
+    let config_path = root.join("config.toml");
+    let secrets_path = root.join("secrets.toml");
+    let previous_config = std::env::var_os("OSP_CONFIG_FILE");
+    let previous_secrets = std::env::var_os("OSP_SECRETS_FILE");
+
+    unsafe {
+        std::env::set_var("OSP_CONFIG_FILE", &config_path);
+        std::env::set_var("OSP_SECRETS_FILE", &secrets_path);
+    }
+
+    let result = callback();
+
+    match previous_config {
+        Some(value) => unsafe { std::env::set_var("OSP_CONFIG_FILE", value) },
+        None => unsafe { std::env::remove_var("OSP_CONFIG_FILE") },
+    }
+    match previous_secrets {
+        Some(value) => unsafe { std::env::set_var("OSP_SECRETS_FILE", value) },
+        None => unsafe { std::env::remove_var("OSP_SECRETS_FILE") },
+    }
+    let _ = std::fs::remove_dir_all(root);
+    result
+}
+
+#[cfg(unix)]
 fn write_pipeline_test_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 

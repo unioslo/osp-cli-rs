@@ -607,32 +607,6 @@ pub struct AppRuntime {
 }
 
 impl AppRuntime {
-    /// Derives the runtime snapshot from resolved config plus shared client registries.
-    pub(crate) fn from_resolved_parts(
-        context: RuntimeContext,
-        resolved_config: ResolvedConfig,
-        render_settings: RenderSettings,
-        message_verbosity: MessageLevel,
-        debug_verbosity: u8,
-        plugins: &PluginManager,
-        native_commands: &NativeCommandRegistry,
-        themes: ThemeCatalog,
-        launch: LaunchContext,
-    ) -> Self {
-        let config = ConfigState::new(resolved_config);
-        let ui = UiState::builder(render_settings)
-            .with_message_verbosity(message_verbosity)
-            .with_debug_verbosity(debug_verbosity)
-            .build();
-        let auth = AuthState::from_resolved_with_external_policies(
-            config.resolved(),
-            plugins,
-            native_commands,
-        );
-
-        Self::new(context, config, ui, auth, themes, launch)
-    }
-
     /// Creates the runtime snapshot shared across CLI and REPL execution.
     pub(crate) fn new(
         context: RuntimeContext,

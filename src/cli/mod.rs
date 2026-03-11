@@ -18,7 +18,7 @@ pub(crate) mod pipeline;
 pub(crate) mod rows;
 use crate::config::{ConfigLayer, ConfigValue, ResolvedConfig, RuntimeLoadOptions};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use crate::ui::chrome::SectionFrameStyle;
+use crate::ui::chrome::{RuledSectionPolicy, SectionFrameStyle};
 use crate::ui::theme::DEFAULT_THEME_NAME;
 use crate::ui::{
     GuideDefaultFormat, HelpTableChrome, RenderSettings, StyleOverrides, TableBorderStyle,
@@ -699,6 +699,12 @@ pub(crate) fn apply_render_settings_from_config(
         settings.chrome_frame = parsed;
     }
 
+    if let Some(value) = config.get_string("ui.chrome.rule_policy")
+        && let Some(parsed) = RuledSectionPolicy::parse(value)
+    {
+        settings.ruled_section_policy = parsed;
+    }
+
     if let Some(value) = config.get_string("ui.guide.default_format")
         && let Some(parsed) = GuideDefaultFormat::parse(value)
     {
@@ -1028,6 +1034,7 @@ mod tests {
             &[("ui.width", "88")],
             &[
                 ("ui.chrome.frame", "round"),
+                ("ui.chrome.rule_policy", "stacked"),
                 ("ui.table.border", "square"),
                 ("ui.table.overflow", "wrap"),
             ],
@@ -1038,6 +1045,10 @@ mod tests {
 
         assert_eq!(settings.width, Some(88));
         assert_eq!(settings.chrome_frame, SectionFrameStyle::Round);
+        assert_eq!(
+            settings.ruled_section_policy,
+            crate::ui::RuledSectionPolicy::Shared
+        );
         assert_eq!(settings.table_border, TableBorderStyle::Square);
         assert_eq!(settings.table_overflow, TableOverflow::Wrap);
     }

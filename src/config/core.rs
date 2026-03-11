@@ -567,6 +567,17 @@ impl ConfigSchema {
             ]),
         );
         schema.insert(
+            "ui.chrome.rule_policy",
+            SchemaEntry::string().with_allowed_values([
+                "per-section",
+                "independent",
+                "separate",
+                "shared",
+                "stacked",
+                "list",
+            ]),
+        );
+        schema.insert(
             "ui.table.overflow",
             SchemaEntry::string().with_allowed_values([
                 "clip", "hidden", "crop", "ellipsis", "truncate", "wrap", "none", "visible",

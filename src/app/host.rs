@@ -264,7 +264,7 @@ fn run(
         &runtime_context,
         &config,
         &launch_context,
-        super::assembly::RenderSettingsSeed::Existing(cli.render_settings()),
+        super::assembly::RenderSettingsSeed::DefaultAuto,
         None,
         None,
         session_layer.clone(),

@@ -551,17 +551,17 @@ pub(crate) struct AppStateParts {
 impl AppStateParts {
     fn from_init(init: AppStateInit, session_override: Option<AppSession>) -> Self {
         let clients = AppClients::new(init.plugins, init.native_commands);
-        let runtime = AppRuntime::from_resolved_parts(
-            init.context,
-            init.config,
-            init.render_settings,
-            init.message_verbosity,
-            init.debug_verbosity,
+        let config = crate::app::ConfigState::new(init.config);
+        let ui = crate::app::UiState::builder(init.render_settings)
+            .with_message_verbosity(init.message_verbosity)
+            .with_debug_verbosity(init.debug_verbosity)
+            .build();
+        let auth = crate::app::AuthState::from_resolved_with_external_policies(
+            config.resolved(),
             clients.plugins(),
             clients.native_commands(),
-            init.themes,
-            init.launch,
         );
+        let runtime = AppRuntime::new(init.context, config, ui, auth, init.themes, init.launch);
         let session = session_override
             .unwrap_or_else(|| AppSession::from_resolved_config(runtime.config.resolved()));
 
