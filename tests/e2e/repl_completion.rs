@@ -160,7 +160,11 @@ fn output_snapshot(output: &Arc<Mutex<String>>, max_len: usize) -> String {
     if buf.len() <= max_len {
         buf.clone()
     } else {
-        buf[buf.len().saturating_sub(max_len)..].to_string()
+        let mut start = buf.len().saturating_sub(max_len);
+        while start < buf.len() && !buf.is_char_boundary(start) {
+            start += 1;
+        }
+        buf[start..].to_string()
     }
 }
 
@@ -215,9 +219,13 @@ fn strip_terminal_noise(text: &str) -> String {
             byte if byte.is_ascii_control() => {
                 idx += 1;
             }
-            byte => {
-                out.push(byte as char);
-                idx += 1;
+            _ => {
+                let ch = text[idx..]
+                    .chars()
+                    .next()
+                    .expect("utf-8 cursor should stay on a character boundary");
+                out.push(ch);
+                idx += ch.len_utf8();
             }
         }
     }
