@@ -30,10 +30,14 @@ fn env_lock() -> &'static Mutex<()> {
 }
 
 fn completion_tree_with_config_show() -> CompletionTree {
-    let mut config = CompletionNode::default();
-    config
-        .children
-        .insert("show".to_string(), CompletionNode::default());
+    let show = CompletionNode::default()
+        .with_flag("--sources", FlagNode::new().flag_only())
+        .with_flag("--raw", FlagNode::new().flag_only());
+
+    let config = CompletionNode::default()
+        .with_child("show", show)
+        .with_child("get", CompletionNode::default())
+        .with_child("explain", CompletionNode::default());
 
     let mut root = CompletionNode::default();
     root.children.insert("config".to_string(), config);
@@ -427,6 +431,77 @@ fn debug_completion_navigation_and_empty_match_states_unit() {
     assert_eq!(debug.selected, -1);
     assert_eq!(debug.stub, "zzz");
     assert_eq!(debug.replace_range, [0, 3]);
+}
+
+#[test]
+fn debug_completion_keeps_same_token_scope_until_a_space_commits_the_subcommand_unit() {
+    let tree = completion_tree_with_config_show();
+
+    let frames = debug_completion_steps(
+        &tree,
+        "config ",
+        "config ".len(),
+        CompletionDebugOptions::new(80, 6),
+        &[DebugStep::Tab, DebugStep::Tab, DebugStep::Tab],
+    );
+
+    assert_eq!(frames[0].state.line, "config ");
+    assert!(frames[0].state.matches.iter().any(|item| item.id == "show"));
+    assert!(frames[0].state.matches.iter().any(|item| item.id == "get"));
+    assert!(
+        frames[0]
+            .state
+            .matches
+            .iter()
+            .any(|item| item.id == "explain")
+    );
+
+    assert!(matches!(
+        frames[1].state.line.as_str(),
+        "config explain" | "config get" | "config show"
+    ));
+    assert!(frames[1].state.matches.iter().any(|item| item.id == "show"));
+    assert!(frames[1].state.matches.iter().any(|item| item.id == "get"));
+    assert!(
+        frames[1]
+            .state
+            .matches
+            .iter()
+            .any(|item| item.id == "explain")
+    );
+
+    assert!(matches!(
+        frames[2].state.line.as_str(),
+        "config explain" | "config get" | "config show"
+    ));
+    assert_ne!(frames[2].state.line, frames[1].state.line);
+    assert!(frames[2].state.matches.iter().any(|item| item.id == "show"));
+    assert!(frames[2].state.matches.iter().any(|item| item.id == "get"));
+    assert!(
+        frames[2]
+            .state
+            .matches
+            .iter()
+            .any(|item| item.id == "explain")
+    );
+}
+
+#[test]
+fn debug_completion_switches_to_show_flags_once_the_subcommand_is_committed_unit() {
+    let tree = completion_tree_with_config_show();
+    let debug = debug_completion(
+        &tree,
+        "config show ",
+        "config show ".len(),
+        CompletionDebugOptions::new(80, 6),
+    );
+
+    let ids = debug
+        .matches
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["--raw", "--sources"]);
 }
 
 #[test]

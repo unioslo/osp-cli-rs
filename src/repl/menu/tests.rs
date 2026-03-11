@@ -32,6 +32,33 @@ impl Completer for DynamicSpanCompleter {
     }
 }
 
+#[derive(Clone)]
+struct ScopedConfigCompleter;
+
+impl Completer for ScopedConfigCompleter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        let input = line.get(..pos).unwrap_or(line);
+        match input {
+            "config " | "config show" | "config get" | "config explain" => {
+                let span = Span { start: 7, end: pos };
+                vec![
+                    suggestion("show", span),
+                    suggestion("get", span),
+                    suggestion("explain", span),
+                ]
+            }
+            "config show " => {
+                let span = Span {
+                    start: pos,
+                    end: pos,
+                };
+                vec![suggestion("--sources", span), suggestion("--raw", span)]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
 fn set_buffer(editor: &mut Editor, buffer: &str) {
     editor.edit_buffer(
         |buf| buf.set_buffer(buffer.to_string()),
@@ -651,27 +678,78 @@ fn builders_shape_layout_and_min_rows() {
 }
 
 #[test]
-fn direct_navigation_uses_registered_editor_pointer() {
+fn navigation_events_defer_buffer_and_selection_updates_until_refresh_unit() {
     let mut editor = Editor::default();
-    set_buffer(&mut editor, "co");
-    let mut completer = DynamicSpanCompleter;
+    set_buffer(&mut editor, "config ");
+    let mut completer = ScopedConfigCompleter;
     let mut menu = OspCompletionMenu::default();
 
     menu.menu_event(MenuEvent::Activate(false));
     menu.update_for_test(&mut editor, &mut completer, 80);
 
-    {
-        let _guard = super::ActiveEditorGuard::register(&mut editor);
-        menu.menu_event(MenuEvent::NextElement);
-    }
-    assert_eq!(editor.line_buffer().get_buffer(), "config");
-    assert!(menu.replace_span.is_some());
+    menu.menu_event(MenuEvent::NextElement);
+    assert_eq!(editor.line_buffer().get_buffer(), "config ");
+    assert!(matches!(menu.event, Some(MenuEvent::NextElement)));
 
-    {
-        let _guard = super::ActiveEditorGuard::register(&mut editor);
-        menu.menu_event(MenuEvent::NextElement);
-    }
-    assert_eq!(editor.line_buffer().get_buffer(), "doctor");
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config show");
+    assert_eq!(menu.core.selected_index(), Some(0));
+
+    menu.menu_event(MenuEvent::NextElement);
+    assert_eq!(editor.line_buffer().get_buffer(), "config show");
+    assert!(matches!(menu.event, Some(MenuEvent::NextElement)));
+
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config get");
+    assert_eq!(menu.core.selected_index(), Some(1));
+}
+
+#[test]
+fn cycling_without_space_stays_on_same_token_sibling_scope_unit() {
+    let mut editor = Editor::default();
+    set_buffer(&mut editor, "config ");
+    let mut completer = ScopedConfigCompleter;
+    let mut menu = OspCompletionMenu::default();
+
+    menu.menu_event(MenuEvent::Activate(false));
+    menu.update_for_test(&mut editor, &mut completer, 80);
+
+    menu.menu_event(MenuEvent::NextElement);
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config show");
+
+    menu.menu_event(MenuEvent::NextElement);
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config get");
+
+    let values = menu
+        .get_values()
+        .iter()
+        .map(|suggestion| suggestion.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec!["show", "get", "explain"]);
+}
+
+#[test]
+fn space_after_subcommand_switches_completion_to_child_scope_unit() {
+    let mut editor = Editor::default();
+    set_buffer(&mut editor, "config show ");
+    let mut completer = ScopedConfigCompleter;
+    let mut menu = OspCompletionMenu::default();
+
+    menu.menu_event(MenuEvent::Activate(false));
+    menu.update_for_test(&mut editor, &mut completer, 80);
+
+    let values = menu
+        .get_values()
+        .iter()
+        .map(|suggestion| suggestion.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec!["--sources", "--raw"]);
+
+    menu.menu_event(MenuEvent::NextElement);
+    menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config show --sources");
 }
 
 #[test]

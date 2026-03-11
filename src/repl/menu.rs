@@ -2,7 +2,6 @@ use reedline::{
     Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
     menu_functions::{can_partially_complete, replace_in_buffer},
 };
-use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
 
 use crate::repl::CompletionTraceMenuState;
@@ -30,37 +29,11 @@ pub struct OspCompletionMenu {
     indent_anchor: Option<u16>,
     cursor_col: u16,
     last_available_lines: u16,
+    // Queue one reedline menu event so editor mutation, match refresh, and
+    // subsequent render all observe the same step. Applying navigation here in
+    // `menu_event` would let the editor buffer advance before the refresh pass
+    // updates menu state, which is how prompt/menu drift can happen.
     event: Option<MenuEvent>,
-}
-
-thread_local! {
-    static ACTIVE_EDITOR: Cell<*mut Editor> = const { Cell::new(std::ptr::null_mut()) };
-}
-
-/// Scoped registration for the reedline editor pointer used by menu callbacks.
-///
-/// reedline's menu callback API does not pass the active `Editor` into
-/// `menu_event`, so the menu keeps a same-thread raw pointer while it runs the
-/// callback path. This is only sound as long as:
-/// - the pointer is registered and used on the same thread
-/// - the pointed-to `Editor` outlives the callback scope
-/// - the thread-local is cleared before the editor can be moved or dropped
-///
-/// The guard enforces the last invariant so future REPL lifecycle refactors do
-/// not accidentally leave a stale pointer behind.
-struct ActiveEditorGuard;
-
-impl ActiveEditorGuard {
-    fn register(editor: &mut Editor) -> Self {
-        ACTIVE_EDITOR.with(|cell| cell.set(editor as *mut Editor));
-        Self
-    }
-}
-
-impl Drop for ActiveEditorGuard {
-    fn drop(&mut self) {
-        ACTIVE_EDITOR.with(|cell| cell.set(std::ptr::null_mut()));
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +141,9 @@ impl OspCompletionMenu {
 
     pub(crate) fn apply_event(&mut self, editor: &mut Editor, completer: &mut dyn Completer) {
         if let Some(event) = self.event.take() {
+            // Apply queued menu events from the refresh path so the editor
+            // buffer, candidate set, and rendered menu all advance from the
+            // same state transition.
             let action = self.core.handle_event(event);
             if matches!(action, MenuAction::UpdateValues) {
                 self.update_values(editor, completer);
@@ -310,7 +286,6 @@ impl OspCompletionMenu {
         screen_width: u16,
         available_lines: u16,
     ) {
-        let _active_editor = ActiveEditorGuard::register(editor);
         self.apply_event(editor, completer);
         self.last_available_lines = available_lines;
         let indent = self.stable_menu_indent(editor);
@@ -364,30 +339,6 @@ impl Menu for OspCompletionMenu {
             self.replace_span = None;
             self.indent_anchor = None;
         }
-
-        if matches!(
-            event,
-            MenuEvent::NextElement
-                | MenuEvent::PreviousElement
-                | MenuEvent::MoveUp
-                | MenuEvent::MoveDown
-                | MenuEvent::MoveLeft
-                | MenuEvent::MoveRight
-        ) {
-            let ptr = ACTIVE_EDITOR.with(|cell| cell.get());
-            if !ptr.is_null() {
-                // SAFETY: `ActiveEditorGuard` registers this pointer from the same
-                // thread immediately before menu callbacks run and clears it on
-                // scope exit, so the editor outlives this dereference.
-                let editor = unsafe { &mut *ptr };
-                let action = self.core.handle_event(event);
-                if matches!(action, MenuAction::ApplySelection) {
-                    self.apply_selection_in_buffer(editor, ApplyMode::Cycle);
-                }
-                return;
-            }
-        }
-
         self.event = Some(event);
     }
 
