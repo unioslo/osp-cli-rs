@@ -1,6 +1,8 @@
 #![allow(missing_docs)]
 
 #[cfg(unix)]
+use crate::temp_support::{TestTempDir, make_temp_dir};
+#[cfg(unix)]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 #[cfg(unix)]
 use std::io::{Read, Write};
@@ -18,20 +20,8 @@ struct PtySession {
     child: Box<dyn portable_pty::Child + Send>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     output: Arc<Mutex<String>>,
-    _home: PathBuf,
-    _plugins: PathBuf,
-}
-
-#[cfg(unix)]
-fn make_temp_dir(prefix: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
+    _home: TestTempDir,
+    _plugins: TestTempDir,
 }
 
 #[cfg(unix)]

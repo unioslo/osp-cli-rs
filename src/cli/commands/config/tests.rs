@@ -115,14 +115,7 @@ fn env_lock() -> &'static Mutex<()> {
 
 fn with_temp_config_paths<T>(callback: impl FnOnce(PathBuf, PathBuf) -> T) -> T {
     let _guard = env_lock().lock().expect("env lock should not be poisoned");
-    let root = std::env::temp_dir().join(format!(
-        "osp-cli-config-tests-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time should be valid")
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).expect("temp root should exist");
+    let root = crate::tests::make_temp_dir("osp-cli-config-tests");
     let config_path = root.join("config.toml");
     let secrets_path = root.join("secrets.toml");
     let previous_config = std::env::var_os("OSP_CONFIG_FILE");
@@ -142,7 +135,6 @@ fn with_temp_config_paths<T>(callback: impl FnOnce(PathBuf, PathBuf) -> T) -> T 
         Some(value) => unsafe { std::env::set_var("OSP_SECRETS_FILE", value) },
         None => unsafe { std::env::remove_var("OSP_SECRETS_FILE") },
     }
-    let _ = std::fs::remove_dir_all(root);
     result
 }
 
@@ -266,14 +258,7 @@ fn resolve_config_scopes_uses_explicit_profile_without_terminal_unit() {
 fn secrets_permissions_diagnostic_warns_for_owner_only_non_600_modes_unit() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = std::env::temp_dir().join(format!(
-        "osp-cli-config-secrets-diagnostic-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time should be valid")
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("temp dir should exist");
+    let dir = crate::tests::make_temp_dir("osp-cli-config-secrets-diagnostic");
     let path = dir.join("secrets.toml");
     std::fs::write(&path, "token = 'secret'\n").expect("fixture should be written");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
@@ -286,8 +271,6 @@ fn secrets_permissions_diagnostic_warns_for_owner_only_non_600_modes_unit() {
         serde_json::Value::String("400".to_string())
     );
     assert!(diagnostic.message.contains("0600 is recommended"));
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -779,14 +762,7 @@ fn secrets_permissions_diagnostic_covers_unavailable_missing_ok_and_issue_unit()
     let missing = secrets_permissions_diagnostic(None);
     assert_eq!(missing.status, "unavailable");
 
-    let dir = std::env::temp_dir().join(format!(
-        "osp-cli-config-secrets-diagnostic-extra-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time should be valid")
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("temp dir should exist");
+    let dir = crate::tests::make_temp_dir("osp-cli-config-secrets-diagnostic-extra");
 
     let absent_path = dir.join("missing.toml");
     let absent = secrets_permissions_diagnostic(Some(absent_path));
@@ -811,8 +787,6 @@ fn secrets_permissions_diagnostic_covers_unavailable_missing_ok_and_issue_unit()
             .message
             .contains("owner-only permissions are required")
     );
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

@@ -48,7 +48,6 @@ ui.mode = "plain"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -83,7 +82,6 @@ ui.mode = "plain"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -127,7 +125,6 @@ profile.default = "uio"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -169,7 +166,6 @@ profile.default = "uio"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -212,7 +208,6 @@ profile.default = "tsd"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -254,7 +249,6 @@ ui.mode = "rich"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -292,7 +286,6 @@ ui.mode = "plain"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -341,7 +334,6 @@ extensions.uio.ldap.url = "ldaps://ldap.uio.no"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -393,7 +385,6 @@ extensions.uio.ldap.bind_password = "file-secret"
     let clear_payload = parse_json_stdout(&clear_output.stdout);
     assert_eq!(clear_payload["value"], "file-secret");
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -459,7 +450,6 @@ extensions.demo.potato = "sekrit"
     assert_eq!(row["key"], "extensions.demo.potato");
     assert_eq!(row["value"], "[REDACTED]");
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -500,7 +490,6 @@ ui.mode = "plain"
         String::from_utf8(output.stderr).expect("stderr should be utf-8"),
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -550,7 +539,6 @@ ui.mode = "plain"
         &[(&home_text, "<HOME>")],
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -585,5 +573,4 @@ ui.format = "json"
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("config key not found: ui.formt"));
 
-    let _ = std::fs::remove_dir_all(&home);
 }

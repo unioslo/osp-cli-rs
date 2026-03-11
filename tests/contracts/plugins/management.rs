@@ -25,12 +25,7 @@ fn debug_flag_enables_developer_logs_contract() {
 
 #[test]
 fn plugins_enable_and_disable_contract() {
-    let mut home = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    home.push(format!("osp-cli-plugin-test-{nonce}"));
+    let home = make_temp_dir("osp-cli-plugin-test");
     let dir = make_temp_dir("osp-cli-plugin-toggle");
     let _plugin = write_named_plugin(&dir, "hello", "hello");
 
@@ -70,19 +65,11 @@ fn plugins_enable_and_disable_contract() {
             .expect("updated plugin state should be a string"),
         "disabled"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
 fn quiet_hides_success_messages_contract() {
-    let mut home = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    home.push(format!("osp-cli-plugin-quiet-test-{nonce}"));
+    let home = make_temp_dir("osp-cli-plugin-quiet-test");
     let dir = make_temp_dir("osp-cli-plugin-quiet-toggle");
     let _plugin = write_named_plugin(&dir, "hello", "hello");
 
@@ -91,9 +78,6 @@ fn quiet_hides_success_messages_contract() {
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["-q", "plugins", "enable", "hello"]);
     cmd.assert().success().stderr(predicate::str::is_empty());
-
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -131,7 +115,6 @@ ui.format = "json"
         .success()
         .stdout(predicate::str::contains("No plugins discovered."));
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -170,18 +153,11 @@ fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins_contract()
         .success()
         .stdout(predicate::str::contains("beta-from-plugin"));
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
 fn plugins_enable_with_terminal_scope_and_clear_state_contract() {
-    let mut home = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    home.push(format!("osp-cli-plugin-terminal-scope-{nonce}"));
+    let home = make_temp_dir("osp-cli-plugin-terminal-scope");
     let dir = make_temp_dir("osp-cli-plugin-terminal-toggle");
     let _plugin = write_named_plugin(&dir, "hello", "hello");
 
@@ -223,7 +199,4 @@ fn plugins_enable_with_terminal_scope_and_clear_state_contract() {
             .is_none(),
         "expected terminal-scoped plugin state to be cleared"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }

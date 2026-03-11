@@ -3,17 +3,9 @@ use super::{
     StaticLayerLoader, TomlFileLoader,
 };
 use crate::config::{ConfigError, ConfigLayer, ConfigSchema, ResolveOptions, Scope};
-use std::path::PathBuf;
 
-fn make_temp_dir(prefix: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
+fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
+    crate::tests::make_temp_dir(prefix)
 }
 
 #[test]
@@ -137,7 +129,7 @@ fn pipeline_builder_covers_schema_and_collected_env_loaders() {
 #[test]
 fn file_and_secrets_loaders_report_read_errors_for_directories_unit() {
     let root = make_temp_dir("osp-config-loader-read-error");
-    let err = TomlFileLoader::new(root.clone())
+    let err = TomlFileLoader::new(root.to_path_buf())
         .required()
         .load()
         .expect_err("reading a directory as TOML should fail");
@@ -147,7 +139,7 @@ fn file_and_secrets_loaders_report_read_errors_for_directories_unit() {
         ConfigError::FileRead { path, .. } if path == root_display
     ));
 
-    let err = SecretsTomlLoader::new(root.clone())
+    let err = SecretsTomlLoader::new(root.to_path_buf())
         .with_strict_permissions(false)
         .required()
         .load()

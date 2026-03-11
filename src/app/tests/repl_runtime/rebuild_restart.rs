@@ -106,7 +106,6 @@ fn rebuild_repl_state_preserves_path_discovery_enabled_by_config_unit() {
         Some(value) => unsafe { std::env::set_var("PATH", value) },
         None => unsafe { std::env::remove_var("PATH") },
     }
-    let _ = std::fs::remove_dir_all(path_root);
 }
 
 #[test]
@@ -114,7 +113,7 @@ fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
     with_temp_config_paths(|| {
         let dir = make_temp_dir("osp-cli-repl-plugin-enable");
         let _plugin = write_pipeline_test_plugin(&dir);
-        let mut state = make_test_state(vec![dir.clone()]);
+        let mut state = make_test_state(vec![dir.to_path_buf()]);
         state
             .clients
             .plugins()
@@ -157,7 +156,6 @@ fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
             "enabled plugin should appear after rebuild"
         );
 
-        let _ = std::fs::remove_dir_all(dir);
     });
 }
 
@@ -167,7 +165,7 @@ fn repl_provider_selection_restart_invalidates_command_cache_unit() {
         let dir = make_temp_dir("osp-cli-repl-provider-selection-restart");
         let _alpha = write_provider_test_plugin(&dir, "alpha-provider", "hello", "alpha");
         let _beta = write_provider_test_plugin(&dir, "beta-provider", "hello", "beta");
-        let mut state = make_test_state(vec![dir.clone()]);
+        let mut state = make_test_state(vec![dir.to_path_buf()]);
         let history = make_test_history(&mut state);
 
         let first = repl_dispatch::execute_repl_plugin_line(
@@ -223,7 +221,6 @@ fn repl_provider_selection_restart_invalidates_command_cache_unit() {
             other => panic!("unexpected repl result: {other:?}"),
         }
 
-        let _ = std::fs::remove_dir_all(&dir);
     });
 }
 

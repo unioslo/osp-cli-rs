@@ -469,18 +469,6 @@ fn write_config(home: &std::path::Path, config: &str) {
 }
 
 #[cfg(unix)]
-fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
-}
-
-#[cfg(unix)]
 fn parse_json_stdout(stdout: &[u8]) -> serde_json::Value {
     serde_json::from_slice(stdout).unwrap_or_else(|err| {
         panic!(
@@ -511,3 +499,4 @@ fn first_json_row<'a>(payload: &'a serde_json::Value, context: &str) -> &'a serd
         .first()
         .unwrap_or_else(|| panic!("{context} should render at least one row"))
 }
+use crate::temp_support::make_temp_dir;

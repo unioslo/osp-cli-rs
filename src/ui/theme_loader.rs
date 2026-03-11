@@ -534,21 +534,15 @@ mod tests {
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use std::collections::BTreeMap;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
         crate::tests::env_lock()
     }
 
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time should be valid")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("{prefix}-{nonce}"));
-        fs::create_dir_all(&dir).expect("temp dir should be created");
-        dir
+    fn unique_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
+        crate::tests::make_temp_dir(prefix)
     }
 
     fn resolved_config_with_theme_paths(paths: Vec<String>) -> crate::config::ResolvedConfig {
@@ -567,8 +561,7 @@ mod tests {
 
     #[test]
     fn theme_file_defaults_id_and_name_from_file_stem() {
-        let dir = std::env::temp_dir().join("osp-theme-loader-test");
-        let _ = fs::create_dir_all(&dir);
+        let dir = unique_temp_dir("osp-theme-loader-test");
         let path = dir.join("solarized-dark.toml");
         fs::write(
             &path,
@@ -592,15 +585,11 @@ title = "#586e75"
             apply_theme_overrides(empty_theme(&spec.id, &spec.name, spec.base.clone()), &spec);
         assert_eq!(theme.id, "solarized-dark");
         assert_eq!(theme.name, "Solarized Dark");
-
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn theme_file_inherits_from_base() {
-        let dir = std::env::temp_dir().join("osp-theme-loader-test-base");
-        let _ = fs::create_dir_all(&dir);
+        let dir = unique_temp_dir("osp-theme-loader-test-base");
         let path = dir.join("custom.toml");
         fs::write(
             &path,
@@ -620,9 +609,6 @@ accent = "#123456"
             .expect("theme should resolve");
         assert_eq!(theme.palette.accent, "#123456");
         assert_eq!(theme.palette.text, "#f8f8f2");
-
-        let _ = fs::remove_file(&path);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -850,8 +836,6 @@ text = "#ffffff"
         );
 
         log_theme_issues(&catalog.issues);
-
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

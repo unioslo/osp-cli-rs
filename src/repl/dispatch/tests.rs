@@ -796,13 +796,7 @@ fn render_repl_command_output_handles_text_none_and_stderr_unit() {
 fn shell_entry_help_and_repl_command_cache_paths_cover_external_flow_unit() {
     use std::os::unix::fs::PermissionsExt;
 
-    let root = std::env::temp_dir().join(format!(
-        "osp-cli-repl-dispatch-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time should be valid")
-            .as_nanos()
-    ));
+    let root = crate::tests::make_temp_dir("osp-cli-repl-dispatch");
     let plugins_dir = root.join("plugins");
     std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
     let plugin_path = plugins_dir.join("osp-cache");
@@ -889,6 +883,4 @@ printf '%s\n' '{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":n
     )
     .expect("cached external run should succeed");
     assert_eq!(cached.exit_code, 0);
-
-    let _ = std::fs::remove_dir_all(&root);
 }

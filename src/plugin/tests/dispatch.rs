@@ -23,7 +23,6 @@ fn dispatch_times_out_hung_plugin() {
         other => panic!("expected timeout error, got {other}"),
     }
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -51,7 +50,6 @@ fn dispatch_drains_large_plugin_output_without_false_timeout_unit() {
             .is_some_and(|blob| blob.len() >= 131_072)
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -77,7 +75,6 @@ fn timed_out_plugin_terminates_background_process_group_unit() {
         "timed-out plugin left a background child behind"
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -266,7 +263,6 @@ JSON"#,
         PluginDispatchError::CommandNotFound { command } if command == "missing"
     ));
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -278,7 +274,6 @@ fn describe_plugin_reports_missing_executable_unit() {
         .expect_err("missing executable should fail");
     assert!(err.to_string().contains("failed to execute --describe"));
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -350,5 +345,4 @@ fn describe_plugin_and_run_provider_cover_direct_error_paths_unit() {
         PluginDispatchError::ExecuteFailed { plugin_id, .. } if plugin_id == "missing"
     ));
 
-    let _ = std::fs::remove_dir_all(&root);
 }

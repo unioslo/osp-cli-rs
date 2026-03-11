@@ -80,7 +80,6 @@ fn help_color_unicode_presentation_matrix_contract() {
         }
     }
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -144,7 +143,6 @@ fn table_color_unicode_presentation_matrix_contract() {
         }
     }
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -278,5 +276,4 @@ fn message_color_unicode_presentation_matrix_contract() {
         }
     }
 
-    let _ = std::fs::remove_dir_all(&home);
 }

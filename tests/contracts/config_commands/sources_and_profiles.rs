@@ -36,7 +36,6 @@ ui.format = "json"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -76,7 +75,6 @@ ui.format = "json"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -117,7 +115,6 @@ ui.mode = "plain"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -141,7 +138,6 @@ ui.mode = "plain"
         .args(["--json", "--no-config-file", "config", "get", "ui.mode"]);
     cmd.assert().failure();
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -189,7 +185,6 @@ ui.mode = "plain"
 
     assert_eq!(positional_out, explicit_out);
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -226,5 +221,4 @@ ui.format = "table"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }

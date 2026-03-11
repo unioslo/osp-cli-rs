@@ -71,6 +71,7 @@ predicates = "3.1"
 proptest = "1.6"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "visit"] }
+tempfile = "3"
 
 [profile.dev]
 debug = 1

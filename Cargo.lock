@@ -1833,6 +1833,7 @@ dependencies = [
  "shell-words",
  "skim",
  "syn 2.0.117",
+ "tempfile",
  "terminal_size",
  "thiserror 2.0.18",
  "toml",

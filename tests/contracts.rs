@@ -35,3 +35,6 @@ mod snapshot_support;
 
 #[path = "contracts/test_env.rs"]
 mod test_env;
+
+#[path = "support/temp.rs"]
+mod temp_support;

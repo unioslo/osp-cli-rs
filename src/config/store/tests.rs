@@ -254,10 +254,17 @@ fn secret_permission_validation_matrix_covers_strict_and_non_strict_paths_unit()
         ("non-strict missing", false, Fixture::Missing, Expected::Ok),
         ("strict missing", true, Fixture::Missing, Expected::FileRead),
     ] {
+        let mut owner = None;
         let path = match fixture {
-            Fixture::GroupReadable => write_secret_fixture(label, Some(0o640)),
+            Fixture::GroupReadable => {
+                let fixture = write_secret_fixture(label, Some(0o640));
+                let path = fixture.path.clone();
+                owner = Some(fixture);
+                path
+            }
             Fixture::Missing => make_temp_dir(label).join("secrets.toml"),
         };
+        let _owner = owner;
 
         match (expected, validate_secrets_permissions(&path, strict)) {
             (Expected::Ok, Ok(())) => {}
@@ -547,19 +554,18 @@ fn table_path_helpers_cover_missing_invalid_and_pruned_sections_unit() {
     assert!(empty_root.is_empty());
 }
 
-fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
+fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
+    crate::tests::make_temp_dir(prefix)
 }
 
 #[cfg(unix)]
-fn write_secret_fixture(prefix: &str, mode: Option<u32>) -> std::path::PathBuf {
+struct SecretFixture {
+    _dir: crate::tests::TestTempDir,
+    path: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+fn write_secret_fixture(prefix: &str, mode: Option<u32>) -> SecretFixture {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = make_temp_dir(prefix);
@@ -569,5 +575,5 @@ fn write_secret_fixture(prefix: &str, mode: Option<u32>) -> std::path::PathBuf {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
             .expect("permissions should be set");
     }
-    path
+    SecretFixture { _dir: dir, path }
 }

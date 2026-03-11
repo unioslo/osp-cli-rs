@@ -62,7 +62,6 @@ fn refresh_picks_up_filesystem_changes_and_prunes_stale_cache() {
     assert!(cache_raw.contains("osp-beta"));
     assert!(!cache_raw.contains("osp-alpha"));
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -87,7 +86,6 @@ fn incompatible_min_osp_version_marks_plugin_unhealthy() {
             .contains("requires osp >=")
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -121,7 +119,6 @@ fn duplicate_plugin_ids_are_marked_unhealthy_and_removed_from_catalog_unit() {
         Err(PluginDispatchError::CommandNotFound { .. })
     ));
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -147,7 +144,6 @@ fn hung_describe_marks_plugin_unhealthy() {
             .contains("timed out after 50 ms")
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -258,7 +254,6 @@ fn search_root_and_checksum_helpers_cover_real_filesystem_paths_unit() {
     let (size, _, _) = file_fingerprint(&exec_path).expect("fingerprint");
     assert!(size > 0);
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -334,7 +329,6 @@ commands = ["demo", "demo show"]
         }
     }
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -368,7 +362,6 @@ fn bundled_plugins_skip_describe_when_manifest_is_missing_unit() {
         "bundled plugin should not execute without a manifest"
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -415,7 +408,6 @@ fn bundled_plugins_skip_describe_when_checksum_mismatches_unit() {
         "bundled plugin should not execute before checksum validation passes"
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -457,7 +449,6 @@ fn path_discovery_is_opt_in_unit() {
         None => unsafe { std::env::remove_var("PATH") },
     }
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -531,5 +522,4 @@ fn passive_path_discovery_uses_cache_without_executing_plugins_unit() {
         None => unsafe { std::env::remove_var("PATH") },
     }
 
-    let _ = std::fs::remove_dir_all(&root);
 }

@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use crate::temp_support::make_temp_dir;
 use assert_cmd::Command;
 
 #[cfg(unix)]
@@ -30,9 +32,6 @@ fn doctor_json_stdout_is_machine_parseable_contract() {
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&empty_plugins);
 }
 
 #[cfg(unix)]
@@ -54,21 +53,6 @@ fn doctor_last_without_recorded_failure_is_human_text_contract() {
             "No recorded REPL failure in this session.",
         ))
         .stderr(predicates::str::is_empty());
-
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&empty_plugins);
-}
-
-#[cfg(unix)]
-fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
 }
 
 #[cfg(unix)]

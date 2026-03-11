@@ -1,4 +1,6 @@
 use crate::assert_snapshot_text;
+#[cfg(unix)]
+use crate::temp_support::make_temp_dir;
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::Value;
@@ -173,8 +175,6 @@ theme.name = "nord"
         serde_json::from_slice(&output.stdout).expect("theme show stdout should be valid json");
     let row = first_row(&payload, "theme show override");
     assert_eq!(row.get("id"), Some(&Value::String("dracula".to_string())));
-
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -208,8 +208,6 @@ theme.name = "nord"
         serde_json::from_slice(&output.stdout).expect("theme show stdout should be valid json");
     let row = first_row(&payload, "theme show from config");
     assert_eq!(row.get("id"), Some(&Value::String("nord".to_string())));
-
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -286,8 +284,6 @@ warning = "#abcdef"
         Some(&Value::String("#abcdef".to_string()))
     );
     assert_eq!(row.get("text"), Some(&Value::String("#d8dee9".to_string())));
-
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -306,16 +302,4 @@ fn write_config(home: &std::path::Path, config: &str) {
     let config_dir = home.join(".config").join("osp");
     std::fs::create_dir_all(&config_dir).expect("config dir should be created");
     std::fs::write(config_dir.join("config.toml"), config).expect("config should be written");
-}
-
-#[cfg(unix)]
-fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
 }

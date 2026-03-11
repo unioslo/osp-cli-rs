@@ -12,7 +12,6 @@ fn command_help_hides_common_invocation_options_without_verbose_contract() {
     assert!(!plain.contains("Common Invocation Options"));
     assert_contract_snapshot!("history_help_default", plain);
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -29,7 +28,6 @@ fn command_help_shows_common_invocation_options_with_verbose_contract() {
     assert!(plain.contains("Common Invocation Options"));
     assert_contract_snapshot!("history_help_verbose", plain);
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -44,5 +42,4 @@ fn tty_subcommand_help_keeps_help_chrome_colors_contract() {
     assert!(output.contains("\u{1b}[32mUsage\u{1b}[0m"));
     assert!(output.contains("\u{1b}[33mlist\u{1b}[0m"));
     assert!(output.contains("\u{1b}[33m-h, --help\u{1b}[0m"));
-    let _ = std::fs::remove_dir_all(&dir);
 }

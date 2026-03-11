@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use crate::temp_support::make_temp_dir;
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -30,9 +32,6 @@ ui.format = "json"
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("hello-from-plugin"));
-
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&plugin_dir);
 }
 
 #[cfg(unix)]
@@ -60,8 +59,6 @@ ui.format = "json"
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("No plugins discovered."));
-
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -89,8 +86,6 @@ ui.format = "json"
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("no plugin provides command: prod"));
-
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -118,8 +113,6 @@ ui.format = "json"
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("no plugin provides command: tsd"));
-
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -155,16 +148,4 @@ JSON
     perms.set_mode(0o755);
     std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
     plugin_path
-}
-
-#[cfg(unix)]
-fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
 }

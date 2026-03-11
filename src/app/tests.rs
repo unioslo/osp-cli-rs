@@ -440,8 +440,8 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
     let cache_root = make_temp_dir("osp-cli-test-cache");
     let launch = LaunchContext::builder()
         .with_plugin_dirs(plugin_dirs.clone())
-        .with_config_root(Some(config_root.clone()))
-        .with_cache_root(Some(cache_root.clone()))
+        .with_config_root(Some(config_root.to_path_buf()))
+        .with_cache_root(Some(cache_root.to_path_buf()))
         .with_runtime_load(RuntimeLoadOptions::default())
         .build();
 
@@ -451,7 +451,10 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
         render_settings: settings,
         message_verbosity: MessageLevel::Success,
         debug_verbosity: 0,
-        plugins: PluginManager::new(plugin_dirs).with_roots(Some(config_root), Some(cache_root)),
+        plugins: PluginManager::new(plugin_dirs).with_roots(
+            Some(config_root.to_path_buf()),
+            Some(cache_root.to_path_buf()),
+        ),
         native_commands: crate::native::NativeCommandRegistry::default(),
         themes: crate::ui::theme_loader::ThemeCatalog::default(),
         launch,
@@ -484,7 +487,6 @@ fn with_temp_config_paths<T>(callback: impl FnOnce() -> T) -> T {
         Some(value) => unsafe { std::env::set_var("OSP_SECRETS_FILE", value) },
         None => unsafe { std::env::remove_var("OSP_SECRETS_FILE") },
     }
-    let _ = std::fs::remove_dir_all(root);
     result
 }
 
@@ -586,13 +588,6 @@ JSON
 }
 
 #[cfg(unix)]
-fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
+fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
+    crate::tests::make_temp_dir(prefix)
 }

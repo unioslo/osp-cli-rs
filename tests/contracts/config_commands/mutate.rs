@@ -40,7 +40,6 @@ ui.mode = "plain"
         .expect("config should be readable");
     assert!(!payload.contains("ui.mode"));
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -70,7 +69,6 @@ profile.default = "uio"
         "bootstrap-only key profile.default is not allowed",
     ));
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -102,7 +100,6 @@ profile.default = "uio"
         "bootstrap-only key profile.default is not allowed",
     ));
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -151,7 +148,6 @@ profile.default = "uio"
     assert!(payload.contains("profile"));
     assert!(payload.contains("default = \"tsd\""));
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -198,5 +194,4 @@ profile.default = "tsd"
         .expect("config should be readable");
     assert!(!payload.contains("profile.default = \"tsd\""));
 
-    let _ = std::fs::remove_dir_all(&home);
 }

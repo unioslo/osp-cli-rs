@@ -167,7 +167,7 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
     perms.set_mode(0o755);
     std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
 
-    let mut state = make_test_state(vec![dir.clone()]);
+    let mut state = make_test_state(vec![dir.to_path_buf()]);
     let history = make_test_history(&mut state);
 
     repl_dispatch::execute_repl_plugin_line(
@@ -198,7 +198,6 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
     }
     assert_eq!(state.repl_cache_size(), cache_size_before);
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -227,7 +226,7 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
     perms.set_mode(0o755);
     std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
 
-    let mut state = make_test_state(vec![dir.clone()]);
+    let mut state = make_test_state(vec![dir.to_path_buf()]);
     let history = make_test_history(&mut state);
 
     repl_dispatch::execute_repl_plugin_line(
@@ -269,7 +268,6 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
     }
     assert_eq!(state.repl_cache_size(), cache_size_before);
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

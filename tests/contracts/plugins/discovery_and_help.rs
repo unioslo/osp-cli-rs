@@ -17,8 +17,6 @@ fn unknown_domain_command_shows_plugin_hint_contract() {
             "Hint: run osp plugins list and set --plugin-dir or OSP_PLUGIN_PATH",
         ));
 
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&empty_plugins);
 }
 
 #[test]
@@ -37,8 +35,6 @@ fn errors_remain_visible_at_double_quiet_contract() {
         .failure()
         .stderr(predicate::str::contains("no plugin provides command: ldap"));
 
-    let _ = std::fs::remove_dir_all(&home);
-    let _ = std::fs::remove_dir_all(&empty_plugins);
 }
 
 #[cfg(unix)]
@@ -67,8 +63,6 @@ fn external_plugin_help_is_passed_through_contract() {
         String::from_utf8(help_subcommand.stdout).expect("help stdout should be utf-8");
     assert_eq!(help_subcommand_stdout, help_flag_stdout);
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -88,8 +82,6 @@ fn external_plugin_help_keeps_raw_stderr_contract() {
     assert_snapshot_text!("external_plugin_help_stderr_stdout", stdout);
     assert_snapshot_text!("external_plugin_help_stderr_stderr", stderr);
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -115,7 +107,6 @@ fn ignores_non_plugin_extension_files_contract() {
         .success()
         .stdout(predicate::str::contains("osp-ignore.sh").not());
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[cfg(unix)]
@@ -135,8 +126,6 @@ fn bundled_plugin_requires_manifest_contract() {
         .stdout(predicate::str::contains("healthy:        false"))
         .stdout(predicate::str::contains("source:         bundled"));
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -188,8 +177,6 @@ commands = ["hello"]
         .success()
         .stdout(predicate::str::contains("hello-from-plugin"));
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -220,8 +207,6 @@ commands = ["ldap"]
         "manifest commands mismatch for hello",
     ));
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -268,8 +253,6 @@ commands = ["hello"]
         "expected manifest id mismatch row in payload: {payload}"
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -304,6 +287,4 @@ fn plugin_min_osp_version_mismatch_marks_plugin_unhealthy_contract() {
         "expected min-version failure row in payload: {payload}"
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }

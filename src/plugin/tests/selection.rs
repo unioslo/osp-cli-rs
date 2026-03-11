@@ -50,7 +50,6 @@ fn ambiguous_command_requires_explicit_selection() {
         None
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -87,7 +86,6 @@ fn preferred_provider_updates_catalog_and_resolves_command() {
         Some("beta (explicit)")
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -128,7 +126,6 @@ fn clearing_preferred_provider_requires_selection_again() {
         None
     );
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -160,7 +157,6 @@ fn command_policy_registry_collects_recursive_plugin_auth_metadata_unit() {
     );
     assert!(nested_policy.feature_flags.contains("orch"));
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(unix)]
@@ -189,7 +185,6 @@ fn preferred_provider_rejects_unknown_command_and_provider_unit() {
         .expect_err("unknown provider should fail");
     assert!(err.to_string().contains("does not provide healthy command"));
 
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -233,7 +228,6 @@ fn disabling_a_command_updates_only_that_command_in_memory_unit() {
         "other commands from the same plugin should remain available"
     );
 
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[cfg(unix)]
@@ -273,7 +267,6 @@ fn config_backed_preferences_can_disable_and_route_commands_unit() {
         .expect("selected provider label should load");
     assert_eq!(provider.as_deref(), Some("beta (explicit)"));
 
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[cfg(unix)]
@@ -376,5 +369,4 @@ fn repl_help_and_provider_listing_cover_selected_and_conflicted_commands_unit() 
         .expect("preferred provider help should render");
     assert!(preferred_help.contains("shared - beta plugin (beta/explicit)"));
 
-    let _ = std::fs::remove_dir_all(&root);
 }

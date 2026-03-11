@@ -38,8 +38,6 @@ fn conflicting_providers_are_visible_in_plugin_commands_contract() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -140,8 +138,6 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         String::from_utf8(after_clear_output.stderr).expect("stderr should be utf-8"),
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -277,9 +273,4 @@ commands = ["ranked"]
         .success()
         .stdout(predicate::str::contains("path-from-plugin"));
 
-    let _ = std::fs::remove_dir_all(&explicit_dir);
-    let _ = std::fs::remove_dir_all(&env_dir);
-    let _ = std::fs::remove_dir_all(&bundled_dir);
-    let _ = std::fs::remove_dir_all(&path_dir);
-    let _ = std::fs::remove_dir_all(&home);
 }

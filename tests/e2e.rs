@@ -1,5 +1,8 @@
 #![allow(missing_docs)]
 
+#[path = "support/temp.rs"]
+mod temp_support;
+
 #[path = "e2e/repl_completion.rs"]
 mod repl_completion;
 

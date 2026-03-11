@@ -26,7 +26,7 @@ JSON
     perms.set_mode(0o755);
     std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
 
-    let mut state = make_test_state(vec![dir.clone()]);
+    let mut state = make_test_state(vec![dir.to_path_buf()]);
 
     let history = make_test_history(&mut state);
     let err = repl_dispatch::execute_repl_plugin_line(
@@ -39,7 +39,6 @@ JSON
     .expect_err("response ok=false should become repl error");
     assert!(err.to_string().contains("MOCK_ERR: mock failure"));
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -70,7 +69,7 @@ JSON
     perms.set_mode(0o755);
     std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
 
-    let mut state = make_test_state(vec![dir.clone()]);
+    let mut state = make_test_state(vec![dir.to_path_buf()]);
     state.session.max_cached_results = 1;
 
     let history = make_test_history(&mut state);
@@ -105,7 +104,6 @@ JSON
     assert!(state.cached_repl_rows("cache second").is_some());
     assert!(!state.last_repl_rows().is_empty());
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -141,7 +139,7 @@ JSON
     perms.set_mode(0o755);
     std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
 
-    let mut state = make_test_state(vec![dir.clone()]);
+    let mut state = make_test_state(vec![dir.to_path_buf()]);
     let history = make_test_history(&mut state);
 
     let first = repl_dispatch::execute_repl_plugin_line(
@@ -173,14 +171,13 @@ JSON
     let log = std::fs::read_to_string(&log_path).expect("invocation log should exist");
     assert_eq!(log.lines().count(), 1);
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
     let dir = make_temp_dir("osp-cli-plugin-pipeline-parity");
     let _plugin_path = write_pipeline_test_plugin(&dir);
-    let mut state = make_test_state(vec![dir.clone()]);
+    let mut state = make_test_state(vec![dir.to_path_buf()]);
     let history = make_test_history(&mut state);
     let stages = vec!["message".to_string()];
 
@@ -223,7 +220,6 @@ fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
         other => panic!("unexpected repl result: {other:?}"),
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -231,7 +227,7 @@ fn repl_plugin_provider_override_dispatches_selected_provider_unit() {
     let dir = make_temp_dir("osp-cli-repl-provider-override");
     let _alpha = write_provider_test_plugin(&dir, "alpha-provider", "hello", "alpha");
     let _beta = write_provider_test_plugin(&dir, "beta-provider", "hello", "beta");
-    let mut state = make_test_state(vec![dir.clone()]);
+    let mut state = make_test_state(vec![dir.to_path_buf()]);
     let history = make_test_history(&mut state);
 
     let err = repl_dispatch::execute_repl_plugin_line(
@@ -260,5 +256,4 @@ fn repl_plugin_provider_override_dispatches_selected_provider_unit() {
         other => panic!("unexpected repl result: {other:?}"),
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
 }

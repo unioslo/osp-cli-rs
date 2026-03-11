@@ -49,7 +49,6 @@ ui.format = "json"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -90,7 +89,6 @@ ui.mode = "plain"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -131,7 +129,6 @@ profile.default = "tsd"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -171,7 +168,6 @@ user.name = "tester"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -213,7 +209,6 @@ ui.format = "json"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -253,7 +248,6 @@ profile.default = "uio"
         String::from_utf8(output.stderr).expect("stderr should be utf-8"),
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -288,5 +282,4 @@ profile.default = "uio"
         .stderr(predicate::str::contains("─ Errors "))
         .stderr(predicate::str::contains("\x1b["));
 
-    let _ = std::fs::remove_dir_all(&home);
 }

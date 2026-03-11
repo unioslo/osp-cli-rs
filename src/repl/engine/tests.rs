@@ -1230,15 +1230,8 @@ fn history_picker_options_use_configured_rows_query_and_skin_unit() {
     );
 }
 
-fn make_temp_dir(prefix: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("time should be valid")
-        .as_nanos();
-    dir.push(format!("{prefix}-{nonce}"));
-    std::fs::create_dir_all(&dir).expect("temp dir should be created");
-    dir
+fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
+    crate::tests::make_temp_dir(prefix)
 }
 
 fn restore_env(key: &str, value: Option<String>) {

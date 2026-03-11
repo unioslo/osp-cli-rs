@@ -13,8 +13,6 @@ fn external_plugin_dispatch_contract() {
         .success()
         .stdout(predicate::str::contains("hello-from-plugin"));
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -56,8 +54,6 @@ fn plugin_dispatch_propagates_runtime_hints_contract() {
     assert_eq!(row["terminal_kind"], "cli");
     assert_eq!(row["terminal"], "xterm-256color");
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -103,8 +99,6 @@ extensions.plugins.cfg.env.retries = 3
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -129,8 +123,6 @@ fn plugin_non_zero_exit_surfaces_stderr_contract() {
         String::from_utf8(output.stderr).expect("stderr should be utf-8"),
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -151,8 +143,6 @@ fn plugin_invalid_json_response_surfaces_contract() {
             "invalid JSON response from plugin broken",
         ));
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -176,8 +166,6 @@ fn plugin_messages_stay_on_stderr_when_data_is_json_contract() {
     assert_snapshot_text!("plugin_messages_json_stdout", stdout);
     assert_snapshot_text!("plugin_messages_json_stderr", stderr);
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -235,7 +223,6 @@ extensions.plugins.cfg.env.retries = 3
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -266,8 +253,6 @@ fn multi_command_plugin_receives_selected_command_contract() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -297,8 +282,6 @@ fn oneshot_dispatch_does_not_use_repl_session_cache_contract() {
         .success()
         .stdout(predicate::str::contains("| 2"));
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[cfg(unix)]
@@ -392,6 +375,4 @@ fn describe_cache_is_reused_and_invalidated_contract() {
         "2"
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&home);
 }

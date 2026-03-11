@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use crate::temp_support::TestTempDir;
 use assert_cmd::Command;
 use serde_json::Value;
 
@@ -159,27 +161,16 @@ fn ldap_plugin_completes_subcommands_and_flags_contract() {
 
 #[cfg(unix)]
 struct LdapPluginFixture {
-    plugin_dir: std::path::PathBuf,
-    home_dir: std::path::PathBuf,
+    plugin_dir: TestTempDir,
+    home_dir: TestTempDir,
 }
 
 #[cfg(unix)]
 impl LdapPluginFixture {
     fn new() -> Self {
         use std::os::unix::fs::PermissionsExt;
-
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("time should be valid")
-            .as_nanos();
-
-        let mut plugin_dir = std::env::temp_dir();
-        plugin_dir.push(format!("osp-cli-ldap-plugin-{nonce}"));
-        std::fs::create_dir_all(&plugin_dir).expect("plugin dir should be created");
-
-        let mut home_dir = std::env::temp_dir();
-        home_dir.push(format!("osp-cli-ldap-home-{nonce}"));
-        std::fs::create_dir_all(&home_dir).expect("home dir should be created");
+        let plugin_dir = crate::temp_support::make_temp_dir("osp-cli-ldap-plugin");
+        let home_dir = crate::temp_support::make_temp_dir("osp-cli-ldap-home");
 
         let plugin_path = plugin_dir.join("osp-ldap");
         std::fs::write(&plugin_path, ldap_plugin_script())
@@ -202,14 +193,6 @@ impl LdapPluginFixture {
             .env("OSP_PLUGIN_PATH", &self.plugin_dir)
             .env("PATH", "/usr/bin:/bin");
         cmd
-    }
-}
-
-#[cfg(unix)]
-impl Drop for LdapPluginFixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.plugin_dir);
-        let _ = std::fs::remove_dir_all(&self.home_dir);
     }
 }
 
