@@ -40,6 +40,9 @@ clap = { version = "4.5", default-features = false, features = ["color", "derive
 comfy-table = { version = "7.1", default-features = false, features = ["custom_styling"] }
 dialoguer = "0.11"
 indicatif = "0.17"
+jaq-core = "3.0.0-gamma"
+jaq-json = { version = "2.0.0-gamma", features = ["serde"] }
+jaq-std = "3.0.0-gamma"
 libc = "0.2"
 miette = { version = "7.4", default-features = false, features = ["derive", "fancy"] }
 nu-ansi-term = "0.50"

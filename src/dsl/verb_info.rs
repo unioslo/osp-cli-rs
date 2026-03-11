@@ -114,7 +114,7 @@ const VERBS: &[VerbInfo] = &[
     },
     VerbInfo {
         verb: "JQ",
-        summary: "Run jq expression",
+        summary: "Run jq-like expression",
         streaming: VerbStreaming::Materializes,
         streaming_note: "jq receives the full current payload",
     },

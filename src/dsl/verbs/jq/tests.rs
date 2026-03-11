@@ -1,13 +1,8 @@
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use serde_json::json;
 
 use super::{
-    JqError, apply_value_with_expr, apply_with_expr, compile, json_to_rows, run_jq_with_program,
-    value_to_group,
+    JqError, apply_value_with_expr, apply_with_expr, compile, compile_program, json_to_rows,
+    run_jaq, value_to_group,
 };
 use crate::core::{
     output_model::{Group, OutputItems},
@@ -19,19 +14,6 @@ fn row(value: serde_json::Value) -> Row {
         .as_object()
         .cloned()
         .expect("fixture should be an object")
-}
-
-fn write_script(name: &str, body: &str) -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time")
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("osp-cli-{name}-{unique}.sh"));
-    fs::write(&path, body).expect("script should write");
-    let mut perms = fs::metadata(&path).expect("script metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&path, perms).expect("script perms");
-    path
 }
 
 #[test]
@@ -67,43 +49,39 @@ fn json_helpers_wrap_scalars_and_restore_group_fallback_metadata_unit() {
 }
 
 #[test]
-fn run_jq_with_program_covers_missing_failure_invalid_and_empty_output_unit() {
+fn run_jaq_reports_compile_eval_non_json_and_empty_output_unit() {
     assert!(matches!(
-        run_jq_with_program("/definitely/missing/jq", ".", &json!(null)),
-        Err(JqError::ExecutableNotFound { .. })
+        compile_program(".["),
+        Err(JqError::CompileFailed { .. })
     ));
 
-    let failing = write_script("jq-fail", "#!/bin/sh\nprintf 'boom\\n' >&2\nexit 7\n");
-    let err = run_jq_with_program(failing.to_str().unwrap(), ".", &json!(null))
-        .expect_err("failing program should error");
+    let failing = compile_program("error(\"boom\")").expect("program should compile");
     assert!(matches!(
-        err,
-        JqError::FailedWithStderr { status_code: 7, .. }
+        run_jaq(&failing, &json!(null)),
+        Err(JqError::EvaluationFailed { .. })
     ));
 
-    let silent = write_script("jq-silent", "#!/bin/sh\nexit 9\n");
-    let err = run_jq_with_program(silent.to_str().unwrap(), ".", &json!(null))
-        .expect_err("silent failure should error");
+    let non_json = compile_program("{(1): 2}").expect("program should compile");
     assert!(matches!(
-        err,
-        JqError::FailedWithoutStderr { status_code: 9 }
-    ));
-
-    let invalid = write_script("jq-invalid", "#!/bin/sh\nprintf 'not-json'\n");
-    assert!(matches!(
-        run_jq_with_program(invalid.to_str().unwrap(), ".", &json!(null)),
+        run_jaq(&non_json, &json!(null)),
         Err(JqError::InvalidJsonOutput { .. })
     ));
 
-    let empty = write_script("jq-empty", "#!/bin/sh\nexit 0\n");
+    let empty = compile_program("empty").expect("program should compile");
+    assert_eq!(run_jaq(&empty, &json!(null)).unwrap(), None);
+}
+
+#[test]
+fn run_jaq_collects_multiple_outputs_into_one_json_array_unit() {
+    let program = compile_program(".[]").expect("program should compile");
     assert_eq!(
-        run_jq_with_program(empty.to_str().unwrap(), ".", &json!(null)).unwrap(),
-        None
+        run_jaq(&program, &json!(["alice", "bob"])).unwrap(),
+        Some(json!(["alice", "bob"]))
     );
 }
 
 #[test]
-fn apply_with_expr_uses_real_jq_for_rows_groups_and_values_unit() {
+fn apply_with_expr_uses_real_jaq_for_rows_groups_and_values_unit() {
     let rows = apply_with_expr(
         OutputItems::Rows(vec![
             row(json!({"uid": "alice", "team": "ops"})),
@@ -145,7 +123,7 @@ fn apply_with_expr_uses_real_jq_for_rows_groups_and_values_unit() {
 }
 
 #[test]
-fn apply_with_expr_returns_empty_rows_when_jq_emits_no_output_unit() {
+fn apply_with_expr_returns_empty_rows_when_jaq_emits_no_output_unit() {
     let rows = apply_with_expr(OutputItems::Rows(Vec::new()), ".").expect("empty rows should work");
     let OutputItems::Rows(rendered_rows) = rows else {
         panic!("expected row output");

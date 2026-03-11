@@ -1,12 +1,14 @@
-use std::io::{ErrorKind, Write};
-use std::process::{Command, Stdio};
-use std::thread;
-
 use crate::core::{
     output_model::{Group, OutputItems},
     row::Row,
 };
 use anyhow::Result;
+use jaq_core::{
+    Ctx, Vars, data,
+    load::{Arena, File, Loader},
+    unwrap_valr,
+};
+use jaq_json::Val;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -14,26 +16,26 @@ use thiserror::Error;
 pub enum JqError {
     #[error("JQ expects a jq expression")]
     MissingExpression,
-    #[error("failed to encode jq payload")]
+    #[error("failed to convert payload into JSON input")]
     SerializePayload {
         #[source]
         source: serde_json::Error,
     },
-    #[error("jq executable not found in PATH: {source}")]
-    ExecutableNotFound { source: std::io::Error },
-    #[error("jq process I/O failed: {source}")]
-    Io { source: std::io::Error },
-    #[error("jq stdin writer thread panicked")]
-    StdinWriterPanicked,
-    #[error("jq failed with status {status_code}")]
-    FailedWithoutStderr { status_code: i32 },
-    #[error("jq failed with status {status_code}: {stderr}")]
-    FailedWithStderr { status_code: i32, stderr: String },
+    #[error("failed to compile jq expression: {message}")]
+    CompileFailed { message: String },
+    #[error("jq evaluation failed: {message}")]
+    EvaluationFailed { message: String },
     #[error("jq output is not valid JSON")]
     InvalidJsonOutput {
         #[source]
         source: serde_json::Error,
     },
+}
+
+type JaqFilter = jaq_core::Filter<data::JustLut<Val>>;
+
+struct JaqProgram {
+    filter: JaqFilter,
 }
 
 pub(crate) fn compile(spec: &str) -> std::result::Result<String, JqError> {
@@ -60,32 +62,34 @@ pub(crate) fn compile(spec: &str) -> std::result::Result<String, JqError> {
 }
 
 pub(crate) fn apply_with_expr(items: OutputItems, expr: &str) -> Result<OutputItems> {
+    let program = compile_program(expr)?;
     match items {
-        OutputItems::Rows(rows) => Ok(OutputItems::Rows(apply_rows(rows, expr)?)),
-        OutputItems::Groups(groups) => Ok(OutputItems::Groups(apply_groups(groups, expr)?)),
+        OutputItems::Rows(rows) => Ok(OutputItems::Rows(apply_rows(rows, &program)?)),
+        OutputItems::Groups(groups) => Ok(OutputItems::Groups(apply_groups(groups, &program)?)),
     }
 }
 
 pub(crate) fn apply_value_with_expr(value: Value, expr: &str) -> Result<Value> {
-    Ok(run_jq(expr, &value)?.unwrap_or(Value::Null))
+    let program = compile_program(expr)?;
+    Ok(run_jaq(&program, &value)?.unwrap_or(Value::Null))
 }
 
-fn apply_rows(rows: Vec<Row>, expr: &str) -> Result<Vec<Row>> {
+fn apply_rows(rows: Vec<Row>, program: &JaqProgram) -> Result<Vec<Row>> {
     if rows.is_empty() {
         return Ok(Vec::new());
     }
     let payload = Value::Array(rows.into_iter().map(Value::Object).collect());
-    match run_jq(expr, &payload)? {
+    match run_jaq(program, &payload)? {
         None => Ok(Vec::new()),
         Some(value) => Ok(json_to_rows(value)),
     }
 }
 
-fn apply_groups(groups: Vec<Group>, expr: &str) -> Result<Vec<Group>> {
+fn apply_groups(groups: Vec<Group>, program: &JaqProgram) -> Result<Vec<Group>> {
     let mut out = Vec::with_capacity(groups.len());
     for group in groups {
         let payload = group_to_value(&group);
-        match run_jq(expr, &payload)? {
+        match run_jaq(program, &payload)? {
             None => out.push(Group {
                 groups: group.groups,
                 aggregates: group.aggregates,
@@ -171,64 +175,59 @@ fn json_value_to_row(value: Value) -> Vec<Row> {
     }
 }
 
-fn run_jq(expr: &str, payload: &Value) -> std::result::Result<Option<Value>, JqError> {
-    run_jq_with_program("jq", expr, payload)
+// Keep the public DSL verb name `JQ`, but execute it in-process through jaq
+// so the pipeline does not depend on an external executable or child-process
+// timing.
+fn compile_program(expr: &str) -> std::result::Result<JaqProgram, JqError> {
+    let arena = Arena::default();
+    let defs = jaq_core::defs()
+        .chain(jaq_std::defs())
+        .chain(jaq_json::defs());
+    let loader = Loader::new(defs);
+    let modules = loader
+        .load(
+            &arena,
+            File {
+                path: (),
+                code: expr,
+            },
+        )
+        .map_err(|errors| JqError::CompileFailed {
+            message: format!("{errors:?}"),
+        })?;
+    let funs = jaq_core::funs()
+        .chain(jaq_std::funs())
+        .chain(jaq_json::funs());
+    let filter = jaq_core::Compiler::default()
+        .with_funs(funs)
+        .compile(modules)
+        .map_err(|errors| JqError::CompileFailed {
+            message: format!("{errors:?}"),
+        })?;
+    Ok(JaqProgram { filter })
 }
 
-fn run_jq_with_program(
-    program: &str,
-    expr: &str,
-    payload: &Value,
-) -> std::result::Result<Option<Value>, JqError> {
-    let input =
-        serde_json::to_string(payload).map_err(|source| JqError::SerializePayload { source })?;
-    let mut child = Command::new(program)
-        .arg(expr)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|source| JqError::ExecutableNotFound { source })?;
-
-    let writer = child.stdin.take().map(|mut stdin| {
-        let input = input.into_bytes();
-        thread::spawn(move || stdin.write_all(&input))
-    });
-
-    let output = child
-        .wait_with_output()
-        .map_err(|source| JqError::Io { source })?;
-    if let Some(writer) = writer {
-        match writer.join() {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) if !output.status.success() && err.kind() == ErrorKind::BrokenPipe => {}
-            Ok(Err(source)) => return Err(JqError::Io { source }),
-            Err(_) => return Err(JqError::StdinWriterPanicked),
-        }
+fn run_jaq(program: &JaqProgram, payload: &Value) -> std::result::Result<Option<Value>, JqError> {
+    let input = serde_json::from_value::<Val>(payload.clone())
+        .map_err(|source| JqError::SerializePayload { source })?;
+    let ctx = Ctx::<data::JustLut<Val>>::new(&program.filter.lut, Vars::new([]));
+    let mut values = Vec::new();
+    for value in program.filter.id.run((ctx, input)).map(unwrap_valr) {
+        let value = value.map_err(|err| JqError::EvaluationFailed {
+            message: err.to_string(),
+        })?;
+        values.push(jaq_value_to_json(&value)?);
     }
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            return Err(JqError::FailedWithoutStderr {
-                status_code: output.status.code().unwrap_or(-1),
-            });
-        }
-        return Err(JqError::FailedWithStderr {
-            status_code: output.status.code().unwrap_or(-1),
-            stderr,
-        });
+    match values.len() {
+        0 => Ok(None),
+        1 => Ok(values.into_iter().next()),
+        _ => Ok(Some(Value::Array(values))),
     }
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed = stdout.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-
-    let parsed = serde_json::from_str::<Value>(trimmed)
-        .map_err(|source| JqError::InvalidJsonOutput { source })?;
-    Ok(Some(parsed))
+fn jaq_value_to_json(value: &Val) -> std::result::Result<Value, JqError> {
+    serde_json::from_str(&value.to_string()).map_err(|source| JqError::InvalidJsonOutput { source })
 }
 
 #[cfg(test)]

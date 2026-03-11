@@ -800,6 +800,9 @@ Output:
 ```
 
 `JQ` sees the full current payload, not one row at a time.
+It is implemented in-process with
+[jaq](https://github.com/01mf02/jaq), so treat it as jq-like rather than a
+bit-for-bit promise of external `jq`.
 
 ### `VAL` / `VALUE` Extract Values
 

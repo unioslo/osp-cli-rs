@@ -251,7 +251,7 @@ fn default_pipe_verbs_include_extended_dsl_surface() {
         verbs.get("?"),
         Some(&"Clean rows / exists filter".to_string())
     );
-    assert_eq!(verbs.get("JQ"), Some(&"Run jq expression".to_string()));
+    assert_eq!(verbs.get("JQ"), Some(&"Run jq-like expression".to_string()));
     assert_eq!(verbs.get("VALUE"), Some(&"Extract values".to_string()));
 }
 

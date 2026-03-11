@@ -203,7 +203,7 @@ pub fn default_pipe_verbs() -> BTreeMap<String, String> {
         ("K".to_string(), "Key-only quick search".to_string()),
         ("?".to_string(), "Clean rows / exists filter".to_string()),
         ("U".to_string(), "Unroll list field".to_string()),
-        ("JQ".to_string(), "Run jq expression".to_string()),
+        ("JQ".to_string(), "Run jq-like expression".to_string()),
         ("VAL".to_string(), "Extract values".to_string()),
         ("VALUE".to_string(), "Extract values".to_string()),
     ])
