@@ -77,7 +77,7 @@ impl NativeCommand for DefaultAuthCommand {
 }
 
 #[test]
-fn registry_catalog_exposes_completion_and_auth_metadata_unit() {
+fn registry_catalog_and_policy_projection_cover_lookup_completion_and_root_auth_unit() {
     let registry = NativeCommandRegistry::new().with_command(TestNativeCommand);
 
     let catalog = registry.catalog();
@@ -100,11 +100,6 @@ fn registry_catalog_exposes_completion_and_auth_metadata_unit() {
             .iter()
             .any(|child| child.name == "user")
     );
-}
-
-#[test]
-fn registry_normalizes_lookup_and_collects_root_policy_without_nested_auth_unit() {
-    let registry = NativeCommandRegistry::new().with_command(TestNativeCommand);
 
     assert!(registry.command("LDAP").is_some());
     assert!(registry.command(" ldap ").is_some());
@@ -115,14 +110,14 @@ fn registry_normalizes_lookup_and_collects_root_policy_without_nested_auth_unit(
 }
 
 #[test]
-fn empty_registry_and_default_auth_describe_paths_unit() {
-    let registry = NativeCommandRegistry::new();
-    assert!(registry.is_empty());
-    assert!(registry.command("missing").is_none());
+fn empty_registry_and_default_auth_catalog_paths_unit() {
+    assert!(NativeCommandRegistry::new().is_empty());
+    assert!(NativeCommandRegistry::new().command("missing").is_none());
 
     let describe = DefaultAuthCommand.describe();
     assert_eq!(describe.name, "version");
     assert!(describe.auth.is_none());
+    assert!(describe.subcommands.is_empty());
 }
 
 #[test]
@@ -181,10 +176,18 @@ impl NativeCommand for TestNativeCommandWithNestedAuth {
 
 #[test]
 fn registry_collects_nested_auth_policies_when_describe_is_overridden_unit() {
-    let registry = NativeCommandRegistry::new().with_command(TestNativeCommandWithNestedAuth);
+    let default_registry = NativeCommandRegistry::new().with_command(TestNativeCommand);
+    assert!(
+        default_registry
+            .command_policy_registry()
+            .resolved_policy(&CommandPath::new(["ldap", "user"]))
+            .is_none()
+    );
 
-    let policy = registry.command_policy_registry();
-    let user_policy = policy
+    let overridden_registry =
+        NativeCommandRegistry::new().with_command(TestNativeCommandWithNestedAuth);
+    let user_policy = overridden_registry
+        .command_policy_registry()
         .resolved_policy(&CommandPath::new(["ldap", "user"]))
         .expect("nested native policy should exist");
     assert_eq!(

@@ -181,185 +181,20 @@ fn filter_preserves_section_metadata_when_descendants_match_unit() {
 }
 
 #[test]
-fn filter_exact_index_path_rebuilds_selected_semantic_branch_unit() {
-    let filtered = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "F",
-            "sections[0].entries[1].name=exit",
-            "F sections[0].entries[1].name=exit",
-        ),
-    )
-    .expect("filter stage should succeed");
+fn filter_addressed_path_failures_collapse_to_null_unit() {
+    for spec in [
+        "sections[0].entries[1].name!=exit",
+        "sections[5].entries[0].name=help",
+    ] {
+        let raw = format!("F {spec}");
+        let filtered = apply_stage(
+            guide_like_value(),
+            &stage(ParsedStageKind::Explicit, "F", spec, &raw),
+        )
+        .expect("filter stage should succeed");
 
-    assert_eq!(filtered["usage"], json!(["osp intro"]));
-    let section = &filtered["sections"].as_array().expect("sections")[0];
-    assert_eq!(section["title"], json!("Commands"));
-    assert_eq!(section["kind"], json!("commands"));
-    assert_eq!(section["entries"].as_array().expect("entries").len(), 1);
-    assert_eq!(section["entries"][0]["name"], json!("exit"));
-    assert!(filtered.get("commands").is_none());
-}
-
-#[test]
-fn filter_exact_negated_index_path_rebuilds_selected_branch_when_predicate_passes_unit() {
-    let filtered = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "F",
-            "sections[0].entries[1].name!=help",
-            "F sections[0].entries[1].name!=help",
-        ),
-    )
-    .expect("filter stage should succeed");
-
-    assert_eq!(filtered["usage"], json!(["osp intro"]));
-    let section = &filtered["sections"].as_array().expect("sections")[0];
-    assert_eq!(section["title"], json!("Commands"));
-    assert_eq!(section["kind"], json!("commands"));
-    assert_eq!(section["entries"].as_array().expect("entries").len(), 1);
-    assert_eq!(section["entries"][0]["name"], json!("exit"));
-    assert!(filtered.get("commands").is_none());
-}
-
-#[test]
-fn filter_exact_negated_index_path_drops_when_predicate_fails_unit() {
-    let filtered = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "F",
-            "sections[0].entries[1].name!=exit",
-            "F sections[0].entries[1].name!=exit",
-        ),
-    )
-    .expect("filter stage should succeed");
-
-    assert_eq!(filtered, json!(null));
-}
-
-#[test]
-fn filter_fanout_path_rebuilds_only_matching_semantic_branch_unit() {
-    let filtered = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "F",
-            "sections[].entries[].name=exit",
-            "F sections[].entries[].name=exit",
-        ),
-    )
-    .expect("filter stage should succeed");
-
-    assert_eq!(filtered["usage"], json!(["osp intro"]));
-    let section = &filtered["sections"].as_array().expect("sections")[0];
-    assert_eq!(section["title"], json!("Commands"));
-    assert_eq!(section["kind"], json!("commands"));
-    assert_eq!(section["entries"].as_array().expect("entries").len(), 1);
-    assert_eq!(section["entries"][0]["name"], json!("exit"));
-    assert!(filtered.get("commands").is_none());
-}
-
-#[test]
-fn filter_out_of_bounds_structural_path_returns_null_unit() {
-    let filtered = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "F",
-            "sections[5].entries[0].name=help",
-            "F sections[5].entries[0].name=help",
-        ),
-    )
-    .expect("filter stage should succeed");
-
-    assert_eq!(filtered, json!(null));
-}
-
-#[test]
-fn project_preserves_section_metadata_when_descendants_are_projected_unit() {
-    let projected = apply_stage(
-        guide_like_value(),
-        &stage(ParsedStageKind::Explicit, "P", "name", "P name"),
-    )
-    .expect("project stage should succeed");
-
-    let section = &projected["sections"].as_array().expect("sections")[0];
-    assert_eq!(section["title"], json!("Commands"));
-    assert_eq!(section["kind"], json!("commands"));
-    assert_eq!(section["entries"].as_array().expect("entries").len(), 2);
-    assert_eq!(section["entries"][0]["name"], json!("help"));
-    assert!(section["entries"][0].get("short_help").is_none());
-}
-
-#[test]
-fn project_mixed_exact_and_generic_keepers_stays_structural_unit() {
-    let projected = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "P",
-            "usage sections[0].entries[1].name",
-            "P usage sections[0].entries[1].name",
-        ),
-    )
-    .expect("project stage should succeed");
-
-    assert_eq!(projected["usage"], json!(["osp intro"]));
-    let section = &projected["sections"].as_array().expect("sections")[0];
-    assert_eq!(section["title"], json!("Commands"));
-    assert_eq!(section["kind"], json!("commands"));
-    assert_eq!(section["entries"].as_array().expect("entries").len(), 1);
-    assert_eq!(section["entries"][0]["name"], json!("exit"));
-    assert!(projected.get("commands").is_none());
-}
-
-#[test]
-fn project_exact_projection_with_droppers_stays_structural_unit() {
-    let projected = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "P",
-            "sections[0].entries[1].name !short_help",
-            "P sections[0].entries[1].name !short_help",
-        ),
-    )
-    .expect("project stage should succeed");
-
-    let section = &projected["sections"].as_array().expect("sections")[0];
-    assert_eq!(section["title"], json!("Commands"));
-    assert_eq!(section["kind"], json!("commands"));
-    assert_eq!(section["entries"][0]["name"], json!("exit"));
-    assert!(section["entries"][0].get("short_help").is_none());
-    assert!(projected.get("commands").is_none());
-}
-
-#[test]
-fn project_fanout_path_rebuilds_selected_descendants_unit() {
-    let projected = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "P",
-            "sections[].entries[].name",
-            "P sections[].entries[].name",
-        ),
-    )
-    .expect("project stage should succeed");
-
-    assert_eq!(projected["usage"], json!(["osp intro"]));
-    let section = &projected["sections"].as_array().expect("sections")[0];
-    assert_eq!(section["title"], json!("Commands"));
-    assert_eq!(section["kind"], json!("commands"));
-    let entries = section["entries"].as_array().expect("entries");
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0]["name"], json!("help"));
-    assert!(entries[0].get("short_help").is_none());
-    assert_eq!(entries[1]["name"], json!("exit"));
-    assert!(projected.get("commands").is_none());
+        assert_eq!(filtered, json!(null), "spec={spec}");
+    }
 }
 
 #[test]
@@ -415,57 +250,30 @@ fn project_relative_path_requires_real_path_matches_unit() {
 }
 
 #[test]
-fn project_mixed_structural_and_generic_keepers_keep_original_section_alignment_unit() {
-    let projected = apply_stage(
-        two_section_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "P",
-            "title sections[1].entries[0].name",
-            "P title sections[1].entries[0].name",
-        ),
-    )
-    .expect("project stage should succeed");
+fn project_structural_keeper_and_dropper_variants_preserve_section_alignment_unit() {
+    let expected = json!({
+        "sections": [
+            {
+                "title": "Options",
+                "kind": "options",
+                "entries": [{"name": "--verbose"}]
+            }
+        ]
+    });
 
-    assert_eq!(
-        projected,
-        json!({
-            "sections": [
-                {
-                    "title": "Options",
-                    "kind": "options",
-                    "entries": [{"name": "--verbose"}]
-                }
-            ]
-        })
-    );
-}
+    for spec in [
+        "title sections[1].entries[0].name",
+        "sections[1].entries[0].name !sections[0]",
+    ] {
+        let raw = format!("P {spec}");
+        let projected = apply_stage(
+            two_section_value(),
+            &stage(ParsedStageKind::Explicit, "P", spec, &raw),
+        )
+        .expect("project stage should succeed");
 
-#[test]
-fn project_structural_droppers_use_original_indexes_after_structural_keepers_unit() {
-    let projected = apply_stage(
-        two_section_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "P",
-            "sections[1].entries[0].name !sections[0]",
-            "P sections[1].entries[0].name !sections[0]",
-        ),
-    )
-    .expect("project stage should succeed");
-
-    assert_eq!(
-        projected,
-        json!({
-            "sections": [
-                {
-                    "title": "Options",
-                    "kind": "options",
-                    "entries": [{"name": "--verbose"}]
-                }
-            ]
-        })
-    );
+        assert_eq!(projected, expected, "spec={spec}");
+    }
 }
 
 #[test]
@@ -574,44 +382,23 @@ fn group_groups_nested_semantic_entry_collections_unit() {
 }
 
 #[test]
-fn aggregate_counts_nested_semantic_entry_collections_unit() {
-    let aggregated = apply_stage(
-        json!({
-            "commands": [
-                {"name": "help", "short_help": "Show overview"},
-                {"name": "exit", "short_help": "Leave shell"}
-            ]
-        }),
-        &stage(
-            ParsedStageKind::Explicit,
-            "A",
-            "count AS count",
-            "A count AS count",
-        ),
-    )
-    .expect("aggregate stage should succeed");
+fn aggregate_and_count_aliases_produce_same_nested_semantic_count_unit() {
+    for (verb, spec, raw) in [("A", "count AS count", "A count AS count"), ("C", "", "C")] {
+        let counted = apply_stage(
+            json!({
+                "commands": [
+                    {"name": "help", "short_help": "Show overview"},
+                    {"name": "exit", "short_help": "Leave shell"}
+                ]
+            }),
+            &stage(ParsedStageKind::Explicit, verb, spec, raw),
+        )
+        .expect("counting stage should succeed");
 
-    let commands = aggregated["commands"].as_array().expect("commands array");
-    assert_eq!(commands.len(), 1);
-    assert_eq!(commands[0]["count"], json!(2));
-}
-
-#[test]
-fn count_macro_counts_nested_semantic_entry_collections_unit() {
-    let counted = apply_stage(
-        json!({
-            "commands": [
-                {"name": "help", "short_help": "Show overview"},
-                {"name": "exit", "short_help": "Leave shell"}
-            ]
-        }),
-        &stage(ParsedStageKind::Explicit, "C", "", "C"),
-    )
-    .expect("count stage should succeed");
-
-    let commands = counted["commands"].as_array().expect("commands array");
-    assert_eq!(commands.len(), 1);
-    assert_eq!(commands[0]["count"], json!(2));
+        let commands = counted["commands"].as_array().expect("commands array");
+        assert_eq!(commands.len(), 1, "raw={raw}");
+        assert_eq!(commands[0]["count"], json!(2), "raw={raw}");
+    }
 }
 
 #[test]
@@ -680,37 +467,4 @@ fn value_stage_extracts_nested_semantic_values_unit() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["value"], json!("help"));
     assert_eq!(rows[1]["value"], json!("exit"));
-}
-
-#[test]
-fn value_keeps_sibling_field_identity_for_same_object_unit() {
-    let values = apply_stage(
-        guide_like_value(),
-        &stage(
-            ParsedStageKind::Explicit,
-            "VALUE",
-            "sections[0].entries[0].name sections[0].entries[0].short_help",
-            "VALUE sections[0].entries[0].name sections[0].entries[0].short_help",
-        ),
-    )
-    .expect("value stage should succeed");
-
-    assert_eq!(
-        values,
-        json!({
-            "sections": [
-                {
-                    "title": "Commands",
-                    "kind": "commands",
-                    "paragraphs": [],
-                    "entries": [
-                        {
-                            "name": {"value": "help"},
-                            "short_help": {"value": "Show overview"}
-                        }
-                    ]
-                }
-            ]
-        })
-    );
 }

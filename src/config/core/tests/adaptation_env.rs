@@ -33,7 +33,7 @@ fn parse_input_value_covers_float_unknown_and_allowed_scope_paths_unit() {
 }
 
 #[test]
-fn schema_extension_runtime_and_scope_helpers_cover_aliases_unit() {
+fn schema_extension_runtime_and_scope_helpers_cover_aliases_and_bootstrap_specs_unit() {
     let mut schema = ConfigSchema::default();
     schema.set_allow_extensions_namespace(false);
     assert!(!schema.is_known_key("extensions.demo.token"));
@@ -47,6 +47,17 @@ fn schema_extension_runtime_and_scope_helpers_cover_aliases_unit() {
             .map(|spec| spec.phase),
         Some(BootstrapPhase::Profile)
     );
+    let env = parse_env_key("OSP__PROFILE__DEFAULT").expect("bootstrap env key should parse");
+    assert_eq!(env.key, "profile.default");
+    assert_eq!(env.scope, Scope::global());
+
+    let env = parse_env_key("OSP__TERM__repl__PROFILE__DEFAULT")
+        .expect("terminal-scoped bootstrap env key should parse");
+    assert_eq!(env.key, "profile.default");
+    assert_eq!(env.scope, Scope::terminal("repl"));
+
+    assert!(bootstrap_key_spec("ui.format").is_none());
+    assert!(!is_bootstrap_only_key("ui.format"));
 }
 
 #[test]
@@ -187,10 +198,7 @@ fn schema_adaptation_helpers_cover_scalar_secret_list_and_env_paths_unit() {
             .expect("missing final key should fail"),
         crate::config::ConfigError::InvalidEnvOverride { reason, .. } if reason.contains("missing final config key")
     ));
-}
 
-#[test]
-fn env_bootstrap_and_scope_normalization_cover_remaining_edge_cases_unit() {
     let env = parse_env_key("OSP__PROFILE__DEFAULT").expect("bootstrap env key should parse");
     assert_eq!(env.key, "profile.default");
     assert_eq!(env.scope, Scope::global());
@@ -205,17 +213,6 @@ fn env_bootstrap_and_scope_normalization_cover_remaining_edge_cases_unit() {
     assert!(!remaining_parts_are_bootstrap_profile_default(&[
         "PROFILE", "OPS"
     ]));
-}
-
-#[test]
-fn bootstrap_env_helpers_cover_terminal_scoped_default_profile_and_unknown_specs_unit() {
-    let env = parse_env_key("OSP__TERM__repl__PROFILE__DEFAULT")
-        .expect("terminal-scoped bootstrap env key should parse");
-    assert_eq!(env.key, "profile.default");
-    assert_eq!(env.scope, Scope::terminal("repl"));
-
-    assert!(bootstrap_key_spec("ui.format").is_none());
-    assert!(!is_bootstrap_only_key("ui.format"));
 }
 
 #[test]

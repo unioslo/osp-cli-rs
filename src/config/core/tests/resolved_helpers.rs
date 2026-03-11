@@ -99,7 +99,7 @@ fn validate_and_adapt_converts_runtime_visible_string_values() {
 }
 
 #[test]
-fn resolved_config_helpers_read_scalar_list_and_alias_views() {
+fn resolved_config_helpers_read_scalar_list_secret_and_alias_views_unit() {
     let resolved = ResolvedConfig {
         active_profile: "ops".to_string(),
         terminal: Some("repl".to_string()),
@@ -150,10 +150,7 @@ fn resolved_config_helpers_read_scalar_list_and_alias_views() {
     assert!(resolved.known_profiles().contains("default"));
     assert!(resolved.values().contains_key("ui.prompt.secrets"));
     assert!(resolved.aliases().contains_key("alias.lookup"));
-}
 
-#[test]
-fn resolved_config_and_layer_helpers_cover_secret_lists_aliases_and_remove_scoped_unit() {
     let resolved = ResolvedConfig {
         active_profile: "default".to_string(),
         terminal: Some("repl".to_string()),
@@ -212,45 +209,41 @@ fn resolved_config_and_layer_helpers_cover_secret_lists_aliases_and_remove_scope
         layer.remove_scoped("ui.format", &Scope::terminal("repl")),
         Some(ConfigValue::String("table".to_string()))
     );
-}
-
-#[test]
-fn resolved_config_string_list_helpers_cover_secret_and_non_string_variants_unit() {
-    let mut values = BTreeMap::new();
-    values.insert(
-        "theme.path".to_string(),
-        ResolvedValue {
-            raw_value: ConfigValue::List(vec![
-                ConfigValue::String("base".to_string()),
-                ConfigValue::Integer(5),
-                ConfigValue::String("secret".to_string()).into_secret(),
-            ]),
-            value: ConfigValue::List(vec![
-                ConfigValue::String("base".to_string()),
-                ConfigValue::Integer(5),
-                ConfigValue::String("secret".to_string()).into_secret(),
-            ]),
-            source: ConfigSource::ConfigFile,
-            scope: Scope::global(),
-            origin: None,
-        },
-    );
-    values.insert(
-        "user.name".to_string(),
-        ResolvedValue {
-            raw_value: ConfigValue::Integer(42).into_secret(),
-            value: ConfigValue::Integer(42).into_secret(),
-            source: ConfigSource::Secrets,
-            scope: Scope::global(),
-            origin: None,
-        },
-    );
 
     let resolved = ResolvedConfig {
         active_profile: "ops".to_string(),
         terminal: None,
         known_profiles: BTreeSet::new(),
-        values,
+        values: BTreeMap::from([
+            (
+                "theme.path".to_string(),
+                ResolvedValue {
+                    raw_value: ConfigValue::List(vec![
+                        ConfigValue::String("base".to_string()),
+                        ConfigValue::Integer(5),
+                        ConfigValue::String("secret".to_string()).into_secret(),
+                    ]),
+                    value: ConfigValue::List(vec![
+                        ConfigValue::String("base".to_string()),
+                        ConfigValue::Integer(5),
+                        ConfigValue::String("secret".to_string()).into_secret(),
+                    ]),
+                    source: ConfigSource::ConfigFile,
+                    scope: Scope::global(),
+                    origin: None,
+                },
+            ),
+            (
+                "user.name".to_string(),
+                ResolvedValue {
+                    raw_value: ConfigValue::Integer(42).into_secret(),
+                    value: ConfigValue::Integer(42).into_secret(),
+                    source: ConfigSource::Secrets,
+                    scope: Scope::global(),
+                    origin: None,
+                },
+            ),
+        ]),
         aliases: BTreeMap::new(),
     };
 

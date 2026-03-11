@@ -348,8 +348,7 @@ mod tests {
     use crate::completion::{
         CompletionEngine,
         model::{
-            CompletionNode, CompletionTree, ContextScope, FlagNode, QuoteStyle, SuggestionEntry,
-            SuggestionOutput,
+            CompletionNode, CompletionTree, FlagNode, QuoteStyle, SuggestionEntry, SuggestionOutput,
         },
     };
 
@@ -406,50 +405,42 @@ mod tests {
         use super::*;
 
         #[test]
-        fn completion_characterization_covers_representative_request_categories() {
+        fn completion_request_characterization_covers_representative_kinds_and_suggestions() {
             let engine = CompletionEngine::new(tree());
             let cases = [
-                ("or", 2usize, "orch"),
-                ("orch pr", "orch pr".len(), "provision"),
-                ("orch provision --", "orch provision --".len(), "--provider"),
+                ("or", 2usize, "subcommands", "orch"),
+                ("orch pr", "orch pr".len(), "subcommands", "provision"),
                 (
-                    "orch provision --provider ",
-                    "orch provision --provider ".len(),
-                    "vmware",
+                    "orch provision --",
+                    "orch provision --".len(),
+                    "flag-names",
+                    "--provider",
                 ),
-                ("orch provision | F", "orch provision | F".len(), "F"),
-            ];
-
-            for (line, cursor, expected) in cases {
-                let values = suggestion_texts(engine.complete(line, cursor).1);
-                assert!(
-                    values.iter().any(|value| value == expected),
-                    "expected `{expected}` in suggestions for `{line}`, got {values:?}"
-                );
-            }
-        }
-
-        #[test]
-        fn completion_request_classifier_covers_representative_categories() {
-            let engine = CompletionEngine::new(tree());
-            let cases = [
-                ("or", 2usize, "subcommands"),
-                ("orch pr", "orch pr".len(), "subcommands"),
-                ("orch provision --", "orch provision --".len(), "flag-names"),
                 (
                     "orch provision --provider ",
                     "orch provision --provider ".len(),
                     "flag-values",
+                    "vmware",
                 ),
-                ("orch provision | F", "orch provision | F".len(), "pipe"),
+                (
+                    "orch provision | F",
+                    "orch provision | F".len(),
+                    "pipe",
+                    "F",
+                ),
             ];
 
-            for (line, cursor, expected) in cases {
+            for (line, cursor, expected_kind, expected_value) in cases {
                 let analysis = engine.analyze(line, cursor);
                 assert_eq!(
                     analysis.request.kind(),
-                    expected,
+                    expected_kind,
                     "unexpected request kind for `{line}`"
+                );
+                let values = suggestion_texts(engine.complete(line, cursor).1);
+                assert!(
+                    values.iter().any(|value| value == expected_value),
+                    "expected `{expected_value}` in suggestions for `{line}`, got {values:?}"
                 );
             }
         }
@@ -481,73 +472,6 @@ mod tests {
                     .expect("provider should merge into cursor context"),
                 &vec!["vmware".to_string()][..]
             );
-        }
-
-        #[test]
-        fn metadata_context_flags_respect_global_and_subtree_scope_boundaries() {
-            let mut provision = CompletionNode::default();
-            provision.flags.insert(
-                "--os".to_string(),
-                FlagNode {
-                    suggestions_by_provider: BTreeMap::from([
-                        ("vmware".to_string(), vec![SuggestionEntry::from("rhel")]),
-                        ("nrec".to_string(), vec![SuggestionEntry::from("alma")]),
-                    ]),
-                    suggestions: vec![SuggestionEntry::from("rhel"), SuggestionEntry::from("alma")],
-                    ..FlagNode::default()
-                },
-            );
-            let mut orch = CompletionNode::default();
-            orch.children
-                .insert("provision".to_string(), provision.clone());
-
-            let mut global_hidden = CompletionNode::default();
-            global_hidden.flags.insert(
-                "--provider".to_string(),
-                FlagNode {
-                    suggestions: vec![
-                        SuggestionEntry::from("vmware"),
-                        SuggestionEntry::from("nrec"),
-                    ],
-                    context_only: true,
-                    context_scope: ContextScope::Global,
-                    ..FlagNode::default()
-                },
-            );
-            let global_engine = CompletionEngine::new(CompletionTree {
-                root: CompletionNode::default()
-                    .with_child("orch", orch.clone())
-                    .with_child("hidden", global_hidden),
-                ..CompletionTree::default()
-            });
-
-            let line = "orch provision --os  --provider vmware";
-            let values = suggestion_texts(global_engine.complete(line, provider_cursor(line)).1);
-            assert!(values.contains(&"rhel".to_string()));
-            assert!(!values.contains(&"alma".to_string()));
-
-            let mut subtree_hidden = CompletionNode::default();
-            subtree_hidden.flags.insert(
-                "--provider".to_string(),
-                FlagNode {
-                    suggestions: vec![
-                        SuggestionEntry::from("vmware"),
-                        SuggestionEntry::from("nrec"),
-                    ],
-                    context_only: true,
-                    context_scope: ContextScope::Subtree,
-                    ..FlagNode::default()
-                },
-            );
-            let subtree_engine = CompletionEngine::new(CompletionTree {
-                root: CompletionNode::default()
-                    .with_child("orch", orch)
-                    .with_child("hidden", subtree_hidden),
-                ..CompletionTree::default()
-            });
-            let values = suggestion_texts(subtree_engine.complete(line, provider_cursor(line)).1);
-            assert!(values.contains(&"rhel".to_string()));
-            assert!(values.contains(&"alma".to_string()));
         }
 
         #[test]

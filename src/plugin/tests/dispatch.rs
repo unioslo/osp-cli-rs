@@ -1,6 +1,6 @@
 #[cfg(unix)]
 #[test]
-fn dispatch_times_out_hung_plugin() {
+fn timeout_dispatch_covers_timeout_fields_and_process_cleanup_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-dispatch-timeout");
     let plugins_dir = root.join("plugins");
     std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
@@ -23,6 +23,25 @@ fn dispatch_times_out_hung_plugin() {
         other => panic!("expected timeout error, got {other}"),
     }
 
+    let leak_root = make_temp_dir("osp-cli-plugin-manager-timeout-process-group");
+    let leak_plugins_dir = leak_root.join("plugins");
+    let marker = leak_root.join("leaked-child.txt");
+    std::fs::create_dir_all(&leak_plugins_dir).expect("plugin dir should be created");
+
+    write_timeout_leak_test_plugin(&leak_plugins_dir, "hang", &marker);
+    let leak_manager = PluginManager::new(vec![leak_plugins_dir.clone()])
+        .with_process_timeout(Duration::from_millis(50));
+
+    let err = leak_manager
+        .dispatch("hang", &[], &PluginDispatchContext::default())
+        .expect_err("hung plugin should time out");
+    assert!(matches!(err, PluginDispatchError::TimedOut { .. }));
+
+    std::thread::sleep(Duration::from_millis(350));
+    assert!(
+        !marker.exists(),
+        "timed-out plugin left a background child behind"
+    );
 }
 
 #[cfg(unix)]
@@ -49,36 +68,10 @@ fn dispatch_drains_large_plugin_output_without_false_timeout_unit() {
             .and_then(|value| value.as_str())
             .is_some_and(|blob| blob.len() >= 131_072)
     );
-
-}
-
-#[cfg(unix)]
-#[test]
-fn timed_out_plugin_terminates_background_process_group_unit() {
-    let root = make_temp_dir("osp-cli-plugin-manager-timeout-process-group");
-    let plugins_dir = root.join("plugins");
-    let marker = root.join("leaked-child.txt");
-    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-    write_timeout_leak_test_plugin(&plugins_dir, "hang", &marker);
-    let manager = PluginManager::new(vec![plugins_dir.clone()])
-        .with_process_timeout(Duration::from_millis(50));
-
-    let err = manager
-        .dispatch("hang", &[], &PluginDispatchContext::default())
-        .expect_err("hung plugin should time out");
-    assert!(matches!(err, PluginDispatchError::TimedOut { .. }));
-
-    std::thread::sleep(Duration::from_millis(350));
-    assert!(
-        !marker.exists(),
-        "timed-out plugin left a background child behind"
-    );
-
 }
 
 #[test]
-fn plugin_dispatch_context_merges_shared_and_plugin_env_pairs_unit() {
+fn plugin_dispatch_context_and_error_formats_cover_local_helper_paths_unit() {
     let context = PluginDispatchContext::new(crate::core::runtime::RuntimeHints::default())
         .with_shared_env([("OSP_FORMAT", "json")])
         .with_plugin_env(std::collections::HashMap::from([(
@@ -95,10 +88,7 @@ fn plugin_dispatch_context_merges_shared_and_plugin_env_pairs_unit() {
         context.env_pairs_for("missing").collect::<Vec<_>>(),
         vec![("OSP_FORMAT", "json")]
     );
-}
 
-#[test]
-fn plugin_dispatch_error_formats_cover_terminal_variants_unit() {
     let timeout_plain = PluginDispatchError::TimedOut {
         plugin_id: "alpha".to_string(),
         timeout: Duration::from_millis(25),
@@ -173,115 +163,17 @@ fn plugin_dispatch_error_formats_cover_terminal_variants_unit() {
 
 #[cfg(unix)]
 #[test]
-fn dispatch_surfaces_nonzero_invalid_json_invalid_payload_and_passthrough_unit() {
+fn describe_plugin_and_provider_error_paths_cover_missing_nonzero_invalid_and_execute_failed_unit() {
     let _lock = env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let root = make_temp_dir("osp-cli-plugin-manager-dispatch-errors");
-    let plugins_dir = root.join("plugins");
-    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-    write_dispatch_fixture_plugin(
-        &plugins_dir,
-        "fail",
-        "fail",
-        r#"printf 'nope\n' >&2; exit 9"#,
-    );
-    write_dispatch_fixture_plugin(
-        &plugins_dir,
-        "bad-json",
-        "bad-json",
-        r#"printf 'not-json\n'"#,
-    );
-    write_dispatch_fixture_plugin(
-        &plugins_dir,
-        "bad-payload",
-        "bad-payload",
-        r#"cat <<'JSON'
-{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":{"code":"broken","message":"boom"},"meta":{"format_hint":"table","columns":["message"]}}
-JSON"#,
-    );
-    write_dispatch_fixture_plugin(
-        &plugins_dir,
-        "raw",
-        "raw",
-        r#"cat <<'JSON'
-{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}
-JSON"#,
-    );
-
-    let manager = PluginManager::new(vec![plugins_dir.clone()]);
-
-    match manager
-        .dispatch("fail", &[], &PluginDispatchContext::default())
-        .expect_err("non-zero exit should surface")
-    {
-        PluginDispatchError::NonZeroExit {
-            plugin_id,
-            status_code,
-            stderr,
-        } => {
-            assert_eq!(plugin_id, "fail");
-            assert_eq!(status_code, 9);
-            assert!(stderr.contains("nope"));
-        }
-        other => panic!("unexpected non-zero result: {other:?}"),
-    }
-
-    match manager
-        .dispatch("bad-json", &[], &PluginDispatchContext::default())
-        .expect_err("invalid json should surface")
-    {
-        PluginDispatchError::InvalidJsonResponse { plugin_id, .. } => {
-            assert_eq!(plugin_id, "bad-json");
-        }
-        other => panic!("unexpected invalid json result: {other:?}"),
-    }
-
-    match manager
-        .dispatch("bad-payload", &[], &PluginDispatchContext::default())
-        .expect_err("invalid payload should surface")
-    {
-        PluginDispatchError::InvalidResponsePayload { plugin_id, reason } => {
-            assert_eq!(plugin_id, "bad-payload");
-            assert!(reason.contains("ok=true requires error=null"));
-        }
-        other => panic!("unexpected invalid payload result: {other:?}"),
-    }
-
-    let raw = manager
-        .dispatch_passthrough("raw", &[], &PluginDispatchContext::default())
-        .expect("passthrough should succeed");
-    assert_eq!(raw.status_code, 0);
-    assert!(raw.stdout.contains("\"message\":\"ok\""));
-
-    let missing = manager
-        .dispatch_passthrough("missing", &[], &PluginDispatchContext::default())
-        .expect_err("missing command should fail");
-    assert!(matches!(
-        missing,
-        PluginDispatchError::CommandNotFound { command } if command == "missing"
-    ));
-
-}
-
-#[test]
-fn describe_plugin_reports_missing_executable_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-missing-describe");
     let missing = root.join("osp-missing");
 
     let err = describe_plugin(&missing, Duration::from_millis(50))
         .expect_err("missing executable should fail");
     assert!(err.to_string().contains("failed to execute --describe"));
-
-}
-
-#[cfg(unix)]
-#[test]
-fn describe_plugin_and_run_provider_cover_direct_error_paths_unit() {
     use std::os::unix::fs::PermissionsExt;
-
-    let root = make_temp_dir("osp-cli-plugin-manager-direct-dispatch-errors");
     let nonzero = root.join("osp-nonzero");
     let invalid_json = root.join("osp-invalid-json");
     let invalid_payload = root.join("osp-invalid-payload");

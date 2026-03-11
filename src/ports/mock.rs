@@ -1,22 +1,16 @@
-//! Small public fixtures and helpers for embedding and examples.
+//! Test and example doubles for the service-layer ports.
 //!
-//! This module exists to expose stable, low-friction building blocks that make
-//! the crate easier to demonstrate and test from the outside. Today that is
-//! mainly the in-memory LDAP fixture used by doctests, service examples, and
-//! integration tests.
-//!
-//! Contract:
-//!
-//! - items here should stay deterministic and lightweight
-//! - this is a convenience surface for examples and tests, not a production
-//!   transport layer
+//! These helpers exist to make the public port surfaces easy to demonstrate
+//! and exercise without bootstrapping the full host stack.
 
 use std::collections::HashMap;
 
-use crate::core::row::Row;
-use crate::ports::{LdapDirectory, apply_filter_and_projection};
 use anyhow::Result;
 use serde_json::json;
+
+use crate::core::row::Row;
+
+use super::{LdapDirectory, apply_filter_and_projection};
 
 /// In-memory LDAP test double used by examples, unit tests, and service tests.
 ///
@@ -27,8 +21,8 @@ use serde_json::json;
 /// # Examples
 ///
 /// ```
-/// use osp_cli::api::MockLdapClient;
 /// use osp_cli::ports::LdapDirectory;
+/// use osp_cli::ports::mock::MockLdapClient;
 ///
 /// let ldap = MockLdapClient::default();
 /// let rows = ldap.user("oistes", Some("uid=oistes"), None).unwrap();
@@ -148,9 +142,8 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::ports::LdapDirectory;
-
     use super::MockLdapClient;
+    use crate::ports::LdapDirectory;
 
     #[test]
     fn user_filter_uid_equals_returns_match() {

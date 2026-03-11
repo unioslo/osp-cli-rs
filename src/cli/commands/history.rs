@@ -54,7 +54,7 @@ mod tests {
     }
 
     #[test]
-    fn history_repl_command_wraps_repl_output_for_cli_unit() {
+    fn history_output_helpers_wrap_rows_and_ignore_text_results_unit() {
         let temp_dir = make_temp_dir("osp-cli-history-wrapper");
         let history = crate::repl::SharedHistory::new(
             HistoryConfig::builder()
@@ -88,10 +88,6 @@ mod tests {
             rows[0]["command"],
             serde_json::Value::String("config show".into())
         );
-    }
-
-    #[test]
-    fn extract_output_rows_returns_none_for_text_results_unit() {
         assert!(extract_output_rows(CliCommandResult::text("hello")).is_none());
     }
 

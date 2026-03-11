@@ -9,7 +9,7 @@ fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
 }
 
 #[test]
-fn toml_file_loader_covers_existing_optional_and_missing_required_paths() {
+fn toml_file_loader_covers_existing_missing_optional_and_directory_paths_unit() {
     let root = make_temp_dir("osp-config-loader");
     let config_path = root.join("config.toml");
     std::fs::write(&config_path, "[default.ui]\ntheme = \"plain\"\n")
@@ -44,10 +44,20 @@ fn toml_file_loader_covers_existing_optional_and_missing_required_paths() {
         .load()
         .expect("optional missing config should be empty");
     assert!(optional_missing.entries().is_empty());
+
+    let err = TomlFileLoader::new(root.to_path_buf())
+        .required()
+        .load()
+        .expect_err("reading a directory as TOML should fail");
+    let root_display = root.to_string_lossy().to_string();
+    assert!(matches!(
+        err,
+        ConfigError::FileRead { path, .. } if path == root_display
+    ));
 }
 
 #[test]
-fn secrets_and_env_loaders_mark_secret_entries_and_origins() {
+fn secrets_and_env_loaders_mark_secret_entries_and_directory_errors_unit() {
     let root = make_temp_dir("osp-config-secrets");
     let secrets_path = root.join("secrets.toml");
     std::fs::write(&secrets_path, "[default.auth]\ntoken = \"shh\"\n")
@@ -77,10 +87,21 @@ fn secrets_and_env_loaders_mark_secret_entries_and_origins() {
         env.entries()[0].origin.as_deref(),
         Some("OSP_SECRET__AUTH__TOKEN")
     );
+
+    let err = SecretsTomlLoader::new(root.to_path_buf())
+        .with_strict_permissions(false)
+        .required()
+        .load()
+        .expect_err("reading a directory as secrets TOML should fail");
+    let root_display = root.to_string_lossy().to_string();
+    assert!(matches!(
+        err,
+        ConfigError::FileRead { path, .. } if path == root_display
+    ));
 }
 
 #[test]
-fn chained_loader_and_pipeline_merge_and_resolve_layers() {
+fn chained_loader_and_pipeline_resolve_layers_with_optionals_unit() {
     let chained = ChainedLoader::new(StaticLayerLoader::new({
         let mut layer = ConfigLayer::default();
         layer.insert("theme.name", "plain", Scope::global());
@@ -111,7 +132,7 @@ fn chained_loader_and_pipeline_merge_and_resolve_layers() {
 }
 
 #[test]
-fn pipeline_builder_covers_schema_and_collected_env_loaders() {
+fn pipeline_builder_covers_schema_collected_env_and_optional_layer_paths_unit() {
     let env: EnvVarLoader = [("OSP__THEME__NAME", "nord")].into_iter().collect();
     let secrets: EnvSecretsLoader = [("OSP_SECRET__AUTH__TOKEN", "tok")].into_iter().collect();
 
@@ -124,34 +145,7 @@ fn pipeline_builder_covers_schema_and_collected_env_loaders() {
 
     assert_eq!(layers.env.entries().len(), 1);
     assert_eq!(layers.secrets.entries().len(), 1);
-}
 
-#[test]
-fn file_and_secrets_loaders_report_read_errors_for_directories_unit() {
-    let root = make_temp_dir("osp-config-loader-read-error");
-    let err = TomlFileLoader::new(root.to_path_buf())
-        .required()
-        .load()
-        .expect_err("reading a directory as TOML should fail");
-    let root_display = root.to_string_lossy().to_string();
-    assert!(matches!(
-        err,
-        ConfigError::FileRead { path, .. } if path == root_display
-    ));
-
-    let err = SecretsTomlLoader::new(root.to_path_buf())
-        .with_strict_permissions(false)
-        .required()
-        .load()
-        .expect_err("reading a directory as secrets TOML should fail");
-    assert!(matches!(
-        err,
-        ConfigError::FileRead { path, .. } if path == root_display
-    ));
-}
-
-#[test]
-fn process_env_and_pipeline_builder_cover_remaining_loader_paths_unit() {
     let _env_loader = EnvVarLoader::from_process_env();
     let _secret_loader = EnvSecretsLoader::from_process_env();
 

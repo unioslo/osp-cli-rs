@@ -12,28 +12,6 @@ fn completion_words_collect_flags_and_backbone_commands_unit() {
     assert!(words.contains(&"--json".to_string()));
     assert!(words.contains(&"user".to_string()));
     assert!(words.contains(&"show".to_string()));
-
-    let manager = PluginManager::new(Vec::new());
-    assert_eq!(
-        manager
-            .completion_words()
-            .expect("backbone completion words should render"),
-        vec![
-            "F".to_string(),
-            "P".to_string(),
-            "V".to_string(),
-            "exit".to_string(),
-            "help".to_string(),
-            "quit".to_string(),
-            "|".to_string(),
-        ]
-    );
-    assert!(
-        manager
-            .repl_help_text()
-            .expect("empty help should render")
-            .contains("No plugin commands available.")
-    );
 }
 
 #[test]

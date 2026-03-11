@@ -109,11 +109,14 @@ impl CompletionTreeBuilder {
     /// use osp_cli::completion::{CommandSpec, CompletionTreeBuilder};
     ///
     /// let tree = CompletionTreeBuilder.build_from_specs(
-    ///     &[CommandSpec::new("ldap").tooltip("Directory lookups")],
+    ///     &[CommandSpec::new("config")
+    ///         .tooltip("Runtime configuration")
+    ///         .subcommand(CommandSpec::new("set"))],
     ///     [("P".to_string(), "Project fields".to_string())],
     /// );
     ///
-    /// assert!(tree.root.children.contains_key("ldap"));
+    /// assert!(tree.root.children.contains_key("config"));
+    /// assert!(tree.root.children["config"].children.contains_key("set"));
     /// assert_eq!(tree.pipe_verbs.get("P").map(String::as_str), Some("Project fields"));
     /// ```
     pub fn build_from_specs(
@@ -139,6 +142,29 @@ impl CompletionTreeBuilder {
     }
 
     /// Injects `config set` key completions into an existing tree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::{CommandSpec, CompletionTreeBuilder, ConfigKeySpec};
+    ///
+    /// let mut tree = CompletionTreeBuilder.build_from_specs(
+    ///     &[CommandSpec::new("config").subcommand(CommandSpec::new("set"))],
+    ///     [],
+    /// );
+    /// CompletionTreeBuilder.apply_config_set_keys(
+    ///     &mut tree,
+    ///     [
+    ///         ConfigKeySpec::new("ui.format"),
+    ///         ConfigKeySpec::new("log.level"),
+    ///     ],
+    /// );
+    ///
+    /// let set_node = &tree.root.children["config"].children["set"];
+    /// assert!(set_node.children.contains_key("ui.format"));
+    /// assert!(set_node.children.contains_key("log.level"));
+    /// assert!(set_node.children["ui.format"].value_key);
+    /// ```
     pub fn apply_config_set_keys(
         &self,
         tree: &mut CompletionTree,
@@ -335,36 +361,6 @@ mod tests {
             &[CommandSpec::new("config").subcommand(CommandSpec::new("set"))],
             [("F".to_string(), "Filter".to_string())],
         )
-    }
-
-    #[test]
-    fn builds_nested_tree_from_specs() {
-        let tree = build_tree();
-        assert!(tree.root.children.contains_key("config"));
-        assert!(
-            tree.root
-                .children
-                .get("config")
-                .and_then(|node| node.children.get("set"))
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn injects_config_key_nodes() {
-        let mut tree = build_tree();
-        CompletionTreeBuilder.apply_config_set_keys(
-            &mut tree,
-            [
-                ConfigKeySpec::new("ui.format"),
-                ConfigKeySpec::new("log.level"),
-            ],
-        );
-
-        let set_node = &tree.root.children["config"].children["set"];
-        assert!(set_node.children.contains_key("ui.format"));
-        assert!(set_node.children.contains_key("log.level"));
-        assert!(set_node.children["ui.format"].value_key);
     }
 
     #[test]

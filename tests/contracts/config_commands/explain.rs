@@ -129,6 +129,42 @@ profile.default = "uio"
 
 #[cfg(unix)]
 #[test]
+fn config_explain_text_reports_presentation_seeded_values_contract() {
+    let home = make_temp_dir("osp-cli-config-explain-presentation-text");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--presentation", "austere", "config", "explain", "ui.chrome.frame"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert!(stdout.contains("value: none (string)"), "{stdout}");
+    assert!(stdout.contains("presentation:"), "{stdout}");
+    assert!(stdout.contains("preset: austere"), "{stdout}");
+    assert!(stdout.contains("preset_source: session"), "{stdout}");
+    assert!(stdout.contains("seeded_value: none (string)"), "{stdout}");
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+}
+
+#[cfg(unix)]
+#[test]
 fn config_set_explain_json_keeps_messages_off_stdout_contract() {
     let home = make_temp_dir("osp-cli-config-set-explain-json");
     write_config(

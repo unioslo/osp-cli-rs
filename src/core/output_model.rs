@@ -407,7 +407,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn from_rows_keeps_first_seen_key_order() {
+    fn row_results_keep_first_seen_key_order_and_expose_row_views_unit() {
         let rows = vec![
             json!({"uid": "oistes", "cn": "Oistein"})
                 .as_object()
@@ -419,13 +419,15 @@ mod tests {
                 .expect("object"),
         ];
 
-        let output = OutputResult::from_rows(rows);
+        let output = OutputResult::from_rows(rows.clone());
         assert_eq!(output.meta.key_index, vec!["uid", "cn", "mail", "title"]);
+        assert_eq!(output.as_rows(), Some(rows.as_slice()));
+        assert_eq!(output.into_rows(), Some(rows));
     }
 
     #[test]
-    fn grouped_output_does_not_expose_rows_views() {
-        let output = OutputResult {
+    fn grouped_results_and_semantic_documents_cover_non_row_views_unit() {
+        let grouped_output = OutputResult {
             items: OutputItems::Groups(vec![Group {
                 groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
                 aggregates: json!({"count": 1}).as_object().cloned().expect("object"),
@@ -440,33 +442,15 @@ mod tests {
             meta: OutputMeta::default(),
         };
 
-        assert_eq!(output.as_rows(), None);
-        assert_eq!(output.into_rows(), None);
-    }
+        assert_eq!(grouped_output.as_rows(), None);
+        assert_eq!(grouped_output.into_rows(), None);
 
-    #[test]
-    fn row_output_exposes_rows_views() {
-        let rows = vec![
-            json!({"uid": "alice"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-        let output = OutputResult::from_rows(rows.clone());
-
-        assert_eq!(output.as_rows(), Some(rows.as_slice()));
-        assert_eq!(output.into_rows(), Some(rows));
-    }
-
-    #[test]
-    fn with_document_attaches_semantic_payload_unit() {
-        let output = OutputResult::from_rows(Vec::new()).with_document(OutputDocument::new(
-            OutputDocumentKind::Guide,
-            json!({"usage": ["osp"]}),
-        ));
+        let document_output = OutputResult::from_rows(Vec::new()).with_document(
+            OutputDocument::new(OutputDocumentKind::Guide, json!({"usage": ["osp"]})),
+        );
 
         assert!(matches!(
-            output.document,
+            document_output.document,
             Some(OutputDocument {
                 kind: OutputDocumentKind::Guide,
                 value: Value::Object(_),
@@ -475,14 +459,16 @@ mod tests {
     }
 
     #[test]
-    fn output_items_to_value_projects_rows_and_groups_unit() {
+    fn output_items_projection_round_trips_rows_and_groups_unit() {
         let rows = OutputItems::Rows(vec![
             json!({"uid": "alice"})
                 .as_object()
                 .cloned()
                 .expect("object"),
         ]);
-        assert!(matches!(output_items_to_value(&rows), Value::Object(_)));
+        let rows_value = output_items_to_value(&rows);
+        assert!(matches!(rows_value, Value::Object(_)));
+        assert_eq!(output_items_from_value(rows_value), rows);
 
         let groups = OutputItems::Groups(vec![Group {
             groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
@@ -494,32 +480,8 @@ mod tests {
                     .expect("object"),
             ],
         }]);
-        assert!(matches!(output_items_to_value(&groups), Value::Array(_)));
-    }
-
-    #[test]
-    fn output_items_from_value_round_trips_rows_and_groups_unit() {
-        let rows = OutputItems::Rows(vec![
-            json!({"uid": "alice"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ]);
-        assert_eq!(output_items_from_value(output_items_to_value(&rows)), rows);
-
-        let groups = OutputItems::Groups(vec![Group {
-            groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
-            aggregates: json!({"count": 1}).as_object().cloned().expect("object"),
-            rows: vec![
-                json!({"uid": "alice"})
-                    .as_object()
-                    .cloned()
-                    .expect("object"),
-            ],
-        }]);
-        assert_eq!(
-            output_items_from_value(output_items_to_value(&groups)),
-            groups
-        );
+        let groups_value = output_items_to_value(&groups);
+        assert!(matches!(groups_value, Value::Array(_)));
+        assert_eq!(output_items_from_value(groups_value), groups);
     }
 }

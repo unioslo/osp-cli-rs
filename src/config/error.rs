@@ -288,7 +288,7 @@ mod tests {
     use crate::config::SchemaValueType;
 
     #[test]
-    fn config_error_display_covers_user_facing_variants() {
+    fn config_error_display_and_path_context_cover_user_facing_variants_unit() {
         let cases = [
             (
                 ConfigError::FileRead {
@@ -470,10 +470,7 @@ mod tests {
                 .into_iter()
                 .all(|(error, expected)| error.to_string().contains(expected))
         );
-    }
 
-    #[test]
-    fn with_path_context_wraps_source_error() {
         let wrapped = with_path_context(
             "/tmp/config.toml".to_string(),
             ConfigError::TomlParse("bad value".to_string()),

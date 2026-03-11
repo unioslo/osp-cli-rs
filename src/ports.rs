@@ -8,6 +8,11 @@
 //! - ports should stay small and easy to mock
 //! - transport- or host-specific concerns belong in adapters, not in these
 //!   traits
+//! - convenience mocks and fixtures belong under the owning port namespace,
+//!   not as top-level crate modules
+
+/// Test and example doubles for the port traits.
+pub mod mock;
 
 use crate::core::row::Row;
 use anyhow::{Result, anyhow};

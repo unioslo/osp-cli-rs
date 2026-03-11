@@ -1,5 +1,5 @@
 #[test]
-fn compatible_min_osp_version_has_no_issue() {
+fn min_osp_version_helper_covers_compatible_and_invalid_inputs_unit() {
     let describe = DescribeV1 {
         protocol_version: 1,
         plugin_id: "hello".to_string(),
@@ -9,10 +9,7 @@ fn compatible_min_osp_version_has_no_issue() {
     };
 
     assert_eq!(min_osp_version_issue(&describe), None);
-}
 
-#[test]
-fn invalid_min_osp_version_reports_issue() {
     let describe = DescribeV1 {
         protocol_version: 1,
         plugin_id: "hello".to_string(),
@@ -66,84 +63,25 @@ fn refresh_picks_up_filesystem_changes_and_prunes_stale_cache() {
 
 #[cfg(unix)]
 #[test]
-fn incompatible_min_osp_version_marks_plugin_unhealthy() {
-    let root = make_temp_dir("osp-cli-plugin-manager-min-version");
-    let plugins_dir = root.join("plugins");
-    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-    write_named_test_plugin_with_min_version(&plugins_dir, "future", "9.9.9");
-    let manager = PluginManager::new(vec![plugins_dir.clone()]);
-
-    let plugins = manager.list_plugins().expect("plugins should list");
-    assert_eq!(plugins.len(), 1);
-    assert_eq!(plugins[0].plugin_id, "future");
-    assert!(!plugins[0].healthy);
-    assert!(
-        plugins[0]
-            .issue
-            .as_deref()
-            .expect("issue should be present")
-            .contains("requires osp >=")
-    );
-
-}
-
-#[cfg(unix)]
-#[test]
-fn duplicate_plugin_ids_are_marked_unhealthy_and_removed_from_catalog_unit() {
-    let root = make_temp_dir("osp-cli-plugin-manager-duplicate-ids");
-    let plugins_dir = root.join("plugins");
-    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-    write_mismatched_id_plugin(&plugins_dir, "alpha-bin", "shared-id", "alpha");
-    write_mismatched_id_plugin(&plugins_dir, "beta-bin", "shared-id", "beta");
-    let manager = PluginManager::new(vec![plugins_dir.clone()]);
-
-    let plugins = manager.list_plugins().expect("plugins should list");
-    assert_eq!(plugins.len(), 2);
-    assert!(plugins.iter().all(|plugin| !plugin.healthy));
-    assert!(plugins.iter().all(|plugin| {
-        plugin
-            .issue
-            .as_deref()
-            .is_some_and(|issue| issue.contains("duplicate plugin id `shared-id`"))
-    }));
-
-    let catalog = manager.command_catalog().expect("catalog should render");
-    assert!(
-        catalog.is_empty(),
-        "duplicate providers should not stay active"
-    );
-    assert!(matches!(
-        manager.resolve_provider("alpha", None),
-        Err(PluginDispatchError::CommandNotFound { .. })
-    ));
-
-}
-
-#[cfg(unix)]
-#[test]
-fn hung_describe_marks_plugin_unhealthy() {
-    let root = make_temp_dir("osp-cli-plugin-manager-describe-timeout");
-    let plugins_dir = root.join("plugins");
-    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-
-    write_sleepy_test_plugin(&plugins_dir, "hang-describe", true);
-    let manager = PluginManager::new(vec![plugins_dir.clone()])
+fn hung_describe_marks_plugin_unhealthy_unit() {
+    let timeout_root = make_temp_dir("osp-cli-plugin-manager-describe-timeout");
+    let timeout_plugins_dir = timeout_root.join("plugins");
+    std::fs::create_dir_all(&timeout_plugins_dir).expect("plugin dir should be created");
+    write_sleepy_test_plugin(&timeout_plugins_dir, "hang-describe", true);
+    let timeout_manager = PluginManager::new(vec![timeout_plugins_dir.clone()])
         .with_process_timeout(Duration::from_millis(50));
 
-    let plugins = manager.list_plugins().expect("plugins should list");
-    assert_eq!(plugins.len(), 1);
-    assert_eq!(plugins[0].plugin_id, "hang-describe");
-    assert!(!plugins[0].healthy);
+    let timeout_plugins = timeout_manager.list_plugins().expect("plugins should list");
+    assert_eq!(timeout_plugins.len(), 1);
+    assert_eq!(timeout_plugins[0].plugin_id, "hang-describe");
+    assert!(!timeout_plugins[0].healthy);
     assert!(
-        plugins[0]
+        timeout_plugins[0]
             .issue
             .as_deref()
             .expect("issue should be present")
             .contains("timed out after 50 ms")
     );
-
 }
 
 #[test]
@@ -333,7 +271,7 @@ commands = ["demo", "demo show"]
 
 #[cfg(unix)]
 #[test]
-fn bundled_plugins_skip_describe_when_manifest_is_missing_unit() {
+fn bundled_plugins_skip_describe_until_manifest_requirements_pass_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-bundled-missing-manifest");
     let marker = root.join("describe.log");
     let executable = write_marker_describe_plugin(&root, "bundled", &marker);
@@ -361,18 +299,12 @@ fn bundled_plugins_skip_describe_when_manifest_is_missing_unit() {
         !marker.exists(),
         "bundled plugin should not execute without a manifest"
     );
-
-}
-
-#[cfg(unix)]
-#[test]
-fn bundled_plugins_skip_describe_when_checksum_mismatches_unit() {
-    let root = make_temp_dir("osp-cli-plugin-manager-bundled-checksum");
-    let marker = root.join("describe.log");
-    let executable = write_marker_describe_plugin(&root, "bundled", &marker);
-    let mut describe_cache = DescribeCacheFile::default();
-    let mut seen = std::collections::HashSet::new();
-    let mut cache_dirty = false;
+    let checksum_root = make_temp_dir("osp-cli-plugin-manager-bundled-checksum");
+    let checksum_marker = checksum_root.join("describe.log");
+    let checksum_executable = write_marker_describe_plugin(&checksum_root, "bundled", &checksum_marker);
+    let mut checksum_describe_cache = DescribeCacheFile::default();
+    let mut checksum_seen = std::collections::HashSet::new();
+    let mut checksum_cache_dirty = false;
     let manifest = ValidatedBundledManifest {
         by_exe: HashMap::from([(
             "osp-bundled".to_string(),
@@ -386,75 +318,31 @@ fn bundled_plugins_skip_describe_when_checksum_mismatches_unit() {
             },
         )]),
     };
-
-    let plugin = assemble_discovered_plugin(
+    let checksum_plugin = assemble_discovered_plugin(
         PluginSource::Bundled,
-        executable,
+        checksum_executable,
         &ManifestState::Valid(manifest),
-        &mut describe_cache,
-        &mut seen,
-        &mut cache_dirty,
+        &mut checksum_describe_cache,
+        &mut checksum_seen,
+        &mut checksum_cache_dirty,
         Duration::from_millis(100),
     );
-
     assert!(
-        plugin
+        checksum_plugin
             .issue
             .as_deref()
             .is_some_and(|issue| issue.contains("checksum mismatch"))
     );
     assert!(
-        !marker.exists(),
+        !checksum_marker.exists(),
         "bundled plugin should not execute before checksum validation passes"
     );
-
 }
 
 #[cfg(unix)]
 #[test]
-fn path_discovery_is_opt_in_unit() {
+fn path_discovery_is_opt_in_and_uses_passive_cache_until_dispatch_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-path-discovery");
-    let _lock = env_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let original_path = std::env::var("PATH").ok();
-    let plugins_dir = root.join("plugins");
-    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-    write_named_test_plugin(&plugins_dir, "pathdemo");
-
-    unsafe {
-        std::env::set_var(
-            "PATH",
-            format!(
-                "{}:{}",
-                plugins_dir.display(),
-                original_path.as_deref().unwrap_or("")
-            ),
-        );
-    }
-
-    let hidden = PluginManager::new(Vec::new())
-        .list_plugins()
-        .expect("path-disabled manager should list plugins");
-    assert!(!hidden.iter().any(|plugin| plugin.plugin_id == "pathdemo"));
-
-    let visible = PluginManager::new(Vec::new())
-        .with_path_discovery(true)
-        .list_plugins()
-        .expect("path-enabled manager should list plugins");
-    assert!(visible.iter().any(|plugin| plugin.plugin_id == "pathdemo"));
-
-    match original_path {
-        Some(value) => unsafe { std::env::set_var("PATH", value) },
-        None => unsafe { std::env::remove_var("PATH") },
-    }
-
-}
-
-#[cfg(unix)]
-#[test]
-fn passive_path_discovery_uses_cache_without_executing_plugins_unit() {
-    let root = make_temp_dir("osp-cli-plugin-manager-passive-path-discovery");
     let _lock = env_lock()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -477,12 +365,17 @@ fn passive_path_discovery_uses_cache_without_executing_plugins_unit() {
         );
     }
 
-    let manager = PluginManager::new(Vec::new())
-        .with_roots(Some(config_root), Some(cache_root))
-        .with_path_discovery(true);
+    let hidden = PluginManager::new(Vec::new())
+        .list_plugins()
+        .expect("path-disabled manager should list plugins");
+    assert!(!hidden.iter().any(|plugin| plugin.plugin_id == "pathdemo"));
 
-    let plugins = manager.list_plugins().expect("plugins should list");
-    let pathdemo = plugins
+    let visible = PluginManager::new(Vec::new())
+        .with_roots(Some(config_root), Some(cache_root))
+        .with_path_discovery(true)
+        .list_plugins()
+        .expect("path-enabled manager should list plugins");
+    let pathdemo = visible
         .iter()
         .find(|plugin| plugin.plugin_id == "pathdemo")
         .expect("path-discovered plugin should be visible");
@@ -497,6 +390,9 @@ fn passive_path_discovery_uses_cache_without_executing_plugins_unit() {
         "--describe should not run during passive discovery"
     );
 
+    let manager = PluginManager::new(Vec::new())
+        .with_roots(Some(root.join("config-2")), Some(root.join("cache-2")))
+        .with_path_discovery(true);
     manager
         .dispatch("pathdemo", &[], &PluginDispatchContext::default())
         .expect("actual dispatch should resolve and run path plugin");

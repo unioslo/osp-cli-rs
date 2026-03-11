@@ -514,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_command_tokens_filters_host_flags_and_preserves_command_boundaries_unit() {
+    fn scan_command_tokens_covers_host_flags_aliases_clusters_and_trace_unit() {
         let scanned = scan(&[
             "ldap",
             "user",
@@ -561,10 +561,7 @@ mod tests {
         .expect("trace scan should succeed");
         assert_eq!(traced.tokens, vec!["ldap", "user", "alice"]);
         assert_eq!(traced.kept_indices, vec![0, 2, 3]);
-    }
 
-    #[test]
-    fn scan_command_tokens_accept_aliases_inline_assignments_and_short_clusters_unit() {
         let explicit_aliases = scan(&["ldap", "--plain", "--color", "never", "--ascii"]);
         assert_eq!(explicit_aliases.invocation.mode, Some(RenderMode::Plain));
         assert_eq!(explicit_aliases.invocation.color, Some(ColorMode::Never));
@@ -638,7 +635,8 @@ mod tests {
     }
 
     #[test]
-    fn invocation_help_and_hidden_completion_flags_follow_visibility_and_one_shots_unit() {
+    fn invocation_help_hidden_completion_and_cli_argv_follow_visibility_and_flag_only_inputs_unit()
+    {
         let rendered = invocation_help_view();
         assert!(!rendered.common_invocation_options.is_empty());
         assert!(
@@ -700,10 +698,7 @@ mod tests {
         assert!(used_one_shots.contains("--cache"));
         assert!(used_one_shots.contains("--plugin-provider"));
         assert!(!used_one_shots.contains("--debug"));
-    }
 
-    #[test]
-    fn scan_cli_argv_preserves_binary_for_empty_and_flag_only_invocations_unit() {
         let scanned = scan_cli_argv(&[
             OsString::from("osp"),
             OsString::from("--json"),

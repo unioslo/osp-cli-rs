@@ -71,6 +71,4 @@ pub(crate) use host::{
 #[cfg(test)]
 pub(crate) use input::{ReplParsedLine, is_repl_shellable_command};
 #[cfg(test)]
-pub(crate) use presentation::{
-    render_prompt_template, render_repl_prompt_right_for_test, theme_display_name,
-};
+pub(crate) use presentation::render_repl_prompt_right_for_test;

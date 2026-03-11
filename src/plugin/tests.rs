@@ -16,7 +16,6 @@ use super::manager::{
 };
 use super::state::{PluginCommandPreferences, PluginCommandState, merge_issue};
 use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
-use crate::core::command_policy::{CommandPath, VisibilityMode};
 use crate::core::plugin::{
     DescribeArgV1, DescribeCommandV1, DescribeFlagV1, DescribeSuggestionV1, DescribeV1,
 };

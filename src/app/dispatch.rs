@@ -300,17 +300,23 @@ mod tests {
     }
 
     #[test]
-    fn normalize_profile_override_trims_and_rejects_blank_values_unit() {
+    fn normalize_profile_helpers_trim_blank_values_and_rewrite_cli_unit() {
         assert_eq!(
             normalize_profile_override(Some("  Dev  ".to_string())),
             Some("dev".to_string())
         );
         assert_eq!(normalize_profile_override(Some("   ".to_string())), None);
         assert_eq!(normalize_profile_override(None), None);
+        let mut cli = parse_cli(&["osp", "--profile", "  DEV  ", "theme", "list"]);
+
+        let normalized = normalize_cli_profile(&mut cli);
+
+        assert_eq!(normalized.as_deref(), Some("dev"));
+        assert_eq!(cli.profile.as_deref(), Some("dev"));
     }
 
     #[test]
-    fn build_dispatch_plan_supports_profile_prefixed_external_commands_unit() {
+    fn build_dispatch_plan_routes_profiles_builtins_external_and_errors_unit() {
         let profiles = BTreeSet::from(["dev".to_string(), "prod".to_string()]);
 
         let mut repl_cli = parse_cli(&["osp", "dev"]);
@@ -329,11 +335,6 @@ mod tests {
             .expect("profile-prefixed config command should work");
         assert!(matches!(action, RunAction::Config(_)));
         assert_eq!(profile_override.as_deref(), Some("dev"));
-    }
-
-    #[test]
-    fn build_dispatch_plan_preserves_external_tokens_when_not_shorthand_unit() {
-        let profiles = BTreeSet::from(["dev".to_string()]);
 
         let mut explicit_profile_cli =
             parse_cli(&["osp", "--profile", "prod", "dev", "config", "show"]);
@@ -357,97 +358,6 @@ mod tests {
             matches!(action, RunAction::External(tokens) if tokens == vec!["stage", "config", "show"])
         );
         assert!(profile_override.is_none());
-    }
-
-    #[test]
-    fn dispatch_visibility_helpers_enforce_builtin_and_plugin_allowlists_unit() {
-        let auth = auth_state(Some(&["config", "history"]), Some(&["ldap"]));
-
-        ensure_builtin_visible_for(&auth, "config").expect("config should be visible");
-        ensure_plugin_visible_for(&auth, "ldap").expect("ldap should be visible");
-        assert!(
-            ensure_builtin_visible_for(&auth, "theme")
-                .expect_err("theme should be hidden")
-                .to_string()
-                .contains("hidden by current auth policy")
-        );
-        assert!(
-            ensure_plugin_visible_for(&auth, "mreg")
-                .expect_err("mreg should be hidden")
-                .to_string()
-                .contains("hidden by current auth policy")
-        );
-    }
-
-    #[test]
-    fn dispatch_visibility_helpers_deny_visible_but_unrunnable_commands_unit() {
-        let mut auth = auth_state(None, None);
-        auth.builtin_policy_mut().register(
-            CommandPolicy::new(CommandPath::new(["config"]))
-                .visibility(VisibilityMode::Authenticated),
-        );
-
-        let err = ensure_builtin_visible_for(&auth, "config")
-            .expect_err("unauthenticated builtin should be denied");
-        assert!(err.to_string().contains("requires authentication"));
-    }
-
-    #[test]
-    fn ensure_dispatch_visibility_and_terminal_kind_cover_all_action_families_unit() {
-        let profiles = BTreeSet::from(["dev".to_string()]);
-        let auth = auth_state(
-            Some(&["plugins", "doctor", "theme", "config", "history"]),
-            Some(&["ldap"]),
-        );
-
-        let mut plugin_cli = parse_cli(&["osp", "plugins", "list"]);
-        let plugin_plan =
-            build_dispatch_plan(&mut plugin_cli, &profiles).expect("plugins should parse");
-        assert_eq!(plugin_plan.action.terminal_kind(), TerminalKind::Cli);
-        ensure_dispatch_visibility(&auth, &plugin_plan.action).expect("plugins should be visible");
-
-        let mut theme_cli = parse_cli(&["osp", "theme", "list"]);
-        let theme_plan =
-            build_dispatch_plan(&mut theme_cli, &profiles).expect("theme should parse");
-        assert_eq!(theme_plan.action.terminal_kind(), TerminalKind::Cli);
-        ensure_dispatch_visibility(&auth, &theme_plan.action).expect("theme should be visible");
-
-        let mut history_cli = parse_cli(&["osp", "history", "list"]);
-        let history_plan =
-            build_dispatch_plan(&mut history_cli, &profiles).expect("history should parse");
-        assert_eq!(history_plan.action.terminal_kind(), TerminalKind::Cli);
-        ensure_dispatch_visibility(&auth, &history_plan.action).expect("history should be visible");
-
-        let mut doctor_cli = parse_cli(&["osp", "doctor", "theme"]);
-        let doctor_plan =
-            build_dispatch_plan(&mut doctor_cli, &profiles).expect("doctor should parse");
-        assert_eq!(doctor_plan.action.terminal_kind(), TerminalKind::Cli);
-        ensure_dispatch_visibility(&auth, &doctor_plan.action).expect("doctor should be visible");
-
-        let mut repl_cli = parse_cli(&["osp"]);
-        let repl_plan = build_dispatch_plan(&mut repl_cli, &profiles).expect("repl should parse");
-        assert_eq!(repl_plan.action.terminal_kind(), TerminalKind::Repl);
-        ensure_dispatch_visibility(&auth, &repl_plan.action)
-            .expect("repl should always be visible");
-
-        let external = RunAction::External(vec!["ldap".to_string(), "user".to_string()]);
-        assert_eq!(external.terminal_kind(), TerminalKind::Cli);
-        ensure_dispatch_visibility(&auth, &external).expect("visible plugin should pass");
-    }
-
-    #[test]
-    fn normalize_cli_profile_rewrites_cli_profile_in_place_unit() {
-        let mut cli = parse_cli(&["osp", "--profile", "  DEV  ", "theme", "list"]);
-
-        let normalized = normalize_cli_profile(&mut cli);
-
-        assert_eq!(normalized.as_deref(), Some("dev"));
-        assert_eq!(cli.profile.as_deref(), Some("dev"));
-    }
-
-    #[test]
-    fn build_dispatch_plan_covers_repl_subcommand_and_shorthand_parse_errors_unit() {
-        let profiles = BTreeSet::from(["dev".to_string()]);
 
         let mut repl_cli = parse_cli(&["osp", "repl", "debug-complete", "--line", "ldap"]);
         let DispatchPlan {
@@ -465,6 +375,57 @@ mod tests {
             err.to_string()
                 .contains("failed to parse command after profile shorthand `dev`")
         );
+    }
+
+    #[test]
+    fn dispatch_visibility_helpers_cover_allowlists_unrunnable_commands_and_terminals_unit() {
+        let auth = auth_state(Some(&["config", "history"]), Some(&["ldap"]));
+
+        ensure_builtin_visible_for(&auth, "config").expect("config should be visible");
+        ensure_plugin_visible_for(&auth, "ldap").expect("ldap should be visible");
+        assert!(
+            ensure_builtin_visible_for(&auth, "theme")
+                .expect_err("theme should be hidden")
+                .to_string()
+                .contains("hidden by current auth policy")
+        );
+        assert!(
+            ensure_plugin_visible_for(&auth, "mreg")
+                .expect_err("mreg should be hidden")
+                .to_string()
+                .contains("hidden by current auth policy")
+        );
+
+        let mut gated_auth = auth_state(None, None);
+        gated_auth.builtin_policy_mut().register(
+            CommandPolicy::new(CommandPath::new(["config"]))
+                .visibility(VisibilityMode::Authenticated),
+        );
+        let err = ensure_builtin_visible_for(&gated_auth, "config")
+            .expect_err("unauthenticated builtin should be denied");
+        assert!(err.to_string().contains("requires authentication"));
+
+        let profiles = BTreeSet::from(["dev".to_string()]);
+        let auth = auth_state(
+            Some(&["plugins", "doctor", "theme", "config", "history"]),
+            Some(&["ldap"]),
+        );
+        for (args, expected_terminal) in [
+            (&["osp", "plugins", "list"][..], TerminalKind::Cli),
+            (&["osp", "theme", "list"][..], TerminalKind::Cli),
+            (&["osp", "history", "list"][..], TerminalKind::Cli),
+            (&["osp", "doctor", "theme"][..], TerminalKind::Cli),
+            (&["osp"][..], TerminalKind::Repl),
+        ] {
+            let mut cli = parse_cli(args);
+            let plan = build_dispatch_plan(&mut cli, &profiles).expect("command should parse");
+            assert_eq!(plan.action.terminal_kind(), expected_terminal);
+            ensure_dispatch_visibility(&auth, &plan.action).expect("command should be visible");
+        }
+
+        let external = RunAction::External(vec!["ldap".to_string(), "user".to_string()]);
+        assert_eq!(external.terminal_kind(), TerminalKind::Cli);
+        ensure_dispatch_visibility(&auth, &external).expect("visible plugin should pass");
     }
 
     #[test]

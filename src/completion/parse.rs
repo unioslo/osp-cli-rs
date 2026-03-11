@@ -804,7 +804,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn tokenization_preserves_pipes_and_recovers_from_unmatched_quotes() {
+        fn scanner_preserves_token_values_offsets_and_unmatched_quote_recovery() {
             let parser = parser();
 
             assert_eq!(
@@ -826,11 +826,6 @@ mod tests {
             assert_eq!(spans[0].value, "cmd");
             assert_eq!(spans[1].value, "--name");
             assert_eq!(spans[2].value, "'alice");
-        }
-
-        #[test]
-        fn span_tracking_preserves_offsets_for_balanced_quotes_and_pipes() {
-            let parser = parser();
             let source = r#"ldap user "alice smith" | P uid"#;
             let spans = parser.tokenize_with_spans(source);
 

@@ -5,21 +5,8 @@ fn dispatch_plan_for(args: &[&str], profile_names: &[&str]) -> crate::app::dispa
     build_dispatch_plan(&mut cli, &profiles(profile_names)).expect("dispatch plan should parse")
 }
 
-fn assert_external_tokens(action: RunAction, expected: &[&str]) {
-    match action {
-        RunAction::External(tokens) => assert_eq!(
-            tokens,
-            expected
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect::<Vec<_>>()
-        ),
-        _ => panic!("expected external action"),
-    }
-}
-
 #[test]
-fn cli_scan_extracts_invocation_flags_without_polluting_clap_unit() {
+fn cli_scan_and_runtime_load_options_strip_invocation_flags_unit() {
     let argv = [
         OsString::from("osp"),
         OsString::from("--json"),
@@ -47,10 +34,15 @@ fn cli_scan_extracts_invocation_flags_without_polluting_clap_unit() {
     assert_eq!(scanned.invocation.color, Some(ColorMode::Never));
     assert_eq!(scanned.invocation.unicode, Some(UnicodeMode::Never));
     assert_eq!(scanned.invocation.quiet, 1);
+
+    let cli = Cli::parse_from(["osp", "--no-env", "--no-config"]);
+    let options = cli.runtime_load_options();
+    assert!(!options.include_env);
+    assert!(!options.include_config_file);
 }
 
 #[test]
-fn invocation_ui_overlays_runtime_defaults_per_command_unit() {
+fn invocation_ui_and_format_hints_overlay_runtime_defaults_unit() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
     let mut resolver = ConfigResolver::default();
@@ -84,67 +76,7 @@ fn invocation_ui_overlays_runtime_defaults_per_command_unit() {
     assert_eq!(resolved.ui.message_verbosity, MessageLevel::Info);
     assert_eq!(resolved.ui.debug_verbosity, 3);
     assert_eq!(resolved.plugin_provider.as_deref(), Some("beta"));
-}
 
-#[test]
-fn cli_cache_flag_is_rejected_outside_repl_unit() {
-    let err = super::run_from(["osp", "--cache", "config", "show"])
-        .expect_err("cache should be rejected outside repl");
-
-    assert!(
-        err.to_string()
-            .contains("`--cache` is only available inside the interactive REPL")
-    );
-}
-
-#[test]
-fn cli_presentation_flag_sets_session_override_unit() {
-    let cli = Cli::parse_from(["osp", "--presentation", "compact"]);
-
-    let layer = build_cli_session_layer(
-        &cli,
-        None,
-        TerminalKind::Repl,
-        RuntimeLoadOptions::default(),
-    )
-    .expect("session layer should build")
-    .expect("presentation flag should create session overrides");
-
-    assert_eq!(
-        layer_value(&layer, "ui.presentation"),
-        Some(&ConfigValue::from("compact"))
-    );
-}
-
-#[test]
-fn cli_gammel_og_bitter_flag_maps_to_austere_unit() {
-    let cli = Cli::parse_from(["osp", "--gammel-og-bitter"]);
-
-    let layer = build_cli_session_layer(
-        &cli,
-        None,
-        TerminalKind::Repl,
-        RuntimeLoadOptions::default(),
-    )
-    .expect("session layer should build")
-    .expect("legacy presentation flag should create session overrides");
-
-    assert_eq!(
-        layer_value(&layer, "ui.presentation"),
-        Some(&ConfigValue::from("austere"))
-    );
-}
-
-#[test]
-fn cli_runtime_load_options_follow_disable_flags_unit() {
-    let cli = Cli::parse_from(["osp", "--no-env", "--no-config"]);
-    let options = cli.runtime_load_options();
-    assert!(!options.include_env);
-    assert!(!options.include_config_file);
-}
-
-#[test]
-fn render_settings_with_hint_use_plugin_hint_only_when_auto_unit() {
     let base = RenderSettings::test_plain(OutputFormat::Auto);
     let hinted = resolve_render_settings_with_hint(&base, Some(OutputFormat::Table));
     assert_eq!(hinted.format, OutputFormat::Table);
@@ -160,14 +92,44 @@ fn render_settings_with_hint_use_plugin_hint_only_when_auto_unit() {
 }
 
 #[test]
-fn positional_profile_dispatch_matrix_covers_repl_external_and_builtin_routes_unit() {
+fn cli_cache_flag_is_rejected_outside_repl_unit() {
+    let err = super::run_from(["osp", "--cache", "config", "show"])
+        .expect_err("cache should be rejected outside repl");
+
+    assert!(
+        err.to_string()
+            .contains("`--cache` is only available inside the interactive REPL")
+    );
+}
+
+#[test]
+fn cli_presentation_flags_map_to_session_overrides_unit() {
+    for (args, expected) in [
+        (&["osp", "--presentation", "compact"][..], "compact"),
+        (&["osp", "--gammel-og-bitter"][..], "austere"),
+    ] {
+        let cli = Cli::parse_from(args);
+        let layer = build_cli_session_layer(
+            &cli,
+            None,
+            TerminalKind::Repl,
+            RuntimeLoadOptions::default(),
+        )
+        .expect("session layer should build")
+        .expect("presentation flag should create session overrides");
+
+        assert_eq!(
+            layer_value(&layer, "ui.presentation"),
+            Some(&ConfigValue::from(expected))
+        );
+    }
+}
+
+#[test]
+fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit() {
     let plan = dispatch_plan_for(&["osp", "tsd"], &["uio", "tsd"]);
     assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
     assert!(matches!(plan.action, RunAction::Repl));
-
-    let plan = dispatch_plan_for(&["osp", "tsd", "ldap", "user", "oistes"], &["uio", "tsd"]);
-    assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
-    assert_external_tokens(plan.action, &["ldap", "user", "oistes"]);
 
     let plan = dispatch_plan_for(&["osp", "tsd", "plugins", "list"], &["uio", "tsd"]);
     assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
@@ -178,13 +140,6 @@ fn positional_profile_dispatch_matrix_covers_repl_external_and_builtin_routes_un
         })
     ));
 
-    let plan = dispatch_plan_for(&["osp", "prod", "ldap", "user", "oistes"], &["uio", "tsd"]);
-    assert_eq!(plan.profile_override, None);
-    assert_external_tokens(plan.action, &["prod", "ldap", "user", "oistes"]);
-}
-
-#[test]
-fn explicit_profile_precedence_and_parity_cover_external_and_builtin_paths_unit() {
     let positional = dispatch_plan_for(&["osp", "tsd", "plugins", "list"], &["uio", "tsd"]);
     let explicit = dispatch_plan_for(
         &["osp", "--profile", "tsd", "plugins", "list"],
@@ -194,34 +149,12 @@ fn explicit_profile_precedence_and_parity_cover_external_and_builtin_paths_unit(
     assert!(matches!(positional.action, RunAction::Plugins(_)));
     assert!(matches!(explicit.action, RunAction::Plugins(_)));
 
-    let positional = dispatch_plan_for(&["osp", "tsd", "ldap", "user", "oistes"], &["uio", "tsd"]);
-    let explicit = dispatch_plan_for(
-        &["osp", "--profile", "tsd", "ldap", "user", "oistes"],
-        &["uio", "tsd"],
-    );
-    assert_eq!(positional.profile_override, explicit.profile_override);
-    match (positional.action, explicit.action) {
-        (RunAction::External(left), RunAction::External(right)) => assert_eq!(left, right),
-        _ => panic!("expected external action on both plans"),
-    }
-
-    let plan = dispatch_plan_for(
-        &["osp", "--profile", "uio", "tsd", "plugins", "list"],
-        &["uio", "tsd"],
-    );
-    assert_eq!(plan.profile_override.as_deref(), Some("uio"));
-    assert_external_tokens(plan.action, &["tsd", "plugins", "list"]);
-
     let normalized = dispatch_plan_for(&["osp", "--profile", "TSD"], &["tsd"]);
     assert_eq!(normalized.profile_override.as_deref(), Some("tsd"));
-}
 
-#[test]
-fn direct_plugins_command_keeps_clap_action_unit() {
     let mut cli = Cli::parse_from(["osp", "plugins", "doctor"]);
     let plan = build_dispatch_plan(&mut cli, &profiles(&["uio", "tsd"]))
         .expect("dispatch plan should parse");
-
     assert_eq!(plan.profile_override, None);
     assert!(matches!(
         plan.action,
@@ -230,14 +163,10 @@ fn direct_plugins_command_keeps_clap_action_unit() {
         })
     ));
     assert!(matches!(cli.command, None | Some(Commands::Plugins(_))));
-}
 
-#[test]
-fn positional_profile_with_config_uses_clap_parser_unit() {
     let mut cli = Cli::parse_from(["osp", "tsd", "config", "show", "--sources"]);
     let plan = build_dispatch_plan(&mut cli, &profiles(&["uio", "tsd"]))
         .expect("dispatch plan should parse");
-
     assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
     match plan.action {
         RunAction::Config(args) => {

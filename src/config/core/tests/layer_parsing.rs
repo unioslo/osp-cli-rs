@@ -1,5 +1,5 @@
 #[test]
-fn config_layer_from_toml_str_flattens_default_profile_and_terminal_scopes() {
+fn config_layer_parsing_flattens_toml_and_env_scopes_unit() {
     let layer = ConfigLayer::from_toml_str(
         r#"
 [default.ui]
@@ -37,10 +37,7 @@ format = "mreg"
             && entry.scope == Scope::profile_terminal("ops", "repl")
             && entry.value == ConfigValue::String("mreg".to_string())
     }));
-}
 
-#[test]
-fn config_layer_from_env_iter_parses_scopes_and_bootstrap_profile_default() {
     let layer = ConfigLayer::from_env_iter([
         ("OSP__TERM__REPL__UI__FORMAT", "json"),
         ("OSP__PROFILE__ops__UI__FORMAT", "table"),

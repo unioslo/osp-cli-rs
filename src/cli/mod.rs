@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_mode_helpers_accept_aliases_and_trim_input_unit() {
+    fn parse_mode_and_config_helpers_normalize_strings_blanks_and_integers_unit() {
         assert_eq!(parse_output_format(" guide "), Some(OutputFormat::Guide));
         assert_eq!(
             parse_output_format(" markdown "),
@@ -1013,10 +1013,7 @@ mod tests {
         assert_eq!(parse_color_mode(" NEVER "), Some(ColorMode::Never));
         assert_eq!(parse_unicode_mode(" always "), Some(UnicodeMode::Always));
         assert_eq!(parse_output_format("yaml"), None);
-    }
 
-    #[test]
-    fn config_helpers_ignore_blank_strings_and_parse_integers_unit() {
         let config = resolved(&[
             ("ui.width", "120"),
             ("color.text", "  "),
@@ -1029,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn render_settings_apply_low_level_ui_overrides_unit() {
+    fn render_settings_apply_presentation_defaults_explicit_overrides_and_help_spacing_unit() {
         let config = resolved_with_session(
             &[("ui.width", "88")],
             &[
@@ -1051,10 +1048,7 @@ mod tests {
         );
         assert_eq!(settings.table_border, TableBorderStyle::Square);
         assert_eq!(settings.table_overflow, TableOverflow::Wrap);
-    }
 
-    #[test]
-    fn presentation_seeds_runtime_chrome_and_table_defaults_unit() {
         let config = resolved(&[("ui.presentation", "expressive")]);
         let mut settings = RenderSettings::test_plain(OutputFormat::Table);
 
@@ -1062,10 +1056,7 @@ mod tests {
 
         assert_eq!(settings.chrome_frame, SectionFrameStyle::TopBottom);
         assert_eq!(settings.table_border, TableBorderStyle::Round);
-    }
 
-    #[test]
-    fn explicit_low_level_overrides_beat_presentation_defaults_unit() {
         let config = resolved_with_session(
             &[("ui.presentation", "expressive")],
             &[("ui.chrome.frame", "square"), ("ui.table.border", "none")],
@@ -1076,20 +1067,14 @@ mod tests {
 
         assert_eq!(settings.chrome_frame, SectionFrameStyle::Square);
         assert_eq!(settings.table_border, TableBorderStyle::None);
-    }
 
-    #[test]
-    fn guide_default_format_reads_from_config_unit() {
         let config = resolved(&[("ui.guide.default_format", "inherit")]);
         let mut settings = RenderSettings::test_plain(OutputFormat::Json);
 
         apply_render_settings_from_config(&mut settings, &config);
 
         assert_eq!(settings.guide_default_format, GuideDefaultFormat::Inherit);
-    }
 
-    #[test]
-    fn help_spacing_overrides_support_inherit_and_numeric_values_unit() {
         let config = resolved(&[
             ("ui.help.entry_indent", "4"),
             ("ui.help.entry_gap", "3"),
@@ -1125,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_runtime_load_options_follow_disable_flags_unit() {
+    fn cli_runtime_load_options_and_inline_parser_follow_disable_flags_unit() {
         let cli = Cli::parse_from(["osp", "--no-env", "--no-config-file", "theme", "list"]);
         assert_eq!(
             cli.runtime_load_options(),

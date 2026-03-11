@@ -156,3 +156,32 @@ fn help_like_payload_fuzzy_quick_restores_typo_matched_command() {
     assert_eq!(rebuilt.preamble, vec!["Deploy commands"]);
     assert_eq!(rebuilt.options.len(), 0);
 }
+
+// Protects render recommendation on guide-shaped payloads: narrowing,
+// cleanup, sorting, limiting, and copy should keep the guide recommendation so
+// callers can still render the surviving semantic payload as guide output.
+#[test]
+fn help_like_payload_keeps_render_recommendation_through_non_structural_stages() {
+    for pipeline in ["doctor | ? | L 1", "S name", "Y"] {
+        let output = run_guide_pipeline(help_like_guide(), pipeline);
+        assert_eq!(
+            output.meta.render_recommendation,
+            Some(osp_cli::core::output_model::RenderRecommendation::Guide),
+            "pipeline={pipeline}"
+        );
+    }
+}
+
+// Protects the degrade boundary for guide-shaped payloads: once the pipeline
+// structurally reshapes or materializes the payload, the guide render hint must
+// clear instead of surviving into generic row output.
+#[test]
+fn help_like_payload_clears_render_recommendation_after_structural_reshapes() {
+    for pipeline in ["P commands[].name", "U entries", "VALUE commands[].name"] {
+        let output = run_guide_pipeline(help_like_guide(), pipeline);
+        assert_eq!(
+            output.meta.render_recommendation, None,
+            "pipeline={pipeline}"
+        );
+    }
+}

@@ -75,3 +75,37 @@ fn help_like_payload_value_mixed_depth_selectors_keep_structural_branches() {
         })
     );
 }
+
+// Protects VALUE extraction for sibling fields on the same addressed object:
+// once one entry survives, both selected leaves should stay attached to the
+// same structural entry instead of being split into unrelated wrappers.
+#[test]
+fn help_like_payload_value_keeps_sibling_field_identity_for_same_object() {
+    let output = run_guide_pipeline(
+        help_like_guide(),
+        "VALUE sections[0].entries[0].name sections[0].entries[0].short_help",
+    );
+
+    assert!(GuideView::try_from_output_result(&output).is_none());
+    let document = output
+        .document
+        .expect("semantic document should remain attached");
+    assert_eq!(
+        document.value,
+        json!({
+            "sections": [
+                {
+                    "title": "Commands",
+                    "kind": "commands",
+                    "paragraphs": ["pick one"],
+                    "entries": [
+                        {
+                            "name": {"value": "apply"},
+                            "short_help": {"value": "Apply pending changes"}
+                        }
+                    ]
+                }
+            ]
+        })
+    );
+}

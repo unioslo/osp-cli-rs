@@ -125,6 +125,40 @@ impl NativeCommandRegistry {
     }
 
     /// Returns a registry with one additional registered command.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use anyhow::Result;
+    /// use clap::Command;
+    /// use osp_cli::{
+    ///     NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
+    /// };
+    ///
+    /// struct VersionCommand;
+    ///
+    /// impl NativeCommand for VersionCommand {
+    ///     fn command(&self) -> Command {
+    ///         Command::new("version").about("Show version")
+    ///     }
+    ///
+    ///     fn execute(
+    ///         &self,
+    ///         _args: &[String],
+    ///         _context: &NativeCommandContext<'_>,
+    ///     ) -> Result<NativeCommandOutcome> {
+    ///         Ok(NativeCommandOutcome::Exit(0))
+    ///     }
+    /// }
+    ///
+    /// let registry = NativeCommandRegistry::new().with_command(VersionCommand);
+    /// let catalog = registry.catalog();
+    ///
+    /// assert!(registry.command(" VERSION ").is_some());
+    /// assert_eq!(catalog[0].name, "version");
+    /// assert_eq!(catalog[0].about, "Show version");
+    /// assert!(catalog[0].auth.is_none());
+    /// ```
     pub fn with_command(mut self, command: impl NativeCommand + 'static) -> Self {
         self.register(command);
         self

@@ -119,7 +119,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn plugin_meta_preserves_column_alignment_unit() {
+    fn plugin_meta_and_data_shapes_preserve_alignment_and_normalize_rows_unit() {
         let output = plugin_data_to_output_result(
             json!([{ "name": "alice", "count": 2 }]),
             Some(&ResponseMetaV1 {
@@ -137,10 +137,7 @@ mod tests {
             output.meta.column_align,
             vec![ColumnAlignment::Left, ColumnAlignment::Right]
         );
-    }
 
-    #[test]
-    fn plugin_meta_maps_all_alignment_variants_unit() {
         let output = plugin_data_to_output_result(
             json!([{ "name": "alice", "count": 2, "status": "ok", "notes": "ready" }]),
             Some(&ResponseMetaV1 {
@@ -169,10 +166,22 @@ mod tests {
                 ColumnAlignment::Right,
             ]
         );
+
+        let scalar = plugin_data_to_output_result(json!("hello"), None);
+        let object = plugin_data_to_output_result(json!({ "uid": "alice", "count": 2 }), None);
+
+        let scalar_rows = output_to_rows(&scalar);
+        let object_rows = output_to_rows(&object);
+
+        assert_eq!(scalar_rows, vec![crate::row! { "value" => "hello" }]);
+        assert_eq!(
+            object_rows,
+            vec![crate::row! { "uid" => "alice", "count" => 2 }]
+        );
     }
 
     #[test]
-    fn rows_round_trip_through_output_result_unit() {
+    fn output_row_helpers_round_trip_and_flatten_groups_unit() {
         let rows = vec![
             crate::row! { "uid" => "alice", "count" => 2 },
             crate::row! { "uid" => "bob", "count" => 3 },
@@ -185,10 +194,7 @@ mod tests {
             output.meta.key_index,
             vec!["uid".to_string(), "count".to_string()]
         );
-    }
 
-    #[test]
-    fn grouped_output_flattens_group_headers_and_rows_unit() {
         let output = OutputResult {
             items: OutputItems::Groups(vec![
                 Group {
@@ -225,20 +231,5 @@ mod tests {
         assert_eq!(rows[2]["team"], Value::String("infra".to_string()));
         assert_eq!(rows[2]["count"], Value::from(0));
         assert_eq!(rows[2].get("user"), None);
-    }
-
-    #[test]
-    fn plugin_data_scalar_and_object_shapes_are_normalized_unit() {
-        let scalar = plugin_data_to_output_result(json!("hello"), None);
-        let object = plugin_data_to_output_result(json!({ "uid": "alice", "count": 2 }), None);
-
-        let scalar_rows = output_to_rows(&scalar);
-        let object_rows = output_to_rows(&object);
-
-        assert_eq!(scalar_rows, vec![crate::row! { "value" => "hello" }]);
-        assert_eq!(
-            object_rows,
-            vec![crate::row! { "uid" => "alice", "count" => 2 }]
-        );
     }
 }

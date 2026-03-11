@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_list_rows_marks_custom_theme_source_unit() {
+    fn theme_rows_and_commands_resolve_builtin_and_custom_sources_unit() {
         let rows = theme_list_rows(&custom_theme_catalog(), "nord");
         let row = &rows[0];
 
@@ -242,10 +242,7 @@ mod tests {
             row.get("origin").and_then(|value| value.as_str()),
             Some("/tmp/themes/nord.toml")
         );
-    }
 
-    #[test]
-    fn run_theme_command_list_emits_builtin_theme_rows_unit() {
         let ui = test_ui_state();
         let themes = builtin_theme_catalog();
         let mut overrides = ConfigLayer::default();
@@ -268,10 +265,7 @@ mod tests {
             row.get("source").and_then(|value| value.as_str()),
             Some("builtin")
         );
-    }
 
-    #[test]
-    fn theme_show_rows_marks_custom_theme_source_unit() {
         let rows = theme_show_rows(&custom_theme_catalog(), "nord").expect("theme should resolve");
         let row = &rows[0];
 
@@ -283,10 +277,7 @@ mod tests {
             row.get("origin").and_then(|value| value.as_str()),
             Some("/tmp/themes/nord.toml")
         );
-    }
 
-    #[test]
-    fn run_theme_command_show_uses_active_builtin_theme_when_name_is_omitted_unit() {
         let mut ui = test_ui_state();
         ui.render_settings.theme_name = "nord".to_string();
         let themes = builtin_theme_catalog();
@@ -314,12 +305,9 @@ mod tests {
     }
 
     #[test]
-    fn extract_output_rows_returns_none_for_text_results_unit() {
+    fn theme_output_helpers_and_command_def_expose_runtime_choices_unit() {
         assert!(extract_output_rows(CliCommandResult::text("hello")).is_none());
-    }
 
-    #[test]
-    fn theme_command_def_exposes_runtime_theme_choices_unit() {
         let def = theme_command_def(&builtin_theme_catalog(), "20");
         assert_eq!(def.name, "theme");
         assert_eq!(def.sort_key.as_deref(), Some("20"));

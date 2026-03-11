@@ -380,6 +380,44 @@ JSON
 }
 
 #[cfg(unix)]
+fn write_mismatched_id_plugin(
+    dir: &std::path::Path,
+    file_stem: &str,
+    describe_id: &str,
+    command_name: &str,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join(format!("osp-{file_stem}"));
+    let plugin_script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{describe_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{file_stem} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"ignored"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+JSON
+"#,
+        file_stem = file_stem,
+        describe_id = describe_id,
+        command_name = command_name,
+    );
+
+    std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("script should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
 fn write_counter_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 

@@ -648,42 +648,6 @@ mod tests {
     }
 
     #[test]
-    fn config_explain_text_surfaces_presentation_effect_unit() {
-        let (config, explain) = resolved_config_and_explain(
-            "ui.chrome.frame",
-            &[("ui.presentation", "expressive")],
-            &[],
-            &[("ui.presentation", "austere")],
-        );
-
-        let rendered = render_config_explain_text(&explain, &config, false);
-
-        assert!(rendered.contains("value: none (string)"));
-        assert!(rendered.contains("presentation:"));
-        assert!(rendered.contains("preset: austere"));
-        assert!(rendered.contains("preset_source: session"));
-        assert!(rendered.contains("seeded_value: none (string)"));
-    }
-
-    #[test]
-    fn config_explain_json_surfaces_presentation_effect_unit() {
-        let (config, explain) = resolved_config_and_explain(
-            "ui.chrome.frame",
-            &[("ui.presentation", "expressive")],
-            &[],
-            &[("ui.presentation", "austere")],
-        );
-
-        let payload = config_explain_json(&explain, &config, false);
-
-        assert_eq!(payload["value"], "none");
-        assert_eq!(payload["presentation"]["preset"], "austere");
-        assert_eq!(payload["presentation"]["preset_source"], "session");
-        assert_eq!(payload["presentation"]["seeded_value"], "none");
-        assert_eq!(payload["presentation"]["seeded_value_type"], "string");
-    }
-
-    #[test]
     fn config_explain_redacts_sensitive_values_in_text_and_json_unit() {
         let (config, _) = resolved_config_and_explain("ui.format", &[], &[], &[]);
         let explain = ConfigExplain {

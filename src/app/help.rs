@@ -344,37 +344,40 @@ mod tests {
     use crate::ui::presentation::{HelpLayout, HelpLevel};
     use std::ffi::OsString;
 
+    fn help_args(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
     #[test]
-    fn render_settings_for_help_honors_austere_override_without_external_config_unit() {
-        let context = render_settings_for_help(&[
-            OsString::from("osp"),
-            OsString::from("--gammel-og-bitter"),
-            OsString::from("--no-env"),
-            OsString::from("--no-config-file"),
-        ]);
+    fn render_settings_for_help_combines_presentation_format_and_level_overrides_unit() {
+        let context = render_settings_for_help(&help_args(&[
+            "osp",
+            "--gammel-og-bitter",
+            "--no-env",
+            "--no-config-file",
+        ]));
 
         assert_eq!(context.layout, HelpLayout::Minimal);
         assert_eq!(context.help_level, HelpLevel::Normal);
         assert_eq!(context.settings.mode, RenderMode::Plain);
         assert_eq!(context.settings.color, ColorMode::Never);
         assert_eq!(context.settings.unicode, UnicodeMode::Never);
-    }
+        assert_eq!(context.settings.format, OutputFormat::Auto);
+        assert!(!context.settings.format_explicit);
 
-    #[test]
-    fn render_settings_for_help_applies_explicit_overrides_after_preset_unit() {
-        let context = render_settings_for_help(&[
-            OsString::from("osp"),
-            OsString::from("--presentation"),
-            OsString::from("compact"),
-            OsString::from("--mode"),
-            OsString::from("rich"),
-            OsString::from("--color"),
-            OsString::from("always"),
-            OsString::from("--unicode"),
-            OsString::from("always"),
-            OsString::from("--no-env"),
-            OsString::from("--no-config-file"),
-        ]);
+        let context = render_settings_for_help(&help_args(&[
+            "osp",
+            "--presentation",
+            "compact",
+            "--mode",
+            "rich",
+            "--color",
+            "always",
+            "--unicode",
+            "always",
+            "--no-env",
+            "--no-config-file",
+        ]));
 
         assert_eq!(context.layout, HelpLayout::Compact);
         assert_eq!(context.help_level, HelpLevel::Normal);
@@ -382,62 +385,48 @@ mod tests {
         assert_eq!(context.settings.color, ColorMode::Always);
         assert_eq!(context.settings.unicode, UnicodeMode::Always);
         assert_eq!(context.settings.format, OutputFormat::Auto);
-    }
+        assert!(!context.settings.format_explicit);
 
-    #[test]
-    fn render_settings_for_help_marks_format_flags_as_explicit_unit() {
-        let context = render_settings_for_help(&[
-            OsString::from("osp"),
-            OsString::from("--json"),
-            OsString::from("--no-env"),
-            OsString::from("--no-config-file"),
-        ]);
+        let context = render_settings_for_help(&help_args(&[
+            "osp",
+            "--json",
+            "--no-env",
+            "--no-config-file",
+        ]));
 
         assert_eq!(context.settings.format, OutputFormat::Json);
         assert!(context.settings.format_explicit);
-    }
-
-    #[test]
-    fn render_settings_for_help_maps_quiet_and_verbose_to_help_level_unit() {
-        let verbose = render_settings_for_help(&[
-            OsString::from("osp"),
-            OsString::from("-v"),
-            OsString::from("--no-env"),
-            OsString::from("--no-config-file"),
-        ]);
-        let quiet = render_settings_for_help(&[
-            OsString::from("osp"),
-            OsString::from("-q"),
-            OsString::from("--no-env"),
-            OsString::from("--no-config-file"),
-        ]);
-        let none = render_settings_for_help(&[
-            OsString::from("osp"),
-            OsString::from("-qq"),
-            OsString::from("--no-env"),
-            OsString::from("--no-config-file"),
-        ]);
-
-        assert_eq!(verbose.help_level, HelpLevel::Verbose);
-        assert_eq!(quiet.help_level, HelpLevel::Tiny);
-        assert_eq!(none.help_level, HelpLevel::None);
-    }
-
-    #[test]
-    fn render_settings_for_help_accepts_guide_alias_unit() {
-        let context = render_settings_for_help(&[
-            OsString::from("osp"),
-            OsString::from("--guide"),
-            OsString::from("--no-env"),
-            OsString::from("--no-config-file"),
-        ]);
+        let context = render_settings_for_help(&help_args(&[
+            "osp",
+            "--guide",
+            "--no-env",
+            "--no-config-file",
+        ]));
 
         assert_eq!(context.settings.format, OutputFormat::Guide);
         assert!(context.settings.format_explicit);
+
+        for (args, expected_level) in [
+            (
+                &["osp", "-v", "--no-env", "--no-config-file"][..],
+                HelpLevel::Verbose,
+            ),
+            (
+                &["osp", "-q", "--no-env", "--no-config-file"][..],
+                HelpLevel::Tiny,
+            ),
+            (
+                &["osp", "-qq", "--no-env", "--no-config-file"][..],
+                HelpLevel::None,
+            ),
+        ] {
+            let context = render_settings_for_help(&help_args(args));
+            assert_eq!(context.help_level, expected_level);
+        }
     }
 
     #[test]
-    fn parse_help_render_overrides_supports_inline_assignment_forms_unit() {
+    fn parse_help_render_overrides_handle_inline_assignments_invalid_values_and_flags_unit() {
         let parsed = parse_help_render_overrides(&[
             OsString::from("osp"),
             OsString::from("--profile=prod"),
@@ -457,10 +446,7 @@ mod tests {
         assert_eq!(parsed.mode, Some(RenderMode::Plain));
         assert_eq!(parsed.color, Some(ColorMode::Always));
         assert_eq!(parsed.unicode, Some(UnicodeMode::Never));
-    }
 
-    #[test]
-    fn parse_help_render_overrides_ignores_invalid_values_without_eating_later_flags_unit() {
         let parsed = parse_help_render_overrides(&[
             OsString::from("osp"),
             OsString::from("--presentation"),
@@ -478,11 +464,27 @@ mod tests {
         assert_eq!(parsed.color, None);
         assert_eq!(parsed.unicode, None);
         assert_eq!(parsed.profile.as_deref(), Some("dev"));
+
+        let parsed = parse_help_render_overrides(&help_args(&[
+            "osp",
+            "-vq",
+            "--verbose",
+            "--quiet",
+            "--ascii",
+            "--no-env",
+            "--no-config",
+        ]));
+        assert_eq!(parsed.verbose, 2);
+        assert_eq!(parsed.quiet, 2);
+        assert!(parsed.ascii_legacy);
+        assert!(parsed.no_env);
+        assert!(parsed.no_config_file);
     }
 
     #[test]
-    fn help_arg_parsers_accept_case_and_whitespace_unit() {
+    fn help_arg_parsers_accept_case_whitespace_and_invalid_values_unit() {
         assert_eq!(parse_render_mode_arg(" rich "), Some(RenderMode::Rich));
+        assert_eq!(parse_render_mode_arg("LOUD"), None);
         assert_eq!(parse_color_mode_arg(" WARNING "), None);
         assert_eq!(parse_color_mode_arg(" Always "), Some(ColorMode::Always));
         assert_eq!(parse_unicode_mode_arg(" Never "), Some(UnicodeMode::Never));

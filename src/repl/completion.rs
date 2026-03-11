@@ -632,20 +632,18 @@ mod tests {
     }
 
     #[test]
-    fn scope_completion_tree_roots_to_current_shell() {
+    fn scope_completion_tree_handles_current_and_unknown_scopes_unit() {
         let mut ldap = CompletionNode::default();
         ldap.children
             .insert("user".to_string(), CompletionNode::default());
-
         let tree = CompletionTree {
             root: CompletionNode::default().with_child("ldap", ldap),
             ..CompletionTree::default()
         };
-        let mut scope = ReplScopeStack::default();
-        scope.enter("ldap");
 
-        let rooted = scope_completion_tree(&tree, &scope);
-
+        let mut scoped = ReplScopeStack::default();
+        scoped.enter("ldap");
+        let rooted = scope_completion_tree(&tree, &scoped);
         assert!(rooted.root.children.contains_key("user"));
         assert!(rooted.root.children.contains_key("help"));
         assert!(rooted.root.children.contains_key("exit"));
@@ -659,21 +657,12 @@ mod tests {
         assert!(suggestions.contains(&"user"));
         assert!(suggestions.contains(&"help"));
         assert!(suggestions.contains(&"exit"));
-    }
 
-    #[test]
-    fn scope_completion_tree_falls_back_to_root_for_unknown_scope() {
-        let tree = CompletionTree {
-            root: CompletionNode::default().with_child("ldap", CompletionNode::default()),
-            ..CompletionTree::default()
-        };
-        let mut scope = ReplScopeStack::default();
-        scope.enter("missing");
-
-        let rooted = scope_completion_tree(&tree, &scope);
-
-        assert!(rooted.root.children.contains_key("ldap"));
-        assert!(rooted.root.children.contains_key("exit"));
+        let mut unknown = ReplScopeStack::default();
+        unknown.enter("missing");
+        let fallback = scope_completion_tree(&tree, &unknown);
+        assert!(fallback.root.children.contains_key("ldap"));
+        assert!(fallback.root.children.contains_key("exit"));
     }
 
     #[test]
@@ -715,77 +704,54 @@ mod tests {
     }
 
     #[test]
-    fn alias_completion_command_captures_prefilled_invocation_flags_unit() {
-        let parsed =
-            alias_completion_command("--json --no-color ldap user ${uid}").expect("alias parses");
+    fn alias_completion_helpers_cover_prefilled_flags_missing_targets_and_collisions_unit() {
+        for template in ["--json --no-color ldap user ${uid}", "--json --no-color"] {
+            let parsed = alias_completion_command(template).expect("alias parses");
+            assert_eq!(
+                parsed.prefilled_flags.get("--format"),
+                Some(&vec!["json".to_string()])
+            );
+            if template.contains("ldap user") {
+                assert!(
+                    !parsed.command.head().is_empty()
+                        || parsed.command.tail_len() > 0
+                        || !parsed.command.pipes().is_empty()
+                );
+            }
+        }
 
-        assert!(
-            !parsed.command.head().is_empty()
-                || parsed.command.tail_len() > 0
-                || !parsed.command.pipes().is_empty()
-        );
-        assert_eq!(
-            parsed.prefilled_flags.get("--format"),
-            Some(&vec!["json".to_string()])
-        );
-    }
-
-    #[test]
-    fn alias_completion_command_handles_invocation_only_alias_unit() {
-        let parsed = alias_completion_command("--json --no-color")
-            .expect("invocation-only aliases still normalize host flags");
-        assert_eq!(
-            parsed.prefilled_flags.get("--format"),
-            Some(&vec!["json".to_string()])
-        );
-    }
-
-    #[test]
-    fn alias_completion_node_keeps_tooltip_when_target_is_missing_unit() {
         let alias = ReplAliasEntry {
             name: "lookup".to_string(),
             template: "missing user ${uid}".to_string(),
             tooltip: "Lookup a user".to_string(),
         };
-
         let node = alias_completion_node(&CompletionNode::default(), None, &alias);
         assert_eq!(node.tooltip.as_deref(), Some("Lookup a user"));
         assert!(node.children.is_empty());
-    }
 
-    #[test]
-    fn inject_alias_nodes_skips_existing_root_children_unit() {
         let mut root = CompletionNode::default();
         root.children
             .insert("lookup".to_string(), CompletionNode::default());
-
         let aliases = vec![ReplAliasEntry {
             name: "lookup".to_string(),
             template: "ldap user ${uid}".to_string(),
             tooltip: "Lookup user".to_string(),
         }];
-
         inject_alias_nodes(&mut root, &CompletionNode::default(), None, &aliases);
-
         assert!(root.children.contains_key("lookup"));
         assert_eq!(root.children.len(), 1);
     }
 
     #[test]
-    fn dsl_help_marks_materializing_verbs_in_listing_unit() {
+    fn dsl_help_describes_materialization_and_streaming_behaviors_unit() {
         let state = test_app_state();
-        let rendered = render_dsl_help(
+        let listing = render_dsl_help(
             ReplViewContext::from_parts(&state.runtime, &state.session),
             "",
         );
+        assert!(listing.contains("A") && listing.contains("[materializes]"));
+        assert!(listing.contains("JQ") && listing.contains("[materializes]"));
 
-        assert!(rendered.contains("A") && rendered.contains("[materializes]"));
-        assert!(rendered.contains("JQ") && rendered.contains("[materializes]"));
-    }
-
-    #[test]
-    fn dsl_help_shows_streaming_details_for_target_verb_unit() {
-        let state = test_app_state();
         let aggregate = render_dsl_help(
             ReplViewContext::from_parts(&state.runtime, &state.session),
             "A",

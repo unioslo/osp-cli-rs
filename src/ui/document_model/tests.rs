@@ -11,7 +11,7 @@ use crate::ui::chrome::SectionFrameStyle;
 use crate::ui::document::Block;
 
 #[test]
-fn guide_view_lowers_commands_to_key_value_sections_unit() {
+fn guide_view_commands_lower_to_key_value_sections_markdown_and_bordered_tables_unit() {
     let view = GuideView::from_text("Commands:\n  help  Show help\n");
     let model = DocumentModel::from_guide_view(&view);
     let BlockModel::Section(section) = &model.blocks[0] else {
@@ -19,28 +19,12 @@ fn guide_view_lowers_commands_to_key_value_sections_unit() {
     };
     assert_eq!(section.title.as_deref(), Some("Commands"));
     assert!(matches!(section.blocks[0], BlockModel::KeyValue(_)));
-}
 
-#[test]
-fn markdown_from_guide_view_uses_entry_lines_unit() {
-    let view = GuideView::from_text("Commands:\n  help  Show help\n");
-    let rendered = DocumentModel::from_guide_view(&view).to_markdown_with_width(Some(80));
+    let rendered = model.to_markdown_with_width(Some(80));
     assert!(rendered.contains("- `help` Show help"));
     assert!(rendered.contains("Show help"));
     assert!(!rendered.contains("| name"));
-}
 
-#[test]
-fn scalar_object_value_renders_as_key_value_group_unit() {
-    let value = json!({"uid": "alice", "mail": "a@uio.no"});
-    let model = DocumentModel::from_value(&value, None);
-    assert!(matches!(model.blocks[0], BlockModel::KeyValue(_)));
-}
-
-#[test]
-fn help_key_values_can_lower_to_bordered_tables_unit() {
-    let view = GuideView::from_text("Commands:\n  help  Show help\n");
-    let model = DocumentModel::from_guide_view(&view);
     let document = model.lower_to_render_document(
         LowerDocumentOptions {
             frame_style: SectionFrameStyle::Top,
@@ -62,36 +46,84 @@ fn help_key_values_can_lower_to_bordered_tables_unit() {
 }
 
 #[test]
-fn guide_view_custom_sections_keep_paragraph_entry_and_epilogue_separation_unit() {
+fn guide_view_section_lowering_preserves_custom_sections_notes_and_scalar_section_data_unit() {
     let mut view = GuideView::default();
     view.sections.push(
         GuideSection::new("Examples", GuideSectionKind::Custom)
             .paragraph("Run this first.")
             .entry("config", "Inspect config"),
     );
+    view.sections.push(
+        GuideSection::new("Keybindings", GuideSectionKind::Custom).data(json!([
+            {"name": "Ctrl-D", "short_help": "exit"},
+            {"name": "Ctrl-L", "short_help": "clear screen"}
+        ])),
+    );
+    view.sections
+        .push(GuideSection::new("Pipes", GuideSectionKind::Custom).data(json!(["F", "P", "S"])));
+    view.notes
+        .push("Use bare help for the REPL overview.".to_string());
     view.epilogue.push("More details later.".to_string());
 
     let model = DocumentModel::from_guide_view(&view);
-    let BlockModel::Section(section) = &model.blocks[0] else {
-        panic!("expected section");
-    };
+    let section = model
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            BlockModel::Section(section) if section.title.as_deref() == Some("Examples") => {
+                Some(section)
+            }
+            _ => None,
+        })
+        .expect("expected examples section");
     assert_eq!(section.title.as_deref(), Some("Examples"));
     assert!(matches!(section.blocks[0], BlockModel::Paragraph(_)));
     assert!(matches!(section.blocks[1], BlockModel::Blank));
     assert!(matches!(section.blocks[2], BlockModel::KeyValue(_)));
-    assert!(matches!(model.blocks[1], BlockModel::Blank));
-    assert!(matches!(model.blocks[2], BlockModel::Blank));
-    assert!(matches!(model.blocks[3], BlockModel::Paragraph(_)));
-}
+    assert!(matches!(
+        model.blocks.last(),
+        Some(BlockModel::Paragraph(_))
+    ));
 
-#[test]
-fn canonical_notes_render_with_body_indent_unit() {
-    let view = GuideView {
+    let keybindings = model
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            BlockModel::Section(section) if section.title.as_deref() == Some("Keybindings") => {
+                Some(section)
+            }
+            _ => None,
+        })
+        .expect("expected keybindings section");
+    assert_eq!(keybindings.title.as_deref(), Some("Keybindings"));
+    assert!(matches!(keybindings.blocks[0], BlockModel::KeyValue(_)));
+
+    let pipes = model
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            BlockModel::Section(section) if section.title.as_deref() == Some("Pipes") => {
+                Some(section)
+            }
+            _ => None,
+        })
+        .expect("expected pipes section");
+    assert_eq!(pipes.title.as_deref(), Some("Pipes"));
+    let BlockModel::List(list) = &pipes.blocks[0] else {
+        panic!("expected scalar section data to lower to a list");
+    };
+    assert_eq!(list.items, vec!["F", "P", "S"]);
+    assert!(list.inline_markup);
+    assert!(matches!(
+        list.layout,
+        crate::ui::document::ValueLayout::AutoGrid
+    ));
+
+    let document = DocumentModel::from_guide_view(&GuideView {
         notes: vec!["Use bare help for the REPL overview.".to_string()],
         ..GuideView::default()
-    };
-
-    let document = DocumentModel::from_guide_view(&view).lower_to_render_document(
+    })
+    .lower_to_render_document(
         LowerDocumentOptions {
             frame_style: SectionFrameStyle::Top,
             panel_kind: Some("help"),
@@ -120,63 +152,12 @@ fn canonical_notes_render_with_body_indent_unit() {
 }
 
 #[test]
-fn guide_view_section_data_lowers_entry_arrays_and_scalar_lists_unit() {
-    let mut view = GuideView::default();
-    view.sections.push(
-        GuideSection::new("Keybindings", GuideSectionKind::Custom).data(json!([
-            {"name": "Ctrl-D", "short_help": "exit"},
-            {"name": "Ctrl-L", "short_help": "clear screen"}
-        ])),
-    );
-    view.sections
-        .push(GuideSection::new("Pipes", GuideSectionKind::Custom).data(json!(["F", "P", "S"])));
-
-    let model = DocumentModel::from_guide_view(&view);
-
-    let BlockModel::Section(keybindings) = &model.blocks[0] else {
-        panic!("expected keybindings section");
-    };
-    assert_eq!(keybindings.title.as_deref(), Some("Keybindings"));
-    assert!(matches!(keybindings.blocks[0], BlockModel::KeyValue(_)));
-
-    let BlockModel::Section(pipes) = &model.blocks[3] else {
-        panic!("expected pipes section");
-    };
-    assert_eq!(pipes.title.as_deref(), Some("Pipes"));
-    let BlockModel::List(list) = &pipes.blocks[0] else {
-        panic!("expected scalar section data to lower to a list");
-    };
-    assert_eq!(list.items, vec!["F", "P", "S"]);
-    assert!(list.inline_markup);
-    assert!(matches!(
-        list.layout,
-        crate::ui::document::ValueLayout::AutoGrid
-    ));
-}
-
-#[test]
-fn value_arrays_lower_to_tables_lists_and_blank_separated_blocks_unit() {
-    let table_model = DocumentModel::from_value(
-        &json!([
-            {"uid": "alice", "city": "Oslo"},
-            {"uid": "bob", "city": "Bergen"}
-        ]),
-        None,
-    );
-    assert!(matches!(table_model.blocks[0], BlockModel::Table(_)));
-
-    let list_model = DocumentModel::from_value(&json!(["alice", "bob"]), None);
-    assert!(matches!(list_model.blocks[0], BlockModel::List(_)));
-
-    let mixed_model = DocumentModel::from_value(&json!([{"uid": "alice"}, 7]), None);
-    assert!(matches!(mixed_model.blocks[0], BlockModel::KeyValue(_)));
-    assert!(matches!(mixed_model.blocks[1], BlockModel::Blank));
-    assert!(matches!(mixed_model.blocks[2], BlockModel::Paragraph(_)));
-}
-
-#[test]
 fn from_value_classifies_root_shapes_and_respects_preferred_key_order_unit() {
     let preferred = vec!["uid".to_string(), "city".to_string()];
+    let scalar_object = json!({"uid": "alice", "mail": "a@uio.no"});
+    let model = DocumentModel::from_value(&scalar_object, None);
+    assert!(matches!(model.blocks[0], BlockModel::KeyValue(_)));
+
     let object_model = DocumentModel::from_value(
         &json!({"mail": "a@uio.no", "city": "Oslo", "uid": "alice"}),
         Some(&preferred),
@@ -224,6 +205,11 @@ fn from_value_classifies_root_shapes_and_respects_preferred_key_order_unit() {
     assert!(matches!(mixed_model.blocks[2], BlockModel::List(_)));
     assert!(matches!(mixed_model.blocks[3], BlockModel::Blank));
     assert!(matches!(mixed_model.blocks[4], BlockModel::Paragraph(_)));
+
+    let mixed_model = DocumentModel::from_value(&json!([{"uid": "alice"}, 7]), None);
+    assert!(matches!(mixed_model.blocks[0], BlockModel::KeyValue(_)));
+    assert!(matches!(mixed_model.blocks[1], BlockModel::Blank));
+    assert!(matches!(mixed_model.blocks[2], BlockModel::Paragraph(_)));
 }
 
 #[test]
@@ -277,13 +263,10 @@ fn lower_key_value_rows_respect_gap_overrides_and_empty_values_unit() {
 }
 
 #[test]
-fn markdown_renderer_returns_empty_string_for_empty_models_unit() {
-    let model = DocumentModel { blocks: Vec::new() };
-    assert_eq!(model.to_markdown_with_width(Some(40)), "");
-}
+fn markdown_renderer_handles_empty_models_and_formats_lists_tables_and_key_value_blocks_unit() {
+    let empty = DocumentModel { blocks: Vec::new() };
+    assert_eq!(empty.to_markdown_with_width(Some(40)), "");
 
-#[test]
-fn markdown_renderer_formats_lists_tables_and_key_value_blocks_unit() {
     let model = DocumentModel {
         blocks: vec![
             BlockModel::List(super::ListModel {

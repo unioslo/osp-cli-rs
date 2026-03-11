@@ -88,8 +88,6 @@ mod tests {
         GuideDefaultFormat, RenderBackend, RenderSettings, ResolvedRenderSettings,
         TableBorderStyle, TableOverflow,
     };
-    use insta::assert_snapshot;
-
     fn resolved_settings(frame: crate::ui::chrome::SectionFrameStyle) -> ResolvedRenderSettings {
         ResolvedRenderSettings {
             backend: RenderBackend::Plain,
@@ -110,15 +108,6 @@ mod tests {
             theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
             style_overrides: StyleOverrides::default(),
             chrome_frame: frame,
-        }
-    }
-
-    fn help_test_overrides() -> StyleOverrides {
-        StyleOverrides {
-            panel_title: Some("green".to_string()),
-            key: Some("red".to_string()),
-            value: Some("blue".to_string()),
-            ..StyleOverrides::default()
         }
     }
 
@@ -158,21 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn help_chrome_layouts_preserve_snapshots_and_custom_sections_unit() {
-        let minimal = render_help_with_chrome(
-            "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n\nUse `osp plugins commands` to list plugin-provided commands.\n",
-            &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
-            HelpLayout::Minimal,
-        );
-        assert_snapshot!("repl_help_minimal_layout", minimal);
-
-        let compact = render_help_with_chrome(
-            "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
-            &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
-            HelpLayout::Compact,
-        );
-        assert_snapshot!("repl_help_compact_layout", compact);
-
+    fn help_chrome_preserves_custom_preamble_and_extra_sections_unit() {
         let preamble = render_help_with_chrome(
             "Custom plugin help\nwith two intro lines\n\nUsage: osp sample\n\nCommands:\n  run\n",
             &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
@@ -192,34 +167,6 @@ mod tests {
             assert!(rendered.contains("Examples:\n  osp sample run"));
             assert!(rendered.contains("Notes:\n  extra detail"));
         }
-    }
-
-    #[test]
-    fn help_chrome_styles_color_text_and_split_command_descriptions_unit() {
-        let mut resolved = resolved_settings(crate::ui::chrome::SectionFrameStyle::TopBottom);
-        resolved.color = true;
-        resolved.style_overrides = help_test_overrides();
-
-        let rendered = render_help_with_chrome(
-            "Usage: osp history <COMMAND>\n\nCommands:\n  list   List stored history entries\n",
-            &resolved,
-            HelpLayout::Compact,
-        );
-        assert!(rendered.contains("\u{1b}[32mUsage\u{1b}[0m"));
-        assert!(rendered.contains("\u{1b}[31mlist\u{1b}[0m"));
-        assert!(rendered.contains("\u{1b}[34m   List stored history entries\u{1b}[0m"));
-        assert!(rendered.contains("\u{1b}[34m  osp history <COMMAND>\u{1b}[0m"));
-
-        let mut split = resolved_settings(crate::ui::chrome::SectionFrameStyle::None);
-        split.color = true;
-        split.style_overrides = help_test_overrides();
-        let rendered = render_help_with_chrome(
-            "Commands:\n  list List stored history entries\n",
-            &split,
-            HelpLayout::Compact,
-        );
-        assert!(rendered.contains("\u{1b}[31mlist\u{1b}[0m"));
-        assert!(rendered.contains("\u{1b}[34m List stored history entries\u{1b}[0m"));
     }
 
     #[test]

@@ -187,10 +187,7 @@ mod schema_value_contracts {
         assert_eq!(ConfigValue::Bool(true).to_string(), "true");
         assert_eq!(ConfigValue::Integer(7).to_string(), "7");
         assert_eq!(ConfigValue::Float(2.5).to_string(), "2.5");
-    }
 
-    #[test]
-    fn display_helpers_cover_remaining_source_and_type_variants() {
         assert_eq!(ConfigSource::Cli.to_string(), "cli");
         assert_eq!(ConfigSource::Session.to_string(), "session");
         assert_eq!(ConfigSource::Derived.to_string(), "derived");

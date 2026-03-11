@@ -140,30 +140,6 @@ JSON
 }
 
 #[cfg(unix)]
-fn write_auth_test_plugin(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-    let plugin_path = dir.join(format!("osp-{name}"));
-    let script = format!(
-        r#"#!/bin/sh
-PATH=/usr/bin:/bin
-if [ "$1" = "--describe" ]; then
-  cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"{name}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{name}","about":"{name} plugin","auth":{{"visibility":"authenticated"}},"args":[],"flags":{{}},"subcommands":[{{"name":"approval","about":"approval commands","args":[],"flags":{{}},"subcommands":[{{"name":"decide","about":"decide approvals","auth":{{"visibility":"capability_gated","required_capabilities":["orch.approval.decide"],"feature_flags":["orch"]}},"args":[],"flags":{{}},"subcommands":[]}}]}}]}}]}}
-JSON
-  exit 0
-fi
-
-cat <<'JSON'
-{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
-JSON
-"#,
-        name = name,
-    );
-
-    write_executable_script_atomically(&plugin_path, &script);
-    plugin_path
-}
-
-#[cfg(unix)]
 fn write_sleepy_test_plugin(
     dir: &std::path::Path,
     name: &str,
@@ -249,37 +225,6 @@ printf '"}},"error":null,"meta":{{"format_hint":"table","columns":["blob"]}}}}'
 }
 
 #[cfg(unix)]
-fn write_mismatched_id_plugin(
-    dir: &std::path::Path,
-    file_stem: &str,
-    describe_id: &str,
-    command_name: &str,
-) -> std::path::PathBuf {
-    let plugin_path = dir.join(format!("osp-{file_stem}"));
-    let script = format!(
-        r#"#!/bin/sh
-PATH=/usr/bin:/bin
-if [ "$1" = "--describe" ]; then
-  cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"{describe_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{file_stem} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
-JSON
-  exit 0
-fi
-
-cat <<'JSON'
-{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
-JSON
-"#,
-        file_stem = file_stem,
-        describe_id = describe_id,
-        command_name = command_name,
-    );
-
-    write_executable_script_atomically(&plugin_path, &script);
-    plugin_path
-}
-
-#[cfg(unix)]
 fn write_marker_describe_plugin(
     dir: &std::path::Path,
     name: &str,
@@ -303,35 +248,6 @@ JSON
 "#,
         marker = marker.display(),
         name = name,
-    );
-
-    write_executable_script_atomically(&plugin_path, &script);
-    plugin_path
-}
-
-#[cfg(unix)]
-fn write_dispatch_fixture_plugin(
-    dir: &std::path::Path,
-    plugin_id: &str,
-    command_name: &str,
-    body: &str,
-) -> std::path::PathBuf {
-    let plugin_path = dir.join(format!("osp-{plugin_id}"));
-    let script = format!(
-        r#"#!/bin/sh
-PATH=/usr/bin:/bin
-if [ "$1" = "--describe" ]; then
-  cat <<'JSON'
-{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
-JSON
-  exit 0
-fi
-
-{body}
-"#,
-        plugin_id = plugin_id,
-        command_name = command_name,
-        body = body
     );
 
     write_executable_script_atomically(&plugin_path, &script);

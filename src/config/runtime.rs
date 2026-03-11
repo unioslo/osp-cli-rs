@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_defaults_seed_expected_keys() {
+    fn runtime_defaults_seed_expected_keys_and_history_placeholders_unit() {
         let defaults =
             RuntimeDefaults::from_env(&RuntimeEnvironment::default(), "nord", "osp> ").to_layer();
 
@@ -634,12 +634,6 @@ mod tests {
             find_value(&defaults, "color.prompt.text"),
             Some(&ConfigValue::String(String::new()))
         );
-    }
-
-    #[test]
-    fn runtime_defaults_history_path_keeps_placeholders() {
-        let defaults =
-            RuntimeDefaults::from_env(&RuntimeEnvironment::default(), "nord", "osp> ").to_layer();
         let path = match find_value(&defaults, "repl.history.path") {
             Some(ConfigValue::String(value)) => value.as_str(),
             other => panic!("unexpected history path value: {other:?}"),
@@ -666,10 +660,7 @@ mod tests {
             paths.secrets_file,
             Some(PathBuf::from("/tmp/custom-secrets.toml"))
         );
-    }
 
-    #[test]
-    fn runtime_config_paths_fall_back_to_xdg_root() {
         let env = RuntimeEnvironment::from_pairs([("XDG_CONFIG_HOME", "/var/tmp/xdg-config")]);
 
         let paths = RuntimeConfigPaths::from_env(&env);
@@ -685,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_environment_uses_home_when_xdg_is_missing() {
+    fn runtime_environment_uses_home_and_temp_fallbacks_for_state_paths_unit() {
         let env = RuntimeEnvironment::from_pairs([("HOME", "/home/tester")]);
 
         assert_eq!(
@@ -700,10 +691,7 @@ mod tests {
             env.state_root_dir(),
             Some(PathBuf::from("/home/tester/.local/state/osp"))
         );
-    }
 
-    #[test]
-    fn runtime_environment_state_artifacts_fall_back_to_temp_root() {
         let env = RuntimeEnvironment::default();
         let mut expected_root = std::env::temp_dir();
         expected_root.push("osp");

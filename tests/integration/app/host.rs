@@ -1,0 +1,358 @@
+use crate::temp_support::make_temp_dir;
+use anyhow::Result;
+use clap::Command;
+use osp_cli::app::{AppBuilder, BufferedUiSink};
+use osp_cli::core::plugin::{PLUGIN_PROTOCOL_V1, ResponseMetaV1, ResponseV1};
+use osp_cli::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
+use serde_json::json;
+
+use super::support::{env_lock, write_executable_script};
+
+fn with_config_path<T>(config_toml: &str, callback: impl FnOnce() -> T) -> T {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let temp = make_temp_dir("osp-cli-app-host-config");
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, config_toml).expect("config should be written");
+
+    let previous = std::env::var_os("OSP_CONFIG_FILE");
+    unsafe {
+        std::env::set_var("OSP_CONFIG_FILE", &config_path);
+    }
+
+    let result = callback();
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var("OSP_CONFIG_FILE", value) },
+        None => unsafe { std::env::remove_var("OSP_CONFIG_FILE") },
+    }
+
+    result
+}
+
+struct NativeProbeCommand;
+
+impl NativeCommand for NativeProbeCommand {
+    fn command(&self) -> Command {
+        Command::new("native-probe").about("Inspect resolved host config")
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        context: &NativeCommandContext<'_>,
+    ) -> Result<NativeCommandOutcome> {
+        Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            ok: true,
+            data: json!([{
+                "active_profile": context.config.active_profile(),
+                "theme": context.config.get_string("theme.name"),
+            }]),
+            error: None,
+            messages: Vec::new(),
+            meta: ResponseMetaV1 {
+                format_hint: Some("json".to_string()),
+                columns: Some(vec!["active_profile".to_string(), "theme".to_string()]),
+                column_align: Vec::new(),
+            },
+        })))
+    }
+}
+
+fn native_probe_registry() -> NativeCommandRegistry {
+    NativeCommandRegistry::new().with_command(NativeProbeCommand)
+}
+
+#[cfg(unix)]
+fn write_route_probe_plugin(dir: &std::path::Path, plugin_id: &str, command_name: &str) {
+    let plugin_path = dir.join(format!("osp-{plugin_id}"));
+    let script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin:$PATH
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"{command_name}","about":"{command_name} route probe","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<JSON
+{{"protocol_version":1,"ok":true,"data":[{{"profile":"${{OSP_PROFILE:-}}","selected_command":"${{OSP_COMMAND:-}}","arg0":"${{1:-}}","arg1":"${{2:-}}"}}],"error":null,"meta":{{"format_hint":"json"}}}}
+JSON
+"#,
+        plugin_id = plugin_id,
+        command_name = command_name,
+    );
+    write_executable_script(&plugin_path, &script);
+}
+
+#[test]
+fn app_host_surfaces_native_commands_in_help_and_dispatch() {
+    let app = AppBuilder::new()
+        .with_native_commands(native_probe_registry())
+        .build();
+
+    let mut help_sink = BufferedUiSink::default();
+    let exit = app
+        .run_with_sink(
+            ["osp", "--no-env", "--no-config-file", "--help"],
+            &mut help_sink,
+        )
+        .expect("help should render");
+    assert_eq!(exit, 0);
+    assert!(help_sink.stdout.contains("native-probe"));
+    assert!(help_sink.stdout.contains("Inspect resolved host config"));
+
+    let mut dispatch_sink = BufferedUiSink::default();
+    let exit = app
+        .run_with_sink(
+            [
+                "osp",
+                "--no-env",
+                "--no-config-file",
+                "--json",
+                "native-probe",
+            ],
+            &mut dispatch_sink,
+        )
+        .expect("native command should dispatch");
+    assert_eq!(exit, 0);
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&dispatch_sink.stdout).expect("native command stdout should be json");
+    let rows = payload
+        .as_array()
+        .expect("native command output should be row array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["active_profile"], "default");
+}
+
+#[test]
+fn app_host_passes_default_and_selected_profiles_into_native_context() {
+    with_config_path(
+        r#"[default]
+profile.default = "uio"
+theme.name = "nord"
+
+[profile.tsd]
+theme.name = "dracula"
+"#,
+        || {
+            let app = AppBuilder::new()
+                .with_native_commands(native_probe_registry())
+                .build();
+
+            let mut default_sink = BufferedUiSink::default();
+            let exit = app
+                .run_with_sink(
+                    ["osp", "--no-env", "--json", "native-probe"],
+                    &mut default_sink,
+                )
+                .expect("default profile command should run");
+            assert_eq!(exit, 0);
+            let payload: serde_json::Value =
+                serde_json::from_str(&default_sink.stdout).expect("default stdout should be json");
+            let rows = payload
+                .as_array()
+                .expect("default output should be row array");
+            assert_eq!(rows[0]["active_profile"], "uio");
+            assert_eq!(rows[0]["theme"], "nord");
+
+            let mut explicit_sink = BufferedUiSink::default();
+            let exit = app
+                .run_with_sink(
+                    [
+                        "osp",
+                        "--no-env",
+                        "--profile",
+                        "tsd",
+                        "--json",
+                        "native-probe",
+                    ],
+                    &mut explicit_sink,
+                )
+                .expect("explicit profile command should run");
+            assert_eq!(exit, 0);
+            let payload: serde_json::Value = serde_json::from_str(&explicit_sink.stdout)
+                .expect("explicit stdout should be json");
+            let rows = payload
+                .as_array()
+                .expect("explicit output should be row array");
+            assert_eq!(rows[0]["active_profile"], "tsd");
+            assert_eq!(rows[0]["theme"], "dracula");
+
+            let mut positional_sink = BufferedUiSink::default();
+            let exit = app
+                .run_with_sink(
+                    ["osp", "--no-env", "tsd", "--json", "native-probe"],
+                    &mut positional_sink,
+                )
+                .expect("positional profile command should run");
+            assert_eq!(exit, 0);
+            let payload: serde_json::Value = serde_json::from_str(&positional_sink.stdout)
+                .expect("positional stdout should be json");
+            let rows = payload
+                .as_array()
+                .expect("positional output should be row array");
+            assert_eq!(rows[0]["active_profile"], "tsd");
+            assert_eq!(rows[0]["theme"], "dracula");
+        },
+    );
+}
+
+#[test]
+fn app_host_projects_native_commands_into_repl_completion_surface() {
+    let app = AppBuilder::new()
+        .with_native_commands(native_probe_registry())
+        .build();
+
+    let mut sink = BufferedUiSink::default();
+    let exit = app
+        .run_with_sink(
+            [
+                "osp",
+                "--json",
+                "--no-env",
+                "--no-config-file",
+                "repl",
+                "debug-complete",
+                "--line",
+                "native-",
+            ],
+            &mut sink,
+        )
+        .expect("debug-complete should run");
+    assert_eq!(exit, 0);
+    assert!(sink.stderr.is_empty());
+
+    let payload: serde_json::Value =
+        serde_json::from_str(&sink.stdout).expect("debug-complete stdout should be json");
+    let matches = payload["matches"]
+        .as_array()
+        .expect("matches should render as an array");
+    assert!(matches.iter().any(|item| item["label"] == "native-probe"));
+}
+
+#[cfg(unix)]
+#[test]
+fn app_host_routes_explicit_and_positional_profiles_the_same_for_external_commands() {
+    with_config_path(
+        r#"[default]
+profile.default = "uio"
+
+[profile.tsd]
+theme.name = "dracula"
+"#,
+        || {
+            let dir = make_temp_dir("osp-cli-app-host-route-plugin");
+            write_route_probe_plugin(dir.path(), "route-probe", "route-probe");
+            let plugin_dir = dir.to_str().expect("plugin dir should be utf-8");
+            let app = AppBuilder::new().build();
+
+            let mut explicit_sink = BufferedUiSink::default();
+            let exit = app
+                .run_with_sink(
+                    [
+                        "osp",
+                        "--json",
+                        "--no-env",
+                        "--plugin-dir",
+                        plugin_dir,
+                        "--profile",
+                        "tsd",
+                        "route-probe",
+                        "hello",
+                    ],
+                    &mut explicit_sink,
+                )
+                .expect("explicit profile command should run");
+            assert_eq!(exit, 0);
+
+            let mut positional_sink = BufferedUiSink::default();
+            let exit = app
+                .run_with_sink(
+                    [
+                        "osp",
+                        "--json",
+                        "--no-env",
+                        "--plugin-dir",
+                        plugin_dir,
+                        "tsd",
+                        "route-probe",
+                        "hello",
+                    ],
+                    &mut positional_sink,
+                )
+                .expect("positional profile command should run");
+            assert_eq!(exit, 0);
+
+            let explicit: serde_json::Value = serde_json::from_str(&explicit_sink.stdout)
+                .expect("explicit stdout should be json");
+            let positional: serde_json::Value = serde_json::from_str(&positional_sink.stdout)
+                .expect("positional stdout should be json");
+            let explicit_row = explicit
+                .as_array()
+                .expect("explicit payload should be a row array")
+                .first()
+                .expect("explicit payload should contain one row");
+            let positional_row = positional
+                .as_array()
+                .expect("positional payload should be a row array")
+                .first()
+                .expect("positional payload should contain one row");
+            assert_eq!(explicit_row["profile"], "tsd");
+            assert_eq!(positional_row["profile"], "tsd");
+            assert_eq!(explicit_row["selected_command"], "route-probe");
+            assert_eq!(positional_row["selected_command"], "route-probe");
+            assert_eq!(explicit_row["arg0"], positional_row["arg0"]);
+            assert_eq!(explicit_row["arg1"], positional_row["arg1"]);
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn app_host_keeps_unknown_leading_token_as_command_instead_of_profile() {
+    with_config_path(
+        r#"[default]
+profile.default = "uio"
+
+[profile.tsd]
+theme.name = "dracula"
+"#,
+        || {
+            let dir = make_temp_dir("osp-cli-app-host-unknown-profile-token");
+            write_route_probe_plugin(dir.path(), "prod", "prod");
+            let plugin_dir = dir.to_str().expect("plugin dir should be utf-8");
+            let app = AppBuilder::new().build();
+
+            let mut sink = BufferedUiSink::default();
+            let exit = app
+                .run_with_sink(
+                    [
+                        "osp",
+                        "--json",
+                        "--no-env",
+                        "--plugin-dir",
+                        plugin_dir,
+                        "prod",
+                    ],
+                    &mut sink,
+                )
+                .expect("unknown leading token command should run");
+            assert_eq!(exit, 0);
+
+            let payload: serde_json::Value =
+                serde_json::from_str(&sink.stdout).expect("stdout should be json");
+            let row = payload
+                .as_array()
+                .expect("payload should be a row array")
+                .first()
+                .expect("payload should contain one row");
+            assert_eq!(row["selected_command"], "prod");
+            assert_eq!(row["profile"], "uio");
+        },
+    );
+}

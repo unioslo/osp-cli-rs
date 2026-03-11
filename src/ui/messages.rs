@@ -437,7 +437,7 @@ mod tests {
     use crate::ui::chrome::SectionFrameStyle;
 
     #[test]
-    fn default_success_hides_info_and_debug() {
+    fn grouped_render_variants_cover_visibility_headers_and_color_toggles_unit() {
         let mut messages = MessageBuffer::default();
         messages.error("bad");
         messages.warning("careful");
@@ -445,20 +445,15 @@ mod tests {
         messages.info("hint");
         messages.trace("trace");
 
-        let rendered = messages.render_grouped(MessageLevel::Success);
-        assert!(rendered.contains("Errors"));
-        assert!(rendered.contains("Warnings"));
-        assert!(rendered.contains("Success"));
-        assert!(!rendered.contains("Info"));
-        assert!(!rendered.contains("Trace"));
-    }
+        let grouped = messages.render_grouped(MessageLevel::Success);
+        assert!(grouped.contains("Errors"));
+        assert!(grouped.contains("Warnings"));
+        assert!(grouped.contains("Success"));
+        assert!(!grouped.contains("Info"));
+        assert!(!grouped.contains("Trace"));
 
-    #[test]
-    fn styled_render_uses_boxed_headers() {
-        let mut messages = MessageBuffer::default();
-        messages.error("bad");
         let theme = crate::ui::theme::resolve_theme("rose-pine-moon");
-        let rendered = messages.render_grouped_styled(
+        let boxed = messages.render_grouped_styled(
             MessageLevel::Error,
             false,
             true,
@@ -466,19 +461,12 @@ mod tests {
             &theme,
             MessageLayout::Grouped,
         );
-        assert!(rendered.contains("─ Errors "));
+        assert!(boxed.contains("─ Errors "));
         assert!(
-            rendered
+            boxed
                 .lines()
                 .any(|line| line.trim().chars().all(|ch| ch == '─'))
         );
-    }
-
-    #[test]
-    fn styled_render_color_toggle_controls_ansi() {
-        let mut messages = MessageBuffer::default();
-        messages.warning("careful");
-        let theme = crate::ui::theme::resolve_theme("rose-pine-moon");
 
         let plain = messages.render_grouped_styled(
             MessageLevel::Warning,
@@ -501,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn minimal_render_flattens_messages_with_level_prefixes_unit() {
+    fn minimal_render_flattens_with_prefixes_and_stable_plain_output_unit() {
         let mut messages = MessageBuffer::default();
         messages.error("bad");
         messages.warning("careful");
@@ -522,17 +510,8 @@ mod tests {
         assert!(rendered.contains("info: hint"));
         assert!(!rendered.contains("Errors"));
         assert!(!rendered.contains("- bad"));
-    }
 
-    #[test]
-    fn minimal_render_matches_plain_snapshot_unit() {
-        let mut messages = MessageBuffer::default();
-        messages.error("bad");
-        messages.warning("careful");
-        messages.info("hint");
-        let theme = crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME);
-
-        let rendered = messages.render_grouped_styled(
+        let narrow = messages.render_grouped_styled(
             MessageLevel::Info,
             false,
             false,
@@ -540,8 +519,7 @@ mod tests {
             &theme,
             MessageLayout::Minimal,
         );
-
-        assert_eq!(rendered, "error: bad\nwarning: careful\ninfo: hint\n");
+        assert_eq!(narrow, "error: bad\nwarning: careful\ninfo: hint\n");
     }
 
     #[test]
@@ -569,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn verbosity_adjustment_clamps() {
+    fn message_helper_paths_cover_verbosity_levels_layout_and_buffer_basics_unit() {
         assert_eq!(
             adjust_verbosity(MessageLevel::Success, 1, 0),
             MessageLevel::Info
@@ -582,19 +560,13 @@ mod tests {
             adjust_verbosity(MessageLevel::Success, 0, 9),
             MessageLevel::Error
         );
-    }
 
-    #[test]
-    fn message_level_helpers_cover_titles_env_and_rank_unit() {
         assert_eq!(MessageLevel::Error.title(), "Errors");
         assert_eq!(MessageLevel::Success.as_env_str(), "success");
         assert_eq!(MessageLevel::from_rank(-1), MessageLevel::Error);
         assert_eq!(MessageLevel::from_rank(1), MessageLevel::Warning);
         assert_eq!(MessageLevel::from_rank(9), MessageLevel::Trace);
-    }
 
-    #[test]
-    fn message_layout_parser_and_buffer_helpers_cover_basic_paths_unit() {
         assert_eq!(
             MessageLayout::parse("grouped"),
             Some(MessageLayout::Grouped)

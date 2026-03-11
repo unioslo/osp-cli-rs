@@ -574,9 +574,9 @@ mod tests {
     }
 
     #[test]
-    fn keeps_object_lists_as_tables_in_plain_mode() {
+    fn object_list_layout_policies_cover_table_width_and_nested_stack_variants_unit() {
         let mut next_block_id = 1;
-        let blocks = build_mreg_blocks(
+        let plain_blocks = build_mreg_blocks(
             &[sample_row()],
             MregBuildOptions {
                 key_order: None,
@@ -590,13 +590,13 @@ mod tests {
             },
             &mut next_block_id,
         );
-        assert!(blocks.iter().any(|block| matches!(block, Block::Table(_))));
-    }
+        assert!(
+            plain_blocks
+                .iter()
+                .any(|block| matches!(block, Block::Table(_)))
+        );
 
-    #[test]
-    fn stacks_wide_flat_object_lists_when_width_is_tight() {
-        let mut next_block_id = 1;
-        let blocks = build_mreg_blocks(
+        let tight_blocks = build_mreg_blocks(
             &[wide_flat_row()],
             MregBuildOptions {
                 key_order: None,
@@ -610,21 +610,20 @@ mod tests {
             },
             &mut next_block_id,
         );
-        assert!(!blocks.iter().any(|block| matches!(block, Block::Table(_))));
-        let has_separator = mreg_blocks(&blocks).any(|mreg| {
+        assert!(
+            !tight_blocks
+                .iter()
+                .any(|block| matches!(block, Block::Table(_)))
+        );
+        assert!(mreg_blocks(&tight_blocks).any(|mreg| {
             mreg.rows.iter().any(|row| {
                 row.entries
                     .iter()
                     .any(|entry| matches!(entry.value, MregValue::Separator))
             })
-        });
-        assert!(has_separator);
-    }
+        }));
 
-    #[test]
-    fn stacks_nested_object_lists_even_when_width_is_wide() {
-        let mut next_block_id = 1;
-        let blocks = build_mreg_blocks(
+        let nested_blocks = build_mreg_blocks(
             &[nested_object_list_row()],
             MregBuildOptions {
                 key_order: None,
@@ -638,31 +637,28 @@ mod tests {
             },
             &mut next_block_id,
         );
-
-        assert!(matches!(blocks.first(), Some(Block::Mreg(_))));
-        let has_separator = mreg_blocks(&blocks).any(|mreg| {
+        assert!(matches!(nested_blocks.first(), Some(Block::Mreg(_))));
+        assert!(mreg_blocks(&nested_blocks).any(|mreg| {
             mreg.rows.iter().any(|row| {
                 row.entries
                     .iter()
                     .any(|entry| matches!(entry.value, MregValue::Separator))
             })
-        });
-        assert!(has_separator);
-        let has_communities_group = mreg_blocks(&blocks).any(|mreg| {
+        }));
+        assert!(mreg_blocks(&nested_blocks).any(|mreg| {
             mreg.rows.iter().any(|row| {
                 row.entries
                     .iter()
                     .any(|entry| entry.key.starts_with("communities"))
             })
-        });
-        assert!(has_communities_group);
+        }));
     }
 
     #[test]
-    fn nested_object_values_become_group_entries() {
+    fn nested_object_values_and_mixed_lists_keep_group_and_table_shapes_unit() {
         let mut next_block_id = 1;
-        let mut row = Map::new();
-        row.insert(
+        let mut nested_row = Map::new();
+        nested_row.insert(
             "owner".to_string(),
             json!({
                 "uid": "alice",
@@ -670,8 +666,8 @@ mod tests {
             }),
         );
 
-        let blocks = build_mreg_blocks(
-            &[row],
+        let nested_blocks = build_mreg_blocks(
+            &[nested_row],
             MregBuildOptions {
                 key_order: None,
                 short_list_max: 1,
@@ -685,7 +681,7 @@ mod tests {
             &mut next_block_id,
         );
 
-        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
+        let mreg = mreg_blocks(&nested_blocks).next().expect("mreg block");
         let entries = &mreg.rows[0].entries;
         assert!(
             entries
@@ -697,19 +693,15 @@ mod tests {
                 .iter()
                 .any(|entry| entry.key == "uid" && matches!(entry.value, MregValue::Scalar(_)))
         );
-    }
 
-    #[test]
-    fn mixed_object_and_scalar_lists_keep_table_shape() {
-        let mut next_block_id = 1;
-        let mut row = Map::new();
-        row.insert(
+        let mut mixed_row = Map::new();
+        mixed_row.insert(
             "records".to_string(),
             Value::Array(vec![json!({"name": "alpha", "count": 1}), json!("raw")]),
         );
 
-        let blocks = build_mreg_blocks(
-            &[row],
+        let mixed_blocks = build_mreg_blocks(
+            &[mixed_row],
             MregBuildOptions {
                 key_order: None,
                 short_list_max: 1,
@@ -723,7 +715,7 @@ mod tests {
             &mut next_block_id,
         );
 
-        let table = table_blocks(&blocks).next().expect("table block");
+        let table = table_blocks(&mixed_blocks).next().expect("table block");
         assert_eq!(table.headers, vec!["name".to_string(), "count".to_string()]);
         assert_eq!(table.rows[1], vec![json!("raw"), json!("raw")]);
     }
@@ -759,37 +751,6 @@ mod tests {
             .map(|entry| entry.key.as_str())
             .collect::<Vec<_>>();
         assert_eq!(keys, vec!["name", "uid", "mail"]);
-    }
-
-    #[test]
-    fn empty_object_lists_fall_back_to_vertical_lists() {
-        let mut next_block_id = 1;
-        let mut row = Map::new();
-        row.insert(
-            "records".to_string(),
-            Value::Array(vec![json!({}), json!({})]),
-        );
-
-        let blocks = build_mreg_blocks(
-            &[row],
-            MregBuildOptions {
-                key_order: None,
-                short_list_max: 1,
-                medium_list_max: 5,
-                width_hint: 80,
-                indent_size: 2,
-                prefer_stacked_object_lists: false,
-                stack_min_col_width: 10,
-                stack_overflow_ratio: 200,
-            },
-            &mut next_block_id,
-        );
-
-        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
-        assert!(mreg.rows[0].entries.iter().any(|entry| {
-            entry.key == "records (2)"
-                && matches!(entry.value, MregValue::VerticalList(ref values) if values == &vec![json!({}), json!({})])
-        }));
     }
 
     #[test]
@@ -851,13 +812,16 @@ mod tests {
     }
 
     #[test]
-    fn single_item_lists_become_scalar_entries() {
+    fn empty_and_singleton_lists_fall_back_to_vertical_and_scalar_entries_unit() {
         let mut next_block_id = 1;
-        let mut row = Map::new();
-        row.insert("single".to_string(), json!(["a"]));
+        let mut empty_row = Map::new();
+        empty_row.insert(
+            "records".to_string(),
+            Value::Array(vec![json!({}), json!({})]),
+        );
 
-        let blocks = build_mreg_blocks(
-            &[row],
+        let empty_blocks = build_mreg_blocks(
+            &[empty_row],
             MregBuildOptions {
                 key_order: None,
                 short_list_max: 1,
@@ -871,7 +835,31 @@ mod tests {
             &mut next_block_id,
         );
 
-        let mreg = mreg_blocks(&blocks).next().expect("mreg block");
+        let mreg = mreg_blocks(&empty_blocks).next().expect("mreg block");
+        assert!(mreg.rows[0].entries.iter().any(|entry| {
+            entry.key == "records (2)"
+                && matches!(entry.value, MregValue::VerticalList(ref values) if values == &vec![json!({}), json!({})])
+        }));
+
+        let mut single_row = Map::new();
+        single_row.insert("single".to_string(), json!(["a"]));
+
+        let single_blocks = build_mreg_blocks(
+            &[single_row],
+            MregBuildOptions {
+                key_order: None,
+                short_list_max: 1,
+                medium_list_max: 5,
+                width_hint: 80,
+                indent_size: 2,
+                prefer_stacked_object_lists: false,
+                stack_min_col_width: 10,
+                stack_overflow_ratio: 200,
+            },
+            &mut next_block_id,
+        );
+
+        let mreg = mreg_blocks(&single_blocks).next().expect("mreg block");
         assert!(mreg.rows[0].entries.iter().any(|entry| {
             entry.key == "single"
                 && matches!(entry.value, MregValue::Scalar(ref value) if value == &json!("a"))

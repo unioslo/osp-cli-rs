@@ -18,14 +18,10 @@ fn row(value: serde_json::Value) -> Row {
 }
 
 #[test]
-fn compile_treats_prefixed_path_quick_as_structural_selector() {
+fn compile_classifies_structural_selectors_and_rejects_invalid_fuzzy_forms_unit() {
     let plan = compile("!sections[0].entries[0]").expect("quick should compile");
-
     assert!(plan.spec.is_structural());
-}
 
-#[test]
-fn compile_rejects_empty_and_unsupported_fuzzy_forms_unit() {
     assert!(compile("   ").is_err());
     assert!(compile("% ?uid").is_err());
     assert!(compile("% ==uid").is_err());
@@ -33,13 +29,12 @@ fn compile_rejects_empty_and_unsupported_fuzzy_forms_unit() {
 }
 
 #[test]
-fn negated_single_row_quick_removes_matching_array_members_unit() {
+fn single_row_and_key_scoped_quick_modes_cover_positive_negated_existence_and_key_matching_unit() {
     let rows = vec![row(json!({
         "uid": "alice",
         "roles": ["eng", "ops"],
         "city": "Oslo"
     }))];
-
     let filtered = apply_with_plan(rows, &compile("!ops").unwrap()).expect("quick should work");
     assert_eq!(
         filtered,
@@ -49,50 +44,86 @@ fn negated_single_row_quick_removes_matching_array_members_unit() {
             "city": "Oslo"
         }))]
     );
-}
 
-#[test]
-fn key_only_multi_row_quick_filters_without_projecting_rows_unit() {
     let rows = vec![
         row(json!({"uid": "alice", "team": "ops"})),
         row(json!({"name": "bob", "team": "eng"})),
     ];
-
-    let filtered = apply_with_plan(rows, &compile("K uid").unwrap()).expect("quick should work");
+    let filtered = apply_with_plan(rows.clone(), &compile("K uid").unwrap())
+        .expect("key-only quick should work");
     assert_eq!(filtered, vec![row(json!({"uid": "alice"}))]);
-}
+    assert_eq!(
+        apply_with_plan(rows, &compile("?uid").unwrap()).unwrap(),
+        vec![row(json!({"uid": "alice", "team": "ops"}))]
+    );
 
-#[test]
-fn key_not_equals_matches_rows_with_nonmatching_keys_unit() {
-    let row = row(json!({"uid": "alice", "team": "ops"}));
-    let flat = flatten_row(&row);
+    let key_match_row = row(json!({"uid": "alice", "team": "ops"}));
+    let flat = flatten_row(&key_match_row);
     let plan = compile("K !=uid").expect("quick should compile");
     let (pairs, _) = resolve_pairs(&flat, plan.spec.token());
     let synthetic = build_synthetic_map(&pairs, &flat);
     let result = match_row(&flat, &pairs, synthetic, &plan.spec);
-
     assert!(plan.spec.key_not_equals);
     assert!(result.matched);
+
+    let all_matching_rows = vec![row(json!({
+        "id": 55753,
+        "txts": {"id": 27994},
+        "ipaddresses": [{"id": 57171}, {"id": 57172}],
+        "metadata": {"asset": {"id": 42}}
+    }))];
+    let filtered =
+        apply_with_plan(all_matching_rows, &compile("id").unwrap()).expect("quick should work");
+    assert_eq!(
+        filtered,
+        vec![row(json!({
+            "id": 55753,
+            "txts": {"id": 27994},
+            "ipaddresses": [{"id": 57171}, {"id": 57172}],
+            "metadata": {"asset": {"id": 42}}
+        }))]
+    );
+
+    let rows = vec![row(json!({"uid": "alice", "team": "ops"}))];
+    assert_eq!(
+        apply_with_plan(rows, &compile("!?missing").unwrap()).unwrap(),
+        vec![row(json!({"uid": "alice", "team": "ops"}))]
+    );
+
+    let rows = vec![row(json!({
+        "uid": "alice",
+        "roles": ["eng", "ops"],
+        "city": "Oslo"
+    }))];
+    let filtered = apply_with_plan(rows, &compile("ops").unwrap()).expect("quick should work");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].get("uid"), Some(&json!("alice")));
+    assert_eq!(filtered[0].get("city"), Some(&json!("Oslo")));
+    let roles = filtered[0]
+        .get("roles")
+        .and_then(|value| value.as_array())
+        .expect("roles should remain an array");
+    assert!(roles.iter().any(|value| value == "ops"));
 }
 
 #[test]
-fn stream_rows_with_plan_preserves_errors_and_uses_multi_row_mode_unit() {
-    let plan = compile("uid").expect("quick should compile");
-    let mut iter = stream_rows_with_plan(
+fn stream_rows_with_plan_preserves_rows_and_errors_across_seed_orders_unit() {
+    for seeds in [
         vec![
             Err(anyhow!("boom")),
             Ok(row(json!({"uid": "alice"}))),
             Err(anyhow!("later")),
         ],
-        plan,
-    );
-
-    assert!(iter.next().expect("first item").is_err());
-    assert_eq!(
-        iter.next().expect("second item").expect("row"),
-        row(json!({"uid": "alice"}))
-    );
-    assert!(iter.next().expect("third item").is_err());
+        vec![Ok(row(json!({"uid": "alice"}))), Err(anyhow!("boom"))],
+    ] {
+        let plan = compile("uid").expect("quick should compile");
+        let results = stream_rows_with_plan(seeds, plan).collect::<Vec<_>>();
+        assert!(results.iter().any(|item| {
+            item.as_ref()
+                .is_ok_and(|row| row.get("uid") == Some(&json!("alice")))
+        }));
+        assert!(results.iter().any(|item| item.is_err()));
+    }
 }
 
 #[test]
@@ -109,76 +140,36 @@ fn grouped_quick_uses_single_row_mode_per_group_unit() {
 }
 
 #[test]
-fn single_row_quick_keeps_all_matching_branches_when_every_branch_matches_unit() {
-    let rows = vec![row(json!({
-        "id": 55753,
-        "txts": {"id": 27994},
-        "ipaddresses": [{"id": 57171}, {"id": 57172}],
-        "metadata": {"asset": {"id": 42}}
-    }))];
+fn dotted_token_search_falls_back_to_visible_row_text_for_exact_partial_and_escaped_queries_unit() {
+    let rows = vec![
+        row(json!({"key": "theme.name", "value": "dracula"})),
+        row(json!({"key": "theme.path", "value": "/tmp/themes"})),
+    ];
 
-    let filtered = apply_with_plan(rows, &compile("id").unwrap()).expect("quick should work");
+    let exact = apply_with_plan(rows.clone(), &compile("theme.name").unwrap())
+        .expect("dotted quick should fall back to visible row search");
     assert_eq!(
-        filtered,
-        vec![row(json!({
-            "id": 55753,
-            "txts": {"id": 27994},
-            "ipaddresses": [{"id": 57171}, {"id": 57172}],
-            "metadata": {"asset": {"id": 42}}
-        }))]
+        exact,
+        vec![row(json!({"key": "theme.name", "value": "dracula"}))]
     );
+
+    let partial = apply_with_plan(rows.clone(), &compile("theme.n").unwrap())
+        .expect("partial dotted quick should still search row values");
+    assert_eq!(
+        partial,
+        vec![row(json!({"key": "theme.name", "value": "dracula"}))]
+    );
+
+    let escaped = apply_with_plan(
+        vec![row(json!({"key": "theme.name", "value": "dracula"}))],
+        &compile(r#"theme\.name"#).unwrap(),
+    )
+    .expect("escaped dotted quick should behave like a literal text search");
+    assert_eq!(escaped, vec![row(json!({"key": "theme.name"}))]);
 }
 
 #[test]
-fn positive_single_row_quick_filters_matching_array_values_unit() {
-    let rows = vec![row(json!({
-        "uid": "alice",
-        "roles": ["eng", "ops"],
-        "city": "Oslo"
-    }))];
-
-    let filtered = apply_with_plan(rows, &compile("ops").unwrap()).expect("quick should work");
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].get("uid"), Some(&json!("alice")));
-    assert_eq!(filtered[0].get("city"), Some(&json!("Oslo")));
-    let roles = filtered[0]
-        .get("roles")
-        .and_then(|value| value.as_array())
-        .expect("roles should remain an array");
-    assert!(roles.iter().any(|value| value == "ops"));
-}
-
-#[test]
-fn existence_quick_respects_positive_and_negated_matches_unit() {
-    let rows = vec![row(json!({"uid": "alice", "team": "ops"}))];
-
-    assert_eq!(
-        apply_with_plan(rows.clone(), &compile("?uid").unwrap()).unwrap(),
-        rows
-    );
-    assert_eq!(
-        apply_with_plan(rows, &compile("!?missing").unwrap()).unwrap(),
-        vec![row(json!({"uid": "alice", "team": "ops"}))]
-    );
-}
-
-#[test]
-fn stream_rows_with_plan_preserves_second_seed_error_unit() {
-    let plan = compile("uid").expect("quick should compile");
-    let mut iter = stream_rows_with_plan(
-        vec![Ok(row(json!({"uid": "alice"}))), Err(anyhow!("boom"))],
-        plan,
-    );
-
-    assert_eq!(
-        iter.next().expect("first item").expect("row"),
-        row(json!({"uid": "alice"}))
-    );
-    assert!(iter.next().expect("second item").is_err());
-}
-
-#[test]
-fn path_scoped_row_quick_preserves_row_value_divergence_unit() {
+fn path_scoped_quick_preserves_row_and_value_envelopes_unit() {
     let source = row(json!({
         "meta": "people",
         "users": [
@@ -216,41 +207,7 @@ fn path_scoped_row_quick_preserves_row_value_divergence_unit() {
     let no_match = apply_with_plan(rows, &compile("users[9]").unwrap())
         .expect("missing structural path should simply drop the row");
     assert!(no_match.is_empty());
-}
 
-#[test]
-fn dotted_tokens_fall_back_to_visible_row_search_when_no_structural_match_exists_unit() {
-    let rows = vec![
-        row(json!({"key": "theme.name", "value": "dracula"})),
-        row(json!({"key": "theme.path", "value": "/tmp/themes"})),
-    ];
-
-    let exact = apply_with_plan(rows.clone(), &compile("theme.name").unwrap())
-        .expect("dotted quick should fall back to visible row search");
-    assert_eq!(
-        exact,
-        vec![row(json!({"key": "theme.name", "value": "dracula"}))]
-    );
-
-    let partial = apply_with_plan(rows, &compile("theme.n").unwrap())
-        .expect("partial dotted quick should still search row values");
-    assert_eq!(
-        partial,
-        vec![row(json!({"key": "theme.name", "value": "dracula"}))]
-    );
-}
-
-#[test]
-fn escaped_dotted_tokens_match_visible_row_text_unit() {
-    let rows = vec![row(json!({"key": "theme.name", "value": "dracula"}))];
-
-    let escaped = apply_with_plan(rows, &compile(r#"theme\.name"#).unwrap())
-        .expect("escaped dotted quick should behave like a literal text search");
-    assert_eq!(escaped, vec![row(json!({"key": "theme.name"}))]);
-}
-
-#[test]
-fn path_scoped_value_quick_preserves_document_envelope_unit() {
     let source = json!({
         "meta": "people",
         "users": [
@@ -258,7 +215,6 @@ fn path_scoped_value_quick_preserves_document_envelope_unit() {
             {"uid": "bob", "team": "eng"}
         ]
     });
-
     let projected = apply_value_with_plan(source.clone(), &compile("users[1]").unwrap())
         .expect("path quick should preserve the document envelope for value output");
     assert_eq!(
@@ -270,11 +226,9 @@ fn path_scoped_value_quick_preserves_document_envelope_unit() {
             ]
         })
     );
-
     let kept = apply_value_with_plan(source.clone(), &compile("?users[0].uid").unwrap())
         .expect("truthy existence should keep the root payload");
     assert_eq!(kept, source);
-
     let missing = apply_value_with_plan(
         json!({
             "meta": "people",
@@ -290,31 +244,29 @@ fn path_scoped_value_quick_preserves_document_envelope_unit() {
 }
 
 #[test]
-fn transform_row_projection_prefers_synthetic_rows_and_squeezes_single_entries_unit() {
+fn transform_row_variants_trim_arrays_synthetic_hits_and_squeezed_entries_unit() {
     let mut synthetic = Row::new();
     synthetic.insert("alpha".to_string(), json!([{"name": "bob"}]));
     synthetic.insert("beta".to_string(), json!(["ops"]));
-    let mut result = MatchResult {
+    let mut projection = MatchResult {
         matched: true,
         key_hits: vec!["alpha".to_string()],
         value_hits: Vec::new(),
         is_projection: true,
         synthetic,
     };
-
-    let projected =
-        transform_row(&Row::new(), &mut result, &compile("alpha").unwrap().spec).unwrap();
+    let projected = transform_row(
+        &Row::new(),
+        &mut projection,
+        &compile("alpha").unwrap().spec,
+    )
+    .unwrap();
     assert_eq!(
         projected,
-        vec![row(json!({"name": "bob"})), row(json!({"beta": ["ops"]})),]
+        vec![row(json!({"name": "bob"})), row(json!({"beta": ["ops"]}))]
     );
+    assert!(squeeze_single_entry(row(json!({"only": []}))).is_empty());
 
-    let squeezed = squeeze_single_entry(row(json!({"only": []})));
-    assert!(squeezed.is_empty());
-}
-
-#[test]
-fn transform_row_negated_and_positive_filter_paths_trim_arrays_and_synthetic_hits_unit() {
     let flat = row(json!({
         "roles": ["ops", "eng"],
         "title": "ops",
@@ -327,7 +279,6 @@ fn transform_row_negated_and_positive_filter_paths_trim_arrays_and_synthetic_hit
         is_projection: false,
         synthetic: row(json!({"aliases": ["ops", "backup"]})),
     };
-
     let negated_rows = transform_row(&flat, &mut negated, &compile("!ops").unwrap().spec)
         .expect("negated quick should keep surviving siblings");
     assert_eq!(

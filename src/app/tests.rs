@@ -199,66 +199,9 @@ fn test_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
         .expect("test config should resolve")
 }
 
-fn synced_render_settings(config: &crate::config::ResolvedConfig) -> RenderSettings {
-    let mut settings = RenderSettings::test_plain(OutputFormat::Table);
-    crate::cli::apply_render_settings_from_config(&mut settings, config);
-    settings.width = Some(18);
-    settings
-}
-
-fn render_help_snapshot(entries: &[(&str, &str)]) -> String {
-    let config = test_config(entries);
-    let settings = synced_render_settings(&config);
-    repl_help::render_help_with_chrome(
-        "Usage: osp [OPTIONS]\n\nCommands:\n  help\n\nOptions:\n  -h, --help\n",
-        &settings.resolve_render_settings(),
-        crate::ui::presentation::help_layout(&config),
-    )
-}
-
-fn render_message_snapshot(entries: &[(&str, &str)]) -> String {
-    let config = test_config(entries);
-    let settings = synced_render_settings(&config);
-    let resolved = settings.resolve_render_settings();
-    let mut messages = MessageBuffer::default();
-    messages.error("bad");
-    messages.warning("careful");
-    messages.render_grouped_with_options(crate::ui::messages::GroupedRenderOptions {
-        max_level: MessageLevel::Warning,
-        color: resolved.color,
-        unicode: resolved.unicode,
-        width: resolved.width,
-        theme: &resolved.theme,
-        layout: crate::ui::presentation::message_layout(&config),
-        chrome_frame: resolved.chrome_frame,
-        style_overrides: resolved.style_overrides.clone(),
-    })
-}
-
 fn render_prompt_snapshot(entries: &[(&str, &str)]) -> String {
     let state = make_completion_state_with_entries(None, entries);
     crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session)).left
-}
-
-fn render_table_snapshot(entries: &[(&str, &str)]) -> String {
-    let config = test_config(entries);
-    let mut settings = crate::cli::default_render_settings();
-    settings.runtime.stdout_is_tty = true;
-    settings.runtime.terminal = Some("xterm-256color".to_string());
-    settings.runtime.locale_utf8 = Some(true);
-    settings.color = ColorMode::Never;
-    crate::cli::apply_render_settings_from_config(&mut settings, &config);
-    settings.format = OutputFormat::Table;
-    settings.width = Some(24);
-
-    let rows = vec![
-        crate::row! { "uid" => "alice", "count" => 2 },
-        crate::row! { "uid" => "bob", "count" => 15 },
-    ];
-    render_output(
-        &crate::cli::rows::output::rows_to_output_result(rows),
-        &settings,
-    )
 }
 
 fn sample_catalog() -> Vec<CommandCatalogEntry> {

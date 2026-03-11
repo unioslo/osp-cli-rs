@@ -309,10 +309,7 @@ mod tests {
             json.payload["command"],
             Value::String("plugins refresh".to_string())
         );
-    }
 
-    #[test]
-    fn theme_doctor_rows_report_issues_and_empty_state_unit() {
         let empty = theme_doctor_rows(&ThemeCatalog::default());
         assert_eq!(
             empty,
@@ -338,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_commands_respect_visibility_and_output_shapes_unit() {
+    fn doctor_commands_respect_visibility_output_shapes_and_subcommand_defs_unit() {
         let visible = run_doctor_command(
             doctor_context(OutputFormat::Json, Some("config,plugins,theme")),
             DoctorArgs {
@@ -399,10 +396,7 @@ mod tests {
                 .iter()
                 .all(|block| matches!(block, Block::Panel(_)))
         );
-    }
 
-    #[test]
-    fn doctor_commands_require_visible_builtins_and_define_expected_subcommands_unit() {
         let config_err = run_doctor_command(
             doctor_context(OutputFormat::Table, Some("theme")),
             DoctorArgs {

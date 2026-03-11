@@ -142,6 +142,18 @@ pub enum GuideSectionKind {
 
 impl GuideView {
     /// Parses plain help text into a structured guide view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::guide::GuideView;
+    ///
+    /// let guide = GuideView::from_text("Usage: osp theme <COMMAND>\n\nCommands:\n  list  Show\n");
+    ///
+    /// assert_eq!(guide.usage, vec!["osp theme <COMMAND>".to_string()]);
+    /// assert_eq!(guide.commands[0].name, "list");
+    /// assert_eq!(guide.commands[0].short_help, "Show");
+    /// ```
     pub fn from_text(help_text: &str) -> Self {
         parse_help_view(help_text)
     }
@@ -161,6 +173,8 @@ impl GuideView {
     ///
     /// assert_eq!(guide.usage, vec!["theme <COMMAND>".to_string()]);
     /// assert_eq!(guide.commands[0].name, "show");
+    /// assert!(guide.arguments.is_empty());
+    /// assert!(guide.options.is_empty());
     /// ```
     pub fn from_command_def(command: &CommandDef) -> Self {
         guide_view_from_command_def(command)
@@ -182,6 +196,9 @@ impl GuideView {
     ///
     /// assert_eq!(output.document.as_ref().map(|doc| doc.kind), Some(OutputDocumentKind::Guide));
     /// assert_eq!(output.meta.render_recommendation.is_some(), true);
+    /// let rows = output.as_rows().expect("guide output should keep row projection");
+    /// assert_eq!(rows.len(), 1);
+    /// assert_eq!(rows[0]["usage"][0], "theme show");
     /// ```
     pub fn to_output_result(&self) -> OutputResult {
         // Keep the semantic row form for DSL/history/cache, but attach the
@@ -195,6 +212,19 @@ impl GuideView {
     }
 
     /// Serializes the guide to its JSON object form.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::guide::GuideView;
+    ///
+    /// let guide = GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n");
+    /// let value = guide.to_json_value();
+    ///
+    /// assert_eq!(value["usage"][0], "osp history <COMMAND>");
+    /// assert_eq!(value["commands"][0]["name"], "list");
+    /// assert!(value.get("sections").is_none());
+    /// ```
     pub fn to_json_value(&self) -> Value {
         Value::Object(self.to_row())
     }
@@ -229,10 +259,20 @@ impl GuideView {
     ///
     /// let guide = GuideView {
     ///     usage: vec!["theme show".to_string()],
+    ///     commands: vec![osp_cli::guide::GuideEntry {
+    ///         name: "list".to_string(),
+    ///         short_help: "List themes".to_string(),
+    ///         display_indent: None,
+    ///         display_gap: None,
+    ///     }],
     ///     ..GuideView::default()
     /// };
     ///
-    /// assert!(guide.to_markdown().contains("theme show"));
+    /// let markdown = guide.to_markdown();
+    ///
+    /// assert!(markdown.contains("## Usage"));
+    /// assert!(markdown.contains("theme show"));
+    /// assert!(markdown.contains("- `list` List themes"));
     /// ```
     pub fn to_markdown(&self) -> String {
         self.to_markdown_with_width(None)
@@ -776,6 +816,20 @@ impl GuideSection {
 
 impl GuideSection {
     /// Creates a new guide section with a title and canonical kind.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::guide::{GuideSection, GuideSectionKind};
+    ///
+    /// let section = GuideSection::new("Notes", GuideSectionKind::Notes)
+    ///     .paragraph("first")
+    ///     .entry("show", "Display");
+    ///
+    /// assert_eq!(section.paragraphs, vec!["first".to_string()]);
+    /// assert_eq!(section.entries[0].name, "show");
+    /// assert_eq!(section.entries[0].short_help, "Display");
+    /// ```
     pub fn new(title: impl Into<String>, kind: GuideSectionKind) -> Self {
         Self {
             title: title.into(),

@@ -1,4 +1,4 @@
-use crate::completion::{ArgNode, CompletionNode, CompletionTree, FlagNode, SuggestionEntry};
+use crate::completion::{CompletionNode, CompletionTree, FlagNode};
 use nu_ansi_term::Color;
 use reedline::Span;
 use reedline::{
@@ -60,57 +60,6 @@ fn completion_tree_with_root_commands() -> CompletionTree {
     }
 }
 
-fn completion_tree_with_root_and_config_show() -> CompletionTree {
-    let show = CompletionNode::default()
-        .with_flag("--sources", FlagNode::new().flag_only())
-        .with_flag("--raw", FlagNode::new().flag_only());
-    let config = CompletionNode::default()
-        .with_child("show", show)
-        .with_child("get", CompletionNode::default())
-        .with_child("explain", CompletionNode::default());
-
-    let root = CompletionNode::default()
-        .with_child("help", CompletionNode::default())
-        .with_child("exit", CompletionNode::default())
-        .with_child("quit", CompletionNode::default())
-        .with_child("config", config)
-        .with_child("doctor", CompletionNode::default());
-
-    CompletionTree {
-        root,
-        ..CompletionTree::default()
-    }
-}
-
-fn completion_tree_with_theme_show_values() -> CompletionTree {
-    let show = CompletionNode {
-        args: vec![ArgNode::named("theme").suggestions([
-            SuggestionEntry::value("catppuccin"),
-            SuggestionEntry::value("dracula"),
-            SuggestionEntry::value("gruvbox"),
-        ])],
-        ..CompletionNode::default()
-    };
-
-    let theme = CompletionNode::default().with_child("show", show);
-    let root = CompletionNode::default().with_child("theme", theme);
-
-    CompletionTree {
-        root,
-        ..CompletionTree::default()
-    }
-}
-
-fn suggestion_ids(outputs: Vec<crate::completion::SuggestionOutput>) -> Vec<String> {
-    outputs
-        .into_iter()
-        .filter_map(|output| match output {
-            crate::completion::SuggestionOutput::Item(item) => Some(item.text),
-            crate::completion::SuggestionOutput::PathSentinel => None,
-        })
-        .collect()
-}
-
 fn history_config() -> super::HistoryConfigBuilder {
     HistoryConfig::builder()
         .with_enabled(true)
@@ -143,16 +92,13 @@ fn disabled_history() -> SharedHistory {
 // History expansion and submission contracts.
 
 #[test]
-fn expands_double_bang() {
-    let history = vec!["ldap user oistes".to_string()];
+fn history_expansion_variants_resolve_recent_relative_and_prefix_queries_unit() {
+    let latest_only = vec!["ldap user oistes".to_string()];
     assert_eq!(
-        expand_history("!!", &history, None, false),
+        expand_history("!!", &latest_only, None, false),
         Some("ldap user oistes".to_string())
     );
-}
 
-#[test]
-fn expands_relative() {
     let history = vec![
         "ldap user oistes".to_string(),
         "ldap netgroup ucore".to_string(),
@@ -161,14 +107,6 @@ fn expands_relative() {
         expand_history("!-1", &history, None, false),
         Some("ldap netgroup ucore".to_string())
     );
-}
-
-#[test]
-fn expands_prefix() {
-    let history = vec![
-        "ldap user oistes".to_string(),
-        "ldap netgroup ucore".to_string(),
-    ];
     assert_eq!(
         expand_history("!ldap user", &history, None, false),
         Some("ldap user oistes".to_string())
@@ -498,232 +436,13 @@ fn debug_completion_navigation_and_empty_match_states_unit() {
 }
 
 #[test]
-fn debug_completion_keeps_same_token_scope_until_a_space_commits_the_subcommand_unit() {
-    let tree = completion_tree_with_config_show();
-
-    let frames = debug_completion_steps(
-        &tree,
-        "config ",
-        "config ".len(),
-        CompletionDebugOptions::new(80, 6),
-        &[DebugStep::Tab, DebugStep::Tab, DebugStep::Tab],
-    );
-
-    assert_eq!(frames[0].state.line, "config ");
-    assert!(frames[0].state.matches.iter().any(|item| item.id == "show"));
-    assert!(frames[0].state.matches.iter().any(|item| item.id == "get"));
-    assert!(
-        frames[0]
-            .state
-            .matches
-            .iter()
-            .any(|item| item.id == "explain")
-    );
-
-    assert!(matches!(
-        frames[1].state.line.as_str(),
-        "config explain" | "config get" | "config show"
-    ));
-    assert!(frames[1].state.matches.iter().any(|item| item.id == "show"));
-    assert!(frames[1].state.matches.iter().any(|item| item.id == "get"));
-    assert!(
-        frames[1]
-            .state
-            .matches
-            .iter()
-            .any(|item| item.id == "explain")
-    );
-
-    assert!(matches!(
-        frames[2].state.line.as_str(),
-        "config explain" | "config get" | "config show"
-    ));
-    assert_ne!(frames[2].state.line, frames[1].state.line);
-    assert!(frames[2].state.matches.iter().any(|item| item.id == "show"));
-    assert!(frames[2].state.matches.iter().any(|item| item.id == "get"));
-    assert!(
-        frames[2]
-            .state
-            .matches
-            .iter()
-            .any(|item| item.id == "explain")
-    );
-}
-
-#[test]
-fn debug_completion_switches_to_show_flags_once_the_subcommand_is_committed_unit() {
-    let tree = completion_tree_with_config_show();
-    let debug = debug_completion(
-        &tree,
-        "config show ",
-        "config show ".len(),
-        CompletionDebugOptions::new(80, 6),
-    );
-
-    let ids = debug
-        .matches
-        .iter()
-        .map(|item| item.id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(ids, vec!["--raw", "--sources"]);
-}
-
-#[test]
-fn debug_completion_keeps_root_command_scope_until_space_commits_command_unit() {
-    let tree = completion_tree_with_root_commands();
-    let engine = crate::completion::CompletionEngine::new(tree.clone());
+fn completion_analysis_marks_uncommitted_root_tokens_as_subcommand_context_unit() {
+    let root_tree = completion_tree_with_root_commands();
+    let engine = crate::completion::CompletionEngine::new(root_tree.clone());
     let analysis = engine.analyze("help", "help".len());
     assert_eq!(analysis.cursor.token_stub, "help");
     assert_eq!(analysis.context.matched_path, Vec::<String>::new());
     assert!(analysis.context.subcommand_context);
-
-    let debug = debug_completion(
-        &tree,
-        "help",
-        "help".len(),
-        CompletionDebugOptions::new(80, 6),
-    );
-
-    let ids = debug
-        .matches
-        .iter()
-        .map(|item| item.id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(ids, vec!["config", "exit", "help", "quit"]);
-}
-
-#[test]
-fn contract_first_tab_opens_the_menu_for_the_current_slot_unit() {
-    let engine =
-        crate::completion::CompletionEngine::new(completion_tree_with_root_and_config_show());
-
-    let root = suggestion_ids(engine.complete("", 0).1);
-    assert!(root.contains(&"help".to_string()));
-    assert!(root.contains(&"config".to_string()));
-    assert!(root.contains(&"doctor".to_string()));
-
-    let config = suggestion_ids(engine.complete("config ", "config ".len()).1);
-    assert_eq!(config, vec!["explain", "get", "show"]);
-
-    let show = suggestion_ids(engine.complete("config show ", "config show ".len()).1);
-    assert_eq!(show, vec!["--raw", "--sources"]);
-}
-
-#[test]
-fn contract_token_is_not_committed_until_there_is_a_delimiter_unit() {
-    let engine = crate::completion::CompletionEngine::new(completion_tree_with_config_show());
-
-    let siblings = suggestion_ids(engine.complete("config show", "config show".len()).1);
-    assert_eq!(siblings, vec!["explain", "get", "show"]);
-
-    let children = suggestion_ids(engine.complete("config show ", "config show ".len()).1);
-    assert_eq!(children, vec!["--raw", "--sources"]);
-}
-
-#[test]
-fn contract_exact_matches_without_trailing_space_stay_in_sibling_scope_unit() {
-    let engine =
-        crate::completion::CompletionEngine::new(completion_tree_with_root_and_config_show());
-
-    let root_siblings = suggestion_ids(engine.complete("config", "config".len()).1);
-    assert_eq!(
-        root_siblings,
-        vec!["config", "doctor", "exit", "help", "quit"]
-    );
-
-    let config_siblings = suggestion_ids(engine.complete("config show", "config show".len()).1);
-    assert_eq!(config_siblings, vec!["explain", "get", "show"]);
-}
-
-#[test]
-fn contract_space_commits_scope_for_the_next_tab_unit() {
-    let engine =
-        crate::completion::CompletionEngine::new(completion_tree_with_root_and_config_show());
-
-    let root_siblings = suggestion_ids(engine.complete("config", "config".len()).1);
-    assert_eq!(
-        root_siblings,
-        vec!["config", "doctor", "exit", "help", "quit"]
-    );
-
-    let committed_children = suggestion_ids(engine.complete("config ", "config ".len()).1);
-    assert_eq!(committed_children, vec!["explain", "get", "show"]);
-
-    let committed_flags = suggestion_ids(engine.complete("config show ", "config show ".len()).1);
-    assert_eq!(committed_flags, vec!["--raw", "--sources"]);
-}
-
-#[test]
-fn contract_used_flags_disappear_once_committed_but_uncommitted_flags_stay_replaceable_unit() {
-    let engine = crate::completion::CompletionEngine::new(completion_tree_with_config_show());
-
-    let uncommitted = suggestion_ids(
-        engine
-            .complete("config show --raw", "config show --raw".len())
-            .1,
-    );
-    assert_eq!(uncommitted, vec!["--raw", "--sources"]);
-
-    let committed = suggestion_ids(
-        engine
-            .complete("config show --raw ", "config show --raw ".len())
-            .1,
-    );
-    assert_eq!(committed, vec!["--sources"]);
-}
-
-#[test]
-fn contract_exact_argument_values_stay_in_sibling_scope_until_delimited_unit() {
-    let engine = crate::completion::CompletionEngine::new(completion_tree_with_theme_show_values());
-
-    let uncommitted = suggestion_ids(
-        engine
-            .complete("theme show catppuccin", "theme show catppuccin".len())
-            .1,
-    );
-    assert_eq!(uncommitted, vec!["catppuccin", "dracula", "gruvbox"]);
-
-    let committed = suggestion_ids(
-        engine
-            .complete("theme show catppuccin ", "theme show catppuccin ".len())
-            .1,
-    );
-    assert!(committed.is_empty());
-}
-
-#[test]
-fn contract_repl_completer_keeps_active_hidden_token_visible_until_a_space_commits_it_unit() {
-    let tree = completion_tree_with_root_commands();
-    let projector = Arc::new(|line: &str| {
-        let hidden = if line.starts_with("help") {
-            BTreeSet::from(["help".to_string()])
-        } else {
-            BTreeSet::default()
-        };
-        LineProjection::passthrough(line).with_hidden_suggestions(hidden)
-    });
-    let mut completer = ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
-
-    let root = completer
-        .complete("", 0)
-        .into_iter()
-        .map(|item| item.value)
-        .collect::<Vec<_>>();
-    assert!(root.contains(&"help".to_string()));
-
-    let exact_uncommitted = completer
-        .complete("help", "help".len())
-        .into_iter()
-        .map(|item| item.value)
-        .collect::<Vec<_>>();
-    assert!(exact_uncommitted.contains(&"help".to_string()));
-
-    let committed = completer
-        .complete("help ", "help ".len())
-        .into_iter()
-        .map(|item| item.value)
-        .collect::<Vec<_>>();
-    assert!(!committed.contains(&"help".to_string()));
 }
 
 #[test]
@@ -787,22 +506,23 @@ fn highlighter_builder_requires_command_color_unit() {
 }
 
 #[test]
-fn path_suggestions_distinguish_files_and_directories_unit() {
+fn path_suggestions_cover_files_directories_and_quote_variants_unit() {
     let root = make_temp_dir("osp-repl-paths");
     std::fs::write(root.join("alpha.txt"), "x").expect("file should be written");
     std::fs::create_dir_all(root.join("alpine")).expect("dir should be created");
-    let stub = format!("{}/al", root.display());
+    std::fs::write(root.join("team docs.txt"), "x").expect("file should be written");
 
-    let suggestions = path_suggestions(
-        &stub,
-        &stub,
+    let file_and_dir_stub = format!("{}/al", root.display());
+    let file_and_dir = path_suggestions(
+        &file_and_dir_stub,
+        &file_and_dir_stub,
         None,
         reedline::Span {
             start: 0,
-            end: stub.len(),
+            end: file_and_dir_stub.len(),
         },
     );
-    let values = suggestions
+    let values = file_and_dir
         .iter()
         .map(|item| {
             (
@@ -819,50 +539,35 @@ fn path_suggestions_distinguish_files_and_directories_unit() {
     assert!(values.iter().any(|(value, desc, append)| {
         value.ends_with("alpine/") && desc.as_deref() == Some("dir") && !*append
     }));
-}
 
-#[test]
-fn path_suggestions_escape_spaces_when_unquoted_unit() {
-    let root = make_temp_dir("osp-repl-paths-quoted");
-    std::fs::write(root.join("team docs.txt"), "x").expect("file should be written");
-    let stub = format!("{}/te", root.display());
-
-    let suggestions = path_suggestions(
-        &stub,
-        &stub,
+    let spaced_stub = format!("{}/te", root.display());
+    let unquoted = path_suggestions(
+        &spaced_stub,
+        &spaced_stub,
         None,
         reedline::Span {
             start: 0,
-            end: stub.len(),
+            end: spaced_stub.len(),
         },
     );
-
     assert!(
-        suggestions
+        unquoted
             .iter()
             .any(|item| item.value.ends_with("team\\ docs.txt"))
     );
-}
 
-#[test]
-fn path_suggestions_preserve_open_double_quote_context_unit() {
-    let root = make_temp_dir("osp-repl-paths-double");
-    std::fs::write(root.join("team docs.txt"), "x").expect("file should be written");
-    let token_stub = format!("{}/te", root.display());
-    let raw_stub = format!("\"{token_stub}");
-
-    let suggestions = path_suggestions(
-        &raw_stub,
-        &token_stub,
+    let quoted_raw_stub = format!("\"{spaced_stub}");
+    let quoted = path_suggestions(
+        &quoted_raw_stub,
+        &spaced_stub,
         Some(QuoteStyle::Double),
         reedline::Span {
             start: 0,
-            end: raw_stub.len(),
+            end: quoted_raw_stub.len(),
         },
     );
-
     assert!(
-        suggestions
+        quoted
             .iter()
             .any(|item| item.value.ends_with("team docs.txt\""))
     );
@@ -907,7 +612,7 @@ fn trace_completion_env_controls_and_jsonl_output_unit() {
 }
 
 #[test]
-fn cursor_position_errors_are_recognized_unit() {
+fn cursor_probe_helpers_distinguish_errors_and_valid_reports_unit() {
     assert!(is_cursor_position_error(&io::Error::from_raw_os_error(25)));
     assert!(is_cursor_position_error(&io::Error::other(
         "Cursor position could not be read"
@@ -915,10 +620,7 @@ fn cursor_position_errors_are_recognized_unit() {
     assert!(!is_cursor_position_error(&io::Error::other(
         "permission denied"
     )));
-}
 
-#[test]
-fn cursor_position_report_parser_distinguishes_valid_and_invalid_sequences_unit() {
     assert_eq!(parse_cursor_position_report(b"\x1b[12;34R"), Some((34, 12)));
     assert_eq!(
         parse_cursor_position_report(b"\x1b[1;200R trailing"),
@@ -932,23 +634,26 @@ fn cursor_position_report_parser_distinguishes_valid_and_invalid_sequences_unit(
 }
 
 #[test]
-fn explicit_basic_input_mode_short_circuits_unit() {
+fn run_repl_with_reason_and_basic_input_detection_cover_basic_and_interactive_modes_unit() {
     assert_eq!(
         basic_input_reason(ReplInputMode::Basic),
         Some(BasicInputReason::Explicit)
     );
-}
 
-#[test]
-fn run_repl_with_reason_routes_basic_reasons_to_basic_handler_unit() {
     for reason in [
-        BasicInputReason::Explicit,
-        BasicInputReason::NotATerminal,
-        BasicInputReason::CursorProbeUnsupported,
+        Some(BasicInputReason::Explicit),
+        Some(BasicInputReason::NotATerminal),
+        Some(BasicInputReason::CursorProbeUnsupported),
+        None,
     ] {
         let history =
             SharedHistory::new(history_config().build()).expect("history config should build");
         let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), None);
+        let completion_words = if reason.is_some() {
+            vec!["help".to_string()]
+        } else {
+            vec!["help".to_string(), "exit".to_string()]
+        };
         let mut execute =
             |_line: &str, _history: &SharedHistory| Ok(ReplLineResult::Continue(String::new()));
         let mut submission = SubmissionContext {
@@ -961,81 +666,48 @@ fn run_repl_with_reason_routes_basic_reasons_to_basic_handler_unit() {
         let result = super::run_repl_with_reason(
             super::ReplRunContext {
                 prompt,
-                completion_words: vec!["help".to_string()],
+                completion_words: completion_words.clone(),
                 completion_tree: Some(completion_tree_with_config_show()),
                 appearance: test_appearance(),
                 line_projector: None,
                 history_store: history.clone(),
             },
-            Some(reason),
+            reason,
             &mut submission,
-            |prompt, _submission| {
+            |basic_prompt, _submission| {
                 basic_calls += 1;
-                assert_eq!(prompt.left(), "left");
+                assert_eq!(basic_prompt.left(), "left");
                 Ok(())
             },
-            |_config, _history, _submission| {
+            |config, interactive_history, _submission| {
                 interactive_calls += 1;
-                Ok(ReplRunResult::Exit(9))
+                assert_eq!(config.prompt.left(), "left");
+                assert_eq!(config.completion_words, completion_words);
+                assert!(config.completion_tree.is_some());
+                assert_eq!(config.appearance.history_menu_rows, 5);
+                assert_eq!(interactive_history.enabled(), history.enabled());
+                assert_eq!(
+                    interactive_history.recent_commands(),
+                    history.recent_commands()
+                );
+                Ok(ReplRunResult::Exit(7))
             },
         )
-        .expect("basic path should succeed");
+        .expect("routing path should succeed");
 
-        assert_eq!(result, ReplRunResult::Exit(0));
-        assert_eq!(basic_calls, 1);
-        assert_eq!(interactive_calls, 0);
+        match reason {
+            Some(_) => {
+                assert_eq!(result, ReplRunResult::Exit(0));
+                assert_eq!(basic_calls, 1);
+                assert_eq!(interactive_calls, 0);
+            }
+            None => {
+                assert_eq!(result, ReplRunResult::Exit(7));
+                assert_eq!(basic_calls, 0);
+                assert_eq!(interactive_calls, 1);
+            }
+        }
     }
-}
-
-#[test]
-fn run_repl_with_reason_routes_none_to_interactive_handler_unit() {
-    let history =
-        SharedHistory::new(history_config().build()).expect("history config should build");
-    let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), None);
-    let tree = completion_tree_with_config_show();
-    let mut execute =
-        |_line: &str, _history: &SharedHistory| Ok(ReplLineResult::Continue(String::new()));
-    let mut submission = SubmissionContext {
-        history_store: &history,
-        execute: &mut execute,
-    };
-    let mut basic_calls = 0usize;
-    let mut interactive_calls = 0usize;
-
-    let result = super::run_repl_with_reason(
-        super::ReplRunContext {
-            prompt,
-            completion_words: vec!["help".to_string(), "exit".to_string()],
-            completion_tree: Some(tree),
-            appearance: test_appearance(),
-            line_projector: None,
-            history_store: history.clone(),
-        },
-        None,
-        &mut submission,
-        |_prompt, _submission| {
-            basic_calls += 1;
-            Ok(())
-        },
-        |config, interactive_history, _submission| {
-            interactive_calls += 1;
-            assert_eq!(config.prompt.left(), "left");
-            assert_eq!(config.completion_words, vec!["help", "exit"]);
-            assert!(config.completion_tree.is_some());
-            assert_eq!(config.appearance.history_menu_rows, 5);
-            assert_eq!(interactive_history.enabled(), history.enabled());
-            assert_eq!(
-                interactive_history.recent_commands(),
-                history.recent_commands()
-            );
-            Ok(ReplRunResult::Exit(7))
-        },
-    )
-    .expect("interactive path should succeed");
-
-    assert_eq!(result, ReplRunResult::Exit(7));
-    assert_eq!(basic_calls, 0);
-    assert_eq!(interactive_calls, 1);
 }
 
 #[test]

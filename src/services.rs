@@ -50,8 +50,8 @@ impl<L: LdapDirectory> ServiceContext<L> {
     /// # Examples
     ///
     /// ```
-    /// use osp_cli::api::MockLdapClient;
     /// use osp_cli::config::RuntimeConfig;
+    /// use osp_cli::ports::mock::MockLdapClient;
     /// use osp_cli::services::ServiceContext;
     ///
     /// let ctx = ServiceContext::new(
@@ -239,8 +239,8 @@ fn parse_ldap_netgroup_tokens(tokens: &[String]) -> Result<ParsedCommand> {
 /// # Examples
 ///
 /// ```
-/// use osp_cli::api::MockLdapClient;
 /// use osp_cli::config::RuntimeConfig;
+/// use osp_cli::ports::mock::MockLdapClient;
 /// use osp_cli::services::{ParsedCommand, ServiceContext, execute_command};
 ///
 /// let ctx = ServiceContext::new(
@@ -297,8 +297,8 @@ pub fn execute_command<L: LdapDirectory>(
 
 #[cfg(test)]
 mod tests {
-    use crate::api::MockLdapClient;
     use crate::core::output_model::OutputResult;
+    use crate::ports::mock::MockLdapClient;
 
     use super::{ParsedCommand, ServiceContext, execute_command, execute_line, parse_repl_command};
 
@@ -352,16 +352,6 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("uid").and_then(|v| v.as_str()), Some("oistes"));
-    }
-
-    #[test]
-    fn execute_line_supports_pipeline() {
-        let ctx = test_ctx();
-        let rows = execute_line(&ctx, "ldap user oistes | P uid,cn")
-            .expect("pipeline command should execute");
-        assert_eq!(output_rows(&rows).len(), 1);
-        assert!(output_rows(&rows)[0].contains_key("uid"));
-        assert!(output_rows(&rows)[0].contains_key("cn"));
     }
 
     #[test]

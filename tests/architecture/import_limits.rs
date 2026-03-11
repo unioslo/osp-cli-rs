@@ -11,7 +11,6 @@ use syn::visit::{self, Visit};
 // particular file layout, so the same policy survives refactors within the
 // current single-crate package.
 const WORKSPACE_CRATES: &[&str] = &[
-    "osp_api",
     "osp_cli",
     "osp_completion",
     "osp_config",
@@ -25,7 +24,6 @@ const WORKSPACE_CRATES: &[&str] = &[
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Component {
-    Api,
     Cli,
     Completion,
     Config,
@@ -40,7 +38,6 @@ enum Component {
 impl Component {
     fn rust_module_name(self) -> &'static str {
         match self {
-            Self::Api => "osp_api",
             Self::Cli => "osp_cli",
             Self::Completion => "osp_completion",
             Self::Config => "osp_config",
@@ -55,13 +52,12 @@ impl Component {
 
     fn root_source_paths(self) -> &'static [&'static str] {
         match self {
-            Self::Api => &["api.rs"],
             Self::Cli => &["osp_cli", "app", "cli", "plugin", "runtime.rs"],
             Self::Completion => &["completion"],
             Self::Config => &["config"],
             Self::Core => &["core"],
             Self::Dsl => &["dsl"],
-            Self::Ports => &["ports.rs"],
+            Self::Ports => &["ports.rs", "ports"],
             Self::Repl => &["osp_repl", "repl"],
             Self::Services => &["services.rs"],
             Self::Ui => &["ui"],
@@ -70,7 +66,6 @@ impl Component {
 
     fn runtime_allowed(self) -> BTreeSet<Component> {
         let values = match self {
-            Self::Api => &[Self::Api, Self::Core, Self::Ports][..],
             Self::Cli => &[
                 Self::Cli,
                 Self::Completion,
@@ -162,6 +157,11 @@ fn root_public_facade_stays_curated() {
         })
         .collect::<BTreeSet<_>>();
 
+    // Top-level public modules are reserved for first-class architectural
+    // nouns: product subsystems, stable embedder entrypoints, or cross-cutting
+    // contract namespaces. Fixtures, mocks, and convenience adapters do not
+    // earn root placement; they belong under the subsystem whose boundary they
+    // serve.
     let expected_modules = [
         "app",
         "config",
@@ -169,7 +169,6 @@ fn root_public_facade_stays_curated() {
         "dsl",
         "guide",
         "ports",
-        "api",
         "services",
         "ui",
         "completion",
@@ -207,9 +206,8 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn all_components() -> [Component; 10] {
+fn all_components() -> [Component; 9] {
     [
-        Component::Api,
         Component::Cli,
         Component::Completion,
         Component::Config,

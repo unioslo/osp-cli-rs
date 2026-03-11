@@ -489,23 +489,7 @@ mod tests {
             .resolve(ResolveOptions::default().with_terminal("cli"))
             .expect("replacement config should resolve");
         assert_eq!(replaced.get_string("theme.name"), Some("replaced"));
-    }
 
-    #[test]
-    fn explain_bootstrap_key_rejects_non_bootstrap_keys_unit() {
-        let resolver = ConfigResolver::default();
-        let err = resolver
-            .explain_bootstrap_key("ui.theme", ResolveOptions::default())
-            .expect_err("non-bootstrap key should fail");
-
-        assert!(matches!(
-            err,
-            ConfigError::InvalidConfigKey { key, .. } if key == "ui.theme"
-        ));
-    }
-
-    #[test]
-    fn resolver_keeps_secret_env_value_over_plain_env_value() {
         let mut resolver = ConfigResolver::default();
         resolver.defaults_mut().set("profile.default", "default");
         resolver.secrets_mut().insert_with_origin(
@@ -534,17 +518,20 @@ mod tests {
             &ConfigValue::String("secret-token".to_string())
         );
         assert_eq!(entry.source, ConfigSource::Secrets);
-    }
 
-    #[test]
-    fn resolver_allows_selected_profile_without_scoped_entries() {
+        let err = ConfigResolver::default()
+            .explain_bootstrap_key("ui.theme", ResolveOptions::default())
+            .expect_err("non-bootstrap key should fail");
+        assert!(matches!(
+            err,
+            ConfigError::InvalidConfigKey { key, .. } if key == "ui.theme"
+        ));
+
         let mut resolver = ConfigResolver::default();
         resolver.defaults_mut().set("profile.default", "ops");
-
         let resolved = resolver
             .resolve(ResolveOptions::default())
             .expect("selected profile without scoped entries should resolve");
-
         assert_eq!(resolved.active_profile(), "ops");
         assert!(resolved.known_profiles().contains("ops"));
     }

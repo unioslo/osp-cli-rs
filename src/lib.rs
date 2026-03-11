@@ -23,8 +23,6 @@
 //!   command surface.
 //! - [`services`] and [`ports`] exist for smaller embeddable integrations that
 //!   do not want the whole host stack.
-//! - [`api`] provides test-friendly fixtures and lightweight helper adapters
-//!   rather than a second full integration surface.
 //!
 //! Architecture contracts worth keeping stable:
 //!
@@ -80,8 +78,6 @@
 //! layouts have been removed so rustdoc and the source tree describe the same
 //! architecture.
 
-/// Test-friendly API adapters and mock implementations.
-pub mod api;
 /// Main host-facing entrypoints, runtime state, and session types.
 pub mod app;
 /// Command-line argument types and CLI parsing helpers.

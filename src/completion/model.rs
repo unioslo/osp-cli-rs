@@ -41,6 +41,19 @@ impl CursorState {
     ///
     /// `raw_stub` keeps the exact buffer slice that will be replaced, while
     /// `token_stub` keeps the normalized text used for matching.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::{CursorState, QuoteStyle};
+    ///
+    /// let state = CursorState::new("tok", "\"tok", 3..7, Some(QuoteStyle::Double));
+    ///
+    /// assert_eq!(state.token_stub, "tok");
+    /// assert_eq!(state.raw_stub, "\"tok");
+    /// assert_eq!(state.replace_range, 3..7);
+    /// assert_eq!(state.quote_style, Some(QuoteStyle::Double));
+    /// ```
     pub fn new(
         token_stub: impl Into<String>,
         raw_stub: impl Into<String>,
@@ -217,6 +230,31 @@ pub struct ArgNode {
 
 impl ArgNode {
     /// Creates an argument node with a visible argument name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::{ArgNode, SuggestionEntry, ValueType};
+    ///
+    /// let entry = SuggestionEntry::value("alma")
+    ///     .meta("linux")
+    ///     .display("AlmaLinux")
+    ///     .sort("02");
+    /// let arg = ArgNode::named("image")
+    ///     .tooltip("Image name")
+    ///     .multi()
+    ///     .value_type(ValueType::Path)
+    ///     .suggestions([entry.clone()]);
+    ///
+    /// assert_eq!(entry.meta.as_deref(), Some("linux"));
+    /// assert_eq!(entry.display.as_deref(), Some("AlmaLinux"));
+    /// assert_eq!(entry.sort.as_deref(), Some("02"));
+    /// assert_eq!(arg.name.as_deref(), Some("image"));
+    /// assert_eq!(arg.tooltip.as_deref(), Some("Image name"));
+    /// assert!(arg.multi);
+    /// assert_eq!(arg.value_type, Some(ValueType::Path));
+    /// assert_eq!(arg.suggestions, vec![entry]);
+    /// ```
     pub fn named(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -367,6 +405,38 @@ impl CompletionNode {
     }
 
     /// Adds a child node keyed by command or value name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::{
+    ///     CompletionNode, ContextScope, FlagNode, SuggestionEntry, ValueType,
+    /// };
+    ///
+    /// let flag = FlagNode::new()
+    ///     .tooltip("Provider")
+    ///     .flag_only()
+    ///     .multi()
+    ///     .context_only(ContextScope::Global)
+    ///     .value_type(ValueType::Path)
+    ///     .suggestions([SuggestionEntry::from("vmware")]);
+    ///
+    /// let node = CompletionNode::default()
+    ///     .sort("01")
+    ///     .with_child("status", CompletionNode::default())
+    ///     .with_flag("--provider", flag.clone());
+    ///
+    /// assert_eq!(flag.tooltip.as_deref(), Some("Provider"));
+    /// assert!(flag.flag_only);
+    /// assert!(flag.multi);
+    /// assert!(flag.context_only);
+    /// assert_eq!(flag.context_scope, ContextScope::Global);
+    /// assert_eq!(flag.value_type, Some(ValueType::Path));
+    /// assert_eq!(flag.suggestions.len(), 1);
+    /// assert_eq!(node.sort.as_deref(), Some("01"));
+    /// assert!(node.children.contains_key("status"));
+    /// assert_eq!(node.flags.get("--provider"), Some(&flag));
+    /// ```
     pub fn with_child(mut self, name: impl Into<String>, node: CompletionNode) -> Self {
         self.children.insert(name.into(), node);
         self
@@ -657,6 +727,25 @@ pub enum MatchKind {
 
 impl MatchKind {
     /// Returns the stable string form used by presentation layers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::MatchKind;
+    ///
+    /// let labels = [
+    ///     MatchKind::Pipe,
+    ///     MatchKind::Flag,
+    ///     MatchKind::Command,
+    ///     MatchKind::Subcommand,
+    ///     MatchKind::Value,
+    /// ]
+    /// .into_iter()
+    /// .map(MatchKind::as_str)
+    /// .collect::<Vec<_>>();
+    ///
+    /// assert_eq!(labels, vec!["pipe", "flag", "command", "subcommand", "value"]);
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pipe => "pipe",
@@ -687,6 +776,21 @@ pub struct Suggestion {
 
 impl Suggestion {
     /// Creates a suggestion with default ranking metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::Suggestion;
+    ///
+    /// let suggestion = Suggestion::new("hello");
+    ///
+    /// assert_eq!(suggestion.text, "hello");
+    /// assert_eq!(suggestion.meta, None);
+    /// assert_eq!(suggestion.display, None);
+    /// assert!(!suggestion.is_exact);
+    /// assert_eq!(suggestion.sort, None);
+    /// assert_eq!(suggestion.match_score, u32::MAX);
+    /// ```
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),

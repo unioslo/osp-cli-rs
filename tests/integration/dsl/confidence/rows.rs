@@ -248,3 +248,60 @@ fn fuzzy_quick_filters_rows_without_reordering_matches() {
         ]
     );
 }
+
+// Protects grouped-output metadata through the public output pipeline:
+// grouped headers should stay intact, projections over member rows should not
+// rewrite the grouped shape, and copy/unroll/value stages should preserve the
+// grouped boundary instead of materializing generic top-level rows.
+#[test]
+fn grouped_output_pipeline_preserves_headers_and_group_shape() {
+    let grouped = osp_cli::core::output_model::OutputResult {
+        items: osp_cli::core::output_model::OutputItems::Groups(vec![
+            osp_cli::core::output_model::Group {
+                groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
+                aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+                rows: vec![
+                    row(json!({"uid": "alice", "roles": ["eng", "ops"]})),
+                    row(json!({"uid": "bob", "roles": ["ops"]})),
+                ],
+            },
+        ]),
+        document: None,
+        meta: Default::default(),
+    };
+
+    let passthrough = osp_cli::dsl::apply_output_pipeline(grouped.clone(), &["P uid".to_string()])
+        .expect("projection should not rewrite grouped members into flat output");
+    assert!(matches!(
+        passthrough.items,
+        osp_cli::core::output_model::OutputItems::Groups(_)
+    ));
+    assert_eq!(passthrough.meta.key_index, vec!["team", "count"]);
+    assert!(passthrough.meta.grouped);
+
+    let copied = osp_cli::dsl::apply_output_pipeline(grouped.clone(), &["Y".to_string()])
+        .expect("copy should preserve grouped output");
+    assert!(copied.meta.wants_copy);
+    assert!(copied.meta.grouped);
+
+    let values = osp_cli::dsl::apply_output_pipeline(grouped.clone(), &["VALUE uid".to_string()])
+        .expect("value extraction should preserve grouped output");
+    let osp_cli::core::output_model::OutputItems::Groups(value_groups) = values.items else {
+        panic!("expected grouped output");
+    };
+    assert_eq!(
+        value_groups[0]
+            .rows
+            .iter()
+            .map(|row| row.get("value").cloned().expect("value"))
+            .collect::<Vec<_>>(),
+        vec![json!("alice"), json!("bob")]
+    );
+
+    let unrolled = osp_cli::dsl::apply_output_pipeline(grouped, &["U roles".to_string()])
+        .expect("unroll should preserve grouped output");
+    assert!(matches!(
+        unrolled.items,
+        osp_cli::core::output_model::OutputItems::Groups(_)
+    ));
+}

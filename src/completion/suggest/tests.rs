@@ -279,7 +279,7 @@ fn path_value_modes_emit_path_sentinels_for_args_and_flags_unit() {
 }
 
 #[test]
-fn flag_hints_filter_provider_specific_flags_and_hide_selectors() {
+fn flag_hints_filter_provider_specific_flags_and_alias_allowlists_unit() {
     let mut node = CompletionNode::default();
     node.flags
         .insert("--provider".to_string(), FlagNode::default());
@@ -326,13 +326,13 @@ fn flag_hints_filter_provider_specific_flags_and_hide_selectors() {
 
     let cmd = with_flag(command(&["provision"]), "--provider", &["nrec"]);
     let output = generate(&engine, cmd, "--");
-    let values = values(output.clone());
-    assert!(values.contains(&"--comment".to_string()));
-    assert!(values.contains(&"--flavor".to_string()));
-    assert!(!values.contains(&"--provider".to_string()));
-    assert!(!values.contains(&"--nrec".to_string()));
-    assert!(!values.contains(&"--vmware".to_string()));
-    assert!(!values.contains(&"--vcenter".to_string()));
+    let rendered_values = values(output.clone());
+    assert!(rendered_values.contains(&"--comment".to_string()));
+    assert!(rendered_values.contains(&"--flavor".to_string()));
+    assert!(!rendered_values.contains(&"--provider".to_string()));
+    assert!(!rendered_values.contains(&"--nrec".to_string()));
+    assert!(!rendered_values.contains(&"--vmware".to_string()));
+    assert!(!rendered_values.contains(&"--vcenter".to_string()));
 
     let items = output
         .into_iter()
@@ -357,38 +357,36 @@ fn flag_hints_filter_provider_specific_flags_and_hide_selectors() {
             .and_then(|item| item.display.as_deref()),
         Some("--flavor*")
     );
-}
 
-#[test]
-fn provider_alias_flag_enables_provider_specific_allowlist() {
-    let mut node = CompletionNode::default();
-    node.flags
+    let mut alias_node = CompletionNode::default();
+    alias_node
+        .flags
         .insert("--provider".to_string(), FlagNode::default());
-    node.flags.insert(
+    alias_node.flags.insert(
         "--nrec".to_string(),
         FlagNode {
             flag_only: true,
             ..FlagNode::default()
         },
     );
-    node.flags
+    alias_node
+        .flags
         .insert("--flavor".to_string(), FlagNode::default());
-    node.flag_hints = Some(FlagHints {
+    alias_node.flag_hints = Some(FlagHints {
         common: vec!["--provider".to_string(), "--nrec".to_string()],
         by_provider: BTreeMap::from([("nrec".to_string(), vec!["--flavor".to_string()])]),
         ..FlagHints::default()
     });
 
-    let tree = CompletionTree {
-        root: CompletionNode::default().with_child("provision", node),
+    let alias_tree = CompletionTree {
+        root: CompletionNode::default().with_child("provision", alias_node),
         ..CompletionTree::default()
     };
-    let engine = CompletionEngine::new(tree);
-    let cmd = with_flag(command(&["provision"]), "--nrec", &[]);
-
-    let values = values(generate(&engine, cmd, "--"));
-    assert!(values.contains(&"--flavor".to_string()));
-    assert!(!values.contains(&"--provider".to_string()));
+    let alias_engine = CompletionEngine::new(alias_tree);
+    let alias_cmd = with_flag(command(&["provision"]), "--nrec", &[]);
+    let alias_values = values(generate(&alias_engine, alias_cmd, "--"));
+    assert!(alias_values.contains(&"--flavor".to_string()));
+    assert!(!alias_values.contains(&"--provider".to_string()));
 }
 
 #[test]

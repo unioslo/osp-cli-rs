@@ -221,6 +221,72 @@ fn help_like_payload_slice_projection_rebuilds_selected_range() {
     );
 }
 
+// Protects addressed structural keepers with guide-shaped envelopes: keeping
+// top-level usage plus one addressed descendant should preserve section
+// metadata, compact away unrelated arrays, and drop parallel flattened command
+// collections that no longer match the selected branch.
+#[test]
+fn help_like_payload_project_keeper_variants_preserve_section_metadata_and_selected_names() {
+    for (spec, expected_names, expect_usage, expect_commands_absent) in [
+        ("name", vec!["apply", "doctor", "status"], false, false),
+        (
+            "usage sections[0].entries[1].name",
+            vec!["doctor"],
+            true,
+            true,
+        ),
+        (
+            "sections[0].entries[1].name !short_help",
+            vec!["doctor"],
+            false,
+            true,
+        ),
+        (
+            "sections[].entries[].name",
+            vec!["apply", "doctor", "status"],
+            true,
+            true,
+        ),
+    ] {
+        let output = run_guide_pipeline(help_like_guide(), &format!("P {spec}"));
+        let document = output
+            .document
+            .expect("semantic document should remain attached");
+
+        if expect_usage {
+            assert_eq!(document.value["usage"], json!(["osp deploy <COMMAND>"]));
+        }
+        let section = document.value["sections"]
+            .as_array()
+            .expect("sections should remain")
+            .iter()
+            .find(|section| section["title"] == json!("Commands"))
+            .expect("commands section should remain");
+        let names = section["entries"]
+            .as_array()
+            .expect("entries should remain")
+            .iter()
+            .map(|entry| {
+                entry["name"]
+                    .as_str()
+                    .expect("entry name should be a string")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, expected_names);
+        assert!(
+            section["entries"]
+                .as_array()
+                .expect("entries should remain")
+                .iter()
+                .all(|entry| entry.get("short_help").is_none()),
+            "spec={spec}"
+        );
+        if expect_commands_absent {
+            assert!(document.value.get("commands").is_none(), "spec={spec}");
+        }
+    }
+}
+
 // Protects structural fanout negation: removing a matched descendant across a
 // fanout path should delete only the addressed leaves, not the containing
 // sections or unrelated top-level guide arrays.

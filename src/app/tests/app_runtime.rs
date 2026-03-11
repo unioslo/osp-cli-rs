@@ -2,9 +2,9 @@ use super::*;
 use miette::WrapErr;
 
 #[test]
-fn app_builder_and_runner_delegate_to_host_paths_unit() {
+fn app_help_entrypoints_and_sink_routing_render_help_unit() {
     let app = crate::app::AppBuilder::new().build();
-    let mut sink = BufferedUiSink::default();
+    let mut help_sink = BufferedUiSink::default();
 
     assert_eq!(
         app.run_from(["osp", "--help"])
@@ -12,13 +12,26 @@ fn app_builder_and_runner_delegate_to_host_paths_unit() {
         0
     );
     assert_eq!(
-        app.run_with_sink(["osp", "--help"], &mut sink)
+        app.run_with_sink(["osp", "--help"], &mut help_sink)
             .expect("app help with sink should render"),
         0
     );
-    assert_eq!(app.run_process_with_sink(["osp", "--help"], &mut sink), 0);
+    assert_eq!(
+        app.run_process_with_sink(["osp", "--help"], &mut help_sink),
+        0
+    );
+    assert!(help_sink.stdout.contains("osp [OPTIONS]"));
+    assert!(help_sink.stderr.is_empty());
 
-    let mut runner = crate::app::AppBuilder::new().build_with_sink(&mut sink);
+    let mut sink = BufferedUiSink::default();
+    let exit = super::run_from_with_sink(["osp", "--help"], &mut sink).expect("help should render");
+    assert_eq!(exit, 0);
+    assert!(!sink.stdout.is_empty());
+    assert!(sink.stdout.contains("osp [OPTIONS]"));
+    assert!(sink.stderr.is_empty());
+
+    let mut runner_sink = BufferedUiSink::default();
+    let mut runner = crate::app::AppBuilder::new().build_with_sink(&mut runner_sink);
     assert_eq!(
         runner
             .run_from(["osp", "--help"])
@@ -29,57 +42,12 @@ fn app_builder_and_runner_delegate_to_host_paths_unit() {
 }
 
 #[test]
-fn app_help_includes_registered_native_commands_unit() {
-    let app = crate::app::AppBuilder::new()
-        .with_native_commands(test_native_registry())
-        .build();
-    let mut sink = BufferedUiSink::default();
-
-    assert_eq!(
-        app.run_with_sink(["osp", "--help"], &mut sink)
-            .expect("help should render"),
-        0
-    );
-    assert!(
-        sink.stdout.contains("Native integrations"),
-        "help output did not include native section:\n{}",
-        sink.stdout
-    );
-    assert!(
-        sink.stdout.contains("ldap"),
-        "help output:\n{}",
-        sink.stdout
-    );
-    assert!(
-        sink.stdout.contains("Directory lookup"),
-        "help output:\n{}",
-        sink.stdout
-    );
-}
-
-#[test]
-fn app_dispatches_top_level_native_commands_unit() {
-    let app = crate::app::AppBuilder::new()
-        .with_native_commands(test_native_registry())
-        .build();
-    let mut sink = BufferedUiSink::default();
-
-    assert_eq!(
-        app.run_with_sink(["osp", "ldap"], &mut sink)
-            .expect("native command should run"),
-        0
-    );
-    assert!(sink.stdout.contains("ldap"));
-}
-
-#[test]
-fn repl_surface_and_policy_include_registered_native_commands_unit() {
+fn native_commands_project_into_auth_catalog_unit() {
     let state = make_completion_state_with_entries_and_native(
         None,
         &[("auth.visible.plugins", "ldap")],
         test_native_registry(),
     );
-
     let catalog = super::authorized_command_catalog_for(&state.runtime.auth, &state.clients)
         .expect("catalog should render");
     assert!(catalog.iter().any(|entry| entry.name == "ldap"));
@@ -89,16 +57,6 @@ fn repl_surface_and_policy_include_registered_native_commands_unit() {
             .auth
             .external_command_access("ldap")
             .is_visible()
-    );
-
-    let repl_surface =
-        surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
-    assert!(repl_surface.root_words.iter().any(|word| word == "ldap"));
-    assert!(
-        repl_surface
-            .overview_entries
-            .iter()
-            .any(|entry| entry.name == "ldap" && entry.summary.contains("Directory lookup"))
     );
 }
 
@@ -127,7 +85,7 @@ fn bootstrap_message_verbosity_handles_non_utf8_short_flags_and_double_dash_unit
 }
 
 #[test]
-fn default_plugin_error_render_preserves_primary_detail_unit() {
+fn error_rendering_prioritizes_actionable_details_across_levels_unit() {
     let report = enrich_dispatch_error(PluginDispatchError::NonZeroExit {
         plugin_id: "ldap".to_string(),
         status_code: 7,
@@ -135,21 +93,20 @@ fn default_plugin_error_render_preserves_primary_detail_unit() {
     });
 
     let rendered = render_report_message(&report, MessageLevel::Success);
-
     assert!(rendered.contains("plugin ldap exited with status 7: backend exploded"));
     assert!(rendered.contains("Hint:"));
-}
 
-#[test]
-fn run_from_with_sink_routes_help_to_stdout_unit() {
-    let mut sink = BufferedUiSink::default();
+    let rendered = render_report_message(&report, MessageLevel::Info);
+    assert!(rendered.contains("plugin ldap exited with status 7"));
+    assert!(rendered.contains("plugin command failed"));
+    assert!(rendered.contains("backend exploded"));
 
-    let exit = super::run_from_with_sink(["osp", "--help"], &mut sink).expect("help should render");
-
-    assert_eq!(exit, 0);
-    assert!(!sink.stdout.is_empty());
-    assert!(sink.stdout.contains("osp [OPTIONS]"));
-    assert!(sink.stderr.is_empty());
+    let report = Err::<(), _>(miette::miette!("unknown theme: missing-theme"))
+        .wrap_err("failed to derive host runtime inputs for startup")
+        .expect_err("wrapped error should stay an error");
+    let rendered = render_report_message(&report, MessageLevel::Success);
+    assert!(rendered.contains("unknown theme: missing-theme"));
+    assert!(!rendered.starts_with("failed to derive host runtime inputs for startup"));
 }
 
 #[test]
@@ -183,7 +140,7 @@ fn run_cli_command_routes_messages_stdout_and_stderr_through_sink_unit() {
 }
 
 #[test]
-fn runtime_state_builders_provide_a_coherent_embedder_path_unit() {
+fn state_and_client_builders_produce_coherent_embedder_state_unit() {
     let config = test_config(&[]);
     let ui = crate::app::UiState::builder(RenderSettings::test_plain(OutputFormat::Json))
         .with_message_verbosity(MessageLevel::Trace)
@@ -226,10 +183,7 @@ fn runtime_state_builders_provide_a_coherent_embedder_path_unit() {
         Some(std::path::Path::new("/tmp/osp-cache"))
     );
     assert!(state.clients.native_commands().command("ldap").is_some());
-}
 
-#[test]
-fn resolved_config_factories_build_embedder_state_unit() {
     let config = test_config(&[
         ("ui.message.verbosity", "trace"),
         ("debug.level", "2"),
@@ -240,7 +194,6 @@ fn resolved_config_factories_build_embedder_state_unit() {
         crate::app::TerminalKind::Cli,
         Some("xterm-256color".to_string()),
     );
-
     let ui = crate::app::UiState::from_resolved_config(&context, &config)
         .expect("ui state should derive from resolved config");
     assert_eq!(ui.message_verbosity, MessageLevel::Trace);
@@ -253,17 +206,13 @@ fn resolved_config_factories_build_embedder_state_unit() {
     assert_eq!(state.runtime.ui.debug_verbosity, 2);
     assert_eq!(state.runtime.ui.render_settings.theme_name, "dracula");
     assert!(state.clients.plugins().explicit_dirs().is_empty());
-}
 
-#[test]
-fn app_clients_builder_assembles_registries_unit() {
     let clients = crate::app::AppClients::builder()
         .with_plugins(crate::plugin::PluginManager::new(vec![
             std::path::PathBuf::from("/tmp/osp-plugin-a"),
         ]))
         .with_native_commands(test_native_registry())
         .build();
-
     assert_eq!(
         clients.plugins().explicit_dirs(),
         &[std::path::PathBuf::from("/tmp/osp-plugin-a")]
@@ -272,34 +221,7 @@ fn app_clients_builder_assembles_registries_unit() {
 }
 
 #[test]
-fn verbose_plugin_error_render_includes_detail_chain_unit() {
-    let report = enrich_dispatch_error(PluginDispatchError::NonZeroExit {
-        plugin_id: "ldap".to_string(),
-        status_code: 7,
-        stderr: "backend exploded".to_string(),
-    });
-
-    let rendered = render_report_message(&report, MessageLevel::Info);
-
-    assert!(rendered.contains("plugin ldap exited with status 7"));
-    assert!(rendered.contains("plugin command failed"));
-    assert!(rendered.contains("backend exploded"));
-}
-
-#[test]
-fn default_error_render_prefers_actionable_source_over_generic_context_unit() {
-    let report = Err::<(), _>(miette::miette!("unknown theme: missing-theme"))
-        .wrap_err("failed to derive host runtime inputs for startup")
-        .expect_err("wrapped error should stay an error");
-
-    let rendered = render_report_message(&report, MessageLevel::Success);
-
-    assert!(rendered.contains("unknown theme: missing-theme"));
-    assert!(!rendered.starts_with("failed to derive host runtime inputs for startup"));
-}
-
-#[test]
-fn prepare_plugin_response_keeps_protocol_failures_in_messages_unit() {
+fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
     let response = ResponseV1 {
         protocol_version: 1,
         ok: false,
@@ -318,7 +240,6 @@ fn prepare_plugin_response_keeps_protocol_failures_in_messages_unit() {
 
     let prepared = super::command_output::prepare_plugin_response(response, &[])
         .expect("protocol failure should still parse");
-
     let super::command_output::PreparedPluginResponse::Failure(failure) = prepared else {
         panic!("expected failure response");
     };
@@ -327,10 +248,7 @@ fn prepare_plugin_response_keeps_protocol_failures_in_messages_unit() {
     assert!(rendered.contains("queried fallback backend"));
     assert!(rendered.contains("NOT_FOUND: missing user"));
     assert_eq!(failure.report, "NOT_FOUND: missing user");
-}
 
-#[test]
-fn prepare_plugin_response_drops_format_hint_after_pipeline_unit() {
     let response = ResponseV1 {
         protocol_version: 1,
         ok: true,
@@ -343,14 +261,11 @@ fn prepare_plugin_response_drops_format_hint_after_pipeline_unit() {
             column_align: Vec::new(),
         },
     };
-
     let prepared = super::command_output::prepare_plugin_response(response, &["P uid".to_string()])
         .expect("pipeline should apply");
-
     let super::command_output::PreparedPluginResponse::Output(output) = prepared else {
         panic!("expected successful output response");
     };
-
     assert!(output.format_hint.is_none());
 }
 

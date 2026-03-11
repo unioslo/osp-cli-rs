@@ -95,8 +95,8 @@ fn render_value_block_appends_trailing_newline() {
 }
 
 #[test]
-fn panel_rules_match_python_plain_layout() {
-    let document = Document {
+fn panel_rules_cover_plain_layout_and_margin_sizing_unit() {
+    let plain_document = Document {
         blocks: vec![Block::Panel(PanelBlock {
             title: Some("Info".to_string()),
             body: Document {
@@ -116,7 +116,7 @@ fn panel_rules_match_python_plain_layout() {
     };
 
     assert_eq!(
-        render_document(&document, plain_settings_with_width(80)),
+        render_document(&plain_document, plain_settings_with_width(80)),
         concat!(
             "- Info -------------------------------------------------------------------------\n",
             "alpha\n",
@@ -124,10 +124,7 @@ fn panel_rules_match_python_plain_layout() {
             "--------------------------------------------------------------------------------\n"
         )
     );
-}
 
-#[test]
-fn panel_rules_respect_margin_when_sizing_shared_dividers_unit() {
     let document = Document {
         blocks: vec![Block::Panel(PanelBlock {
             title: Some("Commands".to_string()),
@@ -282,33 +279,45 @@ fn mreg_large_lists_use_grid_layout() {
 }
 
 #[test]
-fn render_json_block_is_pretty() {
-    let document = Document {
+fn json_block_rendering_covers_pretty_plain_exact_plain_and_rich_colorized_output_unit() {
+    let pretty_document = Document {
         blocks: vec![Block::Json(JsonBlock {
             payload: json!([{"uid": "oistes"}]),
         })],
     };
-    let rendered = render_document(&document, settings(RenderBackend::Plain, false, false));
-    assert!(rendered.contains('\n'));
-    assert!(rendered.contains("\"uid\""));
-}
+    let pretty = render_document(
+        &pretty_document,
+        settings(RenderBackend::Plain, false, false),
+    );
+    assert!(pretty.contains('\n'));
+    assert!(pretty.contains("\"uid\""));
 
-#[test]
-fn rich_json_block_uses_color_tokens() {
-    let document = Document {
+    let exact_document = Document {
+        blocks: vec![Block::Json(JsonBlock {
+            payload: json!({"uid":"oistes"}),
+        })],
+    };
+    assert_eq!(
+        render_document(
+            &exact_document,
+            settings(RenderBackend::Plain, false, false)
+        ),
+        "{\n  \"uid\": \"oistes\"\n}\n"
+    );
+
+    let rich_document = Document {
         blocks: vec![Block::Json(JsonBlock {
             payload: json!({"uid":"oistes","enabled":true,"count":2}),
         })],
     };
-
-    let rendered = render_document(&document, settings(RenderBackend::Rich, true, true));
-    assert!(rendered.contains("\x1b["));
-    assert!(rendered.contains("\"uid\""));
-    assert!(rendered.contains("true"));
+    let rich = render_document(&rich_document, settings(RenderBackend::Rich, true, true));
+    assert!(rich.contains("\x1b["));
+    assert!(rich.contains("\"uid\""));
+    assert!(rich.contains("true"));
 }
 
 #[test]
-fn render_table_toggles_border_style() {
+fn grid_table_rendering_covers_border_style_color_unicode_and_ascii_fallbacks_unit() {
     let document = Document {
         blocks: vec![Block::Table(TableBlock {
             block_id: 1,
@@ -339,78 +348,21 @@ fn render_table_toggles_border_style() {
     assert!(ascii.contains('+'));
     assert!(!borderless.contains('│'));
     assert!(!borderless.contains('┏'));
-}
 
-#[test]
-fn table_renders_header_pairs_before_table() {
-    let document = Document {
-        blocks: vec![Block::Table(TableBlock {
-            block_id: 1,
-            style: TableStyle::Grid,
-            border_override: None,
-            headers: vec!["uid".to_string()],
-            rows: vec![vec![json!("oistes")]],
-            header_pairs: vec![("group".to_string(), json!("ops"))],
-            align: None,
-            shrink_to_fit: true,
-            depth: 0,
-        })],
-    };
+    let no_color = render_document(&document, settings(RenderBackend::Rich, false, true));
+    assert!(!no_color.contains("\x1b["));
 
-    assert_eq!(
-        render_document(&document, settings(RenderBackend::Plain, false, false)),
-        concat!(
-            "group: ops  |  count: 1\n",
-            "+--------+\n",
-            "| uid    |\n",
-            "+--------+\n",
-            "| oistes |\n",
-            "+--------+\n"
-        )
+    let no_unicode = render_document(&document, settings(RenderBackend::Rich, false, false));
+    for ch in ['┌', '┐', '└', '┘', '│', '─', '┬', '┴', '┼'] {
+        assert!(!no_unicode.contains(ch));
+    }
+
+    assert!(
+        ascii
+            .lines()
+            .any(|line| line.starts_with("+-") && line.contains('-'))
     );
-}
-
-#[test]
-fn mreg_vertical_list_matches_python_plain_layout() {
-    let document = Document {
-        blocks: vec![Block::Mreg(MregBlock {
-            block_id: 1,
-            rows: vec![MregRow {
-                entries: vec![MregEntry {
-                    key: "members".to_string(),
-                    depth: 0,
-                    value: MregValue::VerticalList(vec![
-                        json!("alice"),
-                        json!("bob"),
-                        json!("carol"),
-                    ]),
-                }],
-            }],
-        })],
-    };
-
-    let mut settings = settings(RenderBackend::Plain, false, false);
-    settings.short_list_max = 1;
-    settings.medium_list_max = 5;
-
-    assert_eq!(
-        render_document(&document, settings),
-        "members: alice\n         bob\n         carol\n"
-    );
-}
-
-#[test]
-fn json_block_matches_python_plain_layout() {
-    let document = Document {
-        blocks: vec![Block::Json(JsonBlock {
-            payload: json!({"uid":"oistes"}),
-        })],
-    };
-
-    assert_eq!(
-        render_document(&document, settings(RenderBackend::Plain, false, false)),
-        "{\n  \"uid\": \"oistes\"\n}\n"
-    );
+    assert!(!ascii.lines().any(|line| line.starts_with("+=")));
 }
 
 #[test]
@@ -623,73 +575,6 @@ fn nested_object_lists_stack_when_table_would_hide_content() {
 }
 
 #[test]
-fn table_color_never_has_no_ansi_escape_codes() {
-    let document = Document {
-        blocks: vec![Block::Table(TableBlock {
-            block_id: 1,
-            style: TableStyle::Grid,
-            border_override: None,
-            headers: vec!["uid".to_string()],
-            rows: vec![vec![json!("oistes")]],
-            header_pairs: Vec::new(),
-            align: None,
-            shrink_to_fit: true,
-            depth: 0,
-        })],
-    };
-
-    let rendered = render_document(&document, settings(RenderBackend::Rich, false, true));
-    assert!(!rendered.contains("\x1b["));
-}
-
-#[test]
-fn table_unicode_off_has_no_box_drawing_characters() {
-    let document = Document {
-        blocks: vec![Block::Table(TableBlock {
-            block_id: 1,
-            style: TableStyle::Grid,
-            border_override: None,
-            headers: vec!["uid".to_string()],
-            rows: vec![vec![json!("oistes")]],
-            header_pairs: Vec::new(),
-            align: None,
-            shrink_to_fit: true,
-            depth: 0,
-        })],
-    };
-
-    let rendered = render_document(&document, settings(RenderBackend::Rich, false, false));
-    for ch in ['┌', '┐', '└', '┘', '│', '─', '┬', '┴', '┼'] {
-        assert!(!rendered.contains(ch));
-    }
-}
-
-#[test]
-fn plain_ascii_table_uses_dash_header_separator() {
-    let document = Document {
-        blocks: vec![Block::Table(TableBlock {
-            block_id: 1,
-            style: TableStyle::Grid,
-            border_override: None,
-            headers: vec!["uid".to_string()],
-            rows: vec![vec![json!("oistes")]],
-            header_pairs: Vec::new(),
-            align: None,
-            shrink_to_fit: true,
-            depth: 0,
-        })],
-    };
-
-    let rendered = render_document(&document, settings(RenderBackend::Plain, false, false));
-    assert!(
-        rendered
-            .lines()
-            .any(|line| line.starts_with("+-") && line.contains('-'))
-    );
-    assert!(!rendered.lines().any(|line| line.starts_with("+=")));
-}
-
-#[test]
 fn mreg_alignment_accounts_for_nested_depth() {
     let document = Document {
         blocks: vec![Block::Mreg(MregBlock {
@@ -720,30 +605,36 @@ fn mreg_alignment_accounts_for_nested_depth() {
 }
 
 #[test]
-fn markdown_table_render_has_pipe_format() {
-    let document = Document {
+fn markdown_and_header_pair_tables_render_expected_surface_contracts_unit() {
+    let header_pairs_document = Document {
         blocks: vec![Block::Table(TableBlock {
             block_id: 1,
-            style: TableStyle::Markdown,
+            style: TableStyle::Grid,
             border_override: None,
-            headers: vec!["uid".to_string(), "group".to_string()],
-            rows: vec![vec![json!("oistes"), json!("uio")]],
-            header_pairs: Vec::new(),
+            headers: vec!["uid".to_string()],
+            rows: vec![vec![json!("oistes")]],
+            header_pairs: vec![("group".to_string(), json!("ops"))],
             align: None,
             shrink_to_fit: true,
             depth: 0,
         })],
     };
+    assert_eq!(
+        render_document(
+            &header_pairs_document,
+            settings(RenderBackend::Plain, false, false)
+        ),
+        concat!(
+            "group: ops  |  count: 1\n",
+            "+--------+\n",
+            "| uid    |\n",
+            "+--------+\n",
+            "| oistes |\n",
+            "+--------+\n"
+        )
+    );
 
-    let rendered = render_document(&document, settings(RenderBackend::Plain, false, false));
-    assert!(rendered.contains("| uid"));
-    assert!(rendered.contains("| ---"));
-    assert!(rendered.contains("| oistes"));
-}
-
-#[test]
-fn markdown_table_render_respects_column_alignment() {
-    let document = Document {
+    let markdown_document = Document {
         blocks: vec![Block::Table(TableBlock {
             block_id: 1,
             style: TableStyle::Markdown,
@@ -756,8 +647,12 @@ fn markdown_table_render_respects_column_alignment() {
             depth: 0,
         })],
     };
-
-    let rendered = render_document(&document, settings(RenderBackend::Plain, false, false));
+    let rendered = render_document(
+        &markdown_document,
+        settings(RenderBackend::Plain, false, false),
+    );
+    assert!(rendered.contains("| name"));
+    assert!(rendered.contains("| alice"));
     let separator = rendered.lines().nth(1).expect("markdown separator row");
     let cells = separator.split('|').collect::<Vec<_>>();
     assert!(cells[1].trim().starts_with(':'));
@@ -765,348 +660,95 @@ fn markdown_table_render_respects_column_alignment() {
 }
 
 #[test]
-fn width_limit_truncates_wide_cells() {
-    let document = Document {
-        blocks: vec![Block::Table(TableBlock {
-            block_id: 1,
-            style: TableStyle::Grid,
-            border_override: None,
-            headers: vec!["uid".to_string(), "description".to_string()],
-            rows: vec![vec![
-                json!("oistes"),
-                json!("this-is-a-very-long-cell-that-should-truncate"),
-            ]],
-            header_pairs: Vec::new(),
-            align: None,
-            shrink_to_fit: true,
-            depth: 0,
-        })],
-    };
+fn table_overflow_policies_cover_clip_none_ellipsis_and_wrap_unit() {
+    let cases = [
+        (
+            "this-is-a-very-long-cell-that-should-truncate",
+            Some(40usize),
+            TableOverflow::Clip,
+            false,
+            false,
+            false,
+        ),
+        (
+            "this-is-a-very-long-cell-that-should-not-truncate",
+            Some(20usize),
+            TableOverflow::None,
+            true,
+            false,
+            false,
+        ),
+        (
+            "this-is-a-very-long-cell-that-should-truncate",
+            Some(20usize),
+            TableOverflow::Ellipsis,
+            false,
+            true,
+            false,
+        ),
+        (
+            "abcdefghijklmno",
+            Some(12usize),
+            TableOverflow::Wrap,
+            false,
+            false,
+            true,
+        ),
+    ];
 
-    let rendered = render_document(
-        &document,
-        ResolvedRenderSettings {
-            backend: RenderBackend::Plain,
-            color: false,
-            unicode: false,
-            width: Some(40),
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: TableOverflow::Clip,
-            table_border: crate::ui::TableBorderStyle::Square,
-            help_table_border: crate::ui::TableBorderStyle::None,
-            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
-            style_overrides: crate::ui::style::StyleOverrides::default(),
-            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
-        },
-    );
+    for (value, width, overflow, keeps_full, has_ellipsis, keeps_tail) in cases {
+        let document = Document {
+            blocks: vec![Block::Table(TableBlock {
+                block_id: 1,
+                style: TableStyle::Grid,
+                border_override: None,
+                headers: vec!["uid".to_string()],
+                rows: vec![vec![json!(value)]],
+                header_pairs: Vec::new(),
+                align: None,
+                shrink_to_fit: true,
+                depth: 0,
+            })],
+        };
 
-    assert!(!rendered.contains("..."));
-    assert!(!rendered.contains("this-is-a-very-long-cell-that-should-truncate"));
-}
-
-#[test]
-fn table_overflow_none_keeps_full_content() {
-    let long = "this-is-a-very-long-cell-that-should-not-truncate";
-    let document = Document {
-        blocks: vec![Block::Table(TableBlock {
-            block_id: 1,
-            style: TableStyle::Grid,
-            border_override: None,
-            headers: vec!["uid".to_string()],
-            rows: vec![vec![json!(long)]],
-            header_pairs: Vec::new(),
-            align: None,
-            shrink_to_fit: true,
-            depth: 0,
-        })],
-    };
-
-    let rendered = render_document(
-        &document,
-        ResolvedRenderSettings {
-            backend: RenderBackend::Plain,
-            color: false,
-            unicode: false,
-            width: Some(20),
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: TableOverflow::None,
-            table_border: crate::ui::TableBorderStyle::Square,
-            help_table_border: crate::ui::TableBorderStyle::None,
-            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
-            style_overrides: crate::ui::style::StyleOverrides::default(),
-            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
-        },
-    );
-
-    assert!(rendered.contains(long));
-}
-
-#[test]
-fn table_overflow_ellipsis_truncates_with_suffix() {
-    let long = "this-is-a-very-long-cell-that-should-truncate";
-    let document = Document {
-        blocks: vec![Block::Table(TableBlock {
-            block_id: 1,
-            style: TableStyle::Grid,
-            border_override: None,
-            headers: vec!["uid".to_string()],
-            rows: vec![vec![json!(long)]],
-            header_pairs: Vec::new(),
-            align: None,
-            shrink_to_fit: true,
-            depth: 0,
-        })],
-    };
-
-    let rendered = render_document(
-        &document,
-        ResolvedRenderSettings {
-            backend: RenderBackend::Plain,
-            color: false,
-            unicode: false,
-            width: Some(20),
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: TableOverflow::Ellipsis,
-            table_border: crate::ui::TableBorderStyle::Square,
-            help_table_border: crate::ui::TableBorderStyle::None,
-            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
-            style_overrides: crate::ui::style::StyleOverrides::default(),
-            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
-        },
-    );
-
-    assert!(rendered.contains("..."));
-    assert!(!rendered.contains(long));
-}
-
-#[test]
-fn table_overflow_wrap_preserves_tail() {
-    let long = "abcdefghijklmno";
-    let document = Document {
-        blocks: vec![Block::Table(TableBlock {
-            block_id: 1,
-            style: TableStyle::Grid,
-            border_override: None,
-            headers: vec!["uid".to_string()],
-            rows: vec![vec![json!(long)]],
-            header_pairs: Vec::new(),
-            align: None,
-            shrink_to_fit: true,
-            depth: 0,
-        })],
-    };
-
-    let rendered = render_document(
-        &document,
-        ResolvedRenderSettings {
-            backend: RenderBackend::Plain,
-            color: false,
-            unicode: false,
-            width: Some(12),
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: TableOverflow::Wrap,
-            table_border: crate::ui::TableBorderStyle::Square,
-            help_table_border: crate::ui::TableBorderStyle::None,
-            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
-            style_overrides: crate::ui::style::StyleOverrides::default(),
-            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
-        },
-    );
-
-    assert!(rendered.contains("mno"));
-    assert!(!rendered.contains("..."));
-}
-
-#[test]
-fn plain_theme_does_not_style_hex_cells() {
-    let document = Document {
-        blocks: vec![Block::Mreg(MregBlock {
-            block_id: 1,
-            rows: vec![MregRow {
-                entries: vec![MregEntry {
-                    key: "color".to_string(),
-                    depth: 0,
-                    value: MregValue::Scalar(json!("#ff00ff")),
-                }],
-            }],
-        })],
-    };
-
-    let rendered = render_document(
-        &document,
-        ResolvedRenderSettings {
-            backend: RenderBackend::Rich,
-            color: true,
-            unicode: false,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: TableOverflow::Clip,
-            table_border: crate::ui::TableBorderStyle::Square,
-            help_table_border: crate::ui::TableBorderStyle::None,
-            theme_name: "plain".to_string(),
-            theme: crate::ui::theme::resolve_theme("plain"),
-            style_overrides: crate::ui::style::StyleOverrides::default(),
-            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
-        },
-    );
-    assert!(!rendered.contains("\x1b["));
-}
-
-#[test]
-fn theme_hex_values_render_with_truecolor_when_enabled() {
-    let document = Document {
-        blocks: vec![Block::Mreg(MregBlock {
-            block_id: 1,
-            rows: vec![MregRow {
-                entries: vec![MregEntry {
-                    key: "color".to_string(),
-                    depth: 0,
-                    value: MregValue::Scalar(json!("#ff00ff")),
-                }],
-            }],
-        })],
-    };
-
-    let rendered = render_document(
-        &document,
-        ResolvedRenderSettings {
-            backend: RenderBackend::Rich,
-            color: true,
-            unicode: true,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: TableOverflow::Clip,
-            table_border: crate::ui::TableBorderStyle::Square,
-            help_table_border: crate::ui::TableBorderStyle::None,
-            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
-            style_overrides: crate::ui::style::StyleOverrides::default(),
-            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
-        },
-    );
-
-    assert!(rendered.contains("\x1b[38;2;255;0;255m"));
-}
-
-#[test]
-fn code_block_honors_color_code_override() {
-    let document = Document {
-        blocks: vec![Block::Code(crate::ui::document::CodeBlock {
-            code: "let x = 1;".to_string(),
-            language: Some("rust".to_string()),
-        })],
-    };
-
-    let rendered = render_document(
-        &document,
-        ResolvedRenderSettings {
-            backend: RenderBackend::Rich,
-            color: true,
-            unicode: true,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: TableOverflow::Clip,
-            table_border: crate::ui::TableBorderStyle::Square,
-            help_table_border: crate::ui::TableBorderStyle::None,
-            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
-            style_overrides: crate::ui::style::StyleOverrides {
-                code: Some("#00ff00".to_string()),
-                ..Default::default()
+        let rendered = render_document(
+            &document,
+            ResolvedRenderSettings {
+                backend: RenderBackend::Plain,
+                color: false,
+                unicode: false,
+                width,
+                margin: 0,
+                indent_size: 2,
+                short_list_max: 1,
+                medium_list_max: 5,
+                grid_padding: 4,
+                grid_columns: None,
+                column_weight: 3,
+                table_overflow: overflow,
+                table_border: crate::ui::TableBorderStyle::Square,
+                help_table_border: crate::ui::TableBorderStyle::None,
+                theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
+                theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
+                style_overrides: crate::ui::style::StyleOverrides::default(),
+                chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
             },
-            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
-        },
-    );
+        );
 
-    assert!(rendered.contains("\x1b[38;2;0;255;0m"));
-    assert!(rendered.contains("let x = 1;"));
-}
-
-#[test]
-fn value_block_honors_generic_text_override() {
-    let document = Document {
-        blocks: vec![Block::Value(ValueBlock {
-            values: vec!["alpha".to_string()],
-            indent: 0,
-            inline_markup: false,
-            layout: ValueLayout::Vertical,
-        })],
-    };
-
-    let rendered = render_document(
-        &document,
-        ResolvedRenderSettings {
-            backend: RenderBackend::Rich,
-            color: true,
-            unicode: true,
-            width: None,
-            margin: 0,
-            indent_size: 2,
-            short_list_max: 1,
-            medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
-            table_overflow: TableOverflow::Clip,
-            table_border: crate::ui::TableBorderStyle::Square,
-            help_table_border: crate::ui::TableBorderStyle::None,
-            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
-            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
-            style_overrides: crate::ui::style::StyleOverrides {
-                text: Some("#224466".to_string()),
-                ..Default::default()
-            },
-            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
-        },
-    );
-
-    assert!(rendered.contains("\x1b[38;2;34;68;102malpha\x1b[0m"));
+        assert_eq!(
+            rendered.contains(value),
+            keeps_full,
+            "overflow={overflow:?}"
+        );
+        assert_eq!(
+            rendered.contains("..."),
+            has_ellipsis,
+            "overflow={overflow:?}"
+        );
+        if keeps_tail {
+            assert!(rendered.contains("mno"), "overflow={overflow:?}");
+        }
+    }
 }
 
 #[test]
@@ -1161,8 +803,141 @@ fn auto_grid_value_block_preserves_order_and_splits_long_lists() {
 }
 
 #[test]
-fn grid_table_string_cells_honor_value_override() {
-    let document = Document {
+fn style_and_theme_overrides_cover_hex_code_text_and_value_rendering_unit() {
+    let mreg_document = Document {
+        blocks: vec![Block::Mreg(MregBlock {
+            block_id: 1,
+            rows: vec![MregRow {
+                entries: vec![MregEntry {
+                    key: "color".to_string(),
+                    depth: 0,
+                    value: MregValue::Scalar(json!("#ff00ff")),
+                }],
+            }],
+        })],
+    };
+    let plain_theme_rendered = render_document(
+        &mreg_document,
+        ResolvedRenderSettings {
+            backend: RenderBackend::Rich,
+            color: true,
+            unicode: false,
+            width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            table_overflow: TableOverflow::Clip,
+            table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
+            theme_name: "plain".to_string(),
+            theme: crate::ui::theme::resolve_theme("plain"),
+            style_overrides: crate::ui::style::StyleOverrides::default(),
+            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
+        },
+    );
+    assert!(!plain_theme_rendered.contains("\x1b["));
+
+    let themed_hex = render_document(
+        &mreg_document,
+        ResolvedRenderSettings {
+            backend: RenderBackend::Rich,
+            color: true,
+            unicode: true,
+            width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            table_overflow: TableOverflow::Clip,
+            table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
+            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
+            style_overrides: crate::ui::style::StyleOverrides::default(),
+            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
+        },
+    );
+    assert!(themed_hex.contains("\x1b[38;2;255;0;255m"));
+
+    let code_document = Document {
+        blocks: vec![Block::Code(crate::ui::document::CodeBlock {
+            code: "let x = 1;".to_string(),
+            language: Some("rust".to_string()),
+        })],
+    };
+    let code_rendered = render_document(
+        &code_document,
+        ResolvedRenderSettings {
+            backend: RenderBackend::Rich,
+            color: true,
+            unicode: true,
+            width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            table_overflow: TableOverflow::Clip,
+            table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
+            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
+            style_overrides: crate::ui::style::StyleOverrides {
+                code: Some("#00ff00".to_string()),
+                ..Default::default()
+            },
+            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
+        },
+    );
+    assert!(code_rendered.contains("\x1b[38;2;0;255;0m"));
+    assert!(code_rendered.contains("let x = 1;"));
+
+    let value_document = Document {
+        blocks: vec![Block::Value(ValueBlock {
+            values: vec!["alpha".to_string()],
+            indent: 0,
+            inline_markup: false,
+            layout: ValueLayout::Vertical,
+        })],
+    };
+    let value_rendered = render_document(
+        &value_document,
+        ResolvedRenderSettings {
+            backend: RenderBackend::Rich,
+            color: true,
+            unicode: true,
+            width: None,
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 5,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            table_overflow: TableOverflow::Clip,
+            table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
+            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
+            style_overrides: crate::ui::style::StyleOverrides {
+                text: Some("#224466".to_string()),
+                ..Default::default()
+            },
+            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
+        },
+    );
+    assert!(value_rendered.contains("\x1b[38;2;34;68;102malpha\x1b[0m"));
+
+    let table_document = Document {
         blocks: vec![Block::Table(TableBlock {
             block_id: 1,
             style: TableStyle::Grid,
@@ -1175,9 +950,8 @@ fn grid_table_string_cells_honor_value_override() {
             depth: 0,
         })],
     };
-
-    let rendered = render_document(
-        &document,
+    let table_rendered = render_document(
+        &table_document,
         ResolvedRenderSettings {
             backend: RenderBackend::Rich,
             color: true,
@@ -1202,6 +976,5 @@ fn grid_table_string_cells_honor_value_override() {
             chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
         },
     );
-
-    assert!(rendered.contains("\x1b[38;2;204;85;0malice\x1b[0m"));
+    assert!(table_rendered.contains("\x1b[38;2;204;85;0malice\x1b[0m"));
 }

@@ -82,18 +82,31 @@ fn dispatch_snapshot_settings() -> insta::Settings {
 }
 
 #[test]
-fn clap_error_helpers_extract_summary_and_body_unit() {
-    let error = "\
+fn clap_error_helpers_extract_summary_and_body_when_present_or_missing_unit() {
+    let cases = [
+        (
+            "\
 error: unknown argument '--wat'\n\
 \n\
 Usage: osp config show [OPTIONS]\n\
 \n\
 tip: try --help\n\
-For more information, try '--help'.\n";
+For more information, try '--help'.\n",
+            Some("unknown argument '--wat'"),
+            "Usage: osp config show [OPTIONS]",
+        ),
+        (
+            "\nUsage: osp ldap user\nFor more information, try '--help'.\n",
+            None,
+            "Usage: osp ldap user",
+        ),
+    ];
 
-    let parsed = parse_clap_help(error);
-    assert_eq!(parsed.summary, Some("unknown argument '--wat'"));
-    assert_eq!(parsed.body, "Usage: osp config show [OPTIONS]");
+    for (error, expected_summary, expected_body) in cases {
+        let parsed = parse_clap_help(error);
+        assert_eq!(parsed.summary, expected_summary, "error: {error}");
+        assert_eq!(parsed.body, expected_body, "error: {error}");
+    }
 }
 
 #[test]
@@ -223,14 +236,6 @@ fn finalize_repl_command_uses_intro_reload_when_requested_unit() {
             reload: ReplReloadKind::WithIntro
         } if output == "saved\n"
     ));
-}
-
-#[test]
-fn clap_error_helpers_handle_missing_summary_gracefully_unit() {
-    let error = "\nUsage: osp ldap user\nFor more information, try '--help'.\n";
-    let parsed = parse_clap_help(error);
-    assert_eq!(parsed.summary, None);
-    assert_eq!(parsed.body, "Usage: osp ldap user");
 }
 
 #[test]
@@ -481,37 +486,28 @@ fn intro_pipeline_keeps_filtered_guide_structure_unit() {
 }
 
 #[test]
-fn staged_command_parse_errors_do_not_become_pipeline_input_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
-    let err = execute_repl_plugin_line(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &test_history(),
-        "intro --wat | config",
-    )
-    .expect_err("invalid staged invocation should fail before piping");
+fn staged_repl_line_validation_rejects_invalid_invocations_before_pipeline_execution_unit() {
+    let cases = [
+        ("intro --wat | config", "--wat"),
+        ("help --help | config", "invalid help target: --help"),
+    ];
 
-    assert!(err.to_string().contains("--wat"));
+    for (line, needle) in cases {
+        let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+        let err = execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &test_history(),
+            line,
+        )
+        .expect_err("invalid staged line should fail before piping");
+        assert!(err.to_string().contains(needle), "line: {line}");
+    }
 }
 
 #[test]
-fn staged_invalid_help_alias_does_not_become_pipeline_input_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
-    let err = execute_repl_plugin_line(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &test_history(),
-        "help --help | config",
-    )
-    .expect_err("invalid staged help alias should fail before piping");
-
-    assert!(err.to_string().contains("invalid help target: --help"));
-}
-
-#[test]
-fn execute_repl_plugin_line_covers_builtin_blank_dsl_and_help_shortcuts_unit() {
+fn repl_dispatch_and_classification_cover_representative_line_categories_unit() {
     let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
     state.runtime.ui.debug_verbosity = 1;
     let history = test_history();
@@ -567,11 +563,8 @@ fn execute_repl_plugin_line_covers_builtin_blank_dsl_and_help_shortcuts_unit() {
         ReplLineResult::Continue(output)
             if output.contains("Commands") && output.contains("config")
     ));
-}
 
-#[test]
-fn repl_dispatch_characterization_covers_representative_line_categories_unit() {
-    let cases = [
+    let dispatch_cases = [
         ("   ", ObservedDispatchKind::Blank),
         ("quit", ObservedDispatchKind::Exit),
         ("intro | H", ObservedDispatchKind::DslHelp),
@@ -581,16 +574,14 @@ fn repl_dispatch_characterization_covers_representative_line_categories_unit() {
         ("intro --wat | config", ObservedDispatchKind::Error),
     ];
 
-    for (line, expected) in cases {
-        let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
-        let observed = observe_dispatch_kind(&mut state, &test_history(), line);
+    for (line, expected) in dispatch_cases {
+        let mut observed_state =
+            make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+        let observed = observe_dispatch_kind(&mut observed_state, &test_history(), line);
         assert_eq!(observed, expected, "line: {line}");
     }
-}
 
-#[test]
-fn repl_line_plan_classifier_covers_representative_categories_unit() {
-    let cases = [
+    let classification_cases = [
         ("   ", ReplLinePlanKind::Blank),
         ("quit", ReplLinePlanKind::Builtin),
         ("help", ReplLinePlanKind::Builtin),
@@ -600,16 +591,22 @@ fn repl_line_plan_classifier_covers_representative_categories_unit() {
         ("intro", ReplLinePlanKind::Invocation),
     ];
 
-    for (line, expected) in cases {
-        let state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
-        let observed = classify_repl_line_kind(&state.runtime, &state.session, line)
-            .expect("classification should succeed");
+    for (line, expected) in classification_cases {
+        let classified_state =
+            make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+        let observed =
+            classify_repl_line_kind(&classified_state.runtime, &classified_state.session, line)
+                .expect("classification should succeed");
         assert_eq!(observed, expected, "line: {line}");
     }
 
-    let state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
-    let err = classify_repl_line_kind(&state.runtime, &state.session, "intro --wat | config")
-        .expect_err("invalid staged invocation should fail during classification");
+    let classified_state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let err = classify_repl_line_kind(
+        &classified_state.runtime,
+        &classified_state.session,
+        "intro --wat | config",
+    )
+    .expect_err("invalid staged invocation should fail during classification");
     assert!(err.to_string().contains("--wat"));
 }
 

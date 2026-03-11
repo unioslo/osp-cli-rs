@@ -188,10 +188,27 @@ impl CommandDef {
     /// # Examples
     ///
     /// ```
-    /// use osp_cli::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
+    /// use osp_cli::core::command_def::{
+    ///     ArgDef, CommandDef, CommandPolicyDef, FlagDef, ValueChoice, ValueKind,
+    /// };
+    /// use osp_cli::core::command_policy::VisibilityMode;
+    ///
+    /// let policy = CommandPolicyDef {
+    ///     visibility: VisibilityMode::Authenticated,
+    ///     required_capabilities: vec!["plugins.write".to_string()],
+    ///     feature_flags: vec!["beta".to_string()],
+    /// };
     ///
     /// let command = CommandDef::new("theme")
     ///     .about("Inspect themes")
+    ///     .long_about("Long theme help")
+    ///     .usage("osp theme [OPTIONS] [name]")
+    ///     .before_help("before text")
+    ///     .after_help("after text")
+    ///     .alias("skin")
+    ///     .aliases(["palette"])
+    ///     .sort("10")
+    ///     .policy(policy.clone())
     ///     .arg(
     ///         ArgDef::new("name")
     ///             .help("Theme name")
@@ -205,6 +222,13 @@ impl CommandDef {
     ///     .subcommand(CommandDef::new("list").about("List available themes"));
     ///
     /// assert_eq!(command.name, "theme");
+    /// assert_eq!(command.long_about.as_deref(), Some("Long theme help"));
+    /// assert_eq!(command.usage.as_deref(), Some("osp theme [OPTIONS] [name]"));
+    /// assert_eq!(command.before_help.as_deref(), Some("before text"));
+    /// assert_eq!(command.after_help.as_deref(), Some("after text"));
+    /// assert_eq!(command.aliases, vec!["skin".to_string(), "palette".to_string()]);
+    /// assert_eq!(command.sort_key.as_deref(), Some("10"));
+    /// assert_eq!(command.policy, policy);
     /// assert_eq!(command.args[0].choices.len(), 2);
     /// assert_eq!(command.flags[0].long.as_deref(), Some("raw"));
     /// assert_eq!(command.subcommands[0].name, "list");

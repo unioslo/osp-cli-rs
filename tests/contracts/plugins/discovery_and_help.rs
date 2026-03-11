@@ -257,6 +257,52 @@ commands = ["hello"]
 
 #[cfg(unix)]
 #[test]
+fn duplicate_plugin_ids_are_marked_unhealthy_and_removed_from_catalog_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-duplicate-ids");
+    write_mismatched_id_plugin(&dir, "alpha-bin", "shared-id", "alpha");
+    write_mismatched_id_plugin(&dir, "beta-bin", "shared-id", "beta");
+    let home = make_temp_dir("osp-cli-plugin-duplicate-ids-home");
+
+    let mut list = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let list_output = list
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "plugins", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let list_payload = parse_json_stdout(&list_output.stdout);
+    let rows = list_payload
+        .as_array()
+        .expect("plugins list should render a JSON array");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row["plugin_id"] == "shared-id"));
+    assert!(rows.iter().all(|row| row["healthy"] == false));
+    assert!(rows.iter().all(|row| {
+        row["issue"]
+            .as_str()
+            .is_some_and(|issue| issue.contains("duplicate plugin id `shared-id`"))
+    }));
+
+    let mut commands = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let commands_output = commands
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "plugins", "commands"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let commands_payload = parse_json_stdout(&commands_output.stdout);
+    let row = first_json_row(&commands_payload, "plugins commands empty state");
+    assert_eq!(row["status"], "empty");
+    assert_eq!(row["message"], "No plugin commands discovered.");
+
+}
+
+#[cfg(unix)]
+#[test]
 fn plugin_min_osp_version_mismatch_marks_plugin_unhealthy_contract() {
     let dir = make_temp_dir("osp-cli-plugin-min-osp-version");
     let _plugin_path = write_plugin_with_min_version(&dir, "future", "9.9.9");

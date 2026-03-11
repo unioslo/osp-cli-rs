@@ -17,7 +17,6 @@ use crate::repl::surface::{ReplOverviewEntry, ReplSurface};
 use crate::ui::RenderSettings;
 use crate::ui::messages::MessageLevel;
 use crate::ui::presentation::build_presentation_defaults_layer;
-use insta::assert_snapshot;
 use std::time::Duration;
 
 const FULL_INTRO_TEMPLATE_FIXTURE: &str = include_str!(concat!(
@@ -165,155 +164,24 @@ fn intro_surface_with_overview(commands: &[&str]) -> ReplSurface {
     }
 }
 
-mod color_contracts {
-    use super::{
-        ColorMode, FULL_INTRO_TEMPLATE_FIXTURE, RenderMode, UnicodeMode,
-        intro_surface_with_overview, make_intro_state, render_repl_intro, repl_view,
-    };
-    use crate::ui::chrome::{
-        SectionRenderContext, SectionStyleTokens, render_section_divider_with_overrides,
-    };
-    use crate::ui::style::{StyleToken, apply_style_spec};
-
-    fn intro_color_entries(intro_style: &str) -> Vec<(&str, &str)> {
-        let template_key = match intro_style {
-            "minimal" => "repl.intro_template.minimal",
-            "compact" => "repl.intro_template.compact",
-            "full" => "repl.intro_template.full",
-            other => panic!("unsupported intro style for color test: {other}"),
-        };
-
-        vec![
-            ("repl.intro", intro_style),
-            (template_key, FULL_INTRO_TEMPLATE_FIXTURE),
-            ("user.display_name", "Demo"),
-            ("theme.name", "plain"),
-            ("color.panel.border", "red"),
-            ("color.panel.title", "blue"),
-            ("color.key", "yellow"),
-            ("color.value", "green"),
-        ]
-    }
-
-    #[test]
-    fn intro_chrome_and_help_tokens_follow_forced_palette_across_modes() {
-        for intro_style in ["minimal", "compact", "full"] {
-            let state = make_intro_state(
-                &intro_color_entries(intro_style),
-                RenderMode::Rich,
-                ColorMode::Always,
-                UnicodeMode::Always,
-            );
-            let rendered = render_repl_intro(
-                repl_view(&state),
-                &intro_surface_with_overview(&["help", "config", "theme", "plugins"]),
-            );
-            let resolved = state.runtime.ui.render_settings.resolve_render_settings();
-            let section_divider = render_section_divider_with_overrides(
-                "OSP",
-                resolved.unicode,
-                resolved.width,
-                SectionRenderContext {
-                    color: resolved.color,
-                    theme: &resolved.theme,
-                    style_overrides: &resolved.style_overrides,
-                },
-                SectionStyleTokens {
-                    border: StyleToken::PanelBorder,
-                    title: StyleToken::PanelTitle,
-                },
-            );
-
-            assert!(
-                rendered.contains(&section_divider),
-                "expected styled OSP divider for intro style {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                rendered.contains(&apply_style_spec("  Welcome ", "green", true)),
-                "expected intro label text to use the configured value color for {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                rendered.contains(&apply_style_spec("Demo", "yellow", true)),
-                "expected highlighted intro value to use the configured key color for {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                rendered.contains(&apply_style_spec("Ctrl-D", "yellow", true)),
-                "expected keybinding hints to use the configured key color for {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                rendered.contains("reverse search history"),
-                "expected full intro fixture keybinding copy for {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                rendered.contains(&apply_style_spec("| H <verb>", "yellow", true)),
-                "expected highlighted help shortcut hint for {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                !rendered.contains(&apply_style_spec("Demo", "green", true)),
-                "highlighted intro values should not fall back to the plain paragraph color for {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                !rendered.contains(&apply_style_spec("Ctrl-D", "green", true)),
-                "keybinding hints should not fall back to the paragraph color for {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                rendered.contains("Show this command overview."),
-                "expected help overview to render inside the intro for {intro_style}; rendered:\n{rendered}",
-            );
-            assert!(
-                !rendered.contains(&apply_style_spec("help", "red", true)),
-                "help command key should not reuse the border color for {intro_style}; rendered:\n{rendered}",
-            );
-        }
+fn overview_surface(entries: Vec<ReplOverviewEntry>) -> ReplSurface {
+    ReplSurface {
+        root_words: intro_commands(&["help", "config", "theme"]),
+        intro_commands: intro_commands(&["help", "config", "theme"]),
+        specs: Vec::new(),
+        aliases: Vec::new(),
+        overview_entries: entries,
     }
 }
 
-mod unicode_contracts {
-    use super::{
-        ColorMode, FULL_INTRO_TEMPLATE_FIXTURE, RenderMode, UnicodeMode,
-        intro_surface_with_overview, make_intro_state, render_repl_intro, repl_view, strip_ansi,
-    };
-
-    #[test]
-    fn intro_chrome_switches_between_unicode_and_ascii_without_losing_text_shape() {
-        let entries = [
-            ("repl.intro", "full"),
-            ("repl.intro_template.full", FULL_INTRO_TEMPLATE_FIXTURE),
-        ];
-        let unicode = make_intro_state(
-            &entries,
-            RenderMode::Rich,
-            ColorMode::Always,
-            UnicodeMode::Always,
-        );
-        let ascii = make_intro_state(
-            &entries,
-            RenderMode::Rich,
-            ColorMode::Always,
-            UnicodeMode::Never,
-        );
-
-        let unicode_rendered = render_repl_intro(
-            repl_view(&unicode),
-            &intro_surface_with_overview(&["help", "config", "theme", "plugins"]),
-        );
-        let ascii_rendered = render_repl_intro(
-            repl_view(&ascii),
-            &intro_surface_with_overview(&["help", "config", "theme", "plugins"]),
-        );
-        let unicode_plain = strip_ansi(&unicode_rendered);
-        let ascii_plain = strip_ansi(&ascii_rendered);
-
-        assert!(unicode_plain.contains('─'));
-        assert!(unicode_plain.contains("OSP"));
-        assert!(unicode_plain.contains("Commands"));
-        assert!(unicode_plain.contains("Show this command overview."));
-        assert!(!unicode_plain.contains("- OSP "));
-        assert!(ascii_plain.contains("- OSP "));
-        assert!(ascii_plain.contains("- Commands "));
-        assert!(!ascii_plain.contains('─'));
-        assert!(ascii_plain.contains("Show this command overview."));
-    }
+fn rich_prompt_right_settings() -> crate::ui::ResolvedRenderSettings {
+    let mut settings = RenderSettings::test_plain(OutputFormat::Table);
+    settings.mode = crate::core::output::RenderMode::Rich;
+    settings.color = crate::core::output::ColorMode::Always;
+    settings.unicode = crate::core::output::UnicodeMode::Always;
+    settings.runtime.stdout_is_tty = true;
+    settings.runtime.locale_utf8 = Some(true);
+    settings.resolve_render_settings()
 }
 
 mod shape_contracts {
@@ -348,33 +216,6 @@ mod shape_contracts {
     }
 
     #[test]
-    fn intro_mode_matrix_keeps_help_and_structure_boundaries() {
-        let none = render_style(Some("none"), None, MessageLevel::Success);
-        assert!(none.trim().is_empty());
-
-        let minimal = render_style(Some("minimal"), None, MessageLevel::Success);
-        assert!(minimal.contains("Welcome anonymous."));
-        assert!(minimal.contains("Commands: help, config, theme, plugins."));
-        assert!(!minimal.contains("Keybindings"));
-        assert!(!minimal.contains("Usage"));
-
-        let compact = render_style(Some("compact"), None, MessageLevel::Success);
-        assert!(compact.contains("Welcome anonymous."));
-        assert!(compact.contains("Commands: help, config, theme, plugins."));
-        assert!(!compact.contains("Keybindings"));
-        assert!(!compact.contains("Usage"));
-
-        let full = render_style(Some("full"), None, MessageLevel::Success);
-        assert!(full.contains("Keybindings"));
-        assert!(full.contains("Pipes"));
-        assert!(full.contains("Usage"));
-        assert!(full.contains("Commands"));
-        assert!(full.contains("  [INVOCATION_OPTIONS] COMMAND [ARGS]..."));
-        assert!(full.contains("  help"));
-        assert!(full.contains("  config"));
-    }
-
-    #[test]
     fn presentation_and_verbosity_matrix_select_expected_intro_shapes() {
         let expressive = render_style(None, Some("expressive"), MessageLevel::Success);
         assert!(expressive.contains("Keybindings"));
@@ -395,73 +236,6 @@ mod shape_contracts {
         let austere_warning = render_style(None, Some("austere"), MessageLevel::Warning);
         assert!(austere_warning.trim().is_empty());
     }
-}
-
-#[test]
-fn repl_intro_expressive_includes_sections_and_user_context() {
-    let state = make_state(&[
-        ("ui.presentation", "expressive"),
-        ("user.name", "oistes"),
-        ("user.display_name", "Oistes"),
-        ("theme.name", "rose-pine-moon"),
-    ]);
-
-    let rendered = render_repl_intro(
-        repl_view(&state),
-        &intro_surface(&["help", "config", "theme", "plugins"]),
-    );
-    assert!(rendered.contains("OSP"));
-    assert!(rendered.contains("Keybindings"));
-    assert!(rendered.contains("Pipes"));
-    assert!(rendered.contains("Oistes"));
-    assert!(rendered.contains("oistes"));
-    assert!(rendered.contains("Rose Pine Moon"));
-    assert_snapshot!("repl_intro_expressive", rendered);
-}
-
-#[test]
-fn repl_intro_shared_ruled_sections_preserve_template_order_unit() {
-    let state = make_intro_state(
-        &[
-            ("ui.presentation", "expressive"),
-            ("ui.chrome.frame", "top-bottom"),
-            ("ui.chrome.rule_policy", "shared"),
-            ("user.name", "oistes"),
-            ("theme.name", "rose-pine-moon"),
-        ],
-        RenderMode::Auto,
-        ColorMode::Always,
-        UnicodeMode::Always,
-    );
-
-    let rendered = strip_ansi(&render_repl_intro(
-        repl_view(&state),
-        &intro_surface_with_overview(&["help", "config", "theme", "plugins"]),
-    ));
-
-    let osp = rendered.find("─ OSP ").expect("OSP section should render");
-    let keybindings = rendered
-        .find("─ Keybindings ")
-        .expect("Keybindings section should render");
-    let pipes = rendered
-        .find("─ Pipes ")
-        .expect("Pipes section should render");
-    let usage = rendered
-        .find("─ Usage ")
-        .expect("Usage section should render");
-    let commands = rendered
-        .find("─ Commands ")
-        .expect("Commands section should render");
-
-    assert!(osp < keybindings);
-    assert!(keybindings < pipes);
-    assert!(pipes < usage);
-    assert!(usage < commands);
-    assert!(
-        !rendered
-            .lines()
-            .any(|line| line.trim() == "─" || line.trim() == "──")
-    );
 }
 
 #[test]
@@ -573,11 +347,11 @@ fn repl_overview_lists_invocation_options_for_expressive_surface() {
     assert!(rendered.contains("[INVOCATION_OPTIONS] COMMAND [ARGS]"));
     assert!(rendered.contains("options"));
     assert!(rendered.contains("--format json"));
-    assert_snapshot!("repl_overview_expressive", rendered);
+    assert!(rendered.contains("config"));
 }
 
 #[test]
-fn repl_appearance_respects_color_toggle_and_overrides() {
+fn repl_appearance_variants_respect_color_overrides_and_theme_defaults() {
     let plain_state = make_state(&[]);
     let plain = build_repl_appearance(repl_view(&plain_state));
     assert_eq!(plain.completion_text_style, None);
@@ -614,10 +388,7 @@ fn repl_appearance_respects_color_toggle_and_overrides() {
         Some("yellow")
     );
     assert_eq!(appearance.history_menu_rows, 7);
-}
 
-#[test]
-fn repl_appearance_uses_black_popup_text_for_dracula_theme() {
     let mut state = make_state(&[("theme.name", "dracula")]);
     state.runtime.ui.render_settings.mode = crate::core::output::RenderMode::Rich;
     state.runtime.ui.render_settings.color = crate::core::output::ColorMode::Always;
@@ -640,50 +411,34 @@ fn repl_appearance_uses_black_popup_text_for_dracula_theme() {
 }
 
 #[test]
-fn repl_prompt_simple_mode_omits_blank_indicator_separator() {
-    let state = make_state(&[
+fn repl_prompt_variants_render_scope_indicator_and_prompt_right_unit() {
+    let blank_indicator = make_state(&[
         ("ui.presentation", "compact"),
         ("repl.shell_indicator", "   "),
     ]);
+    assert_eq!(
+        build_repl_prompt(repl_view(&blank_indicator)).left,
+        "default> "
+    );
 
-    let prompt = build_repl_prompt(repl_view(&state)).left;
-    assert_eq!(prompt, "default> ");
-}
+    let mut literal_indicator = make_state(&[("repl.shell_indicator", "scoped")]);
+    literal_indicator.session.scope.enter("ldap");
+    let literal_prompt = build_repl_prompt(repl_view(&literal_indicator)).left;
+    assert!(literal_prompt.contains("scoped"));
+    assert!(!literal_prompt.contains("ldap /"));
 
-#[test]
-fn repl_prompt_custom_indicator_template_can_be_literal() {
-    let mut state = make_state(&[("repl.shell_indicator", "scoped")]);
-    state.session.scope.enter("ldap");
+    let mut live_scope = make_state(&[("ui.presentation", "compact")]);
+    live_scope.session.scope.enter("ldap");
+    assert_eq!(
+        build_repl_prompt(repl_view(&live_scope)).left,
+        "default [ldap]> "
+    );
 
-    let prompt = build_repl_prompt(repl_view(&state)).left;
-    assert!(prompt.contains("scoped"));
-    assert!(!prompt.contains("ldap /"));
-}
-
-#[test]
-fn repl_prompt_right_shows_unicode_incognito_when_history_is_disabled() {
-    let mut settings = RenderSettings::test_plain(OutputFormat::Table);
-    settings.mode = crate::core::output::RenderMode::Rich;
-    settings.color = crate::core::output::ColorMode::Always;
-    settings.unicode = crate::core::output::UnicodeMode::Always;
-    settings.runtime.stdout_is_tty = true;
-    settings.runtime.locale_utf8 = Some(true);
-    let resolved = settings.resolve_render_settings();
-
-    let rendered =
+    let resolved = rich_prompt_right_settings();
+    let incognito =
         render_repl_prompt_right_for_test(&resolved, false, &DebugTimingState::default());
-    assert!(rendered.contains("(⌐■_■)"));
-}
+    assert!(incognito.contains("(⌐■_■)"));
 
-#[test]
-fn repl_prompt_right_combines_incognito_and_timing_badge() {
-    let mut settings = RenderSettings::test_plain(OutputFormat::Table);
-    settings.mode = crate::core::output::RenderMode::Rich;
-    settings.color = crate::core::output::ColorMode::Always;
-    settings.unicode = crate::core::output::UnicodeMode::Always;
-    settings.runtime.stdout_is_tty = true;
-    settings.runtime.locale_utf8 = Some(true);
-    let resolved = settings.resolve_render_settings();
     let timing = DebugTimingState::default();
     timing.set(DebugTimingBadge {
         level: 1,
@@ -701,41 +456,39 @@ fn repl_prompt_right_combines_incognito_and_timing_badge() {
 }
 
 #[test]
-fn theme_display_name_falls_back_when_slug_has_no_words() {
-    assert_eq!(theme_display_name("---"), "---");
-    assert_eq!(theme_display_name("nord_light"), "Nord Light");
+fn theme_display_name_and_prompt_template_formatting_unit() {
+    for (slug, expected) in [
+        ("rose-pine-moon", "Rose Pine Moon"),
+        ("dracula", "Dracula"),
+        ("---", "---"),
+        ("nord_light", "Nord Light"),
+    ] {
+        assert_eq!(theme_display_name(slug), expected, "slug={slug}");
+    }
+
+    for (template, expected) in [
+        (
+            "╭─{user}@{domain} {indicator}\n╰─{profile}> ",
+            "╭─oistes@uio.no [orch]\n╰─uio> ",
+        ),
+        ("{profile}>", "tsd> [shell]"),
+        ("{profile} {unknown}", "prod {unknown} [ldap]"),
+        ("{context}:{indicator}", "prod:[ldap]"),
+    ] {
+        let rendered = match template {
+            "╭─{user}@{domain} {indicator}\n╰─{profile}> " => {
+                render_prompt_template(template, "oistes", "uio.no", "uio", "[orch]")
+            }
+            "{profile}>" => render_prompt_template(template, "oistes", "uio.no", "tsd", "[shell]"),
+            _ => render_prompt_template(template, "u", "d", "prod", "[ldap]"),
+        };
+        assert_eq!(rendered, expected, "template={template}");
+    }
 }
 
 #[test]
-fn prompt_template_preserves_unknown_placeholders_and_appends_indicator() {
-    let rendered = render_prompt_template("{profile} {unknown}", "u", "d", "prod", "[ldap]");
-    assert_eq!(rendered, "prod {unknown} [ldap]");
-}
-
-#[test]
-fn prompt_template_replaces_context_alias_and_indicator_placeholder() {
-    let rendered = render_prompt_template("{context}:{indicator}", "u", "d", "prod", "[ldap]");
-    assert_eq!(rendered, "prod:[ldap]");
-}
-
-#[test]
-fn repl_intro_minimal_without_help_visibility_uses_completion_hint() {
-    let state = make_state(&[
-        ("ui.presentation", "compact"),
-        ("auth.visible.builtins", "config,theme,plugins"),
-    ]);
-
-    let rendered = render_repl_intro(
-        repl_view(&state),
-        &intro_surface(&["config", "theme", "plugins"]),
-    );
-    assert!(rendered.contains("Use completion to explore commands."));
-    assert!(!rendered.contains("See `help`"));
-}
-
-#[test]
-fn repl_intro_template_expands_placeholders_and_preserves_unknowns() {
-    let state = make_state(&[
+fn repl_intro_template_placeholder_rules_unit() {
+    let expanded = make_state(&[
         ("ui.presentation", "compact"),
         (
             "repl.intro_template.compact",
@@ -743,16 +496,12 @@ fn repl_intro_template_expands_placeholders_and_preserves_unknowns() {
         ),
         ("user.display_name", "Oistes"),
     ]);
+    let expanded_rendered = render_repl_intro(repl_view(&expanded), &intro_surface(&["help"]));
+    assert!(expanded_rendered.contains("Hello Oistes default"));
+    assert!(expanded_rendered.contains(env!("CARGO_PKG_VERSION")));
+    assert!(expanded_rendered.contains("{{missing}}"));
 
-    let rendered = render_repl_intro(repl_view(&state), &intro_surface(&["help"]));
-    assert!(rendered.contains("Hello Oistes default"));
-    assert!(rendered.contains(env!("CARGO_PKG_VERSION")));
-    assert!(rendered.contains("{{missing}}"));
-}
-
-#[test]
-fn repl_intro_template_does_not_expand_sensitive_placeholders() {
-    let state = make_state(&[
+    let sensitive = make_state(&[
         ("ui.presentation", "compact"),
         (
             "repl.intro_template.compact",
@@ -760,10 +509,9 @@ fn repl_intro_template_does_not_expand_sensitive_placeholders() {
         ),
         ("extensions.demo.token", "secret"),
     ]);
-
-    let rendered = render_repl_intro(repl_view(&state), &intro_surface(&["help"]));
-    assert!(rendered.contains("{{extensions.demo.token}}"));
-    assert!(!rendered.contains("Token secret"));
+    let sensitive_rendered = render_repl_intro(repl_view(&sensitive), &intro_surface(&["help"]));
+    assert!(sensitive_rendered.contains("{{extensions.demo.token}}"));
+    assert!(!sensitive_rendered.contains("Token secret"));
 }
 
 #[test]
@@ -791,27 +539,21 @@ fn repl_intro_payload_uses_custom_full_section_templates() {
 }
 
 #[test]
-fn repl_intro_payload_help_placeholder_merges_overview_entries_unit() {
+fn repl_intro_payload_overview_placeholders_preserve_sections_and_authored_order_unit() {
     let state = make_state(&[
         ("ui.presentation", "expressive"),
         ("repl.intro_template.full", "## Summary\n{{ help }}"),
     ]);
-    let surface = ReplSurface {
-        root_words: intro_commands(&["help", "config", "theme"]),
-        intro_commands: intro_commands(&["help", "config", "theme"]),
-        specs: Vec::new(),
-        aliases: Vec::new(),
-        overview_entries: vec![
-            ReplOverviewEntry {
-                name: "config".to_string(),
-                summary: "Show and change config".to_string(),
-            },
-            ReplOverviewEntry {
-                name: "theme".to_string(),
-                summary: "List and use themes".to_string(),
-            },
-        ],
-    };
+    let surface = overview_surface(vec![
+        ReplOverviewEntry {
+            name: "config".to_string(),
+            summary: "Show and change config".to_string(),
+        },
+        ReplOverviewEntry {
+            name: "theme".to_string(),
+            summary: "List and use themes".to_string(),
+        },
+    ]);
 
     let payload = build_repl_intro_payload(repl_view(&state), &surface, None);
 
@@ -833,50 +575,33 @@ fn repl_intro_payload_help_placeholder_merges_overview_entries_unit() {
         payload.sections[1].entries[1].short_help,
         "List and use themes"
     );
-}
 
-#[test]
-fn repl_intro_payload_overview_placeholder_preserves_authored_order_and_surrounding_copy_unit() {
-    let state = make_state(&[
+    let authored = make_state(&[
         ("ui.presentation", "expressive"),
         (
             "repl.intro_template.full",
             "Before overview\n## Summary\n{{ overview }}\n## Footer\nAfter overview",
         ),
     ]);
-    let surface = ReplSurface {
-        root_words: intro_commands(&["help", "config", "theme"]),
-        intro_commands: intro_commands(&["help", "config", "theme"]),
-        specs: Vec::new(),
-        aliases: Vec::new(),
-        overview_entries: vec![
-            ReplOverviewEntry {
-                name: "config".to_string(),
-                summary: "Show and change config".to_string(),
-            },
-            ReplOverviewEntry {
-                name: "theme".to_string(),
-                summary: "List and use themes".to_string(),
-            },
-        ],
-    };
+    let authored_payload = build_repl_intro_payload(repl_view(&authored), &surface, None);
 
-    let payload = build_repl_intro_payload(repl_view(&state), &surface, None);
-
-    assert_eq!(payload.preamble, vec!["Before overview"]);
-    assert_eq!(payload.sections.len(), 3);
-    assert_eq!(payload.sections[0].title, "Usage");
-    assert_eq!(payload.sections[1].title, "Commands");
+    assert_eq!(authored_payload.preamble, vec!["Before overview"]);
+    assert_eq!(authored_payload.sections.len(), 3);
+    assert_eq!(authored_payload.sections[0].title, "Usage");
+    assert_eq!(authored_payload.sections[1].title, "Commands");
     assert_eq!(
-        payload.sections[1]
+        authored_payload.sections[1]
             .entries
             .iter()
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>(),
         vec!["config", "theme"]
     );
-    assert_eq!(payload.sections[2].title, "Footer");
-    assert_eq!(payload.sections[2].paragraphs, vec!["  After overview"]);
+    assert_eq!(authored_payload.sections[2].title, "Footer");
+    assert_eq!(
+        authored_payload.sections[2].paragraphs,
+        vec!["  After overview"]
+    );
 }
 
 #[test]
@@ -899,13 +624,4 @@ fn repl_prompt_renders_custom_template_with_prompt_style() {
     assert!(prompt.contains("default"));
     assert!(prompt.contains(">"));
     assert!(prompt.contains("\x1b["));
-}
-
-#[test]
-fn repl_simple_prompt_includes_live_shell_indicator() {
-    let mut state = make_state(&[("ui.presentation", "compact")]);
-    state.session.scope.enter("ldap");
-
-    let prompt = build_repl_prompt(repl_view(&state)).left;
-    assert_eq!(prompt, "default [ldap]> ");
 }

@@ -200,19 +200,29 @@ mod tests {
     }
 
     #[test]
-    fn parses_help_alias_into_dispatch_tokens() {
-        let parsed = ReplParsedLine::parse("help ldap user", &make_config())
-            .expect("help alias should parse");
-
+    fn help_alias_parsing_rewrite_and_shell_entry_rules_cover_valid_and_invalid_cases_unit() {
+        let config = make_config();
+        let parsed =
+            ReplParsedLine::parse("help ldap user", &config).expect("help alias should parse");
         assert_eq!(parsed.command_tokens, vec!["help", "ldap", "user"]);
         assert_eq!(parsed.dispatch_tokens, vec!["ldap", "user", "--help"]);
-    }
 
-    #[test]
-    fn shell_entry_checks_dispatch_tokens_and_scope() {
-        let config = make_config();
+        let rewritten = rewrite_help_alias_tokens_at(
+            &["orch".to_string(), "help".to_string(), "status".to_string()],
+            1,
+        )
+        .expect("help alias should rewrite after a scope prefix");
+        assert_eq!(rewritten, vec!["orch", "status", "--help"]);
+
+        for invalid in [
+            vec!["help".to_string(), "help".to_string()],
+            vec!["help".to_string(), "--help".to_string()],
+        ] {
+            assert!(rewrite_help_alias_tokens_at(&invalid, 0).is_none());
+            assert!(!has_valid_help_alias_target(&invalid, 0));
+        }
+
         let mut scope = ReplScopeStack::default();
-
         let ldap = ReplParsedLine::parse("ldap", &config).expect("shell should parse");
         assert_eq!(ldap.shell_entry_command(&scope), Some("ldap"));
 
@@ -225,101 +235,70 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_help_alias_after_scope_prefix_unit() {
-        let rewritten = rewrite_help_alias_tokens_at(
-            &["orch".to_string(), "help".to_string(), "status".to_string()],
-            1,
-        )
-        .expect("help alias should rewrite");
+    fn project_repl_ui_line_masks_invocation_tokens_while_preserving_visible_targets_unit() {
+        let config = make_config();
 
-        assert_eq!(rewritten, vec!["orch", "status", "--help"]);
-    }
-
-    #[test]
-    fn invalid_help_alias_targets_do_not_rewrite_unit() {
-        assert!(
-            rewrite_help_alias_tokens_at(&["help".to_string(), "help".to_string()], 0).is_none()
-        );
-        assert!(
-            rewrite_help_alias_tokens_at(&["help".to_string(), "--help".to_string()], 0).is_none()
-        );
-        assert!(!has_valid_help_alias_target(
-            &["help".to_string(), "help".to_string()],
-            0
-        ));
-        assert!(!has_valid_help_alias_target(
-            &["help".to_string(), "--help".to_string()],
-            0
-        ));
-    }
-
-    #[test]
-    fn projects_repl_ui_line_hides_invocation_flags_and_help_keyword_unit() {
-        let projected = project_repl_ui_line("--json help ldap user", &make_config())
+        let projected = project_repl_ui_line("--json help ldap user", &config)
             .expect("projection should succeed");
-
         assert!(projected.line.contains("ldap user"));
         assert!(!projected.line.contains("--json"));
         assert!(!projected.line.contains("help"));
         assert_eq!(projected.line.len(), "--json help ldap user".len());
+
+        let empty = project_repl_ui_line("", &config).expect("projection should succeed");
+        assert_eq!(empty.line, "");
+        assert!(empty.hidden_suggestions.contains("--json"));
+
+        for (line, visible_fragment) in [("help history", "history"), ("help his", "his")] {
+            let projected = project_repl_ui_line(line, &config).expect("projection should succeed");
+            assert!(!projected.line.contains("help"));
+            assert!(projected.line.contains(visible_fragment), "line: {line}");
+        }
     }
 
     #[test]
-    fn projects_empty_repl_ui_line_without_tokenization_unit() {
-        let projected =
-            project_repl_ui_line("", &make_config()).expect("projection should succeed");
-        assert_eq!(projected.line, "");
-        assert!(projected.hidden_suggestions.contains("--json"));
-    }
+    fn project_repl_ui_line_hidden_suggestions_follow_help_verbosity_and_used_flags_unit() {
+        let config = make_config();
 
-    #[test]
-    fn projection_hides_invocation_completion_flags_until_verbose_unit() {
-        let projected =
-            project_repl_ui_line("history -", &make_config()).expect("projection should succeed");
-        assert!(projected.hidden_suggestions.contains("--json"));
-        assert!(projected.hidden_suggestions.contains("--debug"));
+        let cases = [
+            ("history -", vec!["--json", "--debug"], Vec::<&str>::new()),
+            (
+                "-v history -",
+                Vec::<&str>::new(),
+                vec!["--json", "--debug"],
+            ),
+            (
+                "-v --json history -",
+                vec!["--json", "--format", "--table"],
+                vec!["--debug"],
+            ),
+            (
+                "help ",
+                vec!["help", "--json", "--debug"],
+                Vec::<&str>::new(),
+            ),
+            (
+                "help history -",
+                vec!["--json", "--debug"],
+                vec!["--verbose"],
+            ),
+        ];
 
-        let projected = project_repl_ui_line("-v history -", &make_config())
-            .expect("projection should succeed");
-        assert!(!projected.hidden_suggestions.contains("--json"));
-        assert!(!projected.hidden_suggestions.contains("--debug"));
-    }
+        for (line, hidden, visible) in cases {
+            let projected = project_repl_ui_line(line, &config).expect("projection should succeed");
 
-    #[test]
-    fn projection_suppresses_used_one_shot_invocation_flags_unit() {
-        let projected = project_repl_ui_line("-v --json history -", &make_config())
-            .expect("projection should succeed");
-        assert!(projected.hidden_suggestions.contains("--json"));
-        assert!(projected.hidden_suggestions.contains("--format"));
-        assert!(projected.hidden_suggestions.contains("--table"));
-        assert!(!projected.hidden_suggestions.contains("--debug"));
-    }
-
-    #[test]
-    fn projection_blanks_help_keyword_but_keeps_target_text_unit() {
-        let projected = project_repl_ui_line("help history", &make_config())
-            .expect("projection should succeed");
-        assert!(!projected.line.contains("help"));
-        assert!(projected.line.contains("history"));
-
-        let partial =
-            project_repl_ui_line("help his", &make_config()).expect("projection should succeed");
-        assert!(!partial.line.contains("help"));
-        assert!(partial.line.contains("his"));
-    }
-
-    #[test]
-    fn help_projection_hides_help_and_non_verbose_flags_unit() {
-        let projected =
-            project_repl_ui_line("help ", &make_config()).expect("projection should succeed");
-        assert!(projected.hidden_suggestions.contains("help"));
-        assert!(projected.hidden_suggestions.contains("--json"));
-        assert!(projected.hidden_suggestions.contains("--debug"));
-
-        let target = project_repl_ui_line("help history -", &make_config())
-            .expect("projection should succeed");
-        assert!(!target.hidden_suggestions.contains("--verbose"));
-        assert!(target.hidden_suggestions.contains("--json"));
-        assert!(target.hidden_suggestions.contains("--debug"));
+            for suggestion in hidden {
+                assert!(
+                    projected.hidden_suggestions.contains(suggestion),
+                    "line: {line}, expected hidden: {suggestion}"
+                );
+            }
+            for suggestion in visible {
+                assert!(
+                    !projected.hidden_suggestions.contains(suggestion),
+                    "line: {line}, expected visible: {suggestion}"
+                );
+            }
+        }
     }
 }
