@@ -109,6 +109,27 @@ fn grouped_quick_uses_single_row_mode_per_group_unit() {
 }
 
 #[test]
+fn single_row_quick_keeps_all_matching_branches_when_every_branch_matches_unit() {
+    let rows = vec![row(json!({
+        "id": 55753,
+        "txts": {"id": 27994},
+        "ipaddresses": [{"id": 57171}, {"id": 57172}],
+        "metadata": {"asset": {"id": 42}}
+    }))];
+
+    let filtered = apply_with_plan(rows, &compile("id").unwrap()).expect("quick should work");
+    assert_eq!(
+        filtered,
+        vec![row(json!({
+            "id": 55753,
+            "txts": {"id": 27994},
+            "ipaddresses": [{"id": 57171}, {"id": 57172}],
+            "metadata": {"asset": {"id": 42}}
+        }))]
+    );
+}
+
+#[test]
 fn positive_single_row_quick_filters_matching_array_values_unit() {
     let rows = vec![row(json!({
         "uid": "alice",
@@ -195,6 +216,37 @@ fn path_scoped_row_quick_preserves_row_value_divergence_unit() {
     let no_match = apply_with_plan(rows, &compile("users[9]").unwrap())
         .expect("missing structural path should simply drop the row");
     assert!(no_match.is_empty());
+}
+
+#[test]
+fn dotted_tokens_fall_back_to_visible_row_search_when_no_structural_match_exists_unit() {
+    let rows = vec![
+        row(json!({"key": "theme.name", "value": "dracula"})),
+        row(json!({"key": "theme.path", "value": "/tmp/themes"})),
+    ];
+
+    let exact = apply_with_plan(rows.clone(), &compile("theme.name").unwrap())
+        .expect("dotted quick should fall back to visible row search");
+    assert_eq!(
+        exact,
+        vec![row(json!({"key": "theme.name", "value": "dracula"}))]
+    );
+
+    let partial = apply_with_plan(rows, &compile("theme.n").unwrap())
+        .expect("partial dotted quick should still search row values");
+    assert_eq!(
+        partial,
+        vec![row(json!({"key": "theme.name", "value": "dracula"}))]
+    );
+}
+
+#[test]
+fn escaped_dotted_tokens_match_visible_row_text_unit() {
+    let rows = vec![row(json!({"key": "theme.name", "value": "dracula"}))];
+
+    let escaped = apply_with_plan(rows, &compile(r#"theme\.name"#).unwrap())
+        .expect("escaped dotted quick should behave like a literal text search");
+    assert_eq!(escaped, vec![row(json!({"key": "theme.name"}))]);
 }
 
 #[test]

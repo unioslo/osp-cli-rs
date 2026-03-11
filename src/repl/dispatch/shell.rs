@@ -505,10 +505,16 @@ mod tests {
     #[test]
     fn root_help_shortcut_supports_explicit_value_format_with_dsl_unit() {
         let mut state = app_state();
-        let rendered = render_root_help_line(&mut state, "--value help | help");
-        assert!(rendered.contains("[INVOCATION_OPTIONS] COMMAND [ARGS]..."));
-        assert!(rendered.contains("Show this command overview."));
-        assert!(rendered.contains("Inspect and edit runtime config"));
+        let rendered = render_root_help_line(&mut state, "--value help | doctor");
+        assert!(
+            !rendered.contains("[INVOCATION_OPTIONS] COMMAND [ARGS]..."),
+            "quick should prune unmatched root siblings in value mode: {rendered:?}"
+        );
+        assert!(rendered.contains("Run diagnostics checks"));
+        assert!(
+            !rendered.contains("Show this command overview."),
+            "unexpected extra value-mode payload: {rendered:?}"
+        );
         assert!(!rendered.contains("Commands"));
     }
 
@@ -522,6 +528,10 @@ mod tests {
             .as_array()
             .expect("staged help json should be row array");
         assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].get("usage").is_none(),
+            "filtered root help should not retain unrelated usage envelope",
+        );
         let commands = rows[0]["commands"]
             .as_array()
             .expect("help row should contain commands");

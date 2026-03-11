@@ -1,22 +1,19 @@
 ---
-source: tests/contracts/help_commands.rs
-assertion_line: 412
+source: tests/contracts/help_commands/command_help.rs
+assertion_line: 13
 expression: plain
 ---
 Manage persisted REPL history
 
-
 - Usage ----------------------------------------------------------------
   osp history [OPTIONS] <COMMAND>
 ------------------------------------------------------------------------
-
 - Commands -------------------------------------------------------------
   list   List persisted history entries
   prune  Retain only the newest `keep` entries
   clear  Remove all persisted history entries
   help   Print this message or the help of the given subcommand(s)
 ------------------------------------------------------------------------
-
 - Options --------------------------------------------------------------
   -i, --incognito                    Disable persistent REPL history and other identity-linked behavior
       --profile <PROFILE>            Select the active config profile for the invocation

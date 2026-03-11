@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::core::output_model::{OutputItems, OutputResult, output_items_to_value};
+use crate::core::output_model::{OutputResult, output_items_to_value};
 use crate::guide::GuideView;
 use crate::ui::document::Document;
 use crate::ui::document_model::{DocumentModel, LowerDocumentOptions};
@@ -15,6 +15,7 @@ pub(super) fn build_guide_document(
         return DocumentModel::from_guide_view(&guide).lower_to_render_document(
             LowerDocumentOptions {
                 frame_style: guide_settings.frame_style,
+                ruled_section_policy: guide_settings.ruled_section_policy,
                 panel_kind: Some("guide"),
                 key_value_border: guide_settings.help_chrome.table_border,
                 key_value_indent: guide_settings.help_chrome.entry_indent,
@@ -25,13 +26,10 @@ pub(super) fn build_guide_document(
     }
 
     let value = output_to_value(output);
-    let preferred_root_keys = match &output.items {
-        OutputItems::Rows(rows) if rows.len() == 1 => Some(output.meta.key_index.as_slice()),
-        _ => None,
-    };
-    DocumentModel::from_value(&value, preferred_root_keys).lower_to_render_document(
+    DocumentModel::from_value(&value, None).lower_to_render_document(
         LowerDocumentOptions {
             frame_style: guide_settings.frame_style,
+            ruled_section_policy: guide_settings.ruled_section_policy,
             panel_kind: Some("guide"),
             key_value_border: guide_settings.help_chrome.table_border,
             key_value_indent: None,
@@ -104,6 +102,31 @@ mod tests {
                 .iter()
                 .all(|block| matches!(block, Block::Line(_)))
         );
+    }
+
+    #[test]
+    fn guide_renderer_preserves_input_object_key_order_unit() {
+        let output = OutputResult::from_rows(vec![
+            json!({
+                "theme": "rose-pine-moon",
+                "user": "oistes",
+                "version": "1.4.9"
+            })
+            .as_object()
+            .cloned()
+            .expect("object"),
+        ]);
+        let settings = RenderSettings::test_plain(OutputFormat::Guide);
+        let rendered = render_document(
+            &build_document_from_output(&output, &settings),
+            settings.resolve_render_settings(),
+        );
+        let theme = rendered.find("theme:").expect("theme row");
+        let user = rendered.find("user:").expect("user row");
+        let version = rendered.find("version:").expect("version row");
+
+        assert!(theme < user);
+        assert!(user < version);
     }
 
     #[test]

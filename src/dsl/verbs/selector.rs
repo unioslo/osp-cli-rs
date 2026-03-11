@@ -324,62 +324,56 @@ pub(crate) fn project_row_matches(matches: &[AddressedValue]) -> Vec<Row> {
     }
 }
 
-/// Recursive envelope-preserving traversal for permissive descendant matching.
+/// Recursive descendant filter for permissive quick/filter matching.
 ///
-/// Descends into container fields, tests leaf records and scalars against
-/// `predicate`, and keeps container metadata whenever at least one descendant
-/// matched. Structural path selectors should use the addressed rewrite helpers
-/// above instead.
+/// Contract:
+///
+/// - objects narrow to the child fields that matched
+/// - arrays keep only matching elements
+/// - leaf array records may stay whole when that still narrows the array
+/// - if whole-element retention would make the array branch a no-op, the
+///   element narrows instead
+/// - unrelated ancestor siblings do not survive just because a descendant did
+///
+/// Structural path selectors should use the addressed rewrite helpers above
+/// instead.
 pub(crate) fn filter_descendants<F>(value: Value, predicate: F) -> Result<Value>
 where
     F: Fn(&Row) -> bool + Copy,
 {
+    filter_descendants_with_options(value, predicate, true)
+}
+
+pub(crate) fn filter_descendants_with_options<F>(
+    value: Value,
+    predicate: F,
+    allow_container_key_match: bool,
+) -> Result<Value>
+where
+    F: Fn(&Row) -> bool + Copy,
+{
+    filter_descendants_in_context(value, predicate, false, allow_container_key_match)
+}
+
+fn filter_descendants_in_context<F>(
+    value: Value,
+    predicate: F,
+    preserve_item_siblings: bool,
+    allow_container_key_match: bool,
+) -> Result<Value>
+where
+    F: Fn(&Row) -> bool + Copy,
+{
     match value {
-        Value::Object(map) if json::is_leaf_record_map(&map) => {
-            if predicate(&map) {
-                Ok(Value::Object(map))
-            } else {
-                Ok(Value::Null)
-            }
+        Value::Object(map) => filter_object_descendants(
+            map,
+            predicate,
+            preserve_item_siblings,
+            allow_container_key_match,
+        ),
+        Value::Array(items) => {
+            filter_array_descendants(items, predicate, allow_container_key_match)
         }
-        Value::Object(map) => {
-            let mut out = serde_json::Map::new();
-            let mut deferred_envelope = Vec::new();
-            let mut preserved_nested = false;
-            for (key, child) in map {
-                let keep_as_envelope_field = json::is_envelope_field(&child);
-                if should_match_field_as_whole(&child) && predicate(&single_field_row(&key, &child))
-                {
-                    out.insert(key, child);
-                    continue;
-                }
-                let transformed = filter_descendants(child.clone(), predicate)?;
-                if !json::is_structurally_empty(&transformed) {
-                    preserved_nested = true;
-                    out.insert(key, transformed);
-                } else if keep_as_envelope_field {
-                    deferred_envelope.push((key, child));
-                }
-            }
-            if preserved_nested {
-                for (key, value) in deferred_envelope {
-                    out.entry(key).or_insert(value);
-                }
-            }
-            Ok(Value::Object(out))
-        }
-        Value::Array(items) => Ok(Value::Array(
-            items
-                .into_iter()
-                .filter_map(|item| match filter_descendants(item, predicate) {
-                    Ok(transformed) if !json::is_structurally_empty(&transformed) => {
-                        Some(Ok(transformed))
-                    }
-                    Ok(_) => None,
-                    Err(err) => Some(Err(err)),
-                })
-                .collect::<Result<Vec<_>>>()?,
-        )),
         scalar => {
             if predicate(&single_value_row(&scalar)) {
                 Ok(scalar)
@@ -388,6 +382,134 @@ where
             }
         }
     }
+}
+
+fn filter_array_descendants<F>(
+    items: Vec<Value>,
+    predicate: F,
+    allow_container_key_match: bool,
+) -> Result<Value>
+where
+    F: Fn(&Row) -> bool + Copy,
+{
+    let mut blunt = Vec::new();
+    let mut narrow = Vec::new();
+    let original = items.clone();
+
+    for item in items {
+        // Arrays keep matching elements as the main retention unit. Leaf rows
+        // still get a narrower fallback so a singleton match does not degrade
+        // into a fake no-op like `[{"name":"doctor"}] | doctor`.
+        let narrowed = match &item {
+            Value::Object(map) if json::is_leaf_record_map(map) => filter_descendants_in_context(
+                item.clone(),
+                predicate,
+                false,
+                allow_container_key_match,
+            )?,
+            Value::Object(_) => filter_descendants_in_context(
+                item.clone(),
+                predicate,
+                true,
+                allow_container_key_match,
+            )?,
+            _ => filter_descendants_in_context(
+                item.clone(),
+                predicate,
+                false,
+                allow_container_key_match,
+            )?,
+        };
+
+        if json::is_structurally_empty(&narrowed) {
+            continue;
+        }
+
+        narrow.push(narrowed.clone());
+        if should_keep_array_item_whole(&item) {
+            blunt.push(item);
+        } else {
+            blunt.push(narrowed);
+        }
+    }
+
+    let blunt_value = Value::Array(blunt);
+    if blunt_value == Value::Array(original) {
+        Ok(Value::Array(narrow))
+    } else {
+        Ok(blunt_value)
+    }
+}
+
+fn filter_object_descendants<F>(
+    map: serde_json::Map<String, Value>,
+    predicate: F,
+    preserve_item_siblings: bool,
+    allow_container_key_match: bool,
+) -> Result<Value>
+where
+    F: Fn(&Row) -> bool + Copy,
+{
+    let mut out = serde_json::Map::new();
+    let mut deferred_siblings = Vec::new();
+    let mut preserved_child = false;
+
+    for (key, child) in map {
+        let keep_as_envelope_field = json::is_envelope_field(&child);
+        let keep_whole_by_key = allow_container_key_match
+            && matches!(child, Value::Object(_) | Value::Array(_))
+            && predicate(&single_field_row(&key, &Value::Null));
+        if keep_whole_by_key {
+            preserved_child = true;
+            out.insert(key, child);
+            continue;
+        }
+
+        let transformed = match &child {
+            Value::Object(_) | Value::Array(_) => filter_descendants_in_context(
+                child.clone(),
+                predicate,
+                false,
+                allow_container_key_match,
+            )?,
+            _ if should_match_field_as_whole(&child)
+                && predicate(&single_field_row(&key, &child)) =>
+            {
+                match &child {
+                    Value::Array(_) => {
+                        let narrowed = filter_descendants_in_context(
+                            child.clone(),
+                            predicate,
+                            false,
+                            allow_container_key_match,
+                        )?;
+                        if json::is_structurally_empty(&narrowed) {
+                            child.clone()
+                        } else {
+                            narrowed
+                        }
+                    }
+                    _ => child.clone(),
+                }
+            }
+            _ => Value::Null,
+        };
+
+        if !json::is_structurally_empty(&transformed) {
+            preserved_child = true;
+            out.insert(key, transformed);
+        } else if preserve_item_siblings && keep_as_envelope_field {
+            deferred_siblings.push((key, child));
+        }
+    }
+
+    if preserve_item_siblings && preserved_child {
+        for (key, value) in deferred_siblings {
+            out.entry(key).or_insert(value);
+        }
+    }
+
+    Ok(Value::Object(out))
 }
 
 /// Recursive envelope-preserving traversal for permissive descendant
@@ -491,9 +613,12 @@ fn single_value_row(value: &Value) -> Row {
 }
 
 fn should_match_field_as_whole(value: &Value) -> bool {
-    match value {
-        Value::Array(items) => items.is_empty() || items.iter().all(json::is_scalar_like),
-        Value::Object(map) => json::is_leaf_record_map(map),
-        _ => true,
-    }
+    !matches!(value, Value::Array(_) | Value::Object(_))
+}
+
+fn should_keep_array_item_whole(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+    ) || matches!(value, Value::Object(map) if json::is_leaf_record_map(map))
 }

@@ -16,13 +16,13 @@
 use serde_json::{Map, Value};
 use unicode_width::UnicodeWidthStr;
 
-use crate::guide::{GuideEntry, GuideView};
+use crate::guide::{GuideEntry, GuideSectionKind, GuideView};
 use crate::ui::TableBorderStyle;
-use crate::ui::chrome::SectionFrameStyle;
+use crate::ui::chrome::{RuledSectionPolicy, SectionFrameStyle};
 use crate::ui::display::value_to_display;
 use crate::ui::document::{
     Block, Document, LineBlock, LinePart, PanelBlock, PanelRules, TableAlign, TableBlock,
-    TableStyle,
+    TableStyle, ValueBlock, ValueLayout,
 };
 use crate::ui::style::StyleToken;
 
@@ -82,11 +82,15 @@ pub struct TableModel {
 #[derive(Debug, Clone, Default)]
 pub struct ListModel {
     pub items: Vec<String>,
+    pub indent: usize,
+    pub inline_markup: bool,
+    pub layout: ValueLayout,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct LowerDocumentOptions<'a> {
     pub frame_style: SectionFrameStyle,
+    pub ruled_section_policy: RuledSectionPolicy,
     pub panel_kind: Option<&'a str>,
     pub key_value_border: TableBorderStyle,
     pub key_value_indent: Option<usize>,
@@ -100,40 +104,66 @@ impl DocumentModel {
     /// step decides how they should appear in terminal output.
     pub fn from_guide_view(view: &GuideView) -> Self {
         let mut blocks = Vec::new();
+        let use_ordered_sections = view.uses_ordered_section_representation();
+        let has_usage_section = view.has_canonical_builtin_section_kind(GuideSectionKind::Usage);
+        let has_commands_section =
+            view.has_canonical_builtin_section_kind(GuideSectionKind::Commands);
+        let has_arguments_section =
+            view.has_canonical_builtin_section_kind(GuideSectionKind::Arguments);
+        let has_options_section =
+            view.has_canonical_builtin_section_kind(GuideSectionKind::Options);
+        let has_common_invocation_options_section =
+            view.has_canonical_builtin_section_kind(GuideSectionKind::CommonInvocationOptions);
+        let has_notes_section = view.has_canonical_builtin_section_kind(GuideSectionKind::Notes);
 
         append_paragraphs(&mut blocks, &view.preamble);
-        append_section_if_any(
-            &mut blocks,
-            Some("Usage".to_string()),
-            guide_usage_paragraphs(&view.usage),
-        );
-        append_section_if_any(
-            &mut blocks,
-            Some("Commands".to_string()),
-            guide_entries(&view.commands),
-        );
-        append_section_if_any(
-            &mut blocks,
-            Some("Arguments".to_string()),
-            guide_entries(&view.arguments),
-        );
-        append_section_if_any(
-            &mut blocks,
-            Some("Options".to_string()),
-            guide_entries(&view.options),
-        );
-        append_section_if_any(
-            &mut blocks,
-            Some("Common Invocation Options".to_string()),
-            guide_entries(&view.common_invocation_options),
-        );
-        append_section_if_any(
-            &mut blocks,
-            Some("Notes".to_string()),
-            guide_paragraphs(&view.notes),
-        );
+        if !(use_ordered_sections && has_usage_section) {
+            append_section_if_any(
+                &mut blocks,
+                Some("Usage".to_string()),
+                guide_usage_paragraphs(&view.usage),
+            );
+        }
+        if !(use_ordered_sections && has_commands_section) {
+            append_section_if_any(
+                &mut blocks,
+                Some("Commands".to_string()),
+                guide_entries(&view.commands),
+            );
+        }
+        if !(use_ordered_sections && has_arguments_section) {
+            append_section_if_any(
+                &mut blocks,
+                Some("Arguments".to_string()),
+                guide_entries(&view.arguments),
+            );
+        }
+        if !(use_ordered_sections && has_options_section) {
+            append_section_if_any(
+                &mut blocks,
+                Some("Options".to_string()),
+                guide_entries(&view.options),
+            );
+        }
+        if !(use_ordered_sections && has_common_invocation_options_section) {
+            append_section_if_any(
+                &mut blocks,
+                Some("Common Invocation Options".to_string()),
+                guide_entries(&view.common_invocation_options),
+            );
+        }
+        if !(use_ordered_sections && has_notes_section) {
+            append_section_if_any(
+                &mut blocks,
+                Some("Notes".to_string()),
+                guide_notes_paragraphs(&view.notes),
+            );
+        }
 
         for section in &view.sections {
+            if !use_ordered_sections && section.is_canonical_builtin_section() {
+                continue;
+            }
             let mut section_blocks = guide_paragraphs(&section.paragraphs);
             if !section.entries.is_empty() {
                 if !section_blocks.is_empty() {
@@ -143,7 +173,16 @@ impl DocumentModel {
                     &section.entries,
                 )));
             }
-            append_section_if_any(&mut blocks, Some(section.title.clone()), section_blocks);
+            if let Some(data) = section.data.as_ref() {
+                let data_blocks = guide_section_data_blocks(data);
+                if !data_blocks.is_empty() {
+                    if !section_blocks.is_empty() {
+                        section_blocks.push(BlockModel::Blank);
+                    }
+                    section_blocks.extend(data_blocks);
+                }
+            }
+            append_section_if_any(&mut blocks, section_title(section), section_blocks);
         }
 
         if !blocks.is_empty() && !view.epilogue.is_empty() {
@@ -248,11 +287,36 @@ fn guide_usage_paragraphs(paragraphs: &[String]) -> Vec<BlockModel> {
         .collect()
 }
 
+fn guide_notes_paragraphs(paragraphs: &[String]) -> Vec<BlockModel> {
+    paragraphs
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| BlockModel::Paragraph(format!("  {}", line.trim())))
+        .collect()
+}
+
 fn guide_entries(entries: &[GuideEntry]) -> Vec<BlockModel> {
     if entries.is_empty() {
         return Vec::new();
     }
     vec![BlockModel::KeyValue(key_value_block_from_entries(entries))]
+}
+
+fn guide_section_data_blocks(value: &Value) -> Vec<BlockModel> {
+    if let Some(entries) = guide_entries_from_value(value) {
+        return guide_entries(&entries);
+    }
+    if let Value::Array(items) = value
+        && items.iter().all(is_scalar_like)
+    {
+        return vec![BlockModel::List(ListModel {
+            items: items.iter().map(value_to_display).collect(),
+            indent: 2,
+            inline_markup: true,
+            layout: ValueLayout::AutoGrid,
+        })];
+    }
+    value_blocks(value, None)
 }
 
 fn key_value_block_from_entries(entries: &[GuideEntry]) -> KeyValueBlockModel {
@@ -271,6 +335,34 @@ fn key_value_block_from_entries(entries: &[GuideEntry]) -> KeyValueBlockModel {
         border_override: None,
         markdown_style: KeyValueMarkdownStyle::Lines,
     }
+}
+
+fn guide_entries_from_value(value: &Value) -> Option<Vec<GuideEntry>> {
+    let Value::Array(items) = value else {
+        return None;
+    };
+
+    items.iter().map(guide_entry_from_value).collect()
+}
+
+fn guide_entry_from_value(value: &Value) -> Option<GuideEntry> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+    if map.keys().any(|key| key != "name" && key != "short_help") {
+        return None;
+    }
+
+    Some(GuideEntry {
+        name: map.get("name")?.as_str()?.to_string(),
+        short_help: map
+            .get("short_help")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        display_indent: None,
+        display_gap: None,
+    })
 }
 
 fn root_object_model(map: &Map<String, Value>, preferred_keys: Option<&[String]>) -> DocumentModel {
@@ -309,6 +401,9 @@ fn value_blocks(value: &Value, preferred_keys: Option<&[String]>) -> Vec<BlockMo
         Value::Array(items) if items.iter().all(is_scalar_like) => {
             vec![BlockModel::List(ListModel {
                 items: items.iter().map(value_to_display).collect(),
+                indent: 0,
+                inline_markup: false,
+                layout: ValueLayout::Vertical,
             })]
         }
         Value::Array(items) => {
@@ -394,9 +489,20 @@ fn lower_blocks(
     inherited_border: TableBorderStyle,
 ) -> Vec<Block> {
     let mut out = Vec::new();
-    for block in blocks {
+    let last_section_index = blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| matches!(block, BlockModel::Section(_)).then_some(index))
+        .next_back();
+
+    for (index, block) in blocks.iter().enumerate() {
         match block {
             BlockModel::Section(section) => {
+                let (rules, frame_style) = lower_section_chrome(
+                    options.frame_style,
+                    options.ruled_section_policy,
+                    Some(index) == last_section_index,
+                );
                 out.push(Block::Panel(PanelBlock {
                     title: section.title.clone(),
                     body: Document {
@@ -407,18 +513,23 @@ fn lower_blocks(
                             inherited_border,
                         ),
                     },
-                    rules: PanelRules::None,
-                    frame_style: Some(options.frame_style),
+                    rules,
+                    frame_style,
                     kind: options.panel_kind.map(str::to_string),
                     border_token: Some(StyleToken::PanelBorder),
                     title_token: Some(StyleToken::PanelTitle),
                 }));
             }
             BlockModel::Paragraph(text) => out.push(Block::Line(LineBlock {
-                parts: vec![LinePart {
-                    text: text.clone(),
-                    token: Some(StyleToken::Value),
-                }],
+                parts: crate::ui::inline::parts_from_inline(text)
+                    .into_iter()
+                    .map(|mut part| {
+                        if part.token.is_none() {
+                            part.token = Some(StyleToken::Value);
+                        }
+                        part
+                    })
+                    .collect(),
             })),
             BlockModel::KeyValue(block) => out.extend(lower_key_value_block(
                 block,
@@ -438,19 +549,64 @@ fn lower_blocks(
                 depth: 0,
             })),
             BlockModel::List(list) => {
-                out.extend(list.items.iter().map(|item| {
-                    Block::Line(LineBlock {
-                        parts: vec![LinePart {
-                            text: item.clone(),
-                            token: Some(StyleToken::Value),
-                        }],
-                    })
-                }));
+                if matches!(list.layout, ValueLayout::AutoGrid) {
+                    out.push(Block::Value(ValueBlock {
+                        values: list.items.clone(),
+                        indent: list.indent,
+                        inline_markup: list.inline_markup,
+                        layout: list.layout,
+                    }));
+                } else {
+                    out.extend(list.items.iter().map(|item| {
+                        let mut parts = crate::ui::inline::parts_from_inline(item);
+                        for part in &mut parts {
+                            if part.token.is_none() {
+                                part.token = Some(StyleToken::Value);
+                            }
+                        }
+                        if list.indent > 0 {
+                            parts.insert(
+                                0,
+                                LinePart {
+                                    text: " ".repeat(list.indent),
+                                    token: None,
+                                },
+                            );
+                        }
+                        Block::Line(LineBlock { parts })
+                    }));
+                }
             }
             BlockModel::Blank => out.push(Block::Line(LineBlock { parts: Vec::new() })),
         }
     }
     out
+}
+
+fn lower_section_chrome(
+    frame_style: SectionFrameStyle,
+    ruled_section_policy: RuledSectionPolicy,
+    is_last_section: bool,
+) -> (PanelRules, Option<SectionFrameStyle>) {
+    if matches!(ruled_section_policy, RuledSectionPolicy::Shared) {
+        match frame_style {
+            SectionFrameStyle::Top => return (PanelRules::Top, None),
+            SectionFrameStyle::Bottom => return (PanelRules::Bottom, None),
+            SectionFrameStyle::TopBottom => {
+                return (
+                    if is_last_section {
+                        PanelRules::Both
+                    } else {
+                        PanelRules::Top
+                    },
+                    None,
+                );
+            }
+            SectionFrameStyle::None | SectionFrameStyle::Square | SectionFrameStyle::Round => {}
+        }
+    }
+
+    (PanelRules::None, Some(frame_style))
 }
 
 fn lower_key_value_block(
@@ -838,6 +994,15 @@ fn ordered_keys(map: &Map<String, Value>, preferred_keys: Option<&[String]>) -> 
         }
     }
     keys
+}
+
+fn section_title(section: &crate::guide::GuideSection) -> Option<String> {
+    let trimmed = section.title.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn display_title(key: &str) -> String {

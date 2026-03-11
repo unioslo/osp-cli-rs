@@ -629,6 +629,7 @@ fn semantic_document_tracks_transformed_output_unit() {
     let filtered = apply_output_pipeline(output, &["list".to_string()]).expect("quick should work");
     let filtered_guide =
         GuideView::try_from_output_result(&filtered).expect("guide should still restore");
+    assert!(filtered_guide.usage.is_empty());
     assert_eq!(filtered_guide.commands.len(), 1);
     assert_eq!(filtered_guide.commands[0].name, "list");
 }

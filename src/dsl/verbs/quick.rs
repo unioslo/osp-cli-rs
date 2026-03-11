@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{borrow::Cow, collections::HashSet};
 
 use crate::core::{output_model::Group, row::Row};
 use anyhow::{Result, anyhow};
@@ -360,11 +360,8 @@ fn transform_row(
         if projected.is_empty() {
             return None;
         }
-        return Some(vec![restore_row_envelope(
-            flat,
-            projected,
-            spec.is_structural(),
-        )]);
+        let restored = restore_row_envelope(flat, projected, spec.is_structural());
+        return Some(vec![restored]);
     }
 
     if spec.negated() {
@@ -582,12 +579,13 @@ fn object_array_parent_prefix(key: &str) -> Option<String> {
 }
 
 fn value_matches_token(value: &Value, token: &str, exact: ExactMode, fuzzy: bool) -> bool {
+    let token = unescape_search_token(token);
     match exact {
         ExactMode::CaseSensitive => {
             if let Value::Array(values) = value {
                 return values
                     .iter()
-                    .any(|item| value_matches_token(item, token, exact, fuzzy));
+                    .any(|item| value_matches_token(item, &token, exact, fuzzy));
             }
             render_value(value) == token
         }
@@ -595,22 +593,46 @@ fn value_matches_token(value: &Value, token: &str, exact: ExactMode, fuzzy: bool
             if let Value::Array(values) = value {
                 return values
                     .iter()
-                    .any(|item| value_matches_token(item, token, exact, fuzzy));
+                    .any(|item| value_matches_token(item, &token, exact, fuzzy));
             }
-            eq_case_insensitive(&render_value(value), token)
+            eq_case_insensitive(&render_value(value), &token)
         }
         ExactMode::None => {
             if let Value::Array(values) = value {
                 return values
                     .iter()
-                    .any(|item| value_matches_token(item, token, exact, fuzzy));
+                    .any(|item| value_matches_token(item, &token, exact, fuzzy));
             }
             if fuzzy {
-                return fuzzy_contains_case_insensitive(&render_value(value), token);
+                return fuzzy_contains_case_insensitive(&render_value(value), &token);
             }
-            contains_case_insensitive(&render_value(value), token)
+            contains_case_insensitive(&render_value(value), &token)
         }
     }
+}
+
+fn unescape_search_token(token: &str) -> Cow<'_, str> {
+    if !token.contains('\\') {
+        return Cow::Borrowed(token);
+    }
+
+    // Row quick is search-first UX. If the user escapes punctuation like
+    // `theme\.name`, treat that as the literal text they can already see in
+    // the rendered row instead of forcing parser trivia on them.
+    let mut out = String::with_capacity(token.len());
+    let mut chars = token.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some(escaped) => out.push(escaped),
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+
+    Cow::Owned(out)
 }
 
 fn last_segment_name(key: &str) -> Option<String> {
@@ -670,7 +692,11 @@ pub(crate) fn apply_value_with_plan(value: Value, plan: &QuickPlan) -> Result<Va
     if let Some(transformed) = try_apply_path_scoped_value(&value, &plan.spec) {
         return Ok(transformed);
     }
-    selector::filter_descendants(value, |row| plan.matches_row_filter_mode(row))
+    selector::filter_descendants_with_options(
+        value,
+        |row| plan.matches_row_filter_mode(row),
+        !plan.spec.fuzzy,
+    )
 }
 
 fn try_apply_path_scoped_row(row: &Row, spec: &CompiledQuickSpec) -> Option<Vec<Row>> {
@@ -698,7 +724,7 @@ fn try_apply_path_scoped_row(row: &Row, spec: &CompiledQuickSpec) -> Option<Vec<
     }
 
     if matches.is_empty() {
-        return Some(Vec::new());
+        return None;
     }
 
     // Row quick deliberately strips the structural envelope and emits tabular

@@ -76,12 +76,14 @@ fn help_like_guide() -> GuideView {
                 kind: GuideSectionKind::Commands,
                 paragraphs: vec!["pick one".to_string()],
                 entries: commands,
+                data: None,
             },
             GuideSection {
                 title: "Options".to_string(),
                 kind: GuideSectionKind::Options,
                 paragraphs: vec!["rendering".to_string()],
                 entries: options,
+                data: None,
             },
         ],
         ..GuideView::default()

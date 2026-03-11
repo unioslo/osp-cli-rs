@@ -66,6 +66,7 @@ pub(crate) fn build_guide_document_from_view(
     model.lower_to_render_document(
         LowerDocumentOptions {
             frame_style: options.guide.frame_style,
+            ruled_section_policy: options.guide.ruled_section_policy,
             panel_kind: options.panel_kind,
             key_value_border: options.guide.help_chrome.table_border,
             key_value_indent: options.guide.help_chrome.entry_indent,
@@ -90,6 +91,7 @@ fn apply_title_prefix(view: &GuideView, title_prefix: Option<&str>) -> GuideView
                 kind: GuideSectionKind::Usage,
                 paragraphs: updated.usage.clone(),
                 entries: Vec::new(),
+                data: None,
             },
         );
         updated.usage.clear();
@@ -110,7 +112,7 @@ fn view_is_plain_lines(view: &GuideView) -> bool {
 fn separator_lines(layout: HelpLayout, override_count: Option<usize>) -> usize {
     override_count.unwrap_or(match layout {
         HelpLayout::Minimal => 1,
-        HelpLayout::Full | HelpLayout::Compact => 2,
+        HelpLayout::Full | HelpLayout::Compact => 1,
     })
 }
 
@@ -186,7 +188,7 @@ mod tests {
             SectionFrameStyle::Top,
             TableBorderStyle::None,
         );
-        assert_eq!(doc.blocks.len(), 4);
+        assert_eq!(doc.blocks.len(), 3);
         let Block::Panel(summary) = &doc.blocks[0] else {
             panic!("expected panel");
         };
@@ -289,6 +291,7 @@ mod tests {
                 layout: HelpLayout::Compact,
                 guide: ResolvedGuideRenderSettings {
                     frame_style: SectionFrameStyle::Top,
+                    ruled_section_policy: crate::ui::chrome::RuledSectionPolicy::PerSection,
                     help_chrome: ResolvedHelpChromeSettings {
                         table_border: TableBorderStyle::None,
                         entry_indent: Some(4),

@@ -10,7 +10,7 @@
 
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::output_model::OutputResult;
-use crate::ui::chrome::SectionFrameStyle;
+use crate::ui::chrome::{RuledSectionPolicy, SectionFrameStyle};
 use crate::ui::theme;
 use crate::ui::{
     HelpChromeSettings, RenderBackend, RenderSettings, StyleOverrides, TableBorderStyle,
@@ -86,6 +86,7 @@ pub(crate) struct ResolvedHelpChromeSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResolvedGuideRenderSettings {
     pub(crate) frame_style: SectionFrameStyle,
+    pub(crate) ruled_section_policy: RuledSectionPolicy,
     pub(crate) help_chrome: ResolvedHelpChromeSettings,
 }
 
@@ -102,6 +103,7 @@ impl RenderSettings {
     pub(crate) fn resolve_guide_render_settings(&self) -> ResolvedGuideRenderSettings {
         ResolvedGuideRenderSettings {
             frame_style: self.chrome_frame,
+            ruled_section_policy: self.ruled_section_policy,
             help_chrome: self.help_chrome.resolve(self.table_border),
         }
     }
@@ -277,6 +279,7 @@ impl RenderSettings {
             theme: self.theme.clone(),
             style_overrides: self.style_overrides.clone(),
             chrome_frame: self.chrome_frame,
+            ruled_section_policy: self.ruled_section_policy,
             guide_default_format: self.guide_default_format,
             runtime: self.runtime.clone(),
         }
@@ -302,6 +305,7 @@ impl ResolvedGuideRenderSettings {
     ) -> Self {
         Self {
             frame_style,
+            ruled_section_policy: RuledSectionPolicy::PerSection,
             help_chrome: HelpChromeSettings {
                 table_chrome: match table_border {
                     TableBorderStyle::None => crate::ui::HelpTableChrome::None,

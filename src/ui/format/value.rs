@@ -1,6 +1,6 @@
 use crate::core::row::Row;
 
-use crate::ui::document::ValueBlock;
+use crate::ui::document::{ValueBlock, ValueLayout};
 
 use super::common::value_to_display;
 
@@ -15,6 +15,9 @@ pub fn build_value_block(rows: &[Row], key_order: Option<&[String]>) -> ValueBlo
             .iter()
             .flat_map(|row| row_value_displays(row, key_order))
             .collect(),
+        indent: 0,
+        inline_markup: false,
+        layout: ValueLayout::Vertical,
     }
 }
 
@@ -35,15 +38,11 @@ fn row_value_displays(row: &Row, key_order: Option<&[String]>) -> Vec<String> {
         }
     }
 
-    let mut extras = row
-        .keys()
-        .filter(|key| !seen.contains(*key))
-        .cloned()
-        .collect::<Vec<_>>();
-    extras.sort();
-
-    for key in extras {
-        if let Some(value) = row.get(&key)
+    for key in row.keys() {
+        if seen.contains(key) {
+            continue;
+        }
+        if let Some(value) = row.get(key)
             && !value.is_null()
         {
             out.push(value_to_display(value));

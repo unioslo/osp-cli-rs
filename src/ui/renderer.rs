@@ -26,11 +26,12 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::ui::chrome::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
-    render_section_divider_with_overrides,
+    render_section_divider_with_columns,
 };
 use crate::ui::display::value_to_display;
 use crate::ui::document::{
     Block, Document, MregBlock, MregValue, PanelRules, TableAlign, TableBlock, TableStyle,
+    ValueLayout,
 };
 use crate::ui::layout::{LayoutContext, MregEntryMetrics, MregMetrics, prepare_layout_context};
 use crate::ui::style::{StyleToken, apply_style_spec, apply_style_with_theme_overrides};
@@ -88,7 +89,7 @@ impl<'a> DocumentRenderer<'a> {
                     self.render_json_block(&json.payload)
                 }
             }
-            Block::Value(values) => self.render_value_block(&values.values),
+            Block::Value(values) => self.render_value_block(values),
             Block::Mreg(mreg) => {
                 self.render_mreg_block(mreg, self.layout.mreg_metrics.get(&mreg.block_id).cloned())
             }
@@ -103,18 +104,102 @@ impl<'a> DocumentRenderer<'a> {
         }
     }
 
-    fn render_value_block(&self, values: &[String]) -> String {
-        if values.is_empty() {
+    fn render_value_block(&self, block: &crate::ui::document::ValueBlock) -> String {
+        if block.values.is_empty() {
             return String::new();
         }
 
-        values
+        if matches!(block.layout, ValueLayout::AutoGrid)
+            && block.values.len() > self.settings.medium_list_max
+        {
+            return self.render_value_grid(block);
+        }
+
+        let prefix = " ".repeat(self.settings.margin + block.indent);
+        block
+            .values
             .iter()
-            .map(|value| {
-                let styled = self.style_token(value, StyleToken::Value);
-                format!("{}{}\n", " ".repeat(self.settings.margin), styled)
-            })
+            .map(|value| format!("{prefix}{}\n", self.render_value_item(block, value)))
             .collect()
+    }
+
+    fn render_value_grid(&self, block: &crate::ui::document::ValueBlock) -> String {
+        let visible = block
+            .values
+            .iter()
+            .map(|value| visible_value_text(value, block.inline_markup))
+            .collect::<Vec<_>>();
+        let available_width = self
+            .settings
+            .width
+            .unwrap_or(100)
+            .saturating_sub(self.settings.margin + block.indent)
+            .max(1);
+        let (matrix, column_widths) = arrange_in_grid(
+            &visible,
+            available_width,
+            self.settings.grid_padding.max(1),
+            self.settings.grid_columns,
+            self.settings.column_weight.max(1),
+        );
+        let rows = matrix.len();
+        let columns = column_widths.len();
+        let prefix = " ".repeat(self.settings.margin + block.indent);
+        let mut out = String::new();
+
+        for (row_index, row) in matrix.iter().enumerate().take(rows) {
+            out.push_str(&prefix);
+            let mut first = true;
+            for column_index in 0..columns {
+                let value_index = column_index * rows + row_index;
+                if value_index >= block.values.len() {
+                    continue;
+                }
+
+                let visible_cell = &row[column_index];
+                if visible_cell.is_empty() {
+                    continue;
+                }
+
+                if !first {
+                    out.push_str(&" ".repeat(self.settings.grid_padding));
+                }
+                first = false;
+
+                let mut rendered = if block.inline_markup && visible_cell == &visible[value_index] {
+                    self.render_inline_value(&block.values[value_index])
+                } else {
+                    self.style_token(visible_cell, StyleToken::Value)
+                };
+
+                if column_index + 1 != columns {
+                    let pad =
+                        column_widths[column_index].saturating_sub(display_width(visible_cell));
+                    rendered.push_str(&" ".repeat(pad));
+                }
+                out.push_str(&rendered);
+            }
+            out.push('\n');
+        }
+
+        out
+    }
+
+    fn render_inline_value(&self, value: &str) -> String {
+        crate::ui::inline::render_inline(
+            value,
+            self.settings.color,
+            &self.settings.theme,
+            &self.settings.style_overrides,
+        )
+    }
+
+    fn render_value_item(&self, block: &crate::ui::document::ValueBlock, value: &str) -> String {
+        if block.inline_markup {
+            self.render_inline_value(value)
+        } else {
+            self.style_token(value, StyleToken::Value)
+        }
     }
 
     fn render_line_block(&self, block: &crate::ui::document::LineBlock) -> String {
@@ -282,45 +367,29 @@ impl<'a> DocumentRenderer<'a> {
         }
 
         let divider_width = Some(self.settings.width.unwrap_or(24).max(12));
-        let titled_divider = render_section_divider_with_overrides(
+        let title_columns = self.settings.margin.max(2);
+        let titled_divider = render_section_divider_with_columns(
             block.title.as_deref().unwrap_or(""),
             self.settings.unicode,
             divider_width,
+            title_columns,
             render,
             tokens,
         );
-        let trailing_divider = render_section_divider_with_overrides(
+        let trailing_divider = render_section_divider_with_columns(
             "",
             self.settings.unicode,
             divider_width,
+            title_columns,
             render,
             SectionStyleTokens::same(border_token),
         );
 
         match block.rules {
             PanelRules::None => inner,
-            PanelRules::Top => {
-                format!(
-                    "{}{}\n{}",
-                    " ".repeat(self.settings.margin),
-                    titled_divider,
-                    inner
-                )
-            }
-            PanelRules::Bottom => {
-                format!(
-                    "{inner}{}{}\n",
-                    " ".repeat(self.settings.margin),
-                    trailing_divider
-                )
-            }
-            PanelRules::Both => format!(
-                "{}{}\n{inner}{}{}\n",
-                " ".repeat(self.settings.margin),
-                titled_divider,
-                " ".repeat(self.settings.margin),
-                trailing_divider
-            ),
+            PanelRules::Top => format!("{titled_divider}\n{inner}"),
+            PanelRules::Bottom => format!("{inner}{trailing_divider}\n"),
+            PanelRules::Both => format!("{titled_divider}\n{inner}{trailing_divider}\n"),
         }
     }
 
@@ -1213,6 +1282,16 @@ fn arrange_in_grid(
     let rows = n.div_ceil(best_cols);
     let matrix = build_grid_rows(values, best_cols, rows, available_width);
     (matrix, best_widths)
+}
+
+fn visible_value_text(value: &str, inline_markup: bool) -> String {
+    if !inline_markup {
+        return value.to_string();
+    }
+    crate::ui::inline::parts_from_inline(value)
+        .into_iter()
+        .map(|part| part.text)
+        .collect()
 }
 
 fn build_grid_matrix(

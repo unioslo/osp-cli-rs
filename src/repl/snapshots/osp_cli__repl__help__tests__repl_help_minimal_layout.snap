@@ -10,4 +10,4 @@ Commands:
 Options:
   -h, --help
 
-Use `osp plugins commands` to list plugin-provided commands.
+Use osp plugins commands to list plugin-provided commands.

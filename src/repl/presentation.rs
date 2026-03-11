@@ -11,6 +11,7 @@ use crate::ui::render_guide_payload;
 use crate::ui::style::{
     StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
 };
+use serde_json::Value;
 use std::borrow::Cow;
 use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
@@ -27,21 +28,46 @@ const DEFAULT_MINIMAL_INTRO_TEMPLATE: &str =
 const DEFAULT_COMPACT_INTRO_TEMPLATE: &str =
     "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
 const DEFAULT_FULL_INTRO_TEMPLATE: &str = r#"## OSP
-  Welcome {{display_name}}!
-  Logged in as: {{user.name}}
-  Theme: {{theme_display}}
-  Version: {{version}}
+Welcome `{{display_name}}`!
+
+```osp
+[
+  {"name": "Logged in as", "short_help": "{{user.name}}"},
+  {"name": "Theme", "short_help": "{{theme_display}}"},
+  {"name": "Version", "short_help": "{{version}}"}
+]
+```
 
 ## Keybindings
-  Ctrl-D    exit
-  Ctrl-L    clear screen
-  Ctrl-R    history search
+```osp
+[
+  {"name": "Ctrl-D", "short_help": "exit"},
+  {"name": "Ctrl-L", "short_help": "clear screen"},
+  {"name": "Ctrl-R", "short_help": "reverse search history"}
+]
+```
 
 ## Pipes
-  F key>3 | P col1 col2 | S sort_key | G group_by_k1 k2
-  | A metric() | L limit offset | C count
-  K key | V value | %fuzzy | contains | !not | ?exist | !?not_exist (= exact, == case-sens.)
-  Help: | H or | H <verb> e.g. | H F
+```osp
+[
+  "`F` key>3",
+  "`P` col1 col2",
+  "`S` sort_key",
+  "`G` group_by_k1 k2",
+  "`A` metric()",
+  "`L` limit offset",
+  "`C` count",
+  "`K` key-only quick search",
+  "`V` value-only quick search",
+  "`contains` quick-search text",
+  "`!not` negate a quick match",
+  "`?exist` truthy / exists",
+  "`!?not_exist` missing / falsy",
+  "`= exact` exact match (ci)",
+  "`== case-sens.` exact match (cs)",
+  "`| H <verb>` verb help, e.g. `| H F`"
+]
+```
 
 {{ help }}"#;
 
@@ -108,35 +134,17 @@ fn parse_intro_template_payload(template: &str, help: &GuideView) -> GuideView {
     }
 
     let mut payload = GuideView::default();
-    let mut current_title: Option<String> = None;
-    let mut current_lines: Vec<String> = Vec::new();
-
-    let flush_section = |payload: &mut GuideView,
-                         current_title: &mut Option<String>,
-                         current_lines: &mut Vec<String>| {
-        let Some(title) = current_title.take() else {
-            return;
-        };
-        if current_lines.is_empty() {
-            return;
-        }
-        payload.sections.push(GuideSection {
-            title,
-            kind: GuideSectionKind::Custom,
-            paragraphs: std::mem::take(current_lines),
-            entries: Vec::new(),
-        });
-    };
+    let mut current_section: Option<GuideSection> = None;
 
     for block in parse_markdown_template(trimmed) {
         match block {
             GuideTemplateBlock::Heading(title) => {
-                flush_section(&mut payload, &mut current_title, &mut current_lines);
-                current_title = Some(title);
+                flush_intro_section(&mut payload, &mut current_section);
+                current_section = Some(GuideSection::new(title, GuideSectionKind::Custom));
             }
             GuideTemplateBlock::Include(GuideTemplateInclude::Help)
             | GuideTemplateBlock::Include(GuideTemplateInclude::Overview) => {
-                flush_section(&mut payload, &mut current_title, &mut current_lines);
+                flush_intro_section(&mut payload, &mut current_section);
                 append_template_include_payload(&mut payload, help);
             }
             GuideTemplateBlock::Paragraph(line) => {
@@ -146,17 +154,46 @@ fn parse_intro_template_payload(template: &str, help: &GuideView) -> GuideView {
                     .filter(|line| !line.is_empty())
                     .map(str::to_string)
                     .collect::<Vec<_>>();
-                if current_title.is_some() {
-                    current_lines.extend(lines.into_iter().map(|line| format!("  {line}")));
+                if let Some(section) = current_section.as_mut() {
+                    section
+                        .paragraphs
+                        .extend(lines.into_iter().map(|line| format!("  {line}")));
                 } else {
                     payload.preamble.extend(lines);
                 }
             }
+            GuideTemplateBlock::Data(data) => {
+                let section = current_section
+                    .get_or_insert_with(|| GuideSection::new("", GuideSectionKind::Custom));
+                attach_intro_data_block(section, data);
+            }
         }
     }
 
-    flush_section(&mut payload, &mut current_title, &mut current_lines);
+    flush_intro_section(&mut payload, &mut current_section);
     payload
+}
+
+fn flush_intro_section(payload: &mut GuideView, current: &mut Option<GuideSection>) {
+    let Some(section) = current.take() else {
+        return;
+    };
+    if intro_section_has_content(&section) {
+        payload.sections.push(section);
+    }
+}
+
+fn intro_section_has_content(section: &GuideSection) -> bool {
+    !section.paragraphs.is_empty()
+        || !section.entries.is_empty()
+        || !matches!(section.data, None | Some(Value::Null))
+}
+
+fn attach_intro_data_block(section: &mut GuideSection, data: Value) {
+    section.data = Some(match section.data.take() {
+        None => data,
+        Some(existing) => Value::Array(vec![existing, data]),
+    });
 }
 
 fn append_template_include_payload(payload: &mut GuideView, included: &GuideView) {
@@ -165,9 +202,10 @@ fn append_template_include_payload(payload: &mut GuideView, included: &GuideView
     if !included.usage.is_empty() {
         payload.sections.push(GuideSection {
             title: "Usage".to_string(),
-            kind: GuideSectionKind::Custom,
-            paragraphs: included.usage.clone(),
+            kind: GuideSectionKind::Usage,
+            paragraphs: repl_intro_body_paragraphs(&included.usage),
             entries: Vec::new(),
+            data: None,
         });
     }
     if !included.commands.is_empty() {
@@ -176,6 +214,7 @@ fn append_template_include_payload(payload: &mut GuideView, included: &GuideView
             kind: GuideSectionKind::Commands,
             paragraphs: Vec::new(),
             entries: included.commands.clone(),
+            data: None,
         });
     }
     if !included.arguments.is_empty() {
@@ -184,6 +223,7 @@ fn append_template_include_payload(payload: &mut GuideView, included: &GuideView
             kind: GuideSectionKind::Arguments,
             paragraphs: Vec::new(),
             entries: included.arguments.clone(),
+            data: None,
         });
     }
     if !included.options.is_empty() {
@@ -192,6 +232,7 @@ fn append_template_include_payload(payload: &mut GuideView, included: &GuideView
             kind: GuideSectionKind::Options,
             paragraphs: Vec::new(),
             entries: included.options.clone(),
+            data: None,
         });
     }
     if !included.common_invocation_options.is_empty() {
@@ -200,19 +241,28 @@ fn append_template_include_payload(payload: &mut GuideView, included: &GuideView
             kind: GuideSectionKind::CommonInvocationOptions,
             paragraphs: Vec::new(),
             entries: included.common_invocation_options.clone(),
+            data: None,
         });
     }
     if !included.notes.is_empty() {
         payload.sections.push(GuideSection {
             title: "Notes".to_string(),
             kind: GuideSectionKind::Notes,
-            paragraphs: included.notes.clone(),
+            paragraphs: repl_intro_body_paragraphs(&included.notes),
             entries: Vec::new(),
+            data: None,
         });
     }
 
     payload.sections.extend(included.sections.iter().cloned());
     payload.epilogue.extend(included.epilogue.iter().cloned());
+}
+
+fn repl_intro_body_paragraphs(paragraphs: &[String]) -> Vec<String> {
+    paragraphs
+        .iter()
+        .map(|line| format!("  {}", line.trim_start()))
+        .collect()
 }
 
 fn expand_intro_template<'a>(

@@ -51,7 +51,7 @@ fn ported_project_group_networks_fans_out_then_groups_cleanly() {
 }
 
 #[test]
-fn ported_quick_path_scoping_distinguishes_nested_and_root_matches() {
+fn ported_quick_path_scoping_distinguishes_nested_and_explicit_root_matches() {
     let rows = vec![row(json!({
         "id": 55753,
         "txts": {"id": 27994},
@@ -63,7 +63,12 @@ fn ported_quick_path_scoping_distinguishes_nested_and_root_matches() {
     let OutputItems::Rows(asset_rows) = asset.items else {
         panic!("expected flat rows");
     };
-    assert!(asset_rows.is_empty());
+    assert_eq!(
+        asset_rows,
+        vec![row(json!({
+            "metadata": {"asset": {"id": 42}}
+        }))]
+    );
 
     let root_only = run_rows_pipeline(rows.clone(), ".asset.id");
     let OutputItems::Rows(root_rows) = root_only.items else {
@@ -71,17 +76,14 @@ fn ported_quick_path_scoping_distinguishes_nested_and_root_matches() {
     };
     assert!(root_rows.is_empty());
 
-    let ids = run_rows_pipeline(rows, "id");
-    let OutputItems::Rows(id_rows) = ids.items else {
+    let root_id = run_rows_pipeline(rows, ".id");
+    let OutputItems::Rows(id_rows) = root_id.items else {
         panic!("expected flat rows");
     };
     assert_eq!(
         id_rows,
         vec![row(json!({
-            "id": 55753,
-            "txts": {"id": 27994},
-            "ipaddresses": [{"id": 57171}, {"id": 57172}],
-            "metadata": {"asset": {"id": 42}}
+            "id": 55753
         }))]
     );
 }

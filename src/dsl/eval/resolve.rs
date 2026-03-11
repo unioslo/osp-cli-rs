@@ -268,7 +268,7 @@ pub fn resolve_pairs(flat_row: &Row, token: &str) -> (Vec<(String, Value)>, bool
         let materialized = requires_materialization(&expr);
         let nested = Value::Object(coalesce_flat_row(flat_row));
         let pairs = enumerate_path_values(&nested, &expr);
-        if is_structural_path_token(trimmed, &expr) || materialized || !pairs.is_empty() {
+        if !pairs.is_empty() || materialized {
             return (pairs, materialized);
         }
     }

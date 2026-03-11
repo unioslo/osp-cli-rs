@@ -48,6 +48,7 @@ fn help_key_values_can_lower_to_bordered_tables_unit() {
             key_value_border: TableBorderStyle::Round,
             key_value_indent: None,
             key_value_gap: None,
+            ruled_section_policy: crate::ui::chrome::RuledSectionPolicy::PerSection,
         },
         &mut 1,
     );
@@ -81,6 +82,68 @@ fn guide_view_custom_sections_keep_paragraph_entry_and_epilogue_separation_unit(
     assert!(matches!(model.blocks[1], BlockModel::Blank));
     assert!(matches!(model.blocks[2], BlockModel::Blank));
     assert!(matches!(model.blocks[3], BlockModel::Paragraph(_)));
+}
+
+#[test]
+fn canonical_notes_render_with_body_indent_unit() {
+    let view = GuideView {
+        notes: vec!["Use bare help for the REPL overview.".to_string()],
+        ..GuideView::default()
+    };
+
+    let document = DocumentModel::from_guide_view(&view).lower_to_render_document(
+        LowerDocumentOptions {
+            frame_style: SectionFrameStyle::Top,
+            panel_kind: Some("help"),
+            key_value_border: TableBorderStyle::None,
+            key_value_indent: None,
+            key_value_gap: None,
+            ruled_section_policy: crate::ui::chrome::RuledSectionPolicy::PerSection,
+        },
+        &mut 1,
+    );
+
+    let Block::Panel(panel) = &document.blocks[0] else {
+        panic!("expected notes panel");
+    };
+    let Block::Line(first) = &panel.body.blocks[0] else {
+        panic!("expected indented notes line");
+    };
+    assert_eq!(
+        first
+            .parts
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["  Use bare help for the REPL overview."]
+    );
+}
+
+#[test]
+fn guide_view_section_data_lowers_entry_arrays_and_scalar_lists_unit() {
+    let mut view = GuideView::default();
+    view.sections.push(
+        GuideSection::new("Keybindings", GuideSectionKind::Custom).data(json!([
+            {"name": "Ctrl-D", "short_help": "exit"},
+            {"name": "Ctrl-L", "short_help": "clear screen"}
+        ])),
+    );
+    view.sections
+        .push(GuideSection::new("Pipes", GuideSectionKind::Custom).data(json!(["F", "P", "S"])));
+
+    let model = DocumentModel::from_guide_view(&view);
+
+    let BlockModel::Section(keybindings) = &model.blocks[0] else {
+        panic!("expected keybindings section");
+    };
+    assert_eq!(keybindings.title.as_deref(), Some("Keybindings"));
+    assert!(matches!(keybindings.blocks[0], BlockModel::KeyValue(_)));
+
+    let BlockModel::Section(pipes) = &model.blocks[3] else {
+        panic!("expected pipes section");
+    };
+    assert_eq!(pipes.title.as_deref(), Some("Pipes"));
+    assert!(matches!(pipes.blocks[0], BlockModel::List(_)));
 }
 
 #[test]
@@ -135,6 +198,7 @@ fn lower_key_value_rows_respect_gap_overrides_and_empty_values_unit() {
             key_value_border: TableBorderStyle::None,
             key_value_indent: None,
             key_value_gap: None,
+            ruled_section_policy: crate::ui::chrome::RuledSectionPolicy::PerSection,
         },
         &mut 7,
     );
@@ -164,6 +228,9 @@ fn markdown_renderer_formats_lists_tables_and_key_value_blocks_unit() {
         blocks: vec![
             BlockModel::List(super::ListModel {
                 items: vec!["alpha".to_string(), "beta".to_string()],
+                indent: 0,
+                inline_markup: false,
+                layout: crate::ui::document::ValueLayout::Vertical,
             }),
             BlockModel::Blank,
             BlockModel::KeyValue(KeyValueBlockModel {
@@ -212,7 +279,10 @@ fn markdown_renderer_formats_lists_tables_and_key_value_blocks_unit() {
 fn lower_document_renders_lists_when_model_contains_list_blocks_unit() {
     let model = DocumentModel {
         blocks: vec![BlockModel::List(super::ListModel {
-            items: vec!["alpha".to_string(), "beta".to_string()],
+            items: vec!["`alpha` beta".to_string(), "gamma".to_string()],
+            indent: 2,
+            inline_markup: true,
+            layout: crate::ui::document::ValueLayout::Vertical,
         })],
     };
 
@@ -223,10 +293,66 @@ fn lower_document_renders_lists_when_model_contains_list_blocks_unit() {
             key_value_border: TableBorderStyle::None,
             key_value_indent: None,
             key_value_gap: None,
+            ruled_section_policy: crate::ui::chrome::RuledSectionPolicy::PerSection,
         },
         &mut 11,
     );
 
     assert!(matches!(document.blocks[0], Block::Line(_)));
     assert!(matches!(document.blocks[1], Block::Line(_)));
+    let Block::Line(first) = &document.blocks[0] else {
+        panic!("expected line block");
+    };
+    assert_eq!(first.parts[0].text, "  ");
+    assert_eq!(first.parts[1].text, "alpha");
+    assert_eq!(
+        first.parts[1].token,
+        Some(crate::ui::style::StyleToken::Key)
+    );
+    assert_eq!(first.parts[2].text, " beta");
+    assert_eq!(
+        first.parts[2].token,
+        Some(crate::ui::style::StyleToken::Value)
+    );
+}
+
+#[test]
+fn shared_top_bottom_policy_shares_section_separators_and_closes_once_unit() {
+    let model = DocumentModel {
+        blocks: vec![
+            BlockModel::Section(super::SectionModel {
+                title: Some("One".to_string()),
+                blocks: vec![BlockModel::Paragraph("alpha".to_string())],
+            }),
+            BlockModel::Blank,
+            BlockModel::Section(super::SectionModel {
+                title: Some("Two".to_string()),
+                blocks: vec![BlockModel::Paragraph("beta".to_string())],
+            }),
+        ],
+    };
+
+    let document = model.lower_to_render_document(
+        LowerDocumentOptions {
+            frame_style: SectionFrameStyle::TopBottom,
+            panel_kind: None,
+            key_value_border: TableBorderStyle::None,
+            key_value_indent: None,
+            key_value_gap: None,
+            ruled_section_policy: crate::ui::RuledSectionPolicy::Shared,
+        },
+        &mut 1,
+    );
+
+    let Block::Panel(first) = &document.blocks[0] else {
+        panic!("expected first panel");
+    };
+    assert_eq!(first.rules, crate::ui::document::PanelRules::Top);
+    assert!(first.frame_style.is_none());
+
+    let Block::Panel(second) = &document.blocks[2] else {
+        panic!("expected second panel");
+    };
+    assert_eq!(second.rules, crate::ui::document::PanelRules::Both);
+    assert!(second.frame_style.is_none());
 }

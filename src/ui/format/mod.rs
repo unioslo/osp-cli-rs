@@ -22,7 +22,7 @@ use crate::core::output_model::{
 use crate::core::row::Row;
 use crate::guide::GuideView;
 
-use crate::ui::document::{Block, Document, JsonBlock, TableStyle, ValueBlock};
+use crate::ui::document::{Block, Document, JsonBlock, TableStyle, ValueBlock, ValueLayout};
 use crate::ui::{RenderBackend, RenderSettings, ResolvedRenderPlan};
 
 mod common;
@@ -99,6 +99,9 @@ pub fn build_document_from_output_plan(
                 return Document {
                     blocks: vec![Block::Value(ValueBlock {
                         values: guide.to_value_lines(),
+                        indent: 0,
+                        inline_markup: false,
+                        layout: ValueLayout::Vertical,
                     })],
                 };
             }

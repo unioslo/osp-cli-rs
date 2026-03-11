@@ -12,13 +12,16 @@ fn help_like_payload_restores_after_narrowing_multistage_pipeline() {
     assert_eq!(rebuilt.commands.len(), 1);
     assert_eq!(rebuilt.commands[0].name, "status");
     assert_eq!(rebuilt.commands[0].short_help, "Show deployment status");
-    assert_eq!(rebuilt.preamble, vec!["Deploy commands"]);
-    assert_eq!(rebuilt.usage, vec!["osp deploy <COMMAND>"]);
-    assert_eq!(
-        rebuilt.notes,
-        vec!["Run `doctor` before applying production changes."]
+    assert!(
+        rebuilt.preamble.is_empty(),
+        "unmatched preamble should prune"
     );
-    assert_eq!(rebuilt.epilogue, vec!["footer text"]);
+    assert!(rebuilt.usage.is_empty(), "unmatched usage should prune");
+    assert!(rebuilt.notes.is_empty(), "unmatched notes should prune");
+    assert!(
+        rebuilt.epilogue.is_empty(),
+        "unmatched epilogue should prune"
+    );
     assert!(
         rebuilt.options.is_empty(),
         "unmatched option entries should prune"
@@ -26,15 +29,22 @@ fn help_like_payload_restores_after_narrowing_multistage_pipeline() {
     assert_eq!(rebuilt.sections.len(), 0);
 }
 
-// Protects semantic envelope preservation specifically for guide-shaped data:
-// a descendant match should keep the surviving section title and its entry shell.
+// Protects the blunt quick contract for guide-shaped data: descendant matches
+// keep only the root fields that matched, while matching array elements survive
+// as whole original elements.
 #[test]
-fn help_like_payload_keeps_section_envelope_for_partial_match() {
+fn help_like_payload_quick_prunes_unmatched_root_fields_for_partial_match() {
     let output = run_guide_pipeline(help_like_guide(), "status | ? | L 1");
     let rebuilt = GuideView::try_from_output_result(&output).expect("guide should still restore");
 
-    assert_eq!(rebuilt.preamble, vec!["Deploy commands"]);
-    assert_eq!(rebuilt.usage, vec!["osp deploy <COMMAND>"]);
+    assert!(
+        rebuilt.preamble.is_empty(),
+        "preamble should prune when only commands matched"
+    );
+    assert!(
+        rebuilt.usage.is_empty(),
+        "usage should prune when only commands matched"
+    );
     assert_eq!(rebuilt.commands.len(), 1);
     assert_eq!(rebuilt.commands[0].name, "status");
     assert_eq!(rebuilt.sections.len(), 0);

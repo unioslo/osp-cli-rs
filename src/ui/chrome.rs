@@ -32,6 +32,16 @@ pub enum SectionFrameStyle {
     Round,
 }
 
+/// Placement policy for ruled section separators across sibling sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RuledSectionPolicy {
+    /// Render each section independently according to its frame style.
+    #[default]
+    PerSection,
+    /// Share titled top rules between sibling sections and close the list once.
+    Shared,
+}
+
 impl SectionFrameStyle {
     /// Parses the section-frame spellings accepted by configuration.
     ///
@@ -52,6 +62,17 @@ impl SectionFrameStyle {
             "top-bottom" | "both" | "rules" => Some(Self::TopBottom),
             "square" | "box" | "boxed" => Some(Self::Square),
             "round" | "rounded" => Some(Self::Round),
+            _ => None,
+        }
+    }
+}
+
+impl RuledSectionPolicy {
+    /// Parses the ruled-section policy spellings accepted by configuration.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "per-section" | "independent" | "separate" => Some(Self::PerSection),
+            "shared" | "stacked" | "list" => Some(Self::Shared),
             _ => None,
         }
     }
@@ -141,6 +162,22 @@ pub fn render_section_divider_with_overrides(
     render: SectionRenderContext<'_>,
     tokens: SectionStyleTokens,
 ) -> String {
+    render_section_divider_with_columns(title, unicode, width, 2, render, tokens)
+}
+
+/// Renders a section divider while controlling the title start column.
+///
+/// `title_columns` describes how many columns the divider should consume before
+/// the title text starts. This lets shared ruled sections keep header lines
+/// flush-left while still aligning the title with indented body content.
+pub fn render_section_divider_with_columns(
+    title: &str,
+    unicode: bool,
+    width: Option<usize>,
+    title_columns: usize,
+    render: SectionRenderContext<'_>,
+    tokens: SectionStyleTokens,
+) -> String {
     let border_token = tokens.border;
     let title_token = tokens.title;
     let fill_char = if unicode { '─' } else { '-' };
@@ -150,11 +187,13 @@ pub fn render_section_divider_with_overrides(
     let raw = if title.is_empty() {
         fill_char.to_string().repeat(target_width)
     } else {
-        let prefix = if unicode {
-            format!("─ {title} ")
-        } else {
-            format!("- {title} ")
-        };
+        let title_columns = title_columns.max(2);
+        let prefix = format!(
+            "{} {title} ",
+            fill_char
+                .to_string()
+                .repeat(title_columns.saturating_sub(1))
+        );
         let prefix_width = prefix.chars().count();
         if prefix_width >= target_width {
             prefix
@@ -174,7 +213,13 @@ pub fn render_section_divider_with_overrides(
         return render.style(&raw, border_token);
     }
 
-    let prefix = if unicode { "─ " } else { "- " };
+    let title_columns = title_columns.max(2);
+    let prefix = format!(
+        "{} ",
+        fill_char
+            .to_string()
+            .repeat(title_columns.saturating_sub(1))
+    );
     let title_text = title;
     let prefix_width = prefix.chars().count();
     let title_width = title_text.chars().count();
@@ -186,7 +231,7 @@ pub fn render_section_divider_with_overrides(
         format!(" {}", fill_char.to_string().repeat(fill_len))
     };
 
-    let styled_prefix = render.style(prefix, border_token);
+    let styled_prefix = render.style(&prefix, border_token);
     let styled_title = render.style(title_text, title_token);
     let styled_suffix = render.style(&suffix, border_token);
     format!("{styled_prefix}{styled_title}{styled_suffix}")
@@ -614,6 +659,23 @@ mod tests {
             SectionFrameStyle::parse("none"),
             Some(SectionFrameStyle::None)
         );
+    }
+
+    #[test]
+    fn ruled_section_policy_parses_expected_names_unit() {
+        assert_eq!(
+            super::RuledSectionPolicy::parse("per-section"),
+            Some(super::RuledSectionPolicy::PerSection)
+        );
+        assert_eq!(
+            super::RuledSectionPolicy::parse("stacked"),
+            Some(super::RuledSectionPolicy::Shared)
+        );
+        assert_eq!(
+            super::RuledSectionPolicy::parse("list"),
+            Some(super::RuledSectionPolicy::Shared)
+        );
+        assert_eq!(super::RuledSectionPolicy::parse("wat"), None);
     }
 
     #[test]

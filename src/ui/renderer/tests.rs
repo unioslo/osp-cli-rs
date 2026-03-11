@@ -3,7 +3,7 @@ use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::ui::RenderBackend;
 use crate::ui::document::{
     Block, Document, JsonBlock, MregBlock, MregEntry, MregRow, MregValue, PanelBlock, TableAlign,
-    TableBlock, TableStyle, ValueBlock,
+    TableBlock, TableStyle, ValueBlock, ValueLayout,
 };
 use crate::ui::format;
 use crate::ui::{RenderRuntime, RenderSettings};
@@ -63,6 +63,7 @@ fn mreg_render_settings(width: usize) -> RenderSettings {
         theme: None,
         style_overrides: crate::ui::style::StyleOverrides::default(),
         chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
+        ruled_section_policy: crate::ui::chrome::RuledSectionPolicy::PerSection,
         guide_default_format: crate::ui::GuideDefaultFormat::Guide,
         runtime: RenderRuntime::default(),
     }
@@ -82,6 +83,9 @@ fn render_value_block_appends_trailing_newline() {
     let document = Document {
         blocks: vec![Block::Value(ValueBlock {
             values: vec!["one".to_string(), "two".to_string()],
+            indent: 0,
+            inline_markup: false,
+            layout: ValueLayout::Vertical,
         })],
     };
     assert_eq!(
@@ -98,6 +102,9 @@ fn panel_rules_match_python_plain_layout() {
             body: Document {
                 blocks: vec![Block::Value(ValueBlock {
                     values: vec!["alpha".to_string(), "beta".to_string()],
+                    indent: 0,
+                    inline_markup: false,
+                    layout: ValueLayout::Vertical,
                 })],
             },
             rules: crate::ui::document::PanelRules::Both,
@@ -117,6 +124,40 @@ fn panel_rules_match_python_plain_layout() {
             "--------------------------------------------------------------------------------\n"
         )
     );
+}
+
+#[test]
+fn panel_rules_respect_margin_when_sizing_shared_dividers_unit() {
+    let document = Document {
+        blocks: vec![Block::Panel(PanelBlock {
+            title: Some("Commands".to_string()),
+            body: Document {
+                blocks: vec![Block::Value(ValueBlock {
+                    values: vec!["alpha".to_string()],
+                    indent: 2,
+                    inline_markup: false,
+                    layout: ValueLayout::Vertical,
+                })],
+            },
+            rules: crate::ui::document::PanelRules::Top,
+            frame_style: None,
+            kind: None,
+            border_token: None,
+            title_token: None,
+        })],
+    };
+    let mut settings = plain_settings_with_width(20);
+    settings.margin = 4;
+
+    let rendered = render_document(&document, settings);
+    let mut lines = rendered.lines();
+    let first_line = lines.next().expect("divider line");
+    let body_line = lines.next().expect("body line");
+
+    assert!(!first_line.starts_with(' '));
+    assert!(first_line.starts_with("--- Commands "));
+    assert_eq!(first_line.chars().count(), 20);
+    assert!(body_line.starts_with("      alpha"));
 }
 
 #[test]
@@ -1032,6 +1073,9 @@ fn value_block_honors_generic_text_override() {
     let document = Document {
         blocks: vec![Block::Value(ValueBlock {
             values: vec!["alpha".to_string()],
+            indent: 0,
+            inline_markup: false,
+            layout: ValueLayout::Vertical,
         })],
     };
 
@@ -1063,6 +1107,57 @@ fn value_block_honors_generic_text_override() {
     );
 
     assert!(rendered.contains("\x1b[38;2;34;68;102malpha\x1b[0m"));
+}
+
+#[test]
+fn auto_grid_value_block_preserves_order_and_splits_long_lists() {
+    let document = Document {
+        blocks: vec![Block::Value(ValueBlock {
+            values: vec![
+                "`F` key>3".to_string(),
+                "`P` col1 col2".to_string(),
+                "`S` sort_key".to_string(),
+                "`G` group_by".to_string(),
+                "`A` metric()".to_string(),
+                "`L` limit offset".to_string(),
+            ],
+            indent: 2,
+            inline_markup: true,
+            layout: ValueLayout::AutoGrid,
+        })],
+    };
+
+    let rendered = render_document(
+        &document,
+        ResolvedRenderSettings {
+            backend: RenderBackend::Plain,
+            color: false,
+            unicode: true,
+            width: Some(40),
+            margin: 0,
+            indent_size: 2,
+            short_list_max: 1,
+            medium_list_max: 3,
+            grid_padding: 4,
+            grid_columns: None,
+            column_weight: 3,
+            table_overflow: TableOverflow::Clip,
+            table_border: crate::ui::TableBorderStyle::Square,
+            help_table_border: crate::ui::TableBorderStyle::None,
+            theme_name: crate::ui::theme::DEFAULT_THEME_NAME.to_string(),
+            theme: crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
+            style_overrides: crate::ui::style::StyleOverrides::default(),
+            chrome_frame: crate::ui::chrome::SectionFrameStyle::Top,
+        },
+    );
+
+    let lines = rendered.lines().collect::<Vec<_>>();
+    assert!(lines[0].starts_with("  F key>3"));
+    assert!(lines[0].contains("G group_by"));
+    assert!(lines[1].starts_with("  P col1 col2"));
+    assert!(lines[1].contains("A metric()"));
+    assert!(lines[2].starts_with("  S sort_key"));
+    assert!(lines[2].contains("L limit offset"));
 }
 
 #[test]

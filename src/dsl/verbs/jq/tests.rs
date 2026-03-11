@@ -73,10 +73,7 @@ fn run_jq_with_program_covers_missing_failure_invalid_and_empty_output_unit() {
         Err(JqError::ExecutableNotFound { .. })
     ));
 
-    let failing = write_script(
-        "jq-fail",
-        "#!/usr/bin/env sh\nprintf 'boom\\n' >&2\nexit 7\n",
-    );
+    let failing = write_script("jq-fail", "#!/bin/sh\nprintf 'boom\\n' >&2\nexit 7\n");
     let err = run_jq_with_program(failing.to_str().unwrap(), ".", &json!(null))
         .expect_err("failing program should error");
     assert!(matches!(
@@ -84,7 +81,7 @@ fn run_jq_with_program_covers_missing_failure_invalid_and_empty_output_unit() {
         JqError::FailedWithStderr { status_code: 7, .. }
     ));
 
-    let silent = write_script("jq-silent", "#!/usr/bin/env sh\nexit 9\n");
+    let silent = write_script("jq-silent", "#!/bin/sh\nexit 9\n");
     let err = run_jq_with_program(silent.to_str().unwrap(), ".", &json!(null))
         .expect_err("silent failure should error");
     assert!(matches!(
@@ -92,13 +89,13 @@ fn run_jq_with_program_covers_missing_failure_invalid_and_empty_output_unit() {
         JqError::FailedWithoutStderr { status_code: 9 }
     ));
 
-    let invalid = write_script("jq-invalid", "#!/usr/bin/env sh\nprintf 'not-json'\n");
+    let invalid = write_script("jq-invalid", "#!/bin/sh\nprintf 'not-json'\n");
     assert!(matches!(
         run_jq_with_program(invalid.to_str().unwrap(), ".", &json!(null)),
         Err(JqError::InvalidJsonOutput { .. })
     ));
 
-    let empty = write_script("jq-empty", "#!/usr/bin/env sh\nexit 0\n");
+    let empty = write_script("jq-empty", "#!/bin/sh\nexit 0\n");
     assert_eq!(
         run_jq_with_program(empty.to_str().unwrap(), ".", &json!(null)).unwrap(),
         None

@@ -41,10 +41,11 @@ use serde_json::{Map, Value, json};
 ///
 /// Canonical help sections such as usage, commands, and options are exposed as
 /// dedicated buckets for ergonomic access. The generic [`GuideView::sections`]
-/// list exists to preserve custom or non-canonical sections during
-/// serialization and transforms. Restore logic folds canonical section kinds
-/// back into the dedicated buckets so guides do not render duplicate
-/// `Usage`/`Commands`/`Options` sections.
+/// list exists to preserve authored section order during serialization and
+/// transforms, including canonical sections that were authored inline with
+/// custom content. Restore logic may backfill the dedicated buckets from those
+/// canonical sections, but renderers and serializers treat the ordered section
+/// list as authoritative whenever it already carries that content.
 ///
 /// Public API note: this is intentionally an open semantic DTO. Callers may
 /// compose it directly for bespoke help payloads, while common generation paths
@@ -95,9 +96,10 @@ pub struct GuideEntry {
 /// One logical section within a [`GuideView`].
 ///
 /// Custom sections live here directly. Canonical sections may also be
-/// represented here transiently while importing or transforming guide payloads,
-/// but restore logic normalizes those canonical kinds back into the dedicated
-/// [`GuideView`] buckets.
+/// represented here when authored inline with custom content. Restore logic may
+/// mirror canonical sections into the dedicated [`GuideView`] buckets for
+/// ergonomic access, but it should not reorder or delete the authored section
+/// list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct GuideSection {
@@ -109,6 +111,12 @@ pub struct GuideSection {
     pub paragraphs: Vec<String>,
     /// Structured rows rendered within the section.
     pub entries: Vec<GuideEntry>,
+    /// Arbitrary semantic data rendered through the normal value/document path.
+    ///
+    /// Markdown template imports use this for fenced `osp` blocks so authors
+    /// can embed structured data without forcing the final output to be literal
+    /// source JSON.
+    pub data: Option<Value>,
 }
 
 /// Canonical section kinds used by structured help output.
@@ -237,22 +245,55 @@ impl GuideView {
 
     /// Flattens the guide into value-oriented text lines.
     pub fn to_value_lines(&self) -> Vec<String> {
+        let normalized = Self::normalize_restored_sections(self.clone());
         let mut lines = Vec::new();
+        let use_ordered_sections = normalized.uses_ordered_section_representation();
 
-        append_value_paragraphs(&mut lines, &self.preamble);
-        append_value_paragraphs(&mut lines, &self.usage);
-        append_value_entries(&mut lines, &self.commands);
-        append_value_entries(&mut lines, &self.arguments);
-        append_value_entries(&mut lines, &self.options);
-        append_value_entries(&mut lines, &self.common_invocation_options);
-        append_value_paragraphs(&mut lines, &self.notes);
-
-        for section in &self.sections {
-            append_value_paragraphs(&mut lines, &section.paragraphs);
-            append_value_entries(&mut lines, &section.entries);
+        append_value_paragraphs(&mut lines, &normalized.preamble);
+        if !(use_ordered_sections
+            && normalized.has_canonical_builtin_section_kind(GuideSectionKind::Usage))
+        {
+            append_value_paragraphs(&mut lines, &normalized.usage);
+        }
+        if !(use_ordered_sections
+            && normalized.has_canonical_builtin_section_kind(GuideSectionKind::Commands))
+        {
+            append_value_entries(&mut lines, &normalized.commands);
+        }
+        if !(use_ordered_sections
+            && normalized.has_canonical_builtin_section_kind(GuideSectionKind::Arguments))
+        {
+            append_value_entries(&mut lines, &normalized.arguments);
+        }
+        if !(use_ordered_sections
+            && normalized.has_canonical_builtin_section_kind(GuideSectionKind::Options))
+        {
+            append_value_entries(&mut lines, &normalized.options);
+        }
+        if !(use_ordered_sections
+            && normalized
+                .has_canonical_builtin_section_kind(GuideSectionKind::CommonInvocationOptions))
+        {
+            append_value_entries(&mut lines, &normalized.common_invocation_options);
+        }
+        if !(use_ordered_sections
+            && normalized.has_canonical_builtin_section_kind(GuideSectionKind::Notes))
+        {
+            append_value_paragraphs(&mut lines, &normalized.notes);
         }
 
-        append_value_paragraphs(&mut lines, &self.epilogue);
+        for section in &normalized.sections {
+            if !use_ordered_sections && section.is_canonical_builtin_section() {
+                continue;
+            }
+            append_value_paragraphs(&mut lines, &section.paragraphs);
+            append_value_entries(&mut lines, &section.entries);
+            if let Some(data) = section.data.as_ref() {
+                append_value_data(&mut lines, data);
+            }
+        }
+
+        append_value_paragraphs(&mut lines, &normalized.epilogue);
 
         lines
     }
@@ -352,33 +393,53 @@ impl GuideView {
 
     fn to_row(&self) -> Map<String, Value> {
         let mut row = Map::new();
+        let use_ordered_sections = self.uses_ordered_section_representation();
 
         if !self.preamble.is_empty() {
             row.insert("preamble".to_string(), string_array(&self.preamble));
         }
 
-        if !self.usage.is_empty() {
+        if !(self.usage.is_empty()
+            || use_ordered_sections
+                && self.has_canonical_builtin_section_kind(GuideSectionKind::Usage))
+        {
             row.insert("usage".to_string(), string_array(&self.usage));
         }
-        if !self.commands.is_empty() {
+        if !(self.commands.is_empty()
+            || use_ordered_sections
+                && self.has_canonical_builtin_section_kind(GuideSectionKind::Commands))
+        {
             row.insert("commands".to_string(), payload_entry_array(&self.commands));
         }
-        if !self.arguments.is_empty() {
+        if !(self.arguments.is_empty()
+            || use_ordered_sections
+                && self.has_canonical_builtin_section_kind(GuideSectionKind::Arguments))
+        {
             row.insert(
                 "arguments".to_string(),
                 payload_entry_array(&self.arguments),
             );
         }
-        if !self.options.is_empty() {
+        if !(self.options.is_empty()
+            || use_ordered_sections
+                && self.has_canonical_builtin_section_kind(GuideSectionKind::Options))
+        {
             row.insert("options".to_string(), payload_entry_array(&self.options));
         }
-        if !self.common_invocation_options.is_empty() {
+        if !(self.common_invocation_options.is_empty()
+            || use_ordered_sections
+                && self
+                    .has_canonical_builtin_section_kind(GuideSectionKind::CommonInvocationOptions))
+        {
             row.insert(
                 "common_invocation_options".to_string(),
                 payload_entry_array(&self.common_invocation_options),
             );
         }
-        if !self.notes.is_empty() {
+        if !(self.notes.is_empty()
+            || use_ordered_sections
+                && self.has_canonical_builtin_section_kind(GuideSectionKind::Notes))
+        {
             row.insert("notes".to_string(), string_array(&self.notes));
         }
         if !self.sections.is_empty() {
@@ -410,15 +471,19 @@ impl GuideView {
     }
 
     fn normalize_restored_sections(mut view: Self) -> Self {
-        // Guide payloads intentionally carry both typed buckets
-        // (`commands/options/...`) and a general `sections` list. After DSL
-        // transforms, one representation may be narrowed before the other. On
-        // restore, fold only canonical built-in sections back into the typed
-        // buckets. That keeps `Usage`/`Commands`/`Options` duplicates out of
-        // the rendered guide while still allowing non-canonical sections like
-        // an `Actions` section with kind `Commands` to remain distinct.
-        let sections = std::mem::take(&mut view.sections);
-        let mut remaining_sections = Vec::new();
+        // There are two valid guide representations:
+        //
+        // - ordered sections are authoritative when custom/non-canonical
+        //   sections are interleaved with builtin ones (for example intro
+        //   payloads)
+        // - canonical buckets are authoritative when the payload only carries
+        //   builtin guide sections and those sections are merely structural
+        //   carriers for DSL addressing
+        //
+        // Restore must preserve authored mixed/custom section order, but it may
+        // collapse canonical-only section lists back into the dedicated buckets
+        // so ordinary help payloads keep their stable semantic shape.
+        let use_ordered_sections = view.uses_ordered_section_representation();
         let mut canonical_usage = Vec::new();
         let mut canonical_commands = Vec::new();
         let mut canonical_arguments = Vec::new();
@@ -426,45 +491,109 @@ impl GuideView {
         let mut canonical_common_invocation_options = Vec::new();
         let mut canonical_notes = Vec::new();
 
-        for section in sections {
+        for section in &view.sections {
             if !section.is_canonical_builtin_section() {
-                remaining_sections.push(section);
                 continue;
             }
 
             match section.kind {
-                GuideSectionKind::Usage => canonical_usage.extend(section.paragraphs),
-                GuideSectionKind::Commands => canonical_commands.extend(section.entries),
-                GuideSectionKind::Arguments => canonical_arguments.extend(section.entries),
-                GuideSectionKind::Options => canonical_options.extend(section.entries),
-                GuideSectionKind::CommonInvocationOptions => {
-                    canonical_common_invocation_options.extend(section.entries);
+                GuideSectionKind::Usage => {
+                    canonical_usage.extend(section.paragraphs.iter().cloned())
                 }
-                GuideSectionKind::Notes => canonical_notes.extend(section.paragraphs),
-                GuideSectionKind::Custom => remaining_sections.push(section),
+                GuideSectionKind::Commands => {
+                    canonical_commands.extend(section.entries.iter().cloned());
+                }
+                GuideSectionKind::Arguments => {
+                    canonical_arguments.extend(section.entries.iter().cloned());
+                }
+                GuideSectionKind::Options => {
+                    canonical_options.extend(section.entries.iter().cloned())
+                }
+                GuideSectionKind::CommonInvocationOptions => {
+                    canonical_common_invocation_options.extend(section.entries.iter().cloned());
+                }
+                GuideSectionKind::Notes => {
+                    canonical_notes.extend(section.paragraphs.iter().cloned())
+                }
+                GuideSectionKind::Custom => {}
             }
         }
 
-        if !canonical_usage.is_empty() {
-            view.usage = canonical_usage;
+        if !use_ordered_sections {
+            if view.has_canonical_builtin_section_kind(GuideSectionKind::Usage)
+                || view.usage.is_empty() && !canonical_usage.is_empty()
+            {
+                view.usage = canonical_usage;
+            }
+
+            if view.has_canonical_builtin_section_kind(GuideSectionKind::Commands)
+                || view.commands.is_empty() && !canonical_commands.is_empty()
+            {
+                view.commands = canonical_commands;
+            }
+
+            if view.has_canonical_builtin_section_kind(GuideSectionKind::Arguments)
+                || view.arguments.is_empty() && !canonical_arguments.is_empty()
+            {
+                view.arguments = canonical_arguments;
+            }
+
+            if view.has_canonical_builtin_section_kind(GuideSectionKind::Options)
+                || view.options.is_empty() && !canonical_options.is_empty()
+            {
+                view.options = canonical_options;
+            }
+
+            if view.has_canonical_builtin_section_kind(GuideSectionKind::CommonInvocationOptions)
+                || view.common_invocation_options.is_empty()
+                    && !canonical_common_invocation_options.is_empty()
+            {
+                view.common_invocation_options = canonical_common_invocation_options;
+            }
+
+            if view.has_canonical_builtin_section_kind(GuideSectionKind::Notes)
+                || view.notes.is_empty() && !canonical_notes.is_empty()
+            {
+                view.notes = canonical_notes;
+            }
+
+            view.sections
+                .retain(|section| !section.is_canonical_builtin_section());
+        } else {
+            if view.usage.is_empty() && !canonical_usage.is_empty() {
+                view.usage = canonical_usage;
+            }
+            if view.commands.is_empty() && !canonical_commands.is_empty() {
+                view.commands = canonical_commands;
+            }
+            if view.arguments.is_empty() && !canonical_arguments.is_empty() {
+                view.arguments = canonical_arguments;
+            }
+            if view.options.is_empty() && !canonical_options.is_empty() {
+                view.options = canonical_options;
+            }
+            if view.common_invocation_options.is_empty()
+                && !canonical_common_invocation_options.is_empty()
+            {
+                view.common_invocation_options = canonical_common_invocation_options;
+            }
+            if view.notes.is_empty() && !canonical_notes.is_empty() {
+                view.notes = canonical_notes;
+            }
         }
-        if !canonical_commands.is_empty() {
-            view.commands = canonical_commands;
-        }
-        if !canonical_arguments.is_empty() {
-            view.arguments = canonical_arguments;
-        }
-        if !canonical_options.is_empty() {
-            view.options = canonical_options;
-        }
-        if !canonical_common_invocation_options.is_empty() {
-            view.common_invocation_options = canonical_common_invocation_options;
-        }
-        if !canonical_notes.is_empty() {
-            view.notes = canonical_notes;
-        }
-        view.sections = remaining_sections;
         view
+    }
+
+    pub(crate) fn has_canonical_builtin_section_kind(&self, kind: GuideSectionKind) -> bool {
+        self.sections
+            .iter()
+            .any(|section| section.kind == kind && section.is_canonical_builtin_section())
+    }
+
+    pub(crate) fn uses_ordered_section_representation(&self) -> bool {
+        self.sections
+            .iter()
+            .any(|section| !section.is_canonical_builtin_section())
     }
 }
 
@@ -476,12 +605,13 @@ impl GuideEntry {
 
 impl GuideSection {
     fn is_semantically_valid(&self) -> bool {
+        let has_data = !matches!(self.data, None | Some(Value::Null));
         let has_content =
             !self.title.is_empty() || !self.paragraphs.is_empty() || !self.entries.is_empty();
-        has_content && self.entries.iter().all(GuideEntry::is_semantically_valid)
+        (has_content || has_data) && self.entries.iter().all(GuideEntry::is_semantically_valid)
     }
 
-    fn is_canonical_builtin_section(&self) -> bool {
+    pub(crate) fn is_canonical_builtin_section(&self) -> bool {
         let expected = match self.kind {
             GuideSectionKind::Usage => "Usage",
             GuideSectionKind::Commands => "Commands",
@@ -521,6 +651,94 @@ fn append_value_entries(lines: &mut Vec<String>, entries: &[GuideEntry]) {
     lines.extend(values);
 }
 
+fn append_value_data(lines: &mut Vec<String>, data: &Value) {
+    let values = data_value_lines(data);
+    if values.is_empty() {
+        return;
+    }
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines.extend(values);
+}
+
+fn data_value_lines(value: &Value) -> Vec<String> {
+    if let Some(entries) = payload_entry_array_as_entries(value) {
+        return entries.iter().filter_map(value_line_for_entry).collect();
+    }
+
+    match value {
+        Value::Null => Vec::new(),
+        Value::Array(items) => items.iter().flat_map(data_value_lines).collect(),
+        Value::Object(map) => map
+            .values()
+            .filter(|value| !value.is_null())
+            .map(guide_value_to_display)
+            .collect(),
+        scalar => vec![guide_value_to_display(scalar)],
+    }
+}
+
+fn payload_entry_array_as_entries(value: &Value) -> Option<Vec<GuideEntry>> {
+    let Value::Array(items) = value else {
+        return None;
+    };
+
+    items.iter().map(payload_entry_value_as_entry).collect()
+}
+
+fn payload_entry_value_as_entry(value: &Value) -> Option<GuideEntry> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+    if map.keys().any(|key| key != "name" && key != "short_help") {
+        return None;
+    }
+
+    Some(GuideEntry {
+        name: map.get("name")?.as_str()?.to_string(),
+        short_help: map
+            .get("short_help")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        display_indent: None,
+        display_gap: None,
+    })
+}
+
+fn guide_value_to_display(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => value.to_string().to_ascii_lowercase(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(values) => values
+            .iter()
+            .map(guide_value_to_display)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Value::Object(map) => {
+            if map.is_empty() {
+                return "{}".to_string();
+            }
+            let mut keys = map.keys().collect::<Vec<_>>();
+            keys.sort();
+            let preview = keys
+                .into_iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            if map.len() > 3 {
+                format!("{{{preview}, ...}}")
+            } else {
+                format!("{{{preview}}}")
+            }
+        }
+    }
+}
+
 fn value_line_for_entry(entry: &GuideEntry) -> Option<String> {
     if !entry.short_help.trim().is_empty() {
         return Some(entry.short_help.clone());
@@ -533,12 +751,26 @@ fn value_line_for_entry(entry: &GuideEntry) -> Option<String> {
 
 impl GuideSection {
     fn to_value(&self) -> Value {
-        json!({
-            "title": self.title,
-            "kind": self.kind.as_str(),
-            "paragraphs": self.paragraphs,
-            "entries": self.entries.iter().map(payload_entry_value).collect::<Vec<_>>(),
-        })
+        let mut section = Map::new();
+        section.insert("title".to_string(), Value::String(self.title.clone()));
+        section.insert(
+            "kind".to_string(),
+            Value::String(self.kind.as_str().to_string()),
+        );
+        section.insert("paragraphs".to_string(), string_array(&self.paragraphs));
+        section.insert(
+            "entries".to_string(),
+            Value::Array(
+                self.entries
+                    .iter()
+                    .map(payload_entry_value)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        if let Some(data) = self.data.as_ref() {
+            section.insert("data".to_string(), data.clone());
+        }
+        Value::Object(section)
     }
 }
 
@@ -550,12 +782,22 @@ impl GuideSection {
             kind,
             paragraphs: Vec::new(),
             entries: Vec::new(),
+            data: None,
         }
     }
 
     /// Appends a paragraph to the section.
     pub fn paragraph(mut self, text: impl Into<String>) -> Self {
         self.paragraphs.push(text.into());
+        self
+    }
+
+    /// Attaches semantic data to the section.
+    ///
+    /// Renderers may choose the best presentation for this payload instead of
+    /// showing the authoring JSON literally.
+    pub fn data(mut self, value: Value) -> Self {
+        self.data = Some(value);
         self
     }
 
@@ -710,6 +952,7 @@ fn payload_sections(value: Option<&Value>) -> Option<Vec<GuideSection>> {
             kind,
             paragraphs: row_string_array(section.get("paragraphs"))?,
             entries: payload_entries(section.get("entries"))?,
+            data: section.get("data").cloned(),
         });
     }
     Some(out)

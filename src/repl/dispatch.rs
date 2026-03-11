@@ -68,7 +68,7 @@ enum ReplLinePlan {
     },
     Shortcut {
         parsed: input::ReplParsedLine,
-        shortcut: ReplShortcutPlan,
+        shortcut: Box<ReplShortcutPlan>,
     },
     Help {
         result: Box<crate::app::CliCommandResult>,
@@ -96,6 +96,14 @@ enum ReplTimingPlan {
 struct ExecutedReplLine {
     result: ReplLineResult,
     timing: ReplTimingPlan,
+}
+
+struct ReplExecutionContext<'a, 'sink> {
+    runtime: &'a mut AppRuntime,
+    session: &'a mut AppSession,
+    clients: &'a AppClients,
+    history: &'a SharedHistory,
+    sink: &'sink mut dyn UiSink,
 }
 
 #[cfg(test)]
@@ -168,12 +176,14 @@ fn execute_repl_plugin_line_inner(
     let plan = classify_repl_line(runtime, session, line)?;
     let parse_finished = Instant::now();
     execute_repl_line_plan(
-        runtime,
-        session,
-        clients,
-        history,
+        ReplExecutionContext {
+            runtime,
+            session,
+            clients,
+            history,
+            sink,
+        },
         line,
-        sink,
         plan,
         parse_finished,
     )
@@ -210,7 +220,10 @@ fn classify_repl_line(
 
     let base_invocation = base_repl_invocation(runtime);
     if let Some(shortcut) = classify_repl_shortcut(runtime, session, &parsed, &base_invocation)? {
-        return Ok(ReplLinePlan::Shortcut { parsed, shortcut });
+        return Ok(ReplLinePlan::Shortcut {
+            parsed,
+            shortcut: Box::new(shortcut),
+        });
     }
 
     match parse_repl_invocation(runtime, session, &parsed)? {
@@ -228,15 +241,18 @@ fn classify_repl_line(
 }
 
 fn execute_repl_line_plan(
-    runtime: &mut AppRuntime,
-    session: &mut AppSession,
-    clients: &AppClients,
-    history: &SharedHistory,
+    context: ReplExecutionContext<'_, '_>,
     line: &str,
-    sink: &mut dyn UiSink,
     plan: ReplLinePlan,
     parse_finished: Instant,
 ) -> Result<ExecutedReplLine> {
+    let ReplExecutionContext {
+        runtime,
+        session,
+        clients,
+        history,
+        sink,
+    } = context;
     match plan {
         ReplLinePlan::Builtin { raw, builtin } => {
             let result = execute_repl_builtin(runtime, session, clients, history, &raw, builtin)?;
@@ -264,7 +280,7 @@ fn execute_repl_line_plan(
         }
         ReplLinePlan::Shortcut { parsed, shortcut } => {
             let result =
-                execute_repl_shortcut(runtime, session, clients, &parsed, shortcut, line, sink)?;
+                execute_repl_shortcut(runtime, session, clients, &parsed, *shortcut, line, sink)?;
             Ok(ExecutedReplLine {
                 result,
                 timing: ReplTimingPlan::Flat {

@@ -88,6 +88,7 @@ fn guide_with_sections() -> GuideView {
                         ..Default::default()
                     },
                 ],
+                data: None,
             },
             GuideSection {
                 title: "Utilities".to_string(),
@@ -105,6 +106,7 @@ fn guide_with_sections() -> GuideView {
                         ..Default::default()
                     },
                 ],
+                data: None,
             },
         ],
         ..GuideView::default()

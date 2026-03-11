@@ -5,20 +5,22 @@ expression: rendered
 
 - OSP ------
   Welcome Oistes!
-  Logged in as: oistes
-  Theme: Rose Pine Moon
-  Version: 1.4.8
 
+  Logged in as  oistes
+  Theme         Rose Pine Moon
+  Version       1.4.9
 - Keybindings 
-  Ctrl-D    exit
-  Ctrl-L    clear screen
-  Ctrl-R    history search
-
+  Ctrl-D  exit
+  Ctrl-L  clear screen
+  Ctrl-R  reverse search history
 - Pipes ----
-  F key>3 | P col1 col2 | S sort_key | G group_by_k1 k2
-  | A metric() | L limit offset | C count
-  K key | V value | %fuzzy | contains | !not | ?exist | !?not_exist (= exact, == case-sens.)
-  Help: | H or | H <verb> e.g. | H F
-
+  F key>3                    V value-only quick search
+  P col1 col2                contains quick-search text
+  S sort_key                 !not negate a quick match
+  G group_by_k1 k2           ?exist truthy / exists
+  A metric()                 !?not_exist missing / falsy
+  L limit offset             = exact exact match (ci)
+  C count                    == case-sens. exact match (cs)
+  K key-only quick search    | H <verb> verb help, e.g. | H F
 - Usage ----
-[INVOCATION_OPTIONS] COMMAND [ARGS]...
+  [INVOCATION_OPTIONS] COMMAND [ARGS]...

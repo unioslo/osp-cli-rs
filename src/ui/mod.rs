@@ -66,7 +66,7 @@ use crate::core::row::Row;
 use crate::guide::GuideView;
 
 pub use chrome::{
-    SectionFrameStyle, SectionRenderContext, SectionStyleTokens,
+    RuledSectionPolicy, SectionFrameStyle, SectionRenderContext, SectionStyleTokens,
     render_section_block_with_overrides, render_section_divider_with_overrides,
 };
 pub use clipboard::{ClipboardError, ClipboardService};
@@ -226,6 +226,8 @@ pub struct RenderSettings {
     pub style_overrides: StyleOverrides,
     /// Section frame style used for grouped chrome.
     pub chrome_frame: SectionFrameStyle,
+    /// Placement policy for ruled section separators across sibling sections.
+    pub ruled_section_policy: RuledSectionPolicy,
     /// Fallback behavior for semantic guide output.
     pub guide_default_format: GuideDefaultFormat,
     /// Runtime terminal facts used during auto-resolution.
@@ -257,6 +259,7 @@ impl Default for RenderSettings {
             theme: None,
             style_overrides: crate::ui::style::StyleOverrides::default(),
             chrome_frame: SectionFrameStyle::Top,
+            ruled_section_policy: RuledSectionPolicy::PerSection,
             guide_default_format: GuideDefaultFormat::Guide,
             runtime: RenderRuntime::default(),
         }
@@ -370,6 +373,12 @@ impl RenderSettingsBuilder {
     /// Sets the section frame style.
     pub fn with_chrome_frame(mut self, chrome_frame: SectionFrameStyle) -> Self {
         self.settings.chrome_frame = chrome_frame;
+        self
+    }
+
+    /// Sets how ruled separators are shared across sibling sections.
+    pub fn with_ruled_section_policy(mut self, ruled_section_policy: RuledSectionPolicy) -> Self {
+        self.settings.ruled_section_policy = ruled_section_policy;
         self
     }
 

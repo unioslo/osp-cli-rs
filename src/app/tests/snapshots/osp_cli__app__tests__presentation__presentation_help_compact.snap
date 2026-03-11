@@ -1,13 +1,11 @@
 ---
 source: src/app/tests/presentation.rs
-assertion_line: 159
+assertion_line: 183
 expression: "render_help_snapshot(&[(\"ui.presentation\", \"compact\")])"
 ---
 - Usage ----------
   osp [OPTIONS]
-
 - Commands -------
   help
-
 - Options --------
   -h, --help

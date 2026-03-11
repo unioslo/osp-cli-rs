@@ -1,4 +1,5 @@
 use super::{GuideTemplateBlock, GuideTemplateInclude, parse_markdown_template};
+use serde_json::json;
 
 #[test]
 fn markdown_template_parses_headings_and_includes_unit() {
@@ -39,6 +40,23 @@ fn markdown_template_parses_items_code_blocks_and_overview_include_unit() {
             GuideTemplateBlock::Paragraph("- second".to_string()),
             GuideTemplateBlock::Paragraph("`echo hi`".to_string()),
             GuideTemplateBlock::Paragraph("`pwd`".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn markdown_template_parses_osp_code_blocks_as_semantic_data_unit() {
+    let parsed = parse_markdown_template(
+        "## Keybindings\n\n```osp\n[{\"name\":\"Ctrl-D\",\"short_help\":\"exit\"}]\n```\n",
+    );
+
+    assert_eq!(
+        parsed,
+        vec![
+            GuideTemplateBlock::Heading("Keybindings".to_string()),
+            GuideTemplateBlock::Data(json!([
+                {"name": "Ctrl-D", "short_help": "exit"}
+            ])),
         ]
     );
 }

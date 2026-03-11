@@ -83,6 +83,19 @@ fn intro_command_supports_all_explicit_output_formats_unit() {
     let guide = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--guide", "intro"]);
     assert!(guide.contains("OSP"));
     assert!(guide.contains("Commands"));
+    let osp = guide.find("OSP").expect("OSP section should render");
+    let keybindings = guide
+        .find("Keybindings")
+        .expect("Keybindings section should render");
+    let pipes = guide.find("Pipes").expect("Pipes section should render");
+    let usage = guide.find("Usage").expect("Usage section should render");
+    let commands = guide
+        .find("Commands")
+        .expect("Commands section should render");
+    assert!(osp < keybindings);
+    assert!(keybindings < pipes);
+    assert!(pipes < usage);
+    assert!(usage < commands);
 
     let markdown = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--md", "intro"]);
     assert!(markdown.contains("## OSP"));
@@ -115,11 +128,15 @@ fn staged_semantic_quick_search_preserves_guide_shape_by_default_unit() {
 
     assert!(format_hint.is_none());
     let rebuilt = GuideView::try_from_output_result(&output).expect("guide should still restore");
-    assert_eq!(rebuilt.usage, vec!["osp [COMMAND]".to_string()]);
+    assert!(
+        rebuilt.usage.is_empty(),
+        "quick should prune unmatched root siblings like usage: {rebuilt:?}"
+    );
     assert_eq!(rebuilt.commands.len(), 2);
 
     let rendered = render_output(&output, &RenderSettings::test_plain(OutputFormat::Guide));
     assert!(rendered.contains("Commands"));
+    assert!(!rendered.contains("Usage"));
     assert!(!rendered.contains("Sections"));
     assert!(!rendered.contains("Entries"));
 }

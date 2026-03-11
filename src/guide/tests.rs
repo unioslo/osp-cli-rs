@@ -91,6 +91,42 @@ fn guide_view_round_trips_through_output_result_unit() {
 }
 
 #[test]
+fn guide_round_trip_preserves_authored_canonical_section_order_unit() {
+    let view = GuideView {
+        sections: vec![
+            GuideSection::new("OSP", GuideSectionKind::Custom).paragraph("Welcome"),
+            GuideSection::new("Usage", GuideSectionKind::Usage)
+                .paragraph("[INVOCATION_OPTIONS] COMMAND [ARGS]..."),
+            GuideSection::new("Commands", GuideSectionKind::Commands)
+                .entry("doctor", "Run diagnostics checks"),
+        ],
+        ..GuideView::default()
+    };
+
+    let rebuilt = GuideView::try_from_output_result(&view.to_output_result()).expect("guide");
+
+    assert_eq!(
+        rebuilt
+            .sections
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["OSP", "Usage", "Commands"]
+    );
+    assert_eq!(
+        rebuilt.usage,
+        vec!["[INVOCATION_OPTIONS] COMMAND [ARGS]..."]
+    );
+    assert_eq!(rebuilt.commands[0].name, "doctor");
+
+    let json = rebuilt.to_json_value();
+    assert!(json.get("usage").is_none());
+    assert!(json.get("commands").is_none());
+    assert_eq!(json["sections"][1]["title"], "Usage");
+    assert_eq!(json["sections"][2]["title"], "Commands");
+}
+
+#[test]
 fn guide_view_output_result_carries_document_sidecar_unit() {
     let view =
         GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  help  Print help\n");
@@ -223,6 +259,7 @@ fn guide_value_lines_prefer_content_over_structure_labels_unit() {
                 display_indent: None,
                 display_gap: None,
             }],
+            data: None,
         }],
         ..GuideView::default()
     };
@@ -230,5 +267,32 @@ fn guide_value_lines_prefer_content_over_structure_labels_unit() {
     assert_eq!(
         view.to_value_lines(),
         vec!["Inspect and edit runtime config".to_string()]
+    );
+}
+
+#[test]
+fn guide_value_lines_preserve_json_object_value_order_unit() {
+    let view = GuideView {
+        sections: vec![GuideSection {
+            title: "Session".to_string(),
+            kind: GuideSectionKind::Custom,
+            paragraphs: Vec::new(),
+            entries: Vec::new(),
+            data: Some(json!({
+                "logged_in_as": "oistes",
+                "theme": "rose-pine-moon",
+                "version": "1.4.9"
+            })),
+        }],
+        ..GuideView::default()
+    };
+
+    assert_eq!(
+        view.to_value_lines(),
+        vec![
+            "oistes".to_string(),
+            "rose-pine-moon".to_string(),
+            "1.4.9".to_string()
+        ]
     );
 }

@@ -108,3 +108,27 @@ fn dsl_pipeline_grouped_output_renders_without_flattening() {
     assert!(output.contains("alpha"));
     assert!(output.contains("gamma"));
 }
+
+#[test]
+fn dsl_pipeline_quick_uses_visible_dotted_row_values_when_no_structural_match_exists() {
+    let rows = vec![
+        json!({"key": "theme.name", "value": "dracula"})
+            .as_object()
+            .cloned()
+            .expect("row fixture"),
+        json!({"key": "theme.path", "value": "/tmp/themes"})
+            .as_object()
+            .cloned()
+            .expect("row fixture"),
+    ];
+
+    let parsed = parse_pipeline("fixture | theme.name").expect("valid pipeline");
+    let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
+
+    let settings = RenderSettings::test_plain(OutputFormat::Table);
+    let output = render_output(&transformed, &settings);
+
+    assert!(output.contains("theme.name"));
+    assert!(output.contains("dracula"));
+    assert!(!output.contains("theme.path"));
+}

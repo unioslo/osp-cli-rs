@@ -1,11 +1,10 @@
 ---
-source: src/repl/dispatch.rs
-assertion_line: 557
+source: src/repl/dispatch/tests.rs
+assertion_line: 435
 expression: help
 ---
 - Usage ----
   [INVOCATION_OPTIONS] COMMAND [ARGS]...
-
 - Commands -
   exit     Exit application.
   help     Show this command overview.

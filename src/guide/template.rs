@@ -1,9 +1,11 @@
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GuideTemplateBlock {
     Heading(String),
     Paragraph(String),
+    Data(Value),
     Include(GuideTemplateInclude),
 }
 
@@ -24,7 +26,16 @@ pub(crate) fn parse_markdown_template(template: &str) -> Vec<GuideTemplateBlock>
                 Tag::Heading { .. } => active = Some(ActiveBlock::Heading(String::new())),
                 Tag::Paragraph => active = Some(ActiveBlock::Paragraph(String::new())),
                 Tag::Item => active = Some(ActiveBlock::Item(String::new())),
-                Tag::CodeBlock(_) => active = Some(ActiveBlock::CodeBlock(String::new())),
+                Tag::CodeBlock(kind) => {
+                    let language = match kind {
+                        CodeBlockKind::Fenced(language) => Some(language.to_string()),
+                        CodeBlockKind::Indented => None,
+                    };
+                    active = Some(ActiveBlock::CodeBlock {
+                        language,
+                        text: String::new(),
+                    });
+                }
                 Tag::Emphasis => push_active_text(&mut active, "*"),
                 Tag::Strong => push_active_text(&mut active, "**"),
                 Tag::Strikethrough => push_active_text(&mut active, "~~"),
@@ -65,7 +76,10 @@ enum ActiveBlock {
     Heading(String),
     Paragraph(String),
     Item(String),
-    CodeBlock(String),
+    CodeBlock {
+        language: Option<String>,
+        text: String,
+    },
 }
 
 fn push_active_text(active: &mut Option<ActiveBlock>, text: &str) {
@@ -73,10 +87,10 @@ fn push_active_text(active: &mut Option<ActiveBlock>, text: &str) {
         return;
     };
     match active {
-        ActiveBlock::Heading(buf)
-        | ActiveBlock::Paragraph(buf)
-        | ActiveBlock::Item(buf)
-        | ActiveBlock::CodeBlock(buf) => buf.push_str(text),
+        ActiveBlock::Heading(buf) | ActiveBlock::Paragraph(buf) | ActiveBlock::Item(buf) => {
+            buf.push_str(text)
+        }
+        ActiveBlock::CodeBlock { text: buf, .. } => buf.push_str(text),
     }
 }
 
@@ -94,7 +108,14 @@ fn flush_active_block(out: &mut Vec<GuideTemplateBlock>, active: Option<ActiveBl
         }
         ActiveBlock::Paragraph(text) => push_text_block(out, &text, false),
         ActiveBlock::Item(text) => push_text_block(out, &text, true),
-        ActiveBlock::CodeBlock(text) => {
+        ActiveBlock::CodeBlock { language, text } => {
+            if language.as_deref() == Some("osp")
+                && let Ok(value) = serde_json::from_str::<Value>(&text)
+            {
+                out.push(GuideTemplateBlock::Data(value));
+                return;
+            }
+
             for line in text.lines() {
                 let trimmed = line.trim_end();
                 if !trimmed.is_empty() {

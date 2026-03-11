@@ -55,7 +55,7 @@ fn two_section_value() -> serde_json::Value {
 }
 
 #[test]
-fn quick_filters_semantic_container_fields_without_flattening_unit() {
+fn quick_keeps_only_matching_root_fields_and_matching_array_elements_unit() {
     let value = json!({
         "usage": ["osp intro"],
         "notes": ["Read this first"],
@@ -69,11 +69,58 @@ fn quick_filters_semantic_container_fields_without_flattening_unit() {
         .expect("quick stage should succeed");
 
     assert!(filtered.get("commands").is_some());
-    assert_eq!(filtered["usage"], json!(["osp intro"]));
-    assert_eq!(filtered["notes"], json!(["Read this first"]));
+    assert!(filtered.get("usage").is_none());
+    assert!(filtered.get("notes").is_none());
     let commands = filtered["commands"].as_array().expect("commands array");
     assert_eq!(commands.len(), 1);
-    assert_eq!(commands[0]["name"], json!("help"));
+    assert_eq!(
+        commands[0],
+        json!({"name": "help", "short_help": "Show overview"})
+    );
+}
+
+#[test]
+fn quick_keeps_matching_array_object_elements_whole_without_inventing_values_unit() {
+    let value = json!({
+        "k": [
+            "a",
+            "b",
+            {"a": "d", "k": "c"}
+        ]
+    });
+
+    let filtered = apply_stage(value, &stage(ParsedStageKind::Quick, "", "", "c"))
+        .expect("quick stage should succeed");
+
+    assert_eq!(
+        filtered,
+        json!({
+            "k": [
+                {"a": "d", "k": "c"}
+            ]
+        })
+    );
+}
+
+#[test]
+fn quick_narrows_singleton_matching_array_element_when_whole_element_would_be_noop_unit() {
+    let value = json!({
+        "k": [
+            {"c2": "d2", "e1": "e2"}
+        ]
+    });
+
+    let filtered = apply_stage(value, &stage(ParsedStageKind::Quick, "", "", "d2"))
+        .expect("quick stage should succeed");
+
+    assert_eq!(
+        filtered,
+        json!({
+            "k": [
+                {"c2": "d2"}
+            ]
+        })
+    );
 }
 
 #[test]

@@ -142,6 +142,27 @@ fn resolve_pairs_handles_path_flat_fallback_and_full_materialization() {
 }
 
 #[test]
+fn resolve_pairs_falls_back_after_missing_structural_token_on_flat_rows() {
+    let flat = json!({
+        "key": "theme.name",
+        "value": "dracula"
+    })
+    .as_object()
+    .cloned()
+    .expect("object");
+
+    let (pairs, materialized) = resolve_pairs(&flat, "theme.name");
+    assert!(materialized);
+    assert_eq!(
+        pairs,
+        vec![
+            ("key".to_string(), json!("theme.name")),
+            ("value".to_string(), json!("dracula"))
+        ]
+    );
+}
+
+#[test]
 fn enumerate_paths_and_selectors_cover_negative_indexes() {
     let root = json!({"items": [{"id": 1}, {"id": 2}, {"id": 3}]});
     let path = parse_path("items[-1].id").expect("path should parse");

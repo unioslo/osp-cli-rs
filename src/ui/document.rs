@@ -196,6 +196,22 @@ pub enum TableAlign {
 pub struct ValueBlock {
     /// Values to render line by line.
     pub values: Vec<String>,
+    /// Additional indent applied before each rendered line.
+    pub indent: usize,
+    /// Whether inline markup should be parsed before rendering.
+    pub inline_markup: bool,
+    /// Layout policy for the values.
+    pub layout: ValueLayout,
+}
+
+/// Layout policy for scalar value blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ValueLayout {
+    /// Render one item per line.
+    #[default]
+    Vertical,
+    /// Render as a grid when the list is long enough.
+    AutoGrid,
 }
 
 /// MREG-style hierarchical key/value block.
