@@ -3,7 +3,15 @@ set -euo pipefail
 
 msg_file="${1:?commit message file is required}"
 
-subject="$(sed '/^#/d;/^[[:space:]]*$/d' "$msg_file" | head -n 1 || true)"
+clean_file="$(mktemp)"
+trap 'rm -f "$clean_file"' EXIT
+sed '/^#/d' "$msg_file" > "$clean_file"
+
+subject_line="$(awk 'NF{print NR; exit}' "$clean_file" || true)"
+subject=""
+if [[ -n "$subject_line" ]]; then
+    subject="$(sed -n "${subject_line}p" "$clean_file")"
+fi
 
 if [[ -z "$subject" ]]; then
     echo "ERROR: Empty commit message subject."
@@ -50,10 +58,64 @@ EOF
     exit 1
 fi
 
-# If there is a body, enforce a blank line after the subject.
-if sed '/^#/d' "$msg_file" | awk 'NR==1{next} NR==2{if(length($0)!=0) exit 1; exit 0} END{exit 0}'; then
-    exit 0
+# Reject the common mistake of embedding literal "\n" inside a single -m
+# argument instead of using the editor or multiple -m flags.
+if grep -q '\\n' "$clean_file"; then
+    cat <<'EOF'
+ERROR: Commit message contains literal "\n" sequences.
+
+Use your editor or multiple -m flags, for example:
+  git commit -m "type(scope): Subject" -m "Why..." -m "What..."
+EOF
+    exit 1
 fi
 
-echo "ERROR: Commit body must be separated from the subject by one blank line."
-exit 1
+body_start=$((subject_line + 1))
+next_line="$(sed -n "${body_start}p" "$clean_file")"
+
+if [[ -n "${next_line}" ]]; then
+    echo "ERROR: Commit body must be separated from the subject by one blank line."
+    exit 1
+fi
+
+body="$(tail -n +"$((subject_line + 2))" "$clean_file" || true)"
+meaningful_body="$(
+    printf '%s\n' "$body" \
+        | sed '/^[[:space:]]*$/d' \
+        | grep -Ev '^(Why|What|Verification|Refs):[[:space:]]*$|^-[[:space:]]*$' \
+        || true
+)"
+
+if [[ -z "$meaningful_body" ]]; then
+    cat <<'EOF'
+ERROR: Commit messages must include a real body.
+
+Use the body to explain:
+  - why the change exists
+  - what changed
+  - how you verified it
+EOF
+    exit 1
+fi
+
+overlong_line="$(
+    awk -v start="$((subject_line + 2))" '
+        NR >= start && length($0) > 80 {
+            printf "%d:%d:%s\n", NR, length($0), $0;
+            exit 0;
+        }
+    ' "$clean_file"
+)"
+
+if [[ -n "$overlong_line" ]]; then
+    line_no="${overlong_line%%:*}"
+    rest="${overlong_line#*:}"
+    line_len="${rest%%:*}"
+    line_text="${rest#*:}"
+    echo "ERROR: Commit body lines must be 80 characters or fewer."
+    echo "       Line $line_no has length $line_len."
+    echo "       $line_text"
+    exit 1
+fi
+
+exit 0

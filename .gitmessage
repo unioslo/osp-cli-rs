@@ -1,13 +1,12 @@
+# Keep the subject <=72 characters.
+# Bodies are required for ordinary commits and must wrap at 80 columns.
+# Use your editor or multiple -m flags; do not embed literal \n sequences.
 <type>(<scope>): <Subject>
 
 Why:
-- 
 
 What:
-- 
 
-Operational/testing notes:
-- 
+Verification:
 
 Refs:
-- 
