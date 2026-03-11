@@ -65,6 +65,12 @@ fn repl_view<'a>(
 }
 
 fn run_app_stdout(args: &[&str]) -> String {
+    // Full app invocations still consult process state like TERM/HOME/PATH while
+    // bootstrapping runtime UI and discovery. Serialize them against env-mutating
+    // tests so explicit output-format contracts do not flap in the full suite.
+    let _guard = crate::tests::env_lock()
+        .lock()
+        .expect("env lock should not be poisoned");
     let mut sink = BufferedUiSink::default();
     let code = crate::app::App::new()
         .run_with_sink(args.iter().copied(), &mut sink)

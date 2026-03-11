@@ -11,23 +11,14 @@ fn intro_command_dispatches_as_repl_scoped_builtin_unit() {
 
 #[test]
 fn intro_command_emits_semantic_json_with_explicit_format_unit() {
-    let mut sink = BufferedUiSink::default();
-    let code = crate::app::App::new()
-        .run_with_sink(
-            ["osp", "--no-env", "--no-config-file", "--json", "intro"],
-            &mut sink,
-        )
-        .expect("intro command should succeed");
-
-    assert_eq!(code, 0);
-    let json: serde_json::Value =
-        serde_json::from_str(&sink.stdout).expect("intro JSON should parse");
+    let stdout = run_app_stdout(&["osp", "--no-env", "--no-config-file", "--json", "intro"]);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("intro JSON should parse");
     let rows = json.as_array().expect("guide output should be row array");
     assert_eq!(rows.len(), 1);
     assert!(
         rows[0].get("sections").is_some() || rows[0].get("preamble").is_some(),
         "expected semantic intro payload, got: {}",
-        sink.stdout
+        stdout
     );
 }
 
