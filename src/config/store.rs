@@ -1,3 +1,16 @@
+//! Helpers for editing TOML-backed config stores on disk.
+//!
+//! This module exists to keep config-file mutation logic separate from config
+//! resolution. Callers provide a validated key, typed value, and scope; this
+//! layer applies the edit atomically to the right TOML table structure.
+//!
+//! Contract:
+//!
+//! - this module owns on-disk TOML edits and atomic write behavior
+//! - schema validation and scope validation still happen before a write lands
+//! - callers should treat these helpers as persistence primitives, not config
+//!   resolution APIs
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7,9 +20,36 @@ use crate::config::{
     validate_key_scope, with_path_context,
 };
 
-/// Sets a scoped key in a TOML config file.
+/// Writes one scoped key into a TOML-backed config store.
 ///
-/// Returns the previous typed value for the key when one existed.
+/// The edit runs through normal schema and scope validation first and returns
+/// the previously stored typed value when the key already existed.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::config::{
+///     ConfigValue, Scope, set_scoped_value_in_toml, unset_scoped_value_in_toml,
+/// };
+///
+/// let path = std::env::temp_dir().join(format!(
+///     "osp-cli-doc-{}-{}.toml",
+///     std::process::id(),
+///     std::time::SystemTime::now()
+///         .duration_since(std::time::UNIX_EPOCH)
+///         .unwrap()
+///         .as_nanos()
+/// ));
+/// let _ = std::fs::remove_file(&path);
+///
+/// let value = ConfigValue::String("dracula".to_string());
+/// set_scoped_value_in_toml(&path, "theme.name", &value, &Scope::global(), false, false).unwrap();
+/// let removed = unset_scoped_value_in_toml(&path, "theme.name", &Scope::global(), false, false)
+///     .unwrap();
+///
+/// assert_eq!(removed.previous, Some(value));
+/// let _ = std::fs::remove_file(&path);
+/// ```
 pub fn set_scoped_value_in_toml(
     path: &Path,
     key: &str,
@@ -28,9 +68,10 @@ pub fn set_scoped_value_in_toml(
     )
 }
 
-/// Removes a scoped key from a TOML config file.
+/// Removes one scoped key from a TOML-backed config store.
 ///
-/// Returns the previous typed value for the key when one existed.
+/// The returned edit result includes the previous typed value so callers can
+/// report or inspect what changed without reparsing the file.
 pub fn unset_scoped_value_in_toml(
     path: &Path,
     key: &str,

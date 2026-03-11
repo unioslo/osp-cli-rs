@@ -1,3 +1,28 @@
+//! Declarative command metadata shared by help, completion, and plugin layers.
+//!
+//! This module exists to describe commands in a neutral in-memory form before
+//! any one presentation or transport layer gets involved. Help rendering,
+//! completion tree building, and plugin describe payloads can all consume the
+//! same structure instead of each inventing their own command model.
+//!
+//! In broad terms:
+//!
+//! - [`crate::core::command_def::CommandDef`] describes one command node plus
+//!   nested subcommands
+//! - [`crate::core::command_def::ArgDef`] and
+//!   [`crate::core::command_def::FlagDef`] describe the user-facing invocation
+//!   surface
+//! - [`crate::core::command_def::CommandPolicyDef`] carries the coarse
+//!   visibility/auth requirements that
+//!   travel with a command definition
+//!
+//! Contract:
+//!
+//! - this module owns declarative command shape, not runtime dispatch
+//! - the types here should stay presentation-neutral and broadly reusable
+//! - richer runtime policy evaluation lives in
+//!   [`crate::core::command_policy`], not here
+
 use crate::core::command_policy::VisibilityMode;
 
 /// Declarative command description used for help, completion, and plugin metadata.
@@ -53,7 +78,23 @@ impl Default for CommandPolicyDef {
 }
 
 impl CommandPolicyDef {
-    /// Returns `true` when the policy matches the default public, unrestricted state.
+    /// Returns `true` when the policy matches the default public,
+    /// unrestricted state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_def::CommandPolicyDef;
+    /// use osp_cli::core::command_policy::VisibilityMode;
+    ///
+    /// assert!(CommandPolicyDef::default().is_empty());
+    /// assert!(!CommandPolicyDef {
+    ///     visibility: VisibilityMode::Authenticated,
+    ///     required_capabilities: Vec::new(),
+    ///     feature_flags: Vec::new(),
+    /// }
+    /// .is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.visibility == VisibilityMode::Public
             && self.required_capabilities.is_empty()
@@ -143,6 +184,31 @@ pub struct ValueChoice {
 
 impl CommandDef {
     /// Creates a command definition with the provided command name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
+    ///
+    /// let command = CommandDef::new("theme")
+    ///     .about("Inspect themes")
+    ///     .arg(
+    ///         ArgDef::new("name")
+    ///             .help("Theme name")
+    ///             .value_kind(ValueKind::Enum)
+    ///             .choices([
+    ///                 ValueChoice::new("dracula"),
+    ///                 ValueChoice::new("tokyonight"),
+    ///             ]),
+    ///     )
+    ///     .flag(FlagDef::new("raw").long("raw").help("Show raw values"))
+    ///     .subcommand(CommandDef::new("list").about("List available themes"));
+    ///
+    /// assert_eq!(command.name, "theme");
+    /// assert_eq!(command.args[0].choices.len(), 2);
+    /// assert_eq!(command.flags[0].long.as_deref(), Some("raw"));
+    /// assert_eq!(command.subcommands[0].name, "list");
+    /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -391,6 +457,22 @@ impl FlagDef {
 
 impl ValueChoice {
     /// Creates a suggested value entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_def::ValueChoice;
+    ///
+    /// let choice = ValueChoice::new("dracula")
+    ///     .help("Dark theme")
+    ///     .display("Dracula")
+    ///     .sort("010");
+    ///
+    /// assert_eq!(choice.value, "dracula");
+    /// assert_eq!(choice.help.as_deref(), Some("Dark theme"));
+    /// assert_eq!(choice.display.as_deref(), Some("Dracula"));
+    /// assert_eq!(choice.sort_key.as_deref(), Some("010"));
+    /// ```
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -593,38 +675,4 @@ fn normalize_usage_line(value: String) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{CommandDef, ValueKind};
-
-    #[cfg(feature = "clap")]
-    #[test]
-    fn clap_command_def_caches_usage_aliases_and_help_unit() {
-        use clap::{Arg, Command};
-
-        let command = Command::new("theme")
-            .about("Inspect themes")
-            .visible_alias("skins")
-            .before_help("before text")
-            .after_help("after text")
-            .arg(
-                Arg::new("name")
-                    .help("Theme name")
-                    .value_hint(clap::ValueHint::DirPath),
-            )
-            .arg(
-                Arg::new("raw")
-                    .long("raw")
-                    .visible_alias("plain")
-                    .help("Show raw values"),
-            );
-
-        let def = CommandDef::from_clap(command);
-
-        assert_eq!(def.usage.as_deref(), Some("theme [OPTIONS] [name]"));
-        assert_eq!(def.aliases, vec!["skins".to_string()]);
-        assert_eq!(def.before_help.as_deref(), Some("before text"));
-        assert_eq!(def.after_help.as_deref(), Some("after text"));
-        assert_eq!(def.args[0].value_kind, Some(ValueKind::Path));
-        assert!(def.flags[0].aliases.contains(&"--plain".to_string()));
-    }
-}
+mod tests;

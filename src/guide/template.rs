@@ -133,30 +133,4 @@ fn parse_include(text: &str) -> Option<GuideTemplateInclude> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{GuideTemplateBlock, GuideTemplateInclude, parse_markdown_template};
-
-    #[test]
-    fn markdown_template_parses_headings_and_includes_unit() {
-        let parsed = parse_markdown_template("# Title\n\nHello *there*\n\n{{ help }}");
-        assert_eq!(
-            parsed,
-            vec![
-                GuideTemplateBlock::Heading("Title".to_string()),
-                GuideTemplateBlock::Paragraph("Hello *there*".to_string()),
-                GuideTemplateBlock::Include(GuideTemplateInclude::Help),
-            ]
-        );
-    }
-
-    #[test]
-    fn markdown_template_treats_underscore_emphasis_like_markdown_unit() {
-        let parsed = parse_markdown_template("Muted _text_ and **strong**.");
-        assert_eq!(
-            parsed,
-            vec![GuideTemplateBlock::Paragraph(
-                "Muted *text* and **strong**.".to_string()
-            )]
-        );
-    }
-}
+mod tests;

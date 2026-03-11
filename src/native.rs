@@ -1,3 +1,29 @@
+//! In-process native command surface.
+//!
+//! This module exists so `osp` can expose built-in commands through the same
+//! catalog, policy, and dispatch-adjacent shapes that plugin commands use,
+//! without spawning a subprocess.
+//!
+//! High-level flow:
+//!
+//! - register native command implementations in a [`NativeCommandRegistry`]
+//! - describe them through clap-derived metadata
+//! - project that metadata into completion, help, and policy surfaces
+//! - execute them in-process with a small runtime context
+//!
+//! Contract:
+//!
+//! - native commands are the in-process counterpart to plugin commands
+//! - catalog and policy projection should stay aligned with the plugin-facing
+//!   protocol types in `crate::core::plugin`
+//!
+//! Public API shape:
+//!
+//! - [`NativeCommandRegistry`] is the canonical registration surface
+//! - catalog/context structs stay plain describe-time or execute-time payloads
+//! - commands should expose behavior through the registry rather than by
+//!   leaking host-internal runtime state
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -10,27 +36,45 @@ use crate::core::command_policy::CommandPolicyRegistry;
 use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1, ResponseV1};
 use crate::core::runtime::RuntimeHints;
 
-/// Public catalog entry for one registered native command.
+/// Public metadata snapshot for one registered native command.
+///
+/// This is the describe-time surface projected into help, completion, and
+/// policy code. It is not an execution handle; callers should fetch the command
+/// from [`NativeCommandRegistry`] when they need to run it.
 #[derive(Debug, Clone)]
 pub struct NativeCommandCatalogEntry {
-    /// Command name as exposed to the CLI and REPL.
+    /// Canonical command path root exposed to CLI and REPL users.
     pub name: String,
-    /// Short help text shown in listings.
+    /// Short human-facing summary used in listings and overviews.
     pub about: String,
-    /// Optional auth metadata associated with the command.
+    /// Optional auth/visibility metadata projected into policy surfaces.
     pub auth: Option<DescribeCommandAuthV1>,
-    /// Direct subcommand names available below this command.
+    /// Direct child names available immediately below this command.
     pub subcommands: Vec<String>,
-    /// Completion tree rooted at this command.
+    /// Completion tree rooted at this command's describe-time shape.
     pub completion: CommandSpec,
 }
 
 /// Runtime context passed to native command implementations.
+///
+/// This keeps the command surface small and stable: commands receive the
+/// resolved config snapshot and runtime hints they need to behave like the host
+/// would, without exposing the whole app runtime for ad hoc coupling.
 pub struct NativeCommandContext<'a> {
-    /// Current resolved config snapshot.
+    /// Current resolved config snapshot for this execution.
     pub config: &'a ResolvedConfig,
-    /// Runtime hints propagated to child processes and integrations.
+    /// Runtime hints that should be propagated to child processes and adapters.
     pub runtime_hints: RuntimeHints,
+}
+
+impl<'a> NativeCommandContext<'a> {
+    /// Creates the runtime context passed to one native-command execution.
+    pub fn new(config: &'a ResolvedConfig, runtime_hints: RuntimeHints) -> Self {
+        Self {
+            config,
+            runtime_hints,
+        }
+    }
 }
 
 /// Result of executing a native command.
@@ -43,7 +87,7 @@ pub enum NativeCommandOutcome {
     Exit(i32),
 }
 
-/// Trait implemented by native commands registered directly in-process.
+/// Trait implemented by in-process commands registered alongside plugins.
 pub trait NativeCommand: Send + Sync {
     /// Returns the clap command definition for this command.
     fn command(&self) -> Command;
@@ -101,6 +145,9 @@ impl NativeCommandRegistry {
     }
 
     /// Returns a registered command by normalized name.
+    ///
+    /// Lookup is case- and surrounding-whitespace-insensitive so callers can
+    /// reuse human-typed names without normalizing them first.
     pub fn command(&self, name: &str) -> Option<&Arc<dyn NativeCommand>> {
         self.commands.get(&normalize_name(name))
     }
@@ -156,135 +203,4 @@ fn normalize_name(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
-    use crate::core::command_policy::CommandPath;
-    use crate::core::plugin::{
-        DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, PLUGIN_PROTOCOL_V1,
-        ResponseMetaV1, ResponseV1,
-    };
-    use clap::Command;
-    use serde_json::json;
-
-    struct TestNativeCommand;
-
-    impl NativeCommand for TestNativeCommand {
-        fn command(&self) -> Command {
-            Command::new("ldap")
-                .about("Directory lookups")
-                .subcommand(Command::new("user").about("Look up a user"))
-        }
-
-        fn auth(&self) -> Option<DescribeCommandAuthV1> {
-            Some(DescribeCommandAuthV1 {
-                visibility: Some(DescribeVisibilityModeV1::Public),
-                required_capabilities: Vec::new(),
-                feature_flags: vec!["uio".to_string()],
-            })
-        }
-
-        fn execute(
-            &self,
-            args: &[String],
-            _context: &NativeCommandContext<'_>,
-        ) -> anyhow::Result<NativeCommandOutcome> {
-            Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
-                protocol_version: PLUGIN_PROTOCOL_V1,
-                ok: true,
-                data: json!([{ "args": args }]),
-                error: None,
-                messages: Vec::new(),
-                meta: ResponseMetaV1::default(),
-            })))
-        }
-    }
-
-    #[test]
-    fn registry_catalog_exposes_completion_and_auth_metadata_unit() {
-        let registry = NativeCommandRegistry::new().with_command(TestNativeCommand);
-
-        let catalog = registry.catalog();
-        assert_eq!(catalog.len(), 1);
-        assert_eq!(catalog[0].name, "ldap");
-        assert_eq!(catalog[0].about, "Directory lookups");
-        assert_eq!(
-            catalog[0]
-                .auth
-                .as_ref()
-                .and_then(|auth| auth.hint())
-                .as_deref(),
-            Some("feature: uio")
-        );
-        assert_eq!(catalog[0].subcommands, vec!["user".to_string()]);
-        assert!(
-            catalog[0]
-                .completion
-                .subcommands
-                .iter()
-                .any(|child| child.name == "user")
-        );
-    }
-
-    #[test]
-    fn registry_normalizes_lookup_and_collects_root_policy_without_nested_auth_unit() {
-        let registry = NativeCommandRegistry::new().with_command(TestNativeCommand);
-
-        assert!(registry.command("LDAP").is_some());
-        assert!(registry.command(" ldap ").is_some());
-
-        let policy = registry.command_policy_registry();
-        assert!(policy.contains(&CommandPath::new(["ldap"])));
-        assert!(!policy.contains(&CommandPath::new(["ldap", "user"])));
-    }
-
-    struct TestNativeCommandWithNestedAuth;
-
-    impl NativeCommand for TestNativeCommandWithNestedAuth {
-        fn command(&self) -> Command {
-            Command::new("ldap")
-                .about("Directory lookups")
-                .subcommand(Command::new("user").about("Look up a user"))
-        }
-
-        fn describe(&self) -> DescribeCommandV1 {
-            let mut root = DescribeCommandV1::from_clap(
-                Command::new("ldap")
-                    .about("Directory lookups")
-                    .subcommand(Command::new("user").about("Look up a user")),
-            );
-            root.auth = Some(DescribeCommandAuthV1 {
-                visibility: Some(DescribeVisibilityModeV1::Public),
-                required_capabilities: Vec::new(),
-                feature_flags: vec!["uio".to_string()],
-            });
-            root.subcommands[0].auth = Some(DescribeCommandAuthV1 {
-                visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
-                required_capabilities: vec!["ldap.user.read".to_string()],
-                feature_flags: Vec::new(),
-            });
-            root
-        }
-
-        fn execute(
-            &self,
-            _args: &[String],
-            _context: &NativeCommandContext<'_>,
-        ) -> anyhow::Result<NativeCommandOutcome> {
-            unreachable!("not used in policy test");
-        }
-    }
-
-    #[test]
-    fn registry_collects_nested_auth_policies_when_describe_is_overridden_unit() {
-        let registry = NativeCommandRegistry::new().with_command(TestNativeCommandWithNestedAuth);
-
-        let policy = registry.command_policy_registry();
-        let user_policy = policy
-            .resolved_policy(&CommandPath::new(["ldap", "user"]))
-            .expect("nested native policy should exist");
-        assert_eq!(
-            user_policy.required_capabilities,
-            ["ldap.user.read".to_string()].into_iter().collect()
-        );
-    }
-}
+mod tests;

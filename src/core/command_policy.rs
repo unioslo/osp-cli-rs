@@ -1,3 +1,37 @@
+//! Runtime command visibility and access policy evaluation.
+//!
+//! This module exists to answer two related questions consistently:
+//! should a command be shown, and may the current caller run it? Command
+//! metadata can carry coarse auth requirements, but this module owns the
+//! normalized runtime evaluation rules.
+//!
+//! In broad terms:
+//!
+//! - [`crate::core::command_policy::CommandPolicy`] describes one command's
+//!   visibility and prerequisites
+//! - [`crate::core::command_policy::CommandPolicyContext`] captures the runtime
+//!   facts used during evaluation
+//! - [`crate::core::command_policy::evaluate_policy`] turns the two into a
+//!   concrete access decision
+//! - [`crate::core::command_policy::CommandPolicyRegistry`] stores policies and
+//!   applies per-path overrides
+//!
+//! Contract:
+//!
+//! - this module owns normalized policy evaluation, not command metadata shape
+//! - visibility and runnability are distinct outcomes and should stay distinct
+//! - callers should rely on the returned
+//!   [`crate::core::command_policy::CommandAccess`] instead of re-deriving
+//!   access rules ad hoc
+//!
+//! Public API shape:
+//!
+//! - [`crate::core::command_policy::CommandPolicy`] remains a fluent semantic
+//!   policy DSL
+//! - [`crate::core::command_policy::CommandPolicyOverride`] uses an explicit
+//!   constructor plus `with_*` normalization helpers so overrides follow the
+//!   same normalization rules as base policies
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -7,7 +41,18 @@ use serde::{Deserialize, Serialize};
 pub struct CommandPath(Vec<String>);
 
 impl CommandPath {
-    /// Builds a lowercased path, dropping empty segments after trimming.
+    /// Builds a normalized command path, lowercasing segments and dropping
+    /// empty values after trimming.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_policy::CommandPath;
+    ///
+    /// let path = CommandPath::new([" Orch ", "", "Approval", "  Decide  "]);
+    ///
+    /// assert_eq!(path.as_slice(), &["orch", "approval", "decide"]);
+    /// ```
     pub fn new<I, S>(segments: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -80,6 +125,22 @@ pub struct CommandPolicy {
 
 impl CommandPolicy {
     /// Creates a public, available policy for the given command path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_policy::{CommandPath, CommandPolicy, VisibilityMode};
+    ///
+    /// let policy = CommandPolicy::new(CommandPath::new(["orch", "approval"]))
+    ///     .visibility(VisibilityMode::CapabilityGated)
+    ///     .require_capability("orch.approval.decide")
+    ///     .feature_flag("orch")
+    ///     .allow_profiles(["dev"]);
+    ///
+    /// assert_eq!(policy.path.as_slice(), &["orch", "approval"]);
+    /// assert!(policy.required_capabilities.contains("orch.approval.decide"));
+    /// assert!(policy.feature_flags.contains("orch"));
+    /// ```
     pub fn new(path: CommandPath) -> Self {
         Self {
             path,
@@ -150,6 +211,7 @@ impl CommandPolicy {
 
 /// Partial override applied on top of a registered [`CommandPolicy`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct CommandPolicyOverride {
     /// Replacement visibility mode, when overridden.
     pub visibility: Option<VisibilityMode>,
@@ -161,6 +223,79 @@ pub struct CommandPolicyOverride {
     pub hidden_reason: Option<String>,
     /// Replacement denial message, when overridden.
     pub denied_message: Option<String>,
+}
+
+impl CommandPolicyOverride {
+    /// Creates an empty override.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_policy::{
+    ///     CommandAvailability, CommandPolicyOverride, VisibilityMode,
+    /// };
+    ///
+    /// let override_policy = CommandPolicyOverride::new()
+    ///     .with_visibility(Some(VisibilityMode::CapabilityGated))
+    ///     .with_availability(Some(CommandAvailability::Disabled))
+    ///     .with_required_capabilities([" Orch.Policy.Write ", ""]);
+    ///
+    /// assert_eq!(
+    ///     override_policy.visibility,
+    ///     Some(VisibilityMode::CapabilityGated)
+    /// );
+    /// assert_eq!(
+    ///     override_policy.availability,
+    ///     Some(CommandAvailability::Disabled)
+    /// );
+    /// assert!(override_policy.required_capabilities.contains("orch.policy.write"));
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replaces the overridden visibility mode.
+    pub fn with_visibility(mut self, visibility: Option<VisibilityMode>) -> Self {
+        self.visibility = visibility;
+        self
+    }
+
+    /// Replaces the overridden availability state.
+    pub fn with_availability(mut self, availability: Option<CommandAvailability>) -> Self {
+        self.availability = availability;
+        self
+    }
+
+    /// Replaces the merged required-capability set with normalized values.
+    pub fn with_required_capabilities<I, S>(mut self, required_capabilities: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.required_capabilities = required_capabilities
+            .into_iter()
+            .map(Into::into)
+            .map(|capability| capability.trim().to_ascii_lowercase())
+            .filter(|capability| !capability.is_empty())
+            .collect();
+        self
+    }
+
+    /// Replaces the optional hidden-reason metadata.
+    pub fn with_hidden_reason(mut self, hidden_reason: Option<String>) -> Self {
+        self.hidden_reason = hidden_reason
+            .map(|reason| reason.trim().to_string())
+            .filter(|reason| !reason.is_empty());
+        self
+    }
+
+    /// Replaces the optional denial message.
+    pub fn with_denied_message(mut self, denied_message: Option<String>) -> Self {
+        self.denied_message = denied_message
+            .map(|message| message.trim().to_string())
+            .filter(|message| !message.is_empty());
+        self
+    }
 }
 
 /// Runtime facts used to evaluate a command policy.
@@ -338,7 +473,33 @@ impl CommandPolicyRegistry {
         self.overrides.insert(path, value)
     }
 
-    /// Returns the registered policy merged with any override for the same path.
+    /// Returns the registered policy merged with any override for the same
+    /// path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_policy::{
+    ///     CommandAvailability, CommandPath, CommandPolicy, CommandPolicyOverride,
+    ///     CommandPolicyRegistry, VisibilityMode,
+    /// };
+    ///
+    /// let path = CommandPath::new(["orch", "policy"]);
+    /// let mut registry = CommandPolicyRegistry::new();
+    /// registry.register(CommandPolicy::new(path.clone()).visibility(VisibilityMode::Authenticated));
+    /// registry.override_policy(
+    ///     path.clone(),
+    ///     CommandPolicyOverride::new()
+    ///         .with_availability(Some(CommandAvailability::Disabled))
+    ///         .with_required_capabilities(["orch.policy.write"]),
+    /// );
+    ///
+    /// let resolved = registry.resolved_policy(&path).unwrap();
+    ///
+    /// assert_eq!(resolved.visibility, VisibilityMode::Authenticated);
+    /// assert_eq!(resolved.availability, CommandAvailability::Disabled);
+    /// assert!(resolved.required_capabilities.contains("orch.policy.write"));
+    /// ```
     pub fn resolved_policy(&self, path: &CommandPath) -> Option<CommandPolicy> {
         let mut policy = self.entries.get(path)?.clone();
         if let Some(override_policy) = self.overrides.get(path) {
@@ -383,6 +544,39 @@ impl CommandPolicyRegistry {
 }
 
 /// Evaluates a single policy against the supplied runtime context.
+///
+/// Visibility and runnability are evaluated separately. For example, an
+/// authenticated-only command stays visible to unauthenticated users, but is
+/// denied at execution time.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::command_policy::{
+///     AccessReason, CommandPath, CommandPolicy, CommandPolicyContext,
+///     CommandRunnable, CommandVisibility, VisibilityMode, evaluate_policy,
+/// };
+///
+/// let policy = CommandPolicy::new(CommandPath::new(["orch", "approval", "decide"]))
+///     .visibility(VisibilityMode::CapabilityGated)
+///     .require_capability("orch.approval.decide");
+///
+/// let denied = evaluate_policy(
+///     &policy,
+///     &CommandPolicyContext::default().authenticated(true),
+/// );
+/// assert_eq!(denied.visibility, CommandVisibility::Visible);
+/// assert_eq!(denied.runnable, CommandRunnable::Denied);
+/// assert_eq!(denied.reasons, vec![AccessReason::MissingCapabilities]);
+///
+/// let allowed = evaluate_policy(
+///     &policy,
+///     &CommandPolicyContext::default()
+///         .authenticated(true)
+///         .with_capabilities(["orch.approval.decide"]),
+/// );
+/// assert!(allowed.is_runnable());
+/// ```
 pub fn evaluate_policy(policy: &CommandPolicy, context: &CommandPolicyContext) -> CommandAccess {
     if matches!(policy.availability, CommandAvailability::Disabled) {
         return CommandAccess::hidden(AccessReason::DisabledByProduct);
@@ -572,10 +766,7 @@ mod tests {
         registry.register(CommandPolicy::new(path.clone()));
         registry.override_policy(
             path.clone(),
-            CommandPolicyOverride {
-                visibility: Some(VisibilityMode::Hidden),
-                ..CommandPolicyOverride::default()
-            },
+            CommandPolicyOverride::new().with_visibility(Some(VisibilityMode::Hidden)),
         );
 
         let access = registry
@@ -677,13 +868,12 @@ mod tests {
 
         registry.override_policy(
             path.clone(),
-            CommandPolicyOverride {
-                visibility: Some(VisibilityMode::CapabilityGated),
-                availability: Some(CommandAvailability::Disabled),
-                required_capabilities: BTreeSet::from(["orch.policy.write".to_string()]),
-                hidden_reason: Some("override hidden".to_string()),
-                denied_message: Some("override denied".to_string()),
-            },
+            CommandPolicyOverride::new()
+                .with_visibility(Some(VisibilityMode::CapabilityGated))
+                .with_availability(Some(CommandAvailability::Disabled))
+                .with_required_capabilities(["orch.policy.write"])
+                .with_hidden_reason(Some("override hidden".to_string()))
+                .with_denied_message(Some("override denied".to_string())),
         );
 
         let resolved = registry

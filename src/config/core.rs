@@ -67,11 +67,29 @@ pub enum ConfigValue {
 
 impl ConfigValue {
     /// Returns `true` when the value is wrapped as a secret.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::ConfigValue;
+    ///
+    /// assert!(!ConfigValue::String("alice".to_string()).is_secret());
+    /// assert!(ConfigValue::String("alice".to_string()).into_secret().is_secret());
+    /// ```
     pub fn is_secret(&self) -> bool {
         matches!(self, ConfigValue::Secret(_))
     }
 
     /// Returns the underlying value, unwrapping one secret layer if present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::ConfigValue;
+    ///
+    /// let secret = ConfigValue::String("alice".to_string()).into_secret();
+    /// assert_eq!(secret.reveal(), &ConfigValue::String("alice".to_string()));
+    /// ```
     pub fn reveal(&self) -> &ConfigValue {
         match self {
             ConfigValue::Secret(secret) => secret.expose(),
@@ -80,6 +98,15 @@ impl ConfigValue {
     }
 
     /// Wraps the value as a secret unless it is already secret.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::ConfigValue;
+    ///
+    /// let wrapped = ConfigValue::String("token".to_string()).into_secret();
+    /// assert!(wrapped.is_secret());
+    /// ```
     pub fn into_secret(self) -> ConfigValue {
         match self {
             ConfigValue::Secret(_) => self,
@@ -136,6 +163,15 @@ pub struct SecretValue(Box<ConfigValue>);
 
 impl SecretValue {
     /// Wraps a config value in a secret container.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigValue, SecretValue};
+    ///
+    /// let secret = SecretValue::new(ConfigValue::String("hidden".to_string()));
+    /// assert_eq!(secret.expose(), &ConfigValue::String("hidden".to_string()));
+    /// ```
     pub fn new(value: ConfigValue) -> Self {
         Self(Box::new(value))
     }
@@ -253,7 +289,17 @@ pub struct SchemaEntry {
 }
 
 impl SchemaEntry {
-    /// Builds a schema entry for string values.
+    /// Starts a schema entry for string values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{SchemaEntry, SchemaValueType};
+    ///
+    /// let entry = SchemaEntry::string().required();
+    /// assert_eq!(entry.value_type(), SchemaValueType::String);
+    /// assert!(entry.runtime_visible());
+    /// ```
     pub fn string() -> Self {
         Self {
             canonical_key: None,
@@ -268,7 +314,7 @@ impl SchemaEntry {
         }
     }
 
-    /// Builds a schema entry for boolean values.
+    /// Starts a schema entry for boolean values.
     pub fn boolean() -> Self {
         Self {
             canonical_key: None,
@@ -283,7 +329,7 @@ impl SchemaEntry {
         }
     }
 
-    /// Builds a schema entry for integer values.
+    /// Starts a schema entry for integer values.
     pub fn integer() -> Self {
         Self {
             canonical_key: None,
@@ -298,7 +344,7 @@ impl SchemaEntry {
         }
     }
 
-    /// Builds a schema entry for floating-point values.
+    /// Starts a schema entry for floating-point values.
     pub fn float() -> Self {
         Self {
             canonical_key: None,
@@ -313,7 +359,7 @@ impl SchemaEntry {
         }
     }
 
-    /// Builds a schema entry for lists of strings.
+    /// Starts a schema entry for lists of strings.
     pub fn string_list() -> Self {
         Self {
             canonical_key: None,
@@ -685,6 +731,22 @@ impl ConfigSchema {
     }
 
     /// Parses a raw string into the schema's typed config representation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigSchema, ConfigValue};
+    ///
+    /// let schema = ConfigSchema::default();
+    /// assert_eq!(
+    ///     schema.parse_input_value("repl.history.enabled", "true").unwrap(),
+    ///     ConfigValue::Bool(true)
+    /// );
+    /// assert_eq!(
+    ///     schema.parse_input_value("theme.name", "dracula").unwrap(),
+    ///     ConfigValue::String("dracula".to_string())
+    /// );
+    /// ```
     pub fn parse_input_value(&self, key: &str, raw: &str) -> Result<ConfigValue, ConfigError> {
         if !self.is_known_key(key) {
             return Err(ConfigError::UnknownConfigKeys {
@@ -897,12 +959,30 @@ pub struct Scope {
 }
 
 impl Scope {
-    /// Creates a global scope with no profile or terminal selector.
+    /// Creates an unscoped selector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::Scope;
+    ///
+    /// assert_eq!(Scope::global(), Scope::default());
+    /// ```
     pub fn global() -> Self {
         Self::default()
     }
 
-    /// Creates a profile-scoped selector.
+    /// Creates a selector scoped to one profile.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::Scope;
+    ///
+    /// let scope = Scope::profile("TSD");
+    /// assert_eq!(scope.profile.as_deref(), Some("tsd"));
+    /// assert_eq!(scope.terminal, None);
+    /// ```
     pub fn profile(profile: &str) -> Self {
         Self {
             profile: Some(normalize_identifier(profile)),
@@ -910,7 +990,7 @@ impl Scope {
         }
     }
 
-    /// Creates a terminal-scoped selector.
+    /// Creates a selector scoped to one terminal kind.
     pub fn terminal(terminal: &str) -> Self {
         Self {
             profile: None,
@@ -953,6 +1033,19 @@ impl ConfigLayer {
     }
 
     /// Inserts a global entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLayer, Scope};
+    ///
+    /// let mut layer = ConfigLayer::default();
+    /// layer.set("theme.name", "dracula");
+    ///
+    /// let entry = &layer.entries()[0];
+    /// assert_eq!(entry.key, "theme.name");
+    /// assert_eq!(entry.scope, Scope::global());
+    /// ```
     pub fn set<K, V>(&mut self, key: K, value: V)
     where
         K: Into<String>,
@@ -1032,6 +1125,19 @@ impl ConfigLayer {
     }
 
     /// Removes the last matching entry for a key and scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLayer, ConfigValue, Scope};
+    ///
+    /// let mut layer = ConfigLayer::default();
+    /// layer.set("theme.name", "catppuccin");
+    /// layer.set("theme.name", "dracula");
+    ///
+    /// let removed = layer.remove_scoped("theme.name", &Scope::global());
+    /// assert_eq!(removed, Some(ConfigValue::String("dracula".to_string())));
+    /// ```
     pub fn remove_scoped(&mut self, key: &str, scope: &Scope) -> Option<ConfigValue> {
         let normalized_scope = normalize_scope(scope.clone());
         let index = self
@@ -1042,6 +1148,22 @@ impl ConfigLayer {
     }
 
     /// Parses a config layer from the project's TOML layout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::ConfigLayer;
+    ///
+    /// let layer = ConfigLayer::from_toml_str(r#"
+    /// [default]
+    /// theme.name = "dracula"
+    ///
+    /// [profile.tsd]
+    /// ui.format = "json"
+    /// "#).unwrap();
+    ///
+    /// assert_eq!(layer.entries().len(), 2);
+    /// ```
     pub fn from_toml_str(raw: &str) -> Result<Self, ConfigError> {
         let parsed = raw
             .parse::<toml::Value>()
@@ -1197,7 +1319,39 @@ pub struct ResolveOptions {
 }
 
 impl ResolveOptions {
+    /// Creates empty resolution options with no explicit profile or terminal.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::ResolveOptions;
+    ///
+    /// let options = ResolveOptions::new();
+    /// assert_eq!(options.profile_override, None);
+    /// assert_eq!(options.terminal, None);
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replaces the optional normalized profile override.
+    pub fn with_profile_override(mut self, profile_override: Option<String>) -> Self {
+        self.profile_override = profile_override
+            .map(|value| normalize_identifier(&value))
+            .filter(|value| !value.is_empty());
+        self
+    }
+
     /// Forces resolution to use the provided profile.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::ResolveOptions;
+    ///
+    /// let options = ResolveOptions::new().with_profile("TSD");
+    /// assert_eq!(options.profile_override.as_deref(), Some("tsd"));
+    /// ```
     pub fn with_profile(mut self, profile: &str) -> Self {
         self.profile_override = Some(normalize_identifier(profile));
         self
@@ -1206,6 +1360,14 @@ impl ResolveOptions {
     /// Resolves values for the provided terminal selector.
     pub fn with_terminal(mut self, terminal: &str) -> Self {
         self.terminal = Some(normalize_identifier(terminal));
+        self
+    }
+
+    /// Replaces the optional normalized terminal selector.
+    pub fn with_terminal_override(mut self, terminal: Option<String>) -> Self {
+        self.terminal = terminal
+            .map(|value| normalize_identifier(&value))
+            .filter(|value| !value.is_empty());
         self
     }
 }
@@ -1380,6 +1542,22 @@ impl ResolvedConfig {
     }
 
     /// Returns the resolved string value for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.name", "dracula");
+    ///
+    /// let mut resolver = ConfigResolver::default();
+    /// resolver.set_defaults(defaults);
+    /// let resolved = resolver.resolve(ResolveOptions::default()).unwrap();
+    ///
+    /// assert_eq!(resolved.get_string("theme.name"), Some("dracula"));
+    /// ```
     pub fn get_string(&self, key: &str) -> Option<&str> {
         match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::String(value)) => Some(value),
@@ -1388,6 +1566,22 @@ impl ResolvedConfig {
     }
 
     /// Returns the resolved boolean value for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    /// defaults.set("repl.history.enabled", true);
+    ///
+    /// let mut resolver = ConfigResolver::default();
+    /// resolver.set_defaults(defaults);
+    /// let resolved = resolver.resolve(ResolveOptions::default()).unwrap();
+    ///
+    /// assert_eq!(resolved.get_bool("repl.history.enabled"), Some(true));
+    /// ```
     pub fn get_bool(&self, key: &str) -> Option<bool> {
         match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::Bool(value)) => Some(*value),
@@ -1396,6 +1590,25 @@ impl ResolvedConfig {
     }
 
     /// Returns the resolved string list for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.path", vec!["/tmp/themes".to_string()]);
+    ///
+    /// let mut resolver = ConfigResolver::default();
+    /// resolver.set_defaults(defaults);
+    /// let resolved = resolver.resolve(ResolveOptions::default()).unwrap();
+    ///
+    /// assert_eq!(
+    ///     resolved.get_string_list("theme.path"),
+    ///     Some(vec!["/tmp/themes".to_string()])
+    /// );
+    /// ```
     pub fn get_string_list(&self, key: &str) -> Option<Vec<String>> {
         match self.get(key).map(ConfigValue::reveal) {
             Some(ConfigValue::List(values)) => Some(
@@ -1474,17 +1687,28 @@ fn flatten_key_value(
     }
 }
 
-/// Returns bootstrap metadata for a canonical config key.
+/// Looks up bootstrap-time metadata for a canonical config key.
 pub fn bootstrap_key_spec(key: &str) -> Option<BootstrapKeySpec> {
     builtin_config_schema().bootstrap_key_spec(key)
 }
 
-/// Returns `true` when the key participates only in bootstrap resolution.
+/// Reports whether `key` is consumed during bootstrap but not exposed as a
+/// normal runtime-resolved config key.
 pub fn is_bootstrap_only_key(key: &str) -> bool {
     bootstrap_key_spec(key).is_some_and(|spec| !spec.runtime_visible)
 }
 
-/// Returns `true` when the key is an alias entry.
+/// Reports whether `key` belongs to the `alias.*` namespace.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::config::is_alias_key;
+///
+/// assert!(is_alias_key("alias.prod"));
+/// assert!(is_alias_key(" Alias.User "));
+/// assert!(!is_alias_key("ui.format"));
+/// ```
 pub fn is_alias_key(key: &str) -> bool {
     key.trim().to_ascii_lowercase().starts_with("alias.")
 }

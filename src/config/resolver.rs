@@ -15,7 +15,25 @@ use crate::config::{
     is_bootstrap_only_key,
 };
 
-/// Resolves loaded config layers into a runtime config view.
+/// Resolves layered config input into the runtime view seen by the rest of the
+/// application.
+///
+/// Callers usually populate the individual source layers first and then ask
+/// the resolver for either the final runtime view or an explanation trace.
+///
+/// High-level flow:
+///
+/// - select one winning raw value per key using source and scope precedence
+/// - interpolate placeholders inside the selected winners
+/// - adapt and validate the interpolated values against the schema
+/// - optionally expose an explanation trace that shows why each winner won
+///
+/// Contract:
+///
+/// - precedence rules live here, not in callers
+/// - schema adaptation happens after winner selection, not while scanning layers
+/// - bootstrap handling stays aligned with the config bootstrap helpers rather
+///   than becoming a separate merge system
 #[derive(Debug, Clone, Default)]
 pub struct ConfigResolver {
     layers: LoadedLayers,
@@ -121,7 +139,27 @@ impl ConfigResolver {
         self.layers.session = layer;
     }
 
-    /// Resolves all layers into a final runtime config.
+    /// Resolves all configured layers into the final runtime config.
+    ///
+    /// Source precedence still applies inside this API, so later layers like
+    /// session or CLI overrides can replace lower-priority defaults.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigResolver, LoadedLayers, ResolveOptions};
+    ///
+    /// let mut layers = LoadedLayers::default();
+    /// layers.defaults.set("profile.default", "default");
+    /// layers.defaults.set("theme.name", "plain");
+    /// layers.session.set("theme.name", "dracula");
+    ///
+    /// let resolved = ConfigResolver::from_loaded_layers(layers)
+    ///     .resolve(ResolveOptions::default())
+    ///     .unwrap();
+    ///
+    /// assert_eq!(resolved.get_string("theme.name"), Some("dracula"));
+    /// ```
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
         tracing::debug!(
             profile_override = ?options.profile_override,
@@ -148,6 +186,31 @@ impl ConfigResolver {
     }
 
     /// Explains how a runtime key was selected, interpolated, and adapted.
+    ///
+    /// The explanation keeps the raw winning value as well as the final
+    /// adapted value so callers can see where interpolation or type coercion
+    /// changed the original input.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigResolver, LoadedLayers, ResolveOptions};
+    ///
+    /// let mut layers = LoadedLayers::default();
+    /// layers.defaults.set("profile.default", "default");
+    /// layers.defaults.set("theme.name", "plain");
+    /// layers.cli.set("theme.name", "dracula");
+    ///
+    /// let explain = ConfigResolver::from_loaded_layers(layers)
+    ///     .explain_key("theme.name", ResolveOptions::default())
+    ///     .unwrap();
+    ///
+    /// assert_eq!(explain.key, "theme.name");
+    /// assert_eq!(
+    ///     explain.final_entry.unwrap().value.reveal(),
+    ///     &osp_cli::config::ConfigValue::String("dracula".to_string())
+    /// );
+    /// ```
     pub fn explain_key(
         &self,
         key: &str,

@@ -1,3 +1,17 @@
+//! Output-mode enums shared across config parsing, CLI flags, and the UI.
+//!
+//! These types exist so the rest of the crate can talk about rendering intent
+//! without passing around raw strings. They define the stable vocabulary for
+//! format, richness, color, and unicode behavior.
+//!
+//! Contract:
+//!
+//! - these enums should stay small and broadly reusable
+//! - parsing here should accept the user-facing spellings supported by config
+//!   and CLI flags
+//! - higher-level modules may interpret `Auto`, but the canonical labels live
+//!   here
+
 /// Supported output formats for rendered command results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -18,7 +32,16 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
-    /// Returns the canonical config and CLI string for this format.
+    /// Returns the canonical config and CLI spelling for this format.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::OutputFormat;
+    ///
+    /// assert_eq!(OutputFormat::Markdown.as_str(), "md");
+    /// assert_eq!(OutputFormat::Json.as_str(), "json");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             OutputFormat::Auto => "auto",
@@ -31,7 +54,19 @@ impl OutputFormat {
         }
     }
 
-    /// Parses a case-insensitive output format name or alias.
+    /// Parses the user-facing output format spellings accepted by config and
+    /// CLI flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::OutputFormat;
+    ///
+    /// assert_eq!(OutputFormat::parse("guide"), Some(OutputFormat::Guide));
+    /// assert_eq!(OutputFormat::parse(" markdown "), Some(OutputFormat::Markdown));
+    /// assert_eq!(OutputFormat::parse("MD"), Some(OutputFormat::Markdown));
+    /// assert_eq!(OutputFormat::parse("wat"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(OutputFormat::Auto),
@@ -58,7 +93,15 @@ pub enum RenderMode {
 }
 
 impl RenderMode {
-    /// Returns the canonical config and CLI string for this render mode.
+    /// Returns the canonical config and CLI spelling for this render mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::RenderMode;
+    ///
+    /// assert_eq!(RenderMode::Rich.as_str(), "rich");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             RenderMode::Auto => "auto",
@@ -67,7 +110,17 @@ impl RenderMode {
         }
     }
 
-    /// Parses a case-insensitive render mode name.
+    /// Parses the render-mode spellings accepted by config and CLI flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::RenderMode;
+    ///
+    /// assert_eq!(RenderMode::parse("RICH"), Some(RenderMode::Rich));
+    /// assert_eq!(RenderMode::parse(" plain "), Some(RenderMode::Plain));
+    /// assert_eq!(RenderMode::parse("wat"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(RenderMode::Auto),
@@ -90,7 +143,15 @@ pub enum ColorMode {
 }
 
 impl ColorMode {
-    /// Returns the canonical config and CLI string for this color mode.
+    /// Returns the canonical config and CLI spelling for this color mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::ColorMode;
+    ///
+    /// assert_eq!(ColorMode::Always.as_str(), "always");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             ColorMode::Auto => "auto",
@@ -99,7 +160,17 @@ impl ColorMode {
         }
     }
 
-    /// Parses a case-insensitive color mode name.
+    /// Parses the color-mode spellings accepted by config and CLI flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::ColorMode;
+    ///
+    /// assert_eq!(ColorMode::parse("never"), Some(ColorMode::Never));
+    /// assert_eq!(ColorMode::parse(" AUTO "), Some(ColorMode::Auto));
+    /// assert_eq!(ColorMode::parse("wat"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(ColorMode::Auto),
@@ -122,7 +193,15 @@ pub enum UnicodeMode {
 }
 
 impl UnicodeMode {
-    /// Returns the canonical config and CLI string for this Unicode mode.
+    /// Returns the canonical config and CLI spelling for this unicode mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::UnicodeMode;
+    ///
+    /// assert_eq!(UnicodeMode::Never.as_str(), "never");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             UnicodeMode::Auto => "auto",
@@ -131,7 +210,17 @@ impl UnicodeMode {
         }
     }
 
-    /// Parses a case-insensitive Unicode mode name.
+    /// Parses the unicode-mode spellings accepted by config and CLI flags.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::UnicodeMode;
+    ///
+    /// assert_eq!(UnicodeMode::parse("always"), Some(UnicodeMode::Always));
+    /// assert_eq!(UnicodeMode::parse(" Auto "), Some(UnicodeMode::Auto));
+    /// assert_eq!(UnicodeMode::parse("wat"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(UnicodeMode::Auto),

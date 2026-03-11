@@ -30,6 +30,16 @@ pub struct StaticLayerLoader {
 
 impl StaticLayerLoader {
     /// Wraps an existing layer so it can participate in a loader pipeline.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLayer, ConfigLoader, StaticLayerLoader};
+    ///
+    /// let loader = StaticLayerLoader::new(ConfigLayer::default());
+    ///
+    /// assert!(loader.load().unwrap().entries().is_empty());
+    /// ```
     pub fn new(layer: ConfigLayer) -> Self {
         Self { layer }
     }
@@ -127,6 +137,17 @@ impl EnvVarLoader {
     }
 
     /// Creates a loader from explicit key-value pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLoader, EnvVarLoader};
+    ///
+    /// let loader = EnvVarLoader::from_pairs([("OSP__output__format", "json")]);
+    /// let layer = loader.load().unwrap();
+    ///
+    /// assert_eq!(layer.entries()[0].key, "output.format");
+    /// ```
     pub fn from_pairs<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -492,6 +513,22 @@ impl LoaderPipeline {
     }
 
     /// Loads all layers and resolves them into a runtime config.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLayer, LoaderPipeline, ResolveOptions, StaticLayerLoader};
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.name", "dracula");
+    ///
+    /// let resolved = LoaderPipeline::new(StaticLayerLoader::new(defaults))
+    ///     .resolve(ResolveOptions::default())
+    ///     .unwrap();
+    ///
+    /// assert_eq!(resolved.get_string("theme.name"), Some("dracula"));
+    /// ```
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
         let layers = self.load_layers()?;
         let mut resolver = ConfigResolver::from_loaded_layers(layers);

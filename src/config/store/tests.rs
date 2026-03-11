@@ -226,70 +226,51 @@ fn strict_secret_write_sets_file_mode_to_600() {
 
 #[cfg(unix)]
 #[test]
-fn strict_secret_validation_rejects_group_readable_files() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = make_temp_dir("osp-config-store-insecure-mode");
-    let path = dir.join("secrets.toml");
-    std::fs::write(&path, "token = 'secret'\n").expect("fixture should be written");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640))
-        .expect("permissions should be set");
-
-    let err =
-        validate_secrets_permissions(&path, true).expect_err("insecure permissions should fail");
-    match err {
-        ConfigError::InsecureSecretsPermissions { mode, .. } => assert_eq!(mode, 0o640),
-        other => panic!("unexpected error: {other:?}"),
+fn secret_permission_validation_matrix_covers_strict_and_non_strict_paths_unit() {
+    enum Fixture {
+        GroupReadable,
+        Missing,
     }
-}
 
-#[cfg(unix)]
-#[test]
-fn non_strict_secret_validation_allows_group_readable_files() {
-    use std::os::unix::fs::PermissionsExt;
+    enum Expected {
+        Ok,
+        Insecure(u32),
+        FileRead,
+    }
 
-    let dir = make_temp_dir("osp-config-store-insecure-mode-nonstrict");
-    let path = dir.join("secrets.toml");
-    std::fs::write(&path, "token = 'secret'\n").expect("fixture should be written");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640))
-        .expect("permissions should be set");
+    for (label, strict, fixture, expected) in [
+        (
+            "strict group-readable",
+            true,
+            Fixture::GroupReadable,
+            Expected::Insecure(0o640),
+        ),
+        (
+            "non-strict group-readable",
+            false,
+            Fixture::GroupReadable,
+            Expected::Ok,
+        ),
+        ("non-strict missing", false, Fixture::Missing, Expected::Ok),
+        ("strict missing", true, Fixture::Missing, Expected::FileRead),
+    ] {
+        let path = match fixture {
+            Fixture::GroupReadable => write_secret_fixture(label, Some(0o640)),
+            Fixture::Missing => make_temp_dir(label).join("secrets.toml"),
+        };
 
-    validate_secrets_permissions(&path, false).expect("non-strict validation should pass");
-}
-
-#[cfg(unix)]
-#[test]
-fn non_strict_secret_validation_ignores_missing_files() {
-    let dir = make_temp_dir("osp-config-store-missing-secret-nonstrict");
-    let path = dir.join("secrets.toml");
-    validate_secrets_permissions(&path, false).expect("non-strict validation should short-circuit");
-}
-
-#[test]
-fn empty_dotted_keys_are_rejected_for_set_and_unset() {
-    let dir = make_temp_dir("osp-config-store-empty-key");
-    let path = dir.join("config.toml");
-
-    let err = set_scoped_value_in_toml(
-        &path,
-        " .. ",
-        &ConfigValue::String("json".to_string()),
-        &Scope::global(),
-        true,
-        false,
-    )
-    .expect_err("empty key path should fail");
-    assert!(matches!(
-        err,
-        ConfigError::InvalidConfigKey { key, .. } if key == " .. "
-    ));
-
-    let err = unset_scoped_value_in_toml(&path, "   ", &Scope::global(), true, false)
-        .expect_err("empty key path should fail");
-    assert!(matches!(
-        err,
-        ConfigError::InvalidConfigKey { key, .. } if key == "   "
-    ));
+        match (expected, validate_secrets_permissions(&path, strict)) {
+            (Expected::Ok, Ok(())) => {}
+            (
+                Expected::Insecure(expected_mode),
+                Err(ConfigError::InsecureSecretsPermissions { mode, .. }),
+            ) => {
+                assert_eq!(mode, expected_mode, "{label}");
+            }
+            (Expected::FileRead, Err(ConfigError::FileRead { .. })) => {}
+            (_, other) => panic!("unexpected result for {label}: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -349,30 +330,34 @@ ui = "json"
 }
 
 #[test]
-fn set_and_unset_reject_empty_key_paths() {
+fn set_and_unset_reject_blank_key_paths_across_dry_run_modes_unit() {
     let dir = make_temp_dir("osp-config-store-empty-key");
     let path = dir.join("config.toml");
 
-    let err = set_scoped_value_in_toml(
-        &path,
-        " . ",
-        &ConfigValue::String("json".to_string()),
-        &Scope::global(),
-        false,
-        false,
-    )
-    .expect_err("empty set key should fail");
-    assert!(matches!(
-        err,
-        ConfigError::InvalidConfigKey { key, .. } if key == " . "
-    ));
+    for (key, dry_run) in [(" .. ", true), (" . ", false)] {
+        let err = set_scoped_value_in_toml(
+            &path,
+            key,
+            &ConfigValue::String("json".to_string()),
+            &Scope::global(),
+            dry_run,
+            false,
+        )
+        .expect_err("empty set key should fail");
+        assert!(matches!(
+            err,
+            ConfigError::InvalidConfigKey { key: err_key, .. } if err_key == key
+        ));
+    }
 
-    let err = unset_scoped_value_in_toml(&path, " . ", &Scope::global(), false, false)
-        .expect_err("empty unset key should fail");
-    assert!(matches!(
-        err,
-        ConfigError::InvalidConfigKey { key, .. } if key == " . "
-    ));
+    for (key, dry_run) in [("   ", true), (" . ", false)] {
+        let err = unset_scoped_value_in_toml(&path, key, &Scope::global(), dry_run, false)
+            .expect_err("empty unset key should fail");
+        assert!(matches!(
+            err,
+            ConfigError::InvalidConfigKey { key: err_key, .. } if err_key == key
+        ));
+    }
 }
 
 #[test]
@@ -420,17 +405,6 @@ fn unset_on_missing_file_keeps_empty_root_without_phantom_scopes() {
     assert_eq!(result.previous, None);
     let payload = std::fs::read_to_string(&path).expect("empty config file should be created");
     assert!(payload.trim().is_empty());
-}
-
-#[cfg(unix)]
-#[test]
-fn strict_secret_validation_reports_missing_file_as_read_error() {
-    let dir = make_temp_dir("osp-config-store-missing-secret");
-    let path = dir.join("missing-secrets.toml");
-
-    let err =
-        validate_secrets_permissions(&path, true).expect_err("missing strict secrets file fails");
-    assert!(matches!(err, ConfigError::FileRead { .. }));
 }
 
 #[test]
@@ -582,4 +556,18 @@ fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
     dir.push(format!("{prefix}-{nonce}"));
     std::fs::create_dir_all(&dir).expect("temp dir should be created");
     dir
+}
+
+#[cfg(unix)]
+fn write_secret_fixture(prefix: &str, mode: Option<u32>) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = make_temp_dir(prefix);
+    let path = dir.join("secrets.toml");
+    std::fs::write(&path, "token = 'secret'\n").expect("fixture should be written");
+    if let Some(mode) = mode {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .expect("permissions should be set");
+    }
+    path
 }

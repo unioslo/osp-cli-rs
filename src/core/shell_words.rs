@@ -8,6 +8,19 @@ pub enum QuoteStyle {
 }
 
 /// Quotes `value` for shell reuse using the requested quoting style.
+///
+/// Use [`QuoteStyle::Single`] when you want the most literal shell-safe output,
+/// and [`QuoteStyle::Double`] when interpolation-style shell syntax should stay
+/// visually recognizable to the user.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::shell_words::{QuoteStyle, quote_for_shell};
+///
+/// assert_eq!(quote_for_shell("O'Brien", QuoteStyle::Single), "'O'\\''Brien'");
+/// assert_eq!(quote_for_shell("hello world", QuoteStyle::Double), "\"hello world\"");
+/// ```
 pub fn quote_for_shell(value: &str, style: QuoteStyle) -> String {
     match style {
         QuoteStyle::Single => quote_single(value),
@@ -16,6 +29,20 @@ pub fn quote_for_shell(value: &str, style: QuoteStyle) -> String {
 }
 
 /// Escapes shell-sensitive characters without adding surrounding quotes.
+///
+/// This is useful for tab-completion and history displays where adding full
+/// quotes would be noisier than backslash-escaping.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::shell_words::escape_for_shell;
+///
+/// assert_eq!(
+///     escape_for_shell("team docs/file name.txt"),
+///     "team\\ docs/file\\ name.txt"
+/// );
+/// ```
 pub fn escape_for_shell(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {

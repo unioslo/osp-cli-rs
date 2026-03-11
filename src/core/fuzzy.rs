@@ -3,6 +3,18 @@ use skim::fuzzy_matcher::arinae::ArinaeMatcher;
 use std::sync::OnceLock;
 
 /// Lowercases text using Unicode case folding semantics.
+///
+/// This is stricter than ASCII-only lowercasing, so it is safe to use for
+/// case-insensitive matching on user-facing text.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::fuzzy::fold_case;
+///
+/// assert_eq!(fold_case("LDAP"), "ldap");
+/// assert_eq!(fold_case("ÅSE"), "åse");
+/// ```
 pub fn fold_case(text: &str) -> String {
     text.chars().flat_map(char::to_lowercase).collect()
 }
@@ -13,6 +25,17 @@ pub fn fold_case(text: &str) -> String {
 /// spill short stubs like `ld` into unrelated commands. Arinae with typo mode
 /// disabled keeps that balance while still handling subsequence-style fuzzy
 /// matches well.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::fuzzy::completion_fuzzy_matcher;
+/// use skim::fuzzy_matcher::FuzzyMatcher;
+///
+/// assert!(completion_fuzzy_matcher()
+///     .fuzzy_match("ldap", "lap")
+///     .is_some());
+/// ```
 pub fn completion_fuzzy_matcher() -> &'static ArinaeMatcher {
     static MATCHER: OnceLock<ArinaeMatcher> = OnceLock::new();
     MATCHER.get_or_init(|| ArinaeMatcher::new(CaseMatching::Smart, false, false))
@@ -22,6 +45,17 @@ pub fn completion_fuzzy_matcher() -> &'static ArinaeMatcher {
 ///
 /// `%quick` is the opt-in "be clever" path, so it intentionally accepts a
 /// broader set of typo-like matches than shell completion does.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::fuzzy::search_fuzzy_matcher;
+/// use skim::fuzzy_matcher::FuzzyMatcher;
+///
+/// assert!(search_fuzzy_matcher()
+///     .fuzzy_match("doctor --mreg", "doctr mreg")
+///     .is_some());
+/// ```
 pub fn search_fuzzy_matcher() -> &'static ArinaeMatcher {
     static MATCHER: OnceLock<ArinaeMatcher> = OnceLock::new();
     MATCHER.get_or_init(|| ArinaeMatcher::new(CaseMatching::Smart, true, false))

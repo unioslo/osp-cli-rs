@@ -1,3 +1,30 @@
+//! Structured help and guide payload model.
+//!
+//! This module exists so help, intro, and command-reference content can travel
+//! through the app as semantic data instead of ad hoc rendered strings.
+//!
+//! High level flow:
+//!
+//! - collect guide content from command definitions or parsed help text
+//! - keep it in [`crate::guide::GuideView`] form while other systems inspect,
+//!   filter, or render it
+//! - lower it later into rows, documents, or markdown as needed
+//!
+//! Contract:
+//!
+//! - guide data should stay semantic here
+//! - presentation-specific layout belongs in the UI layer
+//!
+//! Public API shape:
+//!
+//! - [`crate::guide::GuideView`] and related section/entry types stay
+//!   intentionally direct to compose because they are semantic payloads
+//! - common generation paths use factories like
+//!   [`crate::guide::GuideView::from_text`] and
+//!   [`crate::guide::GuideView::from_command_def`]
+//! - rendering/layout policy stays outside this module so the guide model
+//!   remains reusable
+
 pub(crate) mod template;
 
 use crate::core::command_def::{ArgDef, CommandDef, FlagDef};
@@ -9,57 +36,78 @@ use crate::ui::presentation::HelpLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-/// Structured help/guide representation used by the CLI, REPL, and docs views.
+/// Structured help/guide payload shared by the CLI, REPL, renderers, and
+/// semantic output pipeline.
+///
+/// Canonical help sections such as usage, commands, and options are exposed as
+/// dedicated buckets for ergonomic access. The generic [`GuideView::sections`]
+/// list exists to preserve custom or non-canonical sections during
+/// serialization and transforms. Restore logic folds canonical section kinds
+/// back into the dedicated buckets so guides do not render duplicate
+/// `Usage`/`Commands`/`Options` sections.
+///
+/// Public API note: this is intentionally an open semantic DTO. Callers may
+/// compose it directly for bespoke help payloads, while common generation paths
+/// are exposed as factory methods.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct GuideView {
     /// Introductory paragraphs shown before structured sections.
     pub preamble: Vec<String>,
-    /// Additional named sections that do not fit the standard buckets.
+    /// Extra sections preserved outside the canonical buckets.
     pub sections: Vec<GuideSection>,
     /// Closing paragraphs shown after structured sections.
     pub epilogue: Vec<String>,
-    /// Usage synopsis lines.
+    /// Canonical usage synopsis lines.
     pub usage: Vec<String>,
-    /// Command entries available from this guide.
+    /// Canonical command-entry bucket.
     pub commands: Vec<GuideEntry>,
-    /// Positional argument entries.
+    /// Canonical positional-argument bucket.
     pub arguments: Vec<GuideEntry>,
-    /// Option and flag entries.
+    /// Canonical option/flag bucket.
     pub options: Vec<GuideEntry>,
-    /// Global invocation options shared across commands.
+    /// Canonical shared invocation-option bucket.
     pub common_invocation_options: Vec<GuideEntry>,
-    /// Free-form notes associated with the guide.
+    /// Canonical note paragraphs.
     pub notes: Vec<String>,
 }
 
-/// One named help entry such as a command, argument, or option row.
+/// One named row within a guide section or canonical bucket.
+///
+/// The serialized form intentionally keeps only semantic content. Display-only
+/// spacing overrides are carried separately so renderers can adjust layout
+/// without affecting the semantic payload used by DSL, cache, or export flows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct GuideEntry {
-    /// Display name for the entry.
+    /// Stable label for the entry.
     pub name: String,
-    /// Short description shown alongside the name.
+    /// Short explanatory text paired with the label.
     pub short_help: String,
-    /// Optional indentation override used during presentation.
+    /// Presentation-only indentation override.
     #[serde(skip)]
     pub display_indent: Option<String>,
-    /// Optional spacing override between the name and description.
+    /// Presentation-only spacing override between label and description.
     #[serde(skip)]
     pub display_gap: Option<String>,
 }
 
 /// One logical section within a [`GuideView`].
+///
+/// Custom sections live here directly. Canonical sections may also be
+/// represented here transiently while importing or transforming guide payloads,
+/// but restore logic normalizes those canonical kinds back into the dedicated
+/// [`GuideView`] buckets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct GuideSection {
-    /// Section heading.
+    /// User-facing section heading.
     pub title: String,
-    /// Semantic kind used for filtering and rendering.
+    /// Semantic kind used for normalization and rendering policy.
     pub kind: GuideSectionKind,
     /// Paragraph content rendered before any entries.
     pub paragraphs: Vec<String>,
-    /// Structured entries rendered within the section.
+    /// Structured rows rendered within the section.
     pub entries: Vec<GuideEntry>,
 }
 
@@ -84,15 +132,6 @@ pub enum GuideSectionKind {
     Custom,
 }
 
-/// Backward-compatible alias for [`GuideView`].
-pub type HelpView = GuideView;
-/// Backward-compatible alias for [`GuideSection`].
-pub type HelpSection = GuideSection;
-/// Backward-compatible alias for [`GuideSectionKind`].
-pub type HelpSectionKind = GuideSectionKind;
-/// Backward-compatible alias for [`GuideEntry`].
-pub type HelpEntry = GuideEntry;
-
 impl GuideView {
     /// Parses plain help text into a structured guide view.
     pub fn from_text(help_text: &str) -> Self {
@@ -100,11 +139,42 @@ impl GuideView {
     }
 
     /// Builds a guide view from a command definition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_def::CommandDef;
+    /// use osp_cli::guide::GuideView;
+    ///
+    /// let command = CommandDef::new("theme")
+    ///     .about("Inspect themes")
+    ///     .subcommand(CommandDef::new("show").about("Show available themes"));
+    /// let guide = GuideView::from_command_def(&command);
+    ///
+    /// assert_eq!(guide.usage, vec!["theme <COMMAND>".to_string()]);
+    /// assert_eq!(guide.commands[0].name, "show");
+    /// ```
     pub fn from_command_def(command: &CommandDef) -> Self {
         guide_view_from_command_def(command)
     }
 
     /// Converts the guide into row output with a guide sidecar document.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output_model::OutputDocumentKind;
+    /// use osp_cli::guide::GuideView;
+    ///
+    /// let guide = GuideView {
+    ///     usage: vec!["theme show".to_string()],
+    ///     ..GuideView::default()
+    /// };
+    /// let output = guide.to_output_result();
+    ///
+    /// assert_eq!(output.document.as_ref().map(|doc| doc.kind), Some(OutputDocumentKind::Guide));
+    /// assert_eq!(output.meta.render_recommendation.is_some(), true);
+    /// ```
     pub fn to_output_result(&self) -> OutputResult {
         // Keep the semantic row form for DSL/history/cache, but attach the
         // first-class guide payload so renderers do not have to reconstruct it
@@ -122,6 +192,10 @@ impl GuideView {
     }
 
     /// Attempts to recover a guide view from structured output.
+    ///
+    /// A carried semantic document is authoritative. When `output.document` is
+    /// present, this function only attempts to restore from that document and
+    /// does not silently fall back to the row projection.
     pub fn try_from_output_result(output: &OutputResult) -> Option<Self> {
         // A carried semantic document is authoritative. If the canonical JSON
         // no longer restores as a guide after DSL, do not silently guess from
@@ -139,6 +213,19 @@ impl GuideView {
     }
 
     /// Renders the guide as Markdown using the default width policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::guide::GuideView;
+    ///
+    /// let guide = GuideView {
+    ///     usage: vec!["theme show".to_string()],
+    ///     ..GuideView::default()
+    /// };
+    ///
+    /// assert!(guide.to_markdown().contains("theme show"));
+    /// ```
     pub fn to_markdown(&self) -> String {
         self.to_markdown_with_width(None)
     }
@@ -152,35 +239,20 @@ impl GuideView {
     pub fn to_value_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
 
-        lines.extend(self.preamble.iter().cloned());
-        append_value_paragraph_section(&mut lines, "Usage", &self.usage);
-        append_value_entry_section(&mut lines, "Commands", &self.commands);
-        append_value_entry_section(&mut lines, "Arguments", &self.arguments);
-        append_value_entry_section(&mut lines, "Options", &self.options);
-        append_value_entry_section(
-            &mut lines,
-            "Common Invocation Options",
-            &self.common_invocation_options,
-        );
-        append_value_paragraph_section(&mut lines, "Notes", &self.notes);
+        append_value_paragraphs(&mut lines, &self.preamble);
+        append_value_paragraphs(&mut lines, &self.usage);
+        append_value_entries(&mut lines, &self.commands);
+        append_value_entries(&mut lines, &self.arguments);
+        append_value_entries(&mut lines, &self.options);
+        append_value_entries(&mut lines, &self.common_invocation_options);
+        append_value_paragraphs(&mut lines, &self.notes);
 
         for section in &self.sections {
-            if !section.paragraphs.is_empty() || !section.entries.is_empty() {
-                if !lines.is_empty() {
-                    lines.push(String::new());
-                }
-                lines.push(section.title.clone());
-                lines.extend(section.paragraphs.iter().cloned());
-                lines.extend(section.entries.iter().map(value_line_for_entry));
-            }
+            append_value_paragraphs(&mut lines, &section.paragraphs);
+            append_value_entries(&mut lines, &section.entries);
         }
 
-        if !self.epilogue.is_empty() {
-            if !lines.is_empty() {
-                lines.push(String::new());
-            }
-            lines.extend(self.epilogue.iter().cloned());
-        }
+        append_value_paragraphs(&mut lines, &self.epilogue);
 
         lines
     }
@@ -424,34 +496,39 @@ impl GuideSection {
     }
 }
 
-fn append_value_paragraph_section(lines: &mut Vec<String>, title: &str, paragraphs: &[String]) {
+fn append_value_paragraphs(lines: &mut Vec<String>, paragraphs: &[String]) {
     if paragraphs.is_empty() {
         return;
     }
     if !lines.is_empty() {
         lines.push(String::new());
     }
-    lines.push(title.to_string());
     lines.extend(paragraphs.iter().cloned());
 }
 
-fn append_value_entry_section(lines: &mut Vec<String>, title: &str, entries: &[GuideEntry]) {
-    if entries.is_empty() {
+fn append_value_entries(lines: &mut Vec<String>, entries: &[GuideEntry]) {
+    let values = entries
+        .iter()
+        .filter_map(value_line_for_entry)
+        .collect::<Vec<_>>();
+
+    if values.is_empty() {
         return;
     }
     if !lines.is_empty() {
         lines.push(String::new());
     }
-    lines.push(title.to_string());
-    lines.extend(entries.iter().map(value_line_for_entry));
+    lines.extend(values);
 }
 
-fn value_line_for_entry(entry: &GuideEntry) -> String {
-    if entry.short_help.trim().is_empty() {
-        entry.name.clone()
-    } else {
-        format!("{}  {}", entry.name, entry.short_help)
+fn value_line_for_entry(entry: &GuideEntry) -> Option<String> {
+    if !entry.short_help.trim().is_empty() {
+        return Some(entry.short_help.clone());
     }
+    if !entry.name.trim().is_empty() {
+        return Some(entry.name.clone());
+    }
+    None
 }
 
 impl GuideSection {
@@ -496,6 +573,18 @@ impl GuideSection {
 
 impl GuideSectionKind {
     /// Returns the stable string form used in serialized guide payloads.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::guide::GuideSectionKind;
+    ///
+    /// assert_eq!(GuideSectionKind::Commands.as_str(), "commands");
+    /// assert_eq!(
+    ///     GuideSectionKind::CommonInvocationOptions.as_str(),
+    ///     "common_invocation_options"
+    /// );
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             GuideSectionKind::Usage => "usage",
@@ -936,219 +1025,4 @@ fn help_description_split(kind: GuideSectionKind, line: &str) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{GuideEntry, GuideSection, GuideSectionKind, GuideView};
-    use crate::core::command_def::{ArgDef, CommandDef, FlagDef};
-    use serde_json::Value;
-    use serde_json::json;
-
-    use crate::core::output_model::{
-        OutputDocument, OutputDocumentKind, OutputItems, OutputResult,
-    };
-    use crate::ui::presentation::HelpLevel;
-
-    #[test]
-    fn guide_view_from_text_preserves_usage_and_command_entries_unit() {
-        let view = GuideView::from_text("Usage: osp theme <COMMAND>\n\nCommands:\n  list  Show\n");
-
-        assert_eq!(view.usage, vec!["osp theme <COMMAND>".to_string()]);
-        assert_eq!(view.commands[0].name, "list");
-        assert_eq!(view.commands[0].short_help, "Show");
-    }
-
-    #[test]
-    fn filtered_for_help_level_hides_verbose_sections_until_requested_unit() {
-        let mut view = GuideView::from_text(
-            "Usage: osp [COMMAND]\n\nCommands:\n  help  Show help\n\nCommon Invocation Options:\n  --json  Render as JSON\n",
-        );
-        view.sections
-            .push(GuideSection::new("Notes", GuideSectionKind::Notes).paragraph("extra note"));
-
-        let tiny = view.filtered_for_help_level(HelpLevel::Tiny);
-        let normal = view.filtered_for_help_level(HelpLevel::Normal);
-        let verbose = view.filtered_for_help_level(HelpLevel::Verbose);
-
-        assert!(!tiny.usage.is_empty());
-        assert!(tiny.commands.is_empty());
-        assert!(normal.common_invocation_options.is_empty());
-        assert!(!normal.commands.is_empty());
-        assert!(!normal.sections.is_empty());
-        assert!(!verbose.common_invocation_options.is_empty());
-    }
-
-    #[test]
-    fn guide_view_from_command_def_builds_usage_commands_and_options_unit() {
-        let view = GuideView::from_command_def(
-            &CommandDef::new("theme")
-                .about("Inspect and apply themes")
-                .flag(FlagDef::new("raw").long("raw").help("Show raw values"))
-                .arg(ArgDef::new("name").value_name("name"))
-                .subcommand(CommandDef::new("list").about("List themes")),
-        );
-
-        assert_eq!(view.usage.len(), 1);
-        assert_eq!(view.commands.len(), 1);
-        assert_eq!(view.arguments.len(), 1);
-        assert_eq!(view.options.len(), 1);
-    }
-
-    #[test]
-    fn help_section_builder_collects_blocks_unit() {
-        let section = GuideSection::new("Notes", GuideSectionKind::Notes)
-            .paragraph("first")
-            .entry("show", "Display");
-
-        assert_eq!(section.paragraphs, vec!["first".to_string()]);
-        assert_eq!(section.entries.len(), 1);
-    }
-
-    #[test]
-    fn guide_view_projects_to_single_semantic_row_unit() {
-        let view = GuideView::from_text("Commands:\n  list  Show\n");
-        let rows = view.to_output_result().into_rows().expect("rows");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["commands"][0]["name"], "list");
-        assert_eq!(rows[0]["commands"][0]["short_help"], "Show");
-    }
-
-    #[test]
-    fn guide_view_json_value_is_semantic_not_internal_shape_unit() {
-        let view = GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list\n");
-        let value = view.to_json_value();
-
-        assert_eq!(value["usage"][0], "osp history <COMMAND>");
-        assert_eq!(value["commands"][0]["name"], "list");
-        assert!(value.get("sections").is_none());
-    }
-
-    #[test]
-    fn guide_view_round_trips_through_output_result_unit() {
-        let view =
-            GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  help  Print help\n");
-        let output = view.to_output_result();
-        let rebuilt = GuideView::try_from_output_result(&output).expect("guide output");
-
-        assert_eq!(rebuilt.usage[0], "osp history <COMMAND>");
-        assert_eq!(rebuilt.commands[0].name, "help");
-    }
-
-    #[test]
-    fn guide_view_output_result_carries_document_sidecar_unit() {
-        let view =
-            GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  help  Print help\n");
-        let output = view.to_output_result();
-
-        assert!(matches!(
-            output.document,
-            Some(OutputDocument {
-                kind: OutputDocumentKind::Guide,
-                value: Value::Object(_),
-            })
-        ));
-    }
-
-    #[test]
-    fn guide_restore_does_not_guess_from_rows_when_document_is_present_unit() {
-        let output = OutputResult {
-            items: OutputItems::Rows(vec![
-                json!({"commands": [{"name": "list"}]})
-                    .as_object()
-                    .cloned()
-                    .expect("object"),
-            ]),
-            document: Some(OutputDocument::new(
-                OutputDocumentKind::Guide,
-                json!([{"commands": [{"name": "list"}]}]),
-            )),
-            meta: Default::default(),
-        };
-
-        assert!(GuideView::try_from_output_result(&output).is_none());
-    }
-
-    #[test]
-    fn guide_view_accepts_legacy_summary_field_when_rehydrating_unit() {
-        let output = OutputResult::from_rows(vec![
-            json!({
-                "commands": [
-                    {
-                        "name": "list",
-                        "summary": "Show"
-                    }
-                ]
-            })
-            .as_object()
-            .cloned()
-            .expect("object"),
-        ]);
-
-        let rebuilt = GuideView::try_from_output_result(&output).expect("guide output");
-        assert_eq!(rebuilt.commands[0].name, "list");
-        assert_eq!(rebuilt.commands[0].short_help, "Show");
-    }
-
-    #[test]
-    fn guide_view_markdown_uses_headings_and_entry_tables_unit() {
-        let view = GuideView {
-            usage: vec!["history <COMMAND>".to_string()],
-            commands: vec![GuideEntry {
-                name: "list".to_string(),
-                short_help: "List history entries".to_string(),
-                display_indent: None,
-                display_gap: None,
-            }],
-            options: vec![GuideEntry {
-                name: "-h, --help".to_string(),
-                short_help: "Print help".to_string(),
-                display_indent: None,
-                display_gap: None,
-            }],
-            ..GuideView::default()
-        };
-
-        let rendered = view.to_markdown();
-        assert!(rendered.contains("## Usage"));
-        assert!(rendered.contains("history <COMMAND>"));
-        assert!(rendered.contains("## Commands"));
-        assert!(rendered.contains("- `list` List history entries"));
-        assert!(rendered.contains("## Options"));
-        assert!(rendered.contains("- `-h, --help` Print help"));
-        assert!(!rendered.contains("| name"));
-    }
-
-    #[test]
-    fn guide_view_markdown_bounds_padding_to_fit_width_unit() {
-        let view = GuideView {
-            commands: vec![
-                GuideEntry {
-                    name: "plugins".to_string(),
-                    short_help: "Inspect and manage plugin providers".to_string(),
-                    display_indent: None,
-                    display_gap: None,
-                },
-                GuideEntry {
-                    name: "options".to_string(),
-                    short_help: "per invocation: --format/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --cache, --plugin-provider".to_string(),
-                    display_indent: None,
-                    display_gap: None,
-                },
-            ],
-            ..GuideView::default()
-        };
-
-        let rendered = view.to_markdown_with_width(Some(90));
-        let lines = rendered.lines().collect::<Vec<_>>();
-        assert!(
-            lines.iter().any(|line| line.contains("- `plugins` ")),
-            "expected bullet entry row in:\n{rendered}"
-        );
-        assert!(
-            lines.iter().any(|line| line.contains("- `plugins` ")),
-            "expected plugins row in:\n{rendered}"
-        );
-        assert!(
-            lines.iter().any(|line| line.contains("- `options` ")),
-            "expected options row in:\n{rendered}"
-        );
-    }
-}
+mod tests;

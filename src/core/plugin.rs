@@ -1,3 +1,26 @@
+//! Wire-format DTOs for the plugin protocol.
+//!
+//! This module exists to define the stable boundary between `osp-cli` and
+//! external plugins. The app and plugin manager can evolve internally, but the
+//! JSON shapes in this module are the contract that both sides need to agree
+//! on.
+//!
+//! In broad terms:
+//!
+//! - `Describe*` types advertise commands, arguments, and policy metadata
+//! - `Response*` types carry execution results, messages, and render hints
+//! - validation helpers reject protocol-shape errors before higher-level code
+//!   tries to trust the payload
+//!
+//! Contract:
+//!
+//! - these types may depend on shared `core` metadata, but they should stay
+//!   free of host runtime concerns
+//! - any parsing/validation here should enforce protocol rules, not business
+//!   policy
+//! - caller-facing docs should describe stable wire behavior rather than
+//!   internal plugin manager details
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -76,7 +99,19 @@ pub enum DescribeVisibilityModeV1 {
 }
 
 impl DescribeVisibilityModeV1 {
-    /// Converts the wire-format visibility mode into the internal policy enum.
+    /// Converts the protocol visibility label into the internal policy enum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_policy::VisibilityMode;
+    /// use osp_cli::core::plugin::DescribeVisibilityModeV1;
+    ///
+    /// assert_eq!(
+    ///     DescribeVisibilityModeV1::CapabilityGated.as_visibility_mode(),
+    ///     VisibilityMode::CapabilityGated
+    /// );
+    /// ```
     pub fn as_visibility_mode(self) -> VisibilityMode {
         match self {
             DescribeVisibilityModeV1::Public => VisibilityMode::Public,
@@ -87,6 +122,14 @@ impl DescribeVisibilityModeV1 {
     }
 
     /// Returns the canonical protocol label for this visibility mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::plugin::DescribeVisibilityModeV1;
+    ///
+    /// assert_eq!(DescribeVisibilityModeV1::Hidden.as_label(), "hidden");
+    /// ```
     pub fn as_label(self) -> &'static str {
         match self {
             DescribeVisibilityModeV1::Public => "public",
@@ -98,7 +141,27 @@ impl DescribeVisibilityModeV1 {
 }
 
 impl DescribeCommandAuthV1 {
-    /// Returns a short human-readable summary of non-default auth requirements.
+    /// Returns a compact help hint for non-default auth requirements.
+    ///
+    /// This is meant for help and completion surfaces where the full policy
+    /// object would be too noisy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::plugin::{DescribeCommandAuthV1, DescribeVisibilityModeV1};
+    ///
+    /// let auth = DescribeCommandAuthV1 {
+    ///     visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+    ///     required_capabilities: vec!["ldap.write".to_string()],
+    ///     feature_flags: vec!["write-mode".to_string()],
+    /// };
+    ///
+    /// assert_eq!(
+    ///     auth.hint().as_deref(),
+    ///     Some("cap: ldap.write; feature: write-mode")
+    /// );
+    /// ```
     pub fn hint(&self) -> Option<String> {
         let mut parts = Vec::new();
 
@@ -348,7 +411,25 @@ impl DescribeCommandV1 {
 }
 
 impl ResponseV1 {
-    /// Validates the response envelope and returns an error string on protocol violations.
+    /// Validates the response envelope before the app trusts its payload.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::plugin::{ResponseMetaV1, ResponseV1};
+    /// use serde_json::json;
+    ///
+    /// let response = ResponseV1 {
+    ///     protocol_version: 1,
+    ///     ok: true,
+    ///     data: json!({"uid": "alice"}),
+    ///     error: None,
+    ///     messages: Vec::new(),
+    ///     meta: ResponseMetaV1::default(),
+    /// };
+    ///
+    /// assert!(response.validate_v1().is_ok());
+    /// ```
     pub fn validate_v1(&self) -> Result<(), String> {
         if self.protocol_version != PLUGIN_PROTOCOL_V1 {
             return Err(format!(

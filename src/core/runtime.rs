@@ -1,3 +1,33 @@
+//! Runtime hint model shared across host, native commands, and plugin
+//! boundaries.
+//!
+//! This module exists so runtime-facing behavior like verbosity, output mode,
+//! and terminal identity can travel through the system as normalized data
+//! instead of ad hoc environment parsing in each caller.
+//!
+//! High-level flow:
+//!
+//! - parse runtime-oriented environment hints into
+//!   [`crate::core::runtime::RuntimeHints`]
+//! - normalize those values into enums and bounded scalar settings
+//! - export the same normalized hints back into environment pairs when needed
+//!
+//! Contract:
+//!
+//! - environment parsing rules for runtime hints live here
+//! - callers should consume [`crate::core::runtime::RuntimeHints`] instead of
+//!   reparsing raw env vars
+//!
+//! Public API shape:
+//!
+//! - [`crate::core::runtime::RuntimeHints::new`] is the exact constructor for
+//!   already-resolved runtime settings
+//! - [`crate::core::runtime::RuntimeHints::from_env`] and
+//!   [`crate::core::runtime::RuntimeHints::from_env_iter`] are the probing and
+//!   adaptation factories
+//! - optional metadata such as profile and terminal identity uses `with_*`
+//!   refinements instead of raw ad hoc assembly
+
 use std::collections::HashMap;
 
 use crate::core::output::{ColorMode, OutputFormat, UnicodeMode};
@@ -48,6 +78,16 @@ impl UiVerbosity {
     }
 
     /// Parses a case-insensitive verbosity level or supported alias.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::runtime::UiVerbosity;
+    ///
+    /// assert_eq!(UiVerbosity::parse("warn"), Some(UiVerbosity::Warning));
+    /// assert_eq!(UiVerbosity::parse("TRACE"), Some(UiVerbosity::Trace));
+    /// assert_eq!(UiVerbosity::parse("loud"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "error" => Some(UiVerbosity::Error),
@@ -83,6 +123,16 @@ impl RuntimeTerminalKind {
     }
 
     /// Parses a case-insensitive terminal kind name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::runtime::RuntimeTerminalKind;
+    ///
+    /// assert_eq!(RuntimeTerminalKind::parse("cli"), Some(RuntimeTerminalKind::Cli));
+    /// assert_eq!(RuntimeTerminalKind::parse("REPL"), Some(RuntimeTerminalKind::Repl));
+    /// assert_eq!(RuntimeTerminalKind::parse("tty"), None);
+    /// ```
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "cli" => Some(RuntimeTerminalKind::Cli),
@@ -130,12 +180,104 @@ impl Default for RuntimeHints {
 }
 
 impl RuntimeHints {
+    /// Creates a fully specified runtime-hint payload with no profile or
+    /// terminal metadata attached yet.
+    ///
+    /// `debug_level` is clamped to the supported `0..=3` range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::{ColorMode, OutputFormat, UnicodeMode};
+    /// use osp_cli::core::runtime::{RuntimeHints, UiVerbosity};
+    ///
+    /// let hints = RuntimeHints::new(
+    ///     UiVerbosity::Info,
+    ///     7,
+    ///     OutputFormat::Json,
+    ///     ColorMode::Always,
+    ///     UnicodeMode::Never,
+    /// );
+    ///
+    /// assert_eq!(hints.ui_verbosity, UiVerbosity::Info);
+    /// assert_eq!(hints.debug_level, 3);
+    /// assert_eq!(hints.profile, None);
+    /// ```
+    pub fn new(
+        ui_verbosity: UiVerbosity,
+        debug_level: u8,
+        format: OutputFormat,
+        color: ColorMode,
+        unicode: UnicodeMode,
+    ) -> Self {
+        Self {
+            ui_verbosity,
+            debug_level: debug_level.min(3),
+            format,
+            color,
+            unicode,
+            profile: None,
+            terminal: None,
+            terminal_kind: RuntimeTerminalKind::Unknown,
+        }
+    }
+
     /// Reads runtime hints from the current process environment.
     pub fn from_env() -> Self {
         Self::from_env_iter(std::env::vars())
     }
 
+    /// Replaces the optional active-profile label.
+    pub fn with_profile(mut self, profile: Option<String>) -> Self {
+        self.profile = profile
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        self
+    }
+
+    /// Replaces the optional terminal identifier.
+    pub fn with_terminal(mut self, terminal: Option<String>) -> Self {
+        self.terminal = terminal
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        self
+    }
+
+    /// Replaces the terminal-kind hint.
+    pub fn with_terminal_kind(mut self, terminal_kind: RuntimeTerminalKind) -> Self {
+        self.terminal_kind = terminal_kind;
+        self
+    }
+
     /// Builds runtime hints from arbitrary key-value environment pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::{ColorMode, OutputFormat, UnicodeMode};
+    /// use osp_cli::core::runtime::{
+    ///     ENV_OSP_COLOR, ENV_OSP_DEBUG_LEVEL, ENV_OSP_FORMAT, ENV_OSP_PROFILE,
+    ///     ENV_OSP_TERMINAL_KIND, ENV_OSP_UI_VERBOSITY, RuntimeHints,
+    ///     RuntimeTerminalKind, UiVerbosity,
+    /// };
+    ///
+    /// let hints = RuntimeHints::from_env_iter([
+    ///     (ENV_OSP_UI_VERBOSITY, "trace"),
+    ///     (ENV_OSP_DEBUG_LEVEL, "7"),
+    ///     (ENV_OSP_FORMAT, "json"),
+    ///     (ENV_OSP_COLOR, "never"),
+    ///     (ENV_OSP_PROFILE, "uio"),
+    ///     (ENV_OSP_TERMINAL_KIND, "repl"),
+    /// ]);
+    ///
+    /// assert_eq!(hints.ui_verbosity, UiVerbosity::Trace);
+    /// assert_eq!(hints.debug_level, 3);
+    /// assert_eq!(hints.format, OutputFormat::Json);
+    /// assert_eq!(hints.color, ColorMode::Never);
+    /// assert_eq!(hints.unicode, UnicodeMode::Auto);
+    /// assert_eq!(hints.profile.as_deref(), Some("uio"));
+    /// assert_eq!(hints.terminal_kind, RuntimeTerminalKind::Repl);
+    /// ```
     pub fn from_env_iter<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -190,19 +332,35 @@ impl RuntimeHints {
             })
             .unwrap_or(RuntimeTerminalKind::Unknown);
 
-        Self {
-            ui_verbosity,
-            debug_level,
-            format,
-            color,
-            unicode,
-            profile,
-            terminal,
-            terminal_kind,
-        }
+        Self::new(ui_verbosity, debug_level, format, color, unicode)
+            .with_profile(profile)
+            .with_terminal(terminal)
+            .with_terminal_kind(terminal_kind)
     }
 
     /// Returns this hint set as environment variable pairs suitable for export.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output::{ColorMode, OutputFormat, UnicodeMode};
+    /// use osp_cli::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
+    ///
+    /// let hints = RuntimeHints::new(
+    ///     UiVerbosity::Info,
+    ///     2,
+    ///     OutputFormat::Json,
+    ///     ColorMode::Always,
+    ///     UnicodeMode::Never,
+    /// )
+    /// .with_profile(Some("uio".to_string()))
+    /// .with_terminal(Some("xterm-256color".to_string()))
+    /// .with_terminal_kind(RuntimeTerminalKind::Cli);
+    /// let pairs = hints.env_pairs();
+    ///
+    /// assert!(pairs.iter().any(|(key, value)| *key == "OSP_FORMAT" && value == "json"));
+    /// assert!(pairs.iter().any(|(key, value)| *key == "OSP_PROFILE" && value == "uio"));
+    /// ```
     pub fn env_pairs(&self) -> Vec<(&'static str, String)> {
         let mut out = vec![
             (ENV_OSP_UI_VERBOSITY, self.ui_verbosity.as_str().to_string()),
@@ -237,16 +395,16 @@ mod tests {
 
     #[test]
     fn env_roundtrip_keeps_runtime_hints() {
-        let hints = RuntimeHints {
-            ui_verbosity: UiVerbosity::Trace,
-            debug_level: 7,
-            format: OutputFormat::Json,
-            color: ColorMode::Never,
-            unicode: UnicodeMode::Always,
-            profile: Some("uio".to_string()),
-            terminal: Some("xterm-256color".to_string()),
-            terminal_kind: RuntimeTerminalKind::Repl,
-        };
+        let hints = RuntimeHints::new(
+            UiVerbosity::Trace,
+            7,
+            OutputFormat::Json,
+            ColorMode::Never,
+            UnicodeMode::Always,
+        )
+        .with_profile(Some("uio".to_string()))
+        .with_terminal(Some("xterm-256color".to_string()))
+        .with_terminal_kind(RuntimeTerminalKind::Repl);
 
         let parsed = RuntimeHints::from_env_iter(hints.env_pairs());
         assert_eq!(parsed.ui_verbosity, UiVerbosity::Trace);
@@ -257,6 +415,26 @@ mod tests {
         assert_eq!(parsed.profile.as_deref(), Some("uio"));
         assert_eq!(parsed.terminal.as_deref(), Some("xterm-256color"));
         assert_eq!(parsed.terminal_kind, RuntimeTerminalKind::Repl);
+    }
+
+    #[test]
+    fn new_and_with_helpers_build_runtime_hints_unit() {
+        let hints = RuntimeHints::new(
+            UiVerbosity::Info,
+            9,
+            OutputFormat::Table,
+            ColorMode::Always,
+            UnicodeMode::Never,
+        )
+        .with_profile(Some("  dev  ".to_string()))
+        .with_terminal(Some(" xterm-256color ".to_string()))
+        .with_terminal_kind(RuntimeTerminalKind::Cli);
+
+        assert_eq!(hints.ui_verbosity, UiVerbosity::Info);
+        assert_eq!(hints.debug_level, 3);
+        assert_eq!(hints.profile.as_deref(), Some("dev"));
+        assert_eq!(hints.terminal.as_deref(), Some("xterm-256color"));
+        assert_eq!(hints.terminal_kind, RuntimeTerminalKind::Cli);
     }
 
     #[test]

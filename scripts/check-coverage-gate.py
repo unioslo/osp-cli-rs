@@ -119,6 +119,8 @@ def changed_source_files(repo_root: Path) -> list[str]:
             continue
         if not path.startswith("src/"):
             continue
+        if not (repo_root / path).exists():
+            continue
         if path.startswith("src/") and "/src/" in path:
             continue
         if is_internal_test_module(path):

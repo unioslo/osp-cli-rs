@@ -1,3 +1,21 @@
+//! Structured output payload model shared across commands, DSL stages, and UI.
+//!
+//! This module exists to keep command results in a small canonical shape while
+//! they move between execution, transformation, and rendering layers.
+//!
+//! High-level flow:
+//!
+//! - commands produce [`crate::core::output_model::OutputResult`]
+//! - the DSL transforms its [`crate::core::output_model::OutputItems`] and
+//!   optional semantic document
+//! - the UI later lowers the result into rendered documents and terminal text
+//!
+//! Contract:
+//!
+//! - this module describes data shape, not rendering policy
+//! - semantic sidecar documents should stay canonical here instead of leaking
+//!   format-specific assumptions into the DSL or UI
+
 use crate::core::output::OutputFormat;
 use crate::core::row::Row;
 use serde_json::Value;
@@ -70,6 +88,18 @@ pub struct OutputDocument {
 
 impl OutputDocument {
     /// Builds a semantic payload from its identity and canonical JSON value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output_model::{OutputDocument, OutputDocumentKind};
+    /// use serde_json::json;
+    ///
+    /// let document = OutputDocument::new(OutputDocumentKind::Guide, json!({"title": "Help"}));
+    ///
+    /// assert_eq!(document.kind, OutputDocumentKind::Guide);
+    /// assert_eq!(document.value["title"], "Help");
+    /// ```
     pub fn new(kind: OutputDocumentKind, value: Value) -> Self {
         Self { kind, value }
     }
@@ -80,6 +110,22 @@ impl OutputDocument {
     /// concrete semantic types inside the executor. Whether the projected JSON
     /// still restores into the original payload kind is decided later by the
     /// payload codec, not by the pipeline engine itself.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output_model::{OutputDocument, OutputDocumentKind, OutputItems};
+    /// use osp_cli::row;
+    /// use serde_json::json;
+    ///
+    /// let document = OutputDocument::new(OutputDocumentKind::Guide, json!({"usage": ["osp"]}));
+    /// let projected = document.project_over_items(&OutputItems::Rows(vec![
+    ///     row! { "uid" => "alice" },
+    /// ]));
+    ///
+    /// assert_eq!(projected.kind, OutputDocumentKind::Guide);
+    /// assert_eq!(projected.value["uid"], "alice");
+    /// ```
     pub fn project_over_items(&self, items: &OutputItems) -> Self {
         Self {
             kind: self.kind,
@@ -110,6 +156,20 @@ pub struct OutputResult {
 
 impl OutputResult {
     /// Builds a row-based result and derives its key index from first-seen columns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output_model::OutputResult;
+    /// use osp_cli::row;
+    ///
+    /// let output = OutputResult::from_rows(vec![
+    ///     row! { "uid" => "alice", "mail" => "a@example.com" },
+    ///     row! { "uid" => "bob", "cn" => "Bob" },
+    /// ]);
+    ///
+    /// assert_eq!(output.meta.key_index, vec!["uid", "mail", "cn"]);
+    /// ```
     pub fn from_rows(rows: Vec<Row>) -> Self {
         let key_index = compute_key_index(&rows);
         Self {
@@ -126,12 +186,37 @@ impl OutputResult {
     }
 
     /// Attaches a semantic document to the result and returns the updated value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output_model::{OutputDocument, OutputDocumentKind, OutputResult};
+    /// use serde_json::json;
+    ///
+    /// let output = OutputResult::from_rows(Vec::new()).with_document(OutputDocument::new(
+    ///     OutputDocumentKind::Guide,
+    ///     json!({"title": "Help"}),
+    /// ));
+    ///
+    /// assert!(output.document.is_some());
+    /// ```
     pub fn with_document(mut self, document: OutputDocument) -> Self {
         self.document = Some(document);
         self
     }
 
     /// Returns the underlying rows when the result is not grouped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output_model::OutputResult;
+    /// use osp_cli::row;
+    ///
+    /// let output = OutputResult::from_rows(vec![row! { "uid" => "alice" }]);
+    ///
+    /// assert_eq!(output.as_rows().unwrap()[0]["uid"], "alice");
+    /// ```
     pub fn as_rows(&self) -> Option<&[Row]> {
         match &self.items {
             OutputItems::Rows(rows) => Some(rows),
@@ -140,6 +225,19 @@ impl OutputResult {
     }
 
     /// Consumes the result and returns its rows when the payload is row-based.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::output_model::OutputResult;
+    /// use osp_cli::row;
+    ///
+    /// let rows = OutputResult::from_rows(vec![row! { "uid" => "alice" }])
+    ///     .into_rows()
+    ///     .unwrap();
+    ///
+    /// assert_eq!(rows[0]["uid"], "alice");
+    /// ```
     pub fn into_rows(self) -> Option<Vec<Row>> {
         match self.items {
             OutputItems::Rows(rows) => Some(rows),
@@ -149,6 +247,20 @@ impl OutputResult {
 }
 
 /// Computes the stable first-seen column order across all rows.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output_model::compute_key_index;
+/// use osp_cli::row;
+///
+/// let rows = vec![
+///     row! { "uid" => "alice", "mail" => "a@example.com" },
+///     row! { "uid" => "bob", "cn" => "Bob" },
+/// ];
+///
+/// assert_eq!(compute_key_index(&rows), vec!["uid", "mail", "cn"]);
+/// ```
 pub fn compute_key_index(rows: &[Row]) -> Vec<String> {
     let mut key_index = Vec::new();
     let mut seen = HashSet::new();
@@ -165,6 +277,17 @@ pub fn compute_key_index(rows: &[Row]) -> Vec<String> {
 }
 
 /// Projects output items into a canonical JSON value.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output_model::{OutputItems, output_items_to_value};
+/// use osp_cli::row;
+///
+/// let value = output_items_to_value(&OutputItems::Rows(vec![row! { "uid" => "alice" }]));
+///
+/// assert_eq!(value["uid"], "alice");
+/// ```
 pub fn output_items_to_value(items: &OutputItems) -> Value {
     match items {
         OutputItems::Rows(rows) if rows.len() == 1 => rows
@@ -208,6 +331,20 @@ pub fn output_items_to_value(items: &OutputItems) -> Value {
 /// This is the inverse substrate bridge used by the canonical DSL: semantic payloads stay
 /// canonical as JSON, while the existing stage logic continues to operate over
 /// rows and groups derived from that JSON.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output_model::{OutputItems, output_items_from_value};
+/// use serde_json::json;
+///
+/// let items = output_items_from_value(json!({"uid": "alice"}));
+///
+/// assert_eq!(
+///     items,
+///     OutputItems::Rows(vec![json!({"uid": "alice"}).as_object().cloned().unwrap()])
+/// );
+/// ```
 pub fn output_items_from_value(value: Value) -> OutputItems {
     match value {
         Value::Array(items) => {

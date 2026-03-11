@@ -1,3 +1,32 @@
+//! Runtime-facing config defaults, path discovery, and loader-pipeline
+//! assembly.
+//!
+//! This module exists to bridge the full layered config system into the smaller
+//! runtime surfaces the app actually needs at startup.
+//!
+//! High-level flow:
+//!
+//! - define stable default values and path-discovery rules
+//! - discover runtime config file locations from the current environment
+//! - assemble the standard loader pipeline used by the host
+//! - lower resolved config into the compact [`RuntimeConfig`] view used by
+//!   callers that do not need the full explanation surface
+//!
+//! Contract:
+//!
+//! - this module may depend on config loaders and resolved config types
+//! - it should not reimplement precedence rules already owned by the resolver
+//! - callers should use this module for runtime bootstrap wiring instead of
+//!   inventing their own config path and default logic
+//!
+//! Public API shape:
+//!
+//! - small bootstrap toggles like [`RuntimeLoadOptions`] use direct
+//!   constructor/`with_*` methods
+//! - discovered path/default snapshots stay plain data
+//! - loader-pipeline assembly stays centralized here so callers do not invent
+//!   incompatible bootstrap rules
+
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::config::{
@@ -59,7 +88,19 @@ pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
 pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "clip";
 
 /// Options that control which runtime config sources are included.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::config::RuntimeLoadOptions;
+///
+/// let options = RuntimeLoadOptions::default();
+///
+/// assert!(options.include_env);
+/// assert!(options.include_config_file);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RuntimeLoadOptions {
     /// Whether environment-derived layers should be loaded.
     pub include_env: bool,
@@ -73,6 +114,25 @@ impl Default for RuntimeLoadOptions {
             include_env: true,
             include_config_file: true,
         }
+    }
+}
+
+impl RuntimeLoadOptions {
+    /// Creates runtime-load options with the default source set enabled.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets whether environment-derived layers should be loaded.
+    pub fn with_env(mut self, include_env: bool) -> Self {
+        self.include_env = include_env;
+        self
+    }
+
+    /// Sets whether file-backed layers should be loaded.
+    pub fn with_config_file(mut self, include_config_file: bool) -> Self {
+        self.include_config_file = include_config_file;
+        self
     }
 }
 
@@ -92,7 +152,23 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    /// Builds a runtime snapshot from a resolved config.
+    /// Extracts the small runtime snapshot most callers need from a resolved config.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions, RuntimeConfig};
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    ///
+    /// let mut resolver = ConfigResolver::default();
+    /// resolver.set_defaults(defaults);
+    /// let resolved = resolver.resolve(ResolveOptions::default()).unwrap();
+    ///
+    /// let runtime = RuntimeConfig::from_resolved(&resolved);
+    /// assert_eq!(runtime.active_profile, "default");
+    /// ```
     pub fn from_resolved(resolved: &ResolvedConfig) -> Self {
         Self {
             active_profile: resolved.active_profile().to_string(),
@@ -241,6 +317,17 @@ impl RuntimeDefaults {
     }
 
     /// Returns a default string value by key from the global scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::RuntimeDefaults;
+    ///
+    /// let defaults = RuntimeDefaults::from_process_env("dracula", "> ");
+    ///
+    /// assert_eq!(defaults.get_string("theme.name"), Some("dracula"));
+    /// assert_eq!(defaults.get_string("repl.prompt"), Some("> "));
+    /// ```
     pub fn get_string(&self, key: &str) -> Option<&str> {
         self.layer
             .entries()
@@ -253,12 +340,27 @@ impl RuntimeDefaults {
     }
 
     /// Clones the defaults as a standalone config layer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::RuntimeDefaults;
+    ///
+    /// let defaults = RuntimeDefaults::from_process_env("plain", "> ");
+    /// let layer = defaults.to_layer();
+    ///
+    /// assert!(layer.entries().iter().any(|entry| entry.key == "theme.name"));
+    /// ```
     pub fn to_layer(&self) -> ConfigLayer {
         self.layer.clone()
     }
 }
 
-/// Builds the standard runtime loader pipeline for CLI startup.
+/// Assembles the runtime loader precedence stack for CLI startup.
+///
+/// The ordering encoded here is part of the config contract: defaults first,
+/// then optional presentation/env/file/secrets layers, then CLI/session
+/// overrides last.
 pub fn build_runtime_pipeline(
     defaults: ConfigLayer,
     presentation: Option<ConfigLayer>,
@@ -314,17 +416,17 @@ pub fn build_runtime_pipeline(
     pipeline
 }
 
-/// Returns the default XDG-style config root for OSP.
+/// Resolves the default XDG-style config root from the current process environment.
 pub fn default_config_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().config_root_dir()
 }
 
-/// Returns the default XDG-style cache root for OSP.
+/// Resolves the default XDG-style cache root from the current process environment.
 pub fn default_cache_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().cache_root_dir()
 }
 
-/// Returns the default XDG-style state root for OSP.
+/// Resolves the default XDG-style state root from the current process environment.
 pub fn default_state_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().state_root_dir()
 }

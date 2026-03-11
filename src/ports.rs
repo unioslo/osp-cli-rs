@@ -1,3 +1,14 @@
+//! Small service-layer ports and helpers.
+//!
+//! This module exists to define the narrow interfaces the embeddable service
+//! layer needs from the outside world.
+//!
+//! Contract:
+//!
+//! - ports should stay small and easy to mock
+//! - transport- or host-specific concerns belong in adapters, not in these
+//!   traits
+
 use crate::core::row::Row;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
@@ -21,10 +32,22 @@ pub trait LdapDirectory {
     ) -> Result<Vec<Row>>;
 }
 
-/// Parses a comma-separated attribute list from CLI input.
+/// Parses the lightweight comma-separated attribute override syntax.
 ///
-/// Returns `Ok(None)` when no attribute override was provided and rejects
-/// inputs that only contain empty segments.
+/// `None` means the caller did not request projection, while empty or
+/// whitespace-only lists are rejected so the service layer never has to guess.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ports::parse_attributes;
+///
+/// assert_eq!(
+///     parse_attributes(Some("uid, cn ,mail")).unwrap(),
+///     Some(vec!["uid".to_string(), "cn".to_string(), "mail".to_string()])
+/// );
+/// assert_eq!(parse_attributes(None).unwrap(), None);
+/// ```
 pub fn parse_attributes(raw: Option<&str>) -> Result<Option<Vec<String>>> {
     let Some(raw) = raw else {
         return Ok(None);
@@ -46,6 +69,25 @@ pub fn parse_attributes(raw: Option<&str>) -> Result<Option<Vec<String>>> {
 ///
 /// Filtering happens first, followed by attribute projection when an explicit
 /// attribute list is provided.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::ports::apply_filter_and_projection;
+/// use osp_cli::row;
+///
+/// let rows = vec![
+///     row! { "uid" => "alice", "mail" => "alice@example.com" },
+///     row! { "uid" => "bob", "mail" => "bob@example.com" },
+/// ];
+/// let attrs = vec!["mail".to_string()];
+///
+/// let projected = apply_filter_and_projection(rows, Some("uid=alice"), Some(&attrs));
+///
+/// assert_eq!(projected.len(), 1);
+/// assert_eq!(projected[0].get("mail").unwrap(), "alice@example.com");
+/// assert!(!projected[0].contains_key("uid"));
+/// ```
 pub fn apply_filter_and_projection(
     rows: Vec<Row>,
     filter: Option<&str>,

@@ -1,3 +1,16 @@
+//! Small public fixtures and helpers for embedding and examples.
+//!
+//! This module exists to expose stable, low-friction building blocks that make
+//! the crate easier to demonstrate and test from the outside. Today that is
+//! mainly the in-memory LDAP fixture used by doctests, service examples, and
+//! integration tests.
+//!
+//! Contract:
+//!
+//! - items here should stay deterministic and lightweight
+//! - this is a convenience surface for examples and tests, not a production
+//!   transport layer
+
 use std::collections::HashMap;
 
 use crate::core::row::Row;
@@ -10,6 +23,19 @@ use serde_json::json;
 /// The fixture data intentionally stays small and deterministic so callers can
 /// exercise filtering, wildcard lookup, and projection behavior without
 /// talking to a real directory.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::api::MockLdapClient;
+/// use osp_cli::ports::LdapDirectory;
+///
+/// let ldap = MockLdapClient::default();
+/// let rows = ldap.user("oistes", Some("uid=oistes"), None).unwrap();
+///
+/// assert_eq!(rows.len(), 1);
+/// assert_eq!(rows[0].get("uid").and_then(|value| value.as_str()), Some("oistes"));
+/// ```
 #[derive(Debug, Clone)]
 pub struct MockLdapClient {
     users: HashMap<String, Row>,
