@@ -135,7 +135,7 @@ fn run_repl_with_reason<F, B, I>(
 ) -> Result<ReplRunResult>
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
-    B: FnMut(&OspPrompt, &mut SubmissionContext<'_, F>) -> Result<()>,
+    B: FnMut(&OspPrompt, &mut SubmissionContext<'_, F>) -> Result<ReplRunResult>,
     I: FnMut(
         InteractiveLoopConfig<'_>,
         SharedHistory,
@@ -163,8 +163,7 @@ where
             }
             BasicInputReason::Explicit => {}
         }
-        run_basic_fn(&prompt, submission)?;
-        return Ok(ReplRunResult::Exit(0));
+        return run_basic_fn(&prompt, submission);
     }
 
     run_interactive_fn(

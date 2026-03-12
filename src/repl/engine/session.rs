@@ -110,8 +110,7 @@ where
                         "WARNING: terminal does not support cursor position requests; \
 falling back to basic input mode."
                     );
-                    run_repl_basic(prompt, submission)?;
-                    return Ok(ReplRunResult::Exit(0));
+                    return run_repl_basic(prompt, submission);
                 }
                 return Err(err.into());
             }
@@ -128,7 +127,7 @@ falling back to basic input mode."
 pub(crate) fn run_repl_basic<F>(
     prompt: &OspPrompt,
     submission: &mut SubmissionContext<'_, F>,
-) -> Result<()>
+) -> Result<ReplRunResult>
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
@@ -140,7 +139,7 @@ where
         let mut line = String::new();
         let read = stdin.read_line(&mut line)?;
         if read == 0 {
-            break;
+            return Ok(ReplRunResult::Exit(0));
         }
 
         match process_submission(&line, submission)? {
@@ -150,14 +149,13 @@ where
                 println!("{buffer}");
                 continue;
             }
-            SubmissionResult::Exit(_) => break,
-            SubmissionResult::Restart { output, .. } => {
+            SubmissionResult::Exit(code) => return Ok(ReplRunResult::Exit(code)),
+            SubmissionResult::Restart { output, reload } => {
                 print!("{output}");
-                break;
+                return Ok(ReplRunResult::Restart { output, reload });
             }
         }
     }
-    Ok(())
 }
 
 fn build_repl_keybindings() -> reedline::Keybindings {

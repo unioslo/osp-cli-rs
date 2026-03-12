@@ -677,7 +677,7 @@ fn run_repl_with_reason_and_basic_input_detection_cover_basic_and_interactive_mo
             |basic_prompt, _submission| {
                 basic_calls += 1;
                 assert_eq!(basic_prompt.left(), "left");
-                Ok(())
+                Ok(ReplRunResult::Exit(7))
             },
             |config, interactive_history, _submission| {
                 interactive_calls += 1;
@@ -697,7 +697,7 @@ fn run_repl_with_reason_and_basic_input_detection_cover_basic_and_interactive_mo
 
         match reason {
             Some(_) => {
-                assert_eq!(result, ReplRunResult::Exit(0));
+                assert_eq!(result, ReplRunResult::Exit(7));
                 assert_eq!(basic_calls, 1);
                 assert_eq!(interactive_calls, 0);
             }
