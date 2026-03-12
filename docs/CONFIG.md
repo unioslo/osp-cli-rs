@@ -3,6 +3,13 @@
 `osp` resolves config from multiple sources with explicit precedence, profile
 scoping, terminal scoping, and separate secret storage.
 
+This document is for answering operational questions such as:
+
+- why did this value win?
+- where can I set this key?
+- what changes only this invocation versus stored config?
+- which values are runtime data versus bootstrap inputs?
+
 ## Overview
 
 Key properties:
@@ -13,6 +20,69 @@ Key properties:
 - separate secret storage
 - diagnostics that show where values came from
 - strict schema validation with `extensions.*` as the open namespace
+
+## Which Command Should I Run?
+
+Use the smallest command that answers your question:
+
+- `config show`
+  - "What does the resolved runtime config look like right now?"
+- `config get <key>`
+  - "What is the winning value for this one key?"
+- `config explain <key>`
+  - "Why did this value win over the other candidates?"
+- `config set <key> <value>`
+  - "Change the current session or a persistent store."
+- `config unset <key>`
+  - "Remove an explicit value so the next source can win."
+
+Useful switches:
+
+- `--sources`
+  - include winner provenance
+- `--raw`
+  - show pre-interpolation values
+- `--session`
+  - force an in-memory change
+- `--save`
+  - persist the change when running inside the REPL
+
+Rule of thumb:
+
+- if you only need the current winner, use `get`
+- if you are confused, use `explain`
+- if you want the broad picture, use `show`
+
+## Profile Selection On The Command Line
+
+`osp` supports both an explicit profile flag and a positional profile
+shorthand.
+
+Supported forms:
+
+- `osp`
+  - start the REPL in the default profile
+- `osp --profile tsd`
+  - start the REPL in profile `tsd`
+- `osp tsd`
+  - shorthand for starting the REPL in profile `tsd`
+- `osp tsd plugins list`
+  - shorthand for `osp --profile tsd plugins list`
+- `osp plugins list`
+  - run a one-shot command in the default profile
+
+The rule is intentionally simple:
+
+1. if `--profile` is present, it wins
+2. otherwise, if the first positional token matches a known profile, it is
+   treated as a profile shorthand
+3. otherwise the first positional token is treated as command input
+
+Known profiles come from config/bootstrap state, not from network calls.
+
+This means a profile name only wins over a command name if that profile is
+actually defined. If `dev` is not a known profile, `osp dev` is treated as a
+command invocation, not as profile selection.
 
 ## Data Model
 
@@ -239,18 +309,24 @@ Minimum contract tests:
 
 ## UI/REPL Keys (Current)
 
-These keys now drive REPL chrome and message rendering:
+These keys currently drive user-visible rendering and REPL presentation:
 
 - `ui.presentation`
   - `expressive | compact | austere`
+- `ui.format`
 - `ui.mode`
 - `ui.color.mode`
 - `ui.unicode.mode`
+- `ui.width`
 - `ui.chrome.frame`
   - `none | top | bottom | top-bottom | square | round`
+- `ui.chrome.rule_policy`
+  - `per-section | shared`
 - `ui.table.border`
   - `none | square | round`
 - `ui.table.overflow`
+- `ui.help.level`
+  - `inherit | none | tiny | normal | verbose`
 - `theme.name`
 - `theme.path`
 - `user.name`
@@ -260,8 +336,6 @@ These keys now drive REPL chrome and message rendering:
 - `repl.shell_indicator`
 - `repl.intro`
   - `none | minimal | compact | full`
-- `ui.help.layout`
-  - `full | compact | minimal`
 - `color.prompt.text`
 - `color.prompt.command`
 - `ui.messages.layout`

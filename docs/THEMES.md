@@ -1,55 +1,74 @@
-# Theme System
+# Themes
 
-This document captures what to bring from `osprov-cli` theming and what to
-leave behind.
+Themes control the color palette and some presentation-facing style tokens used
+by `osp`.
 
-## What `osprov-cli` Does Well
+Themes do not change command data, config precedence, or DSL behavior. They
+change how the same help, tables, prompts, and message blocks look.
 
-- Semantic token model (`palette.*`, `color.*`) instead of command-specific
-  hardcoded colors.
-- Built-in theme catalog with recognizable presets.
-- Runtime theme switching for preview.
-- REPL prompt styling connected to the active palette.
+If you want fewer borders or less help chrome, that is mostly
+[`UI.md`](UI.md). If you want different colors and prompt styling, that is
+mostly this document.
 
-## What Was Messy In `osprov-cli`
+## What Themes Affect
 
-- Theme command internals import private preset data directly.
-- Theme data is discovered by resolver spelunking instead of using a dedicated
-  typed registry.
-- Heavy runtime mutation/patching around Typer/Rich style globals.
-- Theme management and config mutation logic are tightly coupled.
+Themes feed:
 
-## Rust Direction
+- message and section colors
+- prompt colors
+- table/help/guide chrome tokens
+- interactive selection/completion styling
 
-- Keep a typed, explicit theme registry in `osp-ui`:
-  `crates/osp-ui/src/theme.rs`.
-- Keep semantic style tokens in one place:
-  `crates/osp-ui/src/style.rs`.
-- Keep rendering decisions in UI only; no DSL/dispatch logic in UI.
-- Seed theme from config and allow CLI override.
+Themes do not change:
 
-## Implemented Behavior
+- which format is chosen
+- which command runs
+- what rows or documents are returned
 
-- Global option: `--theme <name>`
-- Commands:
-  - `osp theme list`
-  - `osp theme show [name]`
-  - `osp theme use <name>` (current process/session)
-- REPL builtins:
-  - `theme list`
-  - `theme show [name]`
-  - `theme use <name>`
-- Config seeding:
-  - `theme.name` is read from resolved config when `--theme` is not passed.
-- REPL prompt styling:
-  - `repl.prompt`, `repl.simple_prompt`, `repl.shell_indicator`, `repl.intro`
-  - `color.prompt.text`, `color.prompt.command`
-- Message blocks:
-  - themed section chrome shared by help, intro, and grouped messages
-- Theme palette inspection:
-  - hex palette values render in truecolor when color is enabled
+## How A Theme Is Chosen
 
-## Current Theme Catalog
+Selection order is simple:
+
+1. `--theme <name>` for this process
+2. `theme.name` from resolved config
+3. the built-in default theme
+
+That means `--theme` is a one-shot override. It does not write config.
+
+## Common Commands
+
+List themes:
+
+```bash
+osp theme list
+```
+
+Inspect one theme:
+
+```bash
+osp theme show dracula
+```
+
+Switch theme for the current process or REPL session:
+
+```bash
+osp theme use dracula
+```
+
+Persist a theme as the default:
+
+```bash
+osp config set theme.name dracula --save
+```
+
+The important distinction is:
+
+- `theme use <name>` changes the current process/session
+- `config set theme.name <name> --save` changes stored config
+
+## Built-In Themes
+
+Current built-ins:
 
 - `plain`
 - `nord`
@@ -60,35 +79,97 @@ leave behind.
 - `catppuccin`
 - `rose-pine-moon` (default)
 
-## Current Gaps
+`plain` is the boring fallback. It is useful when you want a predictable
+low-chrome color story or when you are testing presentation behavior without a
+strong palette.
 
-- Persistent write path for `theme.name` waits on `config set` completion.
+## Themes And Presentation
+
+Theme and presentation are related, but not the same:
+
+- `theme.name` chooses colors and theme-derived style tokens
+- `ui.presentation` seeds a broader UI profile such as chrome density and intro
+  defaults
+
+You can mix them freely. For example:
+
+```toml
+[default]
+theme.name = "dracula"
+ui.presentation = "compact"
+```
+
+That gives you Dracula colors with compact layout defaults.
 
 ## Custom Themes
 
-Custom themes live in `theme.path` directories. By default `osp` looks in
-`<platform-config-dir>/osp/themes` (for example `~/.config/osp/themes` on
-Linux, or `$XDG_CONFIG_HOME/osp/themes` when `XDG_CONFIG_HOME` is set).
-Each `*.toml` file defines a theme.
+Custom themes live in `theme.path` directories. By default `osp` looks in the
+platform config root under `osp/themes`, for example:
 
-Example:
+- `~/.config/osp/themes` on Linux when `XDG_CONFIG_HOME` is not set
+- `$XDG_CONFIG_HOME/osp/themes` when `XDG_CONFIG_HOME` is set
+
+Each `*.toml` file defines one theme.
+
+Minimal example:
 
 ```toml
 base = "dracula"
 
 [palette]
 accent = "#123456"
+title = "bold #123456"
 ```
 
 Rules:
 
-- `id` and `name` are optional.
-  - If missing, `id` defaults to the filename stem.
-  - `name` defaults to a title-cased display name of `id`.
-- `base` is optional and can only reference built-in themes.
-  - If `base` is omitted or set to `"none"`, missing palette keys have no color.
-  - If `base` is set, missing palette keys inherit from that base theme.
-- `theme list` shows `source` (`builtin`/`custom`) and `origin` for custom themes.
-- `theme show` includes `base`, `source`, and `origin`.
-- Color specs accept `#RRGGBB` and named colors, optionally prefixed
-  with `bold`, `dim`, `italic`, or `underline`.
+- `id` and `name` are optional
+  - `id` defaults to the filename stem
+  - `name` defaults to a display-friendly title derived from `id`
+- `base` is optional
+  - if present, missing palette keys inherit from that built-in base theme
+  - if omitted or set to `"none"`, missing palette keys stay unset
+- color/style specs accept `#RRGGBB` and named colors
+- style specs may also use prefixes such as `bold`, `dim`, `italic`, or
+  `underline`
+
+Useful config:
+
+```toml
+[default]
+theme.name = "my-theme"
+theme.path = ["~/.config/osp/themes", "/srv/shared/osp-themes"]
+```
+
+## Inspecting Custom Theme State
+
+`theme list` shows whether a theme is `builtin` or `custom`, and includes the
+origin path for custom themes.
+
+`theme show` includes:
+
+- `base`
+- `source`
+- `origin`
+- the current palette values
+
+That makes it the first command to run when a theme does not look the way you
+expected.
+
+## If Themes Look Wrong
+
+Start with:
+
+```bash
+osp theme list
+osp theme show <name>
+osp doctor theme
+osp config explain theme.name
+```
+
+That usually answers one of four questions:
+
+- did the theme load?
+- which theme actually won?
+- did a custom file override a builtin?
+- did the custom theme file have load issues?

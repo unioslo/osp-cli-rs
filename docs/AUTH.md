@@ -6,6 +6,14 @@ crate.
 This document is about the upstream mechanism, not any site-specific auth
 model.
 
+Read this file when you are integrating auth or command visibility into a
+downstream distribution. If you are just trying to understand why one command
+is hidden or blocked at runtime, start with:
+
+- `osp plugins commands`
+- `osp plugins doctor`
+- the command/provider docs for your downstream distribution
+
 ## Scope
 
 Upstream owns:
@@ -24,6 +32,23 @@ Upstream does not own:
 
 Those belong in downstream distributions such as `osp-cli-uio`.
 
+## Why This Exists
+
+Upstream needs one boring, reusable way to answer two product questions:
+
+- should this command be shown to the user?
+- should this command be runnable right now?
+
+That answer must work consistently across:
+
+- command dispatch
+- help and command listings
+- completion
+- REPL overviews
+
+The point is not to define your site's auth model. The point is to keep command
+UX from inventing five different visibility rules in five different places.
+
 ## Core Model
 
 The upstream split is:
@@ -39,6 +64,17 @@ decisions.
 
 This keeps credential acquisition, authorization normalization, and command UX
 policy as separate concerns.
+
+## What Users Actually Experience
+
+The user-facing effect is simple:
+
+- some commands are visible and runnable
+- some commands are visible but blocked
+- some commands are hidden entirely
+
+Visible-but-blocked is important. It lets the product show that a command
+exists without pretending the current session is allowed to run it.
 
 ## Visibility And Runnability
 
@@ -59,6 +95,13 @@ The host uses the same access result for:
 
 Command-policy evaluation governs product visibility and general runnability,
 but backend and resource-level authorization remains authoritative.
+
+Rule of thumb:
+
+- command policy decides whether the command surface should expose the command
+- backend authorization still decides whether the actual operation is allowed
+
+Those are related, but not the same job.
 
 ## Plugin Metadata
 
@@ -88,6 +131,10 @@ Plugin listings and REPL summaries show compact auth hints such as:
 
 These are meant to improve discovery and operator debugging without embedding
 downstream-specific policy logic in the upstream core.
+
+Those hints are intentionally small. They are there to help the operator
+understand "why is this gated?" without turning upstream into a site-specific
+policy encyclopedia.
 
 ## Downstream Use
 

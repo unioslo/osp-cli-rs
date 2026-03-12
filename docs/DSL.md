@@ -3,6 +3,69 @@
 `osp` commands can be followed by a small pipe DSL for filtering, reshaping,
 grouping, and extracting structured output.
 
+This document is about practical use, not parser internals.
+
+The DSL is most useful when the command already gives you roughly the right
+data and you just need to ask a smaller question:
+
+- keep only matching rows
+- keep only the fields you care about
+- sort or limit the result
+- extract one field as plain values
+- inspect help/guide output without writing a special command
+
+The point is to move small, local output shaping to the client side instead of
+adding another command flag for every little reporting need.
+
+## Broad-Strokes Flow
+
+```text
+command output
+  ↓
+optional DSL pipeline
+  ↓
+smaller / reordered / reshaped structured output
+  ↓
+normal format selection and rendering
+```
+
+The last line matters: the DSL runs before rendering. You can use the same
+pipeline and still ask for `json`, `table`, `md`, `mreg`, or `value` output.
+
+## Five-IQ Recipes
+
+Keep matching rows:
+
+```text
+| F active=true
+```
+
+Keep only a few fields:
+
+```text
+| P uid mail
+```
+
+Sort rows:
+
+```text
+| S uid
+```
+
+Take the first few:
+
+```text
+| L 10
+```
+
+Turn one field into a simple value list:
+
+```text
+| VALUE uid
+```
+
+If you only remember five things about the DSL, remember those.
+
 ## Basic Shape
 
 ```text
@@ -13,16 +76,20 @@ Examples:
 
 ```bash
 osp ldap user alice | P uid mail
-osp ldap users | F active=true | S !uid | L 10
+osp plugins commands | P name provider about | S name | L 10
 osp help | VALUE commands[].name
 ```
 
 ## Mental Model
 
+- Row-shaped commands return similar objects, such as users, hosts, or plugin
+  command rows.
+- Document-shaped commands return semantic structures, such as help and intro
+  output.
+- Selector-style stages try to preserve structure when they can.
+- Collection-style stages intentionally reshape row/group data.
 - Bare text like `doctor` is quick search over keys and values.
 - Path-shaped selectors like `commands[].name` are strict paths.
-- Selector verbs try to preserve structure when they can.
-- Collection verbs intentionally reshape rows or groups.
 - The DSL runs before final rendering, so the same pipeline can be shown as a
   table, JSON, markdown, or plain values afterward.
 
@@ -31,6 +98,23 @@ In practice:
 - `name` is permissive.
 - `metadata.owner` means that exact path.
 - `members[].uid` means fan out the `members` array and read each `uid`.
+
+## Choosing The Smallest Useful Stage
+
+Use the dumbest stage that answers your question:
+
+| Need | Stage |
+|---|---|
+| "show me rows/documents mentioning this thing" | bare quick search |
+| "keep only rows matching a condition" | `F` |
+| "keep only these fields" | `P` |
+| "sort the result" | `S` |
+| "show fewer rows" | `L` |
+| "group before rendering" | `G` |
+| "I only want the values of one field" | `VALUE` |
+
+That keeps pipelines readable. If a pipeline becomes clever, it usually becomes
+hard to trust.
 
 ## Example Inputs
 
@@ -89,10 +173,10 @@ Guide-shaped input:
 
 Pipelines are read left to right.
 
-Example:
+Example on the row-shaped input above:
 
-```bash
-osp ldap users | F active=true | P uid dept amount | S !amount AS num | L 2
+```text
+| F active=true | P uid dept amount | S !amount | L 2
 ```
 
 Using the row input above, the result is:
@@ -119,6 +203,25 @@ Result:
   {"value": "theme"}
 ]
 ```
+
+## Row Data Vs Structured Documents
+
+Many commands produce ordinary row sets. Those behave like a table even before
+you render them.
+
+Some commands, especially help/guide surfaces, produce structured documents.
+The DSL still works on those, but selector-style stages are more important
+because the useful thing is often nested.
+
+That is why these both make sense:
+
+```bash
+osp plugins commands | P name provider
+osp help | P commands[].name | VALUE name
+```
+
+Same pipeline language, different output shape, same idea: keep only the part
+you actually need.
 
 ## Verb Examples
 

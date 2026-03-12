@@ -1,61 +1,131 @@
 # LDAP Reference
 
-This document describes the LDAP-facing behavior used by the LDAP command
-provider.
+This document covers the minimal LDAP-shaped command surface that exists in the
+upstream crate and its embeddable service layer.
 
-## Core Behavior
+It is intentionally narrow. It does not define a site-specific LDAP provider
+configuration contract, bind strategy, or downstream command vocabulary.
 
-- Anonymous bind is allowed by default when no credentials are provided.
-- `ldap user` and `ldap netgroup` are the baseline commands documented here.
-- Commands return list-of-row shaped output.
+## What This Document Actually Covers
 
-## Config Keys
+Stable upstream baseline:
 
-All keys are optional:
+- `ldap user`
+- `ldap netgroup`
+- row-shaped output
+- optional lightweight `--filter` and `--attributes` behavior in the small
+  service layer
 
-- `ldap.url` (string) — LDAP server URL.
-- `ldap.base_dn` (string) — base search DN.
-- `ldap.bind_dn` (string) — bind DN for authenticated bind.
-- `ldap.bind_password` (secret) — bind password.
-- `ldap.anonymous` (bool, default true) — allow anonymous bind.
+Not covered here:
 
-Compatibility aliases:
+- downstream/provider-specific LDAP connection config
+- site-specific schema extensions
+- extra commands such as `ldap host` or `ldap org`
+- auth/bind behavior owned by a downstream plugin or distribution
 
-- `ldap.bind_user` -> `ldap.bind_dn`
-- `ldap.domain_controlers` (legacy) -> derive `base_dn` if no base is set
+If you are looking for the small embeddable API rather than the full host, the
+owning code is the service/port layer in
+[`src/services.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/services.rs)
+and
+[`src/ports.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/ports.rs).
 
-## Command Contracts
+## Command Shape
 
-If `ldap user` is called without a uid, it defaults to the active `user.name`
-from config or `-u/--user`.
+Baseline commands:
 
+```text
+ldap user [uid] [--filter SPEC] [--attributes ATTRS]
+ldap netgroup <name> [--filter SPEC] [--attributes ATTRS]
+```
 
-**ldap user <uid>**
+The important shape is simple:
 
-- Returns a list of rows (even if one row).
-- Fields should match the documented command contract and integration fixtures.
+- input is command-like text
+- output is always list-of-rows
+- trailing DSL stages may further reshape the rows afterward
 
-**ldap netgroup <name>**
+## `ldap user`
 
-- Returns a list of rows (even if one row).
-- Fields should match the documented command contract and integration fixtures.
+`ldap user` looks up one logical user subject and returns zero or more rows.
 
-## Error Mapping
+If `uid` is omitted in the small service layer, the command falls back to the
+active user identity from config or `-u/--user`.
 
-- Connection failures -> `ConfigError` if URL missing, or `NetworkError` if unreachable.
-- Search yields no results -> empty list, not an error.
-- Invalid DN or auth failure -> `AuthError`.
+Examples:
 
-## Test Fixture Expectations
+```bash
+osp ldap user alice
+osp ldap user alice --json
+```
 
-For tests and fixtures:
+```text
+ldap user alice | P uid mail
+ldap user alice --cache | P uid
+```
 
-- Use fixtures for `user` and `netgroup` responses.
-- Deterministic ordering of list fields.
-- Always return list-of-rows.
+## `ldap netgroup`
 
-## Common Extensions
+`ldap netgroup` looks up one logical netgroup subject and returns zero or more
+rows.
 
-- `ldap host`, `ldap org`, `ldap automount`, `ldap filegroup`.
-- Attribute filtering and custom LDAP filters.
-- Auth flows with token caching.
+Examples:
+
+```bash
+osp ldap netgroup ops
+```
+
+```text
+ldap netgroup ops | P cn members
+```
+
+## Filter And Attribute Behavior
+
+The small embeddable service surface supports two lightweight modifiers:
+
+- `--filter`
+  - simple row filtering
+- `--attributes`
+  - comma-separated projection list
+
+Examples:
+
+```text
+ldap user alice --attributes uid,mail
+ldap netgroup ops --filter cn=ops
+```
+
+These are intentionally lightweight helpers, not a promise of full LDAP query
+language parity.
+
+## Output Contract
+
+The upstream expectation is boring:
+
+- results are row-shaped
+- zero matches return an empty row list, not a special success shape
+- attribute projection keeps only the requested keys
+- DSL stages can further filter, sort, limit, or extract values afterward
+
+That is why these compose naturally:
+
+```text
+ldap user alice --attributes uid,mail | P uid
+ldap netgroup ops | VALUE cn
+```
+
+## Testing And Fixtures
+
+For examples, doctests, and unit tests, the repo uses a deterministic in-memory
+LDAP double:
+
+- [`src/ports/mock.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/ports/mock.rs)
+
+The fixture is intentionally small and predictable so tests can focus on:
+
+- wildcard lookup behavior
+- row filtering
+- attribute projection
+- empty-result handling
+
+If a downstream plugin owns richer LDAP behavior, that belongs in the plugin's
+own tests and docs rather than in this upstream file.
