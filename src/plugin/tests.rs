@@ -7,8 +7,8 @@ use super::discovery::{
     ValidatedBundledManifest, assemble_discovered_plugin, bundled_manifest_path,
     discover_root_executables, existing_unique_search_roots, file_fingerprint, file_sha256_hex,
     find_cached_describe, has_valid_plugin_suffix, load_manifest_state,
-    load_manifest_state_from_path, min_osp_version_issue, normalize_checksum,
-    prune_stale_describe_cache_entries, upsert_cached_describe,
+    load_manifest_state_from_path, mark_duplicate_plugin_ids, min_osp_version_issue,
+    normalize_checksum, prune_stale_describe_cache_entries, upsert_cached_describe,
 };
 use super::dispatch::{describe_plugin, run_provider};
 use super::manager::{

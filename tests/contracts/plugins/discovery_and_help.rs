@@ -257,7 +257,7 @@ commands = ["hello"]
 
 #[cfg(unix)]
 #[test]
-fn duplicate_plugin_ids_are_marked_unhealthy_and_removed_from_catalog_contract() {
+fn duplicate_plugin_ids_keep_one_winner_and_shadow_later_copies_contract() {
     let dir = make_temp_dir("osp-cli-plugin-duplicate-ids");
     write_mismatched_id_plugin(&dir, "alpha-bin", "shared-id", "alpha");
     write_mismatched_id_plugin(&dir, "beta-bin", "shared-id", "beta");
@@ -278,11 +278,19 @@ fn duplicate_plugin_ids_are_marked_unhealthy_and_removed_from_catalog_contract()
         .expect("plugins list should render a JSON array");
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| row["plugin_id"] == "shared-id"));
-    assert!(rows.iter().all(|row| row["healthy"] == false));
-    assert!(rows.iter().all(|row| {
-        row["issue"]
-            .as_str()
-            .is_some_and(|issue| issue.contains("duplicate plugin id `shared-id`"))
+    assert_eq!(rows.iter().filter(|row| row["healthy"] == true).count(), 1);
+    assert_eq!(rows.iter().filter(|row| row["healthy"] == false).count(), 1);
+    assert!(rows.iter().any(|row| {
+        row["healthy"] == false
+            && row["issue"].as_str().is_some_and(|issue| {
+                issue.contains("duplicate plugin id `shared-id` shadowed by")
+            })
+    }));
+    assert!(rows.iter().any(|row| {
+        row["healthy"] == true
+            && row["commands"]
+                .as_array()
+                .is_some_and(|commands| commands.contains(&serde_json::Value::String("alpha".to_string())))
     }));
 
     let mut commands = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -295,9 +303,31 @@ fn duplicate_plugin_ids_are_marked_unhealthy_and_removed_from_catalog_contract()
         .get_output()
         .clone();
     let commands_payload = parse_json_stdout(&commands_output.stdout);
-    let row = first_json_row(&commands_payload, "plugins commands empty state");
-    assert_eq!(row["status"], "empty");
-    assert_eq!(row["message"], "No plugin commands discovered.");
+    let row = first_json_row(&commands_payload, "plugins commands duplicate winner view");
+    assert_eq!(row["name"], "alpha");
+    assert_eq!(row["provider"], "shared-id");
+    assert_eq!(row["source"], "env");
+    assert_eq!(row["conflicted"], false);
+    assert_eq!(row["requires_selection"], false);
+
+    let mut winner = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    winner
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["alpha"]);
+    winner
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ignored"));
+
+    let mut shadowed = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    shadowed
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["beta"]);
+    shadowed.assert().failure().stderr(predicate::str::contains(
+        "no plugin provides command: beta",
+    ));
 
 }
 

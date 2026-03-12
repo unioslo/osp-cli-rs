@@ -85,6 +85,78 @@ fn hung_describe_marks_plugin_unhealthy_unit() {
 }
 
 #[test]
+fn duplicate_plugin_ids_keep_first_healthy_provider_and_shadow_later_copies_unit() {
+    let mut plugins = vec![
+        DiscoveredPlugin {
+            plugin_id: "shared".to_string(),
+            plugin_version: Some("0.1.0".to_string()),
+            executable: std::path::PathBuf::from("/tmp/osp-shared-alpha"),
+            source: PluginSource::Explicit,
+            commands: vec!["alpha".to_string()],
+            describe_commands: Vec::new(),
+            command_specs: vec![crate::completion::CommandSpec::new("alpha")],
+            issue: None,
+            default_enabled: true,
+        },
+        DiscoveredPlugin {
+            plugin_id: "shared".to_string(),
+            plugin_version: Some("0.1.0".to_string()),
+            executable: std::path::PathBuf::from("/tmp/osp-shared-beta"),
+            source: PluginSource::Env,
+            commands: vec!["beta".to_string()],
+            describe_commands: Vec::new(),
+            command_specs: vec![crate::completion::CommandSpec::new("beta")],
+            issue: None,
+            default_enabled: true,
+        },
+    ];
+
+    mark_duplicate_plugin_ids(&mut plugins);
+
+    assert!(plugins[0].issue.is_none());
+    assert!(plugins[1]
+        .issue
+        .as_deref()
+        .is_some_and(|issue| issue.contains("duplicate plugin id `shared` shadowed by /tmp/osp-shared-alpha")));
+}
+
+#[test]
+fn duplicate_plugin_ids_fall_through_to_later_healthy_provider_when_earlier_copy_is_broken_unit() {
+    let mut plugins = vec![
+        DiscoveredPlugin {
+            plugin_id: "shared".to_string(),
+            plugin_version: Some("0.1.0".to_string()),
+            executable: std::path::PathBuf::from("/tmp/osp-shared-alpha"),
+            source: PluginSource::Explicit,
+            commands: vec!["alpha".to_string()],
+            describe_commands: Vec::new(),
+            command_specs: vec![crate::completion::CommandSpec::new("alpha")],
+            issue: Some("describe failed".to_string()),
+            default_enabled: true,
+        },
+        DiscoveredPlugin {
+            plugin_id: "shared".to_string(),
+            plugin_version: Some("0.1.0".to_string()),
+            executable: std::path::PathBuf::from("/tmp/osp-shared-beta"),
+            source: PluginSource::Bundled,
+            commands: vec!["beta".to_string()],
+            describe_commands: Vec::new(),
+            command_specs: vec![crate::completion::CommandSpec::new("beta")],
+            issue: None,
+            default_enabled: true,
+        },
+    ];
+
+    mark_duplicate_plugin_ids(&mut plugins);
+
+    assert!(plugins[1].issue.is_none());
+    assert!(plugins[0]
+        .issue
+        .as_deref()
+        .is_some_and(|issue| issue.contains("shadowed by /tmp/osp-shared-beta")));
+}
+
+#[test]
 fn cache_and_issue_helpers_cover_update_lookup_and_prune_unit() {
     let describe = DescribeV1 {
         protocol_version: 1,

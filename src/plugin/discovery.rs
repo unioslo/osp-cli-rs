@@ -391,7 +391,7 @@ fn discover_plugins_in_root(
     plugins
 }
 
-fn mark_duplicate_plugin_ids(plugins: &mut [DiscoveredPlugin]) {
+pub(super) fn mark_duplicate_plugin_ids(plugins: &mut [DiscoveredPlugin]) {
     let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
     for (index, plugin) in plugins.iter().enumerate() {
         by_id
@@ -405,21 +405,37 @@ fn mark_duplicate_plugin_ids(plugins: &mut [DiscoveredPlugin]) {
             continue;
         }
 
+        // Duplicate provider IDs cannot be disambiguated by users because
+        // selection and persisted preferences key off `plugin_id`, not an
+        // executable-specific identity. Picking one winner preserves a working
+        // provider and reports the rest as shadowed; erroring the whole group
+        // turns one duplicate binary into a denial of service. A richer
+        // provider identity would be a larger, separate design change.
+        let winner = indexes
+            .iter()
+            .copied()
+            .find(|index| plugins[*index].issue.is_none())
+            .unwrap_or(indexes[0]);
+        let winner_path = plugins[winner].executable.display().to_string();
         let providers = indexes
             .iter()
             .map(|index| plugins[*index].executable.display().to_string())
             .collect::<Vec<_>>();
-        let issue = format!(
-            "duplicate plugin id `{plugin_id}` discovered at {}",
-            providers.join(", ")
-        );
         tracing::warn!(
             plugin_id = %plugin_id,
+            winner = %winner_path,
             providers = providers.join(", "),
             "duplicate plugin id discovered"
         );
         for index in indexes {
-            super::state::merge_issue(&mut plugins[index].issue, issue.clone());
+            if index == winner {
+                continue;
+            }
+            let issue = format!(
+                "duplicate plugin id `{plugin_id}` shadowed by {}",
+                winner_path
+            );
+            super::state::merge_issue(&mut plugins[index].issue, issue);
         }
     }
 }
