@@ -69,7 +69,7 @@ jobs:
       - name: Validate release notes
         env:
           RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
-        run: ./scripts/check-release-readiness.py "${RELEASE_TAG}"
+        run: python3 ./scripts/release.py check "${RELEASE_TAG}"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.94.0
@@ -80,18 +80,11 @@ jobs:
       - name: Install coverage tooling
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Run fast checks
-        run: ./scripts/check-rust-fast.sh
+      - name: Run full confidence lane
+        run: python3 ./scripts/confidence.py full
 
-      - name: Run root package checks
-        run: |
-          cargo check --all-features --locked
-          cargo clippy --all-features --all-targets -- -D warnings
-          cargo test --all-features --locked
-          cargo publish --dry-run --locked
-
-      - name: Enforce coverage gate
-        run: ./scripts/check-coverage-gate.py
+      - name: Dry-run publish
+        run: cargo publish --dry-run --locked
 
   build:
     # Cross-platform packaged binaries are intentionally disabled for now.

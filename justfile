@@ -10,73 +10,84 @@ fmt-fix:
     cargo fmt --all
 
 clippy:
-    ./scripts/check-rust-fast.sh
+    cargo clippy --all-features --all-targets -- -D clippy::collapsible_else_if -D clippy::collapsible_if -D clippy::derivable_impls -D clippy::get_first -D clippy::io_other_error -D clippy::lines_filter_map_ok -D clippy::manual_pattern_char_comparison -D clippy::match_like_matches_macro -D clippy::needless_as_bytes -D clippy::needless_borrow -D clippy::question_mark -D clippy::redundant_closure -D clippy::unnecessary_lazy_evaluations
 
 test:
     cargo test --all-features --locked
 
+confidence lane='local':
+    python3 ./scripts/confidence.py {{lane}}
+
+confidence-static:
+    python3 ./scripts/confidence.py static
+
+confidence-local:
+    python3 ./scripts/confidence.py local
+
+confidence-behavior:
+    python3 ./scripts/confidence.py behavior
+
+confidence-full:
+    python3 ./scripts/confidence.py full
+
+confidence-pre-push:
+    python3 ./scripts/confidence.py pre-push
+
 cov:
-    python3 ./scripts/run-coverage.py --all-features --summary-only
+    python3 ./scripts/coverage.py run --all-features --summary-only
 
 cov-gate:
-    ./scripts/check-coverage-gate.py
+    python3 ./scripts/coverage.py gate
 
 cov-gate-fast:
-    ./scripts/check-coverage-gate.py --fast
+    python3 ./scripts/coverage.py gate --fast
 
 cov-baseline:
-    ./scripts/update-coverage-baseline.py
+    python3 ./scripts/coverage.py baseline
 
 check:
-    ./scripts/check-rust-fast.sh
-    cargo test --all-features --locked
+    python3 ./scripts/confidence.py local
 
 precommit:
-    ./scripts/check-rust-fast.sh
+    python3 ./scripts/public-docs.py --staged
+    python3 ./scripts/confidence.py static
 
 bump target='patch' message='':
     if [[ -n "{{message}}" ]]; then \
-      python3 ./scripts/bump-version.py "{{target}}" -m "{{message}}"; \
+      python3 ./scripts/release.py bump "{{target}}" -m "{{message}}"; \
     else \
-      python3 ./scripts/bump-version.py "{{target}}"; \
+      python3 ./scripts/release.py bump "{{target}}"; \
     fi
 
 bump-dry target='patch' message='':
     if [[ -n "{{message}}" ]]; then \
-      python3 ./scripts/bump-version.py "{{target}}" --dry-run -m "{{message}}"; \
+      python3 ./scripts/release.py bump "{{target}}" --dry-run -m "{{message}}"; \
     else \
-      python3 ./scripts/bump-version.py "{{target}}" --dry-run; \
+      python3 ./scripts/release.py bump "{{target}}" --dry-run; \
     fi
 
 release-notes:
-    python3 ./scripts/check-release-readiness.py
+    python3 ./scripts/release.py check
 
 release-tag:
-    python3 ./scripts/push-release-tag.py
+    python3 ./scripts/release.py tag
 
 release-tag-sign:
-    python3 ./scripts/push-release-tag.py --sign
+    python3 ./scripts/release.py tag --sign
 
 release *args:
-    python3 ./scripts/push-release-tag.py {{args}}
+    python3 ./scripts/release.py tag {{args}}
 
 release-dry *args:
-    python3 ./scripts/push-release-tag.py --dry-run {{args}}
+    python3 ./scripts/release.py tag --dry-run {{args}}
 
 release-sign *args:
-    python3 ./scripts/push-release-tag.py --sign {{args}}
+    python3 ./scripts/release.py tag --sign {{args}}
 
 verify-full:
-    ./scripts/check-rust-fast.sh
-    cargo check --all-features --locked
-    cargo clippy --all-features --all-targets -- -D warnings
-    cargo test --all-features --locked
-    ./scripts/check-coverage-gate.py
+    python3 ./scripts/confidence.py full
 
 release-check:
-    python3 ./scripts/check-release-readiness.py
-    ./scripts/check-rust-fast.sh
-    cargo check --all-features --locked
-    cargo clippy --all-features --all-targets -- -D warnings
-    cargo test --all-features --locked
-    ./scripts/check-coverage-gate.py
+    python3 ./scripts/release.py check
+    python3 ./scripts/confidence.py full
+    cargo publish --dry-run --locked

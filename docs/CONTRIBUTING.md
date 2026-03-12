@@ -56,10 +56,27 @@ The commit hook is in `.githooks/commit-msg`.
 
 The pre-commit hook intentionally stays fast:
 
-- `fmt`
-- focused `clippy`
+- `public-docs.py --staged`
+- `confidence.py static`
 
-Coverage runs on `pre-push`, not `pre-commit`.
+The pre-push hook runs `confidence.py pre-push`.
+
+For a behavior-first local confidence pass, use:
+
+```bash
+python3 scripts/confidence.py local
+```
+
+That runs the fast static checks first, then the contract and integration
+behavior suites, with the repo-wide public docs contract up front.
+
+For the local merge-guard approximation, use:
+
+```bash
+python3 scripts/confidence.py pre-push
+```
+
+That adds the fast changed-file coverage guardrail on top of the local lane.
 
 ## CI And Releases
 
@@ -69,14 +86,12 @@ GitHub Actions runs two separate lanes:
   Runs on `pull_request` and pushes to `main`.
   It runs on the pinned Rust `1.94.0` toolchain from `rust-toolchain.toml`.
   It enforces:
-  - `./scripts/check-rust-fast.sh`
-  - root package checks
-  - the coverage gate
+  - `python3 ./scripts/confidence.py full`
 
 - `Release`
   Runs when a `v*` tag is pushed.
-  It reruns verification on Rust `1.94.0`, then dry-runs publish and publishes
-  the crate and release notes.
+  It reruns the full confidence lane on Rust `1.94.0`, then dry-runs publish
+  and publishes the crate and release notes.
   Cross-platform packaged binaries are currently disabled while that release
   story is on hold.
 
@@ -138,9 +153,8 @@ That enforces the same release prerequisites locally:
 
 - release notes exist for the current package version
 - `CHANGELOG.md` has a finished section for the current package version
-- fast fmt/clippy checks pass
-- root package checks pass
-- the coverage gate passes
+- the full confidence lane passes
+- `cargo publish --dry-run --locked` passes
 
 To create and push the release tag safely, use:
 
@@ -194,21 +208,21 @@ Why this runs on `pre-push` instead of `pre-commit`:
 
 - a warm full release-path `cargo llvm-cov --all-features` run was about one
   minute locally on March 7, 2026
-- even a package-scoped run for a small `osp-cli` + `osp-repl` change set was
-  about `35s`
-- package-scoped coverage is still only an approximation, because narrow local
-  diffs may be covered indirectly by broader test suites
+- even the smaller fast gate still reruns an instrumented test slice, so it is
+  materially slower than the staged docs check plus static lane
 
 So the pragmatic policy is:
 
-- keep `pre-commit` fast
-- enforce a changed-package coverage approximation on `pre-push`
-- enforce full coverage in CI and release checks
+- keep `pre-commit` fast with `public-docs.py --staged` plus
+  `confidence.py static`
+- enforce a changed-file coverage approximation through `confidence.py pre-push`
+- enforce the full confidence lane plus full coverage in CI and release checks
 
 The local `pre-push` path is intentionally approximate:
 
-- it only runs `cargo llvm-cov` for the changed package set when the diff is narrow
-- it falls back to full root-package coverage for broader changes
+- it runs the local behavior-first lane before coverage
+- it reruns instrumented `lib`, `bin`, `contracts`, and `integration` targets
+- it uses the union of branch, index, worktree, and untracked source changes
 - it enforces the changed-file floor, but leaves the full baseline check to CI
 
 ## Updating The Baseline

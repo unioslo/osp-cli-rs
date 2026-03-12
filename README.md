@@ -136,9 +136,11 @@ Core guides:
 Useful commands:
 
 ```bash
-./scripts/check-rust-fast.sh
+python3 scripts/confidence.py static
+python3 scripts/confidence.py local
+python3 scripts/confidence.py pre-push
 cargo test --all-features --locked
-python3 scripts/check-coverage-gate.py --fast
+python3 scripts/coverage.py gate --fast
 ```
 
 See:

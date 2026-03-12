@@ -28,14 +28,5 @@ jobs:
       - name: Install coverage tooling
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Run fast checks
-        run: ./scripts/check-rust-fast.sh
-
-      - name: Run root package checks
-        run: |
-          cargo check --all-features --locked
-          cargo clippy --all-features --all-targets -- -D warnings
-          cargo test --all-features --locked
-
-      - name: Enforce coverage gate
-        run: ./scripts/check-coverage-gate.py
+      - name: Run full confidence lane
+        run: python3 ./scripts/confidence.py full
