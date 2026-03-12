@@ -717,6 +717,7 @@ fn expand_home_and_prompt_renderers_behave_unit() {
     set_env_var_for_test("HOME", "/tmp/osp-home");
     assert_eq!(expand_home("~"), "/tmp/osp-home");
     assert_eq!(expand_home("~/cache"), "/tmp/osp-home/cache");
+    assert_eq!(expand_home("~\\cache"), "/tmp/osp-home/cache");
     assert_eq!(expand_home("/etc/hosts"), "/etc/hosts");
 
     let right: PromptRightRenderer = Arc::new(|| "rhs".to_string());

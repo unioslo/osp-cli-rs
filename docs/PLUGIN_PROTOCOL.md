@@ -48,8 +48,10 @@ Plugins are separate binaries discovered at runtime (Option B).
 
 - Backbone caches successful `--describe` payloads.
 - Cache key is `(executable path, file size, file mtime)`.
-- Default cache file: `~/.cache/osp/describe-v1.json`.
-- If `XDG_CACHE_HOME` is set, cache path is
+- Default cache file:
+  `<platform-cache-dir>/osp/describe-v1.json`.
+- On Linux this is typically `~/.cache/osp/describe-v1.json`.
+- If `XDG_CACHE_HOME` is set, the Linux cache path is
   `$XDG_CACHE_HOME/osp/describe-v1.json`.
 
 ## DescribeV1

@@ -66,8 +66,10 @@ leave behind.
 
 ## Custom Themes
 
-Custom themes live in `theme.path` directories (default:
-`~/.config/osp/themes`). Each `*.toml` file defines a theme.
+Custom themes live in `theme.path` directories. By default `osp` looks in
+`<platform-config-dir>/osp/themes` (for example `~/.config/osp/themes` on
+Linux, or `$XDG_CONFIG_HOME/osp/themes` when `XDG_CONFIG_HOME` is set).
+Each `*.toml` file defines a theme.
 
 Example:
 

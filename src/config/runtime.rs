@@ -29,6 +29,8 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
+use directories::{BaseDirs, ProjectDirs};
+
 use crate::config::{
     ChainedLoader, ConfigLayer, EnvSecretsLoader, EnvVarLoader, LoaderPipeline, ResolvedConfig,
     SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
@@ -86,6 +88,8 @@ pub const DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH: i64 = 10;
 pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
 /// Default table overflow strategy.
 pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "clip";
+
+const PROJECT_APPLICATION_NAME: &str = "osp";
 
 /// Options that control which runtime config sources are included.
 ///
@@ -417,31 +421,41 @@ pub fn build_runtime_pipeline(
     pipeline
 }
 
-/// Resolves the default XDG-style config root from the current process environment.
+/// Resolves the default platform config root from the current process environment.
 pub fn default_config_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().config_root_dir()
 }
 
-/// Resolves the default XDG-style cache root from the current process environment.
+/// Resolves the default platform cache root from the current process environment.
 pub fn default_cache_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().cache_root_dir()
 }
 
-/// Resolves the default XDG-style state root from the current process environment.
+/// Resolves the default platform state root from the current process environment.
 pub fn default_state_root_dir() -> Option<PathBuf> {
     RuntimeEnvironment::capture().state_root_dir()
+}
+
+/// Resolves the current user's home directory from the running platform.
+pub fn default_home_dir() -> Option<PathBuf> {
+    BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
 }
 
 #[derive(Debug, Clone, Default)]
 struct RuntimeEnvironment {
     vars: BTreeMap<String, String>,
+    prefer_platform_dirs: bool,
 }
 
 impl RuntimeEnvironment {
     fn capture() -> Self {
-        Self::from_pairs(std::env::vars())
+        Self {
+            vars: std::env::vars().collect(),
+            prefer_platform_dirs: true,
+        }
     }
 
+    #[cfg(test)]
     fn from_pairs<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -453,6 +467,7 @@ impl RuntimeEnvironment {
                 .into_iter()
                 .map(|(key, value)| (key.as_ref().to_string(), value.as_ref().to_string()))
                 .collect(),
+            prefer_platform_dirs: false,
         }
     }
 
@@ -465,7 +480,19 @@ impl RuntimeEnvironment {
     }
 
     fn state_root_dir(&self) -> Option<PathBuf> {
-        self.xdg_root_dir("XDG_STATE_HOME", &[".local", "state"])
+        if let Some(path) = self.get_nonempty("XDG_STATE_HOME") {
+            return Some(join_path(PathBuf::from(path), &[PROJECT_APPLICATION_NAME]));
+        }
+
+        if self.prefer_platform_dirs {
+            return project_dirs().map(|dirs| {
+                dirs.state_dir()
+                    .unwrap_or_else(|| dirs.data_local_dir())
+                    .to_path_buf()
+            });
+        }
+
+        self.home_root_dir(&[".local", "state"])
     }
 
     fn config_path(&self, leaf: &str) -> Option<PathBuf> {
@@ -518,18 +545,30 @@ impl RuntimeEnvironment {
     fn state_root_dir_or_temp(&self) -> PathBuf {
         self.state_root_dir().unwrap_or_else(|| {
             let mut path = std::env::temp_dir();
-            path.push("osp");
+            path.push(PROJECT_APPLICATION_NAME);
             path
         })
     }
 
     fn xdg_root_dir(&self, xdg_var: &str, home_suffix: &[&str]) -> Option<PathBuf> {
         if let Some(path) = self.get_nonempty(xdg_var) {
-            return Some(join_path(PathBuf::from(path), &["osp"]));
+            return Some(join_path(PathBuf::from(path), &[PROJECT_APPLICATION_NAME]));
         }
 
+        if self.prefer_platform_dirs {
+            return match xdg_var {
+                "XDG_CONFIG_HOME" => project_dirs().map(|dirs| dirs.config_dir().to_path_buf()),
+                "XDG_CACHE_HOME" => project_dirs().map(|dirs| dirs.cache_dir().to_path_buf()),
+                _ => None,
+            };
+        }
+
+        self.home_root_dir(home_suffix)
+    }
+
+    fn home_root_dir(&self, home_suffix: &[&str]) -> Option<PathBuf> {
         let home = self.get_nonempty("HOME")?;
-        Some(join_path(PathBuf::from(home), home_suffix).join("osp"))
+        Some(join_path(PathBuf::from(home), home_suffix).join(PROJECT_APPLICATION_NAME))
     }
 
     fn get_nonempty(&self, key: &str) -> Option<&str> {
@@ -546,6 +585,10 @@ fn join_path(mut root: PathBuf, segments: &[&str]) -> PathBuf {
         root.push(segment);
     }
     root
+}
+
+fn project_dirs() -> Option<ProjectDirs> {
+    ProjectDirs::from("", "", PROJECT_APPLICATION_NAME)
 }
 
 #[cfg(test)]

@@ -351,7 +351,8 @@ osp searches for plugins in this order:
    - `OSP_BUNDLED_PLUGIN_DIR` env var
    - `<osp-binary-dir>/plugins`
    - `<osp-binary-dir>/../lib/osp/plugins`
-4. `~/.config/osp/plugins/` (user plugin directory)
+4. `<platform-config-dir>/osp/plugins/` (for example
+   `~/.config/osp/plugins/` on Linux)
 5. `PATH` (searches for `osp-*` executables) only when
    `extensions.plugins.discovery.path = true`
 
@@ -362,8 +363,10 @@ make it executable, and put it in an explicit plugin directory, in
 ### Discovery caching
 
 Plugin `--describe` results are cached in
-`~/.cache/osp/describe-v1.json`, keyed by executable path, file size,
-and modification time. The cache is invalidated automatically when the
+`<platform-cache-dir>/osp/describe-v1.json`, keyed by executable path,
+file size, and modification time. On Linux this is typically
+`~/.cache/osp/describe-v1.json`, and `XDG_CACHE_HOME` overrides the base
+cache dir when set. The cache is invalidated automatically when the
 binary changes.
 
 Force a cache refresh:

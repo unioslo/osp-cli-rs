@@ -252,16 +252,16 @@ fn expand_theme_path(raw: &str) -> Option<PathBuf> {
         return None;
     }
 
-    if trimmed == "~"
-        && let Ok(home) = std::env::var("HOME")
-    {
-        return Some(PathBuf::from(home));
+    if trimmed == "~" {
+        return crate::config::default_home_dir();
     }
 
-    if let Some(stripped) = trimmed.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
+    if let Some(home) = crate::config::default_home_dir()
+        && let Some(stripped) = trimmed
+            .strip_prefix("~/")
+            .or_else(|| trimmed.strip_prefix("~\\"))
     {
-        return Some(PathBuf::from(home).join(stripped));
+        return Some(home.join(stripped));
     }
 
     Some(PathBuf::from(trimmed))
@@ -693,6 +693,10 @@ accent = "#123456"
         );
         assert_eq!(
             expand_theme_path("~/themes"),
+            Some(std::path::PathBuf::from("/tmp/theme-home/themes"))
+        );
+        assert_eq!(
+            expand_theme_path("~\\themes"),
             Some(std::path::PathBuf::from("/tmp/theme-home/themes"))
         );
         assert_eq!(

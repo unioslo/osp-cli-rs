@@ -17,7 +17,8 @@ first provider when multiple active plugins expose the same command.
 1. `--plugin-dir <dir>` (explicit CLI override)
 2. `OSP_PLUGIN_PATH` (colon-separated directories)
 3. Bundled plugins dir (package-owned)
-4. `~/.config/osp/plugins`
+4. `<platform-config-dir>/osp/plugins` (for example
+   `~/.config/osp/plugins` on Linux)
 5. `PATH` (`osp-*` executables) only when
    `extensions.plugins.discovery.path = true`
 

@@ -47,7 +47,8 @@ provider = "uio-ldap-beta"
 1. `--plugin-dir <dir>`
 2. `OSP_PLUGIN_PATH`
 3. bundled plugin directory
-4. `~/.config/osp/plugins`
+4. `<platform-config-dir>/osp/plugins` (for example
+   `~/.config/osp/plugins` on Linux)
 5. `PATH` (`osp-*` executables) only when
    `extensions.plugins.discovery.path = true`
 

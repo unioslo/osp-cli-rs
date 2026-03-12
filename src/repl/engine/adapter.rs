@@ -625,12 +625,14 @@ pub(crate) fn split_path_stub(stub: &str) -> (PathBuf, String, String) {
 
 pub(crate) fn expand_home(path: &str) -> String {
     if path == "~" {
-        return std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+        return crate::config::default_home_dir()
+            .map(|home| home.display().to_string())
+            .unwrap_or_else(|| "~".to_string());
     }
-    if let Some(rest) = path.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
+    if let Some(home) = crate::config::default_home_dir()
+        && let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"))
     {
-        return format!("{home}/{rest}");
+        return home.join(rest).display().to_string();
     }
     path.to_string()
 }

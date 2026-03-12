@@ -91,8 +91,12 @@ ldap user alice --format table -v
 
 Default paths:
 
-- config: `~/.config/osp/config.toml`
-- secrets: `~/.config/osp/secrets.toml`
+- config: `<platform-config-dir>/osp/config.toml` (for example
+  `~/.config/osp/config.toml` on Linux)
+- secrets: `<platform-config-dir>/osp/secrets.toml` (for example
+  `~/.config/osp/secrets.toml` on Linux)
+
+On Linux, `XDG_CONFIG_HOME` overrides the base config directory when set.
 
 Invocation flags such as `--json`, `--format`, `--color`,
 `--plugin-provider`, `-v`, `-q`, and `-d` affect only the current
