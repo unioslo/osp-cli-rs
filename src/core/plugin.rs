@@ -12,6 +12,24 @@
 //! - validation helpers reject protocol-shape errors before higher-level code
 //!   tries to trust the payload
 //!
+//! Wire flow:
+//!
+//! ```text
+//! plugin executable
+//!      │
+//!      ├── `describe` -> DescribeV1 / DescribeCommandV1
+//!      │                host builds command catalog, completion, and policy
+//!      │
+//!      └── `run`      -> ResponseV1
+//!                       host validates payload before adapting/rendering it
+//! ```
+//!
+//! Useful mental split:
+//!
+//! - plugin authors care about these types as the stable JSON contract
+//! - host-side code cares about them as validated input before converting into
+//!   command catalogs, policy registries, and rendered output
+//!
 //! Contract:
 //!
 //! - these types may depend on shared `core` metadata, but they should stay
@@ -53,34 +71,34 @@ pub struct DescribeV1 {
 pub struct DescribeCommandV1 {
     /// Command name exposed by the plugin.
     pub name: String,
-    #[serde(default)]
     /// Short help text for the command.
+    #[serde(default)]
     pub about: String,
-    #[serde(default)]
     /// Optional authorization metadata for the command.
+    #[serde(default)]
     pub auth: Option<DescribeCommandAuthV1>,
-    #[serde(default)]
     /// Positional argument descriptions in declaration order.
+    #[serde(default)]
     pub args: Vec<DescribeArgV1>,
-    #[serde(default)]
     /// Flag descriptions keyed by protocol flag spelling.
-    pub flags: BTreeMap<String, DescribeFlagV1>,
     #[serde(default)]
+    pub flags: BTreeMap<String, DescribeFlagV1>,
     /// Nested subcommands under this command.
+    #[serde(default)]
     pub subcommands: Vec<DescribeCommandV1>,
 }
 
 /// Authorization metadata attached to a described command.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeCommandAuthV1 {
-    #[serde(default)]
     /// Visibility level for the command.
+    #[serde(default)]
     pub visibility: Option<DescribeVisibilityModeV1>,
-    #[serde(default)]
     /// Capabilities required to run the command.
-    pub required_capabilities: Vec<String>,
     #[serde(default)]
+    pub required_capabilities: Vec<String>,
     /// Feature flags that must be enabled for the command.
+    #[serde(default)]
     pub feature_flags: Vec<String>,
 }
 
@@ -203,54 +221,54 @@ pub enum DescribeValueTypeV1 {
 pub struct DescribeSuggestionV1 {
     /// Raw suggestion value inserted into the command line.
     pub value: String,
-    #[serde(default)]
     /// Optional short metadata string.
+    #[serde(default)]
     pub meta: Option<String>,
-    #[serde(default)]
     /// Optional display label for menu rendering.
-    pub display: Option<String>,
     #[serde(default)]
+    pub display: Option<String>,
     /// Optional sort key used for ordering suggestions.
+    #[serde(default)]
     pub sort: Option<String>,
 }
 
 /// Positional argument description emitted by a plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeArgV1 {
-    #[serde(default)]
     /// Positional name or value label.
+    #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
     /// Short help text for the argument.
+    #[serde(default)]
     pub about: Option<String>,
-    #[serde(default)]
     /// Whether the argument may be repeated.
+    #[serde(default)]
     pub multi: bool,
-    #[serde(default)]
     /// Optional wire-format value type hint.
-    pub value_type: Option<DescribeValueTypeV1>,
     #[serde(default)]
+    pub value_type: Option<DescribeValueTypeV1>,
     /// Suggested values for the argument.
+    #[serde(default)]
     pub suggestions: Vec<DescribeSuggestionV1>,
 }
 
 /// Flag description emitted by a plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeFlagV1 {
-    #[serde(default)]
     /// Short help text for the flag.
+    #[serde(default)]
     pub about: Option<String>,
-    #[serde(default)]
     /// Whether the flag is boolean-only and takes no value.
+    #[serde(default)]
     pub flag_only: bool,
-    #[serde(default)]
     /// Whether the flag may be repeated.
+    #[serde(default)]
     pub multi: bool,
-    #[serde(default)]
     /// Optional wire-format value type hint.
-    pub value_type: Option<DescribeValueTypeV1>,
     #[serde(default)]
+    pub value_type: Option<DescribeValueTypeV1>,
     /// Suggested values for the flag.
+    #[serde(default)]
     pub suggestions: Vec<DescribeSuggestionV1>,
 }
 
@@ -265,8 +283,8 @@ pub struct ResponseV1 {
     pub data: serde_json::Value,
     /// Structured error payload present when `ok` is `false`.
     pub error: Option<ResponseErrorV1>,
-    #[serde(default)]
     /// User-facing messages emitted alongside the payload.
+    #[serde(default)]
     pub messages: Vec<ResponseMessageV1>,
     /// Rendering and presentation metadata for the payload.
     pub meta: ResponseMetaV1,
@@ -279,8 +297,8 @@ pub struct ResponseErrorV1 {
     pub code: String,
     /// Human-readable error message.
     pub message: String,
-    #[serde(default)]
     /// Arbitrary structured error details.
+    #[serde(default)]
     pub details: serde_json::Value,
 }
 
@@ -291,8 +309,8 @@ pub struct ResponseMetaV1 {
     pub format_hint: Option<String>,
     /// Preferred column order for row-based payloads.
     pub columns: Option<Vec<String>>,
-    #[serde(default)]
     /// Preferred alignment hints for displayed columns.
+    #[serde(default)]
     pub column_align: Vec<ColumnAlignmentV1>,
 }
 
@@ -374,7 +392,33 @@ impl DescribeV1 {
         }
     }
 
-    /// Validates the describe payload and returns an error string on protocol violations.
+    /// Validates the describe payload and returns an error string on protocol
+    /// violations.
+    ///
+    /// Hosts should do this before trusting plugin describe data enough to turn
+    /// it into command catalogs, completion trees, or policy registries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::plugin::{DescribeV1, PLUGIN_PROTOCOL_V1};
+    ///
+    /// let describe = DescribeV1 {
+    ///     protocol_version: PLUGIN_PROTOCOL_V1,
+    ///     plugin_id: "ldap".to_string(),
+    ///     plugin_version: "0.1.0".to_string(),
+    ///     min_osp_version: None,
+    ///     commands: Vec::new(),
+    /// };
+    ///
+    /// assert!(describe.validate_v1().is_ok());
+    ///
+    /// let invalid = DescribeV1 {
+    ///     plugin_id: "   ".to_string(),
+    ///     ..describe.clone()
+    /// };
+    /// assert_eq!(invalid.validate_v1().unwrap_err(), "plugin_id must not be empty");
+    /// ```
     pub fn validate_v1(&self) -> Result<(), String> {
         if self.protocol_version != PLUGIN_PROTOCOL_V1 {
             return Err(format!(
@@ -393,7 +437,44 @@ impl DescribeV1 {
 }
 
 impl DescribeCommandV1 {
-    /// Converts command auth metadata into an internal command policy for `path`.
+    /// Converts command auth metadata into an internal command policy for
+    /// `path`.
+    ///
+    /// This is the host-side bridge from wire-format describe data into the
+    /// runtime policy evaluator in [`crate::core::command_policy`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::core::command_policy::{CommandPath, VisibilityMode};
+    /// use osp_cli::core::plugin::{
+    ///     DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1,
+    /// };
+    /// use std::collections::BTreeMap;
+    ///
+    /// let command = DescribeCommandV1 {
+    ///     name: "decide".to_string(),
+    ///     about: String::new(),
+    ///     auth: Some(DescribeCommandAuthV1 {
+    ///         visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+    ///         required_capabilities: vec![" Orch.Approval.Decide ".to_string()],
+    ///         feature_flags: vec![" Review ".to_string()],
+    ///     }),
+    ///     args: Vec::new(),
+    ///     flags: BTreeMap::new(),
+    ///     subcommands: Vec::new(),
+    /// };
+    ///
+    /// let policy = command
+    ///     .command_policy(CommandPath::new(["orch", "approval", "decide"]))
+    ///     .unwrap();
+    ///
+    /// assert_eq!(policy.visibility, VisibilityMode::CapabilityGated);
+    /// assert!(policy
+    ///     .required_capabilities
+    ///     .contains("orch.approval.decide"));
+    /// assert!(policy.feature_flags.contains("review"));
+    /// ```
     pub fn command_policy(&self, path: CommandPath) -> Option<CommandPolicy> {
         let auth = self.auth.as_ref()?;
         let mut policy = CommandPolicy::new(path);
@@ -413,6 +494,9 @@ impl DescribeCommandV1 {
 impl ResponseV1 {
     /// Validates the response envelope before the app trusts its payload.
     ///
+    /// Hosts should run this before adapting plugin JSON into rows, semantic
+    /// output, or user-facing messages.
+    ///
     /// # Examples
     ///
     /// ```
@@ -429,6 +513,17 @@ impl ResponseV1 {
     /// };
     ///
     /// assert!(response.validate_v1().is_ok());
+    ///
+    /// let invalid = ResponseV1 {
+    ///     ok: false,
+    ///     error: None,
+    ///     ..response.clone()
+    /// };
+    ///
+    /// assert_eq!(
+    ///     invalid.validate_v1().unwrap_err(),
+    ///     "ok=false requires error payload"
+    /// );
     /// ```
     pub fn validate_v1(&self) -> Result<(), String> {
         if self.protocol_version != PLUGIN_PROTOCOL_V1 {

@@ -138,7 +138,6 @@ pub fn registered_verbs() -> &'static [VerbInfo] {
 }
 
 #[cfg(test)]
-/// Returns the names of registered verbs that participate in data execution.
 pub fn registered_explicit_verbs() -> Vec<&'static str> {
     VERBS
         .iter()

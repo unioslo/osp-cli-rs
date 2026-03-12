@@ -1,18 +1,55 @@
-//! The UI module exists to turn structured output into predictable terminal
-//! text, while keeping rendering decisions separate from business logic.
+//! The UI module turns structured output into predictable terminal text while
+//! keeping rendering decisions separate from business logic.
 //!
-//! The UI stack has three layers:
+//! Data changes shape four times on the way from DSL output to terminal text:
 //!
-//! - [`format`] lowers rows and semantic outputs into a structured
-//!   [`crate::ui::Document`].
-//! - the internal renderer turns that document into terminal text using
-//!   resolved width, color, unicode, and theme settings.
-//! - inline/theme/style helpers provide smaller reusable building blocks for
-//!   prompts, messages, and rich text fragments.
+//! ```text
+//! OutputResult { items: Rows([{uid:"alice", cn:"Alice"},...]), meta }
+//!       │
+//!       ▼  RenderSettings::resolve_render_plan(output)
+//!       │  selects format: explicit > metadata hint > shape-inference
+//!       │    Groups        → Table
+//!       │    single-value rows → Value
+//!       │    1 row         → Mreg (key/value pairs)
+//!       │    many rows     → Table
+//!       │
+//! ResolvedRenderPlan {
+//!     format: Table,
+//!     render: ResolvedRenderSettings { backend: Rich|Plain, color, width, theme, … },
+//!     guide:  ResolvedGuideRenderSettings,
+//!     mreg:   ResolvedMregRenderSettings,
+//! }
+//!       │
+//!       ▼  format::build_document_from_output_plan(output, plan)
+//!       │  dispatches by format into typed block variants
+//!       │    Table/Markdown → Block::Table(TableBlock { headers, rows: Vec<Vec<Value>>, align })
+//!       │    Json           → Block::Json(JsonBlock { value })
+//!       │    Mreg           → Block::Mreg(MregBlock { rows: Vec<MregRow> })
+//!       │    Value          → Block::Value(ValueBlock { values: Vec<String> })
+//!       │    Guide          → Block::Panel + Block::Table + Block::Line …
+//!       │
+//! Document { blocks: Vec<Block> }
+//!       │
+//!       ▼  renderer::render_document(document, resolved_settings)
+//!       │  precomputes LayoutContext once (width, unicode, margin)
+//!       │  renders each block: Rich = color + box-drawing; Plain = ASCII only
+//!       │
+//! String  ←  terminal text ready for stdout
+//! ```
 //!
-//! Keep the distinction between "document shaping" and "terminal rendering"
-//! clear. Most bugs become easier to localize once you know which side of that
-//! boundary is wrong.
+//! The three public entry points cover the common call sites:
+//!
+//! - [`render_output`] — full pipeline from `OutputResult` to `String`
+//! - [`render_rows`] — convenience wrapper when you already have `Vec<Row>`
+//! - [`render_document`] — skip straight to rendering a pre-built `Document`
+//!
+//! Each has a `_for_copy` sibling that forces Plain backend and strips
+//! box-drawing/ANSI for clipboard-safe output.
+//!
+//! Debugging tip: keep "document shaping" and "terminal rendering" separate.
+//! If output looks structurally wrong (missing columns, wrong format), the
+//! bug is in [`format`]. If it looks semantically right but visually garbled
+//! (bad color, wrong width), the bug is in the renderer or settings resolution.
 //!
 //! Contract:
 //!

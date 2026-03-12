@@ -19,6 +19,14 @@
 //! Keep that boundary explicit. If a selector verb starts looking like a custom
 //! row/group traversal, it usually belongs in `verbs::selector` or `verbs::json`
 //! instead of growing new engine-side special cases.
+//!
+//! Caller rule of thumb:
+//!
+//! - [`apply_pipeline`] is the friendly "I already have rows" entrypoint
+//! - [`apply_output_pipeline`] is the continuation path when output already has
+//!   semantic-document or metadata state attached
+//! - [`execute_pipeline_streaming`] is the iterator-oriented path when callers
+//!   want streamable stages to avoid eager materialization
 
 use crate::core::{
     output_model::{
@@ -42,8 +50,33 @@ use crate::dsl::{
 
 /// Apply a pipeline to plain row output.
 ///
+/// Use this when a command has already produced `Vec<Row>` and you want the
+/// ordinary `osp` pipeline behavior without thinking about existing output
+/// metadata.
+///
 /// This starts with `wants_copy = false` because there is no prior output meta
 /// to preserve.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::dsl::apply_pipeline;
+/// use osp_cli::row;
+///
+/// let output = apply_pipeline(
+///     vec![
+///         row! { "uid" => "alice", "team" => "ops" },
+///         row! { "uid" => "bob", "team" => "infra" },
+///     ],
+///     &["F team=ops".to_string(), "P uid".to_string()],
+/// )?;
+///
+/// let rows = output.as_rows().unwrap();
+/// assert_eq!(rows.len(), 1);
+/// assert_eq!(rows[0]["uid"], "alice");
+/// assert!(!rows[0].contains_key("team"));
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
     apply_output_pipeline(OutputResult::from_rows(rows), stages)
 }
@@ -52,6 +85,30 @@ pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult>
 ///
 /// Unlike `apply_pipeline`, this preserves the incoming `OutputMeta.wants_copy`
 /// bit when continuing an existing output flow.
+///
+/// Use this when the command already produced an [`OutputResult`] and later
+/// stages should inherit its render/document metadata instead of starting from
+/// scratch.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output_model::OutputResult;
+/// use osp_cli::dsl::apply_output_pipeline;
+/// use osp_cli::row;
+///
+/// let mut output = OutputResult::from_rows(vec![
+///     row! { "uid" => "alice" },
+///     row! { "uid" => "bob" },
+/// ]);
+/// output.meta.wants_copy = true;
+///
+/// let limited = apply_output_pipeline(output, &["L 1".to_string()])?;
+///
+/// assert!(limited.meta.wants_copy);
+/// assert_eq!(limited.as_rows().unwrap().len(), 1);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<OutputResult> {
     execute_pipeline_items(
         output.items,
@@ -66,6 +123,28 @@ pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<
 ///
 /// This is the lower-level row entrypoint used by tests and internal helpers.
 /// Like `apply_pipeline`, it starts with `wants_copy = false`.
+///
+/// Prefer [`apply_pipeline`] for the common "rows in, output out" path. This
+/// entrypoint is more useful when you want the execution wording to match the
+/// streaming variant below.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::dsl::execute_pipeline;
+/// use osp_cli::row;
+///
+/// let output = execute_pipeline(
+///     vec![
+///         row! { "uid" => "bob" },
+///         row! { "uid" => "alice" },
+///     ],
+///     &["S uid".to_string()],
+/// )?;
+///
+/// assert_eq!(output.as_rows().unwrap()[0]["uid"], "alice");
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn execute_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
     execute_pipeline_streaming(rows, stages)
 }
@@ -74,6 +153,29 @@ pub fn execute_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResul
 ///
 /// This keeps flat row stages on an iterator-backed path until a stage
 /// requires full materialization (for example sort/group/aggregate/jq).
+///
+/// Use this when rows come from an iterator and you want streamable stages like
+/// `F`, `P`, `U`, and head-only `L` to stay incremental for as long as
+/// possible.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::dsl::execute_pipeline_streaming;
+/// use osp_cli::row;
+///
+/// let output = execute_pipeline_streaming(
+///     vec![
+///         row! { "uid" => "alice" },
+///         row! { "uid" => "bob" },
+///     ],
+///     &["L 1".to_string()],
+/// )?;
+///
+/// assert_eq!(output.as_rows().unwrap()[0]["uid"], "alice");
+/// assert_eq!(output.as_rows().unwrap().len(), 1);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 pub fn execute_pipeline_streaming<I>(rows: I, stages: &[String]) -> Result<OutputResult>
 where
     I: IntoIterator<Item = Row>,

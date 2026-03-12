@@ -131,15 +131,16 @@ impl CommandPolicy {
     /// ```
     /// use osp_cli::core::command_policy::{CommandPath, CommandPolicy, VisibilityMode};
     ///
-    /// let policy = CommandPolicy::new(CommandPath::new(["orch", "approval"]))
+    /// let policy = CommandPolicy::new(CommandPath::new([" Orch ", "Approval "]))
     ///     .visibility(VisibilityMode::CapabilityGated)
-    ///     .require_capability("orch.approval.decide")
-    ///     .feature_flag("orch")
-    ///     .allow_profiles(["dev"]);
+    ///     .require_capability(" Orch.Approval.Decide ")
+    ///     .feature_flag(" Orch ")
+    ///     .allow_profiles([" Dev ", ""]);
     ///
     /// assert_eq!(policy.path.as_slice(), &["orch", "approval"]);
     /// assert!(policy.required_capabilities.contains("orch.approval.decide"));
     /// assert!(policy.feature_flags.contains("orch"));
+    /// assert!(policy.allowed_profiles.as_ref().unwrap().contains("dev"));
     /// ```
     pub fn new(path: CommandPath) -> Self {
         Self {

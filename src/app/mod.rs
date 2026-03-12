@@ -22,6 +22,26 @@
 //!   [`crate::app::LaunchContextBuilder`]
 //! - lower-level semantic payloads live in modules like [`crate::guide`] and
 //!   [`crate::completion`]; this module owns the heavier host machinery
+//!
+//! Broad-strokes host flow:
+//!
+//! ```text
+//! argv / REPL request
+//!      │
+//!      ▼ [ app ]    build host state, load config, assemble command catalog
+//!      ▼ [ dispatch ] choose native or plugin command, run it
+//!      ▼ [ dsl ]    apply trailing pipeline stages to command output
+//!      ▼ [ ui ]     render text to a UiSink or process stdio
+//! ```
+//!
+//! Most callers only need one of these shapes:
+//!
+//! - [`App::run_from`] when they want a structured `Result<i32>`
+//! - [`App::run_process`] when they want process-style exit code conversion
+//! - [`App::with_sink`] or [`AppBuilder::build_with_sink`] when a test or outer
+//!   host wants captured stdout/stderr instead of touching process stdio
+//! - [`crate::services`] when this full host layer is more machinery than the
+//!   integration needs
 
 use crate::native::NativeCommandRegistry;
 use crate::ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity};
@@ -81,12 +101,29 @@ impl App {
     }
 
     /// Replaces the native command registry used for command dispatch.
+    ///
+    /// Use this when an embedder wants extra in-process commands to participate
+    /// in the same command surface as the built-in host commands.
     pub fn with_native_commands(mut self, native_commands: NativeCommandRegistry) -> Self {
         self.native_commands = native_commands;
         self
     }
 
     /// Runs the application and returns a structured exit status.
+    ///
+    /// Use this when your caller wants ordinary Rust error handling instead of
+    /// the process-style exit code conversion performed by
+    /// [`App::run_process`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use osp_cli::App;
+    ///
+    /// let exit = App::new().run_from(["osp", "--help"])?;
+    /// assert_eq!(exit, 0);
+    /// # Ok::<(), miette::Report>(())
+    /// ```
     pub fn run_from<I, T>(&self, args: I) -> miette::Result<i32>
     where
         I: IntoIterator<Item = T>,
@@ -96,6 +133,26 @@ impl App {
     }
 
     /// Binds the application to a specific UI sink for repeated invocations.
+    ///
+    /// Prefer this in tests, editor integrations, or foreign hosts that need
+    /// the same host behavior as `osp` but want the rendered text captured in a
+    /// buffer instead of written to process stdio.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::BufferedUiSink;
+    /// use osp_cli::App;
+    ///
+    /// let mut sink = BufferedUiSink::default();
+    /// let exit = App::new()
+    ///     .with_sink(&mut sink)
+    ///     .run_process(["osp", "--help"]);
+    ///
+    /// assert_eq!(exit, 0);
+    /// assert!(!sink.stdout.is_empty());
+    /// assert!(sink.stderr.is_empty());
+    /// ```
     pub fn with_sink<'a>(self, sink: &'a mut dyn UiSink) -> AppRunner<'a> {
         AppRunner { app: self, sink }
     }
@@ -170,6 +227,20 @@ impl<'a> AppRunner<'a> {
 /// Builder for configuring an [`App`] before construction.
 ///
 /// This is the canonical public composition surface for host-level setup.
+///
+/// # Examples
+///
+/// Minimal embedder `main.rs`:
+///
+/// ```no_run
+/// use osp_cli::AppBuilder;
+///
+/// fn main() {
+///     std::process::exit(
+///         AppBuilder::new().build().run_process(std::env::args_os()),
+///     );
+/// }
+/// ```
 pub struct AppBuilder {
     native_commands: NativeCommandRegistry,
 }
@@ -183,17 +254,27 @@ impl AppBuilder {
     }
 
     /// Replaces the native command registry used by the built application.
+    ///
+    /// This is the builder-friendly way to extend the host with extra native
+    /// commands before calling [`AppBuilder::build`].
     pub fn with_native_commands(mut self, native_commands: NativeCommandRegistry) -> Self {
         self.native_commands = native_commands;
         self
     }
 
     /// Builds an [`App`] from the current builder state.
+    ///
+    /// Choose this when you want an owned application value that can be reused
+    /// across many calls. Use [`AppBuilder::build_with_sink`] when binding the
+    /// output sink is part of the setup.
     pub fn build(self) -> App {
         App::new().with_native_commands(self.native_commands)
     }
 
     /// Builds an [`AppRunner`] bound to the provided UI sink.
+    ///
+    /// This is the shortest path for tests and embedders that want one sink
+    /// binding plus the full host behavior.
     pub fn build_with_sink<'a>(self, sink: &'a mut dyn UiSink) -> AppRunner<'a> {
         self.build().with_sink(sink)
     }

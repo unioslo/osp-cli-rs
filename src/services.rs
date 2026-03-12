@@ -94,6 +94,30 @@ pub enum ParsedCommand {
 ///
 /// This is the small, embeddable surface for callers that want `osp`-style
 /// command parsing plus pipelines without bootstrapping the full CLI host.
+///
+/// The full line is parsed as `<command> [| <stage> ...]`. The command is
+/// dispatched against the ports in `ctx`; the stages are applied to the
+/// returned rows before the result is returned.
+///
+/// # Examples
+///
+/// ```no_run
+/// use osp_cli::config::RuntimeConfig;
+/// use osp_cli::ports::mock::MockLdapClient;
+/// use osp_cli::services::{ServiceContext, execute_line};
+///
+/// let ctx = ServiceContext::new(
+///     Some("alice".to_string()),
+///     MockLdapClient::default(),
+///     RuntimeConfig::default(),
+/// );
+///
+/// // "user alice"                  → LDAP lookup, all attributes
+/// // "user alice | F uid=alice"    → LDAP lookup, then filter by uid
+/// // "user alice | S uid | L 10"  → lookup, sort by uid, take first 10
+/// let result = execute_line(&ctx, "user alice | F uid=alice")
+///     .expect("command and pipeline should run");
+/// ```
 pub fn execute_line<L: LdapDirectory>(ctx: &ServiceContext<L>, line: &str) -> Result<OutputResult> {
     let parsed_pipeline = parse_pipeline(line)?;
     if parsed_pipeline.command.is_empty() {

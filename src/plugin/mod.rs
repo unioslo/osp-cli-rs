@@ -5,6 +5,28 @@
 //! providers. Discovery and catalog building happen before dispatch so the rest
 //! of the app can reason about plugins as ordinary command metadata.
 //!
+//! Broad-strokes flow:
+//!
+//! ```text
+//! plugin executable
+//!      │ emits `describe` JSON
+//!      ▼
+//! [ core::plugin ]  wire DTOs + validation
+//!      ▼
+//! [ plugin ]        discovery, catalog building, provider selection
+//!      ▼
+//! [ app ]           command dispatch and rendering
+//!      │
+//!      └── later invokes plugin command -> `ResponseV1`
+//! ```
+//!
+//! Start here based on which side of the boundary you own:
+//!
+//! - host/application side: [`manager::PluginManager`]
+//! - wire-format / protocol side: [`crate::core::plugin`]
+//! - in-process built-ins that should behave like plugins without subprocesses:
+//!   [`crate::native::NativeCommandRegistry`]
+//!
 //! Contract:
 //!
 //! - plugin discovery and dispatch rules live here

@@ -24,6 +24,18 @@
 //! - [`services`] and [`ports`] exist for smaller embeddable integrations that
 //!   do not want the whole host stack.
 //!
+//! At runtime, data flows roughly like this:
+//!
+//! ```text
+//! argv / REPL line
+//!      │
+//!      ▼ [ cli ]     parse grammar and flags
+//!      ▼ [ config ]  resolve layered settings (builtin → file → env → cli)
+//!      ▼ [ app ]     dispatch to plugin or native command  ──►  Vec<Row>
+//!      ▼ [ dsl ]     apply pipeline stages to rows         ──►  OutputResult
+//!      ▼ [ ui ]      render structured output to terminal or UiSink
+//! ```
+//!
 //! Architecture contracts worth keeping stable:
 //!
 //! - lower-level modules should not depend on [`app`]
@@ -60,19 +72,26 @@
 //! - avoid abstract "factory builder" layers in the public API; callers should
 //!   see concrete type-named builders and factories directly
 //!
-//! For embedders:
+//! For embedders, choose the smallest surface that solves the problem you
+//! actually have:
 //!
-//! - use [`app::App`] or [`app::AppBuilder`] for the full CLI/REPL host
-//! - use [`app::AppState::builder`] when you need a manual runtime/session
-//!   snapshot
-//! - use [`app::UiState::builder`] and [`app::LaunchContext::builder`] for the
-//!   heavier host-building blocks
-//! - use [`repl::ReplRunConfig::builder`] and [`repl::HistoryConfig::builder`]
-//!   when embedding the REPL editor surface directly
-//! - use [`guide::GuideView`] and [`completion::CompletionTreeBuilder`] for
-//!   semantic payload generation
-//! - use [`services`] and [`ports`] when you want narrower integrations instead
-//!   of the whole host stack
+//! - "I want a full `osp`-style binary or custom `main`" →
+//!   [`app::AppBuilder::build`] or [`app::App::run_from`]
+//! - "I want to capture rendered stdout/stderr in tests or another host" →
+//!   [`app::App::with_sink`] or [`app::AppBuilder::build_with_sink`]
+//! - "I want parser + service execution + DSL, but not the full host" →
+//!   [`services::ServiceContext`] and [`services::execute_line`]
+//! - "I already have rows and only want pipeline transforms" →
+//!   [`dsl::apply_pipeline`] or [`dsl::apply_output_pipeline`]
+//! - "I need plugin discovery and catalog/policy integration" →
+//!   [`plugin::PluginManager`] on the host side, or [`core::plugin`] when
+//!   implementing the wire protocol itself
+//! - "I need manual runtime/session state" → [`app::AppState::builder`],
+//!   [`app::UiState::builder`], and [`app::LaunchContext::builder`]
+//! - "I want to embed the interactive editor loop directly" →
+//!   [`repl::ReplRunConfig::builder`] and [`repl::HistoryConfig::builder`]
+//! - "I need semantic payload generation for help/completion surfaces" →
+//!   [`guide::GuideView`] and [`completion::CompletionTreeBuilder`]
 //!
 //! The root crate module tree is the only supported code path. Older mirrored
 //! layouts have been removed so rustdoc and the source tree describe the same
@@ -97,6 +116,7 @@ pub mod guide;
 pub mod plugin;
 /// Service-layer ports used by command execution.
 pub mod ports;
+/// Interactive REPL editor, prompt, history, and completion surface.
 pub mod repl;
 /// Library-level service entrypoints built on the core ports.
 pub mod services;

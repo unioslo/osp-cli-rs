@@ -12,8 +12,36 @@
 //! - [`crate::config::set_scoped_value_in_toml`] edits TOML-backed config files
 //!   while preserving the same schema and scope rules used at runtime.
 //!
+//! Broad-strokes flow:
+//!
+//! ```text
+//! files / env / session overrides
+//!        │
+//!        ▼ [ LoaderPipeline ]
+//!    ConfigLayer values + scope metadata
+//!        │
+//!        ▼ [ ConfigResolver ]
+//!    precedence + interpolation + type adaptation
+//!        │
+//!        ├── ResolvedConfig  (full provenance-aware map)
+//!        ├── RuntimeConfig   (smaller runtime view used by the host)
+//!        └── config explain  (why this winner won)
+//! ```
+//!
 //! Read this module when you need to answer "where did this config value come
 //! from?", "why did this value win?", or "what writes are legal for this key?".
+//!
+//! Most callers should not be assembling bespoke config logic. The normal path
+//! is:
+//!
+//! - load layers through [`crate::config::LoaderPipeline`]
+//! - resolve once through [`crate::config::ConfigResolver`]
+//! - consume the result as [`crate::config::ResolvedConfig`] or
+//!   [`crate::config::RuntimeConfig`]
+//!
+//! The same discipline should hold for writes. File edits belong through the
+//! store helpers here so `config set`, runtime resolution, and `config explain`
+//! stay aligned. A hand-rolled file edit path almost always creates drift.
 //!
 //! Contract:
 //!

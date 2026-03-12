@@ -12,6 +12,25 @@
 //! - `presentation` owns prompt appearance and intro/help material that is
 //!   specific to interactive use.
 //!
+//! A submitted line travels through the layers like this:
+//!
+//! ```text
+//! user keystrokes
+//!       │
+//!       ▼ [ engine ]    reedline editor, prompt, completion/history menus
+//!       │ line accepted
+//!       ▼ [ dispatch ]  execute command, apply shell scope and aliases
+//!       │ ReplLineResult
+//!       ├── Continue     → render output, show next prompt
+//!       ├── ReplaceInput → update input buffer without printing
+//!       ├── Restart      → [ lifecycle ] rebuild REPL state, loop again
+//!       └── Exit         → return ReplRunResult to the caller
+//! ```
+//!
+//! Embedders drive the loop with [`run_repl`], configured through
+//! [`ReplRunConfig::builder`]. The engine, dispatch, and presentation layers
+//! are internal; only the config/result types cross the boundary.
+//!
 //! When debugging the REPL, first decide whether the issue is editor/runtime
 //! state, dispatch semantics, or rendering. That is usually enough to choose
 //! the right submodule.

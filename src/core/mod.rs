@@ -4,6 +4,24 @@
 //! subsystems need: rows, output/result types, command metadata, shell token
 //! handling, fuzzy matching, and a few protocol DTOs.
 //!
+//! Read this module when you need a shared type that should mean the same thing
+//! everywhere else in the crate.
+//!
+//! Rough map:
+//!
+//! - [`command_def`] describes commands as semantic metadata for help and
+//!   catalogs
+//! - [`command_policy`] answers whether a command should be visible or allowed
+//! - [`output`] and [`output_model`] define the crate's canonical output shapes
+//! - [`plugin`] defines the stable wire DTOs shared with external plugins
+//! - [`row`] is the common row representation used by commands, DSL, and UI
+//! - [`shell_words`] and [`fuzzy`] provide small reusable parsing/matching
+//!   primitives
+//!
+//! `core` should not become a junk drawer. A type belongs here only if it is
+//! genuinely shared, stable in meaning, and lower-level than the feature
+//! modules that depend on it.
+//!
 //! Contract:
 //!
 //! - types here should stay broadly reusable and free of host-specific logic

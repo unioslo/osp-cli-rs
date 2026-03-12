@@ -473,7 +473,19 @@ impl StdError for PluginDispatchError {
     }
 }
 
-/// Coordinates plugin discovery, caching, and dispatch settings.
+/// Coordinates plugin discovery, cached metadata, and dispatch settings.
+///
+/// This is the main host-side facade for plugin integration. A typical caller
+/// constructs one manager, points it at explicit roots and persisted state
+/// directories, then asks it for one of three things:
+///
+/// - plugin inventory via [`PluginManager::list_plugins`]
+/// - merged command metadata via [`PluginManager::command_catalog`] or
+///   [`PluginManager::command_policy_registry`]
+/// - dispatch-time configuration such as preferred providers
+///
+/// If you are implementing the plugin executable itself rather than the host,
+/// start in [`crate::core::plugin`] instead of here.
 pub struct PluginManager {
     pub(crate) explicit_dirs: Vec<PathBuf>,
     pub(crate) discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
@@ -609,12 +621,19 @@ impl PluginManager {
         self.with_passive_view(|view| Ok(list_plugins(view)))
     }
 
-    /// Builds the effective command catalog after provider resolution and health filtering.
+    /// Builds the effective command catalog after provider resolution and
+    /// health filtering.
+    ///
+    /// This is the host-facing "what commands exist?" view used by help,
+    /// completion, and similar browse/read surfaces.
     pub fn command_catalog(&self) -> Result<Vec<CommandCatalogEntry>> {
         self.with_passive_view(build_command_catalog)
     }
 
     /// Builds a command policy registry from active plugin describe metadata.
+    ///
+    /// Use this when plugin auth hints need to participate in the same runtime
+    /// visibility and access evaluation as native commands.
     pub fn command_policy_registry(
         &self,
     ) -> Result<crate::core::command_policy::CommandPolicyRegistry> {

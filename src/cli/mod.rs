@@ -5,6 +5,42 @@
 //! arguments into render/config runtime settings. It does not execute commands;
 //! that handoff happens in [`crate::app`].
 //!
+//! Read this module when you need to answer:
+//!
+//! - what is a valid `osp ...` command line?
+//! - which flags are persistent config versus one-shot invocation settings?
+//! - how does the REPL reuse the same grammar without reusing process argv?
+//!
+//! Broad-strokes flow:
+//!
+//! ```text
+//! process argv or REPL line
+//!      │
+//!      ▼
+//! [ Cli / InlineCommandCli ]
+//! clap grammar for builtins and shared flags
+//!      │
+//!      ├── [ invocation ] one-shot execution/render flags (`--format`, `-v`,
+//!      │                  `--cache`, `--plugin-provider`, ...)
+//!      ├── [ pipeline ]   alias-aware command token parsing plus DSL stages
+//!      └── [ commands ]   built-in command handlers once parsing is complete
+//!      │
+//!      ▼
+//! [ app ] host orchestration and final dispatch
+//! ```
+//!
+//! Most callers only need a few entry points:
+//!
+//! - [`Cli`] for the binary-facing grammar
+//! - [`InlineCommandCli`] for command text that omits the binary name
+//! - [`parse_command_text_with_aliases`] when you need alias-aware command plus
+//!   DSL parsing
+//!
+//! The split here is deliberate. One-shot flags that affect rendering or
+//! dispatch should be modeled here so CLI, REPL, tests, and embedders all see
+//! the same contract. Do not let individual command handlers invent their own
+//! side-channel parsing rules or hidden output flags.
+//!
 //! Contract:
 //!
 //! - this module defines what users are allowed to type
