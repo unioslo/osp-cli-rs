@@ -1,6 +1,6 @@
 [package]
 name = "osp-cli"
-version = "1.4.9"
+version = "1.5.0"
 edition = "2024"
 # Note: `skim` as a library needs Rust 1.91+ in local compatibility checks.
 rust-version = "1.94"
