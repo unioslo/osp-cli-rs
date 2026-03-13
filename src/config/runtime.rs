@@ -98,13 +98,40 @@ const PROJECT_APPLICATION_NAME: &str = "osp";
 /// # Examples
 ///
 /// ```
-/// use osp_cli::config::RuntimeLoadOptions;
+/// use osp_cli::config::{RuntimeBootstrapMode, RuntimeLoadOptions};
 ///
 /// let options = RuntimeLoadOptions::default();
 ///
 /// assert!(options.include_env);
 /// assert!(options.include_config_file);
+/// assert_eq!(options.bootstrap_mode, RuntimeBootstrapMode::Standard);
 /// ```
+///
+/// When callers need a sealed bootstrap path with no environment variables,
+/// file loading, or home/XDG-derived discovery, use
+/// [`RuntimeLoadOptions::defaults_only`].
+///
+/// ```
+/// use osp_cli::config::{RuntimeBootstrapMode, RuntimeLoadOptions};
+///
+/// let options = RuntimeLoadOptions::defaults_only();
+///
+/// assert!(!options.include_env);
+/// assert!(!options.include_config_file);
+/// assert_eq!(options.bootstrap_mode, RuntimeBootstrapMode::DefaultsOnly);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeBootstrapMode {
+    /// Use the crate's normal environment and platform-derived bootstrap
+    /// behavior.
+    Standard,
+    /// Use only built-in defaults plus explicit in-memory inputs.
+    ///
+    /// This disables environment-derived defaults, HOME/XDG path discovery,
+    /// config-file and secrets-file lookup, and env/path override discovery.
+    DefaultsOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 #[must_use = "RuntimeLoadOptions builder-style methods return an updated value"]
@@ -116,6 +143,9 @@ pub struct RuntimeLoadOptions {
     /// This does not disable the secrets layer; secrets files and secret
     /// environment overrides still participate through the secrets pipeline.
     pub include_config_file: bool,
+    /// Controls whether bootstrap may consult ambient environment and
+    /// platform-derived paths before the loader pipeline runs.
+    pub bootstrap_mode: RuntimeBootstrapMode,
 }
 
 impl Default for RuntimeLoadOptions {
@@ -123,6 +153,7 @@ impl Default for RuntimeLoadOptions {
         Self {
             include_env: true,
             include_config_file: true,
+            bootstrap_mode: RuntimeBootstrapMode::Standard,
         }
     }
 }
@@ -133,11 +164,24 @@ impl RuntimeLoadOptions {
         Self::default()
     }
 
+    /// Creates a sealed bootstrap policy that uses only built-in defaults plus
+    /// explicit in-memory layers.
+    pub fn defaults_only() -> Self {
+        Self {
+            include_env: false,
+            include_config_file: false,
+            bootstrap_mode: RuntimeBootstrapMode::DefaultsOnly,
+        }
+    }
+
     /// Sets whether environment-derived layers should be loaded.
     ///
     /// The default is `true`.
     pub fn with_env(mut self, include_env: bool) -> Self {
         self.include_env = include_env;
+        if include_env {
+            self.bootstrap_mode = RuntimeBootstrapMode::Standard;
+        }
         self
     }
 
@@ -146,7 +190,45 @@ impl RuntimeLoadOptions {
     /// The default is `true`. This does not disable the secrets layer.
     pub fn with_config_file(mut self, include_config_file: bool) -> Self {
         self.include_config_file = include_config_file;
+        if include_config_file {
+            self.bootstrap_mode = RuntimeBootstrapMode::Standard;
+        }
         self
+    }
+
+    /// Sets whether bootstrap may consult ambient environment and
+    /// platform-derived paths before the loader pipeline runs.
+    ///
+    /// Switching to [`RuntimeBootstrapMode::DefaultsOnly`] also disables the
+    /// env and config-file loader layers.
+    pub fn with_bootstrap_mode(mut self, bootstrap_mode: RuntimeBootstrapMode) -> Self {
+        self.bootstrap_mode = bootstrap_mode;
+        if matches!(bootstrap_mode, RuntimeBootstrapMode::DefaultsOnly) {
+            self.include_env = false;
+            self.include_config_file = false;
+        }
+        self
+    }
+
+    /// Returns whether the load options seal bootstrap against ambient process
+    /// and home-directory state.
+    pub fn is_defaults_only(self) -> bool {
+        matches!(self.bootstrap_mode, RuntimeBootstrapMode::DefaultsOnly)
+    }
+}
+
+impl RuntimeBootstrapMode {
+    fn capture_env(self) -> RuntimeEnvironment {
+        match self {
+            Self::Standard => RuntimeEnvironment::capture(),
+            Self::DefaultsOnly => RuntimeEnvironment::defaults_only(),
+        }
+    }
+}
+
+impl RuntimeLoadOptions {
+    fn runtime_environment(self) -> RuntimeEnvironment {
+        self.bootstrap_mode.capture_env()
     }
 }
 
@@ -223,10 +305,20 @@ impl RuntimeConfigPaths {
     /// let _secrets = paths.secrets_file.as_deref();
     /// ```
     pub fn discover() -> Self {
-        let paths = Self::from_env(&RuntimeEnvironment::capture());
+        Self::discover_with(RuntimeLoadOptions::default())
+    }
+
+    /// Discovers config and secrets paths using the supplied runtime bootstrap
+    /// policy.
+    ///
+    /// [`RuntimeLoadOptions::defaults_only`] returns an empty path set here so
+    /// callers can build a fully sealed bootstrap path.
+    pub fn discover_with(load: RuntimeLoadOptions) -> Self {
+        let paths = Self::from_env(&load.runtime_environment());
         tracing::debug!(
             config_file = ?paths.config_file.as_ref().map(|path| path.display().to_string()),
             secrets_file = ?paths.secrets_file.as_ref().map(|path| path.display().to_string()),
+            bootstrap_mode = ?load.bootstrap_mode,
             "discovered runtime config paths"
         );
         paths
@@ -268,8 +360,26 @@ impl RuntimeDefaults {
     /// assert_eq!(defaults.get_string("repl.prompt"), Some("osp> "));
     /// ```
     pub fn from_process_env(default_theme_name: &str, default_repl_prompt: &str) -> Self {
+        Self::from_runtime_load(
+            RuntimeLoadOptions::default(),
+            default_theme_name,
+            default_repl_prompt,
+        )
+    }
+
+    /// Builds the default layer using the supplied runtime bootstrap policy.
+    ///
+    /// [`RuntimeLoadOptions::defaults_only`] suppresses environment-derived
+    /// identity, theme-path, history-path, and log-path discovery so the
+    /// resulting layer depends only on built-in values plus the provided
+    /// product defaults.
+    pub fn from_runtime_load(
+        load: RuntimeLoadOptions,
+        default_theme_name: &str,
+        default_repl_prompt: &str,
+    ) -> Self {
         Self::from_env(
-            &RuntimeEnvironment::capture(),
+            &load.runtime_environment(),
             default_theme_name,
             default_repl_prompt,
         )
@@ -532,6 +642,13 @@ impl RuntimeEnvironment {
         }
     }
 
+    fn defaults_only() -> Self {
+        Self {
+            vars: BTreeMap::new(),
+            prefer_platform_dirs: false,
+        }
+    }
+
     #[cfg(test)]
     fn from_pairs<I, K, V>(vars: I) -> Self
     where
@@ -672,7 +789,10 @@ fn project_dirs() -> Option<ProjectDirs> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{DEFAULT_PROFILE_NAME, RuntimeConfigPaths, RuntimeDefaults, RuntimeEnvironment};
+    use super::{
+        DEFAULT_PROFILE_NAME, RuntimeBootstrapMode, RuntimeConfigPaths, RuntimeDefaults,
+        RuntimeEnvironment, RuntimeLoadOptions,
+    };
     use crate::config::{ConfigLayer, ConfigValue, Scope};
 
     fn find_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {
@@ -763,6 +883,16 @@ mod tests {
     }
 
     #[test]
+    fn defaults_only_runtime_load_options_disable_ambient_bootstrap_unit() {
+        let load = RuntimeLoadOptions::defaults_only();
+
+        assert!(!load.include_env);
+        assert!(!load.include_config_file);
+        assert_eq!(load.bootstrap_mode, RuntimeBootstrapMode::DefaultsOnly);
+        assert!(load.is_defaults_only());
+    }
+
+    #[test]
     fn runtime_config_paths_prefer_explicit_file_overrides() {
         let env = RuntimeEnvironment::from_pairs([
             ("OSP_CONFIG_FILE", "/tmp/custom-config.toml"),
@@ -828,5 +958,20 @@ mod tests {
             env.log_file_path(),
             expected_root.join("osp.log").display().to_string()
         );
+    }
+
+    #[test]
+    fn defaults_only_bootstrap_skips_home_and_override_discovery_unit() {
+        let load = RuntimeLoadOptions::defaults_only();
+        let paths = RuntimeConfigPaths::discover_with(load);
+        let defaults = RuntimeDefaults::from_runtime_load(load, "nord", "osp> ");
+
+        assert_eq!(paths.config_file, None);
+        assert_eq!(paths.secrets_file, None);
+        assert_eq!(defaults.get_string("user.name"), Some("anonymous"));
+        assert_eq!(defaults.get_string("domain"), Some("local"));
+        assert_eq!(defaults.get_string("theme.name"), Some("nord"));
+        assert_eq!(defaults.get_string("repl.prompt"), Some("osp> "));
+        assert_eq!(defaults.get_string("theme.path"), None);
     }
 }

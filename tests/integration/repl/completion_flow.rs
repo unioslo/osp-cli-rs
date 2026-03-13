@@ -7,8 +7,7 @@ fn debug_complete_payload(line: &str, steps: &[&str]) -> serde_json::Value {
     let mut args = vec![
         "osp".to_string(),
         "--json".to_string(),
-        "--no-env".to_string(),
-        "--no-config-file".to_string(),
+        "--defaults-only".to_string(),
         "repl".to_string(),
         "debug-complete".to_string(),
         "--line".to_string(),

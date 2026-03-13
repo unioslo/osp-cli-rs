@@ -67,9 +67,13 @@ impl RuntimeConfigRequest {
     }
 }
 
-fn runtime_defaults_layer(product_defaults: &ConfigLayer) -> ConfigLayer {
+fn runtime_defaults_layer_with_load(
+    runtime_load: RuntimeLoadOptions,
+    product_defaults: &ConfigLayer,
+) -> ConfigLayer {
     let mut defaults =
-        RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT).to_layer();
+        RuntimeDefaults::from_runtime_load(runtime_load, DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT)
+            .to_layer();
     defaults.extend_from_layer(product_defaults);
     defaults
 }
@@ -162,11 +166,12 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
         profile_override = ?request.profile_override,
         terminal = ?request.terminal,
         has_session_layer,
+        bootstrap_mode = ?request.runtime_load.bootstrap_mode,
         "resolving runtime config"
     );
-    let paths = RuntimeConfigPaths::discover();
+    let paths = RuntimeConfigPaths::discover_with(request.runtime_load);
     let base_pipeline = build_runtime_pipeline(
-        runtime_defaults_layer(&request.product_defaults),
+        runtime_defaults_layer_with_load(request.runtime_load, &request.product_defaults),
         None,
         &paths,
         request.runtime_load,
@@ -188,7 +193,7 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
 
     let presentation_layer = build_presentation_defaults_layer(&base_resolved);
     let resolved = build_runtime_pipeline(
-        runtime_defaults_layer(&request.product_defaults),
+        runtime_defaults_layer_with_load(request.runtime_load, &request.product_defaults),
         Some(presentation_layer),
         &paths,
         request.runtime_load,

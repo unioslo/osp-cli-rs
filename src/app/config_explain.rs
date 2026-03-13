@@ -91,12 +91,15 @@ pub(crate) fn explain_runtime_config(
     request: RuntimeConfigRequest,
     key: &str,
 ) -> Result<ConfigExplain> {
-    let paths = RuntimeConfigPaths::discover();
+    let paths = RuntimeConfigPaths::discover_with(request.runtime_load);
     let base_pipeline = build_runtime_pipeline(
         {
-            let mut defaults =
-                RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT)
-                    .to_layer();
+            let mut defaults = RuntimeDefaults::from_runtime_load(
+                request.runtime_load,
+                DEFAULT_THEME_NAME,
+                DEFAULT_REPL_PROMPT,
+            )
+            .to_layer();
             defaults.extend_from_layer(&request.product_defaults);
             defaults
         },
@@ -119,9 +122,12 @@ pub(crate) fn explain_runtime_config(
         .wrap_err("failed to resolve config before explaining presentation defaults")?;
     let pipeline = build_runtime_pipeline(
         {
-            let mut defaults =
-                RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT)
-                    .to_layer();
+            let mut defaults = RuntimeDefaults::from_runtime_load(
+                request.runtime_load,
+                DEFAULT_THEME_NAME,
+                DEFAULT_REPL_PROMPT,
+            )
+            .to_layer();
             defaults.extend_from_layer(&request.product_defaults);
             defaults
         },

@@ -132,10 +132,7 @@ fn app_host_surfaces_native_commands_in_help_and_dispatch() {
 
     let mut help_sink = BufferedUiSink::default();
     let exit = app
-        .run_with_sink(
-            ["osp", "--no-env", "--no-config-file", "--help"],
-            &mut help_sink,
-        )
+        .run_with_sink(["osp", "--defaults-only", "--help"], &mut help_sink)
         .expect("help should render");
     assert_eq!(exit, 0);
     assert!(help_sink.stdout.contains("native-probe"));
@@ -144,13 +141,7 @@ fn app_host_surfaces_native_commands_in_help_and_dispatch() {
     let mut dispatch_sink = BufferedUiSink::default();
     let exit = app
         .run_with_sink(
-            [
-                "osp",
-                "--no-env",
-                "--no-config-file",
-                "--json",
-                "native-probe",
-            ],
+            ["osp", "--defaults-only", "--json", "native-probe"],
             &mut dispatch_sink,
         )
         .expect("native command should dispatch");
@@ -175,20 +166,11 @@ fn app_value_api_layers_product_defaults_and_process_style_failures() {
         .with_native_commands(site_status_registry())
         .with_product_defaults(product_defaults);
 
-    assert_eq!(
-        app.run_process(["osp", "--no-env", "--no-config-file", "--help"]),
-        0
-    );
+    assert_eq!(app.run_process(["osp", "--defaults-only", "--help"]), 0);
 
     let mut status_sink = BufferedUiSink::default();
     let status_exit = app.run_process_with_sink(
-        [
-            "osp",
-            "--json",
-            "--no-env",
-            "--no-config-file",
-            "site-status",
-        ],
+        ["osp", "--json", "--defaults-only", "site-status"],
         &mut status_sink,
     );
     assert_eq!(status_exit, 0);
@@ -204,8 +186,7 @@ fn app_value_api_layers_product_defaults_and_process_style_failures() {
     let invalid_exit = app.run_process_with_sink(
         [
             "osp",
-            "--no-env",
-            "--no-config-file",
+            "--defaults-only",
             "--quiet",
             "--definitely-not-a-flag",
         ],
@@ -305,8 +286,7 @@ fn app_host_projects_native_commands_into_repl_completion_surface() {
             [
                 "osp",
                 "--json",
-                "--no-env",
-                "--no-config-file",
+                "--defaults-only",
                 "repl",
                 "debug-complete",
                 "--line",

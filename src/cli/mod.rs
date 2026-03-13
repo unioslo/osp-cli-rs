@@ -117,6 +117,14 @@ pub struct Cli {
     #[arg(long = "no-config-file", alias = "no-config", global = true)]
     pub no_config_file: bool,
 
+    /// Use only built-in defaults and explicit in-memory overrides.
+    ///
+    /// This is stricter than combining `--no-env` and `--no-config-file`: it
+    /// also disables env/path bootstrap discovery through `HOME`, `XDG_*`,
+    /// `OSP_CONFIG_FILE`, and `OSP_SECRETS_FILE`.
+    #[arg(long = "defaults-only", global = true)]
+    pub defaults_only: bool,
+
     /// Add one or more plugin discovery directories.
     #[arg(long = "plugin-dir", global = true)]
     pub plugin_dirs: Vec<PathBuf>,
@@ -143,9 +151,13 @@ pub struct Cli {
 impl Cli {
     /// Returns the runtime source-loading options implied by global CLI flags.
     pub fn runtime_load_options(&self) -> RuntimeLoadOptions {
-        RuntimeLoadOptions::new()
-            .with_env(!self.no_env)
-            .with_config_file(!self.no_config_file)
+        if self.defaults_only {
+            RuntimeLoadOptions::defaults_only()
+        } else {
+            RuntimeLoadOptions::new()
+                .with_env(!self.no_env)
+                .with_config_file(!self.no_config_file)
+        }
     }
 }
 
@@ -650,6 +662,7 @@ impl Cli {
             profile: None,
             no_env: false,
             no_config_file: false,
+            defaults_only: false,
             plugin_dirs: Vec::new(),
             theme: None,
             presentation: None,
@@ -1168,6 +1181,12 @@ mod tests {
             RuntimeLoadOptions::new()
                 .with_env(false)
                 .with_config_file(false)
+        );
+
+        let cli = Cli::parse_from(["osp", "--defaults-only", "theme", "list"]);
+        assert_eq!(
+            cli.runtime_load_options(),
+            RuntimeLoadOptions::defaults_only()
         );
 
         let inline = InlineCommandCli::try_parse_from(["theme", "list"])

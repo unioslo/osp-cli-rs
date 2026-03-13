@@ -521,6 +521,7 @@ pub struct PluginManager {
     pub(crate) cache_root: Option<PathBuf>,
     pub(crate) process_timeout: Duration,
     pub(crate) allow_path_discovery: bool,
+    pub(crate) allow_default_roots: bool,
 }
 
 impl PluginManager {
@@ -546,6 +547,7 @@ impl PluginManager {
             cache_root: None,
             process_timeout: Duration::from_millis(DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as u64),
             allow_path_discovery: false,
+            allow_default_roots: true,
         }
     }
 
@@ -591,6 +593,22 @@ impl PluginManager {
     /// Returns the configured cache root used for the describe metadata cache.
     pub fn cache_root(&self) -> Option<&std::path::Path> {
         self.cache_root.as_deref()
+    }
+
+    /// Enables or disables fallback to platform config/cache roots when
+    /// explicit roots are not configured.
+    ///
+    /// The default is `true`. Disable this when the caller wants plugin
+    /// discovery and describe-cache state to stay fully in-memory unless
+    /// explicit roots are provided.
+    pub fn with_default_roots(mut self, allow_default_roots: bool) -> Self {
+        self.allow_default_roots = allow_default_roots;
+        self
+    }
+
+    /// Returns whether platform config/cache root fallback is enabled.
+    pub fn default_roots_enabled(&self) -> bool {
+        self.allow_default_roots
     }
 
     /// Sets the subprocess timeout used for plugin describe and dispatch calls.

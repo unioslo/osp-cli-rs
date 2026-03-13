@@ -147,6 +147,7 @@ pub(crate) fn build_plugin_manager(
 ) -> PluginManager {
     let manager = PluginManager::new(launch.plugin_dirs.clone())
         .with_roots(launch.config_root.clone(), launch.cache_root.clone())
+        .with_default_roots(!launch.runtime_load.is_defaults_only())
         .with_process_timeout(plugin_process_timeout(config))
         .with_path_discovery(plugin_path_discovery_enabled(config))
         .with_command_preferences(

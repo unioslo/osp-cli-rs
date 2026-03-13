@@ -293,13 +293,21 @@ impl PluginManager {
     }
 
     fn user_plugin_dir(&self) -> Option<PathBuf> {
-        let mut path = self.config_root.clone().or_else(default_config_root_dir)?;
+        let mut path = self.config_root.clone().or_else(|| {
+            self.allow_default_roots
+                .then(default_config_root_dir)
+                .flatten()
+        })?;
         path.push("plugins");
         Some(path)
     }
 
     fn describe_cache_path(&self) -> Option<PathBuf> {
-        let mut path = self.cache_root.clone().or_else(default_cache_root_dir)?;
+        let mut path = self.cache_root.clone().or_else(|| {
+            self.allow_default_roots
+                .then(default_cache_root_dir)
+                .flatten()
+        })?;
         path.push("describe-v1.json");
         Some(path)
     }

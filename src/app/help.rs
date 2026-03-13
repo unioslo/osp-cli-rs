@@ -29,15 +29,20 @@ pub(crate) struct HelpRenderOverrides {
     pub(crate) gammel_og_bitter: bool,
     pub(crate) no_env: bool,
     pub(crate) no_config_file: bool,
+    pub(crate) defaults_only: bool,
     pub(crate) verbose: u8,
     pub(crate) quiet: u8,
 }
 
 impl HelpRenderOverrides {
     fn runtime_load_options(&self) -> RuntimeLoadOptions {
-        RuntimeLoadOptions::new()
-            .with_env(!self.no_env)
-            .with_config_file(!self.no_config_file)
+        if self.defaults_only {
+            RuntimeLoadOptions::defaults_only()
+        } else {
+            RuntimeLoadOptions::new()
+                .with_env(!self.no_env)
+                .with_config_file(!self.no_config_file)
+        }
     }
 }
 
@@ -288,6 +293,7 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
             }
             "--no-env" => out.no_env = true,
             "--no-config" | "--no-config-file" => out.no_config_file = true,
+            "--defaults-only" => out.defaults_only = true,
             "--ascii" => out.ascii_legacy = true,
             "--gammel-og-bitter" => out.gammel_og_bitter = true,
             token
@@ -474,12 +480,14 @@ mod tests {
             "--ascii",
             "--no-env",
             "--no-config",
+            "--defaults-only",
         ]));
         assert_eq!(parsed.verbose, 2);
         assert_eq!(parsed.quiet, 2);
         assert!(parsed.ascii_legacy);
         assert!(parsed.no_env);
         assert!(parsed.no_config_file);
+        assert!(parsed.defaults_only);
     }
 
     #[test]

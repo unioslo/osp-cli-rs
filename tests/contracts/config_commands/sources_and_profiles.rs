@@ -142,6 +142,40 @@ ui.mode = "plain"
 
 #[cfg(unix)]
 #[test]
+fn defaults_only_ignores_file_and_environment_bootstrap_contract() {
+    let home = make_temp_dir("osp-cli-config-defaults-only");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+theme.name = "dracula"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .env("OSP__THEME__NAME", "nord")
+        .args(["--json", "--defaults-only", "config", "explain", "theme.name"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let payload = parse_json_stdout(&output.stdout);
+    assert_eq!(payload["value"], osp_cli::ui::DEFAULT_THEME_NAME);
+    assert_eq!(payload["source"], "defaults");
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn positional_and_explicit_profile_resolve_equivalent_config_contract() {
     let home = make_temp_dir("osp-cli-config-profile-equivalent");
     write_config(

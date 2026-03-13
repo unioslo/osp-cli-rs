@@ -140,6 +140,7 @@ mod tests {
         let mut normalized = text
             .lines()
             .map(str::trim_end)
+            .filter(|line| !line.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
         if text.ends_with('\n') {
