@@ -79,14 +79,39 @@ where
         line_projector,
     } = config;
 
+    let mut editor = build_interactive_editor(
+        completion_words,
+        completion_tree,
+        &appearance,
+        line_projector,
+        history_store.clone(),
+    );
+    drive_interactive_editor(
+        prompt,
+        &appearance,
+        &history_store,
+        submission,
+        &mut editor,
+        |editor| editor.read_line(prompt),
+        run_repl_basic,
+    )
+}
+
+pub(super) fn build_interactive_editor(
+    completion_words: Vec<String>,
+    completion_tree: Option<CompletionTree>,
+    appearance: &ReplAppearance,
+    line_projector: Option<LineProjector>,
+    history_store: SharedHistory,
+) -> Reedline {
     let tree = completion_tree.unwrap_or_else(|| build_repl_tree(&completion_words));
     let completer = Box::new(ReplCompleter::new(
         completion_words,
         Some(tree.clone()),
         line_projector.clone(),
     ));
-    let completion_menu = Box::new(build_completion_menu(&appearance));
-    let highlighter = build_repl_highlighter(&tree, &appearance, line_projector);
+    let completion_menu = Box::new(build_completion_menu(appearance));
+    let highlighter = build_repl_highlighter(&tree, appearance, line_projector);
     let edit_mode = Box::new(AutoCompleteEmacs::new(
         Emacs::new(build_repl_keybindings()),
         COMPLETION_MENU_NAME,
@@ -99,10 +124,25 @@ where
     if let Some(highlighter) = highlighter {
         editor = editor.with_highlighter(Box::new(highlighter));
     }
-    editor = editor.with_history(Box::new(history_store.clone()));
+    editor.with_history(Box::new(history_store))
+}
 
+pub(super) fn drive_interactive_editor<F, R, B>(
+    prompt: &OspPrompt,
+    appearance: &ReplAppearance,
+    history_store: &SharedHistory,
+    submission: &mut SubmissionContext<'_, F>,
+    editor: &mut Reedline,
+    mut read_signal: R,
+    mut run_basic_fn: B,
+) -> Result<ReplRunResult>
+where
+    F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
+    R: FnMut(&mut Reedline) -> io::Result<Signal>,
+    B: FnMut(&OspPrompt, &mut SubmissionContext<'_, F>) -> Result<ReplRunResult>,
+{
     loop {
-        let signal = match editor.read_line(prompt) {
+        let signal = match read_signal(editor) {
             Ok(signal) => signal,
             Err(err) => {
                 if is_cursor_position_error(&err) {
@@ -110,14 +150,14 @@ where
                         "WARNING: terminal does not support cursor position requests; \
 falling back to basic input mode."
                     );
-                    return run_repl_basic(prompt, submission);
+                    return run_basic_fn(prompt, submission);
                 }
                 return Err(err.into());
             }
         };
 
         if let Some(result) =
-            handle_interactive_signal(signal, &mut editor, &history_store, &appearance, submission)?
+            handle_interactive_signal(signal, editor, history_store, appearance, submission)?
         {
             return Ok(result);
         }

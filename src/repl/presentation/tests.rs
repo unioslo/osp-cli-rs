@@ -11,12 +11,14 @@ use crate::app::{
 use crate::app::{CMD_CONFIG, CMD_HELP, CMD_PLUGINS, CMD_THEME};
 use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::plugin::PluginManager;
 use crate::repl::ReplViewContext;
 use crate::repl::surface::{ReplOverviewEntry, ReplSurface};
 use crate::ui::RenderSettings;
 use crate::ui::messages::MessageLevel;
 use crate::ui::presentation::build_presentation_defaults_layer;
+use serde_json::json;
 use std::time::Duration;
 
 const FULL_INTRO_TEMPLATE_FIXTURE: &str = include_str!(concat!(
@@ -627,4 +629,147 @@ fn repl_prompt_renders_custom_template_with_prompt_style() {
     assert!(prompt.contains("default"));
     assert!(prompt.contains(">"));
     assert!(prompt.contains("\x1b["));
+}
+
+#[test]
+fn intro_template_parser_expands_all_help_sections_and_merges_repeated_data_blocks() {
+    let help = GuideView {
+        usage: vec!["osp [OPTIONS] COMMAND".to_string()],
+        commands: vec![crate::guide::GuideEntry {
+            name: "help".to_string(),
+            short_help: "Show help".to_string(),
+            display_indent: None,
+            display_gap: None,
+        }],
+        arguments: vec![crate::guide::GuideEntry {
+            name: "<TARGET>".to_string(),
+            short_help: "Target name".to_string(),
+            display_indent: None,
+            display_gap: None,
+        }],
+        options: vec![crate::guide::GuideEntry {
+            name: "--json".to_string(),
+            short_help: "Render json".to_string(),
+            display_indent: None,
+            display_gap: None,
+        }],
+        common_invocation_options: vec![crate::guide::GuideEntry {
+            name: "--profile".to_string(),
+            short_help: "Select profile".to_string(),
+            display_indent: None,
+            display_gap: None,
+        }],
+        notes: vec!["Be careful.".to_string()],
+        sections: vec![GuideSection {
+            title: "Custom".to_string(),
+            kind: GuideSectionKind::Custom,
+            paragraphs: vec!["  Extra section".to_string()],
+            entries: Vec::new(),
+            data: None,
+        }],
+        epilogue: vec!["tail".to_string()],
+        ..GuideView::default()
+    };
+
+    let payload = super::parse_intro_template_payload(
+        r#"
+Before help
+## Status
+ready
+```osp
+{"phase":"boot"}
+```
+```osp
+{"phase":"steady"}
+```
+{{ help }}
+"#,
+        &help,
+    );
+
+    assert_eq!(payload.preamble, vec!["Before help"]);
+    assert_eq!(
+        payload
+            .sections
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Status",
+            "Usage",
+            "Commands",
+            "Arguments",
+            "Options",
+            "Common Invocation Options",
+            "Notes",
+            "Custom",
+        ]
+    );
+    assert_eq!(
+        payload.sections[0].data,
+        Some(json!([{ "phase": "boot" }, { "phase": "steady" }]))
+    );
+    assert_eq!(
+        payload.sections[1].paragraphs,
+        vec!["  osp [OPTIONS] COMMAND".to_string()]
+    );
+    assert_eq!(payload.sections[2].entries[0].name, "help");
+    assert_eq!(payload.sections[3].entries[0].name, "<TARGET>");
+    assert_eq!(payload.sections[4].entries[0].name, "--json");
+    assert_eq!(payload.sections[5].entries[0].name, "--profile");
+    assert_eq!(
+        payload.sections[6].paragraphs,
+        vec!["  Be careful.".to_string()]
+    );
+    assert_eq!(payload.epilogue, vec!["tail"]);
+}
+
+#[test]
+fn intro_template_expansion_handles_scalars_sensitive_keys_and_malformed_placeholders() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    let mut session = ConfigLayer::default();
+    session.set("extensions.demo.enabled", true);
+    session.set("extensions.demo.count", 42_i64);
+    session.set("extensions.demo.token", "secret");
+    session.set("user.display_name", "Codex");
+    session.set(
+        "extensions.demo.items",
+        vec!["1".to_string(), "2".to_string(), "3".to_string()],
+    );
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    resolver.set_session(session);
+    let base = resolver
+        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .expect("list test config should resolve");
+    resolver.set_presentation(build_presentation_defaults_layer(&base));
+    let config = resolver
+        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .expect("list-aware config should resolve");
+    let state = AppState::new(AppStateInit {
+        context: RuntimeContext::new(None, TerminalKind::Repl, None),
+        config,
+        render_settings: RenderSettings::test_plain(OutputFormat::Json),
+        message_verbosity: MessageLevel::Success,
+        debug_verbosity: 0,
+        plugins: PluginManager::new(Vec::new()),
+        native_commands: crate::native::NativeCommandRegistry::default(),
+        themes: crate::ui::theme_loader::ThemeCatalog::default(),
+        launch: LaunchContext::default(),
+    });
+    let expanded = super::expand_intro_template(
+        repl_view(&state),
+        &intro_commands(&["help", "config"]),
+        "Hello {{display_name}} {{extensions.demo.enabled}} {{extensions.demo.count}} {{extensions.demo.items}} {{help_hint}} {{help}} {{extensions.demo.token}} {{}} {{broken",
+    );
+
+    assert_eq!(
+        expanded,
+        "Hello Codex true 42 1, 2, 3 See help for more. {{ help }} {{extensions.demo.token}} {{}} {{broken"
+    );
+    assert_eq!(
+        super::parse_intro_template_payload("", &GuideView::default()),
+        GuideView::default()
+    );
 }

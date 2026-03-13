@@ -738,6 +738,96 @@ fn expand_home_and_prompt_renderers_behave_unit() {
     restore_env("HOME", previous_home);
 }
 
+#[test]
+fn interactive_editor_builder_and_driver_cover_fallback_and_signal_paths_unit() {
+    let history = disabled_history();
+    let appearance = test_appearance();
+    let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), None);
+    let mut built_editor = super::session::build_interactive_editor(
+        vec!["help".to_string(), "exit".to_string()],
+        Some(completion_tree_with_root_commands()),
+        &appearance,
+        None,
+        history.clone(),
+    );
+    assert_eq!(built_editor.current_buffer_contents(), "");
+
+    let mut fallback_execute =
+        |_line: &str, _history: &SharedHistory| Ok(ReplLineResult::Continue(String::new()));
+    let mut fallback_submission = SubmissionContext {
+        history_store: &history,
+        execute: &mut fallback_execute,
+    };
+    let fallback = super::session::drive_interactive_editor(
+        &prompt,
+        &appearance,
+        &history,
+        &mut fallback_submission,
+        &mut built_editor,
+        |_editor| Err(io::Error::from_raw_os_error(25)),
+        |_prompt, _submission| Ok(ReplRunResult::Exit(9)),
+    )
+    .expect("cursor probe errors should fall back to basic mode");
+    assert_eq!(fallback, ReplRunResult::Exit(9));
+
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&executed);
+    let mut execute = move |line: &str, _: &SharedHistory| {
+        seen.lock()
+            .expect("executed command log should not be poisoned")
+            .push(line.to_string());
+        Ok(ReplLineResult::Continue(String::new()))
+    };
+    let mut submission = SubmissionContext {
+        history_store: &history,
+        execute: &mut execute,
+    };
+    let mut editor = reedline::Reedline::create();
+    let mut reads = 0usize;
+    let exit = super::session::drive_interactive_editor(
+        &prompt,
+        &appearance,
+        &history,
+        &mut submission,
+        &mut editor,
+        |_editor| {
+            reads += 1;
+            Ok(if reads == 1 {
+                reedline::Signal::Success("help".to_string())
+            } else {
+                reedline::Signal::CtrlD
+            })
+        },
+        |_prompt, _submission| Ok(ReplRunResult::Exit(99)),
+    )
+    .expect("success and ctrl-d signals should succeed");
+    assert_eq!(exit, ReplRunResult::Exit(0));
+    assert_eq!(
+        *executed
+            .lock()
+            .expect("executed command log should not be poisoned"),
+        vec!["help".to_string()]
+    );
+
+    let mut error_execute =
+        |_line: &str, _history: &SharedHistory| Ok(ReplLineResult::Continue(String::new()));
+    let mut error_submission = SubmissionContext {
+        history_store: &history,
+        execute: &mut error_execute,
+    };
+    let err = super::session::drive_interactive_editor(
+        &prompt,
+        &appearance,
+        &history,
+        &mut error_submission,
+        &mut reedline::Reedline::create(),
+        |_editor| Err(io::Error::other("boom")),
+        |_prompt, _submission| Ok(ReplRunResult::Exit(1)),
+    )
+    .expect_err("non-cursor editor errors should bubble up");
+    assert!(err.to_string().contains("boom"));
+}
+
 // History menu and history-debug contracts.
 
 #[test]
