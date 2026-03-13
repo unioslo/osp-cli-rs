@@ -7,6 +7,20 @@ pub(super) fn env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+pub(crate) fn parse_json_output(
+    label: &str,
+    args: &[&str],
+    stdout: &str,
+    stderr: &str,
+) -> serde_json::Value {
+    serde_json::from_str(stdout).unwrap_or_else(|err| {
+        panic!(
+            "{label} stdout should be json: {err}\nargs: {:?}\nstdout:\n{}\nstderr:\n{}",
+            args, stdout, stderr
+        )
+    })
+}
+
 #[cfg(unix)]
 pub(super) fn with_path_prefix<T>(prefix: &Path, callback: impl FnOnce() -> T) -> T {
     let _guard = env_lock()

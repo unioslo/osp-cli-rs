@@ -180,22 +180,25 @@ fn render_repl_command_output_covers_document_and_text_pipeline_paths_unit() {
     let document_result = CliCommandResult {
         exit_code: 0,
         messages: Default::default(),
-        output: Some(ReplCommandOutput::Document(Document {
-            blocks: vec![
-                Block::Line(LineBlock {
-                    parts: vec![LinePart {
-                        text: "alpha".to_string(),
-                        token: None,
-                    }],
-                }),
-                Block::Line(LineBlock {
-                    parts: vec![LinePart {
-                        text: "beta".to_string(),
-                        token: None,
-                    }],
-                }),
-            ],
-        })),
+        output: Some(ReplCommandOutput::Document {
+            document: Document {
+                blocks: vec![
+                    Block::Line(LineBlock {
+                        parts: vec![LinePart {
+                            text: "alpha".to_string(),
+                            token: None,
+                        }],
+                    }),
+                    Block::Line(LineBlock {
+                        parts: vec![LinePart {
+                            text: "beta".to_string(),
+                            token: None,
+                        }],
+                    }),
+                ],
+            },
+            format_hint: None,
+        }),
         stderr_text: None,
         failure_report: None,
     };

@@ -8,7 +8,7 @@ use osp_cli::core::plugin::{PLUGIN_PROTOCOL_V1, ResponseMetaV1, ResponseV1};
 use osp_cli::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
 use serde_json::json;
 
-use super::support::{env_lock, write_executable_script};
+use super::support::{env_lock, parse_json_output, write_executable_script};
 
 fn with_config_path<T>(config_toml: &str, callback: impl FnOnce() -> T) -> T {
     let _guard = env_lock()
@@ -129,26 +129,29 @@ fn app_host_surfaces_native_commands_in_help_and_dispatch() {
     let app = App::builder()
         .with_native_commands(native_probe_registry())
         .build();
+    let help_args = ["osp", "--defaults-only", "--help"];
 
     let mut help_sink = BufferedUiSink::default();
     let exit = app
-        .run_with_sink(["osp", "--defaults-only", "--help"], &mut help_sink)
+        .run_with_sink(help_args, &mut help_sink)
         .expect("help should render");
     assert_eq!(exit, 0);
     assert!(help_sink.stdout.contains("native-probe"));
     assert!(help_sink.stdout.contains("Inspect resolved host config"));
 
+    let dispatch_args = ["osp", "--defaults-only", "--json", "native-probe"];
     let mut dispatch_sink = BufferedUiSink::default();
     let exit = app
-        .run_with_sink(
-            ["osp", "--defaults-only", "--json", "native-probe"],
-            &mut dispatch_sink,
-        )
+        .run_with_sink(dispatch_args, &mut dispatch_sink)
         .expect("native command should dispatch");
     assert_eq!(exit, 0);
 
-    let payload: serde_json::Value =
-        serde_json::from_str(&dispatch_sink.stdout).expect("native command stdout should be json");
+    let payload = parse_json_output(
+        "app_host_surfaces_native_commands_in_help_and_dispatch/native",
+        &dispatch_args,
+        &dispatch_sink.stdout,
+        &dispatch_sink.stderr,
+    );
     let rows = payload
         .as_array()
         .expect("native command output should be row array");
@@ -166,16 +169,21 @@ fn app_value_api_layers_product_defaults_and_process_style_failures() {
         .with_native_commands(site_status_registry())
         .with_product_defaults(product_defaults);
 
-    assert_eq!(app.run_process(["osp", "--defaults-only", "--help"]), 0);
+    let help_args = ["osp", "--defaults-only", "--help"];
+    let mut help_sink = BufferedUiSink::default();
+    let help_exit = app.run_process_with_sink(help_args, &mut help_sink);
+    assert_eq!(help_exit, 0);
 
+    let status_args = ["osp", "--json", "--defaults-only", "site-status"];
     let mut status_sink = BufferedUiSink::default();
-    let status_exit = app.run_process_with_sink(
-        ["osp", "--json", "--defaults-only", "site-status"],
-        &mut status_sink,
-    );
+    let status_exit = app.run_process_with_sink(status_args, &mut status_sink);
     assert_eq!(status_exit, 0);
-    let payload: serde_json::Value =
-        serde_json::from_str(&status_sink.stdout).expect("site status stdout should be json");
+    let payload = parse_json_output(
+        "app_value_api_layers_product_defaults_and_process_style_failures/status",
+        &status_args,
+        &status_sink.stdout,
+        &status_sink.stderr,
+    );
     let rows = payload
         .as_array()
         .expect("site status output should be a row array");
@@ -183,15 +191,13 @@ fn app_value_api_layers_product_defaults_and_process_style_failures() {
     assert_eq!(rows[0]["banner"], "cli-wrapper");
 
     let mut invalid_sink = BufferedUiSink::default();
-    let invalid_exit = app.run_process_with_sink(
-        [
-            "osp",
-            "--defaults-only",
-            "--quiet",
-            "--definitely-not-a-flag",
-        ],
-        &mut invalid_sink,
-    );
+    let invalid_args = [
+        "osp",
+        "--defaults-only",
+        "--quiet",
+        "--definitely-not-a-flag",
+    ];
+    let invalid_exit = app.run_process_with_sink(invalid_args, &mut invalid_sink);
     assert_ne!(invalid_exit, 0);
     assert!(invalid_sink.stdout.is_empty());
     assert!(!invalid_sink.stderr.is_empty());
@@ -216,55 +222,61 @@ theme.name = "dracula"
                 .with_native_commands(native_probe_registry())
                 .build();
 
+            let default_args = ["osp", "--no-env", "--json", "native-probe"];
             let mut default_sink = BufferedUiSink::default();
             let exit = app
-                .run_with_sink(
-                    ["osp", "--no-env", "--json", "native-probe"],
-                    &mut default_sink,
-                )
+                .run_with_sink(default_args, &mut default_sink)
                 .expect("default profile command should run");
             assert_eq!(exit, 0);
-            let payload: serde_json::Value =
-                serde_json::from_str(&default_sink.stdout).expect("default stdout should be json");
+            let payload = parse_json_output(
+                "app_host_passes_default_and_selected_profiles_into_native_context/default",
+                &default_args,
+                &default_sink.stdout,
+                &default_sink.stderr,
+            );
             let rows = payload
                 .as_array()
                 .expect("default output should be row array");
             assert_eq!(rows[0]["active_profile"], "uio");
             assert_eq!(rows[0]["theme"], "nord");
 
+            let explicit_args = [
+                "osp",
+                "--no-env",
+                "--profile",
+                "tsd",
+                "--json",
+                "native-probe",
+            ];
             let mut explicit_sink = BufferedUiSink::default();
             let exit = app
-                .run_with_sink(
-                    [
-                        "osp",
-                        "--no-env",
-                        "--profile",
-                        "tsd",
-                        "--json",
-                        "native-probe",
-                    ],
-                    &mut explicit_sink,
-                )
+                .run_with_sink(explicit_args, &mut explicit_sink)
                 .expect("explicit profile command should run");
             assert_eq!(exit, 0);
-            let payload: serde_json::Value = serde_json::from_str(&explicit_sink.stdout)
-                .expect("explicit stdout should be json");
+            let payload = parse_json_output(
+                "app_host_passes_default_and_selected_profiles_into_native_context/explicit",
+                &explicit_args,
+                &explicit_sink.stdout,
+                &explicit_sink.stderr,
+            );
             let rows = payload
                 .as_array()
                 .expect("explicit output should be row array");
             assert_eq!(rows[0]["active_profile"], "tsd");
             assert_eq!(rows[0]["theme"], "dracula");
 
+            let positional_args = ["osp", "--no-env", "tsd", "--json", "native-probe"];
             let mut positional_sink = BufferedUiSink::default();
             let exit = app
-                .run_with_sink(
-                    ["osp", "--no-env", "tsd", "--json", "native-probe"],
-                    &mut positional_sink,
-                )
+                .run_with_sink(positional_args, &mut positional_sink)
                 .expect("positional profile command should run");
             assert_eq!(exit, 0);
-            let payload: serde_json::Value = serde_json::from_str(&positional_sink.stdout)
-                .expect("positional stdout should be json");
+            let payload = parse_json_output(
+                "app_host_passes_default_and_selected_profiles_into_native_context/positional",
+                &positional_args,
+                &positional_sink.stdout,
+                &positional_sink.stderr,
+            );
             let rows = payload
                 .as_array()
                 .expect("positional output should be row array");
@@ -280,26 +292,28 @@ fn app_host_projects_native_commands_into_repl_completion_surface() {
         .with_native_commands(native_probe_registry())
         .build();
 
+    let args = [
+        "osp",
+        "--json",
+        "--defaults-only",
+        "repl",
+        "debug-complete",
+        "--line",
+        "native-",
+    ];
     let mut sink = BufferedUiSink::default();
     let exit = app
-        .run_with_sink(
-            [
-                "osp",
-                "--json",
-                "--defaults-only",
-                "repl",
-                "debug-complete",
-                "--line",
-                "native-",
-            ],
-            &mut sink,
-        )
+        .run_with_sink(args, &mut sink)
         .expect("debug-complete should run");
     assert_eq!(exit, 0);
     assert!(sink.stderr.is_empty());
 
-    let payload: serde_json::Value =
-        serde_json::from_str(&sink.stdout).expect("debug-complete stdout should be json");
+    let payload = parse_json_output(
+        "app_host_projects_native_commands_into_repl_completion_surface",
+        &args,
+        &sink.stdout,
+        &sink.stderr,
+    );
     let matches = payload["matches"]
         .as_array()
         .expect("matches should render as an array");
@@ -322,47 +336,51 @@ theme.name = "dracula"
             let plugin_dir = dir.to_str().expect("plugin dir should be utf-8");
             let app = App::builder().build();
 
+            let explicit_args = [
+                "osp",
+                "--json",
+                "--no-env",
+                "--plugin-dir",
+                plugin_dir,
+                "--profile",
+                "tsd",
+                "route-probe",
+                "hello",
+            ];
             let mut explicit_sink = BufferedUiSink::default();
             let exit = app
-                .run_with_sink(
-                    [
-                        "osp",
-                        "--json",
-                        "--no-env",
-                        "--plugin-dir",
-                        plugin_dir,
-                        "--profile",
-                        "tsd",
-                        "route-probe",
-                        "hello",
-                    ],
-                    &mut explicit_sink,
-                )
+                .run_with_sink(explicit_args, &mut explicit_sink)
                 .expect("explicit profile command should run");
             assert_eq!(exit, 0);
 
+            let positional_args = [
+                "osp",
+                "--json",
+                "--no-env",
+                "--plugin-dir",
+                plugin_dir,
+                "tsd",
+                "route-probe",
+                "hello",
+            ];
             let mut positional_sink = BufferedUiSink::default();
             let exit = app
-                .run_with_sink(
-                    [
-                        "osp",
-                        "--json",
-                        "--no-env",
-                        "--plugin-dir",
-                        plugin_dir,
-                        "tsd",
-                        "route-probe",
-                        "hello",
-                    ],
-                    &mut positional_sink,
-                )
+                .run_with_sink(positional_args, &mut positional_sink)
                 .expect("positional profile command should run");
             assert_eq!(exit, 0);
 
-            let explicit: serde_json::Value = serde_json::from_str(&explicit_sink.stdout)
-                .expect("explicit stdout should be json");
-            let positional: serde_json::Value = serde_json::from_str(&positional_sink.stdout)
-                .expect("positional stdout should be json");
+            let explicit = parse_json_output(
+                "app_host_routes_explicit_and_positional_profiles_the_same_for_external_commands/explicit",
+                &explicit_args,
+                &explicit_sink.stdout,
+                &explicit_sink.stderr,
+            );
+            let positional = parse_json_output(
+                "app_host_routes_explicit_and_positional_profiles_the_same_for_external_commands/positional",
+                &positional_args,
+                &positional_sink.stdout,
+                &positional_sink.stderr,
+            );
             let explicit_row = explicit
                 .as_array()
                 .expect("explicit payload should be a row array")
@@ -400,23 +418,25 @@ theme.name = "dracula"
             let app = App::builder().build();
 
             let mut sink = BufferedUiSink::default();
+            let args = [
+                "osp",
+                "--json",
+                "--no-env",
+                "--plugin-dir",
+                plugin_dir,
+                "prod",
+            ];
             let exit = app
-                .run_with_sink(
-                    [
-                        "osp",
-                        "--json",
-                        "--no-env",
-                        "--plugin-dir",
-                        plugin_dir,
-                        "prod",
-                    ],
-                    &mut sink,
-                )
+                .run_with_sink(args, &mut sink)
                 .expect("unknown leading token command should run");
             assert_eq!(exit, 0);
 
-            let payload: serde_json::Value =
-                serde_json::from_str(&sink.stdout).expect("stdout should be json");
+            let payload = parse_json_output(
+                "app_host_keeps_unknown_leading_token_as_command_instead_of_profile",
+                &args,
+                &sink.stdout,
+                &sink.stderr,
+            );
             let row = payload
                 .as_array()
                 .expect("payload should be a row array")

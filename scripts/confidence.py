@@ -128,6 +128,7 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
     """
 
     python = sys.executable or "python3"
+    hermetic_runner = [python, str(root / "scripts" / "run-hermetic-cargo.py"), "--"]
 
     public_docs = ConfidenceCheck(
         name="public-docs",
@@ -178,12 +179,12 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
     contracts = ConfidenceCheck(
         name="contracts",
         description="Spawned-binary CLI behavior contracts.",
-        command=cargo_test_command("--test", "contracts"),
+        command=[*hermetic_runner, *cargo_test_command("--test", "contracts")],
     )
     integration = ConfidenceCheck(
         name="integration",
         description="In-process cross-subsystem behavior flows.",
-        command=cargo_test_command("--test", "integration"),
+        command=[*hermetic_runner, *cargo_test_command("--test", "integration")],
     )
     e2e = ConfidenceCheck(
         name="e2e",

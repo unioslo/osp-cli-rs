@@ -410,9 +410,16 @@ pub(super) fn render_repl_command_output(
                 rendered
             }
         }
-        Some(crate::app::ReplCommandOutput::Document(document)) => {
+        Some(crate::app::ReplCommandOutput::Document {
+            document,
+            format_hint,
+        }) => {
             if stages.is_empty() {
-                render_document(&document, &invocation.ui.render_settings)
+                let render_settings = app::resolve_render_settings_with_hint(
+                    &invocation.ui.render_settings,
+                    format_hint,
+                );
+                render_document(&document, &render_settings)
             } else {
                 // Textual/document outputs are re-rendered through a plain
                 // value projection before piping so DSL stages operate on

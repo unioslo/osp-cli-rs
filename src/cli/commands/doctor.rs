@@ -106,9 +106,10 @@ fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult>
     }
 
     if matches!(context.ui.render_settings.format, OutputFormat::Json) {
-        return Ok(CliCommandResult::document(document_from_json(
-            doctor_report_json_value(&sections),
-        )));
+        return Ok(CliCommandResult::document_with_format(
+            document_from_json(doctor_report_json_value(&sections)),
+            Some(OutputFormat::Json),
+        ));
     }
 
     if sections.is_empty() {
@@ -379,7 +380,7 @@ mod tests {
             },
         )
         .expect("doctor all should succeed");
-        let Some(ReplCommandOutput::Document(document)) = visible.output else {
+        let Some(ReplCommandOutput::Document { document, .. }) = visible.output else {
             panic!("expected document output");
         };
         let Some(Block::Json(json)) = document.blocks.first() else {
@@ -396,7 +397,7 @@ mod tests {
             },
         )
         .expect("doctor all should succeed");
-        let Some(ReplCommandOutput::Document(document)) = filtered.output else {
+        let Some(ReplCommandOutput::Document { document, .. }) = filtered.output else {
             panic!("expected document output");
         };
         let Some(Block::Json(json)) = document.blocks.first() else {

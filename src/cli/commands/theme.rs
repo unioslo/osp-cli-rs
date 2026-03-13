@@ -226,7 +226,7 @@ mod tests {
         let output = match result.output? {
             ReplCommandOutput::Output { output, .. } => output,
             ReplCommandOutput::Guide(_)
-            | ReplCommandOutput::Document(_)
+            | ReplCommandOutput::Document { .. }
             | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()

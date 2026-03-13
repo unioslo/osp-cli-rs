@@ -15,6 +15,9 @@ mod binary_surface;
 #[path = "e2e/cli_invocation.rs"]
 mod cli_invocation;
 
+#[path = "e2e/json_output.rs"]
+mod json_output;
+
 #[path = "e2e/plugin_processes.rs"]
 mod plugin_processes;
 

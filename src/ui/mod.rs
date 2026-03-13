@@ -918,7 +918,11 @@ pub(crate) fn render_structured_output(
 /// assert!(rendered.contains("hello"));
 /// ```
 pub fn render_document(document: &Document, settings: &RenderSettings) -> String {
-    let resolved = settings.resolve_render_settings();
+    let resolved = if matches!(settings.format, OutputFormat::Json) {
+        settings.plain_copy_settings().resolve_render_settings()
+    } else {
+        settings.resolve_render_settings()
+    };
     renderer::render_document(document, resolved)
 }
 
@@ -1095,7 +1099,7 @@ mod tests {
     use crate::core::output_model::OutputResult;
     use crate::core::row::Row;
     use crate::guide::GuideView;
-    use crate::ui::document::{Block, MregValue, TableStyle};
+    use crate::ui::document::{Block, Document, JsonBlock, MregValue, TableStyle};
     use serde_json::json;
 
     fn settings(format: OutputFormat) -> RenderSettings {
@@ -1555,9 +1559,24 @@ mod tests {
         let output = OutputResult::from_rows(json_rows);
         let rendered = render_output(&output, &json_settings);
         let copied = render_output_for_copy(&output, &json_settings);
+        let json_document = Document {
+            blocks: vec![Block::Json(JsonBlock {
+                payload: json!([{ "uid": "alice", "count": 2 }]),
+            })],
+        };
+        let rendered_document = render_document(&json_document, &json_settings);
 
         assert!(rendered.contains("\"uid\""));
-        assert!(rendered.contains("\x1b["));
+        assert_eq!(
+            rendered,
+            "[\n  {\n    \"uid\": \"alice\",\n    \"count\": 2\n  }\n]\n"
+        );
+        assert!(!rendered.contains("\x1b["));
+        assert_eq!(
+            rendered_document,
+            "[\n  {\n    \"uid\": \"alice\",\n    \"count\": 2\n  }\n]\n"
+        );
+        assert!(!rendered_document.contains("\x1b["));
         assert_eq!(
             copied,
             "[\n  {\n    \"uid\": \"alice\",\n    \"count\": 2\n  }\n]\n"

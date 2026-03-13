@@ -466,11 +466,15 @@ fn run_config_set(
             .wrap_err_with(|| format!("failed to resolve config for key `{key}` after set"))?;
         if matches!(context.ui.render_settings.format, OutputFormat::Json) {
             let payload = config_explain_json(&explain, &config, false);
-            ReplCommandOutput::Document(document_from_json(payload))
+            ReplCommandOutput::Document {
+                document: document_from_json(payload),
+                format_hint: Some(OutputFormat::Json),
+            }
         } else {
-            ReplCommandOutput::Document(document_from_text(&render_config_explain_text(
-                &explain, &config, false,
-            )))
+            ReplCommandOutput::Document {
+                document: document_from_text(&render_config_explain_text(&explain, &config, false)),
+                format_hint: None,
+            }
         }
     } else {
         ReplCommandOutput::Output {

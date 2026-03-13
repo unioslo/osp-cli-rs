@@ -42,4 +42,5 @@ matching `docs/releases/vX.Y.Z.md` file before a tag can be published.
 
 - Tightens the public API around the real long-term seams: typed config-store edit options, `App::builder()` as the canonical host front door, wrapper-owned product defaults, and a clearer guided-construction story for embedders.
 - Removes retired DSL rollout compatibility shims, hardens runtime and completion paths against panic-style failure, and adds regression guards that keep the non-test runtime free of `panic!`, `unwrap`, and `expect`.
+- Keeps explicit JSON output machine-readable across headless and PTY execution by forcing plain rendering on JSON surfaces, and hardens the local merge gate by running contract and integration lanes under a hermetic runtime environment.
 - Rebuilds the rustdoc and repo docs experience around credible entrypoints, wrapper guidance, and runnable examples, including a minimal product-wrapper example crate that shows how downstream teams should inject native commands and product defaults.

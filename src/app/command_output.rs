@@ -26,7 +26,10 @@ pub(crate) enum ReplCommandOutput {
         format_hint: Option<OutputFormat>,
     },
     Guide(GuideCommandOutput),
-    Document(Document),
+    Document {
+        document: Document,
+        format_hint: Option<OutputFormat>,
+    },
     Text(String),
 }
 
@@ -98,10 +101,20 @@ impl CliCommandResult {
     }
 
     pub(crate) fn document(document: Document) -> Self {
+        Self::document_with_format(document, None)
+    }
+
+    pub(crate) fn document_with_format(
+        document: Document,
+        format_hint: Option<OutputFormat>,
+    ) -> Self {
         Self {
             exit_code: 0,
             messages: MessageBuffer::default(),
-            output: Some(ReplCommandOutput::Document(document)),
+            output: Some(ReplCommandOutput::Document {
+                document,
+                format_hint,
+            }),
             stderr_text: None,
             failure_report: None,
         }
@@ -394,8 +407,13 @@ fn render_cli_output(
             ));
             maybe_copy_output_with_runtime(runtime, &guide.output, sink);
         }
-        ReplCommandOutput::Document(document) => {
-            sink.write_stdout(&render_document(&document, &runtime.ui().render_settings));
+        ReplCommandOutput::Document {
+            document,
+            format_hint,
+        } => {
+            let effective =
+                resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
+            sink.write_stdout(&render_document(&document, &effective));
         }
         ReplCommandOutput::Text(text) => {
             sink.write_stdout(&text);

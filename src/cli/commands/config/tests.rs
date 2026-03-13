@@ -499,7 +499,7 @@ fn run_config_set_and_unset_cover_session_paths_and_explain_output_unit() {
     .expect("session config set explain should succeed");
     assert!(matches!(
         result.output,
-        Some(ReplCommandOutput::Document(_))
+        Some(ReplCommandOutput::Document { .. })
     ));
 }
 

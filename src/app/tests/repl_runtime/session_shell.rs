@@ -115,7 +115,7 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
     )
     .expect("doctor last should render");
     match rendered.output {
-        Some(ReplCommandOutput::Document(document)) => {
+        Some(ReplCommandOutput::Document { document, .. }) => {
             let Some(Block::Json(json)) = document.blocks.first() else {
                 panic!("expected doctor last json document");
             };

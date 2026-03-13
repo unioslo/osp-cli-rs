@@ -59,7 +59,10 @@ pub(crate) fn config_explain_result(
 
     if matches!(context.ui.render_settings.format, OutputFormat::Json) {
         let payload = config_explain_json(&explain, context.config, args.show_secrets);
-        return Ok(CliCommandResult::document(document_from_json(payload)));
+        return Ok(CliCommandResult::document_with_format(
+            document_from_json(payload),
+            Some(OutputFormat::Json),
+        ));
     }
 
     Ok(CliCommandResult::document(document_from_text(

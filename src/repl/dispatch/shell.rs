@@ -213,8 +213,13 @@ pub(super) fn repl_help_for_scope(
                 &guide.output,
             ))
         }
-        Some(crate::app::ReplCommandOutput::Document(document)) => {
-            Ok(render_document(&document, &invocation.ui.render_settings))
+        Some(crate::app::ReplCommandOutput::Document {
+            document,
+            format_hint,
+        }) => {
+            let render_settings =
+                app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
+            Ok(render_document(&document, &render_settings))
         }
         Some(crate::app::ReplCommandOutput::Output {
             output,

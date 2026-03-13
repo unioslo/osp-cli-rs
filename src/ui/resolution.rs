@@ -240,9 +240,18 @@ impl RenderSettings {
 
     /// Resolves the full UI render plan for one output payload.
     pub(crate) fn resolve_render_plan(&self, output: &OutputResult) -> ResolvedRenderPlan {
+        let format = crate::ui::format::resolve_output_format(output, self);
+        // JSON is a machine-readable surface. Once selected, rendering must not
+        // inherit terminal color/Unicode chrome from the host runtime.
+        let render = if matches!(format, OutputFormat::Json) {
+            self.plain_copy_settings().resolve_render_settings()
+        } else {
+            self.resolve_render_settings()
+        };
+
         ResolvedRenderPlan {
-            format: crate::ui::format::resolve_output_format(output, self),
-            render: self.resolve_render_settings(),
+            format,
+            render,
             guide: self.resolve_guide_render_settings(),
             mreg: self.resolve_mreg_build_settings(),
         }

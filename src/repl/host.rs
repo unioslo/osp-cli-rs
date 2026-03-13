@@ -206,7 +206,10 @@ fn run_repl_debug_complete(
         serde_json::to_string_pretty(&frames).map_err(|err| miette!("{err:#}"))?
     };
     let payload = serde_json::from_str(&payload).map_err(|err| miette!("{err:#}"))?;
-    Ok(CliCommandResult::document(document_from_json(payload)))
+    Ok(CliCommandResult::document_with_format(
+        document_from_json(payload),
+        Some(crate::core::output::OutputFormat::Json),
+    ))
 }
 
 fn run_repl_debug_highlight(
@@ -238,7 +241,10 @@ fn run_repl_debug_highlight(
         "hidden_suggestions": projected_line.hidden_suggestions,
         "spans": spans,
     });
-    Ok(CliCommandResult::document(document_from_json(payload)))
+    Ok(CliCommandResult::document_with_format(
+        document_from_json(payload),
+        Some(crate::core::output::OutputFormat::Json),
+    ))
 }
 
 fn build_repl_completion_tree(
@@ -398,7 +404,7 @@ mod tests {
         .expect("debug complete should succeed");
         assert!(matches!(
             complete.output,
-            Some(crate::app::ReplCommandOutput::Document(_))
+            Some(crate::app::ReplCommandOutput::Document { .. })
         ));
 
         let history_complete = run_repl_debug_command_for(
@@ -421,7 +427,7 @@ mod tests {
         .expect("history debug complete should succeed");
         assert!(matches!(
             history_complete.output,
-            Some(crate::app::ReplCommandOutput::Document(_))
+            Some(crate::app::ReplCommandOutput::Document { .. })
         ));
 
         let highlight = run_repl_debug_command_for(
@@ -437,7 +443,7 @@ mod tests {
         .expect("debug highlight should succeed");
         assert!(matches!(
             highlight.output,
-            Some(crate::app::ReplCommandOutput::Document(_))
+            Some(crate::app::ReplCommandOutput::Document { .. })
         ));
     }
 }

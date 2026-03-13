@@ -1,6 +1,8 @@
 use osp_cli::App;
 use osp_cli::app::BufferedUiSink;
 
+use crate::app::support::parse_json_output;
+
 fn debug_complete_payload(line: &str, steps: &[&str]) -> serde_json::Value {
     let app = App::builder().build();
     let mut sink = BufferedUiSink::default();
@@ -24,7 +26,13 @@ fn debug_complete_payload(line: &str, steps: &[&str]) -> serde_json::Value {
     assert_eq!(exit, 0);
     assert!(sink.stderr.is_empty(), "unexpected stderr: {}", sink.stderr);
 
-    serde_json::from_str(&sink.stdout).expect("debug-complete stdout should be json")
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    parse_json_output(
+        "repl_completion_flow/debug_complete",
+        &arg_refs,
+        &sink.stdout,
+        &sink.stderr,
+    )
 }
 
 fn match_labels(payload: &serde_json::Value) -> Vec<String> {
