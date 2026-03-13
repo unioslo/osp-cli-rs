@@ -248,9 +248,9 @@ lowercase at parse time.
 
 Secret env mapping uses the same scope grammar with `OSP_SECRET__`:
 
-- `OSP_SECRET__LDAP__BIND_PASSWORD` -> `ldap.bind_password`
-- `OSP_SECRET__PROFILE__TSD__LDAP__BIND_PASSWORD` -> profile-scoped secret
-- `OSP_SECRET__TERM__REPL__PROFILE__TSD__LDAP__BIND_PASSWORD` ->
+- `OSP_SECRET__SERVICE__API_TOKEN` -> `service.api_token`
+- `OSP_SECRET__PROFILE__TSD__SERVICE__API_TOKEN` -> profile-scoped secret
+- `OSP_SECRET__TERM__REPL__PROFILE__TSD__SERVICE__API_TOKEN` ->
   terminal+profile scoped secret
 
 ## Secrets
@@ -260,7 +260,10 @@ Secrets are stored in a separate backend:
 - Default backend: TOML file with `0600` permissions (`SecretsTomlLoader`).
 - Optional override backend: `OSP_SECRET__...` environment variables
   (`EnvSecretsLoader`).
-- Secrets are never stored in the main config file.
+- Sensitive keys belong in the secrets store, but `config set` only writes
+  there when you choose `--secrets`.
+- Without `--secrets`, `config set` warns and still writes the value to the
+  main config store.
 - Secrets are wrapped in a redacted type for diagnostics.
 
 No secret defaults are allowed in code. Missing secrets must surface as

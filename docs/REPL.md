@@ -10,6 +10,10 @@ Use the REPL when you are exploring, iterating, or repeatedly looking at the
 same backend data with different pipes and output formats. Use one-shot CLI
 commands when you are scripting, automating, or just need one answer.
 
+Examples that use `inventory ...` below are illustrative provider-backed
+command shapes. Replace them with a real plugin command from
+`plugins commands`.
+
 ## Broad-Strokes Flow
 
 ```text
@@ -41,11 +45,11 @@ If a command works as a one-shot invocation, the same command text should work
 inside the REPL.
 
 ```bash
-osp ldap user alice --json -v
+osp plugins commands --json -v
 ```
 
 ```text
-ldap user alice --json -v
+plugins commands --json -v
 ```
 
 That includes:
@@ -74,39 +78,29 @@ simpler.
 
 ## Shell Scope
 
-Shell scope lets a top-level command namespace stay implicit while you work.
+Shell scope is intentionally narrow. Only a fixed set of top-level command
+roots are shellable by the host: `nh`, `mreg`, `ldap`, `vm`, and `orch`.
+Built-in namespaces such as `plugins`, `config`, `theme`, and `help` do not
+become shells.
 
-Example:
-
-```text
-ldap
-user alice --json
-group ops
-```
-
-That behaves like:
-
-```text
-ldap user alice --json
-ldap group ops
-```
+Most plain upstream installs will not expose those domain roots, so you can
+ignore shell scope until your downstream distribution provides one. When it
+does, entering that bare root makes later lines inherit the root until you
+leave the shell.
 
 Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned. They
 manage the shell rather than dispatching a normal command.
 
-This is useful when you are spending ten minutes in one namespace and do not
-want to keep retyping the same prefix.
-
 ## Cache And Repeated Inspection
 
-`--cache` is REPL-only. It reuses a successful command result from the current
-session so you can keep changing pipes or output format without hitting the
-same backend again.
+`--cache` is REPL-only. It reuses a successful provider-backed command result
+from the current session so you can keep changing pipes or output format
+without hitting the same backend again.
 
 ```text
-ldap user alice --cache | P uid mail
-ldap user alice --cache | P uid
-ldap user alice --cache --format json
+inventory host web-01 --cache | P name owner
+inventory host web-01 --cache | P name
+inventory host web-01 --cache --format json
 ```
 
 The second and third commands reuse the same command result and only re-run the
@@ -129,7 +123,7 @@ Completion does not call remote services while you are typing. It works from
 the known command catalog, config vocabulary, and already-available runtime
 state.
 
-See [COMPLETION.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/COMPLETION.md).
+See [COMPLETION.md](COMPLETION.md).
 
 ## Config Writes Inside The REPL
 
@@ -176,12 +170,12 @@ to try for `repl.input_mode`.
 
 ## Practical Recipes
 
-Stay in one namespace for a short investigation:
+Do a short built-in investigation:
 
 ```text
-plugins
-list
-commands --format md
+plugins list
+plugins commands --format md
+help config
 ```
 
 Change presentation temporarily for the current session:
@@ -194,9 +188,9 @@ config set repl.simple_prompt true
 Do one external fetch, then keep slicing it locally:
 
 ```text
-ldap user alice --cache | P uid mail
-ldap user alice --cache | P uid
-ldap user alice --cache --format json
+inventory host web-01 --cache | P name owner
+inventory host web-01 --cache | P name
+inventory host web-01 --cache --format json
 ```
 
 ## When Not To Use The REPL

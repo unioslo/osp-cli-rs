@@ -1,7 +1,7 @@
 # Output and Invocation Flags
 
-These flags affect one command at a time. They work the same way in the CLI
-and in the REPL.
+These flags affect one command at a time. Most of them work the same way in
+the CLI and in the REPL. The main exception is `--cache`, which is REPL-only.
 
 The useful split is:
 
@@ -30,14 +30,14 @@ Convenience aliases:
 Examples:
 
 ```bash
-osp ldap user alice --format table
-osp ldap user alice --json
+osp plugins commands --format table
+osp plugins commands --json
 osp help --guide
 ```
 
 ```text
-ldap user alice --format table
-ldap user alice --json
+plugins commands --format table
+plugins commands --json
 help --guide
 ```
 
@@ -87,9 +87,9 @@ These are also invocation-local:
 Examples:
 
 ```bash
-osp ldap user alice -v
-osp ldap user alice -dd
-osp ldap user alice --json -q
+osp plugins commands -v
+osp plugins commands -dd
+osp plugins commands --json -q
 ```
 
 ## Provider Selection
@@ -112,9 +112,9 @@ Invocation flags may appear anywhere before `--`.
 These are all valid:
 
 ```bash
-osp ldap user alice --json
-osp --json ldap user alice
-osp ldap --json user alice
+osp plugins commands --json
+osp --json plugins commands
+osp plugins --json commands
 ```
 
 After `--`, remaining tokens are passed through literally.
@@ -135,7 +135,7 @@ osp config set ui.format json --save
 That sets the default. It is different from:
 
 ```bash
-osp ldap user alice --json
+osp plugins commands --json
 ```
 
 Which only affects that invocation.
@@ -145,13 +145,13 @@ Which only affects that invocation.
 Force plain JSON for shell scripts:
 
 ```bash
-osp --format json --mode plain ldap user alice
+osp --format json --mode plain plugins commands
 ```
 
 Keep the normal format but suppress color:
 
 ```bash
-osp --no-color ldap user alice
+osp --no-color plugins commands
 ```
 
 Ask for help/guide output in guide form:

@@ -3,7 +3,9 @@
 `osp` commands can be followed by a small pipe DSL for filtering, reshaping,
 grouping, and extracting structured output.
 
-This document is about practical use, not parser internals.
+This document is about practical use, not parser internals. The implementation
+supports more verbs than this page teaches; most users only need bare quick
+search plus `F`, `P`, `S`, `G`, `L`, and `VALUE` at first.
 
 The DSL is most useful when the command already gives you roughly the right
 data and you just need to ask a smaller question:
@@ -64,7 +66,8 @@ Turn one field into a simple value list:
 | VALUE uid
 ```
 
-If you only remember five things about the DSL, remember those.
+If you only remember five things about the DSL, remember those. You can ignore
+the rest until you actually need a more specialized transform.
 
 ## Basic Shape
 
@@ -75,7 +78,7 @@ command ... | STAGE ... | STAGE ...
 Examples:
 
 ```bash
-osp ldap user alice | P uid mail
+osp plugins commands | P name about
 osp plugins commands | P name provider about | S name | L 10
 osp help | VALUE commands[].name
 ```
@@ -89,15 +92,21 @@ osp help | VALUE commands[].name
 - Selector-style stages try to preserve structure when they can.
 - Collection-style stages intentionally reshape row/group data.
 - Bare text like `doctor` is quick search over keys and values.
-- Path-shaped selectors like `commands[].name` are strict paths.
+- Path-shaped selectors like `commands[].name` prefer exact path lookup.
+- On multi-row data, positive quick search usually acts like keep/drop
+  selection.
+- On a single row or document, positive quick search may narrow the result down
+  to the matched branch instead of returning the whole input unchanged.
 - The DSL runs before final rendering, so the same pipeline can be shown as a
   table, JSON, markdown, or plain values afterward.
 
 In practice:
 
 - `name` is permissive.
-- `metadata.owner` means that exact path.
+- `metadata.owner` first tries that exact path.
 - `members[].uid` means fan out the `members` array and read each `uid`.
+- If a dotted/indexed quick token does not resolve as a path, quick search can
+  still fall back to matching visible row text.
 
 ## Choosing The Smallest Useful Stage
 
@@ -774,13 +783,14 @@ Output:
 
 ```json
 [
-  {"uid": "alice", "dept": "ops"}
+  {"uid": "alice"}
 ]
 ```
 
-`K` only searches keys, not values.
+`K` only searches keys, not values, and returns the matched key projection
+rather than the whole row.
 
-### `?` Clean Or Exists Filter
+### `?` Clean Or Truthy Filter
 
 With no argument, `?` removes empty values and drops empty rows.
 
@@ -807,7 +817,7 @@ Output:
 ]
 ```
 
-With a selector, `?` becomes an exists filter:
+With a selector, `?` keeps rows where the resolved value is truthy:
 
 Pipeline:
 
@@ -831,6 +841,9 @@ Output:
   {"uid": "alice"}
 ]
 ```
+
+For this check, `null`, `false`, `0`, `""`, `[]`, and `{}` all count as
+missing.
 
 ### `U` Unroll A List Field
 
@@ -983,7 +996,7 @@ Path syntax supports:
 Important rule:
 
 - Bare tokens are permissive descendant selectors.
-- Dotted or indexed selectors are strict path selectors.
+- Dotted or indexed selectors prefer exact path lookup first.
 
 That means `owner` and `metadata.owner` are intentionally different surfaces.
 
@@ -993,7 +1006,8 @@ That means `owner` and `metadata.owner` are intentionally different surfaces.
 - commas and whitespace both separate terms in `P` and `VALUE`
 - quotes keep embedded commas or spaces together
 - malformed quoting is an error
-- mistyped verb-like stages are errors, not silent quick search
+- unknown single-letter alphabetic verbs are errors
+- longer unknown stages still fall through to quick search
 
 Examples:
 

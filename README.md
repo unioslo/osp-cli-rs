@@ -9,6 +9,9 @@
 `osp-cli` is a batteries-included Rust CLI and interactive REPL for
 structured operational workflows.
 
+It is also a library for teams that want to embed the upstream host, add
+site-specific native commands, and wrap it in a product-specific crate.
+
 It combines:
 - command execution
 - interactive shell ergonomics
@@ -21,6 +24,16 @@ Use it as:
 - a normal command-line tool
 - a long-running REPL with history, completion, inline help, and cached
   results
+- a library/runtime foundation for a downstream product wrapper
+
+## As A Library
+
+If you are evaluating `osp-cli` as an embedder or wrapper-crate dependency,
+start with:
+
+- [docs/EMBEDDING.md](docs/EMBEDDING.md)
+- [docs/README.md](docs/README.md)
+- [`src/lib.rs`](src/lib.rs)
 
 ## Install
 
@@ -56,22 +69,22 @@ osp plugins list
 REPL:
 
 ```text
-osp> ldap user alice
-osp> ldap user alice | P uid cn mail
-osp> ldap user alice --cache | V uid
+osp> plugins commands
+osp> plugins commands | P name about
+osp> config explain ui.format
 osp> help config
 ```
 
 Per-invocation flags work the same in the CLI and REPL:
 
 ```bash
-osp ldap user alice --json
-osp ldap user alice --format table -v
+osp plugins commands --json
+osp plugins commands --format table -v
 ```
 
 ```text
-ldap user alice --json
-ldap user alice --format table -v
+plugins commands --json
+plugins commands --format table -v
 ```
 
 ## Capabilities
@@ -123,13 +136,28 @@ See:
 Start with:
 - [docs/README.md](docs/README.md)
 
-Core guides:
+If you are just using `osp`, read these first:
+- [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- [docs/COOKBOOK.md](docs/COOKBOOK.md)
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+
+Core operator guides:
 - [docs/REPL.md](docs/REPL.md)
 - [docs/CONFIG.md](docs/CONFIG.md)
+- [docs/FORMATTING.md](docs/FORMATTING.md)
 - [docs/DSL.md](docs/DSL.md)
-- [docs/DSL_AUTHORS.md](docs/DSL_AUTHORS.md)
-- [docs/THEMES.md](docs/THEMES.md)
-- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- [docs/USING_PLUGINS.md](docs/USING_PLUGINS.md)
+
+If you are building a product wrapper on top of `osp-cli`, read these:
+- [docs/EMBEDDING.md](docs/EMBEDDING.md)
+
+If you are writing plugin executables or other extension-side integrations,
+read these:
+- [docs/WRITING_PLUGINS.md](docs/WRITING_PLUGINS.md)
+- [docs/PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md)
+
+If you are working on the repo itself, read:
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
 
 ## Development
 

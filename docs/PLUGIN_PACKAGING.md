@@ -6,7 +6,7 @@ This document defines how to ship `osp` with optional bundled plugins.
 
 - Base: `osp`
   - Backbone only, no bundled plugins.
-- Internal distro: `osp-uio`
+- Downstream distro: `osp-acme`
   - Same `osp` binary plus bundled `osp-*` plugin executables.
 
 ## Discovery Order
@@ -38,8 +38,8 @@ Conflict rule:
 <install-root>/
   bin/osp
   lib/osp/plugins/
-    osp-uio-ldap
-    osp-uio-mreg
+    osp-acme-inventory
+    osp-acme-assets
     manifest.toml
 ```
 
@@ -49,20 +49,20 @@ Conflict rule:
 protocol_version = 1
 
 [[plugin]]
-id = "uio-ldap"
-exe = "osp-uio-ldap"
+id = "acme-inventory"
+exe = "osp-acme-inventory"
 version = "0.1.0"
 enabled_by_default = true
 checksum_sha256 = "..."
-commands = ["ldap"]
+commands = ["inventory"]
 
 [[plugin]]
-id = "uio-mreg"
-exe = "osp-uio-mreg"
+id = "acme-assets"
+exe = "osp-acme-assets"
 version = "0.1.0"
 enabled_by_default = true
 checksum_sha256 = "..."
-commands = ["mreg"]
+commands = ["assets"]
 ```
 
 ## Manifest Validation Rules (Current)
@@ -91,12 +91,12 @@ by the same profile and terminal rules as the rest of the config.
 Example:
 
 ```toml
-[profile.default.plugins.ldap]
+[profile.default.plugins.inventory]
 state = "enabled"
-provider = "uio-ldap"
+provider = "acme-inventory"
 
-[terminal.repl.profile.default.plugins.ldap]
-provider = "uio-ldap-beta"
+[terminal.repl.profile.default.plugins.inventory]
+provider = "acme-inventory-beta"
 ```
 
 Backbone behavior:

@@ -2,22 +2,35 @@
 
 Start here if you are using `osp`.
 
-This folder is about product behavior and operator use. If you are trying to
-understand code ownership or internal layering, the Rust module docs under
-`src/*/mod.rs` are the better place to start.
+If you are evaluating `osp-cli` as a library or wrapper-crate base instead of
+as an operator, jump straight to [EMBEDDING.md](EMBEDDING.md) and the crate
+root rustdoc in [`../src/lib.rs`](../src/lib.rs). If you want the copyable
+starting point, use [`../examples/product-wrapper/src/lib.rs`](../examples/product-wrapper/src/lib.rs)
+and [`../examples/product-wrapper/src/main.rs`](../examples/product-wrapper/src/main.rs).
 
-## Architecture And Module Docs
+This folder mixes operator docs, customization docs, plugin/extender docs, and
+contributor notes. If you are new, stay in `First Stops` and `Using osp` first.
+You can ignore `Extending osp`, `Contributor Docs`, and `Architecture And
+Module Docs` until you actually need them.
 
-If you want the code-level map instead of the operator guide, start with:
+## First Stops
 
-- crate map: [`src/lib.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/lib.rs)
-- host/runtime composition: [`src/app/mod.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/app/mod.rs)
-- CLI grammar: [`src/cli/mod.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/cli/mod.rs)
-- config system: [`src/config/mod.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/config/mod.rs)
-- DSL pipeline: [`src/dsl/mod.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/dsl/mod.rs)
-- REPL boundary: [`src/repl/mod.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/repl/mod.rs)
-- UI/rendering: [`src/ui/mod.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/ui/mod.rs)
-- plugin boundary: [`src/plugin/mod.rs`](/home/oistes/git/github.uio.no/osp/osp-cli-rust/src/plugin/mod.rs)
+- new here:
+  [GETTING_STARTED.md](GETTING_STARTED.md)
+- want copy-pasteable patterns:
+  [COOKBOOK.md](COOKBOOK.md)
+- something is already weird:
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+
+## Common Jobs
+
+- inspect which plugin-provided commands are available:
+  [COOKBOOK.md](COOKBOOK.md) and [USING_PLUGINS.md](USING_PLUGINS.md)
+- debug a missing command or provider conflict:
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md) and
+  [USING_PLUGINS.md](USING_PLUGINS.md)
+- set sane daily defaults for output and presentation:
+  [COOKBOOK.md](COOKBOOK.md), [CONFIG.md](CONFIG.md), and [UI.md](UI.md)
 
 ## Broad-Strokes Mental Model
 
@@ -36,52 +49,75 @@ UI/rendering or REPL presentation
 Most questions about `osp` fit one of those stages. The best doc is usually
 the one that owns that stage.
 
-## Start Here By Task
+## Using osp
 
-- I want to run one command and control output:
-  [FORMATTING.md](FORMATTING.md)
-- I want to work interactively:
+- guided first session:
+  [GETTING_STARTED.md](GETTING_STARTED.md)
+- REPL workflow:
   [REPL.md](REPL.md)
-- I want to understand config, profiles, and why one value won:
+- one-shot output, flags, and rendering:
+  [FORMATTING.md](FORMATTING.md)
+- config, profiles, and precedence:
   [CONFIG.md](CONFIG.md)
-- I want to change themes or presentation:
-  [THEMES.md](THEMES.md) and [UI.md](UI.md)
-- I want to use plugins:
-  [USING_PLUGINS.md](USING_PLUGINS.md)
-- I want to write a plugin:
-  [WRITING_PLUGINS.md](WRITING_PLUGINS.md),
-  [PLUGIN_PROTOCOL.md](PLUGIN_PROTOCOL.md), and
-  [PLUGIN_PACKAGING.md](PLUGIN_PACKAGING.md)
-- I want to troubleshoot odd behavior:
+- pipes and output shaping:
+  [DSL.md](DSL.md)
+- completion and history:
+  [COMPLETION.md](COMPLETION.md)
+- first-pass debugging:
   [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
-## Other Useful References
+## Customizing osp
 
-- DSL user guide: [DSL.md](DSL.md)
-- DSL author notes: [DSL_AUTHORS.md](DSL_AUTHORS.md)
-- Completion and history behavior: [COMPLETION.md](COMPLETION.md)
-- Rendering and UI behavior: [UI.md](UI.md)
-- Logging and debug behavior: [LOGGING.md](LOGGING.md)
-- Auth and command policy: [AUTH.md](AUTH.md)
-- Minimal LDAP command/service surface: [LDAP.md](LDAP.md)
+- themes:
+  [THEMES.md](THEMES.md)
+- UI and presentation behavior:
+  [UI.md](UI.md)
+- logging and debug output:
+  [LOGGING.md](LOGGING.md)
 
-## Five-IQ Quick Start
+## Extending osp
 
-Run one command and ask for JSON:
+Skip this whole section unless you are building on top of `osp-cli`, working
+with plugin-provided commands, or writing plugins.
 
-```bash
-osp ldap user alice --json
-```
+- building a site-specific product crate on top of `osp-cli`:
+  [EMBEDDING.md](EMBEDDING.md)
+- using plugin-provided commands:
+  [USING_PLUGINS.md](USING_PLUGINS.md)
+- writing plugins:
+  [WRITING_PLUGINS.md](WRITING_PLUGINS.md)
+- subprocess protocol:
+  [PLUGIN_PROTOCOL.md](PLUGIN_PROTOCOL.md)
+- bundled plugin packaging:
+  [PLUGIN_PACKAGING.md](PLUGIN_PACKAGING.md)
+- auth and command policy boundary:
+  [AUTH.md](AUTH.md)
+- site-specific integrations belong in downstream product repositories
 
-Start the REPL:
+## Contributor Docs
 
-```bash
-osp
-```
+- contributing workflow:
+  [CONTRIBUTING.md](CONTRIBUTING.md)
+- testing strategy and confidence lanes:
+  [TESTING.md](TESTING.md)
+- DSL implementation notes:
+  [DSL_AUTHORS.md](DSL_AUTHORS.md)
+- planning/review scratch area:
+  `docs/plans/`
 
-Fetch once in the REPL, then keep slicing locally:
+## Architecture And Module Docs
 
-```text
-ldap user alice --cache | P uid mail
-ldap user alice --cache | VALUE uid
-```
+If you want the code-level map instead of the operator guide, start with these.
+Most users can ignore this section.
+
+For rendered API docs, prefer docs.rs or `cargo doc --open`. The links below
+point to the corresponding source entrypoints in this repository.
+
+- crate map: [`src/lib.rs`](../src/lib.rs)
+- host/runtime composition: [`src/app/mod.rs`](../src/app/mod.rs)
+- CLI grammar: [`src/cli/mod.rs`](../src/cli/mod.rs)
+- config system: [`src/config/mod.rs`](../src/config/mod.rs)
+- DSL pipeline: [`src/dsl/mod.rs`](../src/dsl/mod.rs)
+- REPL boundary: [`src/repl/mod.rs`](../src/repl/mod.rs)
+- UI/rendering: [`src/ui/mod.rs`](../src/ui/mod.rs)
+- plugin boundary: [`src/plugin/mod.rs`](../src/plugin/mod.rs)

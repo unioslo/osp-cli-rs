@@ -18,7 +18,8 @@ If `just` is still not found afterwards, make sure `~/.cargo/bin` is on your
 Keep committed docs user-facing.
 
 - product behavior, usage, contributor-facing architecture, and reference docs belong in `docs/`
-- private planning notes, reviews, migration sequencing, and AI working material should stay out of the committed tree
+- `docs/plans/` is the freezone for planning notes, reviews, migration sequencing, and temporary working material
+- keep freezone material under `docs/plans/` instead of mixing it into the user-facing guides
 
 ## Commit Message Contract
 

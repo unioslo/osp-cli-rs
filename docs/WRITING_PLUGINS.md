@@ -429,9 +429,9 @@ Users manage plugins with built-in commands:
 ```bash
 osp plugins list              # Show discovered plugins
 osp plugins commands          # Show plugin-provided commands
-osp plugins enable ldap       # Enable one command
-osp plugins disable ldap      # Disable one command
-osp plugins clear-state ldap  # Remove explicit command state
+osp plugins enable inventory       # Enable one command
+osp plugins disable inventory      # Disable one command
+osp plugins clear-state inventory  # Remove explicit command state
 osp plugins doctor            # Diagnose plugin issues
 osp plugins refresh           # Clear discovery cache
 ```
@@ -443,17 +443,17 @@ command becomes ambiguous until the user either picks a provider for the
 current invocation or stores a preferred provider:
 
 ```bash
-osp ldap user alice --plugin-provider uio-ldap
-osp plugins select-provider ldap uio-ldap
-osp plugins clear-provider ldap
+osp inventory host web-01 --plugin-provider inventory-a
+osp plugins select-provider inventory inventory-a
+osp plugins clear-provider inventory
 ```
 
 Plugin command routing is stored in the regular scoped config file. For example:
 
 ```toml
-[profile.default.plugins.ldap]
+[profile.default.plugins.inventory]
 state = "enabled"
-provider = "uio-ldap"
+provider = "inventory-a"
 ```
 
 ## Writing a plugin in Rust

@@ -26,7 +26,7 @@ Upstream owns:
 Upstream does not own:
 
 - netgroup lookup
-- LDAP or IdP integration
+- directory or IdP integration
 - site-specific capability vocabularies
 - site-specific command authorization decisions
 

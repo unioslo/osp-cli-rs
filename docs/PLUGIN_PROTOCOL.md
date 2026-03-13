@@ -12,7 +12,7 @@ Plugins are separate binaries discovered at runtime (Option B).
 ## Process Model
 
 - Backbone binary: `osp`
-- Plugin binaries: `osp-<id>` (for example `osp-uio-ldap`)
+- Plugin binaries: `osp-<id>` (for example `osp-acme-inventory`)
 - Transport: subprocess invocation + JSON over stdout
 
 ## Required Plugin Commands
@@ -25,8 +25,8 @@ Plugins are separate binaries discovered at runtime (Option B).
 - Normal execution
   - Backbone resolves the plugin from the selected top-level command and then
     invokes the plugin as `<plugin-exe> <selected-command> <remaining-argv...>`.
-  - Example: `osp ldap user oistes` invokes the plugin with argv
-    `["ldap", "user", "oistes"]`.
+  - Example: `osp inventory host web-01` invokes the plugin with argv
+    `["inventory", "host", "web-01"]`.
   - Backbone also sets `OSP_COMMAND=<selected-top-level-command>`.
   - `OSP_COMMAND` and `argv[1]` carry the same selected command on purpose.
     Plugins may use either, but they should agree.
@@ -59,16 +59,16 @@ Plugins are separate binaries discovered at runtime (Option B).
 ```json
 {
   "protocol_version": 1,
-  "plugin_id": "uio-ldap",
+  "plugin_id": "acme-inventory",
   "plugin_version": "0.1.0",
   "min_osp_version": "0.1.0",
   "commands": [
     {
-      "name": "ldap",
-      "about": "LDAP lookups",
+      "name": "inventory",
+      "about": "Inventory lookups",
       "subcommands": [
-        { "name": "user", "about": "Lookup LDAP users", "subcommands": [] },
-        { "name": "netgroup", "about": "Lookup LDAP netgroups", "subcommands": [] }
+        { "name": "host", "about": "Look up one host", "subcommands": [] },
+        { "name": "service", "about": "Look up one service", "subcommands": [] }
       ]
     }
   ]
@@ -131,19 +131,23 @@ Backbone behavior:
 ```json
 {
   "code": "AUTH_FAILED",
-  "message": "LDAP bind failed",
+  "message": "Inventory backend unavailable",
   "details": {}
 }
 ```
 
 ## Exit Code Guidance
 
-- `0`: success
-- `2`: usage/argument error
-- `10`: plugin not found (backbone-level)
-- `20`: auth/config error
-- `30`: upstream API failure
-- `40`: internal error
+- Inside the plugin process, use exit code `0` for successful protocol
+  responses, including `ok=false` application-level failures.
+- Use non-zero exits only for process-level failures such as crashes, missing
+  prerequisites, or setup/transport problems.
+- When a plugin is invoked through `osp`, non-zero plugin exits are collapsed
+  into OSP's generic plugin-failure exit family rather than preserving a
+  plugin-specific numeric taxonomy.
+- If callers need to distinguish auth, config, upstream, or application
+  failures, put that meaning in the structured `error.code` field, not in the
+  process exit code.
 
 ## Compatibility Policy
 
@@ -189,8 +193,8 @@ Env mapping rules:
 - Backbone prefixes the name with `OSP_PLUGIN_CFG_`.
 - Example:
   - `extensions.plugins.env.api.url = "https://example"`
-  - `extensions.plugins.ldap.env.bind.password = "sekrit"`
-  - become `OSP_PLUGIN_CFG_API_URL` and `OSP_PLUGIN_CFG_BIND_PASSWORD`
+  - `extensions.plugins.acme-inventory.env.api.token = "sekrit"`
+  - become `OSP_PLUGIN_CFG_API_URL` and `OSP_PLUGIN_CFG_API_TOKEN`
 - plugin-specific values override shared values when they map to the same env
   name.
 - app-owned plugin config is injected after runtime hints, so later
@@ -201,4 +205,4 @@ Env mapping rules:
 
 Examples:
 - `extensions.plugins.env.api.url = "https://common.example"`
-- `extensions.plugins.ldap.env.bind.password = "sekrit"`
+- `extensions.plugins.acme-inventory.env.api.token = "sekrit"`

@@ -31,7 +31,7 @@ The REPL completes:
 - flags
 - flag values
 - `config set` keys
-- scoped commands inside a shell
+- scoped commands inside a supported REPL shell, when your install exposes one
 - DSL stages after `|`
 - path-like values when a command or plugin marks them as path inputs
 
@@ -41,7 +41,7 @@ Examples:
 plugins <TAB>
 config set <TAB>
 theme use <TAB>
-ldap user alice | <TAB>
+plugins commands | <TAB>
 ```
 
 That is the important contract: completion should help you finish real command
@@ -57,10 +57,10 @@ That matters for things like:
 - provider-specific values
 - path-like flag values
 - DSL suggestions after a pipeline marker
-- shell-scoped commands after entering a namespace like `ldap`
+- shell-scoped commands after entering a supported shellable root
 
-Shell controls like `exit` and `quit` remain REPL-owned. They are treated as
-REPL controls, not as ordinary plugin or built-in commands.
+Built-in namespaces like `plugins`, `config`, and `theme` do not become
+shells. Shell controls like `exit` and `quit` remain REPL-owned.
 
 ## Invocation Flags
 
@@ -70,12 +70,14 @@ CLI, such as:
 - `--format`
 - `--guide`
 - `--json`
-- `-v/-q/-d`
+- `--verbose`
+- `--quiet`
+- `--debug`
 - `--plugin-provider`
 - `--cache`
 
-This matters because one-shot rendering and provider-selection tweaks should be
-discoverable without leaving the REPL.
+Parsing also accepts short forms like `-v/-q/-d`, but completion suggestions
+use the long names.
 
 ## History
 
@@ -94,28 +96,28 @@ Supported expansions:
   - absolute history entry
 - `!prefix`
   - most recent command starting with that prefix
+- `!?text`
+  - most recent command containing that text
 
 Examples:
 
 ```text
 !! 
-!ldap
+!plugins
 !-2
 ```
 
+Persisted history intentionally skips help-like and bang commands such as
+`help`, `history list`, `--help`, and `!` expansions. That is deliberate; it
+keeps durable history focused on commands you are likely to rerun.
+
 ## Scoped History
 
-History is shell-aware. That makes repeated work inside a namespace more
-predictable because the shell prefix stays part of the command context.
+History is shell-aware. That makes repeated work inside a supported shellable
+root more predictable because the shell prefix stays part of the command
+context.
 
-In practice, this means history feels less confusing after entering a shell
-like:
-
-```text
-ldap
-user alice
-netgroup ops
-```
+If your install never exposes shellable roots, you can ignore this section.
 
 ## If Completion Looks Wrong
 
@@ -133,4 +135,4 @@ Completion problems are often catalog problems, not editor problems.
 
 If the line looks visually wrong rather than semantically wrong, that is more
 likely a REPL/editor presentation issue than a completion-logic issue. See
-[REPL.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/REPL.md).
+[REPL.md](REPL.md).

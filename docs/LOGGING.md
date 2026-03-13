@@ -58,8 +58,8 @@ In the REPL, `-v/-q/-d` are command-local. They do not permanently change the
 shell’s behavior unless you change config defaults.
 
 ```text
-ldap user alice -v
-ldap user alice -dd
+plugins commands -v
+plugins commands -dd
 ```
 
 ## Config Keys
@@ -89,5 +89,5 @@ Plugins should keep data output on `stdout` and diagnostics on `stderr`.
 stays on `stdout` and diagnostics stay on `stderr`.
 
 ```bash
-osp ldap user alice --json -d 2>debug.log
+osp plugins commands --json -d 2>debug.log
 ```

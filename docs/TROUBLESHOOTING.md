@@ -3,6 +3,10 @@
 This file is for the boring first-pass checks that solve most operator
 problems.
 
+Examples that use `inventory ...` below are illustrative provider-backed
+command shapes. Replace them with a real plugin command from
+`osp plugins commands`.
+
 The pattern is:
 
 1. identify which stage is failing
@@ -40,14 +44,16 @@ osp plugins doctor
 
 If multiple plugins provide the same command, choose one explicitly:
 
+Illustrative provider-backed example:
+
 ```bash
-osp ldap user alice --plugin-provider uio-ldap
+osp inventory host web-01 --plugin-provider inventory-a
 ```
 
 Or persist a preferred provider:
 
 ```bash
-osp plugins select-provider ldap uio-ldap
+osp plugins select-provider inventory inventory-a
 ```
 
 ## Symptom: A Plugin Command Times Out
@@ -96,7 +102,7 @@ osp config set repl.input_mode basic --save
 with weak interactive support.
 
 If completion looks semantically wrong rather than visually wrong, also check
-[COMPLETION.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/COMPLETION.md).
+[COMPLETION.md](COMPLETION.md).
 
 ## Symptom: JSON Output Is Polluted
 
@@ -110,8 +116,10 @@ If a script sees invalid JSON:
 
 Example:
 
+Illustrative provider-backed example:
+
 ```bash
-osp ldap user alice --json 2>debug.log
+osp inventory host web-01 --json 2>debug.log
 ```
 
 If the JSON becomes valid once `stderr` is redirected, the issue is stream
@@ -149,8 +157,8 @@ load, or a custom file overrode a builtin.
 
 ## More Help
 
-- REPL usage: [REPL.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/REPL.md)
-- Completion and history: [COMPLETION.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/COMPLETION.md)
-- Invocation flags: [FORMATTING.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/FORMATTING.md)
-- Config: [CONFIG.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/CONFIG.md)
-- Plugins: [USING_PLUGINS.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/USING_PLUGINS.md)
+- REPL usage: [REPL.md](REPL.md)
+- Completion and history: [COMPLETION.md](COMPLETION.md)
+- Invocation flags: [FORMATTING.md](FORMATTING.md)
+- Config: [CONFIG.md](CONFIG.md)
+- Plugins: [USING_PLUGINS.md](USING_PLUGINS.md)

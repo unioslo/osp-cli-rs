@@ -2,6 +2,11 @@
 
 Most domain commands in `osp` come from plugins.
 
+If you are only using built-in commands, you can skip this file.
+
+Examples that use `inventory ...` below are illustrative provider-backed
+command shapes. Replace them with a real command from `osp plugins commands`.
+
 ## Inspect Plugins
 
 Useful commands:
@@ -16,9 +21,9 @@ Use `plugins doctor` first when a command is missing or behaving unexpectedly.
 ## Enable and Disable Commands
 
 ```bash
-osp plugins enable ldap
-osp plugins disable ldap
-osp plugins clear-state ldap
+osp plugins enable inventory
+osp plugins disable inventory
+osp plugins clear-state inventory
 ```
 
 These commands persist command routing in the scoped config file. `enable` and
@@ -28,16 +33,16 @@ explicit override so the command falls back to plugin defaults.
 Example:
 
 ```toml
-[profile.default.plugins.ldap]
+[profile.default.plugins.inventory]
 state = "enabled"
-provider = "uio-ldap"
+provider = "inventory-a"
 ```
 
 More specific terminal and profile scopes override less specific ones:
 
 ```toml
-[terminal.repl.profile.default.plugins.ldap]
-provider = "uio-ldap-beta"
+[terminal.repl.profile.default.plugins.inventory]
+provider = "inventory-beta"
 ```
 
 ## Discovery Order
@@ -52,6 +57,13 @@ provider = "uio-ldap-beta"
 5. `PATH` (`osp-*` executables) only when
    `extensions.plugins.discovery.path = true`
 
+PATH discovery is intentionally passive. During ordinary discovery, `osp` does
+not execute PATH plugins just to ask for `--describe`. That means:
+
+- `plugins list` can show a PATH plugin with no discovered commands yet
+- `plugins commands` can stay empty until the first real dispatch or a cached
+  describe payload exists
+
 ## Provider Conflicts
 
 If exactly one active plugin provides a command, `osp` uses it automatically.
@@ -60,14 +72,14 @@ If multiple active plugins provide the same command, `osp` does not guess.
 Choose a provider for one invocation:
 
 ```bash
-osp ldap user alice --plugin-provider uio-ldap
+osp inventory host web-01 --plugin-provider inventory-a
 ```
 
 Or store a preferred provider:
 
 ```bash
-osp plugins select-provider ldap uio-ldap
-osp plugins clear-provider ldap
+osp plugins select-provider inventory inventory-a
+osp plugins clear-provider inventory
 ```
 
 The persisted value is `plugins.<command>.provider = "<plugin-id>"` in the
@@ -81,13 +93,7 @@ instead of inventing a merged command grammar.
 The same provider-selection rules apply in the REPL:
 
 ```text
-ldap user alice --plugin-provider uio-ldap
-```
-
-Inside a scoped shell:
-
-```text
-user alice --plugin-provider uio-ldap
+inventory host web-01 --plugin-provider inventory-a
 ```
 
 ## Plugin Timeouts
@@ -110,6 +116,6 @@ If a plugin times out:
 
 ## More Plugin Docs
 
-- Authoring guide: [WRITING_PLUGINS.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/WRITING_PLUGINS.md)
-- Packaging and manifests: [PLUGIN_PACKAGING.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/PLUGIN_PACKAGING.md)
-- Protocol details: [PLUGIN_PROTOCOL.md](/home/oistes/git/github.uio.no/osp/osp-cli-rust/docs/PLUGIN_PROTOCOL.md)
+- Authoring guide: [WRITING_PLUGINS.md](WRITING_PLUGINS.md)
+- Packaging and manifests: [PLUGIN_PACKAGING.md](PLUGIN_PACKAGING.md)
+- Protocol details: [PLUGIN_PROTOCOL.md](PLUGIN_PROTOCOL.md)
