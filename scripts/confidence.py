@@ -64,6 +64,7 @@ class ConfidenceCheck:
     name: str
     description: str
     command: list[str]
+    env: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,17 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
         name="public-docs",
         description="Repo-wide public function docs contract.",
         command=[python, str(root / "scripts" / "public-docs.py")],
+    )
+    rustdoc_warnings = ConfidenceCheck(
+        name="rustdoc-warnings",
+        description="Fail on rustdoc warnings such as broken intra-doc links.",
+        command=["cargo", "doc", "--no-deps"],
+        env={"RUSTDOCFLAGS": "-D warnings"},
+    )
+    public_api_examples = ConfidenceCheck(
+        name="public-api-examples",
+        description="Curated runnable doctest baseline for public entrypoints.",
+        command=[python, str(root / "scripts" / "public-api-examples.py")],
     )
     contract_env = ConfidenceCheck(
         name="contract-env",
@@ -229,7 +241,7 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
                 "doctests",
                 "coverage gates",
             ),
-            checks=[public_docs, *static_checks, *behavior_checks],
+            checks=[public_docs, rustdoc_warnings, *static_checks, *behavior_checks],
         ),
         "behavior": ConfidenceLane(
             name="behavior",
@@ -267,8 +279,10 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
             ),
             checks=[
                 public_docs,
+                rustdoc_warnings,
                 *static_checks,
                 unit,
+                public_api_examples,
                 doctests,
                 *behavior_checks,
                 e2e,
@@ -291,7 +305,13 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
                 "PTY behavior",
                 "full release-path coverage",
             ),
-            checks=[public_docs, *static_checks, *behavior_checks, coverage_fast],
+            checks=[
+                public_docs,
+                rustdoc_warnings,
+                *static_checks,
+                *behavior_checks,
+                coverage_fast,
+            ],
         ),
     }
 
@@ -325,7 +345,10 @@ def run_check(root: Path, check: ConfidenceCheck) -> CheckResult:
 
     print(f"\n==> [{check.name}] {check.description}", flush=True)
     started = time.perf_counter()
-    result = subprocess.run(check.command, cwd=root)
+    env = None
+    if check.env:
+        env = dict(**subprocess.os.environ, **check.env)
+    result = subprocess.run(check.command, cwd=root, env=env)
     elapsed = time.perf_counter() - started
     if result.returncode != 0:
         print(

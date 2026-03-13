@@ -6,6 +6,7 @@ use crate::ui::{Document, RenderSettings, render_document_for_copy};
 
 /// Clipboard service that tries OSC 52 and platform-specific clipboard helpers.
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct ClipboardService {
     prefer_osc52: bool,
 }

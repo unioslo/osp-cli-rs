@@ -145,6 +145,7 @@ impl RuntimeTerminalKind {
 
 /// Normalized runtime settings loaded from environment variables.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
 pub struct RuntimeHints {
     /// Effective UI message verbosity.
     pub ui_verbosity: UiVerbosity,

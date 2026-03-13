@@ -4,7 +4,6 @@ use crate::config::{ConfigLayer, RuntimeLoadOptions};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::ui::RenderSettings;
 use crate::ui::theme::DEFAULT_THEME_NAME;
-use clap::Parser;
 
 use crate::cli::Cli;
 use crate::ui::presentation::{
@@ -48,19 +47,23 @@ pub(crate) struct HelpRenderContext {
     pub(crate) help_level: HelpLevel,
 }
 
-pub(crate) fn render_settings_for_help(args: &[OsString]) -> HelpRenderContext {
+pub(crate) fn render_settings_for_help(
+    args: &[OsString],
+    product_defaults: &ConfigLayer,
+) -> HelpRenderContext {
     let overrides = parse_help_render_overrides(args);
     let profile_override = normalize_profile_override(overrides.profile.clone());
     let help_override_layer = build_help_override_layer(&overrides);
     let config = resolve_runtime_config(
         RuntimeConfigRequest::new(profile_override, Some("cli"))
             .with_runtime_load(overrides.runtime_load_options())
+            .with_product_defaults(product_defaults.clone())
             .with_session_layer(
                 (!help_override_layer.entries().is_empty()).then_some(help_override_layer),
             ),
     )
     .ok();
-    let default_cli = Cli::try_parse_from(["osp"]).expect("default cli parse should succeed");
+    let default_cli = Cli::default_invocation();
     let mut settings = default_cli.render_settings();
     let mut layout = HelpLayout::Full;
     let effective_help_level;
@@ -296,7 +299,7 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
                     match ch {
                         'v' => out.verbose = out.verbose.saturating_add(1),
                         'q' => out.quiet = out.quiet.saturating_add(1),
-                        _ => unreachable!("guard only allows v/q"),
+                        _ => {}
                     }
                 }
             }
@@ -340,6 +343,7 @@ mod tests {
         parse_color_mode_arg, parse_help_render_overrides, parse_render_mode_arg,
         parse_unicode_mode_arg, render_settings_for_help,
     };
+    use crate::config::ConfigLayer;
     use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use crate::ui::presentation::{HelpLayout, HelpLevel};
     use std::ffi::OsString;
@@ -350,12 +354,10 @@ mod tests {
 
     #[test]
     fn render_settings_for_help_combines_presentation_format_and_level_overrides_unit() {
-        let context = render_settings_for_help(&help_args(&[
-            "osp",
-            "--gammel-og-bitter",
-            "--no-env",
-            "--no-config-file",
-        ]));
+        let context = render_settings_for_help(
+            &help_args(&["osp", "--gammel-og-bitter", "--no-env", "--no-config-file"]),
+            &ConfigLayer::default(),
+        );
 
         assert_eq!(context.layout, HelpLayout::Minimal);
         assert_eq!(context.help_level, HelpLevel::Normal);
@@ -365,19 +367,22 @@ mod tests {
         assert_eq!(context.settings.format, OutputFormat::Auto);
         assert!(!context.settings.format_explicit);
 
-        let context = render_settings_for_help(&help_args(&[
-            "osp",
-            "--presentation",
-            "compact",
-            "--mode",
-            "rich",
-            "--color",
-            "always",
-            "--unicode",
-            "always",
-            "--no-env",
-            "--no-config-file",
-        ]));
+        let context = render_settings_for_help(
+            &help_args(&[
+                "osp",
+                "--presentation",
+                "compact",
+                "--mode",
+                "rich",
+                "--color",
+                "always",
+                "--unicode",
+                "always",
+                "--no-env",
+                "--no-config-file",
+            ]),
+            &ConfigLayer::default(),
+        );
 
         assert_eq!(context.layout, HelpLayout::Compact);
         assert_eq!(context.help_level, HelpLevel::Normal);
@@ -387,21 +392,17 @@ mod tests {
         assert_eq!(context.settings.format, OutputFormat::Auto);
         assert!(!context.settings.format_explicit);
 
-        let context = render_settings_for_help(&help_args(&[
-            "osp",
-            "--json",
-            "--no-env",
-            "--no-config-file",
-        ]));
+        let context = render_settings_for_help(
+            &help_args(&["osp", "--json", "--no-env", "--no-config-file"]),
+            &ConfigLayer::default(),
+        );
 
         assert_eq!(context.settings.format, OutputFormat::Json);
         assert!(context.settings.format_explicit);
-        let context = render_settings_for_help(&help_args(&[
-            "osp",
-            "--guide",
-            "--no-env",
-            "--no-config-file",
-        ]));
+        let context = render_settings_for_help(
+            &help_args(&["osp", "--guide", "--no-env", "--no-config-file"]),
+            &ConfigLayer::default(),
+        );
 
         assert_eq!(context.settings.format, OutputFormat::Guide);
         assert!(context.settings.format_explicit);
@@ -420,7 +421,7 @@ mod tests {
                 HelpLevel::None,
             ),
         ] {
-            let context = render_settings_for_help(&help_args(args));
+            let context = render_settings_for_help(&help_args(args), &ConfigLayer::default());
             assert_eq!(context.help_level, expected_level);
         }
     }

@@ -19,7 +19,8 @@
 //!
 //! Public API shape:
 //!
-//! - use [`AppSessionBuilder`] for session-scoped REPL state
+//! - use [`AppSession::builder`] or [`AppSession::with_cache_limit`] plus the
+//!   `with_*` chainers for session-scoped REPL state
 //! - use [`AppStateBuilder`] when you need a fully assembled runtime/session
 //!   snapshot outside the full CLI bootstrap
 //! - these types are host machinery, not lightweight semantic DTOs
@@ -247,6 +248,7 @@ impl ReplScopeStack {
 
 /// Session-scoped REPL state, caches, and prompt metadata.
 #[non_exhaustive]
+#[must_use]
 pub struct AppSession {
     /// Prompt prefix shown before any scope label.
     pub prompt_prefix: String,
@@ -287,12 +289,43 @@ pub struct LastFailure {
 }
 
 impl AppSession {
-    /// Starts a builder for session-scoped host state.
+    /// Starts the builder for session-scoped host state.
+    ///
+    /// Prefer this when you want a neutral starting point and do not want the
+    /// first constructor call to imply that cache sizing is the primary concern.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::AppSession;
+    ///
+    /// let session = AppSession::builder()
+    ///     .with_prompt_prefix("demo")
+    ///     .with_history_enabled(false)
+    ///     .build();
+    ///
+    /// assert_eq!(session.prompt_prefix, "demo");
+    /// assert!(!session.history_enabled);
+    /// ```
     pub fn builder() -> AppSessionBuilder {
         AppSessionBuilder::new()
     }
 
     /// Creates a session with bounded caches for row and command results.
+    ///
+    /// A requested cache limit of `0` is clamped to `1` so the session never
+    /// stores a zero-capacity cache by accident.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::AppSession;
+    ///
+    /// let session = AppSession::with_cache_limit(4).with_prompt_prefix("demo");
+    ///
+    /// assert_eq!(session.max_cached_results, 4);
+    /// assert_eq!(session.prompt_prefix, "demo");
+    /// ```
     pub fn with_cache_limit(max_cached_results: usize) -> Self {
         let bounded = max_cached_results.max(1);
         Self {
@@ -320,9 +353,7 @@ impl AppSession {
             "session.cache.max_results",
             DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
         );
-        Self::builder()
-            .with_cache_limit(session_cache_max_results)
-            .build()
+        Self::with_cache_limit(session_cache_max_results)
     }
 
     /// Creates the default session snapshot for the current resolved config
@@ -331,14 +362,36 @@ impl AppSession {
         config: &crate::config::ResolvedConfig,
         config_overrides: ConfigLayer,
     ) -> Self {
-        Self::builder()
-            .with_cache_limit(crate::app::host::config_usize(
-                config,
-                "session.cache.max_results",
-                DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
-            ))
-            .with_config_overrides(config_overrides)
-            .build()
+        Self::with_cache_limit(crate::app::host::config_usize(
+            config,
+            "session.cache.max_results",
+            DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
+        ))
+        .with_config_overrides(config_overrides)
+    }
+
+    /// Replaces the prompt prefix shown ahead of any scope label.
+    pub fn with_prompt_prefix(mut self, prompt_prefix: impl Into<String>) -> Self {
+        self.prompt_prefix = prompt_prefix.into();
+        self
+    }
+
+    /// Enables or disables history capture for this session.
+    pub fn with_history_enabled(mut self, history_enabled: bool) -> Self {
+        self.history_enabled = history_enabled;
+        self
+    }
+
+    /// Replaces the shell-scoped history context shared with the history store.
+    pub fn with_history_shell(mut self, history_shell: HistoryShellContext) -> Self {
+        self.history_shell = history_shell;
+        self
+    }
+
+    /// Replaces the session-scoped config overrides layered above persisted config.
+    pub fn with_config_overrides(mut self, config_overrides: ConfigLayer) -> Self {
+        self.config_overrides = config_overrides;
+        self
     }
 
     /// Stores the latest successful row output and updates the result cache.
@@ -460,9 +513,17 @@ impl AppSession {
     }
 }
 
+impl Default for AppSession {
+    fn default() -> Self {
+        Self::with_cache_limit(DEFAULT_SESSION_CACHE_MAX_RESULTS as usize)
+    }
+}
+
 /// Builder for [`AppSession`].
 ///
-/// This is the guided construction path for session-scoped REPL state.
+/// Prefer this when callers want a neutral session-construction entrypoint and
+/// plan to configure prompt/history behavior before building the final value.
+#[must_use]
 pub struct AppSessionBuilder {
     prompt_prefix: String,
     history_enabled: bool,
@@ -521,12 +582,11 @@ impl AppSessionBuilder {
 
     /// Builds the configured [`AppSession`].
     pub fn build(self) -> AppSession {
-        let mut session = AppSession::with_cache_limit(self.max_cached_results);
-        session.prompt_prefix = self.prompt_prefix;
-        session.history_enabled = self.history_enabled;
-        session.history_shell = self.history_shell;
-        session.config_overrides = self.config_overrides;
-        session
+        AppSession::with_cache_limit(self.max_cached_results)
+            .with_prompt_prefix(self.prompt_prefix)
+            .with_history_enabled(self.history_enabled)
+            .with_history_shell(self.history_shell)
+            .with_config_overrides(self.config_overrides)
     }
 }
 
@@ -552,10 +612,11 @@ impl AppStateParts {
     fn from_init(init: AppStateInit, session_override: Option<AppSession>) -> Self {
         let clients = AppClients::new(init.plugins, init.native_commands);
         let config = crate::app::ConfigState::new(init.config);
-        let ui = crate::app::UiState::builder(init.render_settings)
-            .with_message_verbosity(init.message_verbosity)
-            .with_debug_verbosity(init.debug_verbosity)
-            .build();
+        let ui = crate::app::UiState::new(
+            init.render_settings,
+            init.message_verbosity,
+            init.debug_verbosity,
+        );
         let auth = crate::app::AuthState::from_resolved_with_external_policies(
             config.resolved(),
             clients.plugins(),
@@ -575,6 +636,7 @@ impl AppStateParts {
 
 /// Aggregate application state shared between runtime and session logic.
 #[non_exhaustive]
+#[must_use]
 pub struct AppState {
     /// Runtime-scoped services and resolved config state.
     pub runtime: AppRuntime,
@@ -585,15 +647,6 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Starts a builder for a fully assembled application state snapshot.
-    pub fn builder(
-        context: RuntimeContext,
-        config: crate::config::ResolvedConfig,
-        ui: UiState,
-    ) -> AppStateBuilder {
-        AppStateBuilder::new(context, config, ui)
-    }
-
     /// Builds a full application-state snapshot by deriving UI state from the
     /// resolved config and runtime context.
     ///
@@ -697,8 +750,39 @@ impl AppState {
 
 /// Builder for [`AppState`].
 ///
-/// This is the canonical embedder-facing factory for runtime/session/client
+/// This is the canonical manual-construction factory for runtime/session/client
 /// state when callers need a snapshot without going through full CLI bootstrap.
+///
+/// Use [`AppStateBuilder::from_resolved_config`] for the normal config-driven
+/// path, then override specific pieces such as the session or plugin manager as
+/// needed. Use [`AppStateBuilder::new`] only when the caller already has a
+/// fully chosen [`UiState`] and wants the builder to assemble the remaining
+/// runtime/session/client pieces around it.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::app::{AppSession, AppStateBuilder, RuntimeContext, TerminalKind};
+/// use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+///
+/// let mut defaults = ConfigLayer::default();
+/// defaults.set("profile.default", "default");
+///
+/// let mut resolver = ConfigResolver::default();
+/// resolver.set_defaults(defaults);
+/// let config = resolver.resolve(ResolveOptions::new().with_terminal("repl")).unwrap();
+///
+/// let state = AppStateBuilder::from_resolved_config(
+///     RuntimeContext::new(None, TerminalKind::Repl, None),
+///     config,
+/// )?
+/// .with_session(AppSession::with_cache_limit(32).with_prompt_prefix("demo"))
+/// .build();
+///
+/// assert_eq!(state.prompt_prefix(), "demo");
+/// # Ok::<(), miette::Report>(())
+/// ```
+#[must_use]
 pub struct AppStateBuilder {
     context: RuntimeContext,
     config: crate::config::ResolvedConfig,
@@ -713,6 +797,10 @@ pub struct AppStateBuilder {
 impl AppStateBuilder {
     /// Starts building an application-state snapshot from the resolved config
     /// and UI state the caller wants to expose.
+    ///
+    /// This is the manual-construction path. Prefer
+    /// [`AppStateBuilder::from_resolved_config`] when the builder should derive
+    /// UI defaults from config and runtime context first.
     pub fn new(
         context: RuntimeContext,
         config: crate::config::ResolvedConfig,
@@ -732,6 +820,9 @@ impl AppStateBuilder {
 
     /// Starts a builder by deriving UI state from the resolved config and
     /// runtime context.
+    ///
+    /// This is the canonical embedder entrypoint when you want one coherent
+    /// host snapshot and only plan to override selected pieces before build.
     pub fn from_resolved_config(
         context: RuntimeContext,
         config: crate::config::ResolvedConfig,
@@ -761,24 +852,35 @@ impl AppStateBuilder {
     }
 
     /// Replaces the launch-time provenance used for cache and plugin setup.
+    ///
+    /// If omitted, the builder keeps [`LaunchContext::default`].
     pub fn with_launch(mut self, launch: LaunchContext) -> Self {
         self.launch = launch;
         self
     }
 
     /// Replaces the plugin manager used when assembling shared clients.
+    ///
+    /// If omitted, the builder derives the plugin manager from the resolved
+    /// config plus the current launch context during [`AppStateBuilder::build`].
     pub fn with_plugins(mut self, plugins: PluginManager) -> Self {
         self.plugins = Some(plugins);
         self
     }
 
-    /// Replaces the native command registry used when assembling shared clients.
+    /// Replaces the native command registry used when assembling shared
+    /// clients.
+    ///
+    /// If omitted, the builder keeps [`NativeCommandRegistry::default`].
     pub fn with_native_commands(mut self, native_commands: NativeCommandRegistry) -> Self {
         self.native_commands = native_commands;
         self
     }
 
     /// Replaces the session snapshot carried by the built app state.
+    ///
+    /// If omitted, the builder uses the derived/default session for the
+    /// current config.
     pub fn with_session(mut self, session: AppSession) -> Self {
         self.session = Some(session);
         self
@@ -791,6 +893,10 @@ impl AppStateBuilder {
     }
 
     /// Builds the configured [`AppState`].
+    ///
+    /// This assembles one coherent runtime/session/client snapshot, deriving any
+    /// omitted pieces such as themes, plugin manager, and default session before
+    /// returning the final value.
     pub fn build(self) -> AppState {
         let themes = self.themes.unwrap_or_else(|| {
             let themes = crate::ui::theme_loader::load_theme_catalog(&self.config);

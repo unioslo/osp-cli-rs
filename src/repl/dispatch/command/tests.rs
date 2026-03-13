@@ -168,7 +168,7 @@ fn repl_cache_key_covers_disabled_builtin_and_external_paths_unit() {
     )
     .expect("external cache key should exist");
     assert!(key.contains("provider:plugin-a"));
-    assert!(key.contains("\"theme\""));
+    assert!(key.contains("tokens:5:theme|4:show|"));
 }
 
 #[test]

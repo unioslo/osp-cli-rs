@@ -138,6 +138,7 @@ pub fn registered_verbs() -> &'static [VerbInfo] {
 }
 
 #[cfg(test)]
+/// Returns the registered non-meta DSL verb names used by tests.
 pub fn registered_explicit_verbs() -> Vec<&'static str> {
     VERBS
         .iter()

@@ -4,7 +4,7 @@ use crate::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use crate::native::{NativeCommandCatalogEntry, NativeCommandRegistry};
 use crate::repl::{self, SharedHistory};
 use clap::Parser;
-use miette::{IntoDiagnostic, Result, WrapErr, miette};
+use miette::{Result, WrapErr, miette};
 
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::ui::messages::MessageLevel;
@@ -132,6 +132,8 @@ where
     }
 }
 
+impl<E> miette::Diagnostic for ContextError<E> where E: std::error::Error + Send + Sync + 'static {}
+
 /// Runs the top-level CLI entrypoint from an argv-like iterator.
 ///
 /// This is the library-friendly wrapper around the binary entrypoint and
@@ -150,13 +152,13 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    run_from_with_sink_and_native(args, sink, &NativeCommandRegistry::default())
+    run_from_with_sink_and_app(args, sink, &super::AppDefinition::default())
 }
 
-pub(crate) fn run_from_with_sink_and_native<I, T>(
+pub(crate) fn run_from_with_sink_and_app<I, T>(
     args: I,
     sink: &mut dyn UiSink,
-    native_commands: &NativeCommandRegistry,
+    app: &super::AppDefinition,
 ) -> Result<i32>
 where
     I: IntoIterator<Item = T>,
@@ -166,8 +168,8 @@ where
     init_developer_logging(bootstrap_logging_config(&argv));
     let scanned = scan_cli_argv(&argv)?;
     match Cli::try_parse_from(scanned.argv.iter().cloned()) {
-        Ok(cli) => run(cli, scanned.invocation, sink, native_commands),
-        Err(err) => handle_clap_parse_error(&argv, err, sink, native_commands),
+        Ok(cli) => run(cli, scanned.invocation, sink, app),
+        Err(err) => handle_clap_parse_error(&argv, err, sink, app),
     }
 }
 
@@ -175,14 +177,14 @@ fn handle_clap_parse_error(
     args: &[OsString],
     err: clap::Error,
     sink: &mut dyn UiSink,
-    native_commands: &NativeCommandRegistry,
+    app: &super::AppDefinition,
 ) -> Result<i32> {
     match err.kind() {
         clap::error::ErrorKind::DisplayHelp => {
-            let help_context = help::render_settings_for_help(args);
+            let help_context = help::render_settings_for_help(args, &app.product_defaults);
             let mut body = GuideView::from_text(&err.to_string());
             extend_with_invocation_help(&mut body, help_context.help_level);
-            add_native_command_help(&mut body, native_commands);
+            add_native_command_help(&mut body, &app.native_commands);
             let rendered = render_guide_payload_with_layout(
                 &body.filtered_for_help_level(help_context.help_level),
                 &help_context.settings,
@@ -208,7 +210,7 @@ fn run(
     mut cli: Cli,
     invocation: InvocationOptions,
     sink: &mut dyn UiSink,
-    native_commands: &NativeCommandRegistry,
+    app: &super::AppDefinition,
 ) -> Result<i32> {
     let run_started = Instant::now();
     if invocation.cache {
@@ -225,7 +227,8 @@ fn run(
     // 3. resolve again with the full session layer applied
     let initial_config = resolve_runtime_config(
         RuntimeConfigRequest::new(normalized_profile.clone(), Some("cli"))
-            .with_runtime_load(runtime_load),
+            .with_runtime_load(runtime_load)
+            .with_product_defaults(app.product_defaults.clone()),
     )
     .wrap_err("failed to resolve initial config for startup")?;
     let known_profiles = initial_config.known_profiles().clone();
@@ -244,12 +247,12 @@ fn run(
         runtime_context.profile_override().map(ToOwned::to_owned),
         runtime_context.terminal_kind(),
         runtime_load,
+        &app.product_defaults,
     )?;
-    let launch_context = LaunchContext::builder()
+    let launch_context = LaunchContext::default()
         .with_plugin_dirs(cli.plugin_dirs.clone())
         .with_runtime_load(runtime_load)
-        .with_startup_started_at(run_started)
-        .build();
+        .with_startup_started_at(run_started);
 
     let config = resolve_runtime_config(
         RuntimeConfigRequest::new(
@@ -257,6 +260,7 @@ fn run(
             Some(runtime_context.terminal_kind().as_config_terminal()),
         )
         .with_runtime_load(launch_context.runtime_load)
+        .with_product_defaults(app.product_defaults.clone())
         .with_session_layer(session_layer.clone()),
     )
     .wrap_err("failed to resolve config with session layer")?;
@@ -270,13 +274,16 @@ fn run(
         session_layer.clone(),
     )
     .wrap_err("failed to derive host runtime inputs for startup")?;
-    let mut state = crate::app::AppState::builder(runtime_context, config, host_inputs.ui)
+    let mut state = crate::app::AppStateBuilder::new(runtime_context, config, host_inputs.ui)
         .with_launch(launch_context)
         .with_plugins(host_inputs.plugins)
-        .with_native_commands(native_commands.clone())
+        .with_native_commands(app.native_commands.clone())
         .with_session(host_inputs.default_session)
         .with_themes(host_inputs.themes)
         .build();
+    state
+        .runtime
+        .set_product_defaults(app.product_defaults.clone());
     ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
     let invocation_ui = resolve_invocation_ui(
         state.runtime.config.resolved(),
@@ -415,10 +422,7 @@ pub(crate) fn authorized_command_catalog_for(
     auth: &AuthState,
     clients: &AppClients,
 ) -> Result<Vec<CommandCatalogEntry>> {
-    let mut all = clients
-        .plugins()
-        .command_catalog()
-        .map_err(|err| miette!("{err:#}"))?;
+    let mut all = clients.plugins().command_catalog();
     all.extend(
         clients
             .native_commands()
@@ -546,6 +550,7 @@ fn plugins_command_context<'a>(
         auth: &runtime.auth,
         clients: Some(clients),
         plugin_manager: clients.plugins(),
+        product_defaults: runtime.product_defaults(),
         runtime_load: runtime.launch.runtime_load,
     }
 }
@@ -561,6 +566,7 @@ fn config_read_context<'a>(
         ui,
         themes: &runtime.themes,
         config_overrides: &session.config_overrides,
+        product_defaults: runtime.product_defaults(),
         runtime_load: runtime.launch.runtime_load,
     }
 }
@@ -576,6 +582,7 @@ fn config_command_context<'a>(
         ui,
         themes: &runtime.themes,
         config_overrides: &mut session.config_overrides,
+        product_defaults: runtime.product_defaults(),
         runtime_load: runtime.launch.runtime_load,
     }
 }
@@ -651,18 +658,19 @@ pub(crate) fn resolve_invocation_ui(
     }
 
     ResolvedInvocation {
-        ui: UiState::builder(render_settings)
-            .with_message_verbosity(crate::ui::messages::adjust_verbosity(
+        ui: UiState::new(
+            render_settings,
+            crate::ui::messages::adjust_verbosity(
                 ui.message_verbosity,
                 invocation.verbose,
                 invocation.quiet,
-            ))
-            .with_debug_verbosity(if invocation.debug > 0 {
+            ),
+            if invocation.debug > 0 {
                 invocation.debug.min(3)
             } else {
                 ui.debug_verbosity
-            })
-            .build(),
+            },
+        ),
         plugin_provider: invocation.plugin_provider.clone(),
         help_level: help_level(config, invocation.verbose, invocation.quiet),
     }
@@ -856,12 +864,10 @@ pub(crate) fn report_std_error_with_context<E>(err: E, context: &'static str) ->
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    Err::<(), ContextError<E>>(ContextError {
+    miette::Report::new(ContextError {
         context,
         source: err,
     })
-    .into_diagnostic()
-    .unwrap_err()
 }
 
 fn find_error_in_chain<E>(err: &miette::Report) -> Option<&E>

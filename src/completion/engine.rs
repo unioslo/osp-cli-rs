@@ -11,8 +11,13 @@ use crate::completion::{
 use crate::core::fuzzy::fold_case;
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone)]
 /// High-level entry point for parsing and completing command lines.
+///
+/// Reuse one engine across many completion requests for the same tree. The
+/// constructor precomputes global context-only flags so each request only pays
+/// for parsing, context resolution, and ranking.
+#[derive(Debug, Clone)]
+#[must_use]
 pub struct CompletionEngine {
     parser: CommandLineParser,
     suggester: SuggestionEngine,
@@ -22,6 +27,9 @@ pub struct CompletionEngine {
 
 impl CompletionEngine {
     /// Creates an engine for a prebuilt completion tree.
+    ///
+    /// The engine keeps a clone of the tree for suggestion ranking and caches
+    /// global context-only flags up front.
     pub fn new(tree: CompletionTree) -> Self {
         let global_context_flags = collect_global_context_flags(&tree.root);
         Self {
@@ -33,6 +41,30 @@ impl CompletionEngine {
     }
 
     /// Parses `line` at `cursor` and returns the cursor state with suggestions.
+    ///
+    /// This is the canonical one-shot completion entrypoint when callers do
+    /// not need the intermediate [`CompletionAnalysis`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::completion::{
+    ///     CommandSpec, CompletionEngine, CompletionTreeBuilder, SuggestionOutput,
+    /// };
+    ///
+    /// let tree = CompletionTreeBuilder
+    ///     .build_from_specs(&[CommandSpec::new("ldap")], [])
+    ///     .expect("tree should build");
+    /// let engine = CompletionEngine::new(tree);
+    ///
+    /// let (cursor, suggestions) = engine.complete("ld", 2);
+    ///
+    /// assert_eq!(cursor.token_stub, "ld");
+    /// assert!(matches!(
+    ///     suggestions.first(),
+    ///     Some(SuggestionOutput::Item(item)) if item.text == "ldap"
+    /// ));
+    /// ```
     pub fn complete(&self, line: &str, cursor: usize) -> (CursorState, Vec<SuggestionOutput>) {
         let analysis = self.analyze(line, cursor);
         let suggestions = self.suggestions_for_analysis(&analysis);
@@ -45,6 +77,9 @@ impl CompletionEngine {
     }
 
     /// Parses `line` and resolves completion context at `cursor`.
+    ///
+    /// `cursor` is clamped to the line length and to a valid UTF-8 character
+    /// boundary before parsing.
     pub fn analyze(&self, line: &str, cursor: usize) -> CompletionAnalysis {
         let parsed = self.parser.analyze(line, cursor);
 

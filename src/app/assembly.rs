@@ -241,7 +241,7 @@ mod tests {
     fn host_inputs_derivation_reuses_one_config_path_for_ui_plugins_and_session_unit() {
         let config = resolved(&[("extensions.plugins.timeout_ms", "42")]);
         let context = RuntimeContext::new(None, TerminalKind::Cli, None);
-        let launch = LaunchContext::builder().build();
+        let launch = LaunchContext::default();
 
         let derived = ResolvedHostInputs::derive(
             &context,
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn build_plugin_manager_applies_launch_roots_and_preference_override_unit() {
         let config = resolved(&[]);
-        let launch = LaunchContext::builder().build();
+        let launch = LaunchContext::default();
         let mut preferences = crate::plugin::state::PluginCommandPreferences::default();
         preferences.set_provider("ldap user", "demo");
 

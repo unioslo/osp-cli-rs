@@ -44,7 +44,7 @@ pub(crate) fn launch_history_picker(
         return Ok(None);
     }
 
-    let options = build_history_picker_options(appearance, current_line.trim());
+    let options = build_history_picker_options(appearance, current_line.trim())?;
     let (tx, rx): (SkimItemSender, SkimItemReceiver) = skim_unbounded();
     let payload = items
         .into_iter()
@@ -110,7 +110,7 @@ fn single_line_history_label(command: &str) -> String {
 pub(crate) fn build_history_picker_options(
     appearance: &ReplAppearance,
     initial_query: &str,
-) -> skim::SkimOptions {
+) -> Result<skim::SkimOptions> {
     let height = appearance
         .history_menu_rows
         .max(1)
@@ -137,7 +137,7 @@ pub(crate) fn build_history_picker_options(
 
     builder
         .build()
-        .expect("history picker options should be valid")
+        .map_err(|err| anyhow::anyhow!(err.to_string()))
 }
 
 fn build_history_picker_color(appearance: &ReplAppearance) -> Option<String> {
@@ -266,7 +266,6 @@ mod tests {
                 .with_max_entries(0)
                 .build(),
         )
-        .expect("history config should build")
     }
 
     #[test]
@@ -293,7 +292,8 @@ mod tests {
         assert_eq!(history_menu.name(), HISTORY_MENU_NAME);
         assert!(!history_menu.can_quick_complete());
 
-        let options = build_history_picker_options(&appearance, "needle");
+        let options = build_history_picker_options(&appearance, "needle")
+            .expect("history picker options should build");
         assert_eq!(options.height, "8");
         assert_eq!(options.query.as_deref(), Some("needle"));
 
@@ -325,7 +325,8 @@ mod tests {
             assert_eq!(skim_color_value(input).as_deref(), expected);
         }
 
-        let plain_options = build_history_picker_options(&ReplAppearance::default(), "needle");
+        let plain_options = build_history_picker_options(&ReplAppearance::default(), "needle")
+            .expect("history picker options should build");
         assert!(plain_options.color.is_none());
     }
 }

@@ -95,11 +95,7 @@ fn rebuild_repl_state_preserves_path_discovery_enabled_by_config_unit() {
         .set("extensions.plugins.discovery.path", true);
 
     let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    let plugins = next
-        .clients
-        .plugins()
-        .list_plugins()
-        .expect("path-discovered plugins should list");
+    let plugins = next.clients.plugins().list_plugins();
     assert!(plugins.iter().any(|plugin| plugin.plugin_id == "hello"));
 
     match original_path {
@@ -124,7 +120,6 @@ fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
                 .clients
                 .plugins()
                 .command_catalog()
-                .expect("catalog should render")
                 .is_empty()
         );
 
@@ -149,8 +144,7 @@ fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
         let catalog = next
             .clients
             .plugins()
-            .command_catalog()
-            .expect("catalog should render");
+            .command_catalog();
         assert!(
             catalog.iter().any(|entry| entry.name == "hello"),
             "enabled plugin should appear after rebuild"

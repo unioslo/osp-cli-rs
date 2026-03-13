@@ -71,6 +71,21 @@ fn guide_output_restore_round_trips_canonical_and_authored_ordered_shapes_unit()
             Some(vec!["doctor".to_string()]),
             true,
         ),
+        (
+            GuideView {
+                sections: vec![
+                    GuideSection::new("Usage", GuideSectionKind::Usage)
+                        .paragraph("[INVOCATION_OPTIONS] COMMAND [ARGS]..."),
+                    GuideSection::new("Commands", GuideSectionKind::Commands)
+                        .entry("help", "Show this command overview."),
+                ],
+                ..GuideView::default()
+            },
+            vec![],
+            Some(vec!["[INVOCATION_OPTIONS] COMMAND [ARGS]...".to_string()]),
+            Some(vec!["help".to_string()]),
+            false,
+        ),
     ];
 
     for (view, expected_sections, expected_usage, expected_commands, ordered_sections) in cases {
@@ -110,8 +125,15 @@ fn guide_output_restore_round_trips_canonical_and_authored_ordered_shapes_unit()
         if ordered_sections {
             assert!(json.get("usage").is_none());
             assert!(json.get("commands").is_none());
-            assert_eq!(json["sections"][1]["title"], "Usage");
-            assert_eq!(json["sections"][2]["title"], "Commands");
+            assert_eq!(
+                json["sections"]
+                    .as_array()
+                    .expect("ordered sections array")
+                    .iter()
+                    .map(|section| section["title"].as_str().unwrap_or_default().to_string())
+                    .collect::<Vec<_>>(),
+                expected_sections
+            );
         } else {
             assert_eq!(json["usage"][0], rebuilt.usage[0]);
             assert_eq!(json["commands"][0]["name"], rebuilt.commands[0].name);

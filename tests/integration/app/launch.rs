@@ -83,11 +83,10 @@ fn app_state_builder_uses_launch_context_for_plugin_roots_and_path_discovery() {
     write_named_plugin(path_dir.path(), "path-probe");
 
     let config = resolved_config(&[("extensions.plugins.discovery.path", "true")]);
-    let launch = LaunchContext::builder()
+    let launch = LaunchContext::default()
         .with_plugin_dir(explicit_dir.path().to_path_buf())
         .with_config_root(Some(config_root.path().to_path_buf()))
-        .with_cache_root(Some(cache_root.path().to_path_buf()))
-        .build();
+        .with_cache_root(Some(cache_root.path().to_path_buf()));
 
     with_path_prefix(path_dir.path(), || {
         let state = AppStateBuilder::from_resolved_config(
@@ -111,11 +110,7 @@ fn app_state_builder_uses_launch_context_for_plugin_roots_and_path_discovery() {
             Some(cache_root.path())
         );
 
-        let plugins = state
-            .clients
-            .plugins()
-            .list_plugins()
-            .expect("launch-assembled plugins should list");
+        let plugins = state.clients.plugins().list_plugins();
         assert!(
             plugins
                 .iter()

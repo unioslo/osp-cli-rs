@@ -259,7 +259,6 @@ mod tests {
                 .with_max_entries(0)
                 .build(),
         )
-        .expect("history config should build")
     }
 
     fn test_appearance() -> ReplAppearance {

@@ -91,6 +91,7 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
                 ui: &state.runtime.ui,
                 themes: &state.runtime.themes,
                 config_overrides: &state.session.config_overrides,
+                product_defaults: state.runtime.product_defaults(),
                 runtime_load: state.runtime.launch.runtime_load,
             },
             plugins: crate::cli::commands::plugins::PluginsCommandContext {
@@ -100,6 +101,7 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
                 auth: &state.runtime.auth,
                 clients: Some(&state.clients),
                 plugin_manager: state.clients.plugins(),
+                product_defaults: state.runtime.product_defaults(),
                 runtime_load: state.runtime.launch.runtime_load,
             },
             ui: &state.runtime.ui,
@@ -120,6 +122,7 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
             assert_eq!(json.payload["status"], "error");
             assert_eq!(json.payload["command"], "missing");
         }
+        Some(ReplCommandOutput::Guide(_)) => panic!("unexpected doctor output variant"),
         Some(ReplCommandOutput::Output { .. }) => panic!("unexpected doctor output variant"),
         Some(ReplCommandOutput::Text(_)) => panic!("unexpected doctor output variant"),
         None => panic!("expected doctor output"),

@@ -211,7 +211,10 @@ fn collapse_root_value_collection(value: Value) -> Value {
         return Value::Object(map);
     }
 
-    let (only_key, only_value) = map.into_iter().next().expect("single entry ensured above");
+    let mut entries = map.into_iter();
+    let Some((only_key, only_value)) = entries.next() else {
+        return Value::Object(Map::new());
+    };
     // `VALUE` is fundamentally a row extractor. When the semantic transform
     // narrows the whole payload down to one extracted collection like
     // `{"commands": [{"value": ...}]}`, collapse that wrapper so downstream

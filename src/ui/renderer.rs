@@ -701,24 +701,6 @@ impl<'a> DocumentRenderer<'a> {
         margin: usize,
         column_widths: Option<&[usize]>,
     ) -> String {
-        if matches!(
-            block
-                .border_override
-                .unwrap_or(self.settings.help_table_border),
-            TableBorderStyle::Square | TableBorderStyle::Round
-        ) {
-            // Guide tables are normally borderless. If the caller explicitly
-            // requests boxed chrome, reuse the grid renderer instead of
-            // maintaining a second bordered-help path.
-            let mut bordered = block.clone();
-            bordered.border_override = Some(
-                block
-                    .border_override
-                    .unwrap_or(self.settings.help_table_border),
-            );
-            return self.render_grid_table(&bordered, margin, column_widths);
-        }
-
         let table_data = truncate_table_to_widths(
             &block.headers,
             &block.rows,

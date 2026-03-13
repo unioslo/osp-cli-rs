@@ -39,9 +39,24 @@
 //!
 //! The three public entry points cover the common call sites:
 //!
-//! - [`render_output`] — full pipeline from `OutputResult` to `String`
-//! - [`render_rows`] — convenience wrapper when you already have `Vec<Row>`
-//! - [`render_document`] — skip straight to rendering a pre-built `Document`
+//! - [`crate::ui::render_output`] — full pipeline from `OutputResult` to `String`
+//! - [`crate::ui::render_rows`] — convenience wrapper when you already have `Vec<Row>`
+//! - [`crate::ui::render_document`] — skip straight to rendering a pre-built `Document`
+//!
+//! Minimal direct-render path:
+//!
+//! ```
+//! use osp_cli::core::output::OutputFormat;
+//! use osp_cli::row;
+//! use osp_cli::ui::{RenderSettings, render_rows};
+//!
+//! let rendered = render_rows(
+//!     &[row! { "uid" => "alice" }],
+//!     &RenderSettings::test_plain(OutputFormat::Json),
+//! );
+//!
+//! assert!(rendered.contains("\"uid\": \"alice\""));
+//! ```
 //!
 //! Each has a `_for_copy` sibling that forces Plain backend and strips
 //! box-drawing/ANSI for clipboard-safe output.
@@ -131,6 +146,7 @@ pub use theme::{
 /// Runtime terminal characteristics used when resolving render behavior.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use]
 pub struct RenderRuntime {
     /// Whether standard output is attached to a TTY.
     pub stdout_is_tty: bool,
@@ -146,13 +162,38 @@ pub struct RenderRuntime {
 
 impl RenderRuntime {
     /// Starts building runtime terminal facts for render resolution.
+    ///
+    /// Prefer this when a host or test already knows terminal facts and wants
+    /// auto-resolved rendering to use those values consistently.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::ui::RenderRuntime;
+    ///
+    /// let runtime = RenderRuntime::builder()
+    ///     .with_stdout_is_tty(true)
+    ///     .with_terminal("xterm-256color")
+    ///     .with_width(120)
+    ///     .with_locale_utf8(true)
+    ///     .build();
+    ///
+    /// assert_eq!(runtime.terminal.as_deref(), Some("xterm-256color"));
+    /// assert_eq!(runtime.width, Some(120));
+    /// ```
     pub fn builder() -> RenderRuntimeBuilder {
         RenderRuntimeBuilder::new()
     }
 }
 
 /// Builder for [`RenderRuntime`].
+///
+/// Use this when render policy should remain on `Auto`, but the caller wants to
+/// control the terminal facts that auto-resolution sees. In tests, this is the
+/// easiest way to force deterministic width or TTY behavior without mutating
+/// process state.
 #[derive(Debug, Clone, Default)]
+#[must_use]
 pub struct RenderRuntimeBuilder {
     runtime: RenderRuntime,
 }
@@ -213,8 +254,15 @@ pub struct HelpChromeSettings {
 }
 
 /// User-configurable settings for rendering CLI output.
+///
+/// This is the durable caller-facing render policy. `format`, `mode`, `color`,
+/// and `unicode` express caller intent; `runtime` supplies the terminal facts
+/// used when any of those stay on `Auto`. Most embedders should start with
+/// [`RenderSettings::builder`], while tests and deterministic snapshots should
+/// usually start with [`RenderSettings::test_plain`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+#[must_use]
 pub struct RenderSettings {
     /// Preferred output format.
     pub format: OutputFormat,
@@ -296,7 +344,7 @@ impl Default for RenderSettings {
             theme: None,
             style_overrides: crate::ui::style::StyleOverrides::default(),
             chrome_frame: SectionFrameStyle::Top,
-            ruled_section_policy: RuledSectionPolicy::PerSection,
+            ruled_section_policy: RuledSectionPolicy::Shared,
             guide_default_format: GuideDefaultFormat::Guide,
             runtime: RenderRuntime::default(),
         }
@@ -304,7 +352,35 @@ impl Default for RenderSettings {
 }
 
 /// Builder for [`RenderSettings`].
+///
+/// Use [`RenderSettingsBuilder::new`] for normal caller-facing settings that may
+/// still auto-resolve from terminal facts. Use [`RenderSettingsBuilder::plain`]
+/// for deterministic tests, docs, and copy-oriented flows where ANSI and rich
+/// terminal behavior should already be disabled.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output::OutputFormat;
+/// use osp_cli::ui::{GuideDefaultFormat, RenderRuntime, RenderSettings};
+///
+/// let settings = RenderSettings::builder()
+///     .with_format(OutputFormat::Auto)
+///     .with_guide_default_format(GuideDefaultFormat::Guide)
+///     .with_runtime(
+///         RenderRuntime::builder()
+///             .with_stdout_is_tty(true)
+///             .with_terminal("xterm-256color")
+///             .with_width(100)
+///             .build(),
+///     )
+///     .build();
+///
+/// assert_eq!(settings.runtime.width, Some(100));
+/// assert!(settings.prefers_guide_rendering());
+/// ```
 #[derive(Debug, Clone, Default)]
+#[must_use]
 pub struct RenderSettingsBuilder {
     settings: RenderSettings,
 }
@@ -611,6 +687,10 @@ impl HelpTableChrome {
 
 impl RenderSettings {
     /// Starts building render settings from the default UI baseline.
+    ///
+    /// Prefer this for real caller-facing render policy. For deterministic
+    /// docs/tests, [`RenderSettings::test_plain`] is usually a better starting
+    /// point because it disables ANSI and rich terminal inference up front.
     pub fn builder() -> RenderSettingsBuilder {
         RenderSettingsBuilder::new()
     }
@@ -666,6 +746,21 @@ impl RenderSettings {
 }
 
 /// Renders rows using the configured output format.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output::OutputFormat;
+/// use osp_cli::row;
+/// use osp_cli::ui::{RenderSettings, render_rows};
+///
+/// let rendered = render_rows(
+///     &[row! { "uid" => "alice" }],
+///     &RenderSettings::test_plain(OutputFormat::Json),
+/// );
+///
+/// assert!(rendered.contains("\"uid\": \"alice\""));
+/// ```
 pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
     render_output(
         &OutputResult {
@@ -678,6 +773,21 @@ pub fn render_rows(rows: &[Row], settings: &RenderSettings) -> String {
 }
 
 /// Renders a structured output result using the configured output format.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output::OutputFormat;
+/// use osp_cli::core::output_model::OutputResult;
+/// use osp_cli::row;
+/// use osp_cli::ui::{RenderSettings, render_output};
+///
+/// let output = OutputResult::from_rows(vec![row! { "uid" => "alice" }]);
+/// let rendered = render_output(&output, &RenderSettings::test_plain(OutputFormat::Table));
+///
+/// assert!(rendered.contains("uid"));
+/// assert!(rendered.contains("alice"));
+/// ```
 pub fn render_output(output: &OutputResult, settings: &RenderSettings) -> String {
     let plan = settings.resolve_render_plan(output);
     if matches!(plan.format, OutputFormat::Markdown)
@@ -788,6 +898,25 @@ pub(crate) fn render_structured_output(
 }
 
 /// Renders a document directly with the resolved UI settings.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output::OutputFormat;
+/// use osp_cli::ui::{Block, Document, LineBlock, LinePart, RenderSettings, render_document};
+///
+/// let document = Document {
+///     blocks: vec![Block::Line(LineBlock {
+///         parts: vec![LinePart {
+///             text: "hello".to_string(),
+///             token: None,
+///         }],
+///     })],
+/// };
+/// let rendered = render_document(&document, &RenderSettings::test_plain(OutputFormat::Auto));
+///
+/// assert!(rendered.contains("hello"));
+/// ```
 pub fn render_document(document: &Document, settings: &RenderSettings) -> String {
     let resolved = settings.resolve_render_settings();
     renderer::render_document(document, resolved)
@@ -831,6 +960,29 @@ pub fn render_rows_for_copy(rows: &[Row], settings: &RenderSettings) -> String {
 }
 
 /// Renders an output result in plain copy-safe form.
+///
+/// This keeps the caller's format preference where possible, but forces the
+/// effective render settings onto a plain-text path so copied output does not
+/// contain ANSI escapes or terminal-only chrome.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output::{ColorMode, OutputFormat};
+/// use osp_cli::core::output_model::OutputResult;
+/// use osp_cli::row;
+/// use osp_cli::ui::{RenderSettings, render_output_for_copy};
+///
+/// let output = OutputResult::from_rows(vec![row! { "uid" => "alice" }]);
+/// let settings = RenderSettings::builder()
+///     .with_format(OutputFormat::Json)
+///     .with_color(ColorMode::Always)
+///     .build();
+/// let rendered = render_output_for_copy(&output, &settings);
+///
+/// assert!(rendered.contains("\"uid\": \"alice\""));
+/// assert!(!rendered.contains('\u{1b}'));
+/// ```
 pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) -> String {
     let copy_settings = settings.plain_copy_settings();
     let plan = copy_settings.resolve_render_plan(output);
@@ -844,6 +996,35 @@ pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) 
 }
 
 /// Renders a document in plain copy-safe form.
+///
+/// Like [`render_output_for_copy`], this strips ANSI/rich rendering concerns so
+/// the returned text is suitable for clipboards and paste targets.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output::{ColorMode, OutputFormat};
+/// use osp_cli::ui::{
+///     Block, Document, LineBlock, LinePart, RenderSettings, render_document_for_copy,
+/// };
+///
+/// let document = Document {
+///     blocks: vec![Block::Line(LineBlock {
+///         parts: vec![LinePart {
+///             text: "hello".to_string(),
+///             token: None,
+///         }],
+///     })],
+/// };
+/// let settings = RenderSettings::builder()
+///     .with_format(OutputFormat::Auto)
+///     .with_color(ColorMode::Always)
+///     .build();
+/// let rendered = render_document_for_copy(&document, &settings);
+///
+/// assert_eq!(rendered.trim(), "hello");
+/// assert!(!rendered.contains('\u{1b}'));
+/// ```
 pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) -> String {
     let copy_settings = settings.plain_copy_settings();
     let resolved = copy_settings.resolve_render_settings();
@@ -851,6 +1032,9 @@ pub fn render_document_for_copy(document: &Document, settings: &RenderSettings) 
 }
 
 /// Copies rendered rows to the configured clipboard service.
+///
+/// This is a shorthand for wrapping `rows` in an [`OutputResult`] and then
+/// calling [`copy_output_to_clipboard`].
 pub fn copy_rows_to_clipboard(
     rows: &[Row],
     settings: &RenderSettings,
@@ -868,6 +1052,28 @@ pub fn copy_rows_to_clipboard(
 }
 
 /// Copies rendered output to the configured clipboard service.
+///
+/// The output is first rendered through [`render_output_for_copy`], so the
+/// clipboard receives plain text rather than ANSI-rich terminal output.
+///
+/// # Examples
+///
+/// ```no_run
+/// use osp_cli::core::output::OutputFormat;
+/// use osp_cli::core::output_model::OutputResult;
+/// use osp_cli::row;
+/// use osp_cli::ui::{ClipboardService, RenderSettings, copy_output_to_clipboard};
+///
+/// let clipboard = ClipboardService::new().with_osc52(false);
+/// let output = OutputResult::from_rows(vec![row! { "uid" => "alice" }]);
+///
+/// copy_output_to_clipboard(
+///     &output,
+///     &RenderSettings::test_plain(OutputFormat::Json),
+///     &clipboard,
+/// )?;
+/// # Ok::<(), osp_cli::ui::ClipboardError>(())
+/// ```
 pub fn copy_output_to_clipboard(
     output: &OutputResult,
     settings: &RenderSettings,

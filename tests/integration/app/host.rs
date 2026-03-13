@@ -1,7 +1,8 @@
 use crate::temp_support::make_temp_dir;
 use anyhow::Result;
 use clap::Command;
-use osp_cli::app::{AppBuilder, BufferedUiSink};
+use osp_cli::App;
+use osp_cli::app::BufferedUiSink;
 use osp_cli::core::plugin::{PLUGIN_PROTOCOL_V1, ResponseMetaV1, ResponseV1};
 use osp_cli::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
 use serde_json::json;
@@ -90,7 +91,7 @@ JSON
 
 #[test]
 fn app_host_surfaces_native_commands_in_help_and_dispatch() {
-    let app = AppBuilder::new()
+    let app = App::builder()
         .with_native_commands(native_probe_registry())
         .build();
 
@@ -140,7 +141,7 @@ theme.name = "nord"
 theme.name = "dracula"
 "#,
         || {
-            let app = AppBuilder::new()
+            let app = App::builder()
                 .with_native_commands(native_probe_registry())
                 .build();
 
@@ -204,7 +205,7 @@ theme.name = "dracula"
 
 #[test]
 fn app_host_projects_native_commands_into_repl_completion_surface() {
-    let app = AppBuilder::new()
+    let app = App::builder()
         .with_native_commands(native_probe_registry())
         .build();
 
@@ -249,7 +250,7 @@ theme.name = "dracula"
             let dir = make_temp_dir("osp-cli-app-host-route-plugin");
             write_route_probe_plugin(dir.path(), "route-probe", "route-probe");
             let plugin_dir = dir.to_str().expect("plugin dir should be utf-8");
-            let app = AppBuilder::new().build();
+            let app = App::builder().build();
 
             let mut explicit_sink = BufferedUiSink::default();
             let exit = app
@@ -326,7 +327,7 @@ theme.name = "dracula"
             let dir = make_temp_dir("osp-cli-app-host-unknown-profile-token");
             write_route_probe_plugin(dir.path(), "prod", "prod");
             let plugin_dir = dir.to_str().expect("plugin dir should be utf-8");
-            let app = AppBuilder::new().build();
+            let app = App::builder().build();
 
             let mut sink = BufferedUiSink::default();
             let exit = app

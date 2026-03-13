@@ -201,6 +201,18 @@ pub(super) fn repl_help_for_scope(
 ) -> Result<String> {
     match repl_help_command_result_for_scope(runtime, session, clients, invocation)?.output {
         Some(crate::app::ReplCommandOutput::Text(text)) => Ok(text),
+        Some(crate::app::ReplCommandOutput::Guide(guide)) => {
+            let render_settings = app::resolve_render_settings_with_hint(
+                &invocation.ui.render_settings,
+                guide.format_hint,
+            );
+            Ok(app::render_guide_or_structured_output(
+                runtime.config.resolved(),
+                &render_settings,
+                &guide.guide,
+                &guide.output,
+            ))
+        }
         Some(crate::app::ReplCommandOutput::Document(document)) => {
             Ok(render_document(&document, &invocation.ui.render_settings))
         }

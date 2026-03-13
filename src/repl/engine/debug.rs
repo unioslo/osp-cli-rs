@@ -133,6 +133,7 @@ pub struct CompletionDebugFrame {
 /// Rendering and capture options for completion-debug helpers.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
+#[must_use]
 pub struct CompletionDebugOptions<'a> {
     /// Virtual render width for the debug menu.
     pub width: u16,

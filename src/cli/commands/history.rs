@@ -38,7 +38,9 @@ mod tests {
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
         let output = match result.output? {
             ReplCommandOutput::Output { output, .. } => output,
-            ReplCommandOutput::Document(_) | ReplCommandOutput::Text(_) => return None,
+            ReplCommandOutput::Guide(_)
+            | ReplCommandOutput::Document(_)
+            | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
     }
@@ -65,8 +67,7 @@ mod tests {
                 .with_profile_scoped(false)
                 .with_shell_context(crate::repl::HistoryShellContext::default())
                 .build(),
-        )
-        .expect("history should initialize");
+        );
         history
             .save_command_line("config show")
             .expect("history seed should save");

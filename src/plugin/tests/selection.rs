@@ -26,15 +26,15 @@ fn command_preferences_load_state_and_provider_from_resolved_config_unit() {
 
 #[cfg(unix)]
 #[test]
-fn preferred_provider_validation_rejects_empty_unknown_and_mismatched_inputs_unit() {
+fn provider_selection_validation_rejects_empty_unknown_and_mismatched_inputs_unit() {
     let empty_manager = PluginManager::new(Vec::new());
     let err = empty_manager
-        .clear_preferred_provider("   ")
+        .clear_provider_selection("   ")
         .expect_err("empty command should fail");
     assert!(err.to_string().contains("command must not be empty"));
 
     let err = empty_manager
-        .set_preferred_provider("shared", "   ")
+        .select_provider("shared", "   ")
         .expect_err("empty plugin id should fail");
     assert!(err.to_string().contains("plugin id must not be empty"));
 
@@ -49,7 +49,7 @@ fn preferred_provider_validation_rejects_empty_unknown_and_mismatched_inputs_uni
         .with_roots(Some(config_root), Some(cache_root));
 
     let err = manager
-        .set_preferred_provider("missing", "alpha")
+        .select_provider("missing", "alpha")
         .expect_err("unknown command should fail");
     assert!(
         err.to_string()
@@ -57,7 +57,7 @@ fn preferred_provider_validation_rejects_empty_unknown_and_mismatched_inputs_uni
     );
 
     let err = manager
-        .set_preferred_provider("shared", "beta")
+        .select_provider("shared", "beta")
         .expect_err("unknown provider should fail");
     assert!(err.to_string().contains("does not provide healthy command"));
 }
@@ -75,7 +75,7 @@ fn disabling_a_command_updates_only_that_command_in_memory_unit() {
         .set_command_state("ldap", PluginCommandState::Disabled)
         .expect("disabling command should succeed");
 
-    let catalog = manager.command_catalog().expect("catalog should load");
+    let catalog = manager.command_catalog();
     assert!(
         !catalog.iter().any(|entry| entry.name == "ldap"),
         "disabled command should be removed"
@@ -120,8 +120,7 @@ fn config_backed_preferences_can_disable_and_route_commands_unit() {
         .set_command_state("shared", PluginCommandState::Enabled)
         .expect("re-enabling selected command should work");
     let provider = manager
-        .selected_provider_label("shared")
-        .expect("selected provider label should load");
+        .selected_provider_label("shared");
     assert_eq!(provider.as_deref(), Some("beta (explicit)"));
 
 }

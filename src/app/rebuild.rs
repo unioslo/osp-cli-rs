@@ -88,6 +88,7 @@ impl PreservedReplSessionState {
 pub(crate) struct ReplStateRebuilder {
     context: RuntimeContext,
     launch: LaunchContext,
+    product_defaults: ConfigLayer,
     render_settings: RenderSettings,
     native_commands: NativeCommandRegistry,
     plugin_preferences: PluginCommandPreferences,
@@ -104,6 +105,7 @@ impl ReplStateRebuilder {
         Self {
             context: runtime.context.clone(),
             launch: runtime.launch.clone(),
+            product_defaults: runtime.product_defaults().clone(),
             render_settings: runtime.ui.render_settings.clone(),
             native_commands: clients.native_commands().clone(),
             plugin_preferences: clients.plugins().command_preferences_snapshot(),
@@ -124,6 +126,7 @@ impl ReplStateRebuilder {
                 Some(self.context.terminal_kind().as_config_terminal()),
             )
             .with_runtime_load(self.launch.runtime_load)
+            .with_product_defaults(self.product_defaults.clone())
             .with_session_layer(self.preserved_session.session_layer()),
         )
         .wrap_err("failed to resolve config for REPL rebuild")?;
@@ -141,13 +144,14 @@ impl ReplStateRebuilder {
             self.preserved_session.session_layer(),
         )
         .wrap_err("failed to derive host runtime inputs for REPL rebuild")?;
-        let mut next = crate::app::AppState::builder(self.context, config, host_inputs.ui)
+        let mut next = crate::app::AppStateBuilder::new(self.context, config, host_inputs.ui)
             .with_launch(self.launch)
             .with_plugins(host_inputs.plugins)
             .with_native_commands(self.native_commands)
             .with_session(host_inputs.default_session)
             .with_themes(host_inputs.themes)
             .build();
+        next.runtime.set_product_defaults(self.product_defaults);
         self.preserved_session.restore(&mut next.session);
         Ok((next.runtime, next.session, next.clients))
     }

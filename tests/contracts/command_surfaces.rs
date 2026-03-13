@@ -151,12 +151,7 @@ fn intro_command_supports_all_explicit_output_formats_contract() {
 }
 
 #[test]
-fn intro_command_compact_and_austere_share_minimal_value_layout_contract() {
-    let expected = format!(
-        "Welcome anonymous. v{}. Commands: help, config, theme, plugins. See help for more.",
-        env!("CARGO_PKG_VERSION")
-    );
-
+fn intro_command_compact_and_austere_diverge_by_presentation_contract() {
     let compact = run_cli_stdout(&[
         "--user",
         "anonymous",
@@ -164,7 +159,6 @@ fn intro_command_compact_and_austere_share_minimal_value_layout_contract() {
         "--no-config-file",
         "--presentation",
         "compact",
-        "--value",
         "intro",
     ]);
     let austere = run_cli_stdout(&[
@@ -174,12 +168,22 @@ fn intro_command_compact_and_austere_share_minimal_value_layout_contract() {
         "--no-config-file",
         "--presentation",
         "austere",
-        "--value",
         "intro",
     ]);
 
-    assert_eq!(compact.trim(), expected);
-    assert_eq!(austere.trim(), expected);
+    assert!(compact.contains("Usage: [INVOCATION_OPTIONS] COMMAND [ARGS]..."));
+    assert!(compact.contains("Commands:"));
+    assert!(compact.contains("Show this command overview."));
+    assert!(!compact.contains("Welcome anonymous."));
+
+    assert_eq!(
+        austere.trim(),
+        format!(
+            "Welcome anonymous. v{}. Commands: help, config, theme, plugins. See help for more.",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+    assert!(!austere.contains("Usage:"));
 }
 
 #[test]
@@ -187,11 +191,11 @@ fn intro_command_switches_to_completion_hint_when_help_is_hidden_contract() {
     let stdout = run_cli_stdout_with_config(
         Some(
             r#"[default]
-ui.presentation = "compact"
+ui.presentation = "austere"
 auth.visible.builtins = "config,theme,plugins"
 "#,
         ),
-        &["--user", "anonymous", "--no-env", "--value", "intro"],
+        &["--user", "anonymous", "--no-env", "intro"],
     );
 
     assert!(stdout.contains("Use completion to explore commands."));
@@ -207,10 +211,11 @@ ui.presentation = "compact"
 auth.visible.builtins = "help"
 "#,
         ),
-        &["--user", "anonymous", "--no-env", "--value", "intro"],
+        &["--user", "anonymous", "--no-env", "intro"],
     );
 
-    assert!(stdout.contains("Commands: help,"), "{stdout:?}");
+    assert!(stdout.contains("Commands:"), "{stdout:?}");
+    assert!(stdout.contains("help"), "{stdout:?}");
     assert!(!stdout.contains("config"), "{stdout:?}");
     assert!(!stdout.contains("theme"), "{stdout:?}");
     assert!(!stdout.contains("plugins"), "{stdout:?}");
@@ -432,7 +437,7 @@ repl.simple_prompt = true
     assert!(unicode.contains("\u{1b}[31m"), "{unicode:?}");
     assert!(unicode.contains("\u{1b}[34mOSP"), "{unicode:?}");
     assert!(unicode.contains("\u{1b}[33mCtrl-D"), "{unicode:?}");
-    assert!(unicode.contains("\u{1b}[32mWelcome "), "{unicode:?}");
+    assert!(unicode.contains("\u{1b}[32m  Welcome "), "{unicode:?}");
 
     let unicode_plain = strip_ansi(&unicode);
     let ascii_plain = strip_ansi(&ascii);

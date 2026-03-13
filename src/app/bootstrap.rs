@@ -37,6 +37,7 @@ pub(crate) struct RuntimeConfigRequest {
     pub(crate) terminal: Option<String>,
     pub(crate) runtime_load: RuntimeLoadOptions,
     pub(crate) session_layer: Option<ConfigLayer>,
+    pub(crate) product_defaults: ConfigLayer,
 }
 
 impl RuntimeConfigRequest {
@@ -46,6 +47,7 @@ impl RuntimeConfigRequest {
             terminal: terminal.map(ToOwned::to_owned),
             runtime_load: RuntimeLoadOptions::default(),
             session_layer: None,
+            product_defaults: ConfigLayer::default(),
         }
     }
 
@@ -58,6 +60,18 @@ impl RuntimeConfigRequest {
         self.session_layer = session_layer;
         self
     }
+
+    pub(crate) fn with_product_defaults(mut self, product_defaults: ConfigLayer) -> Self {
+        self.product_defaults = product_defaults;
+        self
+    }
+}
+
+fn runtime_defaults_layer(product_defaults: &ConfigLayer) -> ConfigLayer {
+    let mut defaults =
+        RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT).to_layer();
+    defaults.extend_from_layer(product_defaults);
+    defaults
 }
 
 pub(crate) fn build_cli_session_layer(
@@ -65,6 +79,7 @@ pub(crate) fn build_cli_session_layer(
     profile_override: Option<String>,
     terminal_kind: TerminalKind,
     runtime_load: RuntimeLoadOptions,
+    product_defaults: &ConfigLayer,
 ) -> Result<Option<ConfigLayer>> {
     let mut layer = ConfigLayer::default();
     cli.append_static_session_overrides(&mut layer);
@@ -81,6 +96,7 @@ pub(crate) fn build_cli_session_layer(
             Some(terminal_kind.as_config_terminal()),
         )
         .with_runtime_load(runtime_load)
+        .with_product_defaults(product_defaults.clone())
         .with_session_layer(bootstrap_layer),
     )
     .wrap_err("failed to resolve config for CLI session layer")?;
@@ -148,10 +164,9 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
         has_session_layer,
         "resolving runtime config"
     );
-    let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
     let paths = RuntimeConfigPaths::discover();
     let base_pipeline = build_runtime_pipeline(
-        defaults.to_layer(),
+        runtime_defaults_layer(&request.product_defaults),
         None,
         &paths,
         request.runtime_load,
@@ -173,7 +188,7 @@ pub(crate) fn resolve_runtime_config(request: RuntimeConfigRequest) -> Result<Re
 
     let presentation_layer = build_presentation_defaults_layer(&base_resolved);
     let resolved = build_runtime_pipeline(
-        defaults.to_layer(),
+        runtime_defaults_layer(&request.product_defaults),
         Some(presentation_layer),
         &paths,
         request.runtime_load,

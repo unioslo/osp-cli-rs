@@ -32,10 +32,14 @@ const ALIAS_PLACEHOLDER_TOKEN: &str = "__osp_alias__";
 pub(crate) fn build_repl_completion_tree(
     view: ReplViewContext<'_>,
     surface: &ReplSurface,
-) -> CompletionTree {
-    let mut tree = CompletionTreeBuilder.build_from_specs(&surface.specs, default_pipe_verbs());
+) -> Result<CompletionTree> {
+    let mut tree = CompletionTreeBuilder
+        .build_from_specs(&surface.specs, default_pipe_verbs())
+        .map_err(|err| miette::miette!(err.to_string()))?;
     if view.auth.is_builtin_visible(CMD_CONFIG) {
-        CompletionTreeBuilder.apply_config_set_keys(&mut tree, config_set_key_specs());
+        CompletionTreeBuilder
+            .apply_config_set_keys(&mut tree, config_set_key_specs())
+            .map_err(|err| miette::miette!(err.to_string()))?;
     }
     inject_invocation_flags(&mut tree.root);
     mark_context_only_flags(&mut tree.root);
@@ -56,7 +60,7 @@ pub(crate) fn build_repl_completion_tree(
     inject_alias_nodes(&mut tree.root, &root_base, None, &surface.aliases);
 
     if view.scope.is_root() {
-        return tree;
+        return Ok(tree);
     }
 
     let mut rooted = CompletionTree {
@@ -71,7 +75,7 @@ pub(crate) fn build_repl_completion_tree(
         &surface.aliases,
     );
     apply_shell_root_controls(&mut rooted.root);
-    rooted
+    Ok(rooted)
 }
 
 #[derive(Debug, Clone)]
@@ -570,7 +574,8 @@ mod tests {
         sanitize_alias_template_for_completion, scope_completion_tree,
     };
     use crate::app::{
-        AppState, LaunchContext, ReplScopeStack, RuntimeContext, TerminalKind, UiState,
+        AppState, AppStateBuilder, LaunchContext, ReplScopeStack, RuntimeContext, TerminalKind,
+        UiState,
     };
     use crate::completion::{CompletionNode, CompletionTree, ContextScope, FlagNode};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
@@ -590,12 +595,14 @@ mod tests {
             .resolve(ResolveOptions::default().with_terminal("repl"))
             .expect("test config should resolve");
 
-        AppState::builder(
+        AppStateBuilder::new(
             RuntimeContext::new(None, TerminalKind::Repl, None),
             config,
-            UiState::builder(RenderSettings::test_plain(OutputFormat::Json))
-                .with_message_verbosity(MessageLevel::Success)
-                .build(),
+            UiState::new(
+                RenderSettings::test_plain(OutputFormat::Json),
+                MessageLevel::Success,
+                0,
+            ),
         )
         .with_launch(LaunchContext::default())
         .with_plugins(PluginManager::new(Vec::new()))

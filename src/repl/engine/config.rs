@@ -35,6 +35,7 @@ pub type PromptRightRenderer = Arc<dyn Fn() -> String + Send + Sync>;
 /// participate in command completion. A [`LineProjector`] can blank those
 /// spans while also hiding corresponding suggestions.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use]
 pub struct LineProjection {
     /// Projected line passed to completion and highlighting.
     pub line: String,
@@ -64,9 +65,13 @@ pub type LineProjector = Arc<dyn Fn(&str) -> LineProjection + Send + Sync>;
 /// Selects how aggressively the REPL should use the interactive line editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplInputMode {
-    /// Use the interactive editor when the terminal supports it, else fall back.
+    /// Use the interactive editor when terminal capabilities support it, else
+    /// fall back to basic stdin line reading.
     Auto,
-    /// Require the interactive editor even when capability probes would skip it.
+    /// Prefer the interactive editor even when the cursor-position capability
+    /// probe would skip it.
+    ///
+    /// Non-terminal stdin or stdout still force the basic fallback.
     Interactive,
     /// Use plain stdin line reading instead of `reedline`.
     Basic,
@@ -119,6 +124,7 @@ pub enum ReplRunResult {
 /// implementation may change, but callers should still only describe prompt,
 /// completion, history, and input-mode intent here.
 #[non_exhaustive]
+#[must_use]
 pub struct ReplRunConfig {
     /// Left prompt and indicator strings.
     pub prompt: ReplPrompt,
@@ -140,6 +146,10 @@ pub struct ReplRunConfig {
 
 impl ReplRunConfig {
     /// Creates the exact REPL runtime baseline for one run.
+    ///
+    /// The baseline starts with no completion words, no structured completion
+    /// tree, default appearance overrides, [`ReplInputMode::Auto`], no
+    /// right-hand prompt renderer, and no line projector.
     pub fn new(prompt: ReplPrompt, history_config: HistoryConfig) -> Self {
         Self {
             prompt,
@@ -181,6 +191,7 @@ impl ReplRunConfig {
 }
 
 /// Builder for [`ReplRunConfig`].
+#[must_use]
 pub struct ReplRunConfigBuilder {
     config: ReplRunConfig,
 }
@@ -194,6 +205,8 @@ impl ReplRunConfigBuilder {
     }
 
     /// Replaces the legacy fallback completion words.
+    ///
+    /// If omitted, the config keeps an empty fallback word list.
     pub fn with_completion_words<I, S>(mut self, completion_words: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -204,36 +217,49 @@ impl ReplRunConfigBuilder {
     }
 
     /// Replaces the structured completion tree.
+    ///
+    /// If omitted, the REPL uses no structured completion tree.
     pub fn with_completion_tree(mut self, completion_tree: Option<CompletionTree>) -> Self {
         self.config.completion_tree = completion_tree;
         self
     }
 
     /// Replaces the REPL appearance overrides.
+    ///
+    /// If omitted, the config keeps [`ReplAppearance::default`].
     pub fn with_appearance(mut self, appearance: ReplAppearance) -> Self {
         self.config.appearance = appearance;
         self
     }
 
     /// Replaces the history configuration.
+    ///
+    /// If omitted, the builder keeps the history configuration passed to
+    /// [`ReplRunConfigBuilder::new`].
     pub fn with_history_config(mut self, history_config: HistoryConfig) -> Self {
         self.config.history_config = history_config;
         self
     }
 
     /// Replaces the input-mode policy.
+    ///
+    /// If omitted, the config keeps [`ReplInputMode::Auto`].
     pub fn with_input_mode(mut self, input_mode: ReplInputMode) -> Self {
         self.config.input_mode = input_mode;
         self
     }
 
     /// Replaces the optional right-prompt renderer.
+    ///
+    /// If omitted, the REPL renders no right-hand prompt.
     pub fn with_prompt_right(mut self, prompt_right: Option<PromptRightRenderer>) -> Self {
         self.config.prompt_right = prompt_right;
         self
     }
 
     /// Replaces the optional completion/highlighting line projector.
+    ///
+    /// If omitted, the REPL analyzes the raw input line directly.
     pub fn with_line_projector(mut self, line_projector: Option<LineProjector>) -> Self {
         self.config.line_projector = line_projector;
         self
@@ -269,6 +295,7 @@ impl ReplPrompt {
 /// Style overrides for REPL-only completion and highlighting chrome.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+#[must_use]
 pub struct ReplAppearance {
     /// Style applied to non-selected completion text.
     pub completion_text_style: Option<String>,
@@ -317,6 +344,7 @@ impl Default for ReplAppearance {
 
 /// Builder for [`ReplAppearance`].
 #[derive(Debug, Clone, Default)]
+#[must_use]
 pub struct ReplAppearanceBuilder {
     appearance: ReplAppearance,
 }
@@ -330,12 +358,17 @@ impl ReplAppearanceBuilder {
     }
 
     /// Replaces the style applied to non-selected completion text.
+    ///
+    /// If omitted, the REPL keeps the theme/default completion text style.
     pub fn with_completion_text_style(mut self, completion_text_style: Option<String>) -> Self {
         self.appearance.completion_text_style = completion_text_style;
         self
     }
 
     /// Replaces the menu background style.
+    ///
+    /// If omitted, the REPL keeps the theme/default completion background
+    /// style.
     pub fn with_completion_background_style(
         mut self,
         completion_background_style: Option<String>,
@@ -345,6 +378,9 @@ impl ReplAppearanceBuilder {
     }
 
     /// Replaces the style applied to the selected completion entry.
+    ///
+    /// If omitted, the REPL keeps the theme/default completion highlight
+    /// style.
     pub fn with_completion_highlight_style(
         mut self,
         completion_highlight_style: Option<String>,
@@ -354,12 +390,16 @@ impl ReplAppearanceBuilder {
     }
 
     /// Replaces the style applied to recognized command segments.
+    ///
+    /// If omitted, the REPL keeps the theme/default command-highlight style.
     pub fn with_command_highlight_style(mut self, command_highlight_style: Option<String>) -> Self {
         self.appearance.command_highlight_style = command_highlight_style;
         self
     }
 
     /// Replaces the maximum number of visible history-menu rows.
+    ///
+    /// If omitted, the builder keeps the default history-menu row count.
     pub fn with_history_menu_rows(mut self, history_menu_rows: u16) -> Self {
         self.appearance.history_menu_rows = history_menu_rows;
         self

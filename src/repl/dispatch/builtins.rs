@@ -227,7 +227,6 @@ mod tests {
                 .with_shell_context(Default::default())
                 .build(),
         )
-        .expect("history should initialize")
     }
 
     #[test]

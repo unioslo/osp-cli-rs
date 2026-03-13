@@ -41,6 +41,30 @@ enum CommandRunError {
 
 impl PluginManager {
     /// Runs a plugin command and returns its validated structured response.
+    ///
+    /// `command` is the full command path resolved against the active plugin
+    /// catalog. `args` are passed to the plugin after that command name.
+    /// `context` carries runtime hints, optional environment overrides, and an
+    /// optional one-shot provider override for this dispatch only.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginDispatchError`] when provider resolution fails, the
+    /// plugin subprocess cannot be executed, the subprocess times out, the
+    /// plugin exits non-zero, or the returned JSON is syntactically or
+    /// semantically invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::{PluginDispatchContext, PluginDispatchError, PluginManager};
+    ///
+    /// let err = PluginManager::new(Vec::new())
+    ///     .dispatch("shared", &[], &PluginDispatchContext::default())
+    ///     .unwrap_err();
+    ///
+    /// assert!(matches!(err, PluginDispatchError::CommandNotFound { .. }));
+    /// ```
     pub fn dispatch(
         &self,
         command: &str,
@@ -95,6 +119,28 @@ impl PluginManager {
     }
 
     /// Runs a plugin command and returns raw stdout, stderr, and exit status.
+    ///
+    /// Unlike [`PluginManager::dispatch`], this does not attempt to decode or
+    /// validate plugin JSON output. Non-zero exit codes are returned in
+    /// [`RawPluginOutput::status_code`] rather than surfaced as
+    /// [`PluginDispatchError::NonZeroExit`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginDispatchError`] when provider resolution fails, the
+    /// plugin subprocess cannot be executed, or the subprocess times out.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::{PluginDispatchContext, PluginDispatchError, PluginManager};
+    ///
+    /// let err = PluginManager::new(Vec::new())
+    ///     .dispatch_passthrough("shared", &[], &PluginDispatchContext::default())
+    ///     .unwrap_err();
+    ///
+    /// assert!(matches!(err, PluginDispatchError::CommandNotFound { .. }));
+    /// ```
     pub fn dispatch_passthrough(
         &self,
         command: &str,
@@ -362,7 +408,9 @@ fn spawn_command_with_retry(command: &mut Command) -> std::io::Result<Child> {
         }
     }
 
-    unreachable!("retry loop should always return or error");
+    Err(std::io::Error::other(
+        "plugin spawn retry loop exhausted unexpectedly",
+    ))
 }
 
 fn is_text_file_busy(err: &std::io::Error) -> bool {

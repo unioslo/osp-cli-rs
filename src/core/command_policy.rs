@@ -104,6 +104,7 @@ pub enum CommandAvailability {
 
 /// Declarative policy used to decide whether a command is visible and runnable.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
 pub struct CommandPolicy {
     /// Normalized command path used as the registry key.
     pub path: CommandPath,
@@ -213,6 +214,7 @@ impl CommandPolicy {
 /// Partial override applied on top of a registered [`CommandPolicy`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
+#[must_use]
 pub struct CommandPolicyOverride {
     /// Replacement visibility mode, when overridden.
     pub visibility: Option<VisibilityMode>,
@@ -301,6 +303,7 @@ impl CommandPolicyOverride {
 
 /// Runtime facts used to evaluate a command policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use]
 pub struct CommandPolicyContext {
     /// Whether the current caller is authenticated.
     pub authenticated: bool,
@@ -458,6 +461,11 @@ impl CommandPolicyRegistry {
     /// Creates an empty policy registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns `true` when no base policies are registered.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// Registers a policy and returns the previous policy for the same path, if any.

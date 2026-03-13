@@ -1,7 +1,8 @@
-use osp_cli::app::{AppBuilder, BufferedUiSink};
+use osp_cli::App;
+use osp_cli::app::BufferedUiSink;
 
 fn debug_complete_payload(line: &str, steps: &[&str]) -> serde_json::Value {
-    let app = AppBuilder::new().build();
+    let app = App::builder().build();
     let mut sink = BufferedUiSink::default();
     let mut args = vec![
         "osp".to_string(),

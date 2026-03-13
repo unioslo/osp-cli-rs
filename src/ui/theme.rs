@@ -427,13 +427,34 @@ pub fn find_theme(name: &str) -> Option<ThemeDefinition> {
 /// assert_eq!(resolve_theme("missing-theme").id, DEFAULT_THEME_NAME);
 /// ```
 pub fn resolve_theme(name: &str) -> ThemeDefinition {
-    find_theme(name).unwrap_or_else(|| {
-        builtin_theme_defs()
-            .iter()
-            .find(|theme| theme.id == DEFAULT_THEME_NAME)
-            .expect("default theme must exist")
-            .clone()
-    })
+    find_theme(name).unwrap_or_else(default_theme_fallback)
+}
+
+fn default_theme_fallback() -> ThemeDefinition {
+    builtin_theme_defs()
+        .iter()
+        .find(|theme| theme.id == DEFAULT_THEME_NAME)
+        .cloned()
+        .or_else(|| builtin_theme_defs().first().cloned())
+        .unwrap_or_else(|| {
+            ThemeDefinition::new(
+                "plain",
+                "Plain",
+                None,
+                palette(PaletteSpec {
+                    text: "",
+                    muted: "",
+                    accent: "",
+                    info: "",
+                    warning: "",
+                    success: "",
+                    error: "",
+                    border: "",
+                    title: "",
+                }),
+                ThemeOverrides::default(),
+            )
+        })
 }
 
 /// Returns whether a theme name resolves to a known theme.

@@ -298,10 +298,9 @@ fn split_word_token(token: Token, segment: &StageSegment, out: &mut Vec<Token>) 
 
     while cursor < raw.len() {
         let tail = &raw[cursor..];
-        let ch = tail
-            .chars()
-            .next()
-            .expect("cursor should always point at a valid character boundary");
+        let Some(ch) = tail.chars().next() else {
+            break;
+        };
         let width = ch.len_utf8();
 
         match state {

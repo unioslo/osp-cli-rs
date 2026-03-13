@@ -1,15 +1,16 @@
 ---
 source: src/repl/dispatch/tests.rs
-assertion_line: 435
+assertion_line: 440
 expression: help
 ---
-- Usage ----
+- Usage ----------------
   [INVOCATION_OPTIONS] COMMAND [ARGS]...
-- Commands -
-  exit     Exit application.
-  help     Show this command overview.
-  plugins  Inspect and manage plugin providers
-  doctor   Run diagnostics checks
-  theme    Inspect and apply themes
-  config   Inspect and edit runtime config
-  history  Inspect or prune REPL history
+
+- Commands -------------
+  exit        Exit application.
+  help        Show this command overview.
+  plugins     Inspect and manage plugin providers
+  doctor      Run diagnostics checks
+  theme       Inspect and apply themes
+  config      Inspect and edit runtime config
+  history     Inspect or prune REPL history

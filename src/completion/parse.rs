@@ -234,6 +234,9 @@ impl CommandLineParser {
     /// the line ends in an unmatched quote we fall back to the permissive
     /// tokenization path so interactive behavior stays unchanged.
     ///
+    /// `cursor` is clamped to the input length and to a valid UTF-8 character
+    /// boundary before the parser slices the line.
+    ///
     /// # Examples
     ///
     /// ```

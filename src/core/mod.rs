@@ -9,13 +9,15 @@
 //!
 //! Rough map:
 //!
-//! - [`command_def`] describes commands as semantic metadata for help and
+//! - [`crate::core::command_def`] describes commands as semantic metadata for help and
 //!   catalogs
-//! - [`command_policy`] answers whether a command should be visible or allowed
-//! - [`output`] and [`output_model`] define the crate's canonical output shapes
-//! - [`plugin`] defines the stable wire DTOs shared with external plugins
-//! - [`row`] is the common row representation used by commands, DSL, and UI
-//! - [`shell_words`] and [`fuzzy`] provide small reusable parsing/matching
+//! - [`crate::core::command_policy`] answers whether a command should be visible or allowed
+//! - [`crate::core::output`] and [`crate::core::output_model`] define the crate's canonical output
+//!   shapes
+//! - [`crate::core::plugin`] defines the stable wire DTOs shared with external plugins
+//! - [`crate::core::row`] is the common row representation used by commands, DSL, and UI
+//! - [`crate::core::shell_words`] and [`crate::core::fuzzy`] provide small reusable
+//!   parsing/matching
 //!   primitives
 //!
 //! `core` should not become a junk drawer. A type belongs here only if it is

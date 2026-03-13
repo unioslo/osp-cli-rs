@@ -20,7 +20,8 @@ pub enum ConfigSource {
     PresentationDefaults,
     /// Values loaded from user configuration files.
     ConfigFile,
-    /// Values loaded from the secrets file.
+    /// Values loaded from the secrets layer, including secrets files and
+    /// secret-specific environment overrides.
     Secrets,
     /// Values supplied through `OSP__...` environment variables.
     Environment,
@@ -276,6 +277,7 @@ impl BootstrapKeySpec {
 
 /// Schema definition for a single config key.
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct SchemaEntry {
     canonical_key: Option<&'static str>,
     value_type: SchemaValueType,
@@ -1043,6 +1045,33 @@ impl ConfigLayer {
         &self.entries
     }
 
+    /// Appends every entry from another layer in insertion order.
+    ///
+    /// Later entries from `other` win over earlier entries in this layer when
+    /// the resolver evaluates duplicate keys from the same source layer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::ConfigLayer;
+    ///
+    /// let mut base = ConfigLayer::default();
+    /// base.set("theme.name", "dracula");
+    ///
+    /// let mut site = ConfigLayer::default();
+    /// site.set("extensions.site.enabled", true);
+    /// site.set("theme.name", "nord");
+    ///
+    /// base.extend_from_layer(&site);
+    ///
+    /// assert_eq!(base.entries().len(), 3);
+    /// assert_eq!(base.entries()[2].key, "theme.name");
+    /// assert_eq!(base.entries()[2].value.to_string(), "nord");
+    /// ```
+    pub fn extend_from_layer(&mut self, other: &ConfigLayer) {
+        self.entries.extend(other.entries().iter().cloned());
+    }
+
     /// Inserts a global entry.
     ///
     /// # Examples
@@ -1322,6 +1351,7 @@ pub(crate) struct EnvKeySpec {
 
 /// Options that affect profile and terminal selection during resolution.
 #[derive(Debug, Clone, Default)]
+#[must_use]
 pub struct ResolveOptions {
     /// Explicit profile to use instead of the configured default profile.
     pub profile_override: Option<String>,
@@ -1602,6 +1632,9 @@ impl ResolvedConfig {
 
     /// Returns the resolved string list for a key.
     ///
+    /// If the resolved value is a scalar string instead of a list, it is
+    /// promoted to a single-element vector.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1610,6 +1643,19 @@ impl ResolvedConfig {
     /// let mut defaults = ConfigLayer::default();
     /// defaults.set("profile.default", "default");
     /// defaults.set("theme.path", vec!["/tmp/themes".to_string()]);
+    ///
+    /// let mut resolver = ConfigResolver::default();
+    /// resolver.set_defaults(defaults);
+    /// let resolved = resolver.resolve(ResolveOptions::default()).unwrap();
+    ///
+    /// assert_eq!(
+    ///     resolved.get_string_list("theme.path"),
+    ///     Some(vec!["/tmp/themes".to_string()])
+    /// );
+    ///
+    /// let mut defaults = ConfigLayer::default();
+    /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.path", "/tmp/themes");
     ///
     /// let mut resolver = ConfigResolver::default();
     /// resolver.set_defaults(defaults);

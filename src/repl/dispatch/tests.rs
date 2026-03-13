@@ -298,8 +298,7 @@ fn bang_execution_and_scope_helpers_cover_help_matches_and_replace_unit() {
             .with_profile_scoped(false)
             .with_shell_context(Default::default())
             .build(),
-    )
-    .expect("history should initialize");
+    );
     history
         .save_command_line("ldap user alice")
         .expect("first command saves");
@@ -420,7 +419,6 @@ fn test_history() -> SharedHistory {
             .with_shell_context(Default::default())
             .build(),
     )
-    .expect("history should initialize")
 }
 
 #[test]
@@ -853,8 +851,7 @@ printf '%s\n' '{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":n
                 .with_profile_scoped(false)
                 .with_shell_context(Default::default())
                 .build(),
-        )
-        .expect("history should initialize"),
+        ),
         Some("cache-key"),
     )
     .expect("first external run should succeed");
@@ -874,8 +871,7 @@ printf '%s\n' '{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":n
                 .with_profile_scoped(false)
                 .with_shell_context(Default::default())
                 .build(),
-        )
-        .expect("history should initialize"),
+        ),
         Some("cache-key"),
     )
     .expect("cached external run should succeed");

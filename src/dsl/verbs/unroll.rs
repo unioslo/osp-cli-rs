@@ -38,17 +38,17 @@ pub(crate) fn compile(spec: &str) -> Result<UnrollPlan> {
     }
 
     let path = parse_path(trimmed)?;
-    let target = match path.segments.as_slice() {
-        [segment] if !path.absolute && segment.name.is_some() && segment.selectors.is_empty() => {
-            UnrollTarget::DescendantField(
-                segment
-                    .name
-                    .as_ref()
-                    .expect("segment name ensured above")
-                    .clone(),
-            )
+    let target = if !path.absolute {
+        match path.segments.as_slice() {
+            [segment] if segment.selectors.is_empty() => segment
+                .name
+                .as_ref()
+                .map(|name| UnrollTarget::DescendantField(name.clone()))
+                .unwrap_or(UnrollTarget::Path(path)),
+            _ => UnrollTarget::Path(path),
         }
-        _ => UnrollTarget::Path(path),
+    } else {
+        UnrollTarget::Path(path)
     };
 
     Ok(UnrollPlan { target })
@@ -168,7 +168,9 @@ fn duplicate_object_over_field(mut map: Map<String, Value>, field: &str) -> Valu
 
 fn duplicate_object_over_value(map: Map<String, Value>, field: &str, value: Value) -> Value {
     let Value::Array(items) = value else {
-        unreachable!("duplicate_object_over_value requires array payload");
+        let mut restored = map;
+        restored.insert(field.to_string(), value);
+        return Value::Object(restored);
     };
 
     Value::Array(
@@ -254,8 +256,12 @@ fn unroll_named_descendant_field(value: Value, field: &str) -> Value {
         // This preserves object envelope metadata instead of flattening the
         // array contents into anonymous rows.
         Value::Object(mut map) if matches!(map.get(field), Some(Value::Array(_))) => {
-            let Some(Value::Array(items)) = map.remove(field) else {
-                unreachable!("array match ensured above")
+            let Some(existing) = map.remove(field) else {
+                return Value::Object(map);
+            };
+            let Value::Array(items) = existing else {
+                map.insert(field.to_string(), existing);
+                return Value::Object(map);
             };
             Value::Array(
                 items

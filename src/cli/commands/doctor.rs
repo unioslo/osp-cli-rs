@@ -9,10 +9,12 @@ use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{DoctorArgs, DoctorCommands, PluginsArgs, PluginsCommands};
 use crate::core::command_def::CommandDef;
 use crate::core::output::OutputFormat;
+use crate::core::output_model::OutputResult;
 use crate::core::row::Row;
-use crate::ui::document::{Block, Document, PanelBlock, PanelRules};
-use crate::ui::format::build_document_from_output;
+use crate::guide::{GuideSection, GuideSectionKind, GuideView};
+use crate::ui::document::Document;
 use crate::ui::theme_loader::ThemeCatalog;
+use serde_json::{Map, Value};
 
 use super::{config as config_cmd, plugins as plugins_cmd};
 
@@ -96,11 +98,7 @@ fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult>
         ));
     }
     if context.auth.is_builtin_visible(CMD_PLUGINS) {
-        let report = context
-            .plugins
-            .plugin_manager
-            .doctor()
-            .map_err(|err| miette::miette!("{err:#}"))?;
+        let report = context.plugins.plugin_manager.doctor();
         sections.push(("plugins", plugins_cmd::doctor_rows(&report)));
     }
     if context.auth.is_builtin_visible(CMD_THEME) {
@@ -108,36 +106,70 @@ fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult>
     }
 
     if matches!(context.ui.render_settings.format, OutputFormat::Json) {
-        let mut root = serde_json::Map::new();
-        for (name, rows) in sections {
-            let values = rows
-                .into_iter()
-                .map(serde_json::Value::Object)
-                .collect::<Vec<_>>();
-            root.insert(name.to_string(), serde_json::Value::Array(values));
-        }
-        let payload = serde_json::Value::Object(root);
-        return Ok(CliCommandResult::document(document_from_json(payload)));
+        return Ok(CliCommandResult::document(document_from_json(
+            doctor_report_json_value(&sections),
+        )));
     }
 
-    let blocks = sections
-        .into_iter()
-        .map(|(name, rows)| {
-            let output = rows_to_output_result(rows);
-            let body = build_document_from_output(&output, &context.ui.render_settings);
-            Block::Panel(PanelBlock {
-                title: Some(name.to_string()),
-                body,
-                rules: PanelRules::Top,
-                frame_style: None,
-                kind: None,
-                border_token: None,
-                title_token: None,
-            })
-        })
-        .collect();
+    if sections.is_empty() {
+        return Ok(CliCommandResult::document(Document::default()));
+    }
 
-    Ok(CliCommandResult::document(Document { blocks }))
+    Ok(CliCommandResult::guide_with_output(
+        doctor_report_guide(&sections),
+        doctor_report_output(&sections),
+        None,
+    ))
+}
+
+fn doctor_report_guide(sections: &[(&str, Vec<Row>)]) -> GuideView {
+    GuideView {
+        sections: sections
+            .iter()
+            .map(|(name, rows)| {
+                GuideSection::new(*name, GuideSectionKind::Custom)
+                    .data(doctor_section_view_value(rows))
+            })
+            .collect(),
+        ..GuideView::default()
+    }
+}
+
+fn doctor_report_output(sections: &[(&str, Vec<Row>)]) -> OutputResult {
+    OutputResult::from_rows(vec![doctor_report_row(sections, doctor_section_view_value)])
+}
+
+fn doctor_report_json_value(sections: &[(&str, Vec<Row>)]) -> Value {
+    doctor_report_value(sections, doctor_section_json_value)
+}
+
+fn doctor_report_value(
+    sections: &[(&str, Vec<Row>)],
+    value_for_rows: impl Fn(&[Row]) -> Value,
+) -> Value {
+    Value::Object(doctor_report_row(sections, value_for_rows))
+}
+
+fn doctor_report_row(
+    sections: &[(&str, Vec<Row>)],
+    value_for_rows: impl Fn(&[Row]) -> Value,
+) -> Map<String, Value> {
+    sections
+        .iter()
+        .map(|(name, rows)| ((*name).to_string(), value_for_rows(rows)))
+        .collect::<Map<String, Value>>()
+}
+
+fn doctor_section_view_value(rows: &[Row]) -> Value {
+    match rows {
+        [] => Value::Array(Vec::new()),
+        [row] => Value::Object(row.clone()),
+        _ => Value::Array(rows.iter().cloned().map(Value::Object).collect()),
+    }
+}
+
+fn doctor_section_json_value(rows: &[Row]) -> Value {
+    Value::Array(rows.iter().cloned().map(Value::Object).collect())
 }
 
 fn theme_doctor_rows(themes: &ThemeCatalog) -> Vec<Row> {
@@ -215,10 +247,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn ui_state(format: OutputFormat, debug_verbosity: u8) -> UiState {
-        UiState::builder(RenderSettings::test_plain(format))
-            .with_message_verbosity(MessageLevel::Success)
-            .with_debug_verbosity(debug_verbosity)
-            .build()
+        UiState::new(
+            RenderSettings::test_plain(format),
+            MessageLevel::Success,
+            debug_verbosity,
+        )
     }
 
     fn doctor_context(
@@ -241,6 +274,7 @@ mod tests {
         let themes = Box::leak(Box::new(ThemeCatalog::default()));
         let auth = Box::leak(Box::new(AuthState::from_resolved(resolved)));
         let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
+        let product_defaults = Box::leak(Box::new(ConfigLayer::default()));
         let plugin_manager = Box::leak(Box::new(PluginManager::new(Vec::new())));
         let context = Box::leak(Box::new(RuntimeContext::new(None, TerminalKind::Cli, None)));
 
@@ -251,6 +285,7 @@ mod tests {
                 ui,
                 themes,
                 config_overrides,
+                product_defaults,
                 runtime_load: RuntimeLoadOptions::default(),
             },
             plugins: plugins_cmd::PluginsCommandContext {
@@ -260,6 +295,7 @@ mod tests {
                 auth,
                 clients: None,
                 plugin_manager,
+                product_defaults,
                 runtime_load: RuntimeLoadOptions::default(),
             },
             ui,
@@ -387,15 +423,22 @@ mod tests {
             },
         )
         .expect("doctor all should succeed");
-        let Some(ReplCommandOutput::Document(document)) = table.output else {
-            panic!("expected document output");
+        let Some(ReplCommandOutput::Guide(guide)) = table.output else {
+            panic!("expected guide output");
         };
         assert!(
-            document
-                .blocks
+            guide
+                .guide
+                .sections
                 .iter()
-                .all(|block| matches!(block, Block::Panel(_)))
+                .all(|section| section.data.is_some())
         );
+        let rows = guide
+            .output
+            .as_rows()
+            .expect("doctor guide output should keep a structured fallback");
+        assert!(rows[0].get("config").is_some());
+        assert!(rows[0].get("theme").is_some());
 
         let config_err = run_doctor_command(
             doctor_context(OutputFormat::Table, Some("theme")),

@@ -200,6 +200,7 @@ impl OutputResult {
     ///
     /// assert!(output.document.is_some());
     /// ```
+    #[must_use]
     pub fn with_document(mut self, document: OutputDocument) -> Self {
         self.document = Some(document);
         self

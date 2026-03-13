@@ -13,7 +13,6 @@ use super::selection::{ProviderResolution, ProviderSelectionMode, plugin_enabled
 use crate::completion::CommandSpec;
 use crate::core::command_policy::{CommandPath, CommandPolicyRegistry};
 use crate::core::plugin::DescribeCommandV1;
-use anyhow::{Result, anyhow};
 
 pub(crate) fn list_plugins(view: &ActivePluginView<'_>) -> Vec<PluginSummary> {
     view.discovered()
@@ -31,24 +30,25 @@ pub(crate) fn list_plugins(view: &ActivePluginView<'_>) -> Vec<PluginSummary> {
         .collect()
 }
 
-pub(crate) fn build_command_catalog(
-    view: &ActivePluginView<'_>,
-) -> Result<Vec<CommandCatalogEntry>> {
+pub(crate) fn build_command_catalog(view: &ActivePluginView<'_>) -> Vec<CommandCatalogEntry> {
     let mut out = Vec::new();
 
     for command_name in view.active_command_names() {
         let providers = view.provider_labels(command_name);
-        match view
-            .resolve_provider(command_name, None)
-            .map_err(|err| anyhow!("failed to resolve provider for `{command_name}`: {err:?}"))?
-        {
+        let resolution = match view.resolve_provider(command_name, None) {
+            Ok(resolution) => resolution,
+            Err(err) => {
+                tracing::debug!(
+                    command = %command_name,
+                    error = ?err,
+                    "skipping inconsistent active command during catalog build"
+                );
+                continue;
+            }
+        };
+        match resolution {
             ProviderResolution::Selected(selection) => {
-                let spec = selection
-                    .plugin
-                    .command_specs
-                    .iter()
-                    .find(|spec| spec.name == command_name)
-                    .expect("selected provider should include command spec");
+                let spec = selected_command_spec(selection.plugin, command_name);
                 out.push(CommandCatalogEntry {
                     name: command_name.to_string(),
                     about: spec.tooltip.clone().unwrap_or_default(),
@@ -58,7 +58,7 @@ pub(crate) fn build_command_catalog(
                         .iter()
                         .find(|candidate| candidate.name == spec.name)
                         .and_then(|candidate| candidate.auth.clone()),
-                    subcommands: direct_subcommand_names(spec),
+                    subcommands: direct_subcommand_names(&spec),
                     completion: spec.clone(),
                     provider: Some(selection.plugin.plugin_id.clone()),
                     providers: providers.clone(),
@@ -93,18 +93,24 @@ pub(crate) fn build_command_catalog(
     }
 
     out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(out)
+    out
 }
 
-pub(crate) fn build_command_policy_registry(
-    view: &ActivePluginView<'_>,
-) -> Result<CommandPolicyRegistry> {
+pub(crate) fn build_command_policy_registry(view: &ActivePluginView<'_>) -> CommandPolicyRegistry {
     let mut registry = CommandPolicyRegistry::new();
 
     for command_name in view.active_command_names() {
-        let resolution = view
-            .resolve_provider(command_name, None)
-            .map_err(|err| anyhow!("failed to resolve provider for `{command_name}`: {err:?}"))?;
+        let resolution = match view.resolve_provider(command_name, None) {
+            Ok(resolution) => resolution,
+            Err(err) => {
+                tracing::debug!(
+                    command = %command_name,
+                    error = ?err,
+                    "skipping inconsistent active command during policy build"
+                );
+                continue;
+            }
+        };
         let ProviderResolution::Selected(selection) = resolution else {
             continue;
         };
@@ -119,7 +125,7 @@ pub(crate) fn build_command_policy_registry(
         }
     }
 
-    Ok(registry)
+    registry
 }
 
 pub(crate) fn completion_words_from_catalog(catalog: &[CommandCatalogEntry]) -> Vec<String> {
@@ -213,6 +219,31 @@ pub(crate) fn selected_provider_label(
     }
 }
 
+fn selected_command_spec(
+    plugin: &crate::plugin::DiscoveredPlugin,
+    command_name: &str,
+) -> CommandSpec {
+    if let Some(spec) = plugin
+        .command_specs
+        .iter()
+        .find(|spec| spec.name == command_name)
+    {
+        return spec.clone();
+    }
+
+    let mut spec = CommandSpec::new(command_name);
+    if let Some(about) = plugin
+        .describe_commands
+        .iter()
+        .find(|candidate| candidate.name == command_name)
+        .map(|candidate| candidate.about.trim())
+        .filter(|about| !about.is_empty())
+    {
+        spec = spec.tooltip(about);
+    }
+    spec
+}
+
 pub(crate) fn build_doctor_report(view: &ActivePluginView<'_>) -> DoctorReport {
     let plugins = list_plugins(view);
     let mut conflicts = view
@@ -280,7 +311,7 @@ mod tests {
         let preferences = PluginCommandPreferences::default();
         let discovered = [alpha, beta];
         let view = ActivePluginView::new(&discovered, &preferences);
-        let catalog = build_command_catalog(&view).expect("catalog should build");
+        let catalog = build_command_catalog(&view);
         let entry = catalog
             .iter()
             .find(|entry| entry.name == "shared")
@@ -298,7 +329,7 @@ mod tests {
         let preferences = PluginCommandPreferences::default();
         let discovered = [alpha];
         let view = ActivePluginView::new(&discovered, &preferences);
-        let catalog = build_command_catalog(&view).expect("catalog should build");
+        let catalog = build_command_catalog(&view);
 
         let words = completion_words_from_catalog(&catalog);
         assert!(words.iter().any(|word| word == "ldap"));

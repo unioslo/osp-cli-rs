@@ -73,9 +73,7 @@ fn plugin_manager_surfaces_provider_selection_across_catalog_help_and_completion
     write_provider_plugin(&plugins_dir, "beta", "shared");
     let manager = PluginManager::new(vec![plugins_dir]);
 
-    let mut providers = manager
-        .command_providers("shared")
-        .expect("provider labels should load");
+    let mut providers = manager.command_providers("shared");
     providers.sort();
     assert_eq!(
         providers,
@@ -85,7 +83,7 @@ fn plugin_manager_surfaces_provider_selection_across_catalog_help_and_completion
         ]
     );
 
-    let ambiguous_catalog = manager.command_catalog().expect("catalog should load");
+    let ambiguous_catalog = manager.command_catalog();
     let ambiguous_entry = ambiguous_catalog
         .iter()
         .find(|entry| entry.name == "shared")
@@ -99,26 +97,19 @@ fn plugin_manager_surfaces_provider_selection_across_catalog_help_and_completion
             .about
             .contains("provider selection required")
     );
-    assert_eq!(
-        manager
-            .selected_provider_label("shared")
-            .expect("selected provider label should load"),
-        None
-    );
+    assert_eq!(manager.selected_provider_label("shared"), None);
 
-    let ambiguous_help = manager.repl_help_text().expect("help text should render");
+    let ambiguous_help = manager.repl_help_text();
     assert!(ambiguous_help.contains("Plugin commands:"));
     assert!(ambiguous_help.contains("shared"));
     assert!(ambiguous_help.contains("providers: alpha (explicit), beta (explicit)"));
 
-    let words = manager
-        .completion_words()
-        .expect("completion words should render");
+    let words = manager.completion_words();
     assert!(words.contains(&"shared".to_string()));
     assert!(words.contains(&"help".to_string()));
     assert!(words.contains(&"|".to_string()));
 
-    let doctor = manager.doctor().expect("doctor report should load");
+    let doctor = manager.doctor();
     assert!(
         doctor
             .conflicts
@@ -129,10 +120,10 @@ fn plugin_manager_surfaces_provider_selection_across_catalog_help_and_completion
     );
 
     manager
-        .set_preferred_provider("shared", "beta")
-        .expect("preferred provider should be saved");
+        .select_provider("shared", "beta")
+        .expect("provider selection should be applied");
 
-    let selected_catalog = manager.command_catalog().expect("catalog should reload");
+    let selected_catalog = manager.command_catalog();
     let selected_entry = selected_catalog
         .iter()
         .find(|entry| entry.name == "shared")
@@ -143,29 +134,21 @@ fn plugin_manager_surfaces_provider_selection_across_catalog_help_and_completion
     assert!(!selected_entry.requires_selection);
     assert!(selected_entry.selected_explicitly);
     assert_eq!(
-        manager
-            .selected_provider_label("shared")
-            .expect("selected provider label should load")
-            .as_deref(),
+        manager.selected_provider_label("shared").as_deref(),
         Some("beta (explicit)")
     );
 
-    let selected_help = manager.repl_help_text().expect("help text should reload");
+    let selected_help = manager.repl_help_text();
     assert!(selected_help.contains("shared - beta plugin"));
     assert!(selected_help.contains("(beta/explicit)"));
     assert!(selected_help.contains("conflicts: alpha (explicit), beta (explicit)"));
 
     assert!(
         manager
-            .clear_preferred_provider("shared")
-            .expect("preferred provider should clear")
+            .clear_provider_selection("shared")
+            .expect("provider selection should clear")
     );
-    assert_eq!(
-        manager
-            .selected_provider_label("shared")
-            .expect("selected provider label should load after clear"),
-        None
-    );
+    assert_eq!(manager.selected_provider_label("shared"), None);
 }
 
 #[cfg(unix)]
@@ -178,7 +161,7 @@ fn plugin_manager_projects_recursive_auth_metadata_into_catalog_and_policy_regis
     write_auth_plugin(&plugins_dir, "orch");
     let manager = PluginManager::new(vec![plugins_dir]);
 
-    let catalog = manager.command_catalog().expect("catalog should load");
+    let catalog = manager.command_catalog();
     let orch = catalog
         .iter()
         .find(|entry| entry.name == "orch")
@@ -186,12 +169,10 @@ fn plugin_manager_projects_recursive_auth_metadata_into_catalog_and_policy_regis
     assert_eq!(orch.auth_hint().as_deref(), Some("auth"));
     assert_eq!(orch.subcommands, vec!["approval".to_string()]);
 
-    let help = manager.repl_help_text().expect("help text should render");
+    let help = manager.repl_help_text();
     assert!(help.contains("orch [approval] - orch plugin [auth] (orch/explicit)"));
 
-    let registry = manager
-        .command_policy_registry()
-        .expect("policy registry should build");
+    let registry = manager.command_policy_registry();
     let root_policy = registry
         .resolved_policy(&CommandPath::new(["orch"]))
         .expect("root command policy should exist");

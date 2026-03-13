@@ -222,7 +222,10 @@ mod shape_contracts {
         assert!(expressive.contains("Usage"));
 
         let compact = render_style(None, Some("compact"), MessageLevel::Success);
-        assert!(compact.contains("Welcome anonymous."));
+        assert!(compact.contains("Usage:"));
+        assert!(compact.contains("[INVOCATION_OPTIONS] COMMAND [ARGS]..."));
+        assert!(compact.contains("Commands:"));
+        assert!(!compact.contains("Welcome anonymous."));
         assert!(!compact.contains("Keybindings"));
 
         let austere = render_style(None, Some("austere"), MessageLevel::Success);

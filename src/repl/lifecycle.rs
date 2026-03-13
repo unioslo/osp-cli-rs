@@ -93,7 +93,7 @@ impl ReplCycle {
         let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
         let view = ReplViewContext::from_parts(runtime, session);
         let surface = surface::build_repl_surface(view, &catalog);
-        let completion_tree = completion::build_repl_completion_tree(view, &surface);
+        let completion_tree = completion::build_repl_completion_tree(view, &surface)?;
         let intro_text = if include_help_text {
             render_repl_intro(view, &surface)
         } else {
@@ -196,10 +196,11 @@ mod tests {
             .resolve(ResolveOptions::default())
             .expect("config should resolve");
         let themes = ThemeCatalog::default();
-        let ui = UiState::builder(RenderSettings::test_plain(OutputFormat::Table))
-            .with_message_verbosity(MessageLevel::Success)
-            .with_debug_verbosity(0)
-            .build();
+        let ui = UiState::new(
+            RenderSettings::test_plain(OutputFormat::Table),
+            MessageLevel::Success,
+            0,
+        );
         let auth = AuthState::from_resolved(&resolved);
         let scope = ReplScopeStack::default();
         let view = ReplViewContext {
@@ -226,10 +227,11 @@ mod tests {
             .resolve(ResolveOptions::default())
             .expect("config should resolve");
         let themes = ThemeCatalog::default();
-        let ui = UiState::builder(RenderSettings::test_plain(OutputFormat::Table))
-            .with_message_verbosity(MessageLevel::Success)
-            .with_debug_verbosity(0)
-            .build();
+        let ui = UiState::new(
+            RenderSettings::test_plain(OutputFormat::Table),
+            MessageLevel::Success,
+            0,
+        );
         let auth = AuthState::from_resolved(&resolved);
         let scope = ReplScopeStack::default();
         let view = ReplViewContext {

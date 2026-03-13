@@ -34,7 +34,9 @@ mod context;
 pub mod engine;
 /// Shared completion data structures passed between the parser and suggester.
 pub mod model;
+/// Tokenization and cursor-aware command-line parsing.
 pub mod parse;
+/// Suggestion ranking and output shaping from parsed cursor state.
 pub mod suggest;
 /// Declarative completion-tree builders derived from command and config metadata.
 pub mod tree;
@@ -48,4 +50,4 @@ pub use model::{
 };
 pub use parse::{CommandLineParser, ParsedCursorLine, TokenSpan};
 pub use suggest::SuggestionEngine;
-pub use tree::{CommandSpec, CompletionTreeBuilder, ConfigKeySpec};
+pub use tree::{CommandSpec, CompletionTreeBuildError, CompletionTreeBuilder, ConfigKeySpec};

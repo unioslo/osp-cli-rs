@@ -80,6 +80,7 @@ fn render_help_document(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::Cli;
     use crate::core::output::OutputFormat;
     use crate::dsl::apply_output_pipeline;
     use crate::guide::{GuideEntry, GuideView};
@@ -88,6 +89,8 @@ mod tests {
         GuideDefaultFormat, RenderBackend, RenderSettings, ResolvedRenderSettings,
         TableBorderStyle, TableOverflow,
     };
+    use clap::Parser;
+
     fn resolved_settings(frame: crate::ui::chrome::SectionFrameStyle) -> ResolvedRenderSettings {
         ResolvedRenderSettings {
             backend: RenderBackend::Plain,
@@ -109,6 +112,46 @@ mod tests {
             style_overrides: StyleOverrides::default(),
             chrome_frame: frame,
         }
+    }
+
+    fn strip_ansi(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' {
+                if matches!(chars.peek(), Some('[')) {
+                    let _ = chars.next();
+                    for next in chars.by_ref() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            out.push(ch);
+        }
+
+        out
+    }
+
+    fn normalize_help_text(text: &str) -> String {
+        let mut normalized = text
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.ends_with('\n') {
+            normalized.push('\n');
+        }
+        normalized
+    }
+
+    fn clap_help(args: &[&str]) -> String {
+        Cli::try_parse_from(args)
+            .expect_err("args should trigger clap help")
+            .to_string()
     }
 
     fn guide_render_options() -> GuideRenderOptions<'static> {
@@ -155,7 +198,7 @@ mod tests {
         );
         assert!(preamble.contains("Custom plugin help"));
         assert!(preamble.contains("with two intro lines"));
-        assert!(preamble.contains("Usage:\n  osp sample"));
+        assert!(preamble.contains("Usage: osp sample"));
         assert!(preamble.contains("Commands:\n  run"));
 
         for layout in [HelpLayout::Compact, HelpLayout::Minimal] {
@@ -167,6 +210,43 @@ mod tests {
             assert!(rendered.contains("Examples:\n  osp sample run"));
             assert!(rendered.contains("Notes:\n  extra detail"));
         }
+    }
+
+    #[test]
+    fn compact_and_austere_help_surfaces_match_clap_layout_unit() {
+        for raw in [
+            clap_help(&["osp", "--help"]),
+            clap_help(&["osp", "theme", "--help"]),
+        ] {
+            for layout in [HelpLayout::Compact, HelpLayout::Minimal] {
+                let rendered = render_help_with_chrome(
+                    &raw,
+                    &resolved_settings(crate::ui::chrome::SectionFrameStyle::None),
+                    layout,
+                );
+                assert_eq!(
+                    normalize_help_text(rendered.trim_end()),
+                    normalize_help_text(raw.trim_end())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_help_can_add_color_without_box_chrome_unit() {
+        let raw = clap_help(&["osp", "--help"]);
+        let mut resolved = resolved_settings(crate::ui::chrome::SectionFrameStyle::None);
+        resolved.backend = RenderBackend::Rich;
+        resolved.color = true;
+
+        let rendered = render_help_with_chrome(&raw, &resolved, HelpLayout::Compact);
+        assert!(rendered.contains("\u{1b}["));
+        assert!(!rendered.contains('│'));
+        assert!(!rendered.contains('┌'));
+        assert_eq!(
+            normalize_help_text(&strip_ansi(rendered.trim_end())),
+            normalize_help_text(raw.trim_end())
+        );
     }
 
     #[test]

@@ -389,7 +389,7 @@ fn insert_transformed_match(target: &mut Value, address: &[AddressStep], value: 
                 *target = Value::Object(Map::new());
             }
             let Value::Object(map) = target else {
-                unreachable!("object ensured above")
+                return;
             };
             insert_transformed_match(map.entry(name.clone()).or_insert(Value::Null), rest, value);
         }
@@ -398,7 +398,7 @@ fn insert_transformed_match(target: &mut Value, address: &[AddressStep], value: 
                 *target = Value::Array(Vec::new());
             }
             let Value::Array(items) = target else {
-                unreachable!("array ensured above")
+                return;
             };
             if items.len() <= *index {
                 items.resize(index + 1, sparse_hole());

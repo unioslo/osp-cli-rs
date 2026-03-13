@@ -318,6 +318,13 @@ fn guide_section_data_blocks(value: &Value) -> Vec<BlockModel> {
     if let Some(entries) = guide_entries_from_value(value) {
         return guide_entries(&entries);
     }
+    if let Value::Object(map) = value
+        && should_render_as_key_value_group(map)
+    {
+        return vec![BlockModel::KeyValue(key_value_block_from_guide_data_map(
+            map, None,
+        ))];
+    }
     if let Value::Array(items) = value
         && items.iter().all(is_scalar_like)
     {
@@ -491,6 +498,37 @@ fn key_value_block_from_map(
             .collect(),
         border_override: None,
         markdown_style: KeyValueMarkdownStyle::Table,
+    }
+}
+
+fn key_value_block_from_guide_data_map(
+    map: &Map<String, Value>,
+    preferred_keys: Option<&[String]>,
+) -> KeyValueBlockModel {
+    KeyValueBlockModel {
+        key_header: None,
+        value_header: None,
+        rows: ordered_keys(map, preferred_keys)
+            .into_iter()
+            .filter_map(|key| {
+                map.get(&key).map(|value| KeyValueRowModel {
+                    key,
+                    value: guide_data_value_to_display(value),
+                    indent: None,
+                    gap: None,
+                })
+            })
+            .collect(),
+        border_override: None,
+        markdown_style: KeyValueMarkdownStyle::Table,
+    }
+}
+
+fn guide_data_value_to_display(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Array(items) if items.is_empty() => "[]".to_string(),
+        _ => value_to_display(value),
     }
 }
 

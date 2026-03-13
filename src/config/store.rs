@@ -20,16 +20,99 @@ use crate::config::{
     validate_key_scope, with_path_context,
 };
 
+/// Options that control how TOML-backed config edits are applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[must_use = "TomlStoreEditOptions must be passed to a TOML store edit function to have any effect"]
+pub struct TomlStoreEditOptions {
+    mode: TomlStoreEditMode,
+    secret_permissions: TomlSecretPermissions,
+}
+
+impl TomlStoreEditOptions {
+    /// Creates edit options for a normal persisted write.
+    pub const fn new() -> Self {
+        Self {
+            mode: TomlStoreEditMode::Persist,
+            secret_permissions: TomlSecretPermissions::ProcessDefault,
+        }
+    }
+
+    /// Creates edit options for a dry run that validates and computes diffs
+    /// without writing the file.
+    pub const fn dry_run() -> Self {
+        Self {
+            mode: TomlStoreEditMode::DryRun,
+            secret_permissions: TomlSecretPermissions::ProcessDefault,
+        }
+    }
+
+    /// Replaces the edit mode.
+    pub const fn with_mode(mut self, mode: TomlStoreEditMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Replaces the secret-file permission policy used for atomic temp-file
+    /// creation.
+    pub const fn with_secret_permissions(
+        mut self,
+        secret_permissions: TomlSecretPermissions,
+    ) -> Self {
+        self.secret_permissions = secret_permissions;
+        self
+    }
+
+    /// Uses owner-only temp-file permissions suitable for secrets stores.
+    pub const fn for_secrets(mut self) -> Self {
+        self.secret_permissions = TomlSecretPermissions::OwnerOnly;
+        self
+    }
+
+    pub(crate) const fn should_write(self) -> bool {
+        matches!(self.mode, TomlStoreEditMode::Persist)
+    }
+
+    pub(crate) const fn strict_secret_permissions(self) -> bool {
+        matches!(self.secret_permissions, TomlSecretPermissions::OwnerOnly)
+    }
+}
+
+/// Whether a TOML store edit should be written to disk or treated as a dry
+/// run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TomlStoreEditMode {
+    /// Validate and persist the edit to disk.
+    #[default]
+    Persist,
+    /// Validate and compute the edit result without writing the file.
+    DryRun,
+}
+
+/// Permission policy used for temp files created during atomic TOML writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TomlSecretPermissions {
+    /// Use the process default permission behavior for temp-file creation.
+    #[default]
+    ProcessDefault,
+    /// Request owner-only temp-file permissions (`0o600` on Unix).
+    OwnerOnly,
+}
+
 /// Writes one scoped key into a TOML-backed config store.
 ///
 /// The edit runs through normal schema and scope validation first and returns
 /// the previously stored typed value when the key already existed.
 ///
+/// `options` controls whether the edit is a dry run and whether the atomic
+/// write path should request owner-only temp-file permissions for secrets
+/// stores.
+///
 /// # Examples
 ///
 /// ```
 /// use osp_cli::config::{
-///     ConfigValue, Scope, set_scoped_value_in_toml, unset_scoped_value_in_toml,
+///     ConfigValue, Scope, TomlStoreEditOptions, set_scoped_value_in_toml,
+///     unset_scoped_value_in_toml,
 /// };
 ///
 /// let path = std::env::temp_dir().join(format!(
@@ -43,9 +126,23 @@ use crate::config::{
 /// let _ = std::fs::remove_file(&path);
 ///
 /// let value = ConfigValue::String("dracula".to_string());
-/// set_scoped_value_in_toml(&path, "theme.name", &value, &Scope::global(), false, false).unwrap();
-/// let removed = unset_scoped_value_in_toml(&path, "theme.name", &Scope::global(), false, false)
-///     .unwrap();
+/// let options = TomlStoreEditOptions::new();
+///
+/// set_scoped_value_in_toml(
+///     &path,
+///     "theme.name",
+///     &value,
+///     &Scope::global(),
+///     options,
+/// )
+/// .unwrap();
+/// let removed = unset_scoped_value_in_toml(
+///     &path,
+///     "theme.name",
+///     &Scope::global(),
+///     options,
+/// )
+/// .unwrap();
 ///
 /// assert_eq!(removed.previous, Some(value));
 /// let _ = std::fs::remove_file(&path);
@@ -55,38 +152,25 @@ pub fn set_scoped_value_in_toml(
     key: &str,
     value: &ConfigValue,
     scope: &Scope,
-    dry_run: bool,
-    strict_secret_permissions: bool,
+    options: TomlStoreEditOptions,
 ) -> Result<TomlEditResult, ConfigError> {
-    edit_scoped_value_in_toml(
-        path,
-        key,
-        scope,
-        TomlEditOperation::Set(value),
-        dry_run,
-        strict_secret_permissions,
-    )
+    edit_scoped_value_in_toml(path, key, scope, TomlEditOperation::Set(value), options)
 }
 
 /// Removes one scoped key from a TOML-backed config store.
 ///
 /// The returned edit result includes the previous typed value so callers can
 /// report or inspect what changed without reparsing the file.
+///
+/// `options` has the same meaning as on
+/// [`set_scoped_value_in_toml`].
 pub fn unset_scoped_value_in_toml(
     path: &Path,
     key: &str,
     scope: &Scope,
-    dry_run: bool,
-    strict_secret_permissions: bool,
+    options: TomlStoreEditOptions,
 ) -> Result<TomlEditResult, ConfigError> {
-    edit_scoped_value_in_toml(
-        path,
-        key,
-        scope,
-        TomlEditOperation::Unset,
-        dry_run,
-        strict_secret_permissions,
-    )
+    edit_scoped_value_in_toml(path, key, scope, TomlEditOperation::Unset, options)
 }
 
 enum TomlEditOperation<'a> {
@@ -99,8 +183,7 @@ fn edit_scoped_value_in_toml(
     key: &str,
     scope: &Scope,
     operation: TomlEditOperation<'_>,
-    dry_run: bool,
-    strict_secret_permissions: bool,
+    options: TomlStoreEditOptions,
 ) -> Result<TomlEditResult, ConfigError> {
     let normalized_scope = normalize_scope(scope.clone());
     crate::config::ConfigSchema::default().validate_writable_key(key)?;
@@ -121,8 +204,8 @@ fn edit_scoped_value_in_toml(
         TomlEditOperation::Unset => unset_dotted_value(root_table, &normalized_scope, key)?,
     };
 
-    if !dry_run {
-        write_toml_root(path, &root, strict_secret_permissions)?;
+    if options.should_write() {
+        write_toml_root(path, &root, options.strict_secret_permissions())?;
     }
 
     Ok(TomlEditResult { previous })
@@ -296,6 +379,8 @@ fn create_temp_file(
 
 #[cfg(unix)]
 /// Returns the Unix permission bits for a secrets file.
+///
+/// Unix-only.
 pub fn secret_file_mode(path: &Path) -> Result<u32, ConfigError> {
     use std::os::unix::fs::PermissionsExt;
 

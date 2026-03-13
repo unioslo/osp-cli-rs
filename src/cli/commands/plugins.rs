@@ -5,8 +5,8 @@ use crate::app::{
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{PluginConfigArgs, PluginsArgs, PluginsCommands};
 use crate::config::{
-    ConfigValue, ResolvedConfig, RuntimeConfigPaths, Scope, set_scoped_value_in_toml,
-    unset_scoped_value_in_toml,
+    ConfigLayer, ConfigValue, ResolvedConfig, RuntimeConfigPaths, Scope, TomlStoreEditOptions,
+    set_scoped_value_in_toml, unset_scoped_value_in_toml,
 };
 use crate::core::row::Row;
 use crate::plugin::{
@@ -22,6 +22,7 @@ pub(crate) struct PluginsCommandContext<'a> {
     pub(crate) auth: &'a AuthState,
     pub(crate) clients: Option<&'a AppClients>,
     pub(crate) plugin_manager: &'a PluginManager,
+    pub(crate) product_defaults: &'a ConfigLayer,
     pub(crate) runtime_load: crate::config::RuntimeLoadOptions,
 }
 
@@ -32,9 +33,7 @@ pub(crate) fn run_plugins_command(
     let plugin_manager = context.plugin_manager;
     match args.command {
         PluginsCommands::List => {
-            let mut plugins = plugin_manager
-                .list_plugins()
-                .map_err(|err| miette::miette!("{err:#}"))?;
+            let mut plugins = plugin_manager.list_plugins();
             plugins.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
             Ok(CliCommandResult::output(
                 rows_to_output_result(plugin_list_rows(&plugins)),
@@ -45,7 +44,6 @@ pub(crate) fn run_plugins_command(
             let mut commands = context
                 .plugin_manager
                 .command_catalog()
-                .map_err(|err| miette::miette!("{err:#}"))?
                 .into_iter()
                 .filter(|entry| context.auth.is_external_command_visible(&entry.name))
                 .collect::<Vec<_>>();
@@ -69,9 +67,7 @@ pub(crate) fn run_plugins_command(
             Ok(result)
         }
         PluginsCommands::Doctor => {
-            let report = plugin_manager
-                .doctor()
-                .map_err(|err| miette::miette!("{err:#}"))?;
+            let report = plugin_manager.doctor();
             Ok(CliCommandResult::output(
                 rows_to_output_result(doctor_rows(&report)),
                 None,
@@ -154,7 +150,7 @@ pub(crate) fn run_plugins_command(
         PluginsCommands::SelectProvider(args) => {
             let command = normalize_command_name(&args.command)?;
             plugin_manager
-                .validate_preferred_provider(&command, &args.plugin_id)
+                .validate_provider_selection(&command, &args.plugin_id)
                 .map_err(|err| miette::miette!("{err:#}"))?;
             persist_provider_selection(
                 context,
@@ -216,8 +212,7 @@ fn persist_command_state(
         &plugin_state_key(command),
         &value,
         &scope,
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .map_err(|err| miette::miette!("{err}"))?;
     Ok(())
@@ -233,8 +228,7 @@ fn clear_command_state(
         &config_path,
         &plugin_state_key(command),
         &scope,
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .map_err(|err| miette::miette!("{err}"))?;
     Ok(edit_result.previous.is_some())
@@ -252,8 +246,7 @@ fn persist_provider_selection(
         &plugin_provider_key(command),
         &ConfigValue::String(plugin_id.trim().to_string()),
         &scope,
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .map_err(|err| miette::miette!("{err}"))?;
     Ok(())
@@ -269,8 +262,7 @@ fn clear_provider_selection(
         &config_path,
         &plugin_provider_key(command),
         &scope,
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .map_err(|err| miette::miette!("{err}"))?;
     Ok(edit_result.previous.is_some())
@@ -347,7 +339,8 @@ fn sync_current_command_preferences(context: PluginsCommandContext<'_>) -> Resul
             context.context.profile_override().map(ToOwned::to_owned),
             Some(context.context.terminal_kind().as_config_terminal()),
         )
-        .with_runtime_load(context.runtime_load),
+        .with_runtime_load(context.runtime_load)
+        .with_product_defaults(context.product_defaults.clone()),
     )
     .map_err(|err| miette::miette!("{err:#}"))?;
     context.plugin_manager.replace_command_preferences(

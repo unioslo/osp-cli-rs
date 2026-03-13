@@ -3,7 +3,7 @@ use miette::WrapErr;
 
 #[test]
 fn app_help_entrypoints_and_sink_routing_render_help_unit() {
-    let app = crate::app::AppBuilder::new().build();
+    let app = crate::app::App::builder().build();
     let mut help_sink = BufferedUiSink::default();
 
     assert_eq!(
@@ -31,7 +31,7 @@ fn app_help_entrypoints_and_sink_routing_render_help_unit() {
     assert!(sink.stderr.is_empty());
 
     let mut runner_sink = BufferedUiSink::default();
-    let mut runner = crate::app::AppBuilder::new().build_with_sink(&mut runner_sink);
+    let mut runner = crate::app::App::builder().build_with_sink(&mut runner_sink);
     assert_eq!(
         runner
             .run_from(["osp", "--help"])
@@ -112,9 +112,11 @@ fn error_rendering_prioritizes_actionable_details_across_levels_unit() {
 #[test]
 fn run_cli_command_routes_messages_stdout_and_stderr_through_sink_unit() {
     let config = test_config(&[]);
-    let ui = crate::app::UiState::builder(RenderSettings::test_plain(OutputFormat::Value))
-        .with_message_verbosity(MessageLevel::Success)
-        .build();
+    let ui = crate::app::UiState::new(
+        RenderSettings::test_plain(OutputFormat::Value),
+        MessageLevel::Success,
+        0,
+    );
     let runtime = super::CommandRenderRuntime::new(&config, &ui);
     let mut sink = BufferedUiSink::default();
     let mut messages = MessageBuffer::default();
@@ -142,21 +144,18 @@ fn run_cli_command_routes_messages_stdout_and_stderr_through_sink_unit() {
 #[test]
 fn state_and_client_builders_produce_coherent_embedder_state_unit() {
     let config = test_config(&[]);
-    let ui = crate::app::UiState::builder(RenderSettings::test_plain(OutputFormat::Json))
-        .with_message_verbosity(MessageLevel::Trace)
-        .with_debug_verbosity(2)
-        .build();
-    let launch = crate::app::LaunchContext::builder()
+    let ui = crate::app::UiState::new(
+        RenderSettings::test_plain(OutputFormat::Json),
+        MessageLevel::Trace,
+        2,
+    );
+    let launch = crate::app::LaunchContext::default()
         .with_plugin_dir("/tmp/osp-plugin-a")
         .with_config_root(Some(std::path::PathBuf::from("/tmp/osp-config")))
-        .with_cache_root(Some(std::path::PathBuf::from("/tmp/osp-cache")))
-        .build();
-    let session = crate::app::AppSession::builder()
-        .with_prompt_prefix("osp-dev")
-        .with_cache_limit(5)
-        .build();
+        .with_cache_root(Some(std::path::PathBuf::from("/tmp/osp-cache")));
+    let session = crate::app::AppSession::with_cache_limit(5).with_prompt_prefix("osp-dev");
 
-    let state = crate::app::AppState::builder(
+    let state = crate::app::AppStateBuilder::new(
         crate::app::RuntimeContext::new(None, crate::app::TerminalKind::Cli, None),
         config,
         ui,
@@ -207,17 +206,53 @@ fn state_and_client_builders_produce_coherent_embedder_state_unit() {
     assert_eq!(state.runtime.ui.render_settings.theme_name, "dracula");
     assert!(state.clients.plugins().explicit_dirs().is_empty());
 
-    let clients = crate::app::AppClients::builder()
-        .with_plugins(crate::plugin::PluginManager::new(vec![
-            std::path::PathBuf::from("/tmp/osp-plugin-a"),
-        ]))
-        .with_native_commands(test_native_registry())
-        .build();
+    let clients = crate::app::AppClients::new(
+        crate::plugin::PluginManager::new(vec![std::path::PathBuf::from("/tmp/osp-plugin-a")]),
+        test_native_registry(),
+    );
     assert_eq!(
         clients.plugins().explicit_dirs(),
         &[std::path::PathBuf::from("/tmp/osp-plugin-a")]
     );
     assert!(clients.native_commands().command("ldap").is_some());
+}
+
+#[test]
+fn app_builder_product_defaults_flow_through_host_bootstrap_unit() {
+    let mut product_defaults = ConfigLayer::default();
+    product_defaults.set("extensions.site.enabled", true);
+    product_defaults.set_for_terminal("cli", "extensions.site.banner", "cli-wrapper");
+    product_defaults.set_for_terminal("repl", "extensions.site.banner", "repl-wrapper");
+
+    let app = crate::app::App::builder()
+        .with_native_commands(product_defaults_registry())
+        .with_product_defaults(product_defaults)
+        .build();
+
+    let mut status_sink = BufferedUiSink::default();
+    let status_exit = app.run_process_with_sink(["osp", "site-status"], &mut status_sink);
+    assert_eq!(status_exit, 0);
+    assert!(status_sink.stdout.contains("site_enabled=true"));
+    assert!(status_sink.stdout.contains("site_banner=cli-wrapper"));
+    assert!(status_sink.stdout.contains("active_profile=default"));
+
+    let mut config_sink = BufferedUiSink::default();
+    let config_exit = app.run_process_with_sink(
+        ["osp", "--json", "config", "get", "extensions.site.banner"],
+        &mut config_sink,
+    );
+    assert_eq!(config_exit, 0);
+    assert!(config_sink.stdout.contains("\"extensions.site.banner\""));
+    assert!(config_sink.stdout.contains("\"cli-wrapper\""));
+
+    let mut explain_sink = BufferedUiSink::default();
+    let explain_exit = app.run_process_with_sink(
+        ["osp", "config", "explain", "extensions.site.banner"],
+        &mut explain_sink,
+    );
+    assert_eq!(explain_exit, 0);
+    assert!(explain_sink.stdout.contains("key: extensions.site.banner"));
+    assert!(explain_sink.stdout.contains("cli-wrapper"));
 }
 
 #[test]

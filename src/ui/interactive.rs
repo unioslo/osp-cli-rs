@@ -191,6 +191,7 @@ impl Interactive {
 }
 
 /// Handle for a transient spinner shown on stderr.
+#[must_use]
 pub struct Spinner {
     pb: ProgressBar,
 }

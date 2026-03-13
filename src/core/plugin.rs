@@ -30,6 +30,11 @@
 //! - host-side code cares about them as validated input before converting into
 //!   command catalogs, policy registries, and rendered output
 //!
+//! Clap-backed convenience constructors such as
+//! [`crate::core::plugin::DescribeV1::from_clap_command`] are available when
+//! the crate is built with the default `clap` feature. Builds that disable
+//! `clap` still expose the wire DTOs but omit those helper constructors.
+//!
 //! Contract:
 //!
 //! - these types may depend on shared `core` metadata, but they should stay
@@ -357,6 +362,26 @@ pub struct ResponseMessageV1 {
 impl DescribeV1 {
     #[cfg(feature = "clap")]
     /// Builds a v1 describe payload from a single `clap` command tree.
+    ///
+    /// Only available with the `clap` cargo feature, which is enabled by
+    /// default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use clap::Command;
+    /// use osp_cli::core::plugin::DescribeV1;
+    ///
+    /// let describe = DescribeV1::from_clap_command(
+    ///     "ldap",
+    ///     "0.1.0",
+    ///     None,
+    ///     Command::new("ldap").about("Directory lookups"),
+    /// );
+    ///
+    /// assert_eq!(describe.plugin_id, "ldap");
+    /// assert_eq!(describe.commands[0].name, "ldap");
+    /// ```
     pub fn from_clap_command(
         plugin_id: impl Into<String>,
         plugin_version: impl Into<String>,
@@ -373,6 +398,33 @@ impl DescribeV1 {
 
     #[cfg(feature = "clap")]
     /// Builds a v1 describe payload from multiple top-level `clap` commands.
+    ///
+    /// Only available with the `clap` cargo feature, which is enabled by
+    /// default.
+    ///
+    /// Use this when one plugin executable exposes multiple top-level command
+    /// roots.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use clap::Command;
+    /// use osp_cli::core::plugin::DescribeV1;
+    ///
+    /// let describe = DescribeV1::from_clap_commands(
+    ///     "directory-tools",
+    ///     "0.1.0",
+    ///     None,
+    ///     [
+    ///         Command::new("ldap").about("Directory lookups"),
+    ///         Command::new("groups").about("Group lookups"),
+    ///     ],
+    /// );
+    ///
+    /// assert_eq!(describe.plugin_id, "directory-tools");
+    /// assert_eq!(describe.commands.len(), 2);
+    /// assert_eq!(describe.commands[1].name, "groups");
+    /// ```
     pub fn from_clap_commands(
         plugin_id: impl Into<String>,
         plugin_version: impl Into<String>,
@@ -397,6 +449,9 @@ impl DescribeV1 {
     ///
     /// Hosts should do this before trusting plugin describe data enough to turn
     /// it into command catalogs, completion trees, or policy registries.
+    /// Validation errors are returned as plain strings because protocol
+    /// violations are currently treated as operator-facing diagnostics rather
+    /// than a machine-matchable error taxonomy.
     ///
     /// # Examples
     ///
@@ -442,6 +497,10 @@ impl DescribeCommandV1 {
     ///
     /// This is the host-side bridge from wire-format describe data into the
     /// runtime policy evaluator in [`crate::core::command_policy`].
+    ///
+    /// Required capabilities and feature flags are normalized by trimming
+    /// surrounding whitespace and lowercasing the values before they enter the
+    /// runtime policy.
     ///
     /// # Examples
     ///
@@ -552,6 +611,28 @@ impl ResponseV1 {
 #[cfg(feature = "clap")]
 impl DescribeCommandV1 {
     /// Converts a `clap` command into a protocol v1 command description.
+    ///
+    /// Only available with the `clap` cargo feature, which is enabled by
+    /// default.
+    ///
+    /// Use this when the surrounding plugin metadata is assembled elsewhere but
+    /// one command tree should still come from `clap`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use clap::Command;
+    /// use osp_cli::core::plugin::DescribeCommandV1;
+    ///
+    /// let command = DescribeCommandV1::from_clap(
+    ///     Command::new("ldap")
+    ///         .about("Directory lookups")
+    ///         .subcommand(Command::new("user").about("Lookup one user")),
+    /// );
+    ///
+    /// assert_eq!(command.name, "ldap");
+    /// assert_eq!(command.subcommands[0].name, "user");
+    /// ```
     pub fn from_clap(command: clap::Command) -> Self {
         Self::from(&CommandDef::from_clap(command))
     }

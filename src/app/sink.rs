@@ -10,6 +10,40 @@
 //! - higher-level rendering and message formatting belong elsewhere
 
 /// Terminal-facing output sink for stdout/stderr emission.
+///
+/// Implementors should forward or buffer the supplied text exactly as received;
+/// higher layers already handle rendering, grouping, and newline decisions.
+/// Callers may write to stdout and stderr independently and can assume that
+/// empty writes are harmless.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::app::UiSink;
+///
+/// #[derive(Default)]
+/// struct CaptureSink {
+///     stdout: String,
+///     stderr: String,
+/// }
+///
+/// impl UiSink for CaptureSink {
+///     fn write_stdout(&mut self, text: &str) {
+///         self.stdout.push_str(text);
+///     }
+///
+///     fn write_stderr(&mut self, text: &str) {
+///         self.stderr.push_str(text);
+///     }
+/// }
+///
+/// let mut sink = CaptureSink::default();
+/// sink.write_stdout("ok");
+/// sink.write_stderr("warn");
+///
+/// assert_eq!(sink.stdout, "ok");
+/// assert_eq!(sink.stderr, "warn");
+/// ```
 pub trait UiSink {
     /// Writes text to the sink's stdout channel.
     fn write_stdout(&mut self, text: &str);
@@ -19,6 +53,8 @@ pub trait UiSink {
 }
 
 /// Sink that forwards output directly to the process stdio streams.
+///
+/// Empty writes are ignored.
 #[derive(Default)]
 pub struct StdIoUiSink;
 

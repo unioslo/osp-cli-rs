@@ -124,6 +124,8 @@ fn make_completion_state_with_entries_and_native(
 
 struct TestNativeCommand;
 
+struct ProductDefaultsCommand;
+
 impl NativeCommand for TestNativeCommand {
     fn command(&self) -> Command {
         Command::new("ldap")
@@ -178,6 +180,36 @@ impl NativeCommand for TestNativeCommand {
 
 fn test_native_registry() -> NativeCommandRegistry {
     NativeCommandRegistry::new().with_command(TestNativeCommand)
+}
+
+impl NativeCommand for ProductDefaultsCommand {
+    fn command(&self) -> Command {
+        Command::new("site-status").about("Show wrapper defaults from resolved config")
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        context: &NativeCommandContext<'_>,
+    ) -> anyhow::Result<NativeCommandOutcome> {
+        let enabled = context
+            .config
+            .get_bool("extensions.site.enabled")
+            .unwrap_or(false);
+        let profile_banner = context
+            .config
+            .get_string("extensions.site.banner")
+            .unwrap_or("missing");
+
+        Ok(NativeCommandOutcome::Help(format!(
+            "site_enabled={enabled}\nsite_banner={profile_banner}\nactive_profile={}\n",
+            context.config.active_profile()
+        )))
+    }
+}
+
+fn product_defaults_registry() -> NativeCommandRegistry {
+    NativeCommandRegistry::new().with_command(ProductDefaultsCommand)
 }
 
 fn test_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
@@ -349,7 +381,7 @@ fn make_test_history(state: &mut AppState) -> SharedHistory {
         .with_shell_context(history_shell)
         .build();
 
-    SharedHistory::new(history_config).expect("history should init")
+    SharedHistory::new(history_config)
 }
 
 #[cfg(unix)]
@@ -366,12 +398,11 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
 
     let config_root = make_temp_dir("osp-cli-test-config");
     let cache_root = make_temp_dir("osp-cli-test-cache");
-    let launch = LaunchContext::builder()
+    let launch = LaunchContext::default()
         .with_plugin_dirs(plugin_dirs.clone())
         .with_config_root(Some(config_root.to_path_buf()))
         .with_cache_root(Some(cache_root.to_path_buf()))
-        .with_runtime_load(RuntimeLoadOptions::default())
-        .build();
+        .with_runtime_load(RuntimeLoadOptions::default());
 
     AppState::new(AppStateInit {
         context: RuntimeContext::new(None, TerminalKind::Repl, None),

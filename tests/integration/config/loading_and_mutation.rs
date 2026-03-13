@@ -1,8 +1,8 @@
 use crate::temp_support::make_temp_dir;
 use osp_cli::config::{
     ConfigLayer, ConfigResolver, ConfigSource, ConfigValue, EnvVarLoader, LoaderPipeline,
-    ResolveOptions, Scope, StaticLayerLoader, TomlFileLoader, set_scoped_value_in_toml,
-    unset_scoped_value_in_toml,
+    ResolveOptions, Scope, StaticLayerLoader, TomlFileLoader, TomlStoreEditOptions,
+    set_scoped_value_in_toml, unset_scoped_value_in_toml,
 };
 
 fn defaults_layer() -> ConfigLayer {
@@ -28,8 +28,7 @@ fn config_file_mutation_round_trips_through_reload_and_explain() {
         "theme.name",
         &ConfigValue::String("dracula".to_string()),
         &Scope::global(),
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .expect("theme should be written");
     set_scoped_value_in_toml(
@@ -37,8 +36,7 @@ fn config_file_mutation_round_trips_through_reload_and_explain() {
         "ui.presentation",
         &ConfigValue::String("compact".to_string()),
         &Scope::profile("tsd"),
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .expect("profile-scoped presentation should be written");
 
@@ -57,8 +55,7 @@ fn config_file_mutation_round_trips_through_reload_and_explain() {
         "theme.name",
         &ConfigValue::String("gruvbox".to_string()),
         &Scope::global(),
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .expect("theme update should be written");
 
@@ -137,8 +134,7 @@ fn config_store_round_trips_terminal_profile_scope_and_list_values_through_reloa
         "theme.path",
         &formats,
         &Scope::global(),
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .expect("global list value should be written");
     set_scoped_value_in_toml(
@@ -149,8 +145,7 @@ fn config_store_round_trips_terminal_profile_scope_and_list_values_through_reloa
             profile: Some("tsd".to_string()),
             terminal: Some("repl".to_string()),
         },
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .expect("terminal-profile override should be written");
 
@@ -174,8 +169,7 @@ fn config_store_round_trips_terminal_profile_scope_and_list_values_through_reloa
             profile: Some("tsd".to_string()),
             terminal: Some("repl".to_string()),
         },
-        false,
-        false,
+        TomlStoreEditOptions::new(),
     )
     .expect("terminal-profile override should unset");
     assert_eq!(

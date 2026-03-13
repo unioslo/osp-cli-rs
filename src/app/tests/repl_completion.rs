@@ -6,6 +6,7 @@ fn completion_tree_for(
 ) -> crate::completion::CompletionTree {
     let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), catalog);
     completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface)
+        .expect("repl completion tree should build")
 }
 
 fn completion_engine_for(
@@ -291,7 +292,8 @@ fn repl_completion_tree_contains_builtin_and_plugin_commands_unit() {
     let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
     let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface)
+            .expect("repl completion tree should build");
     assert!(tree.root.children.contains_key("help"));
     assert!(tree.root.children.contains_key("exit"));
     assert!(tree.root.children.contains_key("quit"));
@@ -319,7 +321,8 @@ fn repl_completion_tree_injects_config_set_schema_keys_unit() {
     let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
     let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface)
+            .expect("repl completion tree should build");
     let set_node = &tree.root.children["config"].children["set"];
     let ui_mode = &set_node.children["ui.mode"];
     assert!(ui_mode.value_key);
@@ -341,7 +344,8 @@ fn repl_completion_tree_respects_builtin_visibility_unit() {
     let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
     let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface)
+            .expect("repl completion tree should build");
     assert!(tree.root.children.contains_key("theme"));
     assert!(!tree.root.children.contains_key("config"));
     assert!(!tree.root.children.contains_key("plugins"));
@@ -356,7 +360,8 @@ fn repl_completion_tree_roots_to_active_shell_scope_unit() {
     let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
 
     let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface)
+            .expect("repl completion tree should build");
     assert!(!tree.root.children.contains_key("orch"));
     assert!(tree.root.children.contains_key("provision"));
     assert!(tree.root.children.contains_key("help"));
@@ -417,7 +422,8 @@ fn compact_root_completion_suggestions_prioritize_core_commands_unit() {
     let catalog = sample_catalog();
     let surface = surface::build_repl_surface(repl_view(&state.runtime, &state.session), &catalog);
     let tree =
-        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface);
+        completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface)
+            .expect("repl completion tree should build");
     let engine = crate::completion::CompletionEngine::new(tree);
 
     let (_, suggestions) = engine.complete("", 0);

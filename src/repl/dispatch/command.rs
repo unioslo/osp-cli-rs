@@ -241,8 +241,6 @@ fn repl_cache_key_for_command(
     };
 
     let provider = invocation.plugin_provider.as_deref().unwrap_or_default();
-    let encoded_tokens =
-        serde_json::to_string(tokens).expect("external command tokens should serialize");
 
     // Cache entries are tied to config revision and active profile so REPL
     // `--cache` never replays output across theme/profile/provider changes that
@@ -252,8 +250,19 @@ fn repl_cache_key_for_command(
         runtime.config.revision(),
         runtime.config.resolved().active_profile(),
         provider,
-        encoded_tokens
+        encode_cache_key_tokens(tokens)
     ))
+}
+
+fn encode_cache_key_tokens(tokens: &[String]) -> String {
+    let mut encoded = String::new();
+    for token in tokens {
+        encoded.push_str(&token.len().to_string());
+        encoded.push(':');
+        encoded.push_str(token);
+        encoded.push('|');
+    }
+    encoded
 }
 
 pub(super) fn command_side_effects(command: &Commands) -> CommandSideEffects {
@@ -356,6 +365,50 @@ pub(super) fn render_repl_command_output(
                 sink,
             );
             rendered
+        }
+        Some(crate::app::ReplCommandOutput::Guide(guide)) => {
+            let crate::app::GuideCommandOutput {
+                guide,
+                output,
+                format_hint,
+            } = guide;
+
+            if stages.is_empty() {
+                let render_settings = app::resolve_render_settings_with_hint(
+                    &invocation.ui.render_settings,
+                    format_hint,
+                );
+                let rendered = app::render_guide_or_structured_output(
+                    runtime.config.resolved(),
+                    &render_settings,
+                    &guide,
+                    &output,
+                );
+                session.record_result(line, output_to_rows(&output));
+                app::maybe_copy_output_with_runtime(
+                    &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
+                    &output,
+                    sink,
+                );
+                rendered
+            } else {
+                let (output, format_hint) = app::apply_output_stages(output, stages, format_hint)
+                    .map_err(|err| miette!("{err:#}"))?;
+
+                let render_settings = app::resolve_render_settings_with_hint(
+                    &invocation.ui.render_settings,
+                    format_hint,
+                );
+                let rendered =
+                    render_structured_output(runtime.config.resolved(), &render_settings, &output);
+                session.record_result(line, output_to_rows(&output));
+                app::maybe_copy_output_with_runtime(
+                    &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
+                    &output,
+                    sink,
+                );
+                rendered
+            }
         }
         Some(crate::app::ReplCommandOutput::Document(document)) => {
             if stages.is_empty() {

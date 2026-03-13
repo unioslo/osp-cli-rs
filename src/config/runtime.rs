@@ -70,6 +70,8 @@ pub const DEFAULT_UI_GUIDE_DEFAULT_FORMAT: &str = "guide";
 pub const DEFAULT_UI_MESSAGES_LAYOUT: &str = "grouped";
 /// Default section chrome frame style.
 pub const DEFAULT_UI_CHROME_FRAME: &str = "top";
+/// Default rule-sharing policy for sibling section chrome.
+pub const DEFAULT_UI_CHROME_RULE_POLICY: &str = "shared";
 /// Default table border style.
 pub const DEFAULT_UI_TABLE_BORDER: &str = "square";
 /// Default REPL intro mode.
@@ -105,10 +107,14 @@ const PROJECT_APPLICATION_NAME: &str = "osp";
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "RuntimeLoadOptions builder-style methods return an updated value"]
 pub struct RuntimeLoadOptions {
     /// Whether environment-derived layers should be loaded.
     pub include_env: bool,
-    /// Whether file-backed layers should be loaded.
+    /// Whether the ordinary config file should be loaded.
+    ///
+    /// This does not disable the secrets layer; secrets files and secret
+    /// environment overrides still participate through the secrets pipeline.
     pub include_config_file: bool,
 }
 
@@ -128,12 +134,16 @@ impl RuntimeLoadOptions {
     }
 
     /// Sets whether environment-derived layers should be loaded.
+    ///
+    /// The default is `true`.
     pub fn with_env(mut self, include_env: bool) -> Self {
         self.include_env = include_env;
         self
     }
 
-    /// Sets whether file-backed layers should be loaded.
+    /// Sets whether the ordinary config file should be loaded.
+    ///
+    /// The default is `true`. This does not disable the secrets layer.
     pub fn with_config_file(mut self, include_config_file: bool) -> Self {
         self.include_config_file = include_config_file;
         self
@@ -141,6 +151,12 @@ impl RuntimeLoadOptions {
 }
 
 /// Minimal runtime-derived config that callers often need directly.
+///
+/// This is intentionally much smaller than [`ResolvedConfig`]. Keep the full
+/// [`ResolvedConfig`] when a caller needs arbitrary resolved keys, provenance,
+/// terminal selection, or explanation data. Use [`RuntimeConfig`] when the
+/// caller only needs the tiny runtime snapshot the host commonly carries
+/// around directly.
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     /// Active profile name selected for the current invocation.
@@ -191,6 +207,21 @@ pub struct RuntimeConfigPaths {
 
 impl RuntimeConfigPaths {
     /// Discovers config and secrets paths from the current process environment.
+    ///
+    /// This is the standard path-discovery entrypoint for host bootstrap. Use
+    /// it together with [`RuntimeDefaults`] and [`build_runtime_pipeline`] when
+    /// a wrapper crate wants the same platform/env behavior as the stock host.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use osp_cli::config::RuntimeConfigPaths;
+    ///
+    /// let paths = RuntimeConfigPaths::discover();
+    ///
+    /// let _config = paths.config_file.as_deref();
+    /// let _secrets = paths.secrets_file.as_deref();
+    /// ```
     pub fn discover() -> Self {
         let paths = Self::from_env(&RuntimeEnvironment::capture());
         tracing::debug!(
@@ -221,6 +252,21 @@ pub struct RuntimeDefaults {
 
 impl RuntimeDefaults {
     /// Builds the default layer using the current process environment.
+    ///
+    /// `default_theme_name` and `default_repl_prompt` are the product-level
+    /// knobs wrapper crates typically own themselves, while the rest of the
+    /// default layer follows the crate's standard runtime bootstrap rules.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::config::RuntimeDefaults;
+    ///
+    /// let defaults = RuntimeDefaults::from_process_env("dracula", "osp> ");
+    ///
+    /// assert_eq!(defaults.get_string("theme.name"), Some("dracula"));
+    /// assert_eq!(defaults.get_string("repl.prompt"), Some("osp> "));
+    /// ```
     pub fn from_process_env(default_theme_name: &str, default_repl_prompt: &str) -> Self {
         Self::from_env(
             &RuntimeEnvironment::capture(),
@@ -272,7 +318,7 @@ impl RuntimeDefaults {
             "ui.messages.layout" => DEFAULT_UI_MESSAGES_LAYOUT.to_string(),
             "ui.message.verbosity" => "success".to_string(),
             "ui.chrome.frame" => DEFAULT_UI_CHROME_FRAME.to_string(),
-            "ui.chrome.rule_policy" => "per-section".to_string(),
+            "ui.chrome.rule_policy" => DEFAULT_UI_CHROME_RULE_POLICY.to_string(),
             "ui.table.overflow" => DEFAULT_UI_TABLE_OVERFLOW.to_string(),
             "ui.table.border" => DEFAULT_UI_TABLE_BORDER.to_string(),
             "ui.help.table_chrome" => "none".to_string(),
@@ -366,6 +412,37 @@ impl RuntimeDefaults {
 /// The ordering encoded here is part of the config contract: defaults first,
 /// then optional presentation/env/file/secrets layers, then CLI/session
 /// overrides last.
+///
+/// This is the normal bootstrap path for hosts that want the crate's standard
+/// platform/env/file loading semantics without manually wiring each loader.
+///
+/// # Examples
+///
+/// ```no_run
+/// use osp_cli::config::{
+///     ResolveOptions, RuntimeConfigPaths, RuntimeDefaults, RuntimeLoadOptions,
+///     build_runtime_pipeline,
+/// };
+///
+/// let defaults = RuntimeDefaults::from_process_env("dracula", "osp> ").to_layer();
+/// let paths = RuntimeConfigPaths::discover();
+/// let presentation = None;
+/// let cli = None;
+/// let session = None;
+///
+/// let resolved = build_runtime_pipeline(
+///     defaults,
+///     presentation,
+///     &paths,
+///     RuntimeLoadOptions::default(),
+///     cli,
+///     session,
+/// )
+/// .resolve(ResolveOptions::new().with_terminal("cli"))?;
+///
+/// assert_eq!(resolved.terminal(), Some("cli"));
+/// # Ok::<(), osp_cli::config::ConfigError>(())
+/// ```
 pub fn build_runtime_pipeline(
     defaults: ConfigLayer,
     presentation: Option<ConfigLayer>,

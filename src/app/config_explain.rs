@@ -22,6 +22,7 @@ pub(crate) struct ConfigExplainContext<'a> {
     pub(crate) config: &'a ResolvedConfig,
     pub(crate) ui: &'a UiState,
     pub(crate) session_layer: &'a crate::config::ConfigLayer,
+    pub(crate) product_defaults: &'a crate::config::ConfigLayer,
     pub(crate) runtime_load: crate::config::RuntimeLoadOptions,
 }
 
@@ -35,6 +36,7 @@ pub(crate) fn config_explain_result(
             Some(context.context.terminal_kind().as_config_terminal()),
         )
         .with_runtime_load(context.runtime_load)
+        .with_product_defaults(context.product_defaults.clone())
         .with_session_layer(Some(context.session_layer.clone())),
         &args.key,
     )?;
@@ -89,10 +91,15 @@ pub(crate) fn explain_runtime_config(
     request: RuntimeConfigRequest,
     key: &str,
 ) -> Result<ConfigExplain> {
-    let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
     let paths = RuntimeConfigPaths::discover();
     let base_pipeline = build_runtime_pipeline(
-        defaults.to_layer(),
+        {
+            let mut defaults =
+                RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT)
+                    .to_layer();
+            defaults.extend_from_layer(&request.product_defaults);
+            defaults
+        },
         None,
         &paths,
         request.runtime_load,
@@ -111,7 +118,13 @@ pub(crate) fn explain_runtime_config(
         .into_diagnostic()
         .wrap_err("failed to resolve config before explaining presentation defaults")?;
     let pipeline = build_runtime_pipeline(
-        defaults.to_layer(),
+        {
+            let mut defaults =
+                RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT)
+                    .to_layer();
+            defaults.extend_from_layer(&request.product_defaults);
+            defaults
+        },
         Some(build_presentation_defaults_layer(&base_config)),
         &paths,
         request.runtime_load,

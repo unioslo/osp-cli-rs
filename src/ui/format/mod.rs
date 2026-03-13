@@ -48,6 +48,7 @@ pub fn build_document(rows: &[Row], settings: &RenderSettings) -> Document {
 }
 
 /// Builds a document from a structured output result.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_document_from_output(output: &OutputResult, settings: &RenderSettings) -> Document {
     let plan = settings.resolve_render_plan(output);
     build_document_from_output_plan(output, &plan)
@@ -113,7 +114,11 @@ pub fn build_document_from_output_plan(
                 ))],
             }
         }
-        OutputFormat::Auto => unreachable!("auto format is resolved above"),
+        OutputFormat::Auto => {
+            let mut resolved_plan = plan.clone();
+            resolved_plan.format = resolve_output_format(output, &RenderSettings::default());
+            build_document_from_output_plan(output, &resolved_plan)
+        }
     }
 }
 

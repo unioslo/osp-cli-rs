@@ -36,21 +36,19 @@ fn refresh_picks_up_filesystem_changes_and_prunes_stale_cache() {
     let manager = PluginManager::new(vec![plugins_dir.clone()])
         .with_roots(Some(config_root.clone()), Some(cache_root.clone()));
 
-    let first = manager.list_plugins().expect("plugins should list");
+    let first = manager.list_plugins();
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].plugin_id, "alpha");
 
     std::fs::remove_file(&alpha_path).expect("alpha plugin should be removable");
     write_named_test_plugin(&plugins_dir, "beta");
 
-    let cached = manager.list_plugins().expect("cached plugins should list");
+    let cached = manager.list_plugins();
     assert_eq!(cached.len(), 1);
     assert_eq!(cached[0].plugin_id, "alpha");
 
     manager.refresh();
-    let refreshed = manager
-        .list_plugins()
-        .expect("refreshed plugins should list");
+    let refreshed = manager.list_plugins();
     assert_eq!(refreshed.len(), 1);
     assert_eq!(refreshed[0].plugin_id, "beta");
 
@@ -71,7 +69,7 @@ fn hung_describe_marks_plugin_unhealthy_unit() {
     let timeout_manager = PluginManager::new(vec![timeout_plugins_dir.clone()])
         .with_process_timeout(Duration::from_millis(50));
 
-    let timeout_plugins = timeout_manager.list_plugins().expect("plugins should list");
+    let timeout_plugins = timeout_manager.list_plugins();
     assert_eq!(timeout_plugins.len(), 1);
     assert_eq!(timeout_plugins[0].plugin_id, "hang-describe");
     assert!(!timeout_plugins[0].healthy);
@@ -437,16 +435,13 @@ fn path_discovery_is_opt_in_and_uses_passive_cache_until_dispatch_unit() {
         );
     }
 
-    let hidden = PluginManager::new(Vec::new())
-        .list_plugins()
-        .expect("path-disabled manager should list plugins");
+    let hidden = PluginManager::new(Vec::new()).list_plugins();
     assert!(!hidden.iter().any(|plugin| plugin.plugin_id == "pathdemo"));
 
     let visible = PluginManager::new(Vec::new())
         .with_roots(Some(config_root), Some(cache_root))
         .with_path_discovery(true)
-        .list_plugins()
-        .expect("path-enabled manager should list plugins");
+        .list_plugins();
     let pathdemo = visible
         .iter()
         .find(|plugin| plugin.plugin_id == "pathdemo")
@@ -455,7 +450,7 @@ fn path_discovery_is_opt_in_and_uses_passive_cache_until_dispatch_unit() {
         pathdemo
             .issue
             .as_deref()
-            .is_some_and(|issue| issue.contains("passive discovery does not execute PATH plugins"))
+            .is_some_and(|issue: &str| issue.contains("passive discovery does not execute PATH plugins"))
     );
     assert!(
         !probe_path.exists(),
@@ -474,7 +469,7 @@ fn path_discovery_is_opt_in_and_uses_passive_cache_until_dispatch_unit() {
     );
 
     manager.refresh();
-    let refreshed = manager.list_plugins().expect("cached plugins should list");
+    let refreshed = manager.list_plugins();
     let pathdemo = refreshed
         .iter()
         .find(|plugin| plugin.plugin_id == "pathdemo")

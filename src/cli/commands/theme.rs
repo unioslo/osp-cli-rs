@@ -215,16 +215,19 @@ mod tests {
     }
 
     fn test_ui_state() -> UiState {
-        UiState::builder(RenderSettings::test_plain(OutputFormat::Table))
-            .with_message_verbosity(MessageLevel::Info)
-            .with_debug_verbosity(0)
-            .build()
+        UiState::new(
+            RenderSettings::test_plain(OutputFormat::Table),
+            MessageLevel::Info,
+            0,
+        )
     }
 
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
         let output = match result.output? {
             ReplCommandOutput::Output { output, .. } => output,
-            ReplCommandOutput::Document(_) | ReplCommandOutput::Text(_) => return None,
+            ReplCommandOutput::Guide(_)
+            | ReplCommandOutput::Document(_)
+            | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
     }

@@ -86,7 +86,6 @@ fn disabled_history() -> SharedHistory {
             .with_shell_context(HistoryShellContext::default())
             .build(),
     )
-    .expect("history config should build")
 }
 
 // History expansion and submission contracts.
@@ -646,8 +645,7 @@ fn run_repl_with_reason_and_basic_input_detection_cover_basic_and_interactive_mo
         Some(BasicInputReason::CursorProbeUnsupported),
         None,
     ] {
-        let history =
-            SharedHistory::new(history_config().build()).expect("history config should build");
+        let history = SharedHistory::new(history_config().build());
         let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), None);
         let completion_words = if reason.is_some() {
             vec!["help".to_string()]
@@ -889,7 +887,8 @@ fn history_picker_options_use_configured_rows_query_and_skin_unit() {
         .with_history_menu_rows(7)
         .build();
 
-    let options = build_history_picker_options(&appearance, "doctor mreg");
+    let options = build_history_picker_options(&appearance, "doctor mreg")
+        .expect("history picker options should build");
 
     assert_eq!(options.height, "8");
     assert_eq!(options.query.as_deref(), Some("doctor mreg"));
@@ -938,8 +937,7 @@ fn test_history(commands: &[&str]) -> SharedHistory {
             .with_max_entries(32)
             .with_shell_context(HistoryShellContext::default())
             .build(),
-    )
-    .expect("history should initialize");
+    );
 
     for command in commands {
         history

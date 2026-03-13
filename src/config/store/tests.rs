@@ -3,7 +3,19 @@ use super::{
     read_dotted_value, secret_file_mode, set_scoped_value_in_toml, unset_scoped_value_in_toml,
     validate_secrets_permissions, write_text_atomic, write_toml_root,
 };
-use crate::config::{ConfigError, ConfigValue, Scope};
+use crate::config::{ConfigError, ConfigValue, Scope, TomlStoreEditOptions};
+
+fn default_edit_options() -> TomlStoreEditOptions {
+    TomlStoreEditOptions::new()
+}
+
+fn dry_run_edit_options() -> TomlStoreEditOptions {
+    TomlStoreEditOptions::dry_run()
+}
+
+fn secret_edit_options() -> TomlStoreEditOptions {
+    TomlStoreEditOptions::new().for_secrets()
+}
 
 #[test]
 fn dry_run_set_does_not_create_file() {
@@ -15,8 +27,7 @@ fn dry_run_set_does_not_create_file() {
         "ui.format",
         &ConfigValue::String("json".to_string()),
         &Scope::global(),
-        true,
-        false,
+        dry_run_edit_options(),
     )
     .expect("dry-run set should succeed");
 
@@ -42,8 +53,7 @@ format = "json"
         "ui.format",
         &ConfigValue::String("table".to_string()),
         &Scope::global(),
-        false,
-        false,
+        default_edit_options(),
     )
     .expect("overwrite should succeed");
     assert_eq!(
@@ -63,8 +73,7 @@ format = "json"
         "ui.formats",
         &value,
         &Scope::global(),
-        false,
-        false,
+        default_edit_options(),
     )
     .expect("list set should succeed");
     let payload = std::fs::read_to_string(&list_path).expect("config should be readable");
@@ -82,9 +91,13 @@ format = "json"
             }),
         Some(vec!["json", "table"])
     );
-    let result =
-        unset_scoped_value_in_toml(&list_path, "ui.formats", &Scope::global(), false, false)
-            .expect("list unset should succeed");
+    let result = unset_scoped_value_in_toml(
+        &list_path,
+        "ui.formats",
+        &Scope::global(),
+        default_edit_options(),
+    )
+    .expect("list unset should succeed");
     assert_eq!(result.previous, Some(value));
 
     let terminal_profile_path = dir.join("terminal-profile.toml");
@@ -97,8 +110,7 @@ format = "json"
         "ui.format",
         &ConfigValue::String("mreg".to_string()),
         &scope,
-        false,
-        false,
+        default_edit_options(),
     )
     .expect("set should succeed");
     assert_eq!(set_result.previous, None);
@@ -116,9 +128,13 @@ format = "json"
         Some("mreg")
     );
 
-    let unset_result =
-        unset_scoped_value_in_toml(&terminal_profile_path, "ui.format", &scope, false, false)
-            .expect("unset should succeed");
+    let unset_result = unset_scoped_value_in_toml(
+        &terminal_profile_path,
+        "ui.format",
+        &scope,
+        default_edit_options(),
+    )
+    .expect("unset should succeed");
     assert_eq!(
         unset_result.previous,
         Some(ConfigValue::String("mreg".to_string()))
@@ -151,9 +167,13 @@ ui.format = "json"
     )
     .expect("fixture should be written");
 
-    let result =
-        unset_scoped_value_in_toml(&path, "ui.mode", &Scope::terminal("repl"), false, false)
-            .expect("unset should succeed");
+    let result = unset_scoped_value_in_toml(
+        &path,
+        "ui.mode",
+        &Scope::terminal("repl"),
+        default_edit_options(),
+    )
+    .expect("unset should succeed");
     assert_eq!(result.previous, None);
     let payload = std::fs::read_to_string(&path).expect("config should be readable");
     let root: toml::Value = payload.parse().expect("written config should stay valid");
@@ -171,8 +191,7 @@ ui.format = "json"
         &missing_path,
         "ui.format",
         &Scope::terminal("repl"),
-        false,
-        false,
+        default_edit_options(),
     )
     .expect("unset should succeed for missing file");
     assert_eq!(result.previous, None);
@@ -196,8 +215,7 @@ format = "json"
             profile: Some("ops".to_string()),
             terminal: Some("repl".to_string()),
         },
-        false,
-        false,
+        default_edit_options(),
     )
     .expect("unset should succeed");
     let payload = std::fs::read_to_string(&prune_path).expect("config should be readable");
@@ -216,8 +234,7 @@ fn store_reports_invalid_toml_sections_and_blank_keys_for_set_and_unset_unit() {
         "ui.format",
         &ConfigValue::String("json".to_string()),
         &Scope::global(),
-        false,
-        false,
+        default_edit_options(),
     )
     .expect_err("invalid toml should fail");
     match err {
@@ -245,8 +262,7 @@ ui = "json"
         "ui.format",
         &ConfigValue::String("table".to_string()),
         &Scope::global(),
-        false,
-        false,
+        default_edit_options(),
     )
     .expect_err("non-table section should fail");
     match err {
@@ -270,8 +286,7 @@ ui = "json"
         &unset_non_table_path,
         "ui.format",
         &Scope::global(),
-        false,
-        false,
+        default_edit_options(),
     )
     .expect_err("non-table intermediate section should fail");
     match err {
@@ -290,17 +305,28 @@ ui = "json"
             key,
             &ConfigValue::String("json".to_string()),
             &Scope::global(),
-            dry_run,
-            false,
+            if dry_run {
+                dry_run_edit_options()
+            } else {
+                default_edit_options()
+            },
         )
         .expect_err("empty set key should fail");
         assert!(matches!(err, ConfigError::InvalidConfigKey { .. }));
     }
 
     for (key, dry_run) in [("   ", true), (" . ", false)] {
-        let err =
-            unset_scoped_value_in_toml(&blank_key_path, key, &Scope::global(), dry_run, false)
-                .expect_err("empty unset key should fail");
+        let err = unset_scoped_value_in_toml(
+            &blank_key_path,
+            key,
+            &Scope::global(),
+            if dry_run {
+                dry_run_edit_options()
+            } else {
+                default_edit_options()
+            },
+        )
+        .expect_err("empty unset key should fail");
         assert!(matches!(err, ConfigError::InvalidConfigKey { .. }));
     }
 }
@@ -317,8 +343,7 @@ fn secret_write_and_permission_validation_cover_strict_non_strict_and_missing_pa
         "extensions.demo.token",
         &ConfigValue::String("secret".to_string()),
         &Scope::global(),
-        false,
-        true,
+        secret_edit_options(),
     )
     .expect("secret write should succeed");
 

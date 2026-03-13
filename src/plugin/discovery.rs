@@ -88,6 +88,22 @@ pub(super) struct DescribeCacheEntry {
 
 impl PluginManager {
     /// Clears both passive and dispatch discovery caches.
+    ///
+    /// Call this after changing plugin search roots or the filesystem state
+    /// they point at so later browse or dispatch calls rescan discovery
+    /// inputs. This does not clear in-memory command preferences such as
+    /// provider selections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let manager = PluginManager::new(Vec::new());
+    /// manager.refresh();
+    ///
+    /// assert!(manager.list_plugins().is_empty());
+    /// ```
     pub fn refresh(&self) {
         let mut guard = self
             .discovered_cache

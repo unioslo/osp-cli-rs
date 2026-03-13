@@ -1,0 +1,14 @@
+# Curated runnable-doctest baseline for Queue 6.
+# Format: <relative source path> <symbol selector>
+# Use `Type::method` when a file contains multiple public items with the same name.
+
+src/app/mod.rs run_with_sink
+src/app/mod.rs App::run_process
+src/core/command_def.rs from_clap
+src/core/plugin.rs from_clap_command
+src/native.rs execute
+src/plugin/manager.rs select_provider
+src/plugin/manager.rs clear_provider_selection
+src/services.rs execute_line
+src/ui/mod.rs render_output
+src/ui/mod.rs render_document

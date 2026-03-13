@@ -83,7 +83,10 @@ pub enum ConfigError {
         /// Terminal selector present on the rejected scope, if any.
         terminal: Option<String>,
     },
-    /// No default profile could be determined during bootstrap.
+    /// No usable bootstrap profile name could be determined during bootstrap.
+    ///
+    /// This includes both "no default profile exists" and "the selected
+    /// bootstrap profile normalized to empty".
     MissingDefaultProfile,
     /// A bootstrap-only key failed its value validation rule.
     InvalidBootstrapValue {

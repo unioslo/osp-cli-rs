@@ -19,34 +19,39 @@ fn provider_cursor(line: &str) -> usize {
 }
 
 fn completion_tree(context_scope: ContextScope) -> osp_cli::completion::CompletionTree {
-    CompletionTreeBuilder.build_from_specs(
-        &[
-            CommandSpec::new("orch").subcommand(CommandSpec::new("provision").flag(
-                "--os",
-                FlagNode {
-                    suggestions_by_provider: BTreeMap::from([
-                        ("vmware".to_string(), vec![SuggestionEntry::from("rhel")]),
-                        ("nrec".to_string(), vec![SuggestionEntry::from("alma")]),
-                    ]),
-                    suggestions: vec![SuggestionEntry::from("rhel"), SuggestionEntry::from("alma")],
-                    ..FlagNode::default()
-                },
-            )),
-            CommandSpec::new("hidden").flag(
-                "--provider",
-                FlagNode {
-                    suggestions: vec![
-                        SuggestionEntry::from("vmware"),
-                        SuggestionEntry::from("nrec"),
-                    ],
-                    context_only: true,
-                    context_scope,
-                    ..FlagNode::default()
-                },
-            ),
-        ],
-        [],
-    )
+    CompletionTreeBuilder
+        .build_from_specs(
+            &[
+                CommandSpec::new("orch").subcommand(CommandSpec::new("provision").flag(
+                    "--os",
+                    FlagNode {
+                        suggestions_by_provider: BTreeMap::from([
+                            ("vmware".to_string(), vec![SuggestionEntry::from("rhel")]),
+                            ("nrec".to_string(), vec![SuggestionEntry::from("alma")]),
+                        ]),
+                        suggestions: vec![
+                            SuggestionEntry::from("rhel"),
+                            SuggestionEntry::from("alma"),
+                        ],
+                        ..FlagNode::default()
+                    },
+                )),
+                CommandSpec::new("hidden").flag(
+                    "--provider",
+                    FlagNode {
+                        suggestions: vec![
+                            SuggestionEntry::from("vmware"),
+                            SuggestionEntry::from("nrec"),
+                        ],
+                        context_only: true,
+                        context_scope,
+                        ..FlagNode::default()
+                    },
+                ),
+            ],
+            [],
+        )
+        .expect("completion tree should build")
 }
 
 #[test]

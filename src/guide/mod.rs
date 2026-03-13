@@ -524,6 +524,10 @@ impl GuideView {
         // collapse canonical-only section lists back into the dedicated buckets
         // so ordinary help payloads keep their stable semantic shape.
         let use_ordered_sections = view.uses_ordered_section_representation();
+        let has_custom_sections = view
+            .sections
+            .iter()
+            .any(|section| !section.is_canonical_builtin_section());
         let mut canonical_usage = Vec::new();
         let mut canonical_commands = Vec::new();
         let mut canonical_arguments = Vec::new();
@@ -559,7 +563,7 @@ impl GuideView {
             }
         }
 
-        if !use_ordered_sections {
+        if !use_ordered_sections || !has_custom_sections {
             if view.has_canonical_builtin_section_kind(GuideSectionKind::Usage)
                 || view.usage.is_empty() && !canonical_usage.is_empty()
             {
@@ -631,10 +635,30 @@ impl GuideView {
     }
 
     pub(crate) fn uses_ordered_section_representation(&self) -> bool {
-        self.sections
-            .iter()
-            .any(|section| !section.is_canonical_builtin_section())
+        self.sections.iter().any(|section| {
+            !section.is_canonical_builtin_section()
+                || canonical_section_owns_ordered_content(self, section)
+        })
     }
+}
+
+fn canonical_section_owns_ordered_content(view: &GuideView, section: &GuideSection) -> bool {
+    let has_data = !matches!(section.data, None | Some(Value::Null));
+    (match section.kind {
+        // Canonical sections normally mirror the dedicated top-level buckets.
+        // If the bucket is empty but the section carries content, the section
+        // list is the authoritative authored shape and later lowering must keep
+        // that order instead of discarding the canonical section as a duplicate.
+        GuideSectionKind::Usage => !section.paragraphs.is_empty() && view.usage.is_empty(),
+        GuideSectionKind::Commands => !section.entries.is_empty() && view.commands.is_empty(),
+        GuideSectionKind::Arguments => !section.entries.is_empty() && view.arguments.is_empty(),
+        GuideSectionKind::Options => !section.entries.is_empty() && view.options.is_empty(),
+        GuideSectionKind::CommonInvocationOptions => {
+            !section.entries.is_empty() && view.common_invocation_options.is_empty()
+        }
+        GuideSectionKind::Notes => !section.paragraphs.is_empty() && view.notes.is_empty(),
+        GuideSectionKind::Custom => false,
+    }) || has_data
 }
 
 impl GuideEntry {

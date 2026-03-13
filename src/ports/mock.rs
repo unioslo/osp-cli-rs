@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use serde_json::json;
 
 use crate::core::row::Row;
 
@@ -16,7 +15,8 @@ use super::{LdapDirectory, apply_filter_and_projection};
 ///
 /// The fixture data intentionally stays small and deterministic so callers can
 /// exercise filtering, wildcard lookup, and projection behavior without
-/// talking to a real directory.
+/// talking to a real directory. The default fixture currently contains one
+/// `oistes` user entry and one `ucore` netgroup entry.
 ///
 /// # Examples
 ///
@@ -41,33 +41,30 @@ impl Default for MockLdapClient {
         let mut users = HashMap::new();
         users.insert(
             "oistes".to_string(),
-            json!({
-                "uid": "oistes",
-                "cn": "Øistein Søvik",
-                "uidNumber": "361000",
-                "gidNumber": "346297",
-                "homeDirectory": "/uio/kant/usit-gsd-u1/oistes",
-                "loginShell": "/local/gnu/bin/bash",
-                "objectClass": ["uioMembership", "top", "account", "posixAccount"],
-                "eduPersonAffiliation": ["employee", "member", "staff"],
-                "uioAffiliation": "ANSATT@373034",
-                "uioPrimaryAffiliation": "ANSATT@373034",
-                "netgroups": ["ucore", "usit", "it-uio-azure-users"],
-                "filegroups": ["oistes", "ucore", "usit"]
-            })
-            .as_object()
-            .cloned()
-            .expect("static user fixture must be object"),
+            crate::row! {
+                "uid" => "oistes",
+                "cn" => "Øistein Søvik",
+                "uidNumber" => "361000",
+                "gidNumber" => "346297",
+                "homeDirectory" => "/uio/kant/usit-gsd-u1/oistes",
+                "loginShell" => "/local/gnu/bin/bash",
+                "objectClass" => ["uioMembership", "top", "account", "posixAccount"],
+                "eduPersonAffiliation" => ["employee", "member", "staff"],
+                "uioAffiliation" => "ANSATT@373034",
+                "uioPrimaryAffiliation" => "ANSATT@373034",
+                "netgroups" => ["ucore", "usit", "it-uio-azure-users"],
+                "filegroups" => ["oistes", "ucore", "usit"]
+            },
         );
 
         let mut netgroups = HashMap::new();
         netgroups.insert(
             "ucore".to_string(),
-            json!({
-                "cn": "ucore",
-                "description": "Kjernen av Unix-grupp på USIT",
-                "objectClass": ["top", "nisNetgroup"],
-                "members": [
+            crate::row! {
+                "cn" => "ucore",
+                "description" => "Kjernen av Unix-grupp på USIT",
+                "objectClass" => ["top", "nisNetgroup"],
+                "members" => [
                     "andreasd",
                     "arildlj",
                     "kjetilk",
@@ -75,10 +72,7 @@ impl Default for MockLdapClient {
                     "trondham",
                     "werner"
                 ]
-            })
-            .as_object()
-            .cloned()
-            .expect("static netgroup fixture must be object"),
+            },
         );
 
         Self { users, netgroups }
@@ -135,9 +129,10 @@ impl LdapDirectory for MockLdapClient {
 
 fn wildcard_match(pattern: &str, value: &str) -> bool {
     let escaped = regex::escape(pattern).replace("\\*", ".*");
-    let re = regex::Regex::new(&format!("^{escaped}$"))
-        .expect("escaped wildcard patterns must compile as regexes");
-    re.is_match(value)
+    match regex::Regex::new(&format!("^{escaped}$")) {
+        Ok(re) => re.is_match(value),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]

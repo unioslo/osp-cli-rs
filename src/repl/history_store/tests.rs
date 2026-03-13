@@ -44,7 +44,7 @@ fn list_entries_filters_shell_and_excludes() {
         .with_exclude_patterns(["user *"])
         .with_shell_context(shell)
         .build();
-    let mut store = OspHistoryStore::new(config).expect("history store should init");
+    let mut store = OspHistoryStore::new(config);
     let _ = History::save(
         &mut store,
         HistoryItem::from_command_line("ldap user alice"),
@@ -68,7 +68,7 @@ fn list_entries_filters_shell_and_excludes() {
 fn list_entries_tracks_live_shell_context_updates() {
     let shell = HistoryShellContext::default();
     let config = history_config().with_shell_context(shell.clone()).build();
-    let mut store = OspHistoryStore::new(config).expect("history store should init");
+    let mut store = OspHistoryStore::new(config);
     let _ = History::save(
         &mut store,
         HistoryItem::from_command_line("ldap user alice"),
@@ -96,7 +96,7 @@ fn list_entries_tracks_live_shell_context_updates() {
 fn explicit_scope_queries_override_live_shell_context() {
     let shell = HistoryShellContext::default();
     let config = history_config().with_shell_context(shell.clone()).build();
-    let mut store = OspHistoryStore::new(config).expect("history store should init");
+    let mut store = OspHistoryStore::new(config);
     let _ = History::save(
         &mut store,
         HistoryItem::from_command_line("ldap user alice"),
@@ -127,7 +127,7 @@ fn save_expands_history_and_dedupes_with_shell_scope() {
         .with_dedupe(true)
         .with_shell_context(shell)
         .build();
-    let mut store = OspHistoryStore::new(config).expect("history store should init");
+    let mut store = OspHistoryStore::new(config);
 
     let first = History::save(&mut store, HistoryItem::from_command_line("user alice"))
         .expect("save should succeed");
@@ -154,7 +154,7 @@ fn search_respects_filters_direction_bounds_and_skip_logic() {
     let config = history_config()
         .with_shell_context(HistoryShellContext::default())
         .build();
-    let mut store = OspHistoryStore::new(config).expect("history store should init");
+    let mut store = OspHistoryStore::new(config);
 
     let mut first = HistoryItem::from_command_line("ldap user alice");
     first.cwd = Some("/srv/ldap".to_string());
@@ -235,8 +235,7 @@ fn persisted_records_skip_invalid_lines_and_trim_to_capacity() {
             .with_max_entries(1)
             .with_shell_context(HistoryShellContext::default())
             .build(),
-    )
-    .expect("history store should init");
+    );
 
     let entries = store.list_entries_for(None);
     assert_eq!(entries.len(), 1);
@@ -254,8 +253,7 @@ fn shared_history_supports_save_load_prune_clear_and_sync() {
             .with_max_entries(8)
             .with_shell_context(HistoryShellContext::default())
             .build(),
-    )
-    .expect("shared history should init");
+    );
 
     history
         .save_command_line("config show")
@@ -318,8 +316,7 @@ fn unsupported_history_mutations_surface_feature_errors() {
             .with_max_entries(4)
             .with_shell_context(HistoryShellContext::default())
             .build(),
-    )
-    .expect("history store should init");
+    );
 
     let update_err = store
         .update(HistoryItemId::new(0), &|item| item)
@@ -340,8 +337,7 @@ fn load_missing_history_item_returns_not_found_error() {
             .with_max_entries(4)
             .with_shell_context(HistoryShellContext::default())
             .build(),
-    )
-    .expect("history store should init");
+    );
 
     let err = store
         .load(HistoryItemId::new(7))
@@ -357,8 +353,7 @@ fn disabled_history_returns_original_item_without_persisting_records() {
             .with_dedupe(true)
             .with_shell_context(HistoryShellContext::default())
             .build(),
-    )
-    .expect("history store should init");
+    );
 
     let item = History::save(
         &mut store,

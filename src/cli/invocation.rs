@@ -190,7 +190,7 @@ pub(crate) fn scan_command_tokens_with_trace(
                     'v' => invocation.verbose = invocation.verbose.saturating_add(1),
                     'q' => invocation.quiet = invocation.quiet.saturating_add(1),
                     'd' => invocation.debug = invocation.debug.saturating_add(1),
-                    _ => unreachable!("short cluster guard should only allow v/q/d"),
+                    _ => {}
                 }
             }
             index += 1;

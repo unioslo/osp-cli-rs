@@ -130,9 +130,9 @@ impl<'a> MregBuilder<'a> {
         preferred_order: Option<&[String]>,
     ) {
         for key in ordered_keys(map, preferred_order) {
-            let value = map
-                .get(&key)
-                .expect("ordered_keys must only return keys present in the source object");
+            let Some(value) = map.get(&key) else {
+                continue;
+            };
             self.visit_value(&key, value, depth);
         }
     }
@@ -184,10 +184,9 @@ impl<'a> MregBuilder<'a> {
                 }
 
                 if items.len() <= self.short_list_max {
-                    let first = items
-                        .first()
-                        .expect("non-empty list branch must have a first item");
-                    self.push_scalar_entry(key_with_count, depth, first.clone());
+                    if let Some(first) = items.first() {
+                        self.push_scalar_entry(key_with_count, depth, first.clone());
+                    }
                     return;
                 }
 
@@ -385,11 +384,13 @@ fn shrink_column_widths_to_fit(table: &TableBlock, available_width: usize) -> Ve
     }
 
     while widths.iter().sum::<usize>() + widths.len() * 3 + 1 > available_width {
-        let (index, width) = widths
+        let Some((index, width)) = widths
             .iter_mut()
             .enumerate()
             .max_by_key(|(_, width)| **width)
-            .expect("non-empty widths must have a widest column");
+        else {
+            break;
+        };
         if *width <= min_width {
             break;
         }

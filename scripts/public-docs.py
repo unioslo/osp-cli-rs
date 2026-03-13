@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Public Rustdoc contract checks for osp-cli-rust.
 
-This script enforces one narrow rule: exported Rust functions should carry
-Rustdoc. It exists separately from `confidence.py` because the policy has two
-distinct operating modes:
+This script enforces two narrow rules on exported Rust functions:
+
+- public functions and public trait methods should carry Rustdoc
+- `#[cfg(feature = "...")]` public functions should surface the agreed
+  feature-gate prose in that Rustdoc
+
+It exists separately from `confidence.py` because the policy has two distinct
+operating modes:
 
 - `--staged` for fast pre-commit checks against the staged blob
 - repo-wide mode for local confidence lanes and CI
@@ -46,6 +51,10 @@ TRAIT_FN_RE = re.compile(
 PUB_TRAIT_RE = re.compile(r"^\s*pub\s+trait\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 ATTR_RE = re.compile(r"^\s*#\s*\[")
 DOC_RE = re.compile(r"^\s*(///|//!\s*|#\s*\[\s*doc\s*=)")
+DOC_ATTR_RE = re.compile(r'^\s*#\s*\[\s*doc\s*=\s*"(.*)"\s*\]\s*$')
+CFG_FEATURE_RE = re.compile(
+    r'^\s*#\s*\[\s*cfg\s*\(\s*feature\s*=\s*"([^"]+)"\s*\)\s*\]\s*$'
+)
 
 
 @dataclass(frozen=True)
@@ -173,6 +182,48 @@ def has_rustdoc(lines: list[str], line_no: int) -> bool:
     return saw_doc
 
 
+def doc_context(lines: list[str], line_no: int) -> tuple[list[str], list[str]]:
+    """Collect doc text and directly attached `cfg(feature = ...)` gates."""
+
+    docs: list[str] = []
+    features: list[str] = []
+    index = line_no - 2
+
+    while index >= 0:
+        raw = lines[index]
+        stripped = raw.strip()
+        if not stripped:
+            index -= 1
+            continue
+        if DOC_RE.match(raw):
+            docs.append(doc_text_from_line(raw))
+            index -= 1
+            continue
+        if ATTR_RE.match(raw):
+            if match := CFG_FEATURE_RE.match(raw):
+                features.append(match.group(1))
+            index -= 1
+            continue
+        break
+
+    docs.reverse()
+    features.reverse()
+    return docs, features
+
+
+def doc_text_from_line(raw: str) -> str:
+    """Project one doc-comment line into plain text for phrase checks."""
+
+    stripped = raw.lstrip()
+    if stripped.startswith("///"):
+        return stripped[3:].strip()
+    if stripped.startswith("//!"):
+        return stripped[3:].strip()
+    if match := DOC_ATTR_RE.match(raw):
+        return match.group(1)
+    return stripped
+
+
 def is_pub_trait_method(lines: list[str], line_no: int) -> bool:
     """Heuristically detect methods inside a public trait block.
 
@@ -223,11 +274,26 @@ def missing_docs_in_lines(
         else:
             continue
         if has_rustdoc(lines, line_no):
+            docs, features = doc_context(lines, line_no)
+            for feature in features:
+                required = feature_gate_phrase(feature)
+                if required not in " ".join(docs):
+                    failures.append(
+                        f"{path}:{line_no}: public function `{name}` is gated by "
+                        f'feature `{feature}` but its Rustdoc is missing the prose '
+                        f'"{required}"'
+                    )
             continue
         failures.append(
             f"{path}:{line_no}: public function `{name}` is missing a Rustdoc comment"
         )
     return failures
+
+
+def feature_gate_phrase(feature: str) -> str:
+    """Return the required narrow prose pattern for a cargo feature gate."""
+
+    return f"Only available with the `{feature}` cargo feature"
 
 
 def check_staged_public_functions(root: pathlib.Path) -> list[str]:
@@ -273,7 +339,9 @@ def main() -> int:
     """Parse CLI mode and run the public docs contract check."""
 
     parser = argparse.ArgumentParser(
-        description="Check public Rust functions for missing Rustdoc comments."
+        description=(
+            "Check public Rust functions for Rustdoc and required feature-gate notes."
+        )
     )
     parser.add_argument(
         "--staged",
@@ -292,12 +360,12 @@ def main() -> int:
 
     if args.staged:
         print(
-            "ERROR: staged public Rust functions must have Rustdoc comments.",
+            "ERROR: staged public Rust functions must satisfy the public Rustdoc contract.",
             file=sys.stderr,
         )
     else:
         print(
-            "ERROR: public Rust functions must have Rustdoc comments.",
+            "ERROR: public Rust functions must satisfy the public Rustdoc contract.",
             file=sys.stderr,
         )
     print(file=sys.stderr)
@@ -305,7 +373,8 @@ def main() -> int:
         print(f"  {failure}", file=sys.stderr)
     print(file=sys.stderr)
     print(
-        "Add a `///` Rustdoc comment immediately above the exported function.",
+        "Add a `///` Rustdoc comment immediately above the exported function, "
+        "and include the standard feature-gate prose when required.",
         file=sys.stderr,
     )
     return 1

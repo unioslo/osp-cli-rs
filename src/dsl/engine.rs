@@ -302,11 +302,13 @@ impl PipelineExecutor {
     }
 
     fn apply_semantic_stage(&mut self, stage: &CompiledStage) -> Result<()> {
-        let PipelineItems::Semantic(value) = std::mem::replace(
+        let items = std::mem::replace(
             &mut self.items,
             PipelineItems::Semantic(serde_json::Value::Null),
-        ) else {
-            unreachable!("semantic stage dispatch requires semantic items");
+        );
+        let PipelineItems::Semantic(value) = items else {
+            self.items = items;
+            return Err(anyhow!("semantic stage dispatch requires semantic items"));
         };
 
         if matches!(stage, CompiledStage::Copy) {

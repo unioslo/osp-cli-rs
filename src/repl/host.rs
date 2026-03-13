@@ -145,7 +145,7 @@ fn run_repl_debug_complete(
     let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
     let view = ReplViewContext::from_parts(runtime, session);
     let surface = surface::build_repl_surface(view, &catalog);
-    let completion_tree = build_repl_completion_tree(view, &surface);
+    let completion_tree = build_repl_completion_tree(view, &surface)?;
     let appearance = build_repl_appearance(view);
     let cursor = args.cursor.unwrap_or(args.line.len());
 
@@ -171,8 +171,7 @@ fn run_repl_debug_complete(
             DebugMenuArg::History => {
                 let history = crate::repl::SharedHistory::new(history::build_history_config(
                     runtime, session,
-                ))
-                .map_err(|err| miette!("{err:#}"))?;
+                ));
                 crate::repl::debug_history_menu(&history, &projected_line.line, cursor, options)
             }
         };
@@ -194,8 +193,7 @@ fn run_repl_debug_complete(
             DebugMenuArg::History => {
                 let history = crate::repl::SharedHistory::new(history::build_history_config(
                     runtime, session,
-                ))
-                .map_err(|err| miette!("{err:#}"))?;
+                ));
                 crate::repl::debug_history_menu_steps(
                     &history,
                     &projected_line.line,
@@ -220,17 +218,14 @@ fn run_repl_debug_highlight(
     let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
     let view = ReplViewContext::from_parts(runtime, session);
     let surface = surface::build_repl_surface(view, &catalog);
-    let completion_tree = build_repl_completion_tree(view, &surface);
+    let completion_tree = build_repl_completion_tree(view, &surface)?;
     let appearance = build_repl_appearance(view);
     let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
     let command_color = appearance
         .command_highlight_style
         .as_deref()
         .and_then(crate::repl::color_from_style_spec)
-        .unwrap_or_else(|| {
-            crate::repl::color_from_style_spec("green")
-                .expect("known fallback REPL command highlight color should parse")
-        });
+        .unwrap_or(nu_ansi_term::Color::Green);
     let spans = crate::repl::debug_highlight(
         &completion_tree,
         &args.line,
@@ -246,7 +241,10 @@ fn run_repl_debug_highlight(
     Ok(CliCommandResult::document(document_from_json(payload)))
 }
 
-fn build_repl_completion_tree(view: ReplViewContext<'_>, surface: &ReplSurface) -> CompletionTree {
+fn build_repl_completion_tree(
+    view: ReplViewContext<'_>,
+    surface: &ReplSurface,
+) -> Result<CompletionTree> {
     completion::build_repl_completion_tree(view, surface)
 }
 

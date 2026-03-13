@@ -14,8 +14,9 @@ use crate::cli::{
 use crate::config::secret_file_mode;
 use crate::config::{
     ConfigLayer, ConfigSchema, ResolvedConfig, ResolvedValue, RuntimeConfigPaths,
-    RuntimeLoadOptions, Scope, is_bootstrap_only_key, set_scoped_value_in_toml,
-    unset_scoped_value_in_toml, validate_bootstrap_value, validate_key_scope,
+    RuntimeLoadOptions, Scope, TomlStoreEditOptions, is_bootstrap_only_key,
+    set_scoped_value_in_toml, unset_scoped_value_in_toml, validate_bootstrap_value,
+    validate_key_scope,
 };
 use crate::core::output::OutputFormat;
 use crate::core::row::Row;
@@ -29,6 +30,7 @@ pub(crate) struct ConfigCommandContext<'a> {
     pub(crate) ui: &'a UiState,
     pub(crate) themes: &'a ThemeCatalog,
     pub(crate) config_overrides: &'a mut ConfigLayer,
+    pub(crate) product_defaults: &'a ConfigLayer,
     pub(crate) runtime_load: RuntimeLoadOptions,
 }
 
@@ -39,6 +41,7 @@ pub(crate) struct ConfigReadContext<'a> {
     pub(crate) ui: &'a UiState,
     pub(crate) themes: &'a ThemeCatalog,
     pub(crate) config_overrides: &'a ConfigLayer,
+    pub(crate) product_defaults: &'a ConfigLayer,
     pub(crate) runtime_load: RuntimeLoadOptions,
 }
 
@@ -50,6 +53,7 @@ impl<'a> ConfigCommandContext<'a> {
             ui: self.ui,
             themes: self.themes,
             config_overrides: &*self.config_overrides,
+            product_defaults: self.product_defaults,
             runtime_load: self.runtime_load,
         }
     }
@@ -72,6 +76,7 @@ pub(crate) fn run_config_command(
                 config: read.config,
                 ui: read.ui,
                 session_layer: read.config_overrides,
+                product_defaults: read.product_defaults,
                 runtime_load: read.runtime_load,
             },
             explain,
@@ -414,8 +419,7 @@ fn run_config_set(
                     &key,
                     &value,
                     scope,
-                    args.dry_run,
-                    matches!(store, ConfigStore::Secrets),
+                    store_edit_options(store, args.dry_run),
                 )
                 .into_diagnostic()
                 .wrap_err_with(|| {
@@ -454,6 +458,7 @@ fn run_config_set(
             Some(context.context.terminal_kind().as_config_terminal()),
         )
         .with_runtime_load(context.runtime_load)
+        .with_product_defaults(context.product_defaults.clone())
         .with_session_layer(Some(context.config_overrides.clone()));
         let explain = explain_runtime_config(request.clone(), &key)
             .wrap_err_with(|| format!("failed to explain config for key `{key}` after set"))?;
@@ -567,8 +572,7 @@ fn run_config_unset(
                     target_path,
                     &key,
                     scope,
-                    args.dry_run,
-                    matches!(store, ConfigStore::Secrets),
+                    store_edit_options(store, args.dry_run),
                 )
                 .into_diagnostic()
                 .wrap_err_with(|| {
@@ -717,6 +721,19 @@ fn config_store_name(store: ConfigStore) -> &'static str {
         ConfigStore::Session => "session",
         ConfigStore::Config => "config",
         ConfigStore::Secrets => "secrets",
+    }
+}
+
+fn store_edit_options(store: ConfigStore, dry_run: bool) -> TomlStoreEditOptions {
+    let options = if dry_run {
+        TomlStoreEditOptions::dry_run()
+    } else {
+        TomlStoreEditOptions::new()
+    };
+    if matches!(store, ConfigStore::Secrets) {
+        options.for_secrets()
+    } else {
+        options
     }
 }
 

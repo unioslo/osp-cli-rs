@@ -31,9 +31,9 @@
 //!
 //! Most callers only need a few entry points:
 //!
-//! - [`Cli`] for the binary-facing grammar
-//! - [`InlineCommandCli`] for command text that omits the binary name
-//! - [`parse_command_text_with_aliases`] when you need alias-aware command plus
+//! - [`crate::cli::Cli`] for the binary-facing grammar
+//! - [`crate::cli::InlineCommandCli`] for command text that omits the binary name
+//! - [`crate::cli::parse_command_text_with_aliases`] when you need alias-aware command plus
 //!   DSL parsing
 //!
 //! The split here is deliberate. One-shot flags that affect rendering or
@@ -643,6 +643,21 @@ pub struct ConfigUnsetArgs {
 }
 
 impl Cli {
+    pub(crate) fn default_invocation() -> Self {
+        Self {
+            user: None,
+            incognito: false,
+            profile: None,
+            no_env: false,
+            no_config_file: false,
+            plugin_dirs: Vec::new(),
+            theme: None,
+            presentation: None,
+            gammel_og_bitter: false,
+            command: None,
+        }
+    }
+
     /// Returns the default render settings for this CLI invocation.
     pub fn render_settings(&self) -> RenderSettings {
         default_render_settings()

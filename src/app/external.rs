@@ -312,8 +312,8 @@ mod tests {
         render_external_plugin_response, run_external_command_with_help_renderer,
     };
     use crate::app::{
-        AppClients, AppRuntime, AppSession, AppState, LaunchContext, RuntimeContext, TerminalKind,
-        UiState, resolve_invocation_ui,
+        AppClients, AppRuntime, AppSession, AppStateBuilder, LaunchContext, RuntimeContext,
+        TerminalKind, UiState, resolve_invocation_ui,
     };
     use crate::app::{CliCommandResult, ReplCommandOutput};
     use crate::cli::invocation::InvocationOptions;
@@ -399,12 +399,14 @@ mod tests {
             .resolve(ResolveOptions::default())
             .expect("test config should resolve");
 
-        let state = AppState::builder(
+        let state = AppStateBuilder::new(
             RuntimeContext::new(None, TerminalKind::Cli, None),
             config,
-            UiState::builder(RenderSettings::test_plain(OutputFormat::Json))
-                .with_message_verbosity(MessageLevel::Success)
-                .build(),
+            UiState::new(
+                RenderSettings::test_plain(OutputFormat::Json),
+                MessageLevel::Success,
+                0,
+            ),
         )
         .with_launch(LaunchContext::default())
         .with_plugins(PluginManager::new(Vec::new()))
@@ -430,7 +432,7 @@ mod tests {
             parsed,
             ExternalParse::Handled(CliCommandResult {
                 exit_code: 0,
-                output: Some(ReplCommandOutput::Output { .. }),
+                output: Some(ReplCommandOutput::Guide(_)),
                 ..
             })
         ));
@@ -501,9 +503,12 @@ mod tests {
                 NativeOutcomeKind::Help => {
                     assert!(matches!(
                         result.output,
-                        Some(ReplCommandOutput::Output { output, .. })
-                            if crate::guide::GuideView::try_from_output_result(&output)
-                                .is_some_and(|guide| guide.preamble.iter().any(|line| line.contains("HELP::Usage: osp ldap")))
+                        Some(ReplCommandOutput::Guide(guide))
+                            if guide
+                                .guide
+                                .preamble
+                                .iter()
+                                .any(|line| line.contains("HELP::Usage: osp ldap"))
                     ));
                 }
                 NativeOutcomeKind::Exit => {

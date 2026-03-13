@@ -88,6 +88,21 @@ struct ReplRunContext {
 }
 
 /// Runs the interactive REPL and delegates submitted lines to `execute`.
+///
+/// # Fallback behavior
+///
+/// This prefers the interactive editor loop, but it falls back to basic
+/// line-by-line stdin mode when interactive assumptions do not hold. That
+/// includes non-terminal stdin and terminals that do not support the cursor
+/// position probe used by the editor layer.
+///
+/// When that fallback happens, the function emits a warning to stderr unless
+/// the caller explicitly requested basic input mode through the config.
+///
+/// # Errors
+///
+/// Returns an error when the interactive editor layer fails or when the
+/// supplied `execute` callback returns an error for a submitted line.
 pub fn run_repl<F>(config: ReplRunConfig, mut execute: F) -> Result<ReplRunResult>
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
@@ -102,7 +117,7 @@ where
         prompt_right,
         line_projector,
     } = config;
-    let history_store = SharedHistory::new(history_config)?;
+    let history_store = SharedHistory::new(history_config);
     let mut submission = SubmissionContext {
         history_store: &history_store,
         execute: &mut execute,

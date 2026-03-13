@@ -25,8 +25,7 @@ use crate::ui::presentation::{
 
 const DEFAULT_MINIMAL_INTRO_TEMPLATE: &str =
     "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
-const DEFAULT_COMPACT_INTRO_TEMPLATE: &str =
-    "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
+const DEFAULT_COMPACT_INTRO_TEMPLATE: &str = "{{ help }}";
 // The full intro is authored as markdown plus semantic `osp` blocks. Prose
 // stays as paragraphs, but structured sections like keybindings and pipes flow
 // through the same data/document path as help and other guide output.

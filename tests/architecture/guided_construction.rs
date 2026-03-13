@@ -1,19 +1,15 @@
 #![allow(missing_docs)]
 
-use osp_cli::app::{AppBuilder, AppClients, LaunchContext, UiState};
+use osp_cli::App;
+use osp_cli::app::{AppClients, AppSession, LaunchContext, UiState};
 use osp_cli::config::{ResolveOptions, RuntimeLoadOptions};
 use osp_cli::core::command_policy::{CommandAvailability, CommandPolicyOverride, VisibilityMode};
 use osp_cli::core::output::{ColorMode, OutputFormat, UnicodeMode};
 use osp_cli::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use osp_cli::plugin::PluginDispatchContext;
 use osp_cli::repl::{HistoryConfig, ReplAppearance, ReplInputMode, ReplPrompt, ReplRunConfig};
+use osp_cli::ui::messages::MessageLevel;
 use osp_cli::ui::{RenderRuntime, RenderSettings};
-
-fn fixture_render_settings() -> RenderSettings {
-    RenderSettings::builder()
-        .with_format(OutputFormat::Json)
-        .build()
-}
 
 fn fixture_history_config() -> HistoryConfig {
     HistoryConfig::builder()
@@ -26,10 +22,8 @@ fn fixture_history_config() -> HistoryConfig {
 fn canonical_guided_construction_entrypoints_remain_public_unit() {
     let _: osp_cli::ui::RenderRuntimeBuilder = RenderRuntime::builder();
     let _: osp_cli::ui::RenderSettingsBuilder = RenderSettings::builder();
-    let _: osp_cli::app::UiStateBuilder = UiState::builder(fixture_render_settings());
-    let _: osp_cli::app::LaunchContextBuilder = LaunchContext::builder();
-    let _: osp_cli::app::AppClientsBuilder = AppClients::builder();
-    let _: osp_cli::app::AppBuilder = AppBuilder::new();
+    let _: osp_cli::app::AppBuilder = App::builder();
+    let _ = AppSession::builder().with_prompt_prefix("demo").build();
     let _: osp_cli::repl::HistoryConfigBuilder = HistoryConfig::builder();
     let _: osp_cli::repl::ReplAppearanceBuilder = ReplAppearance::builder();
     let _: osp_cli::repl::ReplRunConfigBuilder =
@@ -43,11 +37,14 @@ fn canonical_guided_construction_paths_build_coherent_values_unit() {
         .with_runtime(runtime)
         .with_format(OutputFormat::Json)
         .build();
-    let ui = UiState::builder(render_settings.clone()).build();
-    let launch = LaunchContext::builder()
-        .with_runtime_load(RuntimeLoadOptions::new().with_env(false))
+    let ui = UiState::new(render_settings.clone(), MessageLevel::Success, 0);
+    let launch =
+        LaunchContext::default().with_runtime_load(RuntimeLoadOptions::new().with_env(false));
+    let clients = AppClients::default();
+    let session = AppSession::builder()
+        .with_prompt_prefix("demo")
+        .with_history_enabled(false)
         .build();
-    let clients = AppClients::builder().build();
     let history = HistoryConfig::builder()
         .with_profile(Some(" Dev ".to_string()))
         .with_terminal(Some(" REPL ".to_string()))
@@ -81,6 +78,8 @@ fn canonical_guided_construction_paths_build_coherent_values_unit() {
     assert!(ui.render_settings.runtime.stdout_is_tty);
     assert!(!launch.runtime_load.include_env);
     assert!(clients.plugins().explicit_dirs().is_empty());
+    assert_eq!(session.prompt_prefix, "demo");
+    assert!(!session.history_enabled);
     assert_eq!(history.profile.as_deref(), Some("dev"));
     assert_eq!(history.terminal.as_deref(), Some("repl"));
     assert_eq!(repl.input_mode, ReplInputMode::Basic);

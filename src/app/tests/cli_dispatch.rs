@@ -50,10 +50,11 @@ fn invocation_ui_and_format_hints_overlay_runtime_defaults_unit() {
     let config = resolver
         .resolve(ResolveOptions::default().with_terminal("cli"))
         .expect("config should resolve");
-    let ui = crate::app::UiState::builder(RenderSettings::test_plain(OutputFormat::Table))
-        .with_message_verbosity(MessageLevel::Success)
-        .with_debug_verbosity(1)
-        .build();
+    let ui = crate::app::UiState::new(
+        RenderSettings::test_plain(OutputFormat::Table),
+        MessageLevel::Success,
+        1,
+    );
     let invocation = InvocationOptions {
         format: Some(OutputFormat::Json),
         mode: Some(RenderMode::Rich),
@@ -114,6 +115,7 @@ fn cli_presentation_flags_map_to_session_overrides_unit() {
             None,
             TerminalKind::Repl,
             RuntimeLoadOptions::default(),
+            &ConfigLayer::default(),
         )
         .expect("session layer should build")
         .expect("presentation flag should create session overrides");

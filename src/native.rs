@@ -23,6 +23,10 @@
 //! - catalog/context structs stay plain describe-time or execute-time payloads
 //! - commands should expose behavior through the registry rather than by
 //!   leaking host-internal runtime state
+//! - downstream product crates typically build a registry once and pass it
+//!   into [`crate::App::with_native_commands`] or
+//!   [`crate::AppBuilder::with_native_commands`] as part of their own wrapper
+//!   or builder layer
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -105,6 +109,52 @@ pub trait NativeCommand: Send + Sync {
     }
 
     /// Executes the command using already-parsed argument tokens.
+    ///
+    /// `args` contains the tokens after the registered command name. For a
+    /// command registered as `history`, the command line `osp history clear
+    /// --all` reaches `execute` as `["clear", "--all"]`.
+    ///
+    /// The host interprets outcomes as follows:
+    ///
+    /// - [`NativeCommandOutcome::Help`] is rendered as a help/guide response
+    /// - [`NativeCommandOutcome::Exit`] terminates the command immediately with
+    ///   that exit code
+    /// - [`NativeCommandOutcome::Response`] is treated like plugin protocol
+    ///   output and may still flow through trailing DSL stages
+    ///
+    /// Return `Err` when command execution itself fails. The host formats that
+    /// failure like other command errors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use anyhow::Result;
+    /// use clap::Command;
+    /// use osp_cli::{NativeCommand, NativeCommandContext, NativeCommandOutcome};
+    ///
+    /// struct HistoryCommand;
+    ///
+    /// impl NativeCommand for HistoryCommand {
+    ///     fn command(&self) -> Command {
+    ///         Command::new("history").about("Manage local history")
+    ///     }
+    ///
+    ///     fn execute(
+    ///         &self,
+    ///         args: &[String],
+    ///         _context: &NativeCommandContext<'_>,
+    ///     ) -> Result<NativeCommandOutcome> {
+    ///         match args {
+    ///             [subcommand, flag] if subcommand == "clear" && flag == "--all" => {
+    ///                 Ok(NativeCommandOutcome::Exit(0))
+    ///             }
+    ///             _ => Ok(NativeCommandOutcome::Help(
+    ///                 "usage: history clear --all".to_string(),
+    ///             )),
+    ///         }
+    ///     }
+    /// }
+    /// ```
     fn execute(
         &self,
         args: &[String],
@@ -114,6 +164,7 @@ pub trait NativeCommand: Send + Sync {
 
 /// Registry of in-process native commands exposed alongside plugin commands.
 #[derive(Clone, Default)]
+#[must_use]
 pub struct NativeCommandRegistry {
     commands: Arc<BTreeMap<String, Arc<dyn NativeCommand>>>,
 }

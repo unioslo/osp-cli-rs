@@ -605,7 +605,7 @@ fn insert_addressed_value(target: &mut Value, address: &[AddressStep], value: Va
                 *target = Value::Object(serde_json::Map::new());
             }
             let Value::Object(map) = target else {
-                unreachable!("object ensured above")
+                return;
             };
             let entry = map.entry(name.clone()).or_insert(Value::Null);
             insert_addressed_value(entry, &address[1..], value);
@@ -615,7 +615,7 @@ fn insert_addressed_value(target: &mut Value, address: &[AddressStep], value: Va
                 *target = Value::Array(Vec::new());
             }
             let Value::Array(items) = target else {
-                unreachable!("array ensured above")
+                return;
             };
             if items.len() <= *index {
                 items.resize(index + 1, sparse_hole());

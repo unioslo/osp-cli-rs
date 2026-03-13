@@ -27,7 +27,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::config::{ResolvedConfig, RuntimeLoadOptions};
+use crate::config::{ConfigLayer, ResolvedConfig, RuntimeLoadOptions};
 use crate::core::command_policy::{
     AccessReason, CommandAccess, CommandPolicy, CommandPolicyContext, CommandPolicyRegistry,
     VisibilityMode,
@@ -205,6 +205,7 @@ impl ConfigState {
 /// same derived values.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+#[must_use]
 pub struct UiState {
     /// Render settings derived from the current config snapshot.
     pub render_settings: RenderSettings,
@@ -215,11 +216,6 @@ pub struct UiState {
 }
 
 impl UiState {
-    /// Starts a builder for UI state derived from a render-settings baseline.
-    pub fn builder(render_settings: RenderSettings) -> UiStateBuilder {
-        UiStateBuilder::new(render_settings)
-    }
-
     /// Derives UI state from a resolved config snapshot and runtime context.
     ///
     /// # Examples
@@ -249,10 +245,35 @@ impl UiState {
         context: &RuntimeContext,
         config: &ResolvedConfig,
     ) -> miette::Result<Self> {
-        UiStateBuilder::from_resolved_config(context, config).map(UiStateBuilder::build)
+        let themes = crate::ui::theme_loader::load_theme_catalog(config);
+        crate::app::assembly::derive_ui_state(
+            context,
+            config,
+            &themes,
+            crate::app::assembly::RenderSettingsSeed::DefaultAuto,
+            None,
+        )
     }
 
     /// Creates the UI state snapshot used for one resolved config revision.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::UiState;
+    /// use osp_cli::ui::RenderSettings;
+    /// use osp_cli::ui::messages::MessageLevel;
+    /// use osp_cli::core::output::OutputFormat;
+    ///
+    /// let ui = UiState::new(
+    ///     RenderSettings::test_plain(OutputFormat::Json),
+    ///     MessageLevel::Success,
+    ///     2,
+    /// );
+    ///
+    /// assert_eq!(ui.message_verbosity, MessageLevel::Success);
+    /// assert_eq!(ui.debug_verbosity, 2);
+    /// ```
     pub fn new(
         render_settings: RenderSettings,
         message_verbosity: MessageLevel,
@@ -264,59 +285,8 @@ impl UiState {
             debug_verbosity,
         }
     }
-}
 
-/// Builder for [`UiState`].
-///
-/// This is the guided construction path for host-facing UI state.
-pub struct UiStateBuilder {
-    render_settings: RenderSettings,
-    message_verbosity: MessageLevel,
-    debug_verbosity: u8,
-}
-
-impl UiStateBuilder {
-    /// Starts building UI state from the provided render settings.
-    pub fn new(render_settings: RenderSettings) -> Self {
-        Self {
-            render_settings,
-            message_verbosity: MessageLevel::Success,
-            debug_verbosity: 0,
-        }
-    }
-
-    /// Derives UI-state defaults from resolved config and runtime context.
-    pub fn from_resolved_config(
-        context: &RuntimeContext,
-        config: &ResolvedConfig,
-    ) -> miette::Result<Self> {
-        let themes = crate::ui::theme_loader::load_theme_catalog(config);
-        Self::from_resolved_config_with_themes(context, config, &themes)
-    }
-
-    pub(crate) fn from_resolved_config_with_themes(
-        context: &RuntimeContext,
-        config: &ResolvedConfig,
-        themes: &ThemeCatalog,
-    ) -> miette::Result<Self> {
-        // Rebuild/startup paths can preserve an existing render runtime, but
-        // fresh derivation should probe from the runtime context once here.
-        let ui = crate::app::assembly::derive_ui_state(
-            context,
-            config,
-            themes,
-            crate::app::assembly::RenderSettingsSeed::DefaultAuto,
-            None,
-        )?;
-
-        Ok(Self {
-            render_settings: ui.render_settings,
-            message_verbosity: ui.message_verbosity,
-            debug_verbosity: ui.debug_verbosity,
-        })
-    }
-
-    /// Replaces the render-settings baseline used by the built UI state.
+    /// Replaces the render-settings baseline used by this UI state.
     pub fn with_render_settings(mut self, render_settings: RenderSettings) -> Self {
         self.render_settings = render_settings;
         self
@@ -333,15 +303,6 @@ impl UiStateBuilder {
         self.debug_verbosity = debug_verbosity;
         self
     }
-
-    /// Builds the configured [`UiState`].
-    pub fn build(self) -> UiState {
-        UiState::new(
-            self.render_settings,
-            self.message_verbosity,
-            self.debug_verbosity,
-        )
-    }
 }
 
 /// Startup inputs used to assemble runtime services and locate on-disk state.
@@ -351,6 +312,7 @@ impl UiStateBuilder {
 /// services from the same startup inputs after config changes.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+#[must_use]
 pub struct LaunchContext {
     /// Explicit plugin directories requested by the caller at launch time.
     pub plugin_dirs: Vec<PathBuf>,
@@ -365,11 +327,6 @@ pub struct LaunchContext {
 }
 
 impl LaunchContext {
-    /// Starts a builder for launch-time host provenance.
-    pub fn builder() -> LaunchContextBuilder {
-        LaunchContextBuilder::new()
-    }
-
     /// Creates launch-time provenance for one host bootstrap attempt.
     pub fn new(
         plugin_dirs: Vec<PathBuf>,
@@ -382,48 +339,6 @@ impl LaunchContext {
             config_root,
             cache_root,
             runtime_load,
-            startup_started_at: Instant::now(),
-        }
-    }
-
-    /// Replaces the captured startup timestamp.
-    pub fn with_startup_started_at(mut self, startup_started_at: Instant) -> Self {
-        self.startup_started_at = startup_started_at;
-        self
-    }
-}
-
-impl Default for LaunchContext {
-    fn default() -> Self {
-        Self::new(Vec::new(), None, None, RuntimeLoadOptions::default())
-    }
-}
-
-/// Builder for [`LaunchContext`].
-///
-/// This keeps launch-time bootstrap knobs grouped in one guided surface.
-pub struct LaunchContextBuilder {
-    plugin_dirs: Vec<PathBuf>,
-    config_root: Option<PathBuf>,
-    cache_root: Option<PathBuf>,
-    runtime_load: RuntimeLoadOptions,
-    startup_started_at: Instant,
-}
-
-impl Default for LaunchContextBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LaunchContextBuilder {
-    /// Starts a builder with empty plugin roots and default runtime loading.
-    pub fn new() -> Self {
-        Self {
-            plugin_dirs: Vec::new(),
-            config_root: None,
-            cache_root: None,
-            runtime_load: RuntimeLoadOptions::default(),
             startup_started_at: Instant::now(),
         }
     }
@@ -463,16 +378,11 @@ impl LaunchContextBuilder {
         self.startup_started_at = startup_started_at;
         self
     }
+}
 
-    /// Builds the configured [`LaunchContext`].
-    pub fn build(self) -> LaunchContext {
-        LaunchContext {
-            plugin_dirs: self.plugin_dirs,
-            config_root: self.config_root,
-            cache_root: self.cache_root,
-            runtime_load: self.runtime_load,
-            startup_started_at: self.startup_started_at,
-        }
+impl Default for LaunchContext {
+    fn default() -> Self {
+        Self::new(Vec::new(), None, None, RuntimeLoadOptions::default())
     }
 }
 
@@ -485,6 +395,7 @@ impl LaunchContextBuilder {
 /// internal registries stay private so the host can grow additional cached
 /// machinery without breaking callers.
 #[non_exhaustive]
+#[must_use]
 pub struct AppClients {
     /// Plugin manager used for discovery, dispatch, and provider metadata.
     plugins: PluginManager,
@@ -513,11 +424,6 @@ impl AppClients {
         &self.native_commands
     }
 
-    /// Starts a builder for shared client registries.
-    pub fn builder() -> AppClientsBuilder {
-        AppClientsBuilder::new()
-    }
-
     pub(crate) fn plugin_config_env(&self, config: &ConfigState) -> PluginConfigEnv {
         self.plugin_config_env.collect(config)
     }
@@ -541,44 +447,12 @@ impl AppClients {
     }
 }
 
-/// Builder for [`AppClients`].
-///
-/// This is the guided construction path for shared plugin/native registries.
-pub struct AppClientsBuilder {
-    plugins: PluginManager,
-    native_commands: NativeCommandRegistry,
-}
-
-impl Default for AppClientsBuilder {
+impl Default for AppClients {
     fn default() -> Self {
-        Self {
-            plugins: PluginManager::new(Vec::new()),
-            native_commands: NativeCommandRegistry::default(),
-        }
-    }
-}
-
-impl AppClientsBuilder {
-    /// Starts a builder with empty plugin and native-command registries.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Replaces the plugin manager used by the built client registry.
-    pub fn with_plugins(mut self, plugins: PluginManager) -> Self {
-        self.plugins = plugins;
-        self
-    }
-
-    /// Replaces the native-command registry used by the built client registry.
-    pub fn with_native_commands(mut self, native_commands: NativeCommandRegistry) -> Self {
-        self.native_commands = native_commands;
-        self
-    }
-
-    /// Builds the configured [`AppClients`].
-    pub fn build(self) -> AppClients {
-        AppClients::new(self.plugins, self.native_commands)
+        Self::new(
+            PluginManager::new(Vec::new()),
+            NativeCommandRegistry::default(),
+        )
     }
 }
 
@@ -604,6 +478,7 @@ pub struct AppRuntime {
     pub(crate) themes: ThemeCatalog,
     /// Launch-time inputs used to assemble caches and external services.
     pub launch: LaunchContext,
+    product_defaults: ConfigLayer,
 }
 
 impl AppRuntime {
@@ -623,6 +498,7 @@ impl AppRuntime {
             auth,
             themes,
             launch,
+            product_defaults: ConfigLayer::default(),
         }
     }
 
@@ -665,6 +541,14 @@ impl AppRuntime {
     pub fn launch(&self) -> &LaunchContext {
         &self.launch
     }
+
+    pub(crate) fn product_defaults(&self) -> &ConfigLayer {
+        &self.product_defaults
+    }
+
+    pub(crate) fn set_product_defaults(&mut self, product_defaults: ConfigLayer) {
+        self.product_defaults = product_defaults;
+    }
 }
 
 /// Authorization and command-visibility state derived from configuration.
@@ -700,10 +584,7 @@ impl AuthState {
         native_commands: &NativeCommandRegistry,
     ) -> Self {
         let mut auth = Self::from_resolved(config);
-        let plugin_policy = plugins.command_policy_registry().unwrap_or_else(|err| {
-            tracing::warn!(error = %err, "failed to build plugin command policy registry");
-            CommandPolicyRegistry::default()
-        });
+        let plugin_policy = plugins.command_policy_registry();
         let external_policy =
             merge_policy_registries(plugin_policy, native_commands.command_policy_registry());
         auth.replace_external_policy(external_policy);

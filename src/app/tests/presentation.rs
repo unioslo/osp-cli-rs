@@ -75,9 +75,9 @@ fn repl_help_chrome_variants_render_expected_structure_unit() {
         footer,
     );
     assert!(rendered.contains("Options"));
-    assert!(rendered.contains("Use osp plugins commands"));
-    assert!(rendered.contains("\n\nUse osp plugins commands"));
-    assert!(!rendered.contains("\n\n\nUse osp plugins commands"));
+    assert!(rendered.contains("Use `osp plugins commands`"));
+    assert!(rendered.contains("\n\nUse `osp plugins commands`"));
+    assert!(!rendered.contains("\n\n\nUse `osp plugins commands`"));
 }
 
 #[test]

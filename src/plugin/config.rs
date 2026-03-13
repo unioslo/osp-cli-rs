@@ -44,10 +44,7 @@ struct CachedPluginConfigEnv {
 impl PluginConfigEnvCache {
     pub(crate) fn collect(&self, config: &ConfigState) -> PluginConfigEnv {
         let revision = config.revision();
-        if let Some(cached) = self
-            .cached
-            .read()
-            .expect("plugin config cache poisoned")
+        if let Some(cached) = read_cached_env(&self.cached)
             .as_ref()
             .filter(|cached| cached.revision == revision)
             .cloned()
@@ -56,7 +53,7 @@ impl PluginConfigEnvCache {
         }
 
         let env = collect_plugin_config_env(config.resolved());
-        let mut guard = self.cached.write().expect("plugin config cache poisoned");
+        let mut guard = write_cached_env(&self.cached);
         if let Some(cached) = guard.as_ref()
             && cached.revision == revision
         {
@@ -67,6 +64,24 @@ impl PluginConfigEnvCache {
             env: env.clone(),
         });
         env
+    }
+}
+
+fn read_cached_env(
+    cache: &RwLock<Option<CachedPluginConfigEnv>>,
+) -> std::sync::RwLockReadGuard<'_, Option<CachedPluginConfigEnv>> {
+    match cache.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn write_cached_env(
+    cache: &RwLock<Option<CachedPluginConfigEnv>>,
+) -> std::sync::RwLockWriteGuard<'_, Option<CachedPluginConfigEnv>> {
+    match cache.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 

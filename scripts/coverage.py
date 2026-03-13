@@ -453,9 +453,17 @@ def is_coverage_exempt_module(path: Path) -> bool:
     except OSError:
         return False
 
+    def is_non_code_line(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return True
+        return stripped.startswith(("//", "///", "//!", "#!", "#[", "/*", "*", "*/"))
+
+    code_lines = [line for line in lines if not is_non_code_line(line)]
+
     # This early exit covers the common "types and re-exports only" case and
     # keeps the later line-by-line heuristic focused on edge cases.
-    if "fn " not in text and "impl " not in text:
+    if not any("fn " in line or "impl " in line for line in code_lines):
         return True
 
     allowed_prefixes = (
@@ -485,9 +493,7 @@ def is_coverage_exempt_module(path: Path) -> bool:
 
     for raw in lines:
         line = raw.strip()
-        if not line:
-            continue
-        if line.startswith(("//", "//!", "///", "#!", "#[", "/*", "*", "*/")):
+        if is_non_code_line(raw):
             continue
         if in_use_block:
             if line.endswith(";"):

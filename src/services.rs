@@ -1,11 +1,16 @@
-//! Small embeddable service-layer command surface.
+//! Small embeddable LDAP service surface with optional DSL pipeline support.
 //!
-//! This module exists for callers that want `osp`-style command parsing and DSL
-//! pipelines without bootstrapping the full CLI host or REPL runtime.
+//! This module is intentionally narrow. It currently understands only
+//! `ldap user [uid]` and `ldap netgroup [name]`, plus any trailing DSL stages.
+//! Passing any other command root to [`crate::services::execute_line`] returns
+//! an error immediately.
+//!
+//! Use this when you want in-process LDAP lookups plus DSL filtering without
+//! bootstrapping the full CLI host or REPL runtime.
 //!
 //! High level flow:
 //!
-//! - parse a narrow service command grammar
+//! - parse a small LDAP command grammar
 //! - execute it against abstract [`crate::ports`] traits
 //! - optionally apply trailing DSL stages to the returned rows
 //!
@@ -19,8 +24,8 @@
 //!
 //! - [`crate::services::ServiceContext::new`] is the main construction surface
 //! - parsed commands and output values stay plain semantic data
-//! - callers that outgrow this small surface should move up to [`crate::app`]
-//!   or down to [`crate::ports`] rather than reassembling host machinery here
+//! - callers that outgrow this surface should move up to [`crate::app`] rather
+//!   than rebuilding host machinery here
 
 use crate::config::RuntimeConfig;
 use crate::core::output_model::OutputResult;
@@ -54,6 +59,8 @@ impl<L: LdapDirectory> ServiceContext<L> {
     /// use osp_cli::ports::mock::MockLdapClient;
     /// use osp_cli::services::ServiceContext;
     ///
+    /// // `MockLdapClient::default()` exposes a small fixed fixture set documented
+    /// // on `MockLdapClient`, including an `oistes` user and a `ucore` netgroup.
     /// let ctx = ServiceContext::new(
     ///     Some("oistes".to_string()),
     ///     MockLdapClient::default(),
@@ -90,33 +97,38 @@ pub enum ParsedCommand {
     },
 }
 
-/// Executes one service-layer command line and applies any trailing DSL stages.
+/// Executes one LDAP service command line and applies any trailing DSL stages.
 ///
-/// This is the small, embeddable surface for callers that want `osp`-style
-/// command parsing plus pipelines without bootstrapping the full CLI host.
+/// This is the small, embeddable surface for callers that want LDAP command
+/// parsing plus pipelines without bootstrapping the full CLI host.
 ///
 /// The full line is parsed as `<command> [| <stage> ...]`. The command is
 /// dispatched against the ports in `ctx`; the stages are applied to the
 /// returned rows before the result is returned.
 ///
+/// Only the `ldap user ...` and `ldap netgroup ...` roots are supported today.
+///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use osp_cli::config::RuntimeConfig;
 /// use osp_cli::ports::mock::MockLdapClient;
 /// use osp_cli::services::{ServiceContext, execute_line};
 ///
 /// let ctx = ServiceContext::new(
-///     Some("alice".to_string()),
+///     Some("oistes".to_string()),
 ///     MockLdapClient::default(),
 ///     RuntimeConfig::default(),
 /// );
+/// // `MockLdapClient::default()` exposes a fixed `oistes` user fixture.
 ///
-/// // "user alice"                  → LDAP lookup, all attributes
-/// // "user alice | F uid=alice"    → LDAP lookup, then filter by uid
-/// // "user alice | S uid | L 10"  → lookup, sort by uid, take first 10
-/// let result = execute_line(&ctx, "user alice | F uid=alice")
+/// let result = execute_line(&ctx, "ldap user oistes | F uid=oistes | P uid cn")
 ///     .expect("command and pipeline should run");
+/// let rows = result.as_rows().expect("expected row output");
+///
+/// assert_eq!(rows.len(), 1);
+/// assert_eq!(rows[0].get("uid").and_then(|value| value.as_str()), Some("oistes"));
+/// assert!(rows[0].contains_key("cn"));
 /// ```
 pub fn execute_line<L: LdapDirectory>(ctx: &ServiceContext<L>, line: &str) -> Result<OutputResult> {
     let parsed_pipeline = parse_pipeline(line)?;
@@ -132,8 +144,8 @@ pub fn execute_line<L: LdapDirectory>(ctx: &ServiceContext<L>, line: &str) -> Re
 
 /// Interprets tokenized service-layer input using the minimal LDAP command grammar.
 ///
-/// Unlike the full CLI parser, this only accepts the subset modeled by
-/// [`ParsedCommand`].
+/// Unlike the full CLI parser, this only accepts the LDAP-only subset modeled
+/// by [`ParsedCommand`].
 ///
 /// # Examples
 ///
@@ -272,6 +284,7 @@ fn parse_ldap_netgroup_tokens(tokens: &[String]) -> Result<ParsedCommand> {
 ///     MockLdapClient::default(),
 ///     RuntimeConfig::default(),
 /// );
+/// // `MockLdapClient::default()` exposes a fixed `oistes` user fixture.
 /// let rows = execute_command(
 ///     &ctx,
 ///     &ParsedCommand::LdapUser {
@@ -283,8 +296,7 @@ fn parse_ldap_netgroup_tokens(tokens: &[String]) -> Result<ParsedCommand> {
 /// .unwrap();
 ///
 /// assert_eq!(rows.len(), 1);
-/// assert_eq!(rows[0].get("uid").unwrap(), "oistes");
-/// assert!(rows[0].contains_key("cn"));
+/// assert_eq!(rows[0].get("uid").and_then(|value| value.as_str()), Some("oistes"));
 /// ```
 pub fn execute_command<L: LdapDirectory>(
     ctx: &ServiceContext<L>,

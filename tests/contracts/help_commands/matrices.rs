@@ -42,17 +42,7 @@ fn help_color_unicode_presentation_matrix_contract() {
         }
 
         match presentation {
-            "austere" => {
-                assert!(
-                    plain.contains("Usage:\n  osp [OPTIONS] [COMMAND]"),
-                    "austere help should stay borderless for {color}/{unicode}: {plain:?}"
-                );
-                assert!(
-                    !output.contains("\x1b[31m"),
-                    "austere help should not use border color for {color}/{unicode}: {output:?}"
-                );
-            }
-            _ => {
+            "expressive" => {
                 if color == "always" && unicode == "always" {
                     assert!(
                         output.contains("\x1b[31m─ "),
@@ -77,6 +67,28 @@ fn help_color_unicode_presentation_matrix_contract() {
                     );
                 }
             }
+            "compact" | "austere" => {
+                assert!(
+                    plain.contains("Usage: osp [OPTIONS] [COMMAND]"),
+                    "{presentation} help should stay clap-like for {color}/{unicode}: {plain:?}"
+                );
+                assert!(
+                    !plain.contains("─ Usage") && !plain.contains("- Usage"),
+                    "{presentation} help should not render ruled section chrome for {color}/{unicode}: {plain:?}"
+                );
+                if color == "always" {
+                    assert!(
+                        output.contains("\x1b[33mplugins\x1b[0m"),
+                        "missing command key color for {presentation}/{unicode}: {output:?}"
+                    );
+                } else {
+                    assert!(
+                        !output.contains("\x1b["),
+                        "unexpected ANSI for {presentation}/{color}/{unicode}: {output:?}"
+                    );
+                }
+            }
+            _ => unreachable!("unknown presentation: {presentation}"),
         }
     }
 

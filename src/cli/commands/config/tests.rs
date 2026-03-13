@@ -30,10 +30,7 @@ fn build_resolved_config(defaults: ConfigLayer, terminal: TerminalKind) -> &'sta
 }
 
 fn test_ui_state(format: OutputFormat) -> UiState {
-    UiState::builder(RenderSettings::test_plain(format))
-        .with_message_verbosity(MessageLevel::Success)
-        .with_debug_verbosity(0)
-        .build()
+    UiState::new(RenderSettings::test_plain(format), MessageLevel::Success, 0)
 }
 
 fn read_context(terminal: TerminalKind) -> ConfigReadContext<'static> {
@@ -44,6 +41,7 @@ fn read_context(terminal: TerminalKind) -> ConfigReadContext<'static> {
     let ui = Box::leak(Box::new(test_ui_state(OutputFormat::Table)));
     let themes = Box::leak(Box::new(ThemeCatalog::default()));
     let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
+    let product_defaults = Box::leak(Box::new(ConfigLayer::default()));
 
     ConfigReadContext {
         context,
@@ -51,6 +49,7 @@ fn read_context(terminal: TerminalKind) -> ConfigReadContext<'static> {
         ui,
         themes,
         config_overrides,
+        product_defaults,
         runtime_load: RuntimeLoadOptions::default(),
     }
 }
@@ -72,6 +71,7 @@ fn read_context_with_defaults(
     let ui = Box::leak(Box::new(test_ui_state(OutputFormat::Table)));
     let themes = Box::leak(Box::new(ThemeCatalog::default()));
     let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
+    let product_defaults = Box::leak(Box::new(ConfigLayer::default()));
 
     ConfigReadContext {
         context,
@@ -79,6 +79,7 @@ fn read_context_with_defaults(
         ui,
         themes,
         config_overrides,
+        product_defaults,
         runtime_load: RuntimeLoadOptions::default(),
     }
 }
@@ -98,6 +99,7 @@ fn command_context_with_format(
     let ui = Box::leak(Box::new(test_ui_state(format)));
     let themes = Box::leak(Box::new(ThemeCatalog::default()));
     let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
+    let product_defaults = Box::leak(Box::new(ConfigLayer::default()));
 
     ConfigCommandContext {
         context,
@@ -105,6 +107,7 @@ fn command_context_with_format(
         ui,
         themes,
         config_overrides,
+        product_defaults,
         runtime_load: RuntimeLoadOptions::default(),
     }
 }

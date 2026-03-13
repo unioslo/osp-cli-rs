@@ -2,12 +2,15 @@ use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
 use crate::core::output_model::{OutputResult, RenderRecommendation};
 use crate::core::plugin::{ResponseMessageLevelV1, ResponseV1};
-use crate::dsl::apply_output_pipeline_with_mode;
+use crate::dsl::apply_output_pipeline;
 use crate::guide::GuideView;
 use crate::ui::clipboard::ClipboardService;
 use crate::ui::document::{Block, Document, JsonBlock, LineBlock, LinePart};
 use crate::ui::messages::{MessageBuffer, MessageLevel};
-use crate::ui::{copy_output_to_clipboard, render_document, render_structured_output};
+use crate::ui::{
+    RenderSettings, copy_output_to_clipboard, render_document, render_guide_payload,
+    render_structured_output,
+};
 use miette::Result;
 
 use crate::app::UiState;
@@ -22,8 +25,16 @@ pub(crate) enum ReplCommandOutput {
         output: OutputResult,
         format_hint: Option<OutputFormat>,
     },
+    Guide(GuideCommandOutput),
     Document(Document),
     Text(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct GuideCommandOutput {
+    pub(crate) guide: GuideView,
+    pub(crate) output: OutputResult,
+    pub(crate) format_hint: Option<OutputFormat>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,13 +109,24 @@ impl CliCommandResult {
 
     pub(crate) fn guide(guide: impl Into<GuideView>) -> Self {
         let guide = guide.into();
+        let output = guide.to_output_result();
+        Self::guide_with_output(guide, output, None)
+    }
+
+    pub(crate) fn guide_with_output(
+        guide: impl Into<GuideView>,
+        output: OutputResult,
+        format_hint: Option<OutputFormat>,
+    ) -> Self {
+        let guide = guide.into();
         Self {
             exit_code: 0,
             messages: MessageBuffer::default(),
-            output: Some(ReplCommandOutput::Output {
-                output: guide.to_output_result(),
-                format_hint: None,
-            }),
+            output: Some(ReplCommandOutput::Guide(GuideCommandOutput {
+                guide,
+                output,
+                format_hint,
+            })),
             stderr_text: None,
             failure_report: None,
         }
@@ -205,6 +227,29 @@ pub(crate) fn maybe_copy_output_with_runtime(
     }
 }
 
+pub(crate) fn guide_prefers_semantic_rendering(
+    guide: &GuideView,
+    settings: &RenderSettings,
+) -> bool {
+    matches!(
+        crate::ui::format::resolve_output_format(&guide.to_output_result(), settings),
+        OutputFormat::Guide
+    )
+}
+
+pub(crate) fn render_guide_or_structured_output(
+    config: &ResolvedConfig,
+    settings: &RenderSettings,
+    guide: &GuideView,
+    output: &OutputResult,
+) -> String {
+    if guide_prefers_semantic_rendering(guide, settings) {
+        return render_guide_payload(config, settings, guide);
+    }
+
+    render_structured_output(config, settings, output)
+}
+
 pub(crate) fn prepare_plugin_response(
     response: ResponseV1,
     stages: &[String],
@@ -253,7 +298,7 @@ pub(crate) fn apply_output_stages(
         // This is the central fan-in for staged structured output. Keep all
         // callers on the canonical DSL entrypoint so semantic/output policy
         // stays consistent across CLI, REPL, and plugin flows.
-        output = apply_output_pipeline_with_mode(output, stages)?;
+        output = apply_output_pipeline(output, stages)?;
         // Once a DSL pipeline runs, producer-side format hints stop being an
         // out-of-band override. Any surviving recommendation now lives on the
         // transformed output metadata itself.
@@ -337,6 +382,17 @@ fn render_cli_output(
                 &output,
             ));
             maybe_copy_output_with_runtime(runtime, &output, sink);
+        }
+        ReplCommandOutput::Guide(guide) => {
+            let effective =
+                resolve_render_settings_with_hint(&runtime.ui().render_settings, guide.format_hint);
+            sink.write_stdout(&render_guide_or_structured_output(
+                runtime.config(),
+                &effective,
+                &guide.guide,
+                &guide.output,
+            ));
+            maybe_copy_output_with_runtime(runtime, &guide.output, sink);
         }
         ReplCommandOutput::Document(document) => {
             sink.write_stdout(&render_document(&document, &runtime.ui().render_settings));

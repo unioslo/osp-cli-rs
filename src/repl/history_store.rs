@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 /// Configuration for REPL history persistence, visibility, and shell scoping.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+#[must_use]
 pub struct HistoryConfig {
     /// Path to the history file, when persistence is enabled.
     pub path: Option<PathBuf>,
@@ -109,6 +110,7 @@ impl HistoryConfig {
 
 /// Builder for [`HistoryConfig`].
 #[derive(Debug, Clone, Default)]
+#[must_use]
 pub struct HistoryConfigBuilder {
     config: HistoryConfig,
 }
@@ -122,36 +124,48 @@ impl HistoryConfigBuilder {
     }
 
     /// Replaces the optional persistence path.
+    ///
+    /// If omitted, history persistence stays in-memory only.
     pub fn with_path(mut self, path: Option<PathBuf>) -> Self {
         self.config.path = path;
         self
     }
 
     /// Replaces the retained-entry limit.
+    ///
+    /// If omitted, the builder keeps the default retained-entry limit.
     pub fn with_max_entries(mut self, max_entries: usize) -> Self {
         self.config.max_entries = max_entries;
         self
     }
 
     /// Enables or disables history capture.
+    ///
+    /// If omitted, history capture stays enabled.
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.config.enabled = enabled;
         self
     }
 
     /// Enables or disables duplicate collapsing.
+    ///
+    /// If omitted, duplicate collapsing stays enabled.
     pub fn with_dedupe(mut self, dedupe: bool) -> Self {
         self.config.dedupe = dedupe;
         self
     }
 
     /// Enables or disables profile scoping.
+    ///
+    /// If omitted, history remains profile-scoped.
     pub fn with_profile_scoped(mut self, profile_scoped: bool) -> Self {
         self.config.profile_scoped = profile_scoped;
         self
     }
 
     /// Replaces the excluded command patterns.
+    ///
+    /// If omitted, no exclusion patterns are applied.
     pub fn with_exclude_patterns<I, S>(mut self, exclude_patterns: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -162,18 +176,24 @@ impl HistoryConfigBuilder {
     }
 
     /// Replaces the active profile used for scoping.
+    ///
+    /// If omitted, history entries are not tagged with a profile identifier.
     pub fn with_profile(mut self, profile: Option<String>) -> Self {
         self.config.profile = profile;
         self
     }
 
     /// Replaces the active terminal label recorded on entries.
+    ///
+    /// If omitted, saved entries carry no terminal label.
     pub fn with_terminal(mut self, terminal: Option<String>) -> Self {
         self.config.terminal = terminal;
         self
     }
 
     /// Replaces the shared shell context used for scoped history views.
+    ///
+    /// If omitted, the builder keeps [`HistoryShellContext::default`].
     pub fn with_shell_context(mut self, shell_context: HistoryShellContext) -> Self {
         self.config.shell_context = shell_context;
         self
@@ -263,10 +283,13 @@ pub struct SharedHistory {
 
 impl SharedHistory {
     /// Creates a shared history store from the provided configuration.
-    pub fn new(config: HistoryConfig) -> Result<Self> {
-        Ok(Self {
-            inner: Arc::new(Mutex::new(OspHistoryStore::new(config)?)),
-        })
+    ///
+    /// Persisted history loading is best-effort: unreadable files and malformed
+    /// lines are ignored during initialization.
+    pub fn new(config: HistoryConfig) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(OspHistoryStore::new(config))),
+        }
     }
 
     /// Returns whether history capture is enabled for the current config.
@@ -320,6 +343,11 @@ impl SharedHistory {
     /// the active scope.
     ///
     /// Returns the number of removed entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the history lock is poisoned or when persisting
+    /// the updated history file fails.
     pub fn prune(&self, keep: usize) -> Result<usize> {
         let mut guard = self
             .inner
@@ -332,6 +360,11 @@ impl SharedHistory {
     /// at most `keep`.
     ///
     /// Returns the number of removed entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the history lock is poisoned or when persisting
+    /// the updated history file fails.
     pub fn prune_for(&self, keep: usize, shell_prefix: Option<&str>) -> Result<usize> {
         let mut guard = self
             .inner
@@ -343,6 +376,11 @@ impl SharedHistory {
     /// Clears all entries visible in the current scope.
     ///
     /// Returns the number of removed entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the history lock is poisoned or when persisting
+    /// the updated history file fails.
     pub fn clear_scoped(&self) -> Result<usize> {
         let mut guard = self
             .inner
@@ -354,6 +392,11 @@ impl SharedHistory {
     /// Clears all entries visible to the provided shell prefix.
     ///
     /// Returns the number of removed entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the history lock is poisoned or when persisting
+    /// the updated history file fails.
     pub fn clear_for(&self, shell_prefix: Option<&str>) -> Result<usize> {
         let mut guard = self
             .inner
@@ -362,7 +405,13 @@ impl SharedHistory {
         guard.clear_for(shell_prefix)
     }
 
-    /// Saves one command line through the underlying `reedline::History` implementation.
+    /// Saves one command line through the underlying `reedline::History`
+    /// implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the history lock is poisoned or when the
+    /// underlying history backend rejects or fails to persist the item.
     pub fn save_command_line(&self, command_line: &str) -> Result<()> {
         let mut guard = self
             .inner
@@ -387,7 +436,7 @@ pub(crate) struct OspHistoryStore {
 impl OspHistoryStore {
     /// Creates a history store and eagerly loads persisted records when
     /// persistence is enabled.
-    pub fn new(config: HistoryConfig) -> Result<Self> {
+    pub fn new(config: HistoryConfig) -> Self {
         let config = config.normalized();
         let mut records = Vec::new();
         if config.persist_enabled()
@@ -397,7 +446,7 @@ impl OspHistoryStore {
         }
         let mut store = Self { config, records };
         store.trim_to_capacity();
-        Ok(store)
+        store
     }
 
     /// Returns whether history operations are active for this store.

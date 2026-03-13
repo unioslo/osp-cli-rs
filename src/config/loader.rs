@@ -57,6 +57,7 @@ impl ConfigLoader for StaticLayerLoader {
 
 /// Loader for ordinary TOML config files.
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct TomlFileLoader {
     path: PathBuf,
     missing_ok: bool,
@@ -187,6 +188,7 @@ impl ConfigLoader for EnvVarLoader {
 
 /// Loader for TOML secrets files whose values are marked secret.
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct SecretsTomlLoader {
     path: PathBuf,
     missing_ok: bool,
@@ -334,6 +336,7 @@ impl ConfigLoader for EnvSecretsLoader {
 
 /// Loader that merges multiple loaders in the order they are added.
 #[derive(Default)]
+#[must_use]
 pub struct ChainedLoader {
     loaders: Vec<Box<dyn ConfigLoader>>,
 }
@@ -398,6 +401,7 @@ pub struct LoadedLayers {
 }
 
 /// Builder for the standard multi-source config loading pipeline.
+#[must_use]
 pub struct LoaderPipeline {
     defaults: Box<dyn ConfigLoader>,
     presentation: Option<Box<dyn ConfigLoader>>,

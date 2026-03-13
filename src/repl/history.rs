@@ -414,7 +414,6 @@ mod tests {
                 .with_shell_context(crate::repl::HistoryShellContext::default())
                 .build(),
         )
-        .expect("history should initialize")
     }
 
     fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {

@@ -61,6 +61,12 @@ fn guide_view_section_lowering_preserves_custom_sections_notes_and_scalar_sectio
     );
     view.sections
         .push(GuideSection::new("Pipes", GuideSectionKind::Custom).data(json!(["F", "P", "S"])));
+    view.sections.push(
+        GuideSection::new("Doctor", GuideSectionKind::Custom).data(json!({
+            "theme_issues": [],
+            "secrets_permissions_mode": null,
+        })),
+    );
     view.notes
         .push("Use bare help for the REPL overview.".to_string());
     view.epilogue.push("More details later.".to_string());
@@ -118,6 +124,22 @@ fn guide_view_section_lowering_preserves_custom_sections_notes_and_scalar_sectio
         list.layout,
         crate::ui::document::ValueLayout::AutoGrid
     ));
+
+    let doctor = model
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            BlockModel::Section(section) if section.title.as_deref() == Some("Doctor") => {
+                Some(section)
+            }
+            _ => None,
+        })
+        .expect("expected doctor section");
+    let BlockModel::KeyValue(rows) = &doctor.blocks[0] else {
+        panic!("expected doctor data to lower to key/value rows");
+    };
+    assert_eq!(rows.rows[0].value, "[]");
+    assert_eq!(rows.rows[1].value, "");
 
     let document = DocumentModel::from_guide_view(&GuideView {
         notes: vec!["Use bare help for the REPL overview.".to_string()],

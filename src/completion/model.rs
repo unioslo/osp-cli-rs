@@ -116,6 +116,7 @@ pub enum ContextScope {
 /// This separates the inserted value from the optional display label so menu
 /// UIs can stay human-friendly without changing what lands in the buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
 pub struct SuggestionEntry {
     /// Text inserted into the buffer if this suggestion is accepted.
     pub value: String,
@@ -139,18 +140,24 @@ impl SuggestionEntry {
     }
 
     /// Sets the right-column metadata text.
+    ///
+    /// If omitted, menu-style UIs show no metadata for this suggestion.
     pub fn meta(mut self, meta: impl Into<String>) -> Self {
         self.meta = Some(meta.into());
         self
     }
 
     /// Sets the human-friendly label shown in menus.
+    ///
+    /// If omitted, UIs can fall back to the inserted value.
     pub fn display(mut self, display: impl Into<String>) -> Self {
         self.display = Some(display.into());
         self
     }
 
     /// Sets the hidden sort key for this suggestion.
+    ///
+    /// If omitted, the suggestion carries no explicit sort hint.
     pub fn sort(mut self, sort: impl Into<String>) -> Self {
         self.sort = Some(sort.into());
         self
@@ -215,6 +222,7 @@ pub struct FlagHints {
 /// says what a command slot expects once command-path resolution has reached the
 /// owning node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use]
 pub struct ArgNode {
     /// Argument name shown in completion UIs.
     pub name: Option<String>,
@@ -263,24 +271,32 @@ impl ArgNode {
     }
 
     /// Sets the display tooltip for this argument.
+    ///
+    /// If omitted, completion UIs show no description for this argument.
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
     /// Marks this argument as accepting multiple values.
+    ///
+    /// If omitted, the argument accepts a single value.
     pub fn multi(mut self) -> Self {
         self.multi = true;
         self
     }
 
     /// Sets the semantic value type for this argument.
+    ///
+    /// If omitted, the argument carries no special value-type hint.
     pub fn value_type(mut self, value_type: ValueType) -> Self {
         self.value_type = Some(value_type);
         self
     }
 
     /// Replaces the suggestion list for this argument.
+    ///
+    /// If omitted, the argument contributes no direct value suggestions.
     pub fn suggestions(mut self, suggestions: impl IntoIterator<Item = SuggestionEntry>) -> Self {
         self.suggestions = suggestions.into_iter().collect();
         self
@@ -293,6 +309,7 @@ impl ArgNode {
 /// later completion. `context_only` flags are the bridge for options that shape
 /// suggestion scope even when the cursor is not currently editing that flag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use]
 pub struct FlagNode {
     /// Optional description shown alongside the flag.
     pub tooltip: Option<String>,
@@ -329,24 +346,34 @@ impl FlagNode {
     }
 
     /// Sets the display tooltip for this flag.
+    ///
+    /// If omitted, completion UIs show no description for this flag.
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
     /// Marks this flag as taking no value.
+    ///
+    /// If omitted, the flag is treated as value-taking when the surrounding
+    /// completion metadata asks for values.
     pub fn flag_only(mut self) -> Self {
         self.flag_only = true;
         self
     }
 
     /// Marks this flag as repeatable.
+    ///
+    /// If omitted, the flag is treated as non-repeatable.
     pub fn multi(mut self) -> Self {
         self.multi = true;
         self
     }
 
     /// Marks this flag as context-only within the given scope.
+    ///
+    /// If omitted, later occurrences of the flag are not merged into cursor
+    /// context unless the user is actively editing that flag.
     pub fn context_only(mut self, scope: ContextScope) -> Self {
         self.context_only = true;
         self.context_scope = scope;
@@ -354,12 +381,16 @@ impl FlagNode {
     }
 
     /// Sets the semantic value type for this flag.
+    ///
+    /// If omitted, the flag carries no special value-type hint.
     pub fn value_type(mut self, value_type: ValueType) -> Self {
         self.value_type = Some(value_type);
         self
     }
 
     /// Replaces the suggestion list for this flag value.
+    ///
+    /// If omitted, the flag contributes no direct generic value suggestions.
     pub fn suggestions(mut self, suggestions: impl IntoIterator<Item = SuggestionEntry>) -> Self {
         self.suggestions = suggestions.into_iter().collect();
         self
@@ -372,6 +403,7 @@ impl FlagNode {
 /// subcommands, flags, positional arguments, and any hidden defaults inherited
 /// through aliases or shell scope.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use]
 pub struct CompletionNode {
     /// Optional description shown alongside the node.
     pub tooltip: Option<String>,

@@ -13,7 +13,7 @@
 //! Contract:
 //!
 //! - this file owns the public facade and shared plugin DTOs
-//! - catalog building and provider preference logic live in neighboring
+//! - catalog building and provider selection logic live in neighboring
 //!   modules
 //! - subprocess execution and timeout handling belong in `plugin::dispatch`
 //!
@@ -53,11 +53,11 @@ pub const DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS: usize = 10_000;
 pub enum PluginSource {
     /// Loaded from an explicit search directory supplied by the caller.
     Explicit,
-    /// Loaded from a path specified through an environment variable.
+    /// Loaded from a path listed in the `OSP_PLUGIN_PATH` environment variable.
     Env,
     /// Loaded from the CLI's bundled plugin set.
     Bundled,
-    /// Loaded from the persisted user configuration.
+    /// Loaded from the per-user plugin directory under the configured config root.
     UserConfig,
     /// Loaded by scanning the process `PATH`.
     Path,
@@ -112,11 +112,15 @@ pub struct DiscoveredPlugin {
     pub command_specs: Vec<CommandSpec>,
     /// Discovery or validation issue associated with this plugin.
     pub issue: Option<String>,
-    /// Whether the plugin should be enabled by default.
+    /// Whether commands from this plugin default to enabled when no explicit
+    /// command-state preference overrides them.
     pub default_enabled: bool,
 }
 
 /// Reduced plugin view for listing, doctor, and status surfaces.
+///
+/// `enabled` reflects command-state filtering, while `healthy` reflects
+/// discovery-time validation and describe-cache status.
 #[derive(Debug, Clone)]
 pub struct PluginSummary {
     /// Stable provider identifier returned by the plugin.
@@ -129,7 +133,8 @@ pub struct PluginSummary {
     pub source: PluginSource,
     /// Top-level commands exported by the plugin.
     pub commands: Vec<String>,
-    /// Whether the plugin is enabled for dispatch.
+    /// Whether at least one exported command remains enabled after
+    /// command-state filtering.
     pub enabled: bool,
     /// Whether the plugin passed discovery-time validation.
     pub healthy: bool,
@@ -142,7 +147,7 @@ pub struct PluginSummary {
 pub struct CommandConflict {
     /// Conflicting command name.
     pub command: String,
-    /// Plugin identifiers that provide `command`.
+    /// Provider labels that provide `command`, such as `alpha (explicit)`.
     pub providers: Vec<String>,
 }
 
@@ -151,7 +156,7 @@ pub struct CommandConflict {
 pub struct DoctorReport {
     /// Summary entry for each discovered plugin.
     pub plugins: Vec<PluginSummary>,
-    /// Commands that are provided by more than one plugin.
+    /// Commands that are provided by more than one provider label.
     pub conflicts: Vec<CommandConflict>,
 }
 
@@ -171,15 +176,16 @@ pub struct CommandCatalogEntry {
     pub subcommands: Vec<String>,
     /// Shell completion metadata for this command.
     pub completion: CommandSpec,
-    /// Selected provider when dispatch has been resolved.
+    /// Selected provider identifier when dispatch has been resolved.
     pub provider: Option<String>,
-    /// All providers that export this command.
+    /// Provider labels for every provider that exports this command.
     pub providers: Vec<String>,
     /// Whether more than one provider exports this command.
     pub conflicted: bool,
     /// Whether the caller must choose a provider before dispatch.
     pub requires_selection: bool,
-    /// Whether the provider was selected explicitly by the caller.
+    /// Whether the provider was selected by explicit preference rather than by
+    /// unique-provider resolution.
     pub selected_explicitly: bool,
     /// Discovery source for the selected provider, if resolved.
     pub source: Option<PluginSource>,
@@ -221,9 +227,14 @@ impl CommandCatalogEntry {
 }
 
 /// Raw stdout/stderr captured from a plugin subprocess invocation.
+///
+/// This is the payload returned by passthrough dispatch APIs. A non-zero plugin
+/// exit code is preserved in `status_code` instead of being converted into a
+/// semantic response or validation error.
 #[derive(Debug, Clone)]
 pub struct RawPluginOutput {
-    /// Process exit status code.
+    /// Process exit status code, or `1` when the child ended without a
+    /// conventional exit code.
     pub status_code: i32,
     /// Captured standard output.
     pub stdout: String,
@@ -234,6 +245,7 @@ pub struct RawPluginOutput {
 /// Per-dispatch runtime hints and environment overrides for plugin execution.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
+#[must_use]
 pub struct PluginDispatchContext {
     /// Runtime hints serialized into plugin requests.
     pub runtime_hints: RuntimeHints,
@@ -279,6 +291,8 @@ impl PluginDispatchContext {
     }
 
     /// Replaces the environment injected into every plugin process.
+    ///
+    /// Defaults to no shared environment overrides when omitted.
     pub fn with_shared_env<I, K, V>(mut self, shared_env: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -293,12 +307,20 @@ impl PluginDispatchContext {
     }
 
     /// Replaces the environment injected for specific plugins.
+    ///
+    /// Defaults to no plugin-specific environment overrides when omitted.
+    /// Matching entries are appended after `shared_env` for the selected
+    /// plugin.
     pub fn with_plugin_env(mut self, plugin_env: HashMap<String, Vec<(String, String)>>) -> Self {
         self.plugin_env = plugin_env;
         self
     }
 
     /// Replaces the optional forced provider identifier.
+    ///
+    /// Defaults to the manager's normal provider-resolution rules when omitted.
+    /// Use this for one-shot dispatch overrides without mutating manager-local
+    /// provider selections.
     pub fn with_provider_override(mut self, provider_override: Option<String>) -> Self {
         self.provider_override = provider_override;
         self
@@ -322,6 +344,9 @@ impl PluginDispatchContext {
 }
 
 /// Errors returned when selecting or invoking a plugin command.
+///
+/// Variants that list `providers` use provider labels as rendered in help and
+/// diagnostics, not bare plugin ids.
 #[derive(Debug)]
 pub enum PluginDispatchError {
     /// No plugin provides the requested command.
@@ -333,7 +358,7 @@ pub enum PluginDispatchError {
     CommandAmbiguous {
         /// Command name requested by the caller.
         command: String,
-        /// Plugin identifiers that provide `command`.
+        /// Provider labels that provide `command`.
         providers: Vec<String>,
     },
     /// The requested provider exists, but not for the requested command.
@@ -342,7 +367,7 @@ pub enum PluginDispatchError {
         command: String,
         /// Provider identifier requested by the caller.
         requested_provider: String,
-        /// Plugin identifiers that provide `command`.
+        /// Provider labels that provide `command`.
         providers: Vec<String>,
     },
     /// Spawning or waiting for the plugin process failed.
@@ -476,16 +501,17 @@ impl StdError for PluginDispatchError {
 /// Coordinates plugin discovery, cached metadata, and dispatch settings.
 ///
 /// This is the main host-side facade for plugin integration. A typical caller
-/// constructs one manager, points it at explicit roots and persisted state
-/// directories, then asks it for one of three things:
+/// constructs one manager, points it at explicit roots plus optional config and
+/// cache roots, then asks it for one of three things:
 ///
 /// - plugin inventory via [`PluginManager::list_plugins`]
 /// - merged command metadata via [`PluginManager::command_catalog`] or
 ///   [`PluginManager::command_policy_registry`]
-/// - dispatch-time configuration such as preferred providers
+/// - dispatch-time configuration such as manager-local provider selections
 ///
 /// If you are implementing the plugin executable itself rather than the host,
 /// start in [`crate::core::plugin`] instead of here.
+#[must_use]
 pub struct PluginManager {
     pub(crate) explicit_dirs: Vec<PathBuf>,
     pub(crate) discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
@@ -528,8 +554,13 @@ impl PluginManager {
         &self.explicit_dirs
     }
 
-    /// Sets config and cache roots used for persisted plugin metadata and
-    /// preferences.
+    /// Sets config and cache roots used for user plugin discovery and describe
+    /// cache files.
+    ///
+    /// The config root feeds the per-user plugin directory lookup. The cache
+    /// root feeds the on-disk describe cache. This does not make command
+    /// provider selections persistent by itself; those remain manager-local
+    /// in-memory state.
     ///
     /// # Examples
     ///
@@ -551,12 +582,13 @@ impl PluginManager {
         self
     }
 
-    /// Returns the configured config root used for persisted plugin metadata.
+    /// Returns the configured config root used to resolve the user plugin
+    /// directory.
     pub fn config_root(&self) -> Option<&std::path::Path> {
         self.config_root.as_deref()
     }
 
-    /// Returns the configured cache root used for persisted plugin state.
+    /// Returns the configured cache root used for the describe metadata cache.
     pub fn cache_root(&self) -> Option<&std::path::Path> {
         self.cache_root.as_deref()
     }
@@ -589,6 +621,14 @@ impl PluginManager {
 
     /// Enables or disables fallback discovery through the process `PATH`.
     ///
+    /// PATH discovery is passive on browse/read surfaces. A PATH-discovered
+    /// plugin will not be executed for `--describe` during passive listing or
+    /// catalog building, so command metadata is unavailable there until the
+    /// first command dispatch to that plugin. Dispatching a command triggers
+    /// `--describe` as a cache miss and writes the result to the on-disk
+    /// describe cache; subsequent browse and catalog calls will then see the
+    /// full command metadata.
+    ///
     /// # Examples
     ///
     /// ```
@@ -617,58 +657,158 @@ impl PluginManager {
     }
 
     /// Lists discovered plugins with health, command, and enablement status.
-    pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
-        self.with_passive_view(|view| Ok(list_plugins(view)))
+    ///
+    /// When PATH discovery is enabled, PATH-discovered plugins can appear here
+    /// before their command metadata is available because passive discovery
+    /// does not execute them for `--describe`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let plugins = PluginManager::new(Vec::new()).list_plugins();
+    ///
+    /// assert!(plugins.is_empty());
+    /// ```
+    pub fn list_plugins(&self) -> Vec<PluginSummary> {
+        self.with_passive_view(list_plugins)
     }
 
     /// Builds the effective command catalog after provider resolution and
     /// health filtering.
     ///
     /// This is the host-facing "what commands exist?" view used by help,
-    /// completion, and similar browse/read surfaces.
-    pub fn command_catalog(&self) -> Result<Vec<CommandCatalogEntry>> {
+    /// completion, and similar browse/read surfaces. PATH-discovered plugins
+    /// only contribute commands here after describe metadata has been cached;
+    /// passive discovery alone is not enough.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let catalog = PluginManager::new(Vec::new()).command_catalog();
+    ///
+    /// assert!(catalog.is_empty());
+    /// ```
+    pub fn command_catalog(&self) -> Vec<CommandCatalogEntry> {
         self.with_passive_view(build_command_catalog)
     }
 
     /// Builds a command policy registry from active plugin describe metadata.
     ///
     /// Use this when plugin auth hints need to participate in the same runtime
-    /// visibility and access evaluation as native commands.
-    pub fn command_policy_registry(
-        &self,
-    ) -> Result<crate::core::command_policy::CommandPolicyRegistry> {
+    /// visibility and access evaluation as native commands. Commands that
+    /// still require provider selection are omitted until one provider is
+    /// selected explicitly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let registry = PluginManager::new(Vec::new()).command_policy_registry();
+    ///
+    /// assert!(registry.is_empty());
+    /// ```
+    pub fn command_policy_registry(&self) -> crate::core::command_policy::CommandPolicyRegistry {
         self.with_passive_view(build_command_policy_registry)
     }
 
     /// Returns completion words derived from the current plugin command catalog.
-    pub fn completion_words(&self) -> Result<Vec<String>> {
+    ///
+    /// The returned list always includes the REPL backbone words used by the
+    /// plugin/completion surface, even when no plugins are currently available.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let words = PluginManager::new(Vec::new()).completion_words();
+    ///
+    /// assert!(words.contains(&"help".to_string()));
+    /// assert!(words.contains(&"|".to_string()));
+    /// ```
+    pub fn completion_words(&self) -> Vec<String> {
         self.with_passive_view(|view| {
-            let catalog = build_command_catalog(view)?;
-            Ok(completion_words_from_catalog(&catalog))
+            let catalog = build_command_catalog(view);
+            completion_words_from_catalog(&catalog)
         })
     }
 
     /// Renders a plain-text help view for plugin commands in the REPL.
-    pub fn repl_help_text(&self) -> Result<String> {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let help = PluginManager::new(Vec::new()).repl_help_text();
+    ///
+    /// assert!(help.contains("Backbone commands: help, exit, quit"));
+    /// assert!(help.contains("No plugin commands available."));
+    /// ```
+    pub fn repl_help_text(&self) -> String {
         self.with_passive_view(|view| {
-            let catalog = build_command_catalog(view)?;
-            Ok(render_repl_help(&catalog))
+            let catalog = build_command_catalog(view);
+            render_repl_help(&catalog)
         })
     }
 
-    /// Returns the available provider labels for a command.
-    pub fn command_providers(&self, command: &str) -> Result<Vec<String>> {
-        self.with_passive_view(|view| Ok(command_provider_labels(command, view)))
+    /// Returns the available provider labels for a command after health and
+    /// enablement filtering.
+    ///
+    /// Unknown commands and commands with no currently available providers
+    /// return an empty list.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let providers = PluginManager::new(Vec::new()).command_providers("shared");
+    ///
+    /// assert!(providers.is_empty());
+    /// ```
+    pub fn command_providers(&self, command: &str) -> Vec<String> {
+        self.with_passive_view(|view| command_provider_labels(command, view))
     }
 
-    /// Returns the selected provider label when command resolution is unambiguous.
-    pub fn selected_provider_label(&self, command: &str) -> Result<Option<String>> {
-        self.with_passive_view(|view| Ok(selected_provider_label(command, view)))
+    /// Returns the selected provider label when command resolution is
+    /// unambiguous.
+    ///
+    /// Returns `None` when the command is unknown, ambiguous, or currently
+    /// unavailable after health and enablement filtering.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let provider = PluginManager::new(Vec::new()).selected_provider_label("shared");
+    ///
+    /// assert_eq!(provider, None);
+    /// ```
+    pub fn selected_provider_label(&self, command: &str) -> Option<String> {
+        self.with_passive_view(|view| selected_provider_label(command, view))
     }
 
     /// Produces a doctor report with plugin health summaries and command conflicts.
-    pub fn doctor(&self) -> Result<DoctorReport> {
-        self.with_passive_view(|view| Ok(build_doctor_report(view)))
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let report = PluginManager::new(Vec::new()).doctor();
+    ///
+    /// assert!(report.plugins.is_empty());
+    /// assert!(report.conflicts.is_empty());
+    /// ```
+    pub fn doctor(&self) -> DoctorReport {
+        self.with_passive_view(build_doctor_report)
     }
 
     pub(crate) fn validate_command(&self, command: &str) -> Result<()> {
@@ -694,8 +834,77 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Persists an explicit provider preference for a command.
-    pub fn set_preferred_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
+    /// Applies an explicit provider selection for a command on this manager.
+    ///
+    /// The selection is kept in the manager's in-memory command-preference
+    /// state and affects subsequent command resolution through this
+    /// `PluginManager` value. It is not written to disk.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(unix)] {
+    /// use osp_cli::plugin::PluginManager;
+    /// # use std::fs;
+    /// # use std::os::unix::fs::PermissionsExt;
+    /// # use std::time::{SystemTime, UNIX_EPOCH};
+    /// #
+    /// # fn write_provider_plugin(dir: &std::path::Path, plugin_id: &str) -> std::io::Result<()> {
+    /// #     let plugin_path = dir.join(format!("osp-{plugin_id}"));
+    /// #     let script = format!(
+    /// #         r#"#!/bin/sh
+    /// # PATH=/usr/bin:/bin
+    /// # if [ "$1" = "--describe" ]; then
+    /// #   cat <<'JSON'
+    /// # {{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"shared","about":"{plugin_id} plugin","args":[],"flags":{{}},"subcommands":[]}}]}}
+    /// # JSON
+    /// #   exit 0
+    /// # fi
+    /// #
+    /// # cat <<'JSON'
+    /// # {{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+    /// # JSON
+    /// # "#,
+    /// #         plugin_id = plugin_id
+    /// #     );
+    /// #     fs::write(&plugin_path, script)?;
+    /// #     let mut perms = fs::metadata(&plugin_path)?.permissions();
+    /// #     perms.set_mode(0o755);
+    /// #     fs::set_permissions(&plugin_path, perms)?;
+    /// #     Ok(())
+    /// # }
+    /// #
+    /// # let root = std::env::temp_dir().join(format!(
+    /// #     "osp-cli-doc-provider-selection-{}-{}",
+    /// #     std::process::id(),
+    /// #     SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    /// # ));
+    /// # let plugins_dir = root.join("plugins");
+    /// # fs::create_dir_all(&plugins_dir)?;
+    /// # write_provider_plugin(&plugins_dir, "alpha")?;
+    /// # write_provider_plugin(&plugins_dir, "beta")?;
+    /// #
+    /// let manager = PluginManager::new(vec![plugins_dir]);
+    ///
+    /// assert_eq!(manager.selected_provider_label("shared"), None);
+    ///
+    /// manager.select_provider("shared", "beta")?;
+    ///
+    /// assert_eq!(
+    ///     manager.selected_provider_label("shared").as_deref(),
+    ///     Some("beta (explicit)")
+    /// );
+    /// # fs::remove_dir_all(&root).ok();
+    /// # }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `command` or `plugin_id` is blank, when no
+    /// healthy provider currently exports `command`, or when `plugin_id` is
+    /// not one of the healthy providers for `command`.
+    pub fn select_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
         let command = command.trim();
         let plugin_id = plugin_id.trim();
         if command.is_empty() {
@@ -705,13 +914,29 @@ impl PluginManager {
             return Err(anyhow!("plugin id must not be empty"));
         }
 
-        self.validate_preferred_provider(command, plugin_id)?;
+        self.validate_provider_selection(command, plugin_id)?;
         self.update_command_preferences(|preferences| preferences.set_provider(command, plugin_id));
         Ok(())
     }
 
-    /// Clears any stored provider preference for a command.
-    pub fn clear_preferred_provider(&self, command: &str) -> Result<bool> {
+    /// Clears any explicit in-memory provider selection for a command.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let removed = PluginManager::new(Vec::new())
+    ///     .clear_provider_selection("shared")
+    ///     .unwrap();
+    ///
+    /// assert!(!removed);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `command` is blank.
+    pub fn clear_provider_selection(&self, command: &str) -> Result<bool> {
         let command = command.trim();
         if command.is_empty() {
             return Err(anyhow!("command must not be empty"));
@@ -724,8 +949,28 @@ impl PluginManager {
         Ok(removed)
     }
 
-    /// Verifies that a plugin is a healthy provider for a command before storing it.
-    pub fn validate_preferred_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
+    /// Verifies that a plugin is a healthy provider candidate for a command.
+    ///
+    /// This validates the command/plugin pair against the manager's current
+    /// discovery view but does not change selection state or persist anything.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::plugin::PluginManager;
+    ///
+    /// let err = PluginManager::new(Vec::new())
+    ///     .validate_provider_selection("shared", "alpha")
+    ///     .unwrap_err();
+    ///
+    /// assert!(err.to_string().contains("no healthy plugin provides command"));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no healthy provider currently exports `command`,
+    /// or when `plugin_id` is not one of the healthy providers for `command`.
+    pub fn validate_provider_selection(&self, command: &str, plugin_id: &str) -> Result<()> {
         self.with_dispatch_view(|view| {
             let available = view.healthy_providers(command);
             if available.is_empty() {

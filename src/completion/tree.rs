@@ -14,9 +14,46 @@ use crate::completion::model::{
     ArgNode, CompletionNode, CompletionTree, FlagNode, SuggestionEntry,
 };
 use crate::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
+use thiserror::Error;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Error returned when declarative completion metadata cannot be lowered into a
+/// valid immutable tree.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CompletionTreeBuildError {
+    /// Two root command specs used the same command name.
+    #[error("duplicate root command spec: {name}")]
+    DuplicateRootCommand {
+        /// Duplicate root command name.
+        name: String,
+    },
+    /// Two subcommand specs under the same parent path used the same name.
+    #[error("duplicate subcommand spec under {parent_path}: {name}")]
+    DuplicateSubcommand {
+        /// Parent command path that already contains `name`.
+        parent_path: String,
+        /// Duplicate subcommand name.
+        name: String,
+    },
+    /// Two injected `config set` key specs used the same key.
+    #[error("duplicate config set key: {key}")]
+    DuplicateConfigSetKey {
+        /// Duplicate `config set` key name.
+        key: String,
+    },
+}
+
+impl CompletionTreeBuildError {
+    fn duplicate_subcommand(parent_path: &[String], name: &str) -> Self {
+        Self::DuplicateSubcommand {
+            parent_path: parent_path.join(" "),
+            name: name.to_string(),
+        }
+    }
+}
+
 /// Declarative command description used to build a completion tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use]
 pub struct CommandSpec {
     /// Command or subcommand name.
     pub name: String,
@@ -42,48 +79,64 @@ impl CommandSpec {
     }
 
     /// Attaches the description shown alongside this command in completion UIs.
+    ///
+    /// If omitted, completion UIs show no description for this command.
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
     /// Attaches a hidden sort key used to stabilize menu ordering.
+    ///
+    /// If omitted, the command carries no explicit sort hint.
     pub fn sort(mut self, sort: impl Into<String>) -> Self {
         self.sort = Some(sort.into());
         self
     }
 
     /// Appends one positional argument definition.
+    ///
+    /// If omitted, the command contributes no positional completion metadata.
     pub fn arg(mut self, arg: ArgNode) -> Self {
         self.args.push(arg);
         self
     }
 
     /// Extends the command with positional argument definitions.
+    ///
+    /// If omitted, the command contributes no positional completion metadata.
     pub fn args(mut self, args: impl IntoIterator<Item = ArgNode>) -> Self {
         self.args.extend(args);
         self
     }
 
     /// Adds one flag definition keyed by its spelling.
+    ///
+    /// If omitted, the command contributes no flag completion metadata.
     pub fn flag(mut self, name: impl Into<String>, flag: FlagNode) -> Self {
         self.flags.insert(name.into(), flag);
         self
     }
 
     /// Extends the command with multiple flag definitions.
+    ///
+    /// If omitted, the command contributes no flag completion metadata.
     pub fn flags(mut self, flags: impl IntoIterator<Item = (String, FlagNode)>) -> Self {
         self.flags.extend(flags);
         self
     }
 
     /// Appends one nested subcommand.
+    ///
+    /// If omitted, the command contributes no nested subcommand metadata.
     pub fn subcommand(mut self, subcommand: CommandSpec) -> Self {
         self.subcommands.push(subcommand);
         self
     }
 
     /// Extends the command with nested subcommands.
+    ///
+    /// If omitted, the command contributes no nested subcommand metadata.
     pub fn subcommands(mut self, subcommands: impl IntoIterator<Item = CommandSpec>) -> Self {
         self.subcommands.extend(subcommands);
         self
@@ -103,6 +156,13 @@ impl CompletionTreeBuilder {
     /// it, augment it with plugin/provider hints, and pass it into the engine
     /// without keeping builder state alive.
     ///
+    /// # Errors
+    ///
+    /// Returns [`CompletionTreeBuildError::DuplicateRootCommand`] when `specs`
+    /// contains duplicate root command names, or
+    /// [`CompletionTreeBuildError::DuplicateSubcommand`] when any nested
+    /// subcommand list reuses a name under the same parent path.
+    ///
     /// # Examples
     ///
     /// ```
@@ -113,7 +173,8 @@ impl CompletionTreeBuilder {
     ///         .tooltip("Runtime configuration")
     ///         .subcommand(CommandSpec::new("set"))],
     ///     [("P".to_string(), "Project fields".to_string())],
-    /// );
+    /// )
+    /// .expect("tree should build");
     ///
     /// assert!(tree.root.children.contains_key("config"));
     /// assert!(tree.root.children["config"].children.contains_key("set"));
@@ -123,25 +184,30 @@ impl CompletionTreeBuilder {
         &self,
         specs: &[CommandSpec],
         pipe_verbs: impl IntoIterator<Item = (String, String)>,
-    ) -> CompletionTree {
+    ) -> Result<CompletionTree, CompletionTreeBuildError> {
         let mut root = CompletionNode::default();
         for spec in specs {
             let name = spec.name.clone();
-            assert!(
-                root.children
-                    .insert(name.clone(), Self::node_from_spec(spec))
-                    .is_none(),
-                "duplicate root command spec: {name}"
-            );
+            let node = Self::node_from_spec(spec, &[])?;
+            if root.children.insert(name.clone(), node).is_some() {
+                return Err(CompletionTreeBuildError::DuplicateRootCommand { name });
+            }
         }
 
-        CompletionTree {
+        Ok(CompletionTree {
             root,
             pipe_verbs: pipe_verbs.into_iter().collect(),
-        }
+        })
     }
 
     /// Injects `config set` key completions into an existing tree.
+    ///
+    /// This is a no-op when the tree does not contain a `config set` path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CompletionTreeBuildError::DuplicateConfigSetKey`] when `keys`
+    /// contains duplicate config-set key names.
     ///
     /// # Examples
     ///
@@ -151,14 +217,16 @@ impl CompletionTreeBuilder {
     /// let mut tree = CompletionTreeBuilder.build_from_specs(
     ///     &[CommandSpec::new("config").subcommand(CommandSpec::new("set"))],
     ///     [],
-    /// );
+    /// )
+    /// .expect("tree should build");
     /// CompletionTreeBuilder.apply_config_set_keys(
     ///     &mut tree,
     ///     [
     ///         ConfigKeySpec::new("ui.format"),
     ///         ConfigKeySpec::new("log.level"),
     ///     ],
-    /// );
+    /// )
+    /// .expect("config keys should inject");
     ///
     /// let set_node = &tree.root.children["config"].children["set"];
     /// assert!(set_node.children.contains_key("ui.format"));
@@ -169,12 +237,12 @@ impl CompletionTreeBuilder {
         &self,
         tree: &mut CompletionTree,
         keys: impl IntoIterator<Item = ConfigKeySpec>,
-    ) {
+    ) -> Result<(), CompletionTreeBuildError> {
         let Some(config_node) = tree.root.children.get_mut("config") else {
-            return;
+            return Ok(());
         };
         let Some(set_node) = config_node.children.get_mut("set") else {
-            return;
+            return Ok(());
         };
 
         for key in keys {
@@ -194,14 +262,18 @@ impl CompletionTreeBuilder {
                     },
                 );
             }
-            assert!(
-                set_node.children.insert(key_name.clone(), node).is_none(),
-                "duplicate config set key: {key_name}"
-            );
+            if set_node.children.insert(key_name.clone(), node).is_some() {
+                return Err(CompletionTreeBuildError::DuplicateConfigSetKey { key: key_name });
+            }
         }
+
+        Ok(())
     }
 
-    fn node_from_spec(spec: &CommandSpec) -> CompletionNode {
+    fn node_from_spec(
+        spec: &CommandSpec,
+        parent_path: &[String],
+    ) -> Result<CompletionNode, CompletionTreeBuildError> {
         let mut node = CompletionNode {
             tooltip: spec.tooltip.clone(),
             sort: spec.sort.clone(),
@@ -210,17 +282,17 @@ impl CompletionTreeBuilder {
             ..CompletionNode::default()
         };
 
+        let mut path = parent_path.to_vec();
+        path.push(spec.name.clone());
         for subcommand in &spec.subcommands {
             let name = subcommand.name.clone();
-            assert!(
-                node.children
-                    .insert(name.clone(), Self::node_from_spec(subcommand))
-                    .is_none(),
-                "duplicate subcommand spec: {name}"
-            );
+            let child = Self::node_from_spec(subcommand, &path)?;
+            if node.children.insert(name.clone(), child).is_some() {
+                return Err(CompletionTreeBuildError::duplicate_subcommand(&path, &name));
+            }
         }
 
-        node
+        Ok(node)
     }
 }
 
@@ -313,8 +385,9 @@ fn to_completion_value_type(value_kind: Option<ValueKind>) -> Option<crate::comp
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Declarative `config set` key metadata used for completion nodes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use]
 pub struct ConfigKeySpec {
     /// Config key name completed below `config set`.
     pub key: String,
@@ -334,12 +407,16 @@ impl ConfigKeySpec {
     }
 
     /// Sets the display tooltip for this config key.
+    ///
+    /// If omitted, completion UIs show no description for the key.
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
     /// Replaces the suggested values for this config key.
+    ///
+    /// If omitted, the key contributes no value suggestions.
     pub fn value_suggestions(
         mut self,
         suggestions: impl IntoIterator<Item = SuggestionEntry>,
@@ -354,34 +431,74 @@ mod tests {
     use crate::completion::model::CompletionTree;
     use crate::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
 
-    use super::{CommandSpec, CompletionTreeBuilder, ConfigKeySpec, command_spec_from_command_def};
+    use super::{
+        CommandSpec, CompletionTreeBuildError, CompletionTreeBuilder, ConfigKeySpec,
+        command_spec_from_command_def,
+    };
 
     fn build_tree() -> CompletionTree {
-        CompletionTreeBuilder.build_from_specs(
-            &[CommandSpec::new("config").subcommand(CommandSpec::new("set"))],
-            [("F".to_string(), "Filter".to_string())],
-        )
+        CompletionTreeBuilder
+            .build_from_specs(
+                &[CommandSpec::new("config").subcommand(CommandSpec::new("set"))],
+                [("F".to_string(), "Filter".to_string())],
+            )
+            .expect("tree should build")
     }
 
     #[test]
-    #[should_panic(expected = "duplicate root command spec")]
-    fn duplicate_root_specs_fail_fast() {
-        let _ = CompletionTreeBuilder.build_from_specs(
-            &[CommandSpec::new("config"), CommandSpec::new("config")],
-            [],
+    fn duplicate_root_specs_return_an_error() {
+        let err = CompletionTreeBuilder
+            .build_from_specs(
+                &[CommandSpec::new("config"), CommandSpec::new("config")],
+                [],
+            )
+            .expect_err("duplicate root command should fail");
+
+        assert_eq!(
+            err,
+            CompletionTreeBuildError::DuplicateRootCommand {
+                name: "config".to_string()
+            }
         );
     }
 
     #[test]
-    #[should_panic(expected = "duplicate config set key")]
-    fn duplicate_config_keys_fail_fast() {
+    fn duplicate_config_keys_return_an_error() {
         let mut tree = build_tree();
-        CompletionTreeBuilder.apply_config_set_keys(
-            &mut tree,
-            [
-                ConfigKeySpec::new("ui.format"),
-                ConfigKeySpec::new("ui.format"),
-            ],
+        let err = CompletionTreeBuilder
+            .apply_config_set_keys(
+                &mut tree,
+                [
+                    ConfigKeySpec::new("ui.format"),
+                    ConfigKeySpec::new("ui.format"),
+                ],
+            )
+            .expect_err("duplicate config key should fail");
+
+        assert_eq!(
+            err,
+            CompletionTreeBuildError::DuplicateConfigSetKey {
+                key: "ui.format".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn duplicate_subcommands_return_an_error() {
+        let err = CompletionTreeBuilder
+            .build_from_specs(
+                &[CommandSpec::new("config")
+                    .subcommands([CommandSpec::new("set"), CommandSpec::new("set")])],
+                [],
+            )
+            .expect_err("duplicate subcommand should fail");
+
+        assert_eq!(
+            err,
+            CompletionTreeBuildError::DuplicateSubcommand {
+                parent_path: "config".to_string(),
+                name: "set".to_string()
+            }
         );
     }
 

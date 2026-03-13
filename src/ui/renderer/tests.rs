@@ -366,6 +366,33 @@ fn grid_table_rendering_covers_border_style_color_unicode_and_ascii_fallbacks_un
 }
 
 #[test]
+fn guide_tables_ignore_box_chrome_and_remain_borderless_unit() {
+    let document = Document {
+        blocks: vec![Block::Table(TableBlock {
+            block_id: 1,
+            style: TableStyle::Guide,
+            border_override: None,
+            headers: vec!["uid".to_string(), "role".to_string()],
+            rows: vec![vec![json!("oistes"), json!("ops")]],
+            header_pairs: Vec::new(),
+            align: None,
+            shrink_to_fit: true,
+            depth: 0,
+        })],
+    };
+
+    let mut settings = settings(RenderBackend::Plain, false, false);
+    settings.help_table_border = crate::ui::TableBorderStyle::Square;
+
+    let rendered = render_document(&document, settings);
+
+    assert!(rendered.contains("uid"));
+    assert!(rendered.contains("oistes"));
+    assert!(!rendered.contains('+'));
+    assert!(!rendered.contains('|'));
+}
+
+#[test]
 fn ldap_user_sample_renders_as_python_style_mreg() {
     let Value::Object(row) = json!({
         "cn": "_istein S_vik",

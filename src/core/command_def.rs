@@ -27,6 +27,7 @@ use crate::core::command_policy::VisibilityMode;
 
 /// Declarative command description used for help, completion, and plugin metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[must_use]
 pub struct CommandDef {
     /// Canonical command name shown in the command path.
     pub name: String,
@@ -104,6 +105,7 @@ impl CommandPolicyDef {
 
 /// Positional argument definition for a command.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[must_use]
 pub struct ArgDef {
     /// Stable identifier for the argument.
     pub id: String,
@@ -127,6 +129,7 @@ pub struct ArgDef {
 
 /// Flag or option definition for a command.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[must_use]
 pub struct FlagDef {
     /// Stable identifier for the flag or option.
     pub id: String,
@@ -171,6 +174,7 @@ pub enum ValueKind {
 
 /// Suggested value for an argument or flag.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[must_use]
 pub struct ValueChoice {
     /// Underlying value passed to the command.
     pub value: String,
@@ -526,6 +530,23 @@ impl ValueChoice {
 #[cfg(feature = "clap")]
 impl CommandDef {
     /// Converts a `clap` command tree into a [`CommandDef`] tree.
+    ///
+    /// Only available with the `clap` cargo feature, which is enabled by
+    /// default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use clap::Command;
+    /// use osp_cli::core::command_def::CommandDef;
+    ///
+    /// let command = CommandDef::from_clap(
+    ///     Command::new("ldap").about("Directory lookups"),
+    /// );
+    ///
+    /// assert_eq!(command.name, "ldap");
+    /// assert_eq!(command.about.as_deref(), Some("Directory lookups"));
+    /// ```
     pub fn from_clap(command: clap::Command) -> Self {
         clap_command_to_def(command)
     }
