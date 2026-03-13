@@ -3,6 +3,7 @@ use anyhow::Result;
 use clap::Command;
 use osp_cli::App;
 use osp_cli::app::BufferedUiSink;
+use osp_cli::config::ConfigLayer;
 use osp_cli::core::plugin::{PLUGIN_PROTOCOL_V1, ResponseMetaV1, ResponseV1};
 use osp_cli::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
 use serde_json::json;
@@ -64,6 +65,40 @@ impl NativeCommand for NativeProbeCommand {
 
 fn native_probe_registry() -> NativeCommandRegistry {
     NativeCommandRegistry::new().with_command(NativeProbeCommand)
+}
+
+struct SiteStatusCommand;
+
+impl NativeCommand for SiteStatusCommand {
+    fn command(&self) -> Command {
+        Command::new("site-status").about("Show wrapper defaults from resolved config")
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        context: &NativeCommandContext<'_>,
+    ) -> Result<NativeCommandOutcome> {
+        Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            ok: true,
+            data: json!([{
+                "enabled": context.config.get_bool("extensions.site.enabled").unwrap_or(false),
+                "banner": context.config.get_string("extensions.site.banner"),
+            }]),
+            error: None,
+            messages: Vec::new(),
+            meta: ResponseMetaV1 {
+                format_hint: Some("json".to_string()),
+                columns: Some(vec!["enabled".to_string(), "banner".to_string()]),
+                column_align: Vec::new(),
+            },
+        })))
+    }
+}
+
+fn site_status_registry() -> NativeCommandRegistry {
+    NativeCommandRegistry::new().with_command(SiteStatusCommand)
 }
 
 #[cfg(unix)]
@@ -128,6 +163,61 @@ fn app_host_surfaces_native_commands_in_help_and_dispatch() {
         .expect("native command output should be row array");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["active_profile"], "default");
+}
+
+#[test]
+fn app_value_api_layers_product_defaults_and_process_style_failures() {
+    let mut product_defaults = ConfigLayer::default();
+    product_defaults.set("extensions.site.enabled", true);
+    product_defaults.set_for_terminal("cli", "extensions.site.banner", "cli-wrapper");
+
+    let app = App::new()
+        .with_native_commands(site_status_registry())
+        .with_product_defaults(product_defaults);
+
+    assert_eq!(
+        app.run_process(["osp", "--no-env", "--no-config-file", "--help"]),
+        0
+    );
+
+    let mut status_sink = BufferedUiSink::default();
+    let status_exit = app.run_process_with_sink(
+        [
+            "osp",
+            "--json",
+            "--no-env",
+            "--no-config-file",
+            "site-status",
+        ],
+        &mut status_sink,
+    );
+    assert_eq!(status_exit, 0);
+    let payload: serde_json::Value =
+        serde_json::from_str(&status_sink.stdout).expect("site status stdout should be json");
+    let rows = payload
+        .as_array()
+        .expect("site status output should be a row array");
+    assert_eq!(rows[0]["enabled"], true);
+    assert_eq!(rows[0]["banner"], "cli-wrapper");
+
+    let mut invalid_sink = BufferedUiSink::default();
+    let invalid_exit = app.run_process_with_sink(
+        [
+            "osp",
+            "--no-env",
+            "--no-config-file",
+            "--quiet",
+            "--definitely-not-a-flag",
+        ],
+        &mut invalid_sink,
+    );
+    assert_ne!(invalid_exit, 0);
+    assert!(invalid_sink.stdout.is_empty());
+    assert!(!invalid_sink.stderr.is_empty());
+    assert!(
+        invalid_sink.stderr.contains("definitely-not-a-flag")
+            || invalid_sink.stderr.contains("unexpected argument")
+    );
 }
 
 #[test]

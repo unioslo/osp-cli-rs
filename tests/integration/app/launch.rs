@@ -1,7 +1,7 @@
 use crate::temp_support::make_temp_dir;
 use anyhow::Result;
 use clap::Command;
-use osp_cli::app::{AppStateBuilder, LaunchContext, RuntimeContext, TerminalKind};
+use osp_cli::app::{AppSession, AppStateBuilder, LaunchContext, RuntimeContext, TerminalKind};
 use osp_cli::config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use osp_cli::core::command_policy::{CommandPath, VisibilityMode};
 use osp_cli::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
@@ -157,4 +157,54 @@ fn app_state_builder_projects_native_registry_into_external_policy() {
         .expect("native policy should resolve");
     assert_eq!(policy.visibility, VisibilityMode::Authenticated);
     assert!(policy.feature_flags.contains("launch"));
+}
+
+#[test]
+fn app_state_builder_tracks_session_public_helpers_from_resolved_config() {
+    let config = resolved_config(&[]);
+    let mut state = AppStateBuilder::from_resolved_config(
+        RuntimeContext::new(None, TerminalKind::Repl, None),
+        config,
+    )
+    .expect("app state builder should derive host inputs")
+    .with_session(
+        AppSession::builder()
+            .with_prompt_prefix("demo")
+            .with_history_enabled(false)
+            .build(),
+    )
+    .build();
+
+    assert_eq!(state.prompt_prefix(), "demo");
+
+    let mut row = serde_json::Map::new();
+    row.insert("uid".to_string(), serde_json::json!("alice"));
+    state.record_repl_rows("ldap user alice", vec![row.clone()]);
+    assert_eq!(state.repl_cache_size(), 1);
+    let cached = state
+        .cached_repl_rows("ldap user alice")
+        .expect("cached rows should be available");
+    assert_eq!(cached[0]["uid"], "alice");
+
+    state.record_repl_failure("ldap user missing", "boom", "boom detail");
+    let failure = state
+        .last_repl_failure()
+        .expect("last failure should be recorded");
+    assert_eq!(failure.command_line, "ldap user missing");
+    assert_eq!(failure.summary, "boom");
+}
+
+#[test]
+fn app_state_builder_surfaces_invalid_theme_selection_errors() {
+    let config = resolved_config(&[("theme.name", "definitely-not-a-theme")]);
+    let err = AppStateBuilder::from_resolved_config(
+        RuntimeContext::new(None, TerminalKind::Cli, None),
+        config,
+    )
+    .err()
+    .expect("invalid theme should fail during host-input derivation");
+
+    let text = err.to_string();
+    assert!(text.contains("definitely-not-a-theme"));
+    assert!(text.contains("theme"));
 }
