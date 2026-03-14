@@ -132,7 +132,7 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
 
     public_docs = ConfidenceCheck(
         name="public-docs",
-        description="Repo-wide public function docs contract.",
+        description="Repo-wide public Rustdoc coverage and feature-gate contract.",
         command=[python, str(root / "scripts" / "public-docs.py")],
     )
     rustdoc_warnings = ConfidenceCheck(

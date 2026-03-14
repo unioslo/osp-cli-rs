@@ -2,6 +2,7 @@
     not(test),
     warn(clippy::expect_used, clippy::panic, clippy::unwrap_used)
 )]
+#![deny(missing_docs)]
 
 //! `osp-cli` is the library behind the `osp` CLI and REPL.
 //!
@@ -165,8 +166,9 @@
 //!
 //! If you are new here, start with one of these:
 //!
-//! - wrapper crate / downstream product → [`docs/EMBEDDING.md` in the repo] and
-//!   [`App::builder`]
+//! - wrapper crate / downstream product →
+//!   [embedding guide](https://github.com/unioslo/osp-cli-rs/blob/main/docs/EMBEDDING.md)
+//!   and [`App::builder`]
 //! - full in-process host → [`app`]
 //! - smaller service-only integration → [`services`]
 //! - rendering / formatting only → [`ui`]

@@ -135,6 +135,15 @@ pub enum RuntimeBootstrapMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 #[must_use = "RuntimeLoadOptions builder-style methods return an updated value"]
+/// Source-loading policy for runtime config bootstrap.
+///
+/// This is the caller-facing switchboard for how much ambient process state the
+/// normal runtime bootstrap path may consult before config resolution runs.
+///
+/// Use [`RuntimeLoadOptions::new`] for the normal host path, then selectively
+/// disable environment or config-file inputs for test or embedding scenarios.
+/// Use [`RuntimeLoadOptions::defaults_only`] when the goal is a sealed config
+/// bootstrap that ignores environment-derived defaults and path discovery.
 pub struct RuntimeLoadOptions {
     /// Whether environment-derived layers should be loaded.
     pub include_env: bool,

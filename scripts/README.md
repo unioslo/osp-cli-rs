@@ -16,7 +16,8 @@ The folder is intentionally flat for now. The current rule is simple:
 - `coverage.py`
   Owns the repository coverage gate and coverage utility commands.
 - `public-docs.py`
-  Enforces the public Rustdoc contract in staged or repo-wide mode.
+  Enforces public Rustdoc coverage and feature-gate wording in staged or
+  repo-wide mode.
 - `check-contract-env.sh`
   Guards the contract-test environment assumptions.
 

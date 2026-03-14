@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Public Rustdoc contract checks for osp-cli-rust.
 
-This script enforces two narrow rules on exported Rust functions:
+This script enforces two rules on the public library surface:
 
-- public functions and public trait methods should carry Rustdoc
-- `#[cfg(feature = "...")]` public functions should surface the agreed
-  feature-gate prose in that Rustdoc
+- exported public items must satisfy the compiler-backed `missing_docs`
+  contract
+- `#[cfg(feature = "...")]` public functions and trait methods should surface
+  the agreed feature-gate prose in that Rustdoc
 
 It exists separately from `confidence.py` because the policy has two distinct
 operating modes:
@@ -17,29 +18,32 @@ That split is intentional. The hook should judge what is actually being
 committed, not whatever happens to be in the working tree at the moment. The
 repo-wide mode exists so the same contract can be enforced outside hooks.
 
-This script deliberately uses lightweight syntax heuristics instead of a full
-Rust parser. That keeps it fast and easy to run in hooks. Do not casually expand
-it into a general documentation linter. If the team needs broader docs policy,
-that should be a separate tool with different tradeoffs.
+The compiler is the authority for the actual public-item coverage rule. This
+script deliberately keeps only the extra feature-gate wording policy on a
+lightweight syntax heuristic. Do not casually grow that heuristic into a full
+Rust visibility/export checker; when parity with the compiler matters, prefer
+running the compiler.
 
 Warnings for future edits:
 
-- preserve the staged-blob behavior; reading from the working tree weakens the
+- preserve the staged-index behavior; reading from the working tree weakens the
   hook contract
-- keep test modules out of scope so internal helper churn does not become docs
-  noise
-- prefer a small number of obvious false negatives over complicated parsing that
-  makes the hook slow or fragile
+- keep the compiler-backed missing-docs check aligned with the library crate
+  rather than inventing a second export-graph model here
+- keep test modules out of scope for the feature-gate prose heuristic so
+  internal helper churn does not become docs noise
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+import tempfile
 
 
 PUB_FN_RE = re.compile(
@@ -55,15 +59,6 @@ DOC_ATTR_RE = re.compile(r'^\s*#\s*\[\s*doc\s*=\s*"(.*)"\s*\]\s*$')
 CFG_FEATURE_RE = re.compile(
     r'^\s*#\s*\[\s*cfg\s*\(\s*feature\s*=\s*"([^"]+)"\s*\)\s*\]\s*$'
 )
-
-
-@dataclass(frozen=True)
-class AddedLine:
-    """One added staged line as reported by unified diff output."""
-
-    path: pathlib.Path
-    line_no: int
-
 
 def repo_root() -> pathlib.Path:
     """Anchor git operations to the repository that owns this script."""
@@ -86,15 +81,15 @@ def is_internal_test_module(path: pathlib.Path) -> bool:
     return posix_path.endswith("/tests.rs") or "/tests/" in posix_path
 
 
-def staged_added_lines(root: pathlib.Path) -> list[AddedLine]:
-    """Return added staged lines under `src/` for fast pre-commit enforcement."""
+def staged_rust_files(root: pathlib.Path) -> list[pathlib.Path]:
+    """Return staged production Rust files under `src/`."""
 
     cmd = [
         "git",
         "diff",
         "--cached",
-        "--unified=0",
-        "--no-color",
+        "--name-only",
+        "--diff-filter=ACMR",
         "--",
         "src/**/*.rs",
         "src/*.rs",
@@ -106,35 +101,11 @@ def staged_added_lines(root: pathlib.Path) -> list[AddedLine]:
         check=True,
         cwd=root,
     )
-    lines = result.stdout.splitlines()
-
-    out: list[AddedLine] = []
-    current_path: pathlib.Path | None = None
-    new_line_no: int | None = None
-
-    for raw in lines:
-        if raw.startswith("+++ b/"):
-            current_path = pathlib.Path(raw[6:])
-            new_line_no = None
-            continue
-        if raw.startswith("@@"):
-            match = re.search(r"\+(\d+)(?:,(\d+))?", raw)
-            if not match:
-                new_line_no = None
-                continue
-            new_line_no = int(match.group(1))
-            continue
-        if current_path is None or new_line_no is None:
-            continue
-        if raw.startswith("+") and not raw.startswith("+++"):
-            out.append(AddedLine(current_path, new_line_no))
-            new_line_no += 1
-        elif raw.startswith("-") and not raw.startswith("---"):
-            continue
-        else:
-            new_line_no += 1
-
-    return out
+    return sorted(
+        pathlib.Path(raw.strip())
+        for raw in result.stdout.splitlines()
+        if raw.strip() and not is_internal_test_module(pathlib.Path(raw.strip()))
+    )
 
 
 def staged_file_lines(root: pathlib.Path, path: pathlib.Path) -> list[str] | None:
@@ -251,18 +222,14 @@ def is_pub_trait_method(lines: list[str], line_no: int) -> bool:
     return bool(trait_depths)
 
 
-def missing_docs_in_lines(
+def feature_gate_doc_failures_in_lines(
     path: pathlib.Path,
     lines: list[str],
-    line_numbers: set[int] | None = None,
 ) -> list[str]:
-    """Return missing-doc failures for exported functions in the given lines."""
+    """Return feature-gate prose failures in the given lines."""
 
     failures: list[str] = []
-    limit_to = line_numbers
     for line_no, line in enumerate(lines, start=1):
-        if limit_to is not None and line_no not in limit_to:
-            continue
         match = PUB_FN_RE.match(line)
         if match:
             name = match.group(1)
@@ -273,20 +240,17 @@ def missing_docs_in_lines(
             name = trait_match.group(1)
         else:
             continue
-        if has_rustdoc(lines, line_no):
-            docs, features = doc_context(lines, line_no)
-            for feature in features:
-                required = feature_gate_phrase(feature)
-                if required not in " ".join(docs):
-                    failures.append(
-                        f"{path}:{line_no}: public function `{name}` is gated by "
-                        f'feature `{feature}` but its Rustdoc is missing the prose '
-                        f'"{required}"'
-                    )
+        if not has_rustdoc(lines, line_no):
             continue
-        failures.append(
-            f"{path}:{line_no}: public function `{name}` is missing a Rustdoc comment"
-        )
+        docs, features = doc_context(lines, line_no)
+        for feature in features:
+            required = feature_gate_phrase(feature)
+            if required not in " ".join(docs):
+                failures.append(
+                    f"{path}:{line_no}: public function `{name}` is gated by "
+                    f'feature `{feature}` but its Rustdoc is missing the prose '
+                    f'"{required}"'
+                )
     return failures
 
 
@@ -296,23 +260,73 @@ def feature_gate_phrase(feature: str) -> str:
     return f"Only available with the `{feature}` cargo feature"
 
 
-def check_staged_public_functions(root: pathlib.Path) -> list[str]:
-    """Evaluate the public docs contract against staged additions only."""
+def merged_rustflags(current: str | None, extra: str) -> str:
+    """Append one rustflag while preserving any existing caller-provided flags."""
 
-    failures: list[str] = []
-    by_file: dict[pathlib.Path, set[int]] = {}
-    for added in staged_added_lines(root):
-        if is_internal_test_module(added.path):
-            continue
-        by_file.setdefault(added.path, set()).add(added.line_no)
+    if not current:
+        return extra
+    return f"{current} {extra}"
 
-    for path, line_numbers in sorted(by_file.items()):
-        lines = staged_file_lines(root, path)
-        if lines is None:
-            continue
-        failures.extend(missing_docs_in_lines(path, lines, line_numbers))
 
-    return failures
+def compiler_missing_docs_failures(root: pathlib.Path, cwd: pathlib.Path) -> list[str]:
+    """Return compiler-backed missing-docs failures for the library crate."""
+
+    env = os.environ.copy()
+    env["RUSTFLAGS"] = merged_rustflags(env.get("RUSTFLAGS"), "-Dmissing-docs")
+    env.setdefault("CARGO_TARGET_DIR", str(root / "target" / "public-docs"))
+    result = subprocess.run(
+        [
+            "cargo",
+            "check",
+            "--lib",
+            "--locked",
+            "--message-format",
+            "short",
+        ],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return []
+
+    diagnostics = [
+        line
+        for line in (result.stdout.splitlines() + result.stderr.splitlines())
+        if line.strip()
+    ]
+    if not diagnostics:
+        diagnostics = ["`cargo check --lib --locked` failed without diagnostics."]
+    return [
+        "compiler-backed public Rustdoc coverage check failed:",
+        *[f"  {line}" for line in diagnostics],
+    ]
+
+
+def export_staged_index(root: pathlib.Path) -> pathlib.Path:
+    """Export the staged git index into a temporary directory."""
+
+    target_root = root / "target"
+    target_root.mkdir(parents=True, exist_ok=True)
+    temp_root = pathlib.Path(
+        tempfile.mkdtemp(prefix="osp-public-docs-", dir=target_root)
+    )
+    subprocess.run(
+        [
+            "git",
+            "checkout-index",
+            "--all",
+            "--force",
+            f"--prefix={temp_root}{os.sep}",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return temp_root
 
 
 def rust_source_files(root: pathlib.Path) -> list[pathlib.Path]:
@@ -325,13 +339,34 @@ def rust_source_files(root: pathlib.Path) -> list[pathlib.Path]:
     )
 
 
-def check_workspace_public_functions(root: pathlib.Path) -> list[str]:
+def check_workspace_public_docs(root: pathlib.Path) -> list[str]:
     """Evaluate the public docs contract across the whole repository tree."""
 
-    failures: list[str] = []
+    failures = compiler_missing_docs_failures(root, root)
     for path in rust_source_files(root):
         lines = root.joinpath(path).read_text().splitlines()
-        failures.extend(missing_docs_in_lines(path, lines))
+        failures.extend(feature_gate_doc_failures_in_lines(path, lines))
+    return failures
+
+
+def check_staged_public_docs(root: pathlib.Path) -> list[str]:
+    """Evaluate the public docs contract against the staged git index."""
+
+    files = staged_rust_files(root)
+    if not files:
+        return []
+
+    failures: list[str] = []
+    staged_root = export_staged_index(root)
+    try:
+        failures.extend(compiler_missing_docs_failures(root, staged_root))
+        for path in files:
+            lines = staged_file_lines(root, path)
+            if lines is None:
+                continue
+            failures.extend(feature_gate_doc_failures_in_lines(path, lines))
+    finally:
+        shutil.rmtree(staged_root, ignore_errors=True)
     return failures
 
 
@@ -340,32 +375,32 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Check public Rust functions for Rustdoc and required feature-gate notes."
+            "Check public Rustdoc coverage and required feature-gate notes."
         )
     )
     parser.add_argument(
         "--staged",
         action="store_true",
-        help="Check only staged added lines, intended for pre-commit hooks.",
+        help="Check the staged git index, intended for pre-commit hooks.",
     )
     args = parser.parse_args()
 
     root = repo_root()
     if args.staged:
-        failures = check_staged_public_functions(root)
+        failures = check_staged_public_docs(root)
     else:
-        failures = check_workspace_public_functions(root)
+        failures = check_workspace_public_docs(root)
     if not failures:
         return 0
 
     if args.staged:
         print(
-            "ERROR: staged public Rust functions must satisfy the public Rustdoc contract.",
+            "ERROR: staged public Rust items must satisfy the public Rustdoc contract.",
             file=sys.stderr,
         )
     else:
         print(
-            "ERROR: public Rust functions must satisfy the public Rustdoc contract.",
+            "ERROR: public Rust items must satisfy the public Rustdoc contract.",
             file=sys.stderr,
         )
     print(file=sys.stderr)
@@ -373,8 +408,8 @@ def main() -> int:
         print(f"  {failure}", file=sys.stderr)
     print(file=sys.stderr)
     print(
-        "Add a `///` Rustdoc comment immediately above the exported function, "
-        "and include the standard feature-gate prose when required.",
+        "Add a `///` Rustdoc comment above the exported item, and include the "
+        "standard feature-gate prose when required.",
         file=sys.stderr,
     )
     return 1
