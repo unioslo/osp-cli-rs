@@ -157,7 +157,7 @@ read these:
 - [docs/PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md)
 
 If you are working on the repo itself, read:
-- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Development
 
@@ -172,7 +172,7 @@ python3 scripts/coverage.py gate --fast
 ```
 
 See:
-- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 - [docs/TESTING.md](docs/TESTING.md)
 
 ## License

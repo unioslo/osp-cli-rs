@@ -283,3 +283,37 @@ profile.default = "uio"
         .stderr(predicate::str::contains("\x1b["));
 
 }
+
+#[cfg(unix)]
+#[test]
+fn config_get_missing_key_suggests_nearby_keys_contract() {
+    let home = make_temp_dir("osp-cli-config-missing-key-suggestions");
+    write_config(
+        &home,
+        r#"
+[default]
+profile.default = "uio"
+ui.format = "json"
+"#,
+    );
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    cmd.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "--mode",
+            "rich",
+            "--color",
+            "never",
+            "--unicode",
+            "never",
+            "config",
+            "get",
+            "ui.formt",
+        ]);
+    cmd.assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("config key not found: ui.formt"))
+        .stderr(predicate::str::contains("did you mean: ui.format"));
+}

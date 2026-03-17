@@ -182,7 +182,7 @@ over:
 ## Coverage and Hooks
 
 `TESTING.md` describes test shape and workflow. Coverage policy and git hook
-behavior live in [CONTRIBUTING.md](CONTRIBUTING.md).
+behavior live in [../CONTRIBUTING.md](../CONTRIBUTING.md).
 
 In short:
 

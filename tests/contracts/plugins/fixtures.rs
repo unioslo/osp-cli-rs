@@ -499,21 +499,13 @@ fn write_manifest(dir: &std::path::Path, manifest: &str) {
     std::fs::write(dir.join("manifest.toml"), manifest).expect("manifest.toml should be written");
 }
 
+use crate::output_support::parse_json_stdout;
+
 #[cfg(unix)]
 fn write_config(home: &std::path::Path, config: &str) {
     let config_dir = home.join(".config").join("osp");
     std::fs::create_dir_all(&config_dir).expect("config dir should be created");
     std::fs::write(config_dir.join("config.toml"), config).expect("config should be written");
-}
-
-#[cfg(unix)]
-fn parse_json_stdout(stdout: &[u8]) -> serde_json::Value {
-    serde_json::from_slice(stdout).unwrap_or_else(|err| {
-        panic!(
-            "stdout should be valid json: {err}\n{}",
-            String::from_utf8_lossy(stdout)
-        )
-    })
 }
 
 #[cfg(unix)]

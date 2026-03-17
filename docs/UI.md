@@ -132,7 +132,7 @@ The main keys here are:
 - `ui.help.level`
   - `inherit | none | tiny | normal | verbose`
 - `ui.messages.layout`
-  - `grouped | minimal`
+  - `grouped | plain | minimal`
 - `ui.chrome.frame`
   - `none | top | bottom | top-bottom | square | round`
 - `ui.chrome.rule_policy`
@@ -142,7 +142,7 @@ What these do:
 
 - `ui.help.level` controls how much help/detail is shown
 - `ui.messages.layout` controls whether messages are grouped into sections or
-  shown inline with minimal chrome
+  shown as plain indented groups or inline with minimal chrome
 - `ui.chrome.frame` controls the section framing style used by help, guide, and
   grouped messages
 - `ui.chrome.rule_policy` controls whether section rules are rendered

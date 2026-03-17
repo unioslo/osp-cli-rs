@@ -4,9 +4,9 @@ expression: sanitized
 ---
 id:        dracula
 name:      Dracula
-base:
+base:      null
 source:    builtin
-origin:
+origin:    null
 text:      #f8f8f2
 muted:     #6879ad
 accent:    #bd93f9
@@ -18,5 +18,5 @@ border:    #ff79c6
 title:     #ff79c6
 selection: #bd93f9
 link:      #bd93f9
-bg:
-bg_alt:
+bg:        null
+bg_alt:    null

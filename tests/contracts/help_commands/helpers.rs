@@ -1,3 +1,5 @@
+use crate::output_support::strip_ansi;
+
 #[cfg(unix)]
 fn fixture_config(path: &std::path::Path) {
     std::fs::write(
@@ -228,25 +230,6 @@ fn error_output(
             "missing.key",
         ],
     )
-}
-
-#[cfg(unix)]
-fn strip_ansi(text: &str) -> String {
-    let mut out = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
-            chars.next();
-            for next in chars.by_ref() {
-                if ('@'..='~').contains(&next) {
-                    break;
-                }
-            }
-            continue;
-        }
-        out.push(ch);
-    }
-    out
 }
 
 #[cfg(unix)]

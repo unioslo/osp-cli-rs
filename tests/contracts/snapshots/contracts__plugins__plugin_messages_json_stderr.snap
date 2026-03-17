@@ -3,5 +3,5 @@ source: crates/osp-cli/tests/contracts/plugins.rs
 expression: stderr
 ---
 - Warnings -------------------------------------------------------------
-- plugin-warning-line
+  plugin-warning-line
 ------------------------------------------------------------------------

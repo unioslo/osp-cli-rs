@@ -342,6 +342,7 @@ These keys currently drive user-visible rendering and REPL presentation:
 - `color.prompt.text`
 - `color.prompt.command`
 - `ui.messages.layout`
+  - `grouped | plain | minimal`
   - `grouped | minimal`
 
 ## UI Examples

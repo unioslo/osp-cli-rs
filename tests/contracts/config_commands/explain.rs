@@ -75,6 +75,7 @@ ui.mode = "plain"
 
     let payload = parse_json_stdout(&output.stdout);
     assert_eq!(payload["key"], "ui.mode");
+    assert_eq!(payload["description"], "Preferred render mode");
     assert_eq!(payload["value"], "plain");
     assert!(
         output.stderr.is_empty(),
@@ -314,6 +315,7 @@ ui.mode = "plain"
 
     let payload = parse_json_stdout(&output.stdout);
     assert_eq!(payload["key"], "profile.active");
+    assert_eq!(payload["description"], "Active profile derived during resolution");
     assert_eq!(payload["phase"], "runtime");
     assert_eq!(payload["value"], "uio");
     assert!(

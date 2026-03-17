@@ -80,7 +80,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["plugins", "select-provider", "shared", "beta-provider"]);
     select.assert().success().stderr(predicate::str::contains(
-        "selected provider for command shared: beta-provider",
+        "selected provider for command `shared`: beta-provider",
     ));
 
     let mut commands = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -119,7 +119,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["plugins", "clear-provider", "shared"]);
     clear.assert().success().stderr(predicate::str::contains(
-        "cleared provider selection for command shared",
+        "cleared provider selection for command `shared`",
     ));
 
     let mut after_clear = Command::new(assert_cmd::cargo::cargo_bin!("osp"));

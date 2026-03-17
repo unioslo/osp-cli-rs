@@ -1,5 +1,51 @@
 # Contributing
 
+## Engineering Philosophy
+
+This repo is trying to stay simple to reason about, not merely easy to extend
+with one more layer.
+
+In practice that means a few things.
+
+We want one clear owner for each important piece of knowledge. If a rule,
+mapping, or invariant matters, it should live in one place and other code
+should call into that owner instead of quietly rebuilding the same decision.
+That is what we mean by:
+
+- centralize facts
+- localize effects
+- constrain reachability
+- remove duplicate decisions
+
+This is also why some files in this repo are intentionally large. A large file
+is fine when it is the one place that owns a concept. Splitting code just to
+make files smaller is usually a loss if it scatters the truth across multiple
+modules.
+
+We try hard to separate "looks easy" from "is actually simple." Hiding
+complexity behind a helper, abstraction, trait, or layer can make one callsite
+feel nicer while making the system harder to understand and change. We are not
+against abstractions, but we want them to earn their keep.
+
+The default bias is:
+
+- choose the boring design over the clever one
+- start with the simplest working shape
+- add abstractions only for real, current duplication or variation
+- prefer duplicated code over duplicated truth
+- do small, behavior-preserving refactors instead of big rewrites
+
+A useful rule of thumb for reviews and refactors:
+
+- merge code when the same knowledge is defined twice
+- do not merge code just because it looks similar
+
+Said another way: do not DRY out the shape, DRY out the knowledge.
+
+Tests follow the same philosophy. We prefer tests at stable boundaries, keep
+the end-to-end suite small and high-signal, and avoid stacks of local tests
+that all prove the same thing with slightly different setup.
+
 ## Local Tooling
 
 This repo expects `just` for the documented developer commands.
@@ -23,22 +69,49 @@ Keep committed docs user-facing.
 
 ## Commit Message Contract
 
-This repository uses a strict commit subject format:
+This repository enforces commit messages through `.githooks/commit-msg` and
+installs the `.gitmessage` template.
+
+Normal commits must use:
 
 `<type>(<scope>): <Subject>`
 
 - Allowed `type`:
   - `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `style`, `ci`, `build`, `perf`, `revert`
-- `scope` is optional.
-- `Subject` must start with uppercase and must not end with a period.
-- Subject line max length: 72 chars.
-- If a body is present, add one blank line after the subject.
+- `scope` is optional. If present, it must start lowercase and may contain
+  lowercase letters, digits, `.`, `_`, `/`, and `-`
+- `Subject` must start with uppercase, must not end with a period, and must be
+  72 characters or fewer
+- the line immediately after the subject must be blank before the body starts
+- ordinary commits must include a real body
+- body lines must wrap at 80 columns or fewer
+- do not embed literal `\n` sequences in a single `git commit -m ...`; use the
+  editor or multiple `-m` flags instead
+- Git-generated `Merge ...`, `Revert ...`, and autosquash `fixup! ...` /
+  `squash! ...` subjects are allowed exceptions
+
+Use the installed template:
+
+```text
+<type>(<scope>): <Subject>
+
+Why:
+
+What:
+
+Verification:
+
+Refs:
+```
+
+Fill `Why`, `What`, and `Verification` with real content; empty headings alone
+fail the hook.
 
 Examples:
 
 - `feat(cli): Add profile positional dispatch`
 - `fix(config): Normalize profile and terminal keys`
-- `docs(state): Clarify config revision invariants`
+- `ci(test): Pin Rust 1.94 and tighten test guardrails`
 
 ## Hook Setup
 
@@ -110,12 +183,15 @@ Typical release flow:
 
 ```bash
 just bump patch "Summarize the release"
-git commit -am "chore(release): Prepare v1.4.6"
+git commit --all
 git push origin main
 just release-check
 just release-dry
 just release-sign
 ```
+
+Use the installed commit template when writing the release commit so the hook
+sees a real body.
 
 ## Version Bumps
 

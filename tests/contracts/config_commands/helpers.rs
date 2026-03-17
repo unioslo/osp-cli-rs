@@ -1,3 +1,5 @@
+use crate::output_support::{first_json_row, parse_json_stdout};
+
 #[cfg(unix)]
 fn write_config(home: &std::path::Path, config: &str) {
     let config_dir = home.join(".config").join("osp");
@@ -18,23 +20,5 @@ fn write_secrets(home: &std::path::Path, secrets: &str) {
     std::fs::set_permissions(&secrets_path, perms).expect("secrets permissions");
 }
 
-#[cfg(unix)]
-fn parse_json_stdout(stdout: &[u8]) -> serde_json::Value {
-    serde_json::from_slice(stdout).unwrap_or_else(|err| {
-        panic!(
-            "stdout should be valid json: {err}\n{}",
-            String::from_utf8_lossy(stdout)
-        )
-    })
-}
-
-#[cfg(unix)]
-fn first_json_row<'a>(payload: &'a serde_json::Value, context: &str) -> &'a serde_json::Value {
-    payload
-        .as_array()
-        .unwrap_or_else(|| panic!("{context} should render a JSON array"))
-        .first()
-        .unwrap_or_else(|| panic!("{context} should render at least one row"))
-}
 #[cfg(unix)]
 use crate::temp_support::make_temp_dir;

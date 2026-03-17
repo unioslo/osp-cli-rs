@@ -1,9 +1,12 @@
 ---
-source: crates/osp-cli/tests/contracts/config_commands.rs
+source: tests/contracts/config_commands/explain.rs
+assertion_line: 572
 expression: sanitized
 ---
 key: ui.mode
 phase: runtime
+description: Preferred render mode
+
 value: plain (string)
 
 winner:

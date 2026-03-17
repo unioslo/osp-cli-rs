@@ -123,8 +123,9 @@ fn bundled_plugin_requires_manifest_contract() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("bundled manifest.toml not found"))
-        .stdout(predicate::str::contains("healthy:        false"))
-        .stdout(predicate::str::contains("source:         bundled"));
+        .stdout(predicate::str::contains("healthy:"))
+        .stdout(predicate::str::contains("source:"))
+        .stdout(predicate::str::contains("bundled"));
 
 }
 

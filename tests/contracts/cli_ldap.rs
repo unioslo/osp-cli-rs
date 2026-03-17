@@ -1,24 +1,8 @@
 #[cfg(unix)]
+use crate::output_support::{first_json_row, parse_json_stdout};
+#[cfg(unix)]
 use crate::temp_support::TestTempDir;
 use assert_cmd::Command;
-use serde_json::Value;
-
-fn parse_json_stdout(stdout: &[u8]) -> Value {
-    serde_json::from_slice(stdout).unwrap_or_else(|err| {
-        panic!(
-            "stdout should be valid json: {err}\n{}",
-            String::from_utf8_lossy(stdout)
-        )
-    })
-}
-
-fn first_json_row<'a>(payload: &'a Value, context: &str) -> &'a Value {
-    payload
-        .as_array()
-        .unwrap_or_else(|| panic!("{context} should render a JSON array"))
-        .first()
-        .unwrap_or_else(|| panic!("{context} should render at least one row"))
-}
 
 #[cfg(unix)]
 #[test]

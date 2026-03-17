@@ -97,7 +97,7 @@ with plugin-provided commands, or writing plugins.
 ## Contributor Docs
 
 - contributing workflow:
-  [CONTRIBUTING.md](CONTRIBUTING.md)
+  [../CONTRIBUTING.md](../CONTRIBUTING.md)
 - testing strategy and confidence lanes:
   [TESTING.md](TESTING.md)
 - DSL implementation notes:

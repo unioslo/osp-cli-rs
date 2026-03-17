@@ -20,8 +20,8 @@ fn app_runtime_rebuild_flows_share_the_host_assembly_boundary() {
     let lifecycle = read_source("src/app/repl_lifecycle.rs");
 
     assert!(
-        host.contains("ResolvedHostInputs::derive("),
-        "host startup should derive runtime inputs through app::assembly"
+        host.contains("prepare_startup_host("),
+        "host startup should route startup assembly through the bootstrap/assembly seam"
     );
     assert!(
         !host.contains("PluginManager::new(") && !host.contains("load_theme_catalog(&config)"),
@@ -45,28 +45,44 @@ fn app_runtime_rebuild_flows_share_the_host_assembly_boundary() {
 }
 
 #[test]
-fn ui_document_lowering_consumes_render_plans_instead_of_raw_settings() {
-    let resolution = read_source("src/ui/resolution.rs");
-    let format = read_source("src/ui/format/mod.rs");
+fn ui_runtime_rendering_flows_through_plan_lower_emit_without_document_fallbacks() {
+    let settings = read_source("src/ui/settings/mod.rs");
+    let plan = read_source("src/ui/plan/mod.rs");
+    let lower = read_source("src/ui/lower.rs");
+    let emit = read_source("src/ui/emit/mod.rs");
     let ui = read_source("src/ui/mod.rs");
 
     assert!(
-        resolution.contains("struct ResolvedRenderPlan"),
-        "ui resolution should define a semantic render plan"
+        settings.contains("pub struct ResolvedRenderSettings")
+            && settings.contains("pub fn resolve_render_settings(&self) -> ResolvedRenderSettings")
+            && settings.contains(
+                "pub(crate) fn resolve_output_format(&self, output: &OutputResult) -> OutputFormat"
+            ),
+        "ui settings should own resolved render facts and output-format resolution"
     );
     assert!(
-        format.contains("ResolvedRenderPlan") && format.contains("build_document_from_output_plan"),
-        "ui::format should lower through the render plan seam"
+        plan.contains("pub fn plan_output(")
+            && plan.contains("let format = settings.resolve_output_format(output);"),
+        "ui planning should own the semantic render plan entrypoint"
     );
     assert!(
-        !format.contains("settings.resolve_guide_render_settings()")
-            && !format.contains("settings.resolve_mreg_build_settings()")
-            && !format.contains("build_document_from_output_resolved"),
-        "ui::format drifted back to mixing raw settings with resolved rendering state"
+        lower.contains("fn lower_output(") && lower.contains("RenderPlan"),
+        "ui lowering should consume the semantic render plan"
     );
     assert!(
-        ui.contains("resolve_render_plan(") && ui.contains("build_document_from_output_plan("),
-        "ui render entrypoints should route through render plans before lowering"
+        emit.contains("pub fn emit_doc(") && emit.contains("OutputFormat::Markdown"),
+        "ui emitter should stay behind a single document emission seam"
+    );
+    assert!(
+        ui.contains("render_output_with_profile(")
+            && ui.contains("plan_output(output, settings, profile)")
+            && ui.contains("emit::emit_doc(")
+            && ui.contains("&lower::lower_output(output, &plan)")
+            && ui.contains("plan.format")
+            && ui.contains("&plan.settings")
+            && !ui.contains("document_render::render_document(")
+            && !ui.contains("build_document_from_output_plan"),
+        "ui runtime should flow through the canonical plan/lower/emit path without document fallback"
     );
 }
 

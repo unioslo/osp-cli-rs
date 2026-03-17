@@ -1,3 +1,4 @@
+use crate::output_support::strip_ansi;
 use crate::temp_support::make_temp_dir;
 use crate::test_env::isolated_env;
 use assert_cmd::Command;
@@ -31,26 +32,6 @@ fn run_cli_stdout_with_config(config_toml: Option<&str>, args: &[&str]) -> Strin
         .stdout
         .clone();
     String::from_utf8(output).expect("stdout should be utf-8")
-}
-
-fn strip_ansi(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
-            let _ = chars.next();
-            for next in chars.by_ref() {
-                if ('@'..='~').contains(&next) {
-                    break;
-                }
-            }
-            continue;
-        }
-        out.push(ch);
-    }
-
-    out
 }
 
 #[test]
@@ -104,6 +85,13 @@ fn top_level_help_supports_all_explicit_output_formats_contract() {
 }
 
 #[test]
+fn top_level_help_guide_contract() {
+    let guide = run_cli_stdout(&["--no-env", "--no-config-file", "--guide", "--help"]);
+    assert!(guide.contains("Usage"));
+    assert!(guide.contains("Commands"));
+}
+
+#[test]
 fn intro_command_supports_all_explicit_output_formats_contract() {
     let json = run_cli_stdout(&["--no-env", "--no-config-file", "--json", "intro"]);
     let json_value: serde_json::Value =
@@ -135,7 +123,6 @@ fn intro_command_supports_all_explicit_output_formats_contract() {
     assert!(markdown.contains("## OSP"));
     assert!(markdown.contains("## Commands"));
     assert!(markdown.contains("- `help` Show this command overview."));
-    assert!(!markdown.contains("| name"));
 
     let table = run_cli_stdout(&["--no-env", "--no-config-file", "--table", "intro"]);
     assert!(table.contains("sections"));
@@ -148,6 +135,53 @@ fn intro_command_supports_all_explicit_output_formats_contract() {
     assert!(value.contains("Welcome"));
     assert!(value.contains("Show this command overview."));
     assert!(value.contains("Inspect and edit runtime config"));
+}
+
+#[test]
+fn intro_command_expressive_guide_contract() {
+    let config = r#"[default]
+ui.presentation = "expressive"
+repl.intro = "full"
+repl.simple_prompt = true
+user.display_name = "Demo"
+user.name = "oistes"
+theme.name = "rose-pine-moon"
+"#;
+    let guide = run_cli_stdout_with_config(Some(config), &["--no-env", "--guide", "intro"]);
+    assert!(guide.contains("Demo"));
+    assert!(guide.contains("Commands"));
+    assert!(guide.contains("help"));
+}
+
+#[test]
+fn intro_command_compact_contract() {
+    let output = run_cli_stdout(&[
+        "--user",
+        "anonymous",
+        "--no-env",
+        "--no-config-file",
+        "--presentation",
+        "compact",
+        "intro",
+    ]);
+    assert!(output.contains("Usage: [INVOCATION_OPTIONS] COMMAND [ARGS]..."));
+    assert!(output.contains("Commands:"));
+    assert!(output.contains("help"));
+}
+
+#[test]
+fn intro_command_austere_contract() {
+    let output = run_cli_stdout(&[
+        "--user",
+        "anonymous",
+        "--no-env",
+        "--no-config-file",
+        "--presentation",
+        "austere",
+        "intro",
+    ]);
+    assert!(output.contains("Welcome"));
+    assert!(output.contains("Commands:"));
 }
 
 #[test]

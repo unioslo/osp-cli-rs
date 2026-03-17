@@ -5,6 +5,6 @@ expression: sanitized
 ---
 <TIMESTAMP>Z  WARN osp_cli::plugin::manager: plugin command requires explicit provider selection command=shared providers="alpha-provider (env), beta-provider (env)"
 - Errors ---
-- command shared is provided by multiple plugins: alpha-provider (env), beta-provider (env)
+  command shared is provided by multiple plugins: alpha-provider (env), beta-provider (env)
 Hint: rerun with --plugin-provider <plugin-id> or persist a default with osp plugins select-provider <command> <plugin-id>
 ------------

@@ -41,3 +41,6 @@ mod test_env;
 
 #[path = "support/temp.rs"]
 mod temp_support;
+
+#[path = "support/output.rs"]
+mod output_support;

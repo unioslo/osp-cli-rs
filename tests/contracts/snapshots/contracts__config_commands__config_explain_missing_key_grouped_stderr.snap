@@ -1,7 +1,10 @@
 ---
-source: crates/osp-cli/tests/contracts/config_commands.rs
+source: tests/contracts/config_commands/explain.rs
+assertion_line: 526
 expression: sanitized
 ---
 - Errors ---------------------------------------------------------------
-- config key not found: ui.m
+  config key not found: ui.m
+- Warnings -------------------------------------------------------------
+  did you mean: ui.margin, ui.medium_list_max, ui.message.verbosity, ui.messages.layout, ui.mode
 ------------------------------------------------------------------------

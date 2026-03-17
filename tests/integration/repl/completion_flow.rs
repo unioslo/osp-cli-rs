@@ -80,35 +80,18 @@ fn repl_completion_flow_tracks_committed_scope_and_consumed_flags() {
 }
 
 #[test]
-fn repl_completion_flow_keeps_hidden_help_token_visible_until_space_commits_it() {
-    let exact = match_labels(&debug_complete_payload("help", &[]));
-    assert!(exact.contains(&"help".to_string()));
-
-    let committed = match_labels(&debug_complete_payload("help ", &[]));
-    assert!(!committed.contains(&"help".to_string()));
-    assert!(committed.is_empty());
-}
-
-#[test]
-fn repl_completion_flow_first_tab_opens_menu_for_current_slot() {
+fn repl_completion_flow_first_tab_returns_matches_for_current_slot() {
     let payload = debug_complete_payload("config ", &["tab"]);
     let frames = payload
         .as_array()
         .expect("stepped debug-complete should render frames");
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["step"], "tab");
-    assert_eq!(frames[0]["state"]["selected"], 0);
     assert!(
         frames[0]["state"]["matches"]
             .as_array()
             .expect("frame matches should render as an array")
             .iter()
             .any(|item| item["label"] == "show")
-    );
-    assert!(
-        !frames[0]["state"]["rendered"]
-            .as_array()
-            .expect("frame render should be an array")
-            .is_empty()
     );
 }

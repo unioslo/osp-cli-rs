@@ -5,6 +5,6 @@ expression: sanitized
 ---
 <TIMESTAMP>Z  WARN osp_cli::plugin::dispatch: plugin command exited with non-zero status plugin_id=boom command=boom status_code=7 stderr=boom-from-stderr
 - Errors ---
-- plugin boom exited with status 7: boom-from-stderr
+  plugin boom exited with status 7: boom-from-stderr
 Hint: inspect the plugin stderr output or rerun with -v/-vv for more context
 ------------

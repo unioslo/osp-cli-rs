@@ -214,40 +214,61 @@ fn message_color_unicode_presentation_matrix_contract() {
         );
 
         if color == "always" {
-            if presentation == "austere" {
-                assert!(
-                    success_info.contains("\x1b[92msuccess: "),
-                    "missing austere success color for {unicode}: {success_info:?}"
-                );
-                assert!(
-                    success_info.contains("\x1b[34minfo: "),
-                    "missing austere info color for {unicode}: {success_info:?}"
-                );
-                assert!(
-                    warning_success.contains("\x1b[33mwarning: "),
-                    "missing austere warning color for {unicode}: {warning_success:?}"
-                );
-                assert!(
-                    error.contains("\x1b[31merror: "),
-                    "missing austere error color for {unicode}: {error:?}"
-                );
-            } else {
-                assert!(
-                    success_info.contains("\x1b[92m") && success_info.contains(" Success "),
-                    "missing grouped success color for {presentation}/{unicode}: {success_info:?}"
-                );
-                assert!(
-                    success_info.contains("\x1b[34m") && success_info.contains(" Info "),
-                    "missing grouped info color for {presentation}/{unicode}: {success_info:?}"
-                );
-                assert!(
-                    warning_success.contains("\x1b[33m") && warning_success.contains(" Warnings "),
-                    "missing grouped warning color for {presentation}/{unicode}: {warning_success:?}"
-                );
-                assert!(
-                    error.contains("\x1b[31m") && error.contains(" Errors "),
-                    "missing grouped error color for {presentation}/{unicode}: {error:?}"
-                );
+            match presentation {
+                "austere" => {
+                    assert!(
+                        success_info.contains("\x1b[92msuccess\x1b[0m"),
+                        "missing austere success color for {unicode}: {success_info:?}"
+                    );
+                    assert!(
+                        success_info.contains("\x1b[34minfo\x1b[0m"),
+                        "missing austere info color for {unicode}: {success_info:?}"
+                    );
+                    assert!(
+                        warning_success.contains("\x1b[33mwarning\x1b[0m"),
+                        "missing austere warning color for {unicode}: {warning_success:?}"
+                    );
+                    assert!(
+                        error.contains("\x1b[31merror\x1b[0m"),
+                        "missing austere error color for {unicode}: {error:?}"
+                    );
+                }
+                "compact" => {
+                    assert!(
+                        success_info.contains("\x1b[92m") && success_info.contains("Success:"),
+                        "missing compact success color for {unicode}: {success_info:?}"
+                    );
+                    assert!(
+                        success_info.contains("\x1b[34m") && success_info.contains("Info:"),
+                        "missing compact info color for {unicode}: {success_info:?}"
+                    );
+                    assert!(
+                        warning_success.contains("\x1b[33m") && warning_success.contains("Warnings:"),
+                        "missing compact warning color for {unicode}: {warning_success:?}"
+                    );
+                    assert!(
+                        error.contains("\x1b[31m") && error.contains("Errors:"),
+                        "missing compact error color for {unicode}: {error:?}"
+                    );
+                }
+                _ => {
+                    assert!(
+                        success_info.contains("\x1b[92m") && success_info.contains("Success"),
+                        "missing full success color for {presentation}/{unicode}: {success_info:?}"
+                    );
+                    assert!(
+                        success_info.contains("\x1b[34m") && success_info.contains("Info"),
+                        "missing full info color for {presentation}/{unicode}: {success_info:?}"
+                    );
+                    assert!(
+                        warning_success.contains("\x1b[33m") && warning_success.contains("Warnings"),
+                        "missing full warning color for {presentation}/{unicode}: {warning_success:?}"
+                    );
+                    assert!(
+                        error.contains("\x1b[31m") && error.contains("Errors"),
+                        "missing full error color for {presentation}/{unicode}: {error:?}"
+                    );
+                }
             }
         } else {
             assert!(!success_info.contains("\x1b["));
@@ -258,31 +279,50 @@ fn message_color_unicode_presentation_matrix_contract() {
         match presentation {
             "austere" => {
                 assert!(
-                    success_plain.contains("success: active theme set to: plain"),
+                    success_plain.contains("  success: active theme set to: plain"),
                     "austere success should be minimal for {color}/{unicode}: {success_plain:?}"
                 );
                 assert!(
-                    warning_plain.contains("warning: writing a sensitive key"),
+                    warning_plain.contains("  warning: writing a sensitive key"),
                     "austere warning should be minimal for {color}/{unicode}: {warning_plain:?}"
                 );
                 assert!(
-                    error_plain.contains("error: config key not found: missing.key"),
+                    error_plain.contains("  error: config key not found: missing.key"),
                     "austere error should be minimal for {color}/{unicode}: {error_plain:?}"
+                );
+            }
+            "compact" => {
+                assert!(
+                    success_plain.contains("Success:\n  active theme set to: plain"),
+                    "compact success should use titled paragraphs for {color}/{unicode}: {success_plain:?}"
+                );
+                assert!(
+                    warning_plain.contains("Warnings:\n  writing a sensitive key"),
+                    "compact warning should use titled paragraphs for {color}/{unicode}: {warning_plain:?}"
+                );
+                assert!(
+                    error_plain.contains("Errors:\n  config key not found: missing.key"),
+                    "compact error should use titled paragraphs for {color}/{unicode}: {error_plain:?}"
+                );
+                let rule = if unicode == "always" { '─' } else { '-' };
+                assert!(
+                    !success_plain.contains(rule),
+                    "compact success should not use ruled chrome for {color}/{unicode}: {success_plain:?}"
                 );
             }
             _ => {
                 let rule = if unicode == "always" { '─' } else { '-' };
                 assert!(
                     success_plain.contains(rule) && success_plain.contains("Success"),
-                    "grouped success should keep framed chrome for {presentation}/{color}/{unicode}: {success_plain:?}"
+                    "full success should keep ruled chrome for {presentation}/{color}/{unicode}: {success_plain:?}"
                 );
                 assert!(
                     warning_plain.contains(rule) && warning_plain.contains("Warnings"),
-                    "grouped warning should keep framed chrome for {presentation}/{color}/{unicode}: {warning_plain:?}"
+                    "full warning should keep ruled chrome for {presentation}/{color}/{unicode}: {warning_plain:?}"
                 );
                 assert!(
                     error_plain.contains(rule) && error_plain.contains("Errors"),
-                    "grouped error should keep framed chrome for {presentation}/{color}/{unicode}: {error_plain:?}"
+                    "full error should keep ruled chrome for {presentation}/{color}/{unicode}: {error_plain:?}"
                 );
             }
         }

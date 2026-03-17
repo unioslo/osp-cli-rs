@@ -1,4 +1,6 @@
 #[cfg(unix)]
+use crate::output_support::parse_json_stdout;
+#[cfg(unix)]
 use crate::temp_support::make_temp_dir;
 use assert_cmd::Command;
 
@@ -82,14 +84,4 @@ fn compact_doctor_renders_semantic_sections_with_key_value_rows_contract() {
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-#[cfg(unix)]
-fn parse_json_stdout(stdout: &[u8]) -> serde_json::Value {
-    serde_json::from_slice(stdout).unwrap_or_else(|err| {
-        panic!(
-            "stdout should be valid json: {err}\n{}",
-            String::from_utf8_lossy(stdout)
-        )
-    })
 }
