@@ -146,7 +146,7 @@ fn truncate_display_width_crop(value: &str, max_width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::PreparedGridList;
+    use super::{PreparedGridList, arrange_in_grid};
 
     #[test]
     fn prepared_grid_list_crops_cells_to_available_width_unit() {
@@ -157,5 +157,42 @@ mod tests {
         assert_eq!(grid.rows[0][0], "alph");
         assert_eq!(grid.column_widths[0], 4);
         assert_eq!(grid.gap, 4);
+    }
+
+    #[test]
+    fn grid_layout_handles_single_items_and_forced_columns_unit() {
+        let single = PreparedGridList::from_items(&["solo".to_string()], 20);
+        assert_eq!(single.rows, vec![vec!["solo".to_string()]]);
+        assert_eq!(single.column_widths, vec![4]);
+
+        let values = vec![
+            "a".to_string(),
+            "bb".to_string(),
+            "ccc".to_string(),
+            "dddd".to_string(),
+        ];
+        let (rows, widths) = arrange_in_grid(&values, 40, 2, Some(2), 3);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], vec!["a".to_string(), "ccc".to_string()]);
+        assert_eq!(rows[1], vec!["bb".to_string(), "dddd".to_string()]);
+        assert_eq!(widths, vec![2, 4]);
+    }
+
+    #[test]
+    fn grid_layout_prefers_balanced_columns_when_width_allows_unit() {
+        let values = vec![
+            "one".to_string(),
+            "two".to_string(),
+            "three".to_string(),
+            "four".to_string(),
+        ];
+
+        let (rows, widths) = arrange_in_grid(&values, 20, 2, None, 1);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(widths.len(), 2);
+        assert_eq!(rows[0], vec!["one".to_string(), "three".to_string()]);
+        assert_eq!(rows[1], vec!["two".to_string(), "four".to_string()]);
     }
 }

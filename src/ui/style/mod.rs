@@ -178,7 +178,7 @@ pub fn style_spec<'a>(
     }
 }
 
-fn override_spec<'a>(overrides: &'a StyleOverrides, token: StyleToken) -> Option<&'a str> {
+fn override_spec(overrides: &StyleOverrides, token: StyleToken) -> Option<&str> {
     match token {
         StyleToken::None | StyleToken::PromptCommand => None,
         StyleToken::Trace | StyleToken::MessageTrace => overrides
@@ -420,5 +420,40 @@ mod tests {
         assert_eq!(apply_style_spec("x", "wat", true), "x");
         assert!(is_valid_style_spec("bold #abcdef"));
         assert!(!is_valid_style_spec("wat ???"));
+    }
+
+    #[test]
+    fn style_overrides_cover_value_painting_and_fallback_tokens_unit() {
+        let rose = resolve_theme("rose-pine-moon");
+        let overrides = StyleOverrides {
+            key: Some("green".to_string()),
+            number: Some("#123456".to_string()),
+            bool_true: Some("#0f0".to_string()),
+            message_error: Some("bold red".to_string()),
+            ..StyleOverrides::default()
+        };
+        let styler = ThemeStyler::new(true, &rose, &overrides);
+
+        assert_eq!(
+            style_spec(&rose, &overrides, StyleToken::TableHeader),
+            "green"
+        );
+        assert!(styler.paint_value("42").contains("\u{1b}["));
+        assert!(
+            styler
+                .paint("true", StyleToken::BoolTrue)
+                .contains("\u{1b}[")
+        );
+        assert!(
+            super::apply_style_with_theme_overrides(
+                "boom",
+                StyleToken::MessageError,
+                true,
+                &rose,
+                &overrides,
+            )
+            .contains("\u{1b}[")
+        );
+        assert!(super::apply_style_spec("x", "bold #abc", true).contains("\u{1b}["));
     }
 }

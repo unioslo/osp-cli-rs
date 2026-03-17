@@ -163,3 +163,87 @@ fn markdown_separator(widths: &[usize]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{emit_doc, emit_table};
+    use crate::ui::doc::{
+        Block, Doc, GuideEntriesBlock, GuideEntryRow, KeyValueRow, ParagraphBlock, SectionBlock,
+        SectionTitleChrome, TableBlock,
+    };
+
+    #[test]
+    fn markdown_emitter_renders_sections_with_suffixes_and_trailing_newline_unit() {
+        let doc = Doc {
+            blocks: vec![
+                Block::Section(SectionBlock {
+                    title: Some("Usage".to_string()),
+                    title_chrome: SectionTitleChrome::Ruled,
+                    body_indent: 0,
+                    inline_title_suffix: Some("osp history <COMMAND>".to_string()),
+                    trailing_newline: false,
+                    blocks: vec![Block::Paragraph(ParagraphBlock {
+                        text: "Run `osp history list`".to_string(),
+                        indent: 2,
+                        inline_markup: true,
+                    })],
+                }),
+                Block::Blank,
+                Block::Section(SectionBlock {
+                    title: Some("Commands".to_string()),
+                    title_chrome: SectionTitleChrome::Plain,
+                    body_indent: 0,
+                    inline_title_suffix: None,
+                    trailing_newline: false,
+                    blocks: vec![Block::GuideEntries(GuideEntriesBlock {
+                        default_indent: "  ".to_string(),
+                        default_gap: None,
+                        rows: vec![GuideEntryRow {
+                            key: "list".to_string(),
+                            value: "List history entries".to_string(),
+                            indent_hint: None,
+                            gap_hint: None,
+                        }],
+                    })],
+                }),
+            ],
+        };
+
+        let rendered = emit_doc(&doc);
+
+        assert!(rendered.starts_with("## Usage osp history <COMMAND>\n\n  Run `osp history list`"));
+        assert!(rendered.contains("\n\nCommands:\n\n- `list` List history entries"));
+        assert!(rendered.ends_with('\n'));
+    }
+
+    #[test]
+    fn markdown_emitter_handles_empty_and_summary_tables_unit() {
+        let empty = TableBlock {
+            summary: Vec::new(),
+            headers: Vec::new(),
+            rows: Vec::new(),
+        };
+        assert_eq!(emit_table(&empty), "");
+
+        let table = TableBlock {
+            summary: vec![KeyValueRow {
+                key: "team".to_string(),
+                value: "prod".to_string(),
+                indent: None,
+                gap: None,
+            }],
+            headers: vec!["uid".to_string(), "mail".to_string()],
+            rows: vec![
+                vec!["alice".to_string(), "a@example.com".to_string()],
+                vec!["bob".to_string(), "".to_string()],
+            ],
+        };
+
+        let rendered = emit_table(&table);
+
+        assert!(rendered.contains("- team: prod"));
+        assert!(rendered.contains("| uid"));
+        assert!(rendered.contains("| ---"));
+        assert!(rendered.contains("| bob   |"));
+    }
+}

@@ -383,3 +383,50 @@ fn parsed_and_authored_guides_merge_round_trip_and_render_through_semantic_outpu
     assert!(value_lines.contains(&"rose-pine-moon".to_string()));
     assert!(value_lines.contains(&"2".to_string()));
 }
+
+#[test]
+fn mixed_guide_section_data_renders_through_canonical_pipeline_end_to_end() {
+    let guide = GuideView {
+        sections: vec![
+            GuideSection::new("Session", GuideSectionKind::Custom).data(json!({
+                "profile": "prod",
+                "theme": "rose-pine-moon"
+            })),
+            GuideSection::new("Examples", GuideSectionKind::Custom).data(json!([
+                "osp history list",
+                "osp history clear",
+                "osp history last",
+                "osp history search",
+                "osp history export",
+                "osp history import"
+            ])),
+            GuideSection::new("Shortcuts", GuideSectionKind::Custom).data(json!([
+                {"name": "list", "short_help": "List history"},
+                {"name": "clear", "short_help": "Clear history"}
+            ])),
+            GuideSection::new("Matrix", GuideSectionKind::Custom).data(json!([
+                {"uid": "alice", "state": "ok"},
+                {"uid": "bob", "state": "warn"}
+            ])),
+        ],
+        ..Default::default()
+    };
+    let output = guide.to_output_result();
+
+    let mut guide_settings = RenderSettings::test_plain(OutputFormat::Guide);
+    guide_settings.width = Some(40);
+    let rendered = render_output(&output, &guide_settings);
+    assert!(rendered.contains("Session"));
+    assert!(rendered.contains("profile"));
+    assert!(rendered.contains("osp history list"));
+    assert!(rendered.contains("alice"));
+
+    let mut markdown_settings = RenderSettings::test_plain(OutputFormat::Markdown);
+    markdown_settings.format_explicit = true;
+    let markdown = render_output(&output, &markdown_settings);
+    assert!(markdown.contains("## Session"));
+    assert!(markdown.contains("- profile: prod"));
+    assert!(markdown.contains("| name"));
+    assert!(markdown.contains("List history"));
+    assert!(markdown.contains("| uid"));
+}

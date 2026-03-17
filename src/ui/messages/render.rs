@@ -448,10 +448,25 @@ mod tests {
     use super::{
         MessageChrome, MessageFrameStyle, MessageRenderOptions, MessageRulePolicy, render_messages,
         render_messages_internal, render_messages_with_styler,
+        render_messages_with_styler_from_config,
     };
+    use crate::config::{ConfigLayer, ConfigResolver, LoadedLayers, ResolveOptions};
     use crate::ui::ThemeStyler;
     use crate::ui::messages::{MessageBuffer, MessageLevel};
     use crate::ui::theme::resolve_theme;
+
+    fn resolved_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
+        let mut defaults = ConfigLayer::default();
+        for (key, value) in entries {
+            defaults.set(*key, *value);
+        }
+        ConfigResolver::from_loaded_layers(LoadedLayers {
+            defaults,
+            ..LoadedLayers::default()
+        })
+        .resolve(ResolveOptions::default())
+        .expect("config should resolve")
+    }
 
     #[test]
     fn full_render_orders_sections_and_filters_levels() {
@@ -573,5 +588,62 @@ mod tests {
 
         assert!(rendered.contains("  \x1b[38;2;139;233;253minfo\x1b[0m"));
         assert!(rendered.ends_with(" hint\n"));
+    }
+
+    #[test]
+    fn config_driven_message_rendering_uses_layout_from_config_unit() {
+        let mut buffer = MessageBuffer::default();
+        buffer.error("bad");
+        let theme = resolve_theme("dracula");
+        let overrides = crate::ui::StyleOverrides::default();
+        let styler = ThemeStyler::new(true, &theme, &overrides);
+        let config = resolved_config(&[("ui.messages.layout", "compact")]);
+
+        let rendered = render_messages_with_styler_from_config(
+            &buffer,
+            &config,
+            MessageLevel::Error,
+            &styler,
+            MessageChrome::default(),
+        );
+
+        assert!(rendered.contains("Errors:"));
+        assert!(rendered.contains("bad"));
+        assert!(!rendered.contains("--------"));
+    }
+
+    #[test]
+    fn full_render_supports_bottom_and_round_frames_unit() {
+        let mut buffer = MessageBuffer::default();
+        buffer.error("bad");
+
+        let bottom = render_messages_internal(
+            &buffer,
+            MessageRenderOptions::full(MessageLevel::Error),
+            None,
+            MessageChrome {
+                frame_style: MessageFrameStyle::Bottom,
+                ruled_policy: MessageRulePolicy::PerSection,
+                unicode: false,
+                width: Some(12),
+            },
+        );
+        assert!(bottom.starts_with("Errors:"));
+        assert!(bottom.contains("\n------------"));
+
+        let round = render_messages_internal(
+            &buffer,
+            MessageRenderOptions::full(MessageLevel::Error),
+            None,
+            MessageChrome {
+                frame_style: MessageFrameStyle::Round,
+                ruled_policy: MessageRulePolicy::PerSection,
+                unicode: true,
+                width: Some(14),
+            },
+        );
+        assert!(round.contains('╭'));
+        assert!(round.contains('│'));
+        assert!(round.contains('╯'));
     }
 }

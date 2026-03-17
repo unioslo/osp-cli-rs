@@ -1,5 +1,7 @@
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use crate::core::output_model::{OutputDocument, OutputDocumentKind, OutputResult};
+use crate::core::output_model::{
+    Group, OutputDocument, OutputDocumentKind, OutputItems, OutputMeta, OutputResult,
+};
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::row;
 use serde_json::json;
@@ -452,4 +454,112 @@ fn ui2_help_chrome_settings_override_indent_gap_and_spacing_unit() {
         rendered,
         "Commands:\n    show   Display current value\nOptions:\n    -h, --help   Print help\n"
     );
+}
+
+#[test]
+fn ui_grouped_outputs_lower_and_render_with_one_group_owner_unit() {
+    let output = OutputResult {
+        items: OutputItems::Groups(vec![
+            Group {
+                groups: row! { "team" => "prod" },
+                aggregates: row! { "count" => 2 },
+                rows: vec![row! { "uid" => "alice" }, row! { "uid" => "bob" }],
+            },
+            Group {
+                groups: row! { "team" => "stage" },
+                aggregates: row! { "count" => 1 },
+                rows: vec![row! { "uid" => "carol" }],
+            },
+        ]),
+        document: None,
+        meta: OutputMeta {
+            key_index: vec!["team".to_string(), "count".to_string(), "uid".to_string()],
+            column_align: Vec::new(),
+            wants_copy: false,
+            grouped: true,
+            render_recommendation: None,
+        },
+    };
+
+    let table_plan = plan_output(
+        &output,
+        &RenderSettings::test_plain(OutputFormat::Table),
+        RenderProfile::Normal,
+    );
+    let table_doc = super::lower::lower_output(&output, &table_plan);
+    assert!(matches!(table_doc.blocks[0], Block::Table(_)));
+    assert!(matches!(table_doc.blocks[1], Block::Blank));
+    assert!(matches!(table_doc.blocks[2], Block::Table(_)));
+    let Block::Table(first_group) = &table_doc.blocks[0] else {
+        panic!("expected first grouped table");
+    };
+    assert_eq!(first_group.summary[0].key, "team");
+    assert_eq!(first_group.summary[1].key, "count");
+
+    let mut json_settings = RenderSettings::test_plain(OutputFormat::Json);
+    json_settings.format_explicit = true;
+    let rendered_json = render_output(&output, &json_settings);
+    assert!(rendered_json.contains("\"groups\""));
+    assert!(rendered_json.contains("\"aggregates\""));
+    assert!(rendered_json.contains("\"rows\""));
+}
+
+#[test]
+fn ui_help_layout_lowers_mixed_structured_section_data_through_one_pipeline_unit() {
+    let guide = GuideView {
+        sections: vec![
+            GuideSection::new("Session", GuideSectionKind::Custom).data(json!({
+                "profile": "prod",
+                "theme": "rose-pine-moon"
+            })),
+            GuideSection::new("Examples", GuideSectionKind::Custom).data(json!([
+                "osp history list",
+                "osp history clear",
+                "osp history last",
+                "osp history search",
+                "osp history export",
+                "osp history import"
+            ])),
+            GuideSection::new("Shortcuts", GuideSectionKind::Custom).data(json!([
+                {"name": "list", "short_help": "List history"},
+                {"name": "clear", "short_help": "Clear history"}
+            ])),
+            GuideSection::new("Matrix", GuideSectionKind::Custom).data(json!([
+                {"uid": "alice", "state": "ok"},
+                {"uid": "bob", "state": "warn"}
+            ])),
+        ],
+        ..Default::default()
+    };
+    let mut settings = RenderSettings::test_plain(OutputFormat::Guide);
+    settings.width = Some(40);
+    let plan = plan_output(&guide.to_output_result(), &settings, RenderProfile::Normal);
+    let doc = super::lower::lower_guide_help_layout(&guide, &plan, HelpLayout::Full, false);
+
+    let Block::Section(session) = &doc.blocks[0] else {
+        panic!("expected session section");
+    };
+    assert!(matches!(session.blocks[0], Block::KeyValue(_)));
+    let Block::Section(examples) = &doc.blocks[2] else {
+        panic!("expected examples section");
+    };
+    let Block::List(list) = &examples.blocks[0] else {
+        panic!("expected scalar list");
+    };
+    assert!(list.auto_grid);
+    let Block::Section(shortcuts) = &doc.blocks[4] else {
+        panic!("expected shortcuts section");
+    };
+    assert!(matches!(shortcuts.blocks[0], Block::GuideEntries(_)));
+    let Block::Section(matrix) = &doc.blocks[6] else {
+        panic!("expected matrix section");
+    };
+    assert!(matches!(matrix.blocks[0], Block::Table(_)));
+
+    let rendered = render_guide_with_layout(&guide, &settings, HelpLayout::Full);
+    assert!(rendered.contains("Session"));
+    assert!(rendered.contains("profile"));
+    assert!(rendered.contains("osp history list"));
+    assert!(rendered.contains("list"));
+    assert!(rendered.contains("alice"));
 }

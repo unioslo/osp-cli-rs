@@ -82,6 +82,25 @@ pub fn render_rows(rows: &[crate::core::row::Row], settings: &RenderSettings) ->
     )
 }
 
+/// Renders structured output using the canonical UI pipeline.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::output::OutputFormat;
+/// use osp_cli::core::output_model::OutputResult;
+/// use osp_cli::row;
+/// use osp_cli::ui::{RenderSettings, render_output};
+///
+/// let output = OutputResult::from_rows(vec![row! {
+///     "uid" => "alice",
+///     "mail" => "a@example.com",
+/// }]);
+/// let rendered = render_output(&output, &RenderSettings::test_plain(OutputFormat::Markdown));
+///
+/// assert!(rendered.contains("| uid"));
+/// assert!(rendered.contains("alice"));
+/// ```
 pub fn render_output(output: &OutputResult, settings: &RenderSettings) -> String {
     render_output_with_profile(output, settings, RenderProfile::Normal)
 }

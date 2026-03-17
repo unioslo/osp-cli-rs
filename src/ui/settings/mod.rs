@@ -939,16 +939,23 @@ pub fn resolve_settings(
 #[cfg(test)]
 mod tests {
     use super::{
-        HelpLayout, apply_render_config_overrides, config_int, config_non_empty_string,
-        config_usize_override, help_layout_from_config,
+        GuideDefaultFormat, HelpChromeSettings, HelpLayout, HelpTableChrome, RenderBackend,
+        RenderProfile, RenderRuntime, RenderSettingsBuilder, TableBorderStyle, TableOverflow,
+        UiPresentation, apply_render_config_overrides, config_int, config_non_empty_string,
+        config_usize_override, explain_presentation_effect, help_layout_from_config,
     };
-    use crate::config::{ConfigLayer, ConfigResolver, LoadedLayers, ResolveOptions};
-    use crate::core::output::OutputFormat;
+    use crate::config::{
+        ConfigLayer, ConfigResolver, ConfigSource, ConfigValue, LoadedLayers, ResolveOptions,
+    };
+    use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
+    use crate::core::output_model::{
+        Group, OutputItems, OutputMeta, OutputResult, RenderRecommendation,
+    };
+    use crate::guide::GuideView;
+    use crate::row;
     use crate::ui::build_presentation_defaults_layer;
     use crate::ui::section_chrome::{RuledSectionPolicy, SectionFrameStyle};
-    use crate::ui::settings::{
-        GuideDefaultFormat, RenderSettings, TableBorderStyle, TableOverflow,
-    };
+    use crate::ui::settings::RenderSettings;
 
     fn resolved_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
@@ -1112,5 +1119,147 @@ mod tests {
         assert_eq!(settings.help_chrome.entry_indent, Some(4));
         assert_eq!(settings.help_chrome.entry_gap, Some(3));
         assert_eq!(settings.help_chrome.section_spacing, None);
+    }
+
+    #[test]
+    fn render_settings_resolution_and_output_format_ownership_unit() {
+        let defaults = RenderSettings::default();
+        assert_eq!(defaults.format, OutputFormat::Auto);
+        assert_eq!(defaults.theme_name, super::DEFAULT_THEME_NAME);
+        assert_eq!(defaults.table_border, TableBorderStyle::Square);
+        assert_eq!(defaults.help_chrome, HelpChromeSettings::default());
+
+        let plain_settings = RenderSettingsBuilder::default()
+            .with_runtime(
+                RenderRuntime::builder()
+                    .with_stdout_is_tty(false)
+                    .with_width(72)
+                    .build(),
+            )
+            .build();
+        let plain = plain_settings.resolve_render_settings();
+        assert_eq!(plain.backend, RenderBackend::Plain);
+        assert!(!plain.color);
+        assert!(!plain.unicode);
+        assert_eq!(plain.width, Some(72));
+
+        let rich_settings = RenderSettingsBuilder::default()
+            .with_mode(RenderMode::Auto)
+            .with_color(ColorMode::Always)
+            .with_unicode(UnicodeMode::Always)
+            .with_runtime(
+                RenderRuntime::builder()
+                    .with_stdout_is_tty(true)
+                    .with_terminal("xterm-256color")
+                    .with_locale_utf8(true)
+                    .with_width(88)
+                    .build(),
+            )
+            .build();
+        let rich = rich_settings.resolve_render_settings();
+        assert_eq!(rich.backend, RenderBackend::Rich);
+        assert!(rich.color);
+        assert!(rich.unicode);
+        assert_eq!(rich.width, Some(88));
+
+        let copy = rich_settings.plain_copy_settings();
+        let resolved_copy = super::resolve_settings(&rich_settings, RenderProfile::CopySafe);
+        assert_eq!(copy.mode, RenderMode::Plain);
+        assert_eq!(copy.color, ColorMode::Never);
+        assert_eq!(copy.unicode, UnicodeMode::Never);
+        assert_eq!(resolved_copy.backend, RenderBackend::Plain);
+        assert!(!resolved_copy.color);
+        assert!(!resolved_copy.unicode);
+
+        let guide_output =
+            GuideView::from_text("Usage: osp history <COMMAND>\n").to_output_result();
+        assert_eq!(
+            plain_settings.resolve_output_format(&guide_output),
+            OutputFormat::Guide
+        );
+
+        let mut explicit_json = RenderSettings::test_plain(OutputFormat::Json);
+        explicit_json.format_explicit = true;
+        assert_eq!(
+            explicit_json.resolve_output_format(&guide_output),
+            OutputFormat::Json
+        );
+
+        let mut recommended = OutputResult::from_rows(vec![row! { "uid" => "alice" }]);
+        recommended.meta.render_recommendation =
+            Some(RenderRecommendation::Format(OutputFormat::Markdown));
+        assert_eq!(
+            plain_settings.resolve_output_format(&recommended),
+            OutputFormat::Markdown
+        );
+
+        let grouped = OutputResult {
+            items: OutputItems::Groups(vec![Group {
+                groups: row! { "team" => "prod" },
+                aggregates: row! { "count" => 2 },
+                rows: vec![row! { "uid" => "alice" }, row! { "uid" => "bob" }],
+            }]),
+            document: None,
+            meta: OutputMeta {
+                key_index: vec!["team".to_string(), "count".to_string(), "uid".to_string()],
+                column_align: Vec::new(),
+                wants_copy: false,
+                grouped: true,
+                render_recommendation: None,
+            },
+        };
+        assert_eq!(
+            plain_settings.resolve_output_format(&grouped),
+            OutputFormat::Table
+        );
+
+        let value_output = OutputResult::from_rows(vec![row! { "value" => "hello" }]);
+        assert_eq!(
+            plain_settings.resolve_output_format(&value_output),
+            OutputFormat::Value
+        );
+
+        let mreg_output = OutputResult::from_rows(vec![row! { "uid" => "alice" }]);
+        assert_eq!(
+            plain_settings.resolve_output_format(&mreg_output),
+            OutputFormat::Mreg
+        );
+    }
+
+    #[test]
+    fn parser_aliases_and_presentation_effects_remain_canonical_unit() {
+        assert_eq!(
+            GuideDefaultFormat::parse("none"),
+            Some(GuideDefaultFormat::Inherit)
+        );
+        assert_eq!(
+            HelpTableChrome::parse("boxed"),
+            Some(HelpTableChrome::Square)
+        );
+        assert_eq!(
+            HelpTableChrome::parse("rounded"),
+            Some(HelpTableChrome::Round)
+        );
+        assert_eq!(
+            HelpTableChrome::Square.resolve(TableBorderStyle::None),
+            TableBorderStyle::Square
+        );
+        assert_eq!(TableOverflow::parse("hidden"), Some(TableOverflow::Clip));
+        assert_eq!(
+            TableBorderStyle::parse("boxed"),
+            Some(TableBorderStyle::Square)
+        );
+        assert_eq!(
+            UiPresentation::parse("gammel-og-bitter"),
+            Some(UiPresentation::Austere)
+        );
+        assert_eq!(UiPresentation::Compact.as_config_value(), "compact");
+
+        let config = resolved_config_with_presentation(&[("ui.presentation", "compact")]);
+        let effect = explain_presentation_effect(&config, "ui.messages.layout")
+            .expect("presentation default should be explainable");
+        assert_eq!(effect.preset, UiPresentation::Compact);
+        assert_eq!(effect.seeded_value, ConfigValue::from("compact"));
+        assert_eq!(effect.preset_source, ConfigSource::BuiltinDefaults);
     }
 }

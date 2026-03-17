@@ -76,3 +76,23 @@ pub(crate) fn visible_inline_text(value: &str) -> String {
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::visible_inline_text;
+
+    #[test]
+    fn visible_inline_text_unwraps_escaped_and_balanced_markup_unit() {
+        assert_eq!(
+            visible_inline_text(r"\*literal\* `code` **bold** *italics* ``two words``"),
+            "*literal* code bold italics two words"
+        );
+    }
+
+    #[test]
+    fn visible_inline_text_preserves_unbalanced_markup_unit() {
+        assert_eq!(visible_inline_text("keep `broken"), "keep `broken");
+        assert_eq!(visible_inline_text("keep **broken"), "keep **broken");
+        assert_eq!(visible_inline_text("keep *broken"), "keep *broken");
+    }
+}
