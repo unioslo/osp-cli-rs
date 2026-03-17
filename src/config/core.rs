@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::OnceLock;
 
 use crate::config::ConfigError;
+pub(crate) use crate::normalize::{normalize_identifier, normalize_optional_identifier};
 
 /// Result details for an in-place TOML edit operation.
 #[derive(Debug, Clone, PartialEq)]
@@ -280,6 +281,7 @@ impl BootstrapKeySpec {
 #[must_use]
 pub struct SchemaEntry {
     canonical_key: Option<&'static str>,
+    doc: Option<&'static str>,
     value_type: SchemaValueType,
     required: bool,
     writable: bool,
@@ -305,6 +307,7 @@ impl SchemaEntry {
     pub fn string() -> Self {
         Self {
             canonical_key: None,
+            doc: None,
             value_type: SchemaValueType::String,
             required: false,
             writable: true,
@@ -320,6 +323,7 @@ impl SchemaEntry {
     pub fn boolean() -> Self {
         Self {
             canonical_key: None,
+            doc: None,
             value_type: SchemaValueType::Bool,
             required: false,
             writable: true,
@@ -335,6 +339,7 @@ impl SchemaEntry {
     pub fn integer() -> Self {
         Self {
             canonical_key: None,
+            doc: None,
             value_type: SchemaValueType::Integer,
             required: false,
             writable: true,
@@ -350,6 +355,7 @@ impl SchemaEntry {
     pub fn float() -> Self {
         Self {
             canonical_key: None,
+            doc: None,
             value_type: SchemaValueType::Float,
             required: false,
             writable: true,
@@ -365,6 +371,7 @@ impl SchemaEntry {
     pub fn string_list() -> Self {
         Self {
             canonical_key: None,
+            doc: None,
             value_type: SchemaValueType::StringList,
             required: false,
             writable: true,
@@ -385,6 +392,12 @@ impl SchemaEntry {
     /// Marks the key as read-only for user-provided config sources.
     pub fn read_only(mut self) -> Self {
         self.writable = false;
+        self
+    }
+
+    /// Attaches a human-readable description to the key.
+    pub fn with_doc(mut self, doc: &'static str) -> Self {
+        self.doc = Some(doc);
         self
     }
 
@@ -425,6 +438,11 @@ impl SchemaEntry {
     /// Returns the normalized allow-list, if the key is enumerated.
     pub fn allowed_values(&self) -> Option<&[String]> {
         self.allowed_values.as_deref()
+    }
+
+    /// Returns the human-readable description for the key, if one exists.
+    pub fn doc(&self) -> Option<&'static str> {
+        self.doc
     }
 
     /// Returns whether the key is visible in resolved runtime config.
@@ -494,187 +512,607 @@ impl ConfigSchema {
             entries: BTreeMap::new(),
             allow_extensions_namespace: true,
         };
-
-        schema.insert(
-            "profile.default",
-            SchemaEntry::string()
-                .bootstrap_only(
-                    BootstrapPhase::Profile,
-                    BootstrapScopeRule::GlobalOrTerminal,
-                )
-                .with_bootstrap_value_rule(BootstrapValueRule::NonEmptyString),
-        );
-        schema.insert(
-            "profile.active",
-            SchemaEntry::string().required().read_only(),
-        );
-        schema.insert("theme.name", SchemaEntry::string());
-        schema.insert("theme.path", SchemaEntry::string_list());
-        schema.insert("user.name", SchemaEntry::string());
-        schema.insert("user.display_name", SchemaEntry::string());
-        schema.insert("user.full_name", SchemaEntry::string());
-        schema.insert("domain", SchemaEntry::string());
-
-        schema.insert(
-            "ui.format",
-            SchemaEntry::string()
-                .with_allowed_values(["auto", "guide", "json", "table", "md", "mreg", "value"]),
-        );
-        schema.insert(
-            "ui.mode",
-            SchemaEntry::string().with_allowed_values(["auto", "plain", "rich"]),
-        );
-        schema.insert(
-            "ui.presentation",
-            SchemaEntry::string().with_allowed_values([
-                "expressive",
-                "compact",
-                "austere",
-                "gammel-og-bitter",
-            ]),
-        );
-        schema.insert(
-            "ui.color.mode",
-            SchemaEntry::string().with_allowed_values(["auto", "always", "never"]),
-        );
-        schema.insert(
-            "ui.unicode.mode",
-            SchemaEntry::string().with_allowed_values(["auto", "always", "never"]),
-        );
-        schema.insert("ui.width", SchemaEntry::integer());
-        schema.insert("ui.margin", SchemaEntry::integer());
-        schema.insert("ui.indent", SchemaEntry::integer());
-        schema.insert(
-            "ui.help.level",
-            SchemaEntry::string()
-                .with_allowed_values(["inherit", "none", "tiny", "normal", "verbose"]),
-        );
-        schema.insert(
-            "ui.guide.default_format",
-            SchemaEntry::string().with_allowed_values(["guide", "inherit", "none"]),
-        );
-        schema.insert(
-            "ui.messages.layout",
-            SchemaEntry::string().with_allowed_values(["grouped", "minimal"]),
-        );
-        schema.insert(
-            "ui.chrome.frame",
-            SchemaEntry::string().with_allowed_values([
-                "none",
-                "top",
-                "bottom",
-                "top-bottom",
-                "square",
-                "round",
-            ]),
-        );
-        schema.insert(
-            "ui.chrome.rule_policy",
-            SchemaEntry::string().with_allowed_values([
-                "per-section",
-                "independent",
-                "separate",
-                "shared",
-                "stacked",
-                "list",
-            ]),
-        );
-        schema.insert(
-            "ui.table.overflow",
-            SchemaEntry::string().with_allowed_values([
-                "clip", "hidden", "crop", "ellipsis", "truncate", "wrap", "none", "visible",
-            ]),
-        );
-        schema.insert(
-            "ui.table.border",
-            SchemaEntry::string().with_allowed_values(["none", "square", "round"]),
-        );
-        schema.insert(
-            "ui.help.table_chrome",
-            SchemaEntry::string().with_allowed_values(["inherit", "none", "square", "round"]),
-        );
-        schema.insert("ui.help.entry_indent", SchemaEntry::string());
-        schema.insert("ui.help.entry_gap", SchemaEntry::string());
-        schema.insert("ui.help.section_spacing", SchemaEntry::string());
-        schema.insert("ui.short_list_max", SchemaEntry::integer());
-        schema.insert("ui.medium_list_max", SchemaEntry::integer());
-        schema.insert("ui.grid_padding", SchemaEntry::integer());
-        schema.insert("ui.grid_columns", SchemaEntry::integer());
-        schema.insert("ui.column_weight", SchemaEntry::integer());
-        schema.insert("ui.mreg.stack_min_col_width", SchemaEntry::integer());
-        schema.insert("ui.mreg.stack_overflow_ratio", SchemaEntry::integer());
-        schema.insert(
-            "ui.message.verbosity",
-            SchemaEntry::string()
-                .with_allowed_values(["error", "warning", "success", "info", "trace"]),
-        );
-        schema.insert("ui.prompt", SchemaEntry::string());
-        schema.insert("ui.prompt.secrets", SchemaEntry::boolean());
-        schema.insert("extensions.plugins.timeout_ms", SchemaEntry::integer());
-        schema.insert("extensions.plugins.discovery.path", SchemaEntry::boolean());
-        schema.insert("repl.prompt", SchemaEntry::string());
-        schema.insert(
-            "repl.input_mode",
-            SchemaEntry::string().with_allowed_values(["auto", "interactive", "basic"]),
-        );
-        schema.insert("repl.simple_prompt", SchemaEntry::boolean());
-        schema.insert("repl.shell_indicator", SchemaEntry::string());
-        schema.insert(
-            "repl.intro",
-            SchemaEntry::string().with_allowed_values(["none", "minimal", "compact", "full"]),
-        );
-        schema.insert("repl.intro_template.minimal", SchemaEntry::string());
-        schema.insert("repl.intro_template.compact", SchemaEntry::string());
-        schema.insert("repl.intro_template.full", SchemaEntry::string());
-        schema.insert("repl.history.path", SchemaEntry::string());
-        schema.insert("repl.history.max_entries", SchemaEntry::integer());
-        schema.insert("repl.history.enabled", SchemaEntry::boolean());
-        schema.insert("repl.history.dedupe", SchemaEntry::boolean());
-        schema.insert("repl.history.profile_scoped", SchemaEntry::boolean());
-        schema.insert("repl.history.menu_rows", SchemaEntry::integer());
-        schema.insert("repl.history.exclude", SchemaEntry::string_list());
-        schema.insert("session.cache.max_results", SchemaEntry::integer());
-        schema.insert("color.prompt.text", SchemaEntry::string());
-        schema.insert("color.prompt.command", SchemaEntry::string());
-        schema.insert("color.prompt.completion.text", SchemaEntry::string());
-        schema.insert("color.prompt.completion.background", SchemaEntry::string());
-        schema.insert("color.prompt.completion.highlight", SchemaEntry::string());
-        schema.insert("color.text", SchemaEntry::string());
-        schema.insert("color.text.muted", SchemaEntry::string());
-        schema.insert("color.key", SchemaEntry::string());
-        schema.insert("color.border", SchemaEntry::string());
-        schema.insert("color.table.header", SchemaEntry::string());
-        schema.insert("color.mreg.key", SchemaEntry::string());
-        schema.insert("color.value", SchemaEntry::string());
-        schema.insert("color.value.number", SchemaEntry::string());
-        schema.insert("color.value.bool_true", SchemaEntry::string());
-        schema.insert("color.value.bool_false", SchemaEntry::string());
-        schema.insert("color.value.null", SchemaEntry::string());
-        schema.insert("color.value.ipv4", SchemaEntry::string());
-        schema.insert("color.value.ipv6", SchemaEntry::string());
-        schema.insert("color.panel.border", SchemaEntry::string());
-        schema.insert("color.panel.title", SchemaEntry::string());
-        schema.insert("color.code", SchemaEntry::string());
-        schema.insert("color.json.key", SchemaEntry::string());
-        schema.insert("color.message.error", SchemaEntry::string());
-        schema.insert("color.message.warning", SchemaEntry::string());
-        schema.insert("color.message.success", SchemaEntry::string());
-        schema.insert("color.message.info", SchemaEntry::string());
-        schema.insert("color.message.trace", SchemaEntry::string());
-        schema.insert("auth.visible.builtins", SchemaEntry::string());
-        schema.insert("auth.visible.plugins", SchemaEntry::string());
-        schema.insert("debug.level", SchemaEntry::integer());
-        schema.insert("log.file.enabled", SchemaEntry::boolean());
-        schema.insert("log.file.path", SchemaEntry::string());
-        schema.insert(
-            "log.file.level",
-            SchemaEntry::string().with_allowed_values(["error", "warn", "info", "debug", "trace"]),
-        );
-
-        schema.insert("base.dir", SchemaEntry::string());
+        insert_identity_schema_keys(&mut schema);
+        insert_ui_schema_keys(&mut schema);
+        insert_repl_schema_keys(&mut schema);
+        insert_color_schema_keys(&mut schema);
+        insert_misc_schema_keys(&mut schema);
 
         schema
     }
+}
+
+fn insert_builtin_schema_key(
+    schema: &mut ConfigSchema,
+    key: &'static str,
+    entry: SchemaEntry,
+    doc: &'static str,
+) {
+    schema.insert(key, entry.with_doc(doc));
+}
+
+fn insert_identity_schema_keys(schema: &mut ConfigSchema) {
+    insert_builtin_schema_key(
+        schema,
+        "profile.default",
+        SchemaEntry::string()
+            .bootstrap_only(
+                BootstrapPhase::Profile,
+                BootstrapScopeRule::GlobalOrTerminal,
+            )
+            .with_bootstrap_value_rule(BootstrapValueRule::NonEmptyString),
+        "Default profile selected when no override is provided",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "profile.active",
+        SchemaEntry::string().required().read_only(),
+        "Active profile derived during resolution",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "theme.name",
+        SchemaEntry::string(),
+        "Name of the active color theme",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "theme.path",
+        SchemaEntry::string_list(),
+        "Extra theme search paths",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "user.name",
+        SchemaEntry::string(),
+        "Short user name used in prompts and interpolation",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "user.display_name",
+        SchemaEntry::string(),
+        "Preferred display name for the current user",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "user.full_name",
+        SchemaEntry::string(),
+        "Full name for the current user",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "domain",
+        SchemaEntry::string(),
+        "Default domain name used in prompts and interpolation",
+    );
+}
+
+fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
+    insert_builtin_schema_key(
+        schema,
+        "ui.format",
+        SchemaEntry::string()
+            .with_allowed_values(["auto", "guide", "json", "table", "md", "mreg", "value"]),
+        "Default output format",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.mode",
+        SchemaEntry::string().with_allowed_values(["auto", "plain", "rich"]),
+        "Preferred render mode",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.presentation",
+        SchemaEntry::string().with_allowed_values([
+            "expressive",
+            "compact",
+            "austere",
+            "gammel-og-bitter",
+        ]),
+        "UI presentation preset",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.color.mode",
+        SchemaEntry::string().with_allowed_values(["auto", "always", "never"]),
+        "Color rendering policy",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.unicode.mode",
+        SchemaEntry::string().with_allowed_values(["auto", "always", "never"]),
+        "Unicode rendering policy",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.width",
+        SchemaEntry::integer(),
+        "Default render width hint",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.margin",
+        SchemaEntry::integer(),
+        "Left margin used when rendering output",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.indent",
+        SchemaEntry::integer(),
+        "Indent width for nested output",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.help.level",
+        SchemaEntry::string().with_allowed_values(["inherit", "none", "tiny", "normal", "verbose"]),
+        "Help detail level or inherit",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.guide.default_format",
+        SchemaEntry::string().with_allowed_values(["guide", "inherit", "none"]),
+        "Guide rendering format used by help-like output",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.messages.layout",
+        SchemaEntry::string().with_allowed_values([
+            "full", "compact", "austere", "plain", "none", "grouped", "minimal",
+        ]),
+        "Message layout style",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.chrome.frame",
+        SchemaEntry::string().with_allowed_values([
+            "none",
+            "top",
+            "bottom",
+            "top-bottom",
+            "square",
+            "round",
+        ]),
+        "Section chrome frame style",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.chrome.rule_policy",
+        SchemaEntry::string().with_allowed_values([
+            "per-section",
+            "independent",
+            "separate",
+            "shared",
+            "stacked",
+            "list",
+        ]),
+        "How sibling section rules are shared",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.table.overflow",
+        SchemaEntry::string().with_allowed_values([
+            "clip", "hidden", "crop", "ellipsis", "truncate", "wrap", "none", "visible",
+        ]),
+        "Table overflow behavior",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.table.border",
+        SchemaEntry::string().with_allowed_values(["none", "square", "round"]),
+        "Table border style",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.help.table_chrome",
+        SchemaEntry::string().with_allowed_values(["inherit", "none", "square", "round"]),
+        "Help table chrome style or inherit",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.help.entry_indent",
+        SchemaEntry::string(),
+        "Help entry indent override or inherit",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.help.entry_gap",
+        SchemaEntry::string(),
+        "Help entry gap override or inherit",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.help.section_spacing",
+        SchemaEntry::string(),
+        "Help section spacing override or inherit",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.short_list_max",
+        SchemaEntry::integer(),
+        "Maximum items rendered as a short list",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.medium_list_max",
+        SchemaEntry::integer(),
+        "Maximum items rendered as a medium list",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.grid_padding",
+        SchemaEntry::integer(),
+        "Padding between rendered grid columns",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.grid_columns",
+        SchemaEntry::integer(),
+        "Fixed grid column count when set",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.column_weight",
+        SchemaEntry::integer(),
+        "Relative weight used for adaptive columns",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.mreg.stack_min_col_width",
+        SchemaEntry::integer(),
+        "Minimum column width before MREG stacks columns",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.mreg.stack_overflow_ratio",
+        SchemaEntry::integer(),
+        "Overflow ratio threshold for stacked MREG output",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.message.verbosity",
+        SchemaEntry::string().with_allowed_values(["error", "warning", "success", "info", "trace"]),
+        "Default message verbosity level",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.prompt",
+        SchemaEntry::string(),
+        "Prompt template used by the UI",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.prompt.secrets",
+        SchemaEntry::boolean(),
+        "Whether prompts may reveal secret values",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "extensions.plugins.timeout_ms",
+        SchemaEntry::integer(),
+        "Plugin process timeout in milliseconds",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "extensions.plugins.discovery.path",
+        SchemaEntry::boolean(),
+        "Whether plugin discovery should scan PATH",
+    );
+}
+
+fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
+    insert_builtin_schema_key(
+        schema,
+        "repl.prompt",
+        SchemaEntry::string(),
+        "Prompt template used by the REPL",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.prompt_right",
+        SchemaEntry::string(),
+        "Right-hand prompt template used by the REPL",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.input_mode",
+        SchemaEntry::string().with_allowed_values(["auto", "interactive", "basic"]),
+        "REPL input mode",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.simple_prompt",
+        SchemaEntry::boolean(),
+        "Whether the REPL should use the simple prompt",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.shell_indicator",
+        SchemaEntry::string(),
+        "Template for the current shell indicator",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.intro",
+        SchemaEntry::string().with_allowed_values(["none", "minimal", "compact", "full"]),
+        "REPL intro detail level",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.intro_template.minimal",
+        SchemaEntry::string(),
+        "Template for the minimal REPL intro",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.intro_template.compact",
+        SchemaEntry::string(),
+        "Template for the compact REPL intro",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.intro_template.full",
+        SchemaEntry::string(),
+        "Template for the full REPL intro",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.history.path",
+        SchemaEntry::string(),
+        "Path to the persistent REPL history file",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.history.max_entries",
+        SchemaEntry::integer(),
+        "Maximum number of persisted REPL history entries",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.history.enabled",
+        SchemaEntry::boolean(),
+        "Whether persistent REPL history is enabled",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.history.dedupe",
+        SchemaEntry::boolean(),
+        "Whether duplicate history entries are collapsed",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.history.profile_scoped",
+        SchemaEntry::boolean(),
+        "Whether history files are scoped by profile",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.history.menu_rows",
+        SchemaEntry::integer(),
+        "Maximum rows shown in the history menu",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.history.exclude",
+        SchemaEntry::string_list(),
+        "Commands excluded from persisted history",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "session.cache.max_results",
+        SchemaEntry::integer(),
+        "Maximum cached session results",
+    );
+}
+
+fn insert_color_schema_keys(schema: &mut ConfigSchema) {
+    insert_builtin_schema_key(
+        schema,
+        "color.prompt.text",
+        SchemaEntry::string(),
+        "Prompt text color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.prompt.command",
+        SchemaEntry::string(),
+        "Prompt command color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.prompt.completion.text",
+        SchemaEntry::string(),
+        "Completion text color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.prompt.completion.background",
+        SchemaEntry::string(),
+        "Completion background color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.prompt.completion.highlight",
+        SchemaEntry::string(),
+        "Completion highlight color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.text",
+        SchemaEntry::string(),
+        "Primary text color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.text.muted",
+        SchemaEntry::string(),
+        "Muted text color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.key",
+        SchemaEntry::string(),
+        "Key label color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.border",
+        SchemaEntry::string(),
+        "Border color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.table.header",
+        SchemaEntry::string(),
+        "Table header color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.mreg.key",
+        SchemaEntry::string(),
+        "MREG key color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.value",
+        SchemaEntry::string(),
+        "Value color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.value.number",
+        SchemaEntry::string(),
+        "Numeric value color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.value.bool_true",
+        SchemaEntry::string(),
+        "True boolean color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.value.bool_false",
+        SchemaEntry::string(),
+        "False boolean color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.value.null",
+        SchemaEntry::string(),
+        "Null value color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.value.ipv4",
+        SchemaEntry::string(),
+        "IPv4 value color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.value.ipv6",
+        SchemaEntry::string(),
+        "IPv6 value color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.panel.border",
+        SchemaEntry::string(),
+        "Panel border color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.panel.title",
+        SchemaEntry::string(),
+        "Panel title color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.code",
+        SchemaEntry::string(),
+        "Code block color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.json.key",
+        SchemaEntry::string(),
+        "JSON key color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.message.error",
+        SchemaEntry::string(),
+        "Error message color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.message.warning",
+        SchemaEntry::string(),
+        "Warning message color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.message.success",
+        SchemaEntry::string(),
+        "Success message color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.message.info",
+        SchemaEntry::string(),
+        "Info message color override",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "color.message.trace",
+        SchemaEntry::string(),
+        "Trace message color override",
+    );
+}
+
+fn insert_misc_schema_keys(schema: &mut ConfigSchema) {
+    insert_builtin_schema_key(
+        schema,
+        "auth.visible.builtins",
+        SchemaEntry::string(),
+        "Visible builtin auth command allow-list",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "auth.visible.plugins",
+        SchemaEntry::string(),
+        "Visible plugin auth command allow-list",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "debug.level",
+        SchemaEntry::integer(),
+        "Developer debug verbosity",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "log.file.enabled",
+        SchemaEntry::boolean(),
+        "Whether file logging is enabled",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "log.file.path",
+        SchemaEntry::string(),
+        "Path to the runtime log file",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "log.file.level",
+        SchemaEntry::string().with_allowed_values(["error", "warn", "info", "debug", "trace"]),
+        "Minimum log level written to the log file",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "base.dir",
+        SchemaEntry::string(),
+        "Base directory available for interpolation and tooling",
+    );
 }
 
 impl ConfigSchema {
@@ -733,6 +1171,12 @@ impl ConfigSchema {
         self.entries
             .iter()
             .map(|(key, entry)| (key.as_str(), entry))
+    }
+
+    /// Returns the schema-owned description for a key, if one exists.
+    pub fn doc_for_key(&self, key: &str) -> Option<&'static str> {
+        let normalized = key.trim().to_ascii_lowercase();
+        self.entries.get(&normalized).and_then(SchemaEntry::doc)
     }
 
     /// Returns the expected runtime type for a key.
@@ -1377,9 +1821,7 @@ impl ResolveOptions {
 
     /// Replaces the optional normalized profile override.
     pub fn with_profile_override(mut self, profile_override: Option<String>) -> Self {
-        self.profile_override = profile_override
-            .map(|value| normalize_identifier(&value))
-            .filter(|value| !value.is_empty());
+        self.profile_override = normalize_optional_identifier(profile_override);
         self
     }
 
@@ -1406,9 +1848,7 @@ impl ResolveOptions {
 
     /// Replaces the optional normalized terminal selector.
     pub fn with_terminal_override(mut self, terminal: Option<String>) -> Self {
-        self.terminal = terminal
-            .map(|value| normalize_identifier(&value))
-            .filter(|value| !value.is_empty());
+        self.terminal = normalize_optional_identifier(terminal);
         self
     }
 }
@@ -2144,21 +2584,9 @@ fn remaining_parts_are_bootstrap_profile_default(parts: &[&str]) -> bool {
 
 pub(crate) fn normalize_scope(scope: Scope) -> Scope {
     Scope {
-        profile: scope
-            .profile
-            .as_deref()
-            .map(normalize_identifier)
-            .filter(|value| !value.is_empty()),
-        terminal: scope
-            .terminal
-            .as_deref()
-            .map(normalize_identifier)
-            .filter(|value| !value.is_empty()),
+        profile: normalize_optional_identifier(scope.profile),
+        terminal: normalize_optional_identifier(scope.terminal),
     }
-}
-
-pub(crate) fn normalize_identifier(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
 }
 
 #[cfg(test)]

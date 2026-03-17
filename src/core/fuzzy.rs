@@ -41,6 +41,28 @@ pub fn completion_fuzzy_matcher() -> &'static ArinaeMatcher {
     MATCHER.get_or_init(|| ArinaeMatcher::new(CaseMatching::Smart, false, false))
 }
 
+/// Typo-tolerant fuzzy matcher for config-key recovery suggestions.
+///
+/// Config lookup failures should help with misspellings like
+/// `ui.formt -> ui.format`, but they should still stay narrower than broad
+/// search-oriented matching. Callers are expected to pair this matcher with
+/// explicit ranking such as same-namespace and last-segment preference.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::core::fuzzy::config_fuzzy_matcher;
+/// use skim::fuzzy_matcher::FuzzyMatcher;
+///
+/// assert!(config_fuzzy_matcher()
+///     .fuzzy_match("ui.format", "ui.formt")
+///     .is_some());
+/// ```
+pub fn config_fuzzy_matcher() -> &'static ArinaeMatcher {
+    static MATCHER: OnceLock<ArinaeMatcher> = OnceLock::new();
+    MATCHER.get_or_init(|| ArinaeMatcher::new(CaseMatching::Smart, true, false))
+}
+
 /// Typo-tolerant fuzzy matcher for explicit DSL `%quick` searches.
 ///
 /// `%quick` is the opt-in "be clever" path, so it intentionally accepts a

@@ -1,53 +1,37 @@
-use crate::config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
+use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
-use crate::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use crate::native::{NativeCommandCatalogEntry, NativeCommandRegistry};
-use crate::repl::{self, SharedHistory};
+use crate::repl;
 use clap::Parser;
 use miette::{Result, WrapErr, miette};
 
-use crate::guide::{GuideSection, GuideSectionKind, GuideView};
+use crate::guide::{GuideSection, GuideSectionKind, GuideView, HelpLevel};
+use crate::ui::RenderSettings;
 use crate::ui::messages::MessageLevel;
-use crate::ui::presentation::{HelpLevel, help_level};
-use crate::ui::theme::normalize_theme_name;
-use crate::ui::{RenderRuntime, RenderSettings, render_guide_payload_with_layout};
 use std::borrow::Cow;
 use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::time::Instant;
-use terminal_size::{Width, terminal_size};
 
 use super::help;
+use super::help::help_level;
 use crate::app::logging::{bootstrap_logging_config, init_developer_logging};
 use crate::app::sink::{StdIoUiSink, UiSink};
-use crate::app::{
-    AppClients, AppRuntime, AppSession, AuthState, LaunchContext, TerminalKind, UiState,
-};
-use crate::cli::commands::{
-    config as config_cmd, doctor as doctor_cmd, history as history_cmd, intro as intro_cmd,
-    plugins as plugins_cmd, theme as theme_cmd,
-};
+use crate::app::{AppClients, AppState, AuthState, UiState};
+use crate::cli::Cli;
 use crate::cli::invocation::{InvocationOptions, extend_with_invocation_help, scan_cli_argv};
-use crate::cli::{Cli, Commands};
-use crate::plugin::{
-    CommandCatalogEntry, DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext,
-    PluginDispatchError,
-};
+use crate::plugin::{CommandCatalogEntry, PluginDispatchError};
 
 pub(crate) use super::bootstrap::{
-    RuntimeConfigRequest, build_cli_session_layer, build_runtime_context, resolve_runtime_config,
+    RuntimeConfigRequest, prepare_startup_host, resolve_runtime_config,
 };
-pub(crate) use super::command_output::{CliCommandResult, CommandRenderRuntime, run_cli_command};
-pub(crate) use super::config_explain::{
-    ConfigExplainContext, config_explain_json, config_explain_result, config_value_to_json,
-    explain_runtime_config, format_scope, is_sensitive_key, render_config_explain_text,
-};
+pub(crate) use super::command_output::run_cli_command_with_ui;
 pub(crate) use super::dispatch::{
-    RunAction, build_dispatch_plan, ensure_builtin_visible_for, ensure_dispatch_visibility,
-    ensure_plugin_visible_for, normalize_cli_profile, normalize_profile_override,
+    DispatchPlan, RunAction, build_dispatch_plan, ensure_builtin_visible_for,
+    ensure_dispatch_visibility, ensure_plugin_visible_for, normalize_cli_profile,
+    normalize_profile_override,
 };
+use super::external::run_external_command;
 pub(crate) use super::external::run_external_command_with_help_renderer;
-use super::external::{ExternalCommandRuntime, run_external_command};
 #[cfg(test)]
 pub(crate) use super::repl_lifecycle::rebuild_repl_state;
 pub(crate) use super::timing::{TimingSummary, format_timing_badge, right_align_timing_line};
@@ -58,7 +42,6 @@ pub(crate) use crate::plugin::config::{
 pub(crate) use crate::plugin::config::{
     collect_plugin_config_env, config_value_to_plugin_env, plugin_config_env_name,
 };
-use crate::ui::theme_loader;
 
 pub(crate) const CMD_PLUGINS: &str = "plugins";
 pub(crate) const CMD_DOCTOR: &str = "doctor";
@@ -89,6 +72,12 @@ pub(crate) struct ResolvedInvocation {
     pub(crate) ui: UiState,
     pub(crate) plugin_provider: Option<String>,
     pub(crate) help_level: HelpLevel,
+}
+
+struct PreparedHostRun {
+    state: AppState,
+    dispatch: DispatchPlan,
+    invocation_ui: ResolvedInvocation,
 }
 
 #[derive(Debug)]
@@ -185,8 +174,10 @@ fn handle_clap_parse_error(
             let mut body = GuideView::from_text(&err.to_string());
             extend_with_invocation_help(&mut body, help_context.help_level);
             add_native_command_help(&mut body, &app.native_commands);
-            let rendered = render_guide_payload_with_layout(
-                &body.filtered_for_help_level(help_context.help_level),
+            let filtered = body.filtered_for_help_level(help_context.help_level);
+            let rendered = crate::ui::render_structured_output_with_source_guide(
+                &filtered.to_output_result(),
+                Some(&filtered),
                 &help_context.settings,
                 help_context.layout,
             );
@@ -219,94 +210,11 @@ fn run(
         ));
     }
 
-    let normalized_profile = normalize_cli_profile(&mut cli);
-    let runtime_load = cli.runtime_load_options();
-    // Startup resolves config in three phases:
-    // 1. bootstrap once to discover known profiles
-    // 2. build the session layer, including derived overrides
-    // 3. resolve again with the full session layer applied
-    let initial_config = resolve_runtime_config(
-        RuntimeConfigRequest::new(normalized_profile.clone(), Some("cli"))
-            .with_runtime_load(runtime_load)
-            .with_product_defaults(app.product_defaults.clone()),
-    )
-    .wrap_err("failed to resolve initial config for startup")?;
-    let known_profiles = initial_config.known_profiles().clone();
-    let dispatch = build_dispatch_plan(&mut cli, &known_profiles)?;
-    tracing::debug!(
-        action = ?dispatch.action,
-        profile_override = ?dispatch.profile_override,
-        known_profiles = known_profiles.len(),
-        "built dispatch plan"
-    );
-
-    let terminal_kind = dispatch.action.terminal_kind();
-    let runtime_context = build_runtime_context(dispatch.profile_override.clone(), terminal_kind);
-    let session_layer = build_cli_session_layer(
-        &cli,
-        runtime_context.profile_override().map(ToOwned::to_owned),
-        runtime_context.terminal_kind(),
-        runtime_load,
-        &app.product_defaults,
-    )?;
-    let launch_context = LaunchContext::default()
-        .with_plugin_dirs(cli.plugin_dirs.clone())
-        .with_runtime_load(runtime_load)
-        .with_startup_started_at(run_started);
-
-    let config = resolve_runtime_config(
-        RuntimeConfigRequest::new(
-            runtime_context.profile_override().map(ToOwned::to_owned),
-            Some(runtime_context.terminal_kind().as_config_terminal()),
-        )
-        .with_runtime_load(launch_context.runtime_load)
-        .with_product_defaults(app.product_defaults.clone())
-        .with_session_layer(session_layer.clone()),
-    )
-    .wrap_err("failed to resolve config with session layer")?;
-    let host_inputs = super::assembly::ResolvedHostInputs::derive(
-        &runtime_context,
-        &config,
-        &launch_context,
-        super::assembly::RenderSettingsSeed::DefaultAuto,
-        None,
-        None,
-        session_layer.clone(),
-    )
-    .wrap_err("failed to derive host runtime inputs for startup")?;
-    let mut state = crate::app::AppStateBuilder::new(runtime_context, config, host_inputs.ui)
-        .with_launch(launch_context)
-        .with_plugins(host_inputs.plugins)
-        .with_native_commands(app.native_commands.clone())
-        .with_session(host_inputs.default_session)
-        .with_themes(host_inputs.themes)
-        .build();
-    state
-        .runtime
-        .set_product_defaults(app.product_defaults.clone());
-    ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
-    let invocation_ui = resolve_invocation_ui(
-        state.runtime.config.resolved(),
-        &state.runtime.ui,
-        &invocation,
-    );
-    super::assembly::apply_runtime_side_effects(
-        state.runtime.config.resolved(),
-        invocation_ui.ui.debug_verbosity,
-        &state.runtime.themes,
-    );
-    tracing::debug!(
-        debug_count = invocation_ui.ui.debug_verbosity,
-        "developer logging initialized"
-    );
-
-    tracing::info!(
-        profile = %state.runtime.config.resolved().active_profile(),
-        terminal = %state.runtime.context.terminal_kind().as_config_terminal(),
-        action = ?dispatch.action,
-        plugin_timeout_ms = plugin_process_timeout(state.runtime.config.resolved()).as_millis(),
-        "osp session initialized"
-    );
+    let PreparedHostRun {
+        mut state,
+        dispatch,
+        invocation_ui,
+    } = prepare_host_run(&mut cli, &invocation, app, run_started)?;
 
     let action_started = Instant::now();
     let is_repl = matches!(dispatch.action, RunAction::Repl);
@@ -316,76 +224,36 @@ fn run(
             state.runtime.ui = invocation_ui.ui.clone();
             repl::run_plugin_repl(&mut state)
         }
-        RunAction::ReplCommand(args) => run_builtin_cli_command_parts(
+        RunAction::External(tokens) => run_external_command(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
-            &invocation_ui,
-            Commands::Repl(args),
-            sink,
-        ),
-        RunAction::Plugins(args) => run_builtin_cli_command_parts(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &invocation_ui,
-            Commands::Plugins(args),
-            sink,
-        ),
-        RunAction::Doctor(args) => run_builtin_cli_command_parts(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &invocation_ui,
-            Commands::Doctor(args),
-            sink,
-        ),
-        RunAction::Theme(args) => run_builtin_cli_command_parts(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &invocation_ui,
-            Commands::Theme(args),
-            sink,
-        ),
-        RunAction::Config(args) => run_builtin_cli_command_parts(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &invocation_ui,
-            Commands::Config(args),
-            sink,
-        ),
-        RunAction::History(args) => run_builtin_cli_command_parts(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &invocation_ui,
-            Commands::History(args),
-            sink,
-        ),
-        RunAction::Intro(args) => run_builtin_cli_command_parts(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &invocation_ui,
-            Commands::Intro(args),
-            sink,
-        ),
-        RunAction::External(ref tokens) => run_external_command(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            tokens,
+            &tokens,
             &invocation_ui,
         )
         .and_then(|result| {
-            run_cli_command(
-                &CommandRenderRuntime::new(state.runtime.config.resolved(), &invocation_ui.ui),
+            run_cli_command_with_ui(
+                state.runtime.config.resolved(),
+                &invocation_ui.ui,
                 result,
                 sink,
             )
         }),
+        action => {
+            let Some(command) = action.into_builtin_command() else {
+                return Err(miette!(
+                    "internal error: non-builtin run action reached builtin dispatch"
+                ));
+            };
+            super::run_cli_builtin_command_parts(
+                &mut state.runtime,
+                &mut state.session,
+                &state.clients,
+                &invocation_ui,
+                command,
+                sink,
+            )
+        }
     };
 
     if !is_repl && invocation_ui.ui.debug_verbosity > 0 {
@@ -418,6 +286,82 @@ fn run(
     result
 }
 
+// Startup is phase-based:
+// 1. bootstrap just enough config to understand profiles and dispatch
+// 2. assemble the runtime/session layer for the chosen action
+// 3. apply startup-time side effects before handing off to execution
+fn prepare_host_run(
+    cli: &mut Cli,
+    invocation: &InvocationOptions,
+    app: &super::AppDefinition,
+    run_started: Instant,
+) -> Result<PreparedHostRun> {
+    let normalized_profile = normalize_cli_profile(cli);
+    let runtime_load = cli.runtime_load_options();
+    let initial_config = resolve_runtime_config(
+        RuntimeConfigRequest::new(normalized_profile.clone(), Some("cli"))
+            .with_runtime_load(runtime_load)
+            .with_product_defaults(app.product_defaults.clone()),
+    )
+    .wrap_err("failed to resolve initial config for startup")?;
+    let known_profiles = initial_config.known_profiles().clone();
+    let dispatch = build_dispatch_plan(cli, &known_profiles)?;
+    tracing::debug!(
+        action = ?dispatch.action,
+        profile_override = ?dispatch.profile_override,
+        known_profiles = known_profiles.len(),
+        "built dispatch plan"
+    );
+
+    let terminal_kind = dispatch.action.terminal_kind();
+    let prepared = prepare_startup_host(
+        cli,
+        dispatch.profile_override.clone(),
+        terminal_kind,
+        run_started,
+        &app.product_defaults,
+    )?;
+    let mut state = crate::app::AppStateBuilder::from_host_inputs(
+        prepared.runtime_context,
+        prepared.config,
+        prepared.host_inputs,
+    )
+    .with_launch(prepared.launch_context)
+    .with_native_commands(app.native_commands.clone())
+    .build();
+    state
+        .runtime
+        .set_product_defaults(app.product_defaults.clone());
+    ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
+    let invocation_ui = resolve_invocation_ui(
+        state.runtime.config.resolved(),
+        &state.runtime.ui,
+        invocation,
+    );
+    super::assembly::apply_runtime_side_effects(
+        state.runtime.config.resolved(),
+        invocation_ui.ui.debug_verbosity,
+        &state.runtime.themes,
+    );
+    tracing::debug!(
+        debug_count = invocation_ui.ui.debug_verbosity,
+        "developer logging initialized"
+    );
+    tracing::info!(
+        profile = %state.runtime.config.resolved().active_profile(),
+        terminal = %state.runtime.context.terminal_kind().as_config_terminal(),
+        action = ?dispatch.action,
+        plugin_timeout_ms = super::plugin_process_timeout(state.runtime.config.resolved()).as_millis(),
+        "osp session initialized"
+    );
+
+    Ok(PreparedHostRun {
+        state,
+        dispatch,
+        invocation_ui,
+    })
+}
+
 pub(crate) fn authorized_command_catalog_for(
     auth: &AuthState,
     clients: &AppClients,
@@ -435,206 +379,6 @@ pub(crate) fn authorized_command_catalog_for(
         .into_iter()
         .filter(|entry| auth.is_external_command_visible(&entry.name))
         .collect())
-}
-
-fn run_builtin_cli_command_parts(
-    runtime: &mut AppRuntime,
-    session: &mut AppSession,
-    clients: &AppClients,
-    invocation: &ResolvedInvocation,
-    command: Commands,
-    sink: &mut dyn UiSink,
-) -> Result<i32> {
-    let result =
-        dispatch_builtin_command_parts(runtime, session, clients, None, Some(invocation), command)?
-            .ok_or_else(|| miette!("expected builtin command"))?;
-    run_cli_command(
-        &CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
-        result,
-        sink,
-    )
-}
-
-pub(crate) fn run_inline_builtin_command(
-    runtime: &mut AppRuntime,
-    session: &mut AppSession,
-    clients: &AppClients,
-    invocation: Option<&ResolvedInvocation>,
-    command: Commands,
-    stages: &[String],
-) -> Result<Option<CliCommandResult>> {
-    if matches!(command, Commands::External(_)) {
-        return Ok(None);
-    }
-
-    let spec = repl::repl_command_spec(&command);
-    ensure_command_supports_dsl(&spec, stages)?;
-    dispatch_builtin_command_parts(runtime, session, clients, None, invocation, command)
-}
-
-pub(crate) fn dispatch_builtin_command_parts(
-    runtime: &mut AppRuntime,
-    session: &mut AppSession,
-    clients: &AppClients,
-    repl_history: Option<&SharedHistory>,
-    invocation: Option<&ResolvedInvocation>,
-    command: Commands,
-) -> Result<Option<CliCommandResult>> {
-    let invocation_ui = ui_state_for_invocation(&runtime.ui, invocation);
-    match command {
-        Commands::Plugins(args) => {
-            ensure_builtin_visible_for(&runtime.auth, CMD_PLUGINS)?;
-            plugins_cmd::run_plugins_command(plugins_command_context(runtime, clients), args)
-                .map(Some)
-        }
-        Commands::Doctor(args) => {
-            ensure_builtin_visible_for(&runtime.auth, CMD_DOCTOR)?;
-            doctor_cmd::run_doctor_command(
-                doctor_command_context(runtime, session, clients, &invocation_ui),
-                args,
-            )
-            .map(Some)
-        }
-        Commands::Theme(args) => {
-            ensure_builtin_visible_for(&runtime.auth, CMD_THEME)?;
-            let ui = &invocation_ui;
-            let themes = &runtime.themes;
-            theme_cmd::run_theme_command(
-                &mut session.config_overrides,
-                theme_cmd::ThemeCommandContext { ui, themes },
-                args,
-            )
-            .map(Some)
-        }
-        Commands::Config(args) => {
-            ensure_builtin_visible_for(&runtime.auth, CMD_CONFIG)?;
-            config_cmd::run_config_command(
-                config_command_context(runtime, session, &invocation_ui),
-                args,
-            )
-            .map(Some)
-        }
-        Commands::History(args) => {
-            ensure_builtin_visible_for(&runtime.auth, CMD_HISTORY)?;
-            match repl_history {
-                Some(history) => {
-                    history_cmd::run_history_repl_command(session, args, history).map(Some)
-                }
-                None => history_cmd::run_history_command(args).map(Some),
-            }
-        }
-        Commands::Intro(args) => intro_cmd::run_intro_command(
-            intro_command_context(runtime, session, clients, &invocation_ui),
-            args,
-        )
-        .map(Some),
-        Commands::Repl(args) => {
-            if repl_history.is_some() {
-                Err(miette!("`repl` debug commands are not available in REPL"))
-            } else {
-                repl::run_repl_debug_command_for(runtime, session, clients, args).map(Some)
-            }
-        }
-        Commands::External(_) => Ok(None),
-    }
-}
-
-fn plugins_command_context<'a>(
-    runtime: &'a AppRuntime,
-    clients: &'a AppClients,
-) -> plugins_cmd::PluginsCommandContext<'a> {
-    plugins_cmd::PluginsCommandContext {
-        context: &runtime.context,
-        config: runtime.config.resolved(),
-        config_state: Some(&runtime.config),
-        auth: &runtime.auth,
-        clients: Some(clients),
-        plugin_manager: clients.plugins(),
-        product_defaults: runtime.product_defaults(),
-        runtime_load: runtime.launch.runtime_load,
-    }
-}
-
-fn config_read_context<'a>(
-    runtime: &'a AppRuntime,
-    session: &'a AppSession,
-    ui: &'a UiState,
-) -> config_cmd::ConfigReadContext<'a> {
-    config_cmd::ConfigReadContext {
-        context: &runtime.context,
-        config: runtime.config.resolved(),
-        ui,
-        themes: &runtime.themes,
-        config_overrides: &session.config_overrides,
-        product_defaults: runtime.product_defaults(),
-        runtime_load: runtime.launch.runtime_load,
-    }
-}
-
-fn config_command_context<'a>(
-    runtime: &'a AppRuntime,
-    session: &'a mut AppSession,
-    ui: &'a UiState,
-) -> config_cmd::ConfigCommandContext<'a> {
-    config_cmd::ConfigCommandContext {
-        context: &runtime.context,
-        config: runtime.config.resolved(),
-        ui,
-        themes: &runtime.themes,
-        config_overrides: &mut session.config_overrides,
-        product_defaults: runtime.product_defaults(),
-        runtime_load: runtime.launch.runtime_load,
-    }
-}
-
-fn doctor_command_context<'a>(
-    runtime: &'a AppRuntime,
-    session: &'a AppSession,
-    clients: &'a AppClients,
-    ui: &'a UiState,
-) -> doctor_cmd::DoctorCommandContext<'a> {
-    doctor_cmd::DoctorCommandContext {
-        config: config_read_context(runtime, session, ui),
-        plugins: plugins_command_context(runtime, clients),
-        ui,
-        auth: &runtime.auth,
-        themes: &runtime.themes,
-        last_failure: session.last_failure.as_ref(),
-    }
-}
-
-fn intro_command_context<'a>(
-    runtime: &'a AppRuntime,
-    session: &'a AppSession,
-    clients: &'a AppClients,
-    ui: &'a UiState,
-) -> intro_cmd::IntroCommandContext<'a> {
-    let view = repl::ReplViewContext {
-        config: runtime.config.resolved(),
-        ui,
-        auth: &runtime.auth,
-        themes: &runtime.themes,
-        scope: &session.scope,
-    };
-    let surface = authorized_command_catalog_for(&runtime.auth, clients)
-        .ok()
-        .map(|catalog| repl::surface::build_repl_surface(view, &catalog))
-        .unwrap_or_else(|| repl::surface::ReplSurface {
-            root_words: Vec::new(),
-            intro_commands: Vec::new(),
-            specs: Vec::new(),
-            aliases: Vec::new(),
-            overview_entries: Vec::new(),
-        });
-
-    intro_cmd::IntroCommandContext { view, surface }
-}
-
-fn ui_state_for_invocation(ui: &UiState, invocation: Option<&ResolvedInvocation>) -> UiState {
-    let Some(invocation) = invocation else {
-        return ui.clone();
-    };
-    invocation.ui.clone()
 }
 
 pub(crate) fn resolve_invocation_ui(
@@ -687,19 +431,6 @@ pub(crate) fn ensure_command_supports_dsl(spec: &ReplCommandSpec, stages: &[Stri
     ))
 }
 
-pub(crate) fn resolve_known_theme_name(
-    value: &str,
-    catalog: &theme_loader::ThemeCatalog,
-) -> Result<String> {
-    let normalized = normalize_theme_name(value);
-    if catalog.resolve(&normalized).is_some() {
-        return Ok(normalized);
-    }
-
-    let known = catalog.ids().join(", ");
-    Err(miette!("unknown theme: {value}. available themes: {known}"))
-}
-
 pub(crate) fn enrich_dispatch_error(err: PluginDispatchError) -> miette::Report {
     report_std_error_with_context(err, "plugin command failed")
 }
@@ -750,33 +481,6 @@ pub fn render_report_message(err: &miette::Report, verbosity: MessageLevel) -> S
     }
 
     message
-}
-
-pub(crate) fn config_usize(config: &ResolvedConfig, key: &str, fallback: usize) -> usize {
-    match config.get(key).map(ConfigValue::reveal) {
-        Some(ConfigValue::Integer(value)) if *value > 0 => *value as usize,
-        Some(ConfigValue::String(raw)) => raw
-            .trim()
-            .parse::<usize>()
-            .ok()
-            .filter(|value| *value > 0)
-            .unwrap_or(fallback),
-        _ => fallback,
-    }
-}
-
-pub(crate) fn plugin_process_timeout(config: &ResolvedConfig) -> std::time::Duration {
-    std::time::Duration::from_millis(config_usize(
-        config,
-        "extensions.plugins.timeout_ms",
-        DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS,
-    ) as u64)
-}
-
-pub(crate) fn plugin_path_discovery_enabled(config: &ResolvedConfig) -> bool {
-    config
-        .get_bool("extensions.plugins.discovery.path")
-        .unwrap_or(false)
 }
 
 fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
@@ -882,159 +586,6 @@ where
         current = source.source();
     }
     None
-}
-
-pub(crate) fn resolve_default_render_width(config: &ResolvedConfig) -> usize {
-    let configured = config_usize(config, "ui.width", DEFAULT_UI_WIDTH as usize);
-    if configured != DEFAULT_UI_WIDTH as usize {
-        return configured;
-    }
-
-    detect_terminal_width()
-        .or_else(|| {
-            std::env::var("COLUMNS")
-                .ok()
-                .and_then(|value| value.trim().parse::<usize>().ok())
-                .filter(|value| *value > 0)
-        })
-        .unwrap_or(configured)
-}
-
-fn detect_terminal_width() -> Option<usize> {
-    if !std::io::stdout().is_terminal() {
-        return None;
-    }
-    terminal_size()
-        .map(|(Width(columns), _)| columns as usize)
-        .filter(|value| *value > 0)
-}
-
-fn detect_columns_env() -> Option<usize> {
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-}
-
-fn locale_utf8_hint_from_env() -> Option<bool> {
-    for key in ["LC_ALL", "LC_CTYPE", "LANG"] {
-        if let Ok(value) = std::env::var(key) {
-            let lower = value.to_ascii_lowercase();
-            if lower.contains("utf-8") || lower.contains("utf8") {
-                return Some(true);
-            }
-            return Some(false);
-        }
-    }
-    None
-}
-
-pub(crate) fn build_render_runtime(terminal_env: Option<&str>) -> RenderRuntime {
-    RenderRuntime {
-        stdout_is_tty: std::io::stdout().is_terminal(),
-        terminal: terminal_env.map(ToOwned::to_owned),
-        no_color: std::env::var("NO_COLOR").is_ok(),
-        width: detect_terminal_width().or_else(detect_columns_env),
-        locale_utf8: locale_utf8_hint_from_env(),
-    }
-}
-
-fn to_ui_verbosity(level: MessageLevel) -> UiVerbosity {
-    match level {
-        MessageLevel::Error => UiVerbosity::Error,
-        MessageLevel::Warning => UiVerbosity::Warning,
-        MessageLevel::Success => UiVerbosity::Success,
-        MessageLevel::Info => UiVerbosity::Info,
-        MessageLevel::Trace => UiVerbosity::Trace,
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn plugin_dispatch_context_for_runtime(
-    runtime: &crate::app::AppRuntime,
-    clients: &AppClients,
-    invocation: Option<&ResolvedInvocation>,
-) -> PluginDispatchContext {
-    build_plugin_dispatch_context(
-        &runtime.context,
-        &runtime.config,
-        clients,
-        invocation.map(|value| &value.ui).unwrap_or(&runtime.ui),
-    )
-}
-
-pub(in crate::app) fn plugin_dispatch_context_for(
-    runtime: &ExternalCommandRuntime<'_>,
-    invocation: Option<&ResolvedInvocation>,
-) -> PluginDispatchContext {
-    build_plugin_dispatch_context(
-        runtime.context,
-        runtime.config_state,
-        runtime.clients,
-        invocation.map(|value| &value.ui).unwrap_or(runtime.ui),
-    )
-}
-
-fn build_plugin_dispatch_context(
-    context: &crate::app::RuntimeContext,
-    config: &crate::app::ConfigState,
-    clients: &AppClients,
-    ui: &crate::app::UiState,
-) -> PluginDispatchContext {
-    let config_env = clients.plugin_config_env(config);
-    PluginDispatchContext::new(
-        RuntimeHints::new(
-            to_ui_verbosity(ui.message_verbosity),
-            ui.debug_verbosity.min(3),
-            ui.render_settings.format,
-            ui.render_settings.color,
-            ui.render_settings.unicode,
-        )
-        .with_profile(Some(config.resolved().active_profile().to_string()))
-        .with_terminal(context.terminal_env().map(ToOwned::to_owned))
-        .with_terminal_kind(match context.terminal_kind() {
-            TerminalKind::Cli => RuntimeTerminalKind::Cli,
-            TerminalKind::Repl => RuntimeTerminalKind::Repl,
-        }),
-    )
-    .with_shared_env(
-        config_env
-            .shared
-            .iter()
-            .map(|entry| (entry.env_key.clone(), entry.value.clone()))
-            .collect::<Vec<_>>(),
-    )
-    .with_plugin_env(
-        config_env
-            .by_plugin_id
-            .into_iter()
-            .map(|(plugin_id, entries)| {
-                (
-                    plugin_id,
-                    entries
-                        .into_iter()
-                        .map(|entry| (entry.env_key, entry.value))
-                        .collect(),
-                )
-            })
-            .collect(),
-    )
-}
-
-pub(crate) fn runtime_hints_for_runtime(runtime: &crate::app::AppRuntime) -> RuntimeHints {
-    RuntimeHints::new(
-        to_ui_verbosity(runtime.ui.message_verbosity),
-        runtime.ui.debug_verbosity.min(3),
-        runtime.ui.render_settings.format,
-        runtime.ui.render_settings.color,
-        runtime.ui.render_settings.unicode,
-    )
-    .with_profile(Some(runtime.config.resolved().active_profile().to_string()))
-    .with_terminal(runtime.context.terminal_env().map(ToOwned::to_owned))
-    .with_terminal_kind(match runtime.context.terminal_kind() {
-        TerminalKind::Cli => RuntimeTerminalKind::Cli,
-        TerminalKind::Repl => RuntimeTerminalKind::Repl,
-    })
 }
 
 fn native_catalog_entry_to_command_catalog_entry(

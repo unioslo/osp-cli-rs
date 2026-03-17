@@ -12,9 +12,9 @@ use crate::repl::ReplViewContext;
 use crate::repl::completion;
 
 use super::{
-    CMD_HELP, CliCommandResult, PreparedPluginResponse, ReplCommandOutput, ResolvedInvocation,
+    CMD_HELP, CliCommandResult, ResolvedInvocation, cli_result_from_plugin_response,
     enrich_dispatch_error, ensure_plugin_visible_for, plugin_dispatch_context_for,
-    prepare_plugin_response, run_inline_builtin_command, runtime_hints_for_runtime,
+    run_inline_builtin_command, runtime_hints_for_runtime,
 };
 
 pub(super) struct ExternalCommandRuntime<'a> {
@@ -160,32 +160,14 @@ fn render_native_response(
     response: crate::core::plugin::ResponseV1,
     stages: &[String],
 ) -> Result<CliCommandResult> {
-    match prepare_plugin_response(response, stages).map_err(|err| miette!("{err:#}"))? {
-        PreparedPluginResponse::Failure(failure) => Ok(CliCommandResult {
-            exit_code: 1,
-            messages: failure.messages,
-            output: None,
-            stderr_text: None,
-            failure_report: Some(failure.report),
-        }),
-        PreparedPluginResponse::Output(prepared) => Ok(CliCommandResult {
-            exit_code: 0,
-            messages: prepared.messages,
-            output: Some(ReplCommandOutput::Output {
-                output: prepared.output,
-                format_hint: prepared.format_hint,
-            }),
-            stderr_text: None,
-            failure_report: None,
-        }),
-    }
+    cli_result_from_plugin_response(response, stages)
 }
 
 fn parse_external_invocation(
     runtime: &AppRuntime,
     session: &AppSession,
     tokens: &[String],
-    help_level: crate::ui::presentation::HelpLevel,
+    help_level: crate::guide::HelpLevel,
 ) -> Result<ExternalParse> {
     let parsed = parse_command_tokens_with_aliases(tokens, runtime.config.resolved())?;
     if parsed.tokens.is_empty() {
@@ -240,8 +222,7 @@ fn run_external_plugin_command(
     );
 
     if is_help_passthrough(args) {
-        let dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation))
-            .with_provider_override(invocation.plugin_provider.clone());
+        let dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation));
         let raw = runtime
             .plugins
             .dispatch_passthrough(command, args, &dispatch_context)
@@ -258,8 +239,7 @@ fn run_external_plugin_command(
         return Ok(result);
     }
 
-    let dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation))
-        .with_provider_override(invocation.plugin_provider.clone());
+    let dispatch_context = plugin_dispatch_context_for(runtime, Some(invocation));
     let response = runtime
         .plugins
         .dispatch(command, args, &dispatch_context)
@@ -272,25 +252,7 @@ fn render_external_plugin_response(
     response: crate::core::plugin::ResponseV1,
     stages: &[String],
 ) -> Result<CliCommandResult> {
-    match prepare_plugin_response(response, stages).map_err(|err| miette!("{err:#}"))? {
-        PreparedPluginResponse::Failure(failure) => Ok(CliCommandResult {
-            exit_code: 1,
-            messages: failure.messages,
-            output: None,
-            stderr_text: None,
-            failure_report: Some(failure.report),
-        }),
-        PreparedPluginResponse::Output(prepared) => Ok(CliCommandResult {
-            exit_code: 0,
-            messages: prepared.messages,
-            output: Some(ReplCommandOutput::Output {
-                output: prepared.output,
-                format_hint: prepared.format_hint,
-            }),
-            stderr_text: None,
-            failure_report: None,
-        }),
-    }
+    cli_result_from_plugin_response(response, stages)
 }
 
 pub(crate) fn is_help_passthrough(args: &[String]) -> bool {
@@ -432,7 +394,7 @@ mod tests {
             parsed,
             ExternalParse::Handled(CliCommandResult {
                 exit_code: 0,
-                output: Some(ReplCommandOutput::Guide(_)),
+                output: Some(ReplCommandOutput::Output(_)),
                 ..
             })
         ));
@@ -503,9 +465,11 @@ mod tests {
                 NativeOutcomeKind::Help => {
                     assert!(matches!(
                         result.output,
-                        Some(ReplCommandOutput::Guide(guide))
+                        Some(ReplCommandOutput::Output(guide))
                             if guide
-                                .guide
+                                .source_guide
+                                .as_ref()
+                                .expect("expected semantic guide payload")
                                 .preamble
                                 .iter()
                                 .any(|line| line.contains("HELP::Usage: osp ldap"))
@@ -518,10 +482,7 @@ mod tests {
                 NativeOutcomeKind::Response => {
                     assert_eq!(result.exit_code, 0);
                     assert!(!result.messages.is_empty());
-                    assert!(matches!(
-                        result.output,
-                        Some(ReplCommandOutput::Output { .. })
-                    ));
+                    assert!(matches!(result.output, Some(ReplCommandOutput::Output(_))));
                 }
             }
         }

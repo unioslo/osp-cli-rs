@@ -222,7 +222,7 @@ fn repl_provider_selection_restart_invalidates_command_cache_unit() {
 fn repl_reload_intent_matches_command_scope_unit() {
     let mut state = make_test_state(Vec::new());
     state.runtime.themes =
-        crate::ui::theme_loader::load_theme_catalog(state.runtime.config.resolved());
+        crate::ui::theme_catalog::load_theme_catalog(state.runtime.config.resolved());
     let history = make_test_history(&mut state);
 
     let theme_result = repl_dispatch::execute_repl_plugin_line(

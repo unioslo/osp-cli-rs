@@ -14,6 +14,7 @@ use crate::completion::{
 };
 use crate::core::fuzzy::fold_case;
 use crate::core::shell_words::{QuoteStyle, escape_for_shell, quote_for_shell};
+use crate::dsl::registered_verbs;
 use crate::repl::highlight::ReplHighlighter;
 use nu_ansi_term::{Color, Style};
 use reedline::{Completer, Span, Suggestion};
@@ -188,25 +189,10 @@ fn history_suggestion(entry: HistoryEntry, span: Span) -> Suggestion {
 
 /// Returns the default DSL verbs exposed after `|` in the REPL.
 pub fn default_pipe_verbs() -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("F".to_string(), "Filter rows".to_string()),
-        ("P".to_string(), "Project columns".to_string()),
-        ("S".to_string(), "Sort rows".to_string()),
-        ("G".to_string(), "Group rows".to_string()),
-        ("A".to_string(), "Aggregate rows/groups".to_string()),
-        ("L".to_string(), "Limit rows".to_string()),
-        ("Z".to_string(), "Collapse grouped output".to_string()),
-        ("C".to_string(), "Count rows".to_string()),
-        ("Y".to_string(), "Mark output for copy".to_string()),
-        ("H".to_string(), "Show DSL help".to_string()),
-        ("V".to_string(), "Value-only quick search".to_string()),
-        ("K".to_string(), "Key-only quick search".to_string()),
-        ("?".to_string(), "Clean rows / exists filter".to_string()),
-        ("U".to_string(), "Unroll list field".to_string()),
-        ("JQ".to_string(), "Run jq-like expression".to_string()),
-        ("VAL".to_string(), "Extract values".to_string()),
-        ("VALUE".to_string(), "Extract values".to_string()),
-    ])
+    registered_verbs()
+        .iter()
+        .map(|info| (info.verb.to_string(), info.summary.to_string()))
+        .collect()
 }
 
 pub(crate) fn build_repl_tree(words: &[String]) -> CompletionTree {

@@ -110,15 +110,8 @@ fn cli_presentation_flags_map_to_session_overrides_unit() {
         (&["osp", "--gammel-og-bitter"][..], "austere"),
     ] {
         let cli = Cli::parse_from(args);
-        let layer = build_cli_session_layer(
-            &cli,
-            None,
-            TerminalKind::Repl,
-            RuntimeLoadOptions::default(),
-            &ConfigLayer::default(),
-        )
-        .expect("session layer should build")
-        .expect("presentation flag should create session overrides");
+        let layer = build_cli_session_layer(&cli)
+            .expect("presentation flag should create session overrides");
 
         assert_eq!(
             layer_value(&layer, "ui.presentation"),
@@ -175,8 +168,10 @@ fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit()
             assert!(matches!(
                 args.command,
                 ConfigCommands::Show(crate::cli::ConfigShowArgs {
-                    sources: true,
-                    raw: false,
+                    output: crate::cli::ConfigReadOutputArgs {
+                        sources: true,
+                        raw: false,
+                    },
                 })
             ));
         }
@@ -191,10 +186,10 @@ fn repl_dsl_capability_is_declared_per_command_unit() {
     });
     let plugins_enable = Commands::Plugins(crate::cli::PluginsArgs {
         command: PluginsCommands::Enable(crate::cli::PluginCommandStateArgs {
-            command: "ldap".to_string(),
-            global: false,
-            profile: None,
-            terminal: None,
+            target: crate::cli::PluginCommandTargetArgs {
+                command: "ldap".to_string(),
+                scope: crate::cli::PluginScopeArgs::default(),
+            },
         }),
     });
     let theme_show = Commands::Theme(crate::cli::ThemeArgs {
@@ -207,22 +202,18 @@ fn repl_dsl_capability_is_declared_per_command_unit() {
     });
     let config_show = Commands::Config(crate::cli::ConfigArgs {
         command: ConfigCommands::Show(crate::cli::ConfigShowArgs {
-            sources: false,
-            raw: false,
+            output: crate::cli::ConfigReadOutputArgs {
+                sources: false,
+                raw: false,
+            },
         }),
     });
     let config_set = Commands::Config(crate::cli::ConfigArgs {
         command: ConfigCommands::Set(crate::cli::ConfigSetArgs {
             key: "ui.mode".to_string(),
             value: "plain".to_string(),
-            global: false,
-            profile: None,
-            profile_all: false,
-            terminal: None,
-            session: false,
-            config_store: false,
-            secrets: false,
-            save: false,
+            scope: crate::cli::ConfigScopeArgs::default(),
+            store: crate::cli::ConfigStoreArgs::default(),
             dry_run: false,
             yes: false,
             explain: false,
@@ -252,14 +243,8 @@ fn external_inline_builtin_reuses_repl_dsl_policy_unit() {
         command: ConfigCommands::Set(crate::cli::ConfigSetArgs {
             key: "ui.mode".to_string(),
             value: "plain".to_string(),
-            global: false,
-            profile: None,
-            profile_all: false,
-            terminal: None,
-            session: false,
-            config_store: false,
-            secrets: false,
-            save: false,
+            scope: crate::cli::ConfigScopeArgs::default(),
+            store: crate::cli::ConfigStoreArgs::default(),
             dry_run: false,
             yes: false,
             explain: false,

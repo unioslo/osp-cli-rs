@@ -1,9 +1,11 @@
-use super::command_output::{apply_output_stages, parse_output_format_hint};
+use super::command_output::{
+    CommandRenderRuntime, apply_output_stages, parse_output_format_hint, run_cli_command,
+};
 use super::help::parse_help_render_overrides;
 use super::{
-    CliCommandResult, CommandRenderRuntime, authorized_command_catalog_for,
-    bootstrap_message_verbosity, command_output, plugin_dispatch_context_for_runtime,
-    resolve_runtime_config, run_cli_command, run_from, run_from_with_sink,
+    CliCommandResult, authorized_command_catalog_for, bootstrap_message_verbosity, command_output,
+    plugin_dispatch_context_for_runtime, resolve_runtime_config, run_cli_command_with_ui, run_from,
+    run_from_with_sink,
 };
 use super::{
     EXIT_CODE_CONFIG, EXIT_CODE_PLUGIN, EXIT_CODE_USAGE, PluginConfigEntry, PluginConfigScope,
@@ -33,9 +35,8 @@ use crate::plugin::{
 use crate::repl;
 use crate::repl::{HistoryConfig, HistoryShellContext, SharedHistory};
 use crate::repl::{completion, dispatch as repl_dispatch, help as repl_help, surface};
-use crate::ui::document::Block;
+use crate::ui::build_presentation_defaults_layer;
 use crate::ui::messages::{MessageBuffer, MessageLevel};
-use crate::ui::presentation::build_presentation_defaults_layer;
 use crate::ui::{RenderSettings, render_output};
 use crate::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
 use clap::Command;
@@ -117,7 +118,7 @@ fn make_completion_state_with_entries_and_native(
         debug_verbosity: 0,
         plugins: PluginManager::new(Vec::new()),
         native_commands,
-        themes: crate::ui::theme_loader::ThemeCatalog::default(),
+        themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),
     })
 }
@@ -361,25 +362,25 @@ fn make_test_history(state: &mut AppState) -> SharedHistory {
     let history_shell = state.session.history_shell.clone();
     state.sync_history_shell_context();
 
-    let history_config = HistoryConfig::builder()
-        .with_path(Some(history_path))
-        .with_max_entries(128)
-        .with_enabled(true)
-        .with_dedupe(true)
-        .with_profile_scoped(true)
-        .with_profile(Some(
-            state.runtime.config.resolved().active_profile().to_string(),
-        ))
-        .with_terminal(Some(
+    let history_config = HistoryConfig {
+        path: Some(history_path),
+        max_entries: 128,
+        enabled: true,
+        dedupe: true,
+        profile_scoped: true,
+        exclude_patterns: Vec::new(),
+        profile: Some(state.runtime.config.resolved().active_profile().to_string()),
+        terminal: Some(
             state
                 .runtime
                 .context
                 .terminal_kind()
                 .as_config_terminal()
                 .to_string(),
-        ))
-        .with_shell_context(history_shell)
-        .build();
+        ),
+        shell_context: history_shell,
+    }
+    .normalized();
 
     SharedHistory::new(history_config)
 }
@@ -415,7 +416,7 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
             Some(cache_root.to_path_buf()),
         ),
         native_commands: crate::native::NativeCommandRegistry::default(),
-        themes: crate::ui::theme_loader::ThemeCatalog::default(),
+        themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch,
     })
 }

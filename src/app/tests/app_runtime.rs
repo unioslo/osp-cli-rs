@@ -142,6 +142,92 @@ fn run_cli_command_routes_messages_stdout_and_stderr_through_sink_unit() {
 }
 
 #[test]
+fn run_cli_command_with_ui_builds_runtime_from_config_and_ui_unit() {
+    let config = test_config(&[]);
+    let ui = crate::app::UiState::new(
+        RenderSettings::test_plain(OutputFormat::Value),
+        MessageLevel::Success,
+        0,
+    );
+    let mut sink = BufferedUiSink::default();
+
+    let exit = super::run_cli_command_with_ui(
+        &config,
+        &ui,
+        super::CliCommandResult {
+            exit_code: 3,
+            messages: MessageBuffer::default(),
+            output: Some(super::ReplCommandOutput::Text("payload\n".to_string())),
+            stderr_text: None,
+            failure_report: None,
+        },
+        &mut sink,
+    )
+    .expect("command output should render");
+
+    assert_eq!(exit, 3);
+    assert_eq!(sink.stdout, "payload\n");
+    assert!(sink.stderr.is_empty());
+}
+
+#[test]
+fn render_messages_for_ui_uses_ui2_as_the_runtime_owner_unit() {
+    let config = test_config(&[]);
+    let mut settings = RenderSettings::test_plain(OutputFormat::Value);
+    settings.mode = RenderMode::Rich;
+    settings.color = ColorMode::Always;
+    settings.runtime.stdout_is_tty = true;
+    settings.theme_name = "dracula".to_string();
+    let ui = crate::app::UiState::new(settings, MessageLevel::Trace, 0);
+    let mut messages = MessageBuffer::default();
+    messages.warning("careful");
+
+    let rendered =
+        crate::ui::render_messages(&config, &ui.render_settings, &messages, MessageLevel::Trace);
+
+    assert!(rendered.contains("careful"));
+    assert!(rendered.contains("Warnings"));
+    assert!(rendered.contains('\u{1b}'));
+}
+
+#[test]
+fn render_messages_for_ui_supports_plain_layout_in_ui2_unit() {
+    let mut resolver = crate::config::ConfigResolver::default();
+    let mut defaults = crate::config::ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    resolver.set_defaults(defaults);
+
+    let options = crate::config::ResolveOptions::default().with_terminal("cli");
+    let base = resolver
+        .resolve(options.clone())
+        .expect("base test config should resolve");
+    resolver.set_presentation(crate::ui::build_presentation_defaults_layer(&base));
+
+    let mut session = crate::config::ConfigLayer::default();
+    session.set("ui.messages.layout", "plain");
+    resolver.set_session(session);
+
+    let config = resolver
+        .resolve(options)
+        .expect("plain layout override should resolve");
+    let mut settings = RenderSettings::test_plain(OutputFormat::Value);
+    settings.mode = RenderMode::Rich;
+    settings.color = ColorMode::Always;
+    settings.runtime.stdout_is_tty = true;
+    settings.theme_name = "dracula".to_string();
+    let ui = crate::app::UiState::new(settings, MessageLevel::Trace, 0);
+    let mut messages = MessageBuffer::default();
+    messages.warning("careful");
+
+    let rendered =
+        crate::ui::render_messages(&config, &ui.render_settings, &messages, MessageLevel::Trace);
+
+    assert!(!rendered.contains("Warnings"));
+    assert!(rendered.contains("careful"));
+    assert!(rendered.contains("  careful"));
+}
+
+#[test]
 fn state_and_client_builders_produce_coherent_embedder_state_unit() {
     let config = test_config(&[]);
     let ui = crate::app::UiState::new(
@@ -215,6 +301,43 @@ fn state_and_client_builders_produce_coherent_embedder_state_unit() {
         &[std::path::PathBuf::from("/tmp/osp-plugin-a")]
     );
     assert!(clients.native_commands().command("ldap").is_some());
+}
+
+#[test]
+fn state_builder_from_host_inputs_preserves_derived_plugin_and_theme_state_unit() {
+    let config = test_config(&[
+        ("ui.message.verbosity", "trace"),
+        ("debug.level", "2"),
+        ("theme.name", "dracula"),
+    ]);
+    let context = crate::app::RuntimeContext::new(
+        None,
+        crate::app::TerminalKind::Cli,
+        Some("xterm-256color".to_string()),
+    );
+    let launch = crate::app::LaunchContext::default().with_plugin_dir("/tmp/osp-plugin-a");
+    let host_inputs = crate::app::assembly::ResolvedHostInputs::derive(
+        &context,
+        &config,
+        &launch,
+        crate::app::assembly::RenderSettingsSeed::DefaultAuto,
+        None,
+        None,
+        None,
+    )
+    .expect("host inputs should derive");
+
+    let state = crate::app::AppStateBuilder::from_host_inputs(context, config, host_inputs)
+        .with_launch(launch)
+        .build();
+
+    assert_eq!(state.runtime.ui.message_verbosity, MessageLevel::Trace);
+    assert_eq!(state.runtime.ui.debug_verbosity, 2);
+    assert_eq!(state.runtime.ui.render_settings.theme_name, "dracula");
+    assert_eq!(
+        state.clients.plugins().explicit_dirs(),
+        &[std::path::PathBuf::from("/tmp/osp-plugin-a")]
+    );
 }
 
 #[test]
@@ -386,6 +509,36 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
         panic!("expected successful output response");
     };
     assert!(output.format_hint.is_none());
+}
+
+#[test]
+fn prepared_plugin_response_maps_into_cli_command_result_unit() {
+    let response = ResponseV1 {
+        protocol_version: 1,
+        ok: false,
+        data: serde_json::json!({}),
+        error: Some(ResponseErrorV1 {
+            code: "NOT_FOUND".to_string(),
+            message: "missing user".to_string(),
+            details: serde_json::json!({}),
+        }),
+        messages: vec![ResponseMessageV1 {
+            level: ResponseMessageLevelV1::Warning,
+            text: "queried fallback backend".to_string(),
+        }],
+        meta: ResponseMetaV1::default(),
+    };
+    let prepared = super::command_output::prepare_plugin_response(response, &[])
+        .expect("protocol failure should still parse");
+    let result = CliCommandResult::from_prepared_plugin_response(prepared);
+
+    assert_eq!(result.exit_code, 1);
+    assert!(result.output.is_none());
+    assert_eq!(
+        result.failure_report.as_deref(),
+        Some("NOT_FOUND: missing user")
+    );
+    assert!(!result.messages.is_empty());
 }
 
 #[test]

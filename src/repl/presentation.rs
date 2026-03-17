@@ -1,13 +1,16 @@
 use crate::app::DebugTimingState;
 use crate::app::format_timing_badge;
+use crate::app::help::help_level;
 use crate::app::is_sensitive_key;
 use crate::app::{CMD_HELP, DEFAULT_REPL_PROMPT};
 use crate::config::ConfigValue;
 use crate::config::DEFAULT_REPL_HISTORY_MENU_ROWS;
+use crate::config::ResolvedConfig;
 use crate::guide::template::{GuideTemplateBlock, GuideTemplateInclude, parse_markdown_template};
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::repl::{ReplAppearance, ReplPrompt};
-use crate::ui::render_guide_payload;
+use crate::ui::messages::MessageLevel;
+use crate::ui::render_structured_output_with_source_guide;
 use crate::ui::style::{
     StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
 };
@@ -19,9 +22,96 @@ use unicode_width::UnicodeWidthStr;
 use super::ReplViewContext;
 use super::history;
 use super::surface::ReplSurface;
-use crate::ui::presentation::{
-    ReplIntroStyle, help_level, intro_style, intro_style_with_verbosity, repl_simple_prompt,
-};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplIntroStyle {
+    None,
+    Minimal,
+    Compact,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplInputMode {
+    Auto,
+    Interactive,
+    Basic,
+}
+
+impl ReplIntroStyle {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" | "off" => Some(Self::None),
+            "minimal" | "austere" => Some(Self::Minimal),
+            "compact" => Some(Self::Compact),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
+impl ReplInputMode {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "interactive" | "full" => Some(Self::Interactive),
+            "basic" | "plain" => Some(Self::Basic),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn repl_simple_prompt(config: &ResolvedConfig) -> bool {
+    config.get_bool("repl.simple_prompt").unwrap_or(false)
+}
+
+pub(crate) fn intro_style(config: &ResolvedConfig) -> ReplIntroStyle {
+    config
+        .get_string("repl.intro")
+        .and_then(ReplIntroStyle::parse)
+        .or_else(|| {
+            config.get_bool("repl.intro").map(|enabled| {
+                if enabled {
+                    ReplIntroStyle::Full
+                } else {
+                    ReplIntroStyle::None
+                }
+            })
+        })
+        .unwrap_or(ReplIntroStyle::Full)
+}
+
+pub(crate) fn intro_style_with_verbosity(
+    style: ReplIntroStyle,
+    verbosity: MessageLevel,
+) -> ReplIntroStyle {
+    let mut rank = match style {
+        ReplIntroStyle::None => 0_i8,
+        ReplIntroStyle::Minimal => 1,
+        ReplIntroStyle::Compact => 2,
+        ReplIntroStyle::Full => 3,
+    };
+    let delta = match verbosity {
+        MessageLevel::Error | MessageLevel::Warning => -3,
+        MessageLevel::Success => 0,
+        MessageLevel::Info => 1,
+        MessageLevel::Trace => 2,
+    };
+    rank = (rank + delta).clamp(0, 3);
+    match rank {
+        0 => ReplIntroStyle::None,
+        1 => ReplIntroStyle::Minimal,
+        2 => ReplIntroStyle::Compact,
+        _ => ReplIntroStyle::Full,
+    }
+}
+
+pub(crate) fn repl_input_mode(config: &ResolvedConfig) -> ReplInputMode {
+    config
+        .get_string("repl.input_mode")
+        .and_then(ReplInputMode::parse)
+        .unwrap_or(ReplInputMode::Auto)
+}
 
 const DEFAULT_MINIMAL_INTRO_TEMPLATE: &str =
     "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
@@ -76,10 +166,12 @@ Welcome `{{display_name}}`!
 pub(crate) fn render_repl_intro(view: ReplViewContext<'_>, surface: &ReplSurface) -> String {
     let intro_style =
         intro_style_with_verbosity(intro_style(view.config), view.ui.message_verbosity);
-    let mut rendered = render_guide_payload(
-        view.config,
+    let guide = build_repl_intro_payload(view, surface, Some(intro_style));
+    let mut rendered = render_structured_output_with_source_guide(
+        &guide.to_output_result(),
+        Some(&guide),
         &view.ui.render_settings,
-        &build_repl_intro_payload(view, surface, Some(intro_style)),
+        crate::ui::help_layout_from_config(view.config),
     );
     if !rendered.is_empty() {
         rendered.insert(0, '\n');
@@ -413,14 +505,16 @@ pub(crate) fn render_repl_command_overview(
     view: ReplViewContext<'_>,
     surface: &ReplSurface,
 ) -> String {
-    render_guide_payload(
+    let guide = build_repl_command_overview_view(surface).filtered_for_help_level(help_level(
         view.config,
+        0,
+        0,
+    ));
+    render_structured_output_with_source_guide(
+        &guide.to_output_result(),
+        Some(&guide),
         &view.ui.render_settings,
-        &build_repl_command_overview_view(surface).filtered_for_help_level(help_level(
-            view.config,
-            0,
-            0,
-        )),
+        crate::ui::help_layout_from_config(view.config),
     )
 }
 
@@ -515,47 +609,76 @@ pub(crate) fn build_repl_appearance(view: ReplViewContext<'_>) -> ReplAppearance
         .build()
 }
 
+struct ReplPromptState {
+    simple: bool,
+    profile: String,
+    user: String,
+    domain: String,
+    indicator: String,
+}
+
+impl ReplPromptState {
+    fn from_view(view: ReplViewContext<'_>) -> Self {
+        Self {
+            simple: repl_simple_prompt(view.config),
+            profile: view.config.active_profile().to_string(),
+            user: view
+                .config
+                .get_string("user.name")
+                .unwrap_or("anonymous")
+                .to_string(),
+            domain: view
+                .config
+                .get_string("domain")
+                .unwrap_or("local")
+                .to_string(),
+            indicator: build_shell_indicator(view),
+        }
+    }
+}
+
+struct ReplPromptRightState {
+    incognito: String,
+    timing: String,
+}
+
 pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
     let resolved = view.ui.render_settings.resolve_render_settings();
     let config = view.config;
     let theme = &resolved.theme;
-    let simple = repl_simple_prompt(config);
-    let profile = config.active_profile();
-    let user = config.get_string("user.name").unwrap_or("anonymous");
-    let domain = config.get_string("domain").unwrap_or("local");
-    let indicator = build_shell_indicator(view);
+    let prompt = ReplPromptState::from_view(view);
     let prompt_style = config.get_string("color.prompt.text");
 
     let user_text = style_prompt_fragment(
         prompt_style,
-        user,
+        &prompt.user,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let domain_text = style_prompt_fragment(
         prompt_style,
-        domain,
+        &prompt.domain,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let profile_text = style_prompt_fragment(
         prompt_style,
-        profile,
+        &prompt.profile,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let indicator_text = style_prompt_fragment(
         prompt_style,
-        &indicator,
+        &prompt.indicator,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
 
-    let prompt = if simple {
+    let prompt = if prompt.simple {
         let suffix = style_prompt_fragment(
             prompt_style,
             "> ",
@@ -563,17 +686,19 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
             resolved.color,
             theme,
         );
-        if indicator.trim().is_empty() {
+        if prompt.indicator.trim().is_empty() {
             format!("{profile_text}{suffix}")
         } else {
             format!("{profile_text} {indicator_text}{suffix}")
         }
     } else {
-        let template = config
-            .get_string("repl.prompt")
-            .unwrap_or(DEFAULT_REPL_PROMPT);
+        let template = decode_repl_prompt_template(
+            config
+                .get_string("repl.prompt")
+                .unwrap_or(DEFAULT_REPL_PROMPT),
+        );
         render_prompt_template_styled(
-            template,
+            &template,
             &user_text,
             &domain_text,
             &profile_text,
@@ -594,49 +719,97 @@ pub(crate) fn build_repl_prompt_right_renderer(
     timing: DebugTimingState,
 ) -> crate::repl::PromptRightRenderer {
     let resolved = view.ui.render_settings.resolve_render_settings();
+    let prompt_right_template = view
+        .config
+        .get_string("repl.prompt_right")
+        .map(str::to_string);
     let history_enabled = history::repl_history_enabled(view.config);
-    Arc::new(move || render_repl_prompt_right(&resolved, history_enabled, &timing))
+    Arc::new(move || {
+        render_repl_prompt_right(
+            &resolved,
+            prompt_right_template.as_deref(),
+            history_enabled,
+            &timing,
+        )
+    })
 }
 
 #[cfg(test)]
 pub(crate) fn render_repl_prompt_right_for_test(
     resolved: &crate::ui::ResolvedRenderSettings,
+    prompt_right_template: Option<&str>,
     history_enabled: bool,
     timing: &DebugTimingState,
 ) -> String {
-    render_repl_prompt_right(resolved, history_enabled, timing)
+    render_repl_prompt_right(resolved, prompt_right_template, history_enabled, timing)
 }
 
 fn render_repl_prompt_right(
     resolved: &crate::ui::ResolvedRenderSettings,
+    prompt_right_template: Option<&str>,
     history_enabled: bool,
     timing: &DebugTimingState,
 ) -> String {
+    let state = ReplPromptRightState {
+        incognito: render_repl_prompt_incognito(resolved, history_enabled),
+        timing: render_repl_prompt_timing(resolved, timing),
+    };
+
+    if let Some(template) = prompt_right_template {
+        return render_repl_prompt_right_template(
+            &decode_repl_prompt_template(template),
+            &state.incognito,
+            &state.timing,
+        );
+    }
+
     let mut parts = Vec::new();
-
-    if !history_enabled {
-        let incognito = if resolved.unicode {
-            "(⌐■_■)"
-        } else {
-            "incognito"
-        };
-        parts.push(apply_style_with_theme_overrides(
-            incognito,
-            StyleToken::Muted,
-            resolved.color,
-            &resolved.theme,
-            &resolved.style_overrides,
-        ));
+    if !state.incognito.is_empty() {
+        parts.push(state.incognito);
     }
-
-    if let Some(badge) = timing.badge() {
-        let rendered = format_timing_badge(badge.summary, badge.level, resolved);
-        if !rendered.is_empty() {
-            parts.push(rendered);
-        }
+    if !state.timing.is_empty() {
+        parts.push(state.timing);
     }
-
     parts.join("  ")
+}
+
+fn render_repl_prompt_incognito(
+    resolved: &crate::ui::ResolvedRenderSettings,
+    history_enabled: bool,
+) -> String {
+    if history_enabled {
+        return String::new();
+    }
+
+    let incognito = if resolved.unicode {
+        "(⌐■_■)"
+    } else {
+        "incognito"
+    };
+    apply_style_with_theme_overrides(
+        incognito,
+        StyleToken::Muted,
+        resolved.color,
+        &resolved.theme,
+        &resolved.style_overrides,
+    )
+}
+
+fn render_repl_prompt_timing(
+    resolved: &crate::ui::ResolvedRenderSettings,
+    timing: &DebugTimingState,
+) -> String {
+    timing
+        .badge()
+        .map(|badge| format_timing_badge(badge.summary, badge.level, resolved))
+        .filter(|rendered| !rendered.is_empty())
+        .unwrap_or_default()
+}
+
+fn render_repl_prompt_right_template(template: &str, incognito: &str, timing: &str) -> String {
+    let mut out = template.replace("{incognito}", incognito);
+    out = out.replace("{timing}", timing);
+    out
 }
 
 fn build_shell_indicator(view: ReplViewContext<'_>) -> String {
@@ -662,7 +835,7 @@ pub(crate) fn render_prompt_template(
     profile: &str,
     indicator: &str,
 ) -> String {
-    let mut out = template
+    let mut out = decode_repl_prompt_template(template)
         .replace("{user}", user)
         .replace("{domain}", domain)
         .replace("{profile}", profile)
@@ -731,6 +904,10 @@ fn render_prompt_template_styled(
     }
 
     out
+}
+
+fn decode_repl_prompt_template(template: &str) -> String {
+    template.replace("\\n", "\n")
 }
 
 struct PromptTemplateStyleContext<'a> {

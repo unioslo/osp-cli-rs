@@ -2,7 +2,9 @@ use super::{
     ChainedLoader, ConfigLoader, EnvSecretsLoader, EnvVarLoader, LoaderPipeline, SecretsTomlLoader,
     StaticLayerLoader, TomlFileLoader,
 };
-use crate::config::{ConfigError, ConfigLayer, ConfigSchema, ResolveOptions, Scope};
+use crate::config::{
+    ConfigError, ConfigLayer, ConfigSchema, ConfigValue, ResolveOptions, SchemaEntry, Scope,
+};
 
 fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
     crate::tests::make_temp_dir(prefix)
@@ -177,4 +179,35 @@ fn pipeline_builder_covers_schema_collected_env_and_optional_layer_paths_unit() 
     assert_eq!(layers.presentation.entries().len(), 1);
     assert_eq!(layers.cli.entries().len(), 1);
     assert_eq!(layers.session.entries().len(), 1);
+}
+
+#[test]
+fn pipeline_resolver_preserves_custom_schema_for_explain_unit() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    defaults.set("custom.answer", "42");
+
+    let mut schema = ConfigSchema::default();
+    schema.insert(
+        "custom.answer",
+        SchemaEntry::integer().with_doc("Custom integer used in tests"),
+    );
+
+    let resolver = LoaderPipeline::new(StaticLayerLoader::new(defaults))
+        .with_schema(schema)
+        .resolver()
+        .expect("pipeline resolver should preserve schema");
+
+    let explain = resolver
+        .explain_key("custom.answer", ResolveOptions::default())
+        .expect("custom schema key should explain through the pipeline resolver");
+
+    assert_eq!(
+        explain
+            .final_entry
+            .expect("custom.answer should have a winning value")
+            .value
+            .reveal(),
+        &ConfigValue::Integer(42)
+    );
 }

@@ -18,8 +18,8 @@ use super::{
     build_history_menu, build_history_picker_options, build_repl_highlighter,
     color_from_style_spec, contains_cursor_position_report, debug_completion,
     debug_completion_steps, debug_history_menu, debug_history_menu_steps, default_pipe_verbs,
-    expand_history, expand_home, history_picker_items, is_cursor_position_error,
-    parse_cursor_position_report, path_suggestions, process_submission, split_path_stub,
+    evaluate_repl_submission, expand_history, expand_home, history_picker_items,
+    is_cursor_position_error, parse_cursor_position_report, path_suggestions, split_path_stub,
     trace_completion, trace_completion_enabled,
 };
 use crate::core::shell_words::QuoteStyle;
@@ -130,9 +130,9 @@ fn submission_delegates_help_and_exit_to_host() {
         execute: &mut execute,
     };
 
-    let help = process_submission("help", &mut submission).expect("help should succeed");
-    let bang = process_submission("!!", &mut submission).expect("bang should succeed");
-    let exit = process_submission("exit", &mut submission).expect("exit should succeed");
+    let help = evaluate_repl_submission("help", &mut submission).expect("help should succeed");
+    let bang = evaluate_repl_submission("!!", &mut submission).expect("bang should succeed");
+    let exit = evaluate_repl_submission("exit", &mut submission).expect("exit should succeed");
 
     assert!(matches!(help, SubmissionResult::Print(text) if text == "host help"));
     assert!(matches!(bang, SubmissionResult::ReplaceInput(text) if text == "ldap user oistes"));
@@ -445,7 +445,7 @@ fn completion_analysis_marks_uncommitted_root_tokens_as_subcommand_context_unit(
 }
 
 #[test]
-fn process_submission_handles_restart_and_error_paths_unit() {
+fn evaluate_repl_submission_handles_restart_and_error_paths_unit() {
     let history = disabled_history();
 
     let mut restart_execute = |_line: &str, _: &SharedHistory| {
@@ -458,7 +458,8 @@ fn process_submission_handles_restart_and_error_paths_unit() {
         history_store: &history,
         execute: &mut restart_execute,
     };
-    let restart = process_submission("config set", &mut submission).expect("restart should map");
+    let restart =
+        evaluate_repl_submission("config set", &mut submission).expect("restart should map");
     assert!(matches!(
         restart,
         SubmissionResult::Restart {
@@ -474,8 +475,8 @@ fn process_submission_handles_restart_and_error_paths_unit() {
         history_store: &history,
         execute: &mut failing_execute,
     };
-    let result =
-        process_submission("broken", &mut failing_submission).expect("error should be absorbed");
+    let result = evaluate_repl_submission("broken", &mut failing_submission)
+        .expect("error should be absorbed");
     assert!(matches!(result, SubmissionResult::Noop));
 
     let mut noop_execute =
@@ -484,7 +485,8 @@ fn process_submission_handles_restart_and_error_paths_unit() {
         history_store: &history,
         execute: &mut noop_execute,
     };
-    let result = process_submission("   ", &mut noop_submission).expect("blank lines should noop");
+    let result =
+        evaluate_repl_submission("   ", &mut noop_submission).expect("blank lines should noop");
     assert!(matches!(result, SubmissionResult::Noop));
 }
 

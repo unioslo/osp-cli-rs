@@ -2,9 +2,10 @@ use crate::repl::{ReplLineResult, SharedHistory, expand_history};
 use miette::{Result, miette};
 
 use crate::app::CMD_HELP;
+use crate::app::sink::UiSink;
 use crate::app::{AppClients, AppRuntime, AppSession};
 
-use super::shell::{handle_repl_exit_request, repl_help_for_scope};
+use super::shell::{handle_repl_exit_request, render_repl_help_for_scope};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ReplBuiltin {
@@ -29,17 +30,19 @@ pub(super) fn execute_repl_builtin(
     history: &SharedHistory,
     raw: &str,
     builtin: ReplBuiltin,
+    sink: &mut dyn UiSink,
 ) -> Result<ReplLineResult> {
     match builtin {
-        ReplBuiltin::Help => Ok(ReplLineResult::Continue(repl_help_for_scope(
+        ReplBuiltin::Help => Ok(ReplLineResult::Continue(render_repl_help_for_scope(
             runtime,
             session,
             clients,
             &super::base_repl_invocation(runtime),
+            raw,
+            &[],
+            sink,
         )?)),
-        ReplBuiltin::Exit => Ok(
-            handle_repl_exit_request(session).unwrap_or(ReplLineResult::Continue(String::new()))
-        ),
+        ReplBuiltin::Exit => Ok(handle_repl_exit_request(session)),
         ReplBuiltin::Bang(command) => execute_bang_command(session, history, raw, command),
     }
 }
@@ -151,12 +154,7 @@ pub(super) fn execute_bang_command(
 }
 
 pub(super) fn current_history_scope(session: &AppSession) -> Option<String> {
-    let prefix = session.scope.history_prefix();
-    if prefix.is_empty() {
-        None
-    } else {
-        Some(prefix)
-    }
+    session.scope.history_scope_prefix()
 }
 
 pub(super) fn strip_history_scope(command: &str, scope: Option<&str>) -> String {
@@ -212,7 +210,7 @@ mod tests {
             debug_verbosity: 0,
             plugins: crate::plugin::PluginManager::new(Vec::new()),
             native_commands: crate::native::NativeCommandRegistry::default(),
-            themes: crate::ui::theme_loader::ThemeCatalog::default(),
+            themes: crate::ui::theme_catalog::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         })
     }
@@ -250,6 +248,7 @@ mod tests {
     fn execute_repl_builtin_covers_exit_and_help_unit() {
         let mut state = app_state();
         let history = history();
+        let mut sink = crate::app::sink::BufferedUiSink::default();
 
         assert_eq!(
             parse_repl_builtin("ldap user alice").expect("non-builtin"),
@@ -266,12 +265,14 @@ mod tests {
                 parse_repl_builtin("exit")
                     .expect("exit should parse")
                     .expect("exit should classify"),
+                &mut sink,
             )
             .expect("exit should succeed"),
             ReplLineResult::Exit(0)
         ));
 
         let mut state = app_state();
+        let mut sink = crate::app::sink::BufferedUiSink::default();
         assert!(matches!(
             execute_repl_builtin(
                 &mut state.runtime,
@@ -282,6 +283,7 @@ mod tests {
                 parse_repl_builtin("help")
                     .expect("help should parse")
                     .expect("help should classify"),
+                &mut sink,
             )
             .expect("help should succeed"),
             ReplLineResult::Continue(text) if text.contains("help") || text.contains("config")

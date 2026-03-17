@@ -8,6 +8,7 @@ use crate::cli::{
     ThemeArgs, parse_inline_command_tokens,
 };
 use crate::core::command_policy::{AccessReason, CommandAccess};
+use crate::normalize::{normalize_identifier, normalize_optional_identifier};
 
 use super::{CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS, CMD_THEME};
 
@@ -34,6 +35,19 @@ impl RunAction {
             | RunAction::Config(_)
             | RunAction::History(_)
             | RunAction::External(_) => TerminalKind::Cli,
+        }
+    }
+
+    pub(crate) fn into_builtin_command(self) -> Option<Commands> {
+        match self {
+            RunAction::Plugins(args) => Some(Commands::Plugins(args)),
+            RunAction::Doctor(args) => Some(Commands::Doctor(args)),
+            RunAction::Theme(args) => Some(Commands::Theme(args)),
+            RunAction::Config(args) => Some(Commands::Config(args)),
+            RunAction::History(args) => Some(Commands::History(args)),
+            RunAction::Intro(args) => Some(Commands::Intro(args)),
+            RunAction::ReplCommand(args) => Some(Commands::Repl(args)),
+            RunAction::Repl | RunAction::External(_) => None,
         }
     }
 }
@@ -160,18 +174,7 @@ pub(crate) fn ensure_plugin_visible_for(auth: &AuthState, command: &str) -> Resu
 }
 
 pub(crate) fn normalize_profile_override(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let normalized = normalize_identifier(&value);
-        if normalized.is_empty() {
-            None
-        } else {
-            Some(normalized)
-        }
-    })
-}
-
-fn normalize_identifier(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+    normalize_optional_identifier(value)
 }
 
 // `osp <profile> <command>` is a supported shorthand for
@@ -275,7 +278,7 @@ mod tests {
         normalize_profile_override,
     };
     use crate::app::{AuthState, TerminalKind};
-    use crate::cli::Cli;
+    use crate::cli::{Cli, Commands};
 
     fn parse_cli(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("cli args should parse")
@@ -426,6 +429,22 @@ mod tests {
         let external = RunAction::External(vec!["ldap".to_string(), "user".to_string()]);
         assert_eq!(external.terminal_kind(), TerminalKind::Cli);
         ensure_dispatch_visibility(&auth, &external).expect("visible plugin should pass");
+    }
+
+    #[test]
+    fn run_action_builtin_conversion_covers_builtin_and_non_builtin_paths_unit() {
+        let plugins = RunAction::Plugins(crate::cli::PluginsArgs {
+            command: crate::cli::PluginsCommands::List,
+        });
+        let repl = RunAction::Repl;
+        let external = RunAction::External(vec!["ldap".to_string()]);
+
+        assert!(matches!(
+            plugins.into_builtin_command(),
+            Some(Commands::Plugins(_))
+        ));
+        assert!(repl.into_builtin_command().is_none());
+        assert!(external.into_builtin_command().is_none());
     }
 
     #[test]

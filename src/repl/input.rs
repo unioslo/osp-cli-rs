@@ -1,9 +1,10 @@
 use crate::completion::CommandLineParser;
 use crate::config::ResolvedConfig;
 use crate::dsl::parse::lexer::split_pipeline;
-use crate::repl::LineProjection;
+use crate::repl::{LineProjection, LineProjector};
 use miette::{IntoDiagnostic, Result, WrapErr};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::app::ReplScopeStack;
 use crate::app::{CMD_HELP, REPL_SHELLABLE_COMMANDS};
@@ -26,10 +27,6 @@ impl ReplParsedLine {
             )
         })?;
         Ok(Self::from_parsed(parsed))
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.command_tokens.is_empty()
     }
 
     pub(crate) fn requests_repl_help(&self) -> bool {
@@ -136,6 +133,13 @@ pub(crate) fn project_repl_ui_line(line: &str, config: &ResolvedConfig) -> Resul
     .with_hidden_suggestions(hidden_suggestions))
 }
 
+pub(crate) fn build_repl_ui_line_projector(config: &ResolvedConfig) -> LineProjector {
+    let config = config.clone();
+    Arc::new(move |line| {
+        project_repl_ui_line(line, &config).unwrap_or_else(|_| LineProjection::passthrough(line))
+    })
+}
+
 pub(crate) fn help_alias_target_at(tokens: &[String], command_index: usize) -> Option<&str> {
     tokens.get(command_index + 1).map(String::as_str)
 }
@@ -182,8 +186,8 @@ pub(crate) fn is_repl_shellable_command(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ReplParsedLine, has_valid_help_alias_target, project_repl_ui_line,
-        rewrite_help_alias_tokens_at,
+        ReplParsedLine, build_repl_ui_line_projector, has_valid_help_alias_target,
+        project_repl_ui_line, rewrite_help_alias_tokens_at,
     };
     use crate::app::ReplScopeStack;
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
@@ -300,5 +304,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn build_repl_ui_line_projector_falls_back_to_passthrough_on_parse_error_unit() {
+        let config = make_config();
+        let projector = build_repl_ui_line_projector(&config);
+        let projected = projector("config \"unterminated");
+
+        assert_eq!(projected.line, "config \"unterminated");
     }
 }

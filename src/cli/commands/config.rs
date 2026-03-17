@@ -1,10 +1,10 @@
+use crate::app::{AppRuntime, AppSession, RuntimeContext, TerminalKind, UiState};
 use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, ConfigExplainContext, ReplCommandOutput,
     RuntimeConfigRequest, config_explain_json, config_explain_result, config_value_to_json,
-    document_from_json, document_from_text, explain_runtime_config, format_scope, is_sensitive_key,
+    explain_runtime_config, format_scope, is_sensitive_key, push_missing_config_key_messages,
     render_config_explain_text, resolve_runtime_config,
 };
-use crate::app::{RuntimeContext, TerminalKind, UiState};
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::rows::row::RowBuilder;
 use crate::cli::{
@@ -21,7 +21,7 @@ use crate::config::{
 use crate::core::output::OutputFormat;
 use crate::core::row::Row;
 use crate::ui::messages::MessageBuffer;
-use crate::ui::theme_loader::ThemeCatalog;
+use crate::ui::theme_catalog::ThemeCatalog;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 
 pub(crate) struct ConfigCommandContext<'a> {
@@ -46,6 +46,22 @@ pub(crate) struct ConfigReadContext<'a> {
 }
 
 impl<'a> ConfigCommandContext<'a> {
+    pub(crate) fn from_parts(
+        runtime: &'a AppRuntime,
+        session: &'a mut AppSession,
+        ui: &'a UiState,
+    ) -> Self {
+        Self {
+            context: &runtime.context,
+            config: runtime.config.resolved(),
+            ui,
+            themes: &runtime.themes,
+            config_overrides: &mut session.config_overrides,
+            product_defaults: runtime.product_defaults(),
+            runtime_load: runtime.launch.runtime_load,
+        }
+    }
+
     fn read(&self) -> ConfigReadContext<'_> {
         ConfigReadContext {
             context: self.context,
@@ -55,6 +71,24 @@ impl<'a> ConfigCommandContext<'a> {
             config_overrides: &*self.config_overrides,
             product_defaults: self.product_defaults,
             runtime_load: self.runtime_load,
+        }
+    }
+}
+
+impl<'a> ConfigReadContext<'a> {
+    pub(crate) fn from_parts(
+        runtime: &'a AppRuntime,
+        session: &'a AppSession,
+        ui: &'a UiState,
+    ) -> Self {
+        Self {
+            context: &runtime.context,
+            config: runtime.config.resolved(),
+            ui,
+            themes: &runtime.themes,
+            config_overrides: &session.config_overrides,
+            product_defaults: runtime.product_defaults(),
+            runtime_load: runtime.launch.runtime_load,
         }
     }
 }
@@ -100,7 +134,7 @@ fn config_show_rows(context: ConfigReadContext<'_>, args: ConfigShowArgs) -> Vec
     entries.sort_by(|(left, _), (right, _)| left.cmp(right));
     entries
         .into_iter()
-        .map(|(key, entry)| config_entry_row(key, entry, args.sources, args.raw))
+        .map(|(key, entry)| config_entry_row(key, entry, args.output.sources, args.output.raw))
         .collect()
 }
 
@@ -111,10 +145,13 @@ fn run_config_get(context: ConfigReadContext<'_>, args: ConfigGetArgs) -> Result
         Some(rows) => Ok(CliCommandResult {
             exit_code: 0,
             messages,
-            output: Some(ReplCommandOutput::Output {
-                output: rows_to_output_result(rows),
-                format_hint: None,
-            }),
+            output: Some(ReplCommandOutput::Output(
+                crate::app::StructuredCommandOutput {
+                    source_guide: None,
+                    output: rows_to_output_result(rows),
+                    format_hint: None,
+                },
+            )),
             stderr_text: None,
             failure_report: None,
         }),
@@ -134,7 +171,7 @@ fn config_get_rows(
     messages: &mut MessageBuffer,
 ) -> Result<Option<Vec<Row>>> {
     if let Some(entry) = context.config.get_value_entry(&args.key) {
-        let row = config_entry_row(&args.key, entry, args.sources, args.raw);
+        let row = config_entry_row(&args.key, entry, args.output.sources, args.output.raw);
         return Ok(Some(vec![row]));
     }
 
@@ -144,7 +181,7 @@ fn config_get_rows(
         } else {
             format!("alias.{}", args.key.trim().to_ascii_lowercase())
         };
-        let row = config_entry_row(&key, entry, args.sources, args.raw);
+        let row = config_entry_row(&key, entry, args.output.sources, args.output.raw);
         return Ok(Some(vec![row]));
     }
 
@@ -161,12 +198,12 @@ fn config_get_rows(
         .wrap_err_with(|| format!("failed to resolve bootstrap key `{}`", args.key))?;
 
         if let Some(entry) = explain.final_entry {
-            let row = config_entry_row(&args.key, &entry, args.sources, args.raw);
+            let row = config_entry_row(&args.key, &entry, args.output.sources, args.output.raw);
             return Ok(Some(vec![row]));
         }
     }
 
-    messages.error(format!("config key not found: {}", args.key));
+    push_missing_config_key_messages(messages, context.config, &args.key);
     Ok(None)
 }
 
@@ -466,21 +503,16 @@ fn run_config_set(
             .wrap_err_with(|| format!("failed to resolve config for key `{key}` after set"))?;
         if matches!(context.ui.render_settings.format, OutputFormat::Json) {
             let payload = config_explain_json(&explain, &config, false);
-            ReplCommandOutput::Document {
-                document: document_from_json(payload),
-                format_hint: Some(OutputFormat::Json),
-            }
+            ReplCommandOutput::Json(payload)
         } else {
-            ReplCommandOutput::Document {
-                document: document_from_text(&render_config_explain_text(&explain, &config, false)),
-                format_hint: None,
-            }
+            ReplCommandOutput::Text(render_config_explain_text(&explain, &config, false))
         }
     } else {
-        ReplCommandOutput::Output {
+        ReplCommandOutput::Output(crate::app::StructuredCommandOutput {
+            source_guide: None,
             output: rows_to_output_result(rows),
             format_hint: None,
-        }
+        })
     };
 
     messages.success(format!(
@@ -636,10 +668,13 @@ fn run_config_unset(
     Ok(CliCommandResult {
         exit_code: 0,
         messages,
-        output: Some(ReplCommandOutput::Output {
-            output: rows_to_output_result(rows),
-            format_hint: None,
-        }),
+        output: Some(ReplCommandOutput::Output(
+            crate::app::StructuredCommandOutput {
+                source_guide: None,
+                output: rows_to_output_result(rows),
+                format_hint: None,
+            },
+        )),
         stderr_text: None,
         failure_report: None,
     })
@@ -690,17 +725,35 @@ enum ConfigStoreTarget {
 impl ConfigWriteTarget {
     fn from_set_args(args: &ConfigSetArgs) -> Self {
         Self {
-            scope: resolve_scope_target(args.global, args.profile.clone(), args.profile_all),
-            terminal: args.terminal.clone(),
-            store: resolve_store_target(args.session, args.config_store, args.secrets, args.save),
+            scope: resolve_scope_target(
+                args.scope.global,
+                args.scope.profile.clone(),
+                args.scope.profile_all,
+            ),
+            terminal: args.scope.terminal.clone(),
+            store: resolve_store_target(
+                args.store.session,
+                args.store.config_store,
+                args.store.secrets,
+                args.store.save,
+            ),
         }
     }
 
     fn from_unset_args(args: &ConfigUnsetArgs) -> Self {
         Self {
-            scope: resolve_scope_target(args.global, args.profile.clone(), args.profile_all),
-            terminal: args.terminal.clone(),
-            store: resolve_store_target(args.session, args.config_store, args.secrets, args.save),
+            scope: resolve_scope_target(
+                args.scope.global,
+                args.scope.profile.clone(),
+                args.scope.profile_all,
+            ),
+            terminal: args.scope.terminal.clone(),
+            store: resolve_store_target(
+                args.store.session,
+                args.store.config_store,
+                args.store.secrets,
+                args.store.save,
+            ),
         }
     }
 }

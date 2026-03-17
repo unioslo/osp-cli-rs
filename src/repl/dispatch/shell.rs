@@ -1,5 +1,4 @@
 use crate::repl::ReplLineResult;
-use crate::ui::{render_document, render_structured_output};
 use miette::{Result, miette};
 
 use crate::app;
@@ -7,9 +6,11 @@ use crate::app::{AppClients, AppRuntime, AppSession, CliCommandResult};
 use crate::app::{CMD_HELP, ResolvedInvocation};
 use crate::cli::invocation::scan_command_tokens;
 
-use super::command::{render_repl_command_output, run_repl_external_command};
+use super::command::{
+    ParsedReplDispatch, execute_repl_command_dispatch, run_repl_external_command,
+};
 use crate::app::sink::UiSink;
-use crate::repl::{ReplViewContext, input, presentation, surface};
+use crate::repl::{input, lifecycle, presentation};
 
 #[derive(Debug)]
 pub(super) enum ReplShortcutPlan {
@@ -61,8 +62,7 @@ pub(super) fn execute_repl_shortcut(
             command,
             invocation,
         } => {
-            let entered = enter_repl_shell(runtime, session, clients, &command, &invocation)?;
-            session.sync_history_shell_context();
+            let entered = enter_repl_shell(runtime, session, clients, &command, &invocation, sink)?;
             Ok(ReplLineResult::Continue(entered))
         }
     }
@@ -125,34 +125,49 @@ fn repl_help_result(
     line: &str,
     sink: &mut dyn UiSink,
 ) -> Result<ReplLineResult> {
-    if parsed.stages.is_empty() {
-        return Ok(ReplLineResult::Continue(repl_help_for_scope(
-            runtime, session, clients, invocation,
-        )?));
-    }
-
-    let result = repl_help_command_result_for_scope(runtime, session, clients, invocation)?;
-    let rendered = render_repl_command_output(
+    Ok(ReplLineResult::Continue(render_repl_help_for_scope(
         runtime,
         session,
+        clients,
+        invocation,
         line,
         &parsed.stages,
-        result,
-        invocation,
         sink,
-    )?;
-    Ok(ReplLineResult::Continue(rendered))
+    )?))
 }
 
-pub(super) fn handle_repl_exit_request(session: &mut AppSession) -> Option<ReplLineResult> {
-    if session.scope.is_root() {
-        session.sync_history_shell_context();
-        return Some(ReplLineResult::Exit(0));
-    }
+fn execute_repl_help_dispatch(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    line: &str,
+    stages: Vec<String>,
+    result: CliCommandResult,
+    invocation: &ResolvedInvocation,
+    sink: &mut dyn UiSink,
+) -> Result<super::command::ExecutedReplCommand> {
+    execute_repl_command_dispatch(
+        runtime,
+        session,
+        clients,
+        None,
+        line,
+        ParsedReplDispatch::Help {
+            result: Box::new(result),
+            effective: Box::new(invocation.clone()),
+            stages,
+        },
+        sink,
+    )
+}
 
-    let message = leave_repl_shell(session)?;
-    session.sync_history_shell_context();
-    Some(ReplLineResult::Continue(message))
+pub(super) fn handle_repl_exit_request(session: &mut AppSession) -> ReplLineResult {
+    match session.request_repl_exit() {
+        crate::app::session::ReplExitTransition::ExitRoot => ReplLineResult::Exit(0),
+        crate::app::session::ReplExitTransition::LeftShell { frame, now_root } => {
+            ReplLineResult::Continue(render_repl_shell_leave_message(&frame, now_root))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -163,13 +178,22 @@ pub(crate) fn apply_repl_shell_prefix(
     scope.prefixed_tokens(tokens)
 }
 
+#[cfg(test)]
 pub(crate) fn leave_repl_shell(session: &mut AppSession) -> Option<String> {
-    let frame = session.scope.leave()?;
-    Some(if session.scope.is_root() {
+    match session.request_repl_exit() {
+        crate::app::session::ReplExitTransition::ExitRoot => None,
+        crate::app::session::ReplExitTransition::LeftShell { frame, now_root } => {
+            Some(render_repl_shell_leave_message(&frame, now_root))
+        }
+    }
+}
+
+fn render_repl_shell_leave_message(frame: &crate::app::ReplScopeFrame, now_root: bool) -> String {
+    if now_root {
         format!("Leaving {} shell. Back at root.\n", frame.command())
     } else {
         format!("Leaving {} shell.\n", frame.command())
-    })
+    }
 }
 
 pub(super) fn enter_repl_shell(
@@ -178,6 +202,7 @@ pub(super) fn enter_repl_shell(
     clients: &AppClients,
     command: &str,
     invocation: &ResolvedInvocation,
+    sink: &mut dyn UiSink,
 ) -> Result<String> {
     app::ensure_plugin_visible_for(&runtime.auth, command)?;
     let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
@@ -185,56 +210,52 @@ pub(super) fn enter_repl_shell(
         return Err(miette!("no plugin provides command: {command}"));
     }
 
-    session.scope.enter(command.to_string());
+    session.enter_repl_scope(command.to_string());
     let mut out = format!("Entering {command} shell. Type `exit` to leave.\n");
-    if let Ok(help) = repl_help_for_scope(runtime, session, clients, invocation) {
+    if let Ok(help) =
+        render_repl_help_for_scope(runtime, session, clients, invocation, "", &[], sink)
+    {
         out.push_str(&help);
     }
     Ok(out)
 }
 
+pub(super) fn render_repl_help_for_scope(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    invocation: &ResolvedInvocation,
+    line: &str,
+    stages: &[String],
+    sink: &mut dyn UiSink,
+) -> Result<String> {
+    let result = repl_help_command_result_for_scope(runtime, session, clients, invocation)?;
+    match execute_repl_help_dispatch(
+        runtime,
+        session,
+        clients,
+        line,
+        stages.to_vec(),
+        result,
+        invocation,
+        sink,
+    )?
+    .result
+    {
+        ReplLineResult::Continue(rendered) => Ok(rendered),
+        other => Err(miette!("unexpected REPL help result: {other:?}")),
+    }
+}
+
+#[cfg(test)]
 pub(super) fn repl_help_for_scope(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
     clients: &AppClients,
     invocation: &ResolvedInvocation,
 ) -> Result<String> {
-    match repl_help_command_result_for_scope(runtime, session, clients, invocation)?.output {
-        Some(crate::app::ReplCommandOutput::Text(text)) => Ok(text),
-        Some(crate::app::ReplCommandOutput::Guide(guide)) => {
-            let render_settings = app::resolve_render_settings_with_hint(
-                &invocation.ui.render_settings,
-                guide.format_hint,
-            );
-            Ok(app::render_guide_or_structured_output(
-                runtime.config.resolved(),
-                &render_settings,
-                &guide.guide,
-                &guide.output,
-            ))
-        }
-        Some(crate::app::ReplCommandOutput::Document {
-            document,
-            format_hint,
-        }) => {
-            let render_settings =
-                app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
-            Ok(render_document(&document, &render_settings))
-        }
-        Some(crate::app::ReplCommandOutput::Output {
-            output,
-            format_hint,
-        }) => {
-            let render_settings =
-                app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
-            Ok(render_structured_output(
-                runtime.config.resolved(),
-                &render_settings,
-                &output,
-            ))
-        }
-        None => Ok(String::new()),
-    }
+    let mut sink = crate::app::sink::BufferedUiSink::default();
+    render_repl_help_for_scope(runtime, session, clients, invocation, "", &[], &mut sink)
 }
 
 fn repl_help_command_result_for_scope(
@@ -244,11 +265,9 @@ fn repl_help_command_result_for_scope(
     invocation: &ResolvedInvocation,
 ) -> Result<CliCommandResult> {
     if session.scope.is_root() {
-        let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
-        let view = ReplViewContext::from_parts(runtime, session);
-        let surface = surface::build_repl_surface(view, &catalog);
+        let prepared = lifecycle::prepare_repl_surface_state(runtime, session, clients)?;
         return Ok(CliCommandResult::guide(
-            presentation::build_repl_command_overview_view(&surface)
+            presentation::build_repl_command_overview_view(&prepared.surface)
                 .filtered_for_help_level(invocation.help_level),
         ));
     }
@@ -333,7 +352,7 @@ mod tests {
             debug_verbosity: 0,
             plugins: crate::plugin::PluginManager::new(Vec::new()),
             native_commands,
-            themes: crate::ui::theme_loader::ThemeCatalog::default(),
+            themes: crate::ui::theme_catalog::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         })
     }
@@ -383,7 +402,7 @@ mod tests {
         );
         assert!(matches!(
             handle_repl_exit_request(&mut state.session),
-            Some(ReplLineResult::Exit(0))
+            ReplLineResult::Exit(0)
         ));
 
         state.session.scope.enter("ldap");
@@ -393,7 +412,7 @@ mod tests {
         );
         assert!(matches!(
             handle_repl_exit_request(&mut state.session),
-            Some(ReplLineResult::Continue(text)) if text.contains("Leaving ldap shell")
+            ReplLineResult::Continue(text) if text.contains("Leaving ldap shell")
         ));
     }
 
@@ -454,12 +473,14 @@ mod tests {
         .expect_err("missing plugin should reject shell entry");
         assert!(err.to_string().contains("no plugin provides command: ldap"));
 
+        let mut sink = BufferedUiSink::default();
         let err = enter_repl_shell(
             &mut state.runtime,
             &mut state.session,
             &state.clients,
             "ldap",
             &invocation,
+            &mut sink,
         )
         .expect_err("direct shell entry should also fail");
         assert!(err.to_string().contains("no plugin provides command: ldap"));
@@ -470,6 +491,7 @@ mod tests {
         let native = NativeCommandRegistry::new().with_command(NativeLdapHelpCommand);
         let mut state = app_state_with_native(native);
         let invocation = base_repl_invocation(&state.runtime);
+        let mut sink = BufferedUiSink::default();
 
         let entered = enter_repl_shell(
             &mut state.runtime,
@@ -477,6 +499,7 @@ mod tests {
             &state.clients,
             "ldap",
             &invocation,
+            &mut sink,
         )
         .expect("native ldap shell should enter");
         assert!(entered.contains("Entering ldap shell"));
@@ -589,6 +612,8 @@ mod tests {
         let mut mreg_state = app_state();
         let mreg = render_root_help_line(&mut mreg_state, "--mreg help | L 1");
         assert!(mreg.contains("usage:") || mreg.contains("Usage"));
-        assert!(mreg.contains("commands:") || mreg.contains("Commands"));
+        assert!(
+            mreg.contains("commands:") || mreg.contains("commands (") || mreg.contains("Commands")
+        );
     }
 }

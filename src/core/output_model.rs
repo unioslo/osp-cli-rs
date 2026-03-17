@@ -247,6 +247,44 @@ impl OutputResult {
     }
 }
 
+pub(crate) fn output_items_to_rows(items: &OutputItems) -> Vec<Row> {
+    match items {
+        OutputItems::Rows(rows) => rows.clone(),
+        OutputItems::Groups(groups) => groups.iter().flat_map(group_rows).collect(),
+    }
+}
+
+pub(crate) fn group_rows(group: &Group) -> Vec<Row> {
+    if group.rows.is_empty() {
+        return vec![group_header_row(group)];
+    }
+
+    group
+        .rows
+        .iter()
+        .map(|row| group_member_row(group, row))
+        .collect()
+}
+
+pub(crate) fn group_header_row(group: &Group) -> Row {
+    let mut row = group.groups.clone();
+    for (key, value) in &group.aggregates {
+        row.insert(key.clone(), value.clone());
+    }
+    row
+}
+
+pub(crate) fn group_member_row(group: &Group, row: &Row) -> Row {
+    let mut merged = group.groups.clone();
+    for (key, value) in &group.aggregates {
+        merged.insert(key.clone(), value.clone());
+    }
+    for (key, value) in row {
+        merged.insert(key.clone(), value.clone());
+    }
+    merged
+}
+
 /// Computes the stable first-seen column order across all rows.
 ///
 /// # Examples
@@ -367,6 +405,24 @@ pub fn output_items_from_value(value: Value) -> OutputItems {
     }
 }
 
+/// Projects any JSON value into a row stream for pipeline-oriented processing.
+///
+/// Arrays expand into one row per item. Objects become single rows directly.
+/// Scalars become a single row under the canonical `value` column.
+pub fn rows_from_value(value: Value) -> Vec<Row> {
+    match value {
+        Value::Array(values) => values.into_iter().flat_map(row_items_from_value).collect(),
+        other => row_items_from_value(other),
+    }
+}
+
+fn row_items_from_value(value: Value) -> Vec<Row> {
+    match value {
+        Value::Object(map) => vec![map],
+        other => vec![row_with_value(other)],
+    }
+}
+
 fn row_with_value(value: Value) -> Row {
     let mut row = Row::new();
     row.insert("value".to_string(), value);
@@ -402,7 +458,7 @@ fn group_from_value(value: &Value) -> Option<Group> {
 mod tests {
     use super::{
         Group, OutputDocument, OutputDocumentKind, OutputItems, OutputMeta, OutputResult,
-        output_items_from_value, output_items_to_value,
+        output_items_from_value, output_items_to_rows, output_items_to_value,
     };
     use serde_json::Value;
     use serde_json::json;
@@ -484,5 +540,38 @@ mod tests {
         let groups_value = output_items_to_value(&groups);
         assert!(matches!(groups_value, Value::Array(_)));
         assert_eq!(output_items_from_value(groups_value), groups);
+    }
+
+    #[test]
+    fn output_items_to_rows_merges_group_context_once_unit() {
+        let items = OutputItems::Groups(vec![
+            Group {
+                groups: json!({"team": "ops"}).as_object().cloned().expect("object"),
+                aggregates: json!({"count": 2}).as_object().cloned().expect("object"),
+                rows: vec![
+                    json!({"user": "alice"})
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
+                    json!({"user": "bob"}).as_object().cloned().expect("object"),
+                ],
+            },
+            Group {
+                groups: json!({"team": "dev"}).as_object().cloned().expect("object"),
+                aggregates: json!({"count": 0}).as_object().cloned().expect("object"),
+                rows: Vec::new(),
+            },
+        ]);
+
+        let rows = output_items_to_rows(&items);
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["team"], "ops");
+        assert_eq!(rows[0]["count"], 2);
+        assert_eq!(rows[0]["user"], "alice");
+        assert_eq!(rows[1]["user"], "bob");
+        assert_eq!(rows[2]["team"], "dev");
+        assert_eq!(rows[2]["count"], 0);
+        assert!(rows[2].get("user").is_none());
     }
 }

@@ -1,4 +1,4 @@
-use crate::app::{AppClients, AuthState, ConfigState, RuntimeContext};
+use crate::app::{AppClients, AppRuntime, AuthState, ConfigState, RuntimeContext};
 use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, PluginConfigScope, plugin_config_entries,
 };
@@ -24,6 +24,21 @@ pub(crate) struct PluginsCommandContext<'a> {
     pub(crate) plugin_manager: &'a PluginManager,
     pub(crate) product_defaults: &'a ConfigLayer,
     pub(crate) runtime_load: crate::config::RuntimeLoadOptions,
+}
+
+impl<'a> PluginsCommandContext<'a> {
+    pub(crate) fn from_parts(runtime: &'a AppRuntime, clients: &'a AppClients) -> Self {
+        Self {
+            context: &runtime.context,
+            config: runtime.config.resolved(),
+            config_state: Some(&runtime.config),
+            auth: &runtime.auth,
+            clients: Some(clients),
+            plugin_manager: clients.plugins(),
+            product_defaults: runtime.product_defaults(),
+            runtime_load: runtime.launch.runtime_load,
+        }
+    }
 }
 
 pub(crate) fn run_plugins_command(
@@ -74,7 +89,7 @@ pub(crate) fn run_plugins_command(
             ))
         }
         PluginsCommands::Enable(args) => {
-            let command = normalize_command_name(&args.command)?;
+            let command = normalize_command_name(&args.target.command)?;
             plugin_manager
                 .validate_command(&command)
                 .map_err(|err| miette::miette!("{err:#}"))?;
@@ -82,12 +97,7 @@ pub(crate) fn run_plugins_command(
                 context,
                 command.as_str(),
                 PluginCommandState::Enabled,
-                plugin_scope(
-                    context,
-                    args.global,
-                    args.profile.as_deref(),
-                    args.terminal.as_deref(),
-                ),
+                plugin_scope(context, &args.target.scope),
             )?;
             sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
@@ -97,7 +107,7 @@ pub(crate) fn run_plugins_command(
             Ok(result)
         }
         PluginsCommands::Disable(args) => {
-            let command = normalize_command_name(&args.command)?;
+            let command = normalize_command_name(&args.target.command)?;
             plugin_manager
                 .validate_command(&command)
                 .map_err(|err| miette::miette!("{err:#}"))?;
@@ -105,12 +115,7 @@ pub(crate) fn run_plugins_command(
                 context,
                 command.as_str(),
                 PluginCommandState::Disabled,
-                plugin_scope(
-                    context,
-                    args.global,
-                    args.profile.as_deref(),
-                    args.terminal.as_deref(),
-                ),
+                plugin_scope(context, &args.target.scope),
             )?;
             sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
@@ -120,19 +125,14 @@ pub(crate) fn run_plugins_command(
             Ok(result)
         }
         PluginsCommands::ClearState(args) => {
-            let command = normalize_command_name(&args.command)?;
+            let command = normalize_command_name(&args.target.command)?;
             plugin_manager
                 .validate_command(&command)
                 .map_err(|err| miette::miette!("{err:#}"))?;
             let removed = clear_command_state(
                 context,
                 command.as_str(),
-                plugin_scope(
-                    context,
-                    args.global,
-                    args.profile.as_deref(),
-                    args.terminal.as_deref(),
-                ),
+                plugin_scope(context, &args.target.scope),
             )?;
             sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
@@ -148,7 +148,7 @@ pub(crate) fn run_plugins_command(
             Ok(result)
         }
         PluginsCommands::SelectProvider(args) => {
-            let command = normalize_command_name(&args.command)?;
+            let command = normalize_command_name(&args.target.command)?;
             plugin_manager
                 .validate_provider_selection(&command, &args.plugin_id)
                 .map_err(|err| miette::miette!("{err:#}"))?;
@@ -156,12 +156,7 @@ pub(crate) fn run_plugins_command(
                 context,
                 &command,
                 &args.plugin_id,
-                plugin_scope(
-                    context,
-                    args.global,
-                    args.profile.as_deref(),
-                    args.terminal.as_deref(),
-                ),
+                plugin_scope(context, &args.target.scope),
             )?;
             sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
@@ -172,16 +167,11 @@ pub(crate) fn run_plugins_command(
             Ok(result)
         }
         PluginsCommands::ClearProvider(args) => {
-            let command = normalize_command_name(&args.command)?;
+            let command = normalize_command_name(&args.target.command)?;
             let removed = clear_provider_selection(
                 context,
                 &command,
-                plugin_scope(
-                    context,
-                    args.global,
-                    args.profile.as_deref(),
-                    args.terminal.as_deref(),
-                ),
+                plugin_scope(context, &args.target.scope),
             )?;
             sync_current_command_preferences(context)?;
             let mut result = CliCommandResult::exit(0);
@@ -279,20 +269,17 @@ fn plugin_config_path(context: PluginsCommandContext<'_>) -> Result<std::path::P
         .ok_or_else(|| miette::miette!("failed to resolve config.toml path for plugin config"))
 }
 
-fn plugin_scope(
-    context: PluginsCommandContext<'_>,
-    global: bool,
-    profile: Option<&str>,
-    terminal: Option<&str>,
-) -> Scope {
-    let terminal = resolve_terminal_selector(context, terminal);
-    if global {
+fn plugin_scope(context: PluginsCommandContext<'_>, args: &crate::cli::PluginScopeArgs) -> Scope {
+    let terminal = resolve_terminal_selector(context, args.terminal.as_deref());
+    if args.global {
         return terminal
             .as_deref()
             .map_or_else(Scope::global, Scope::terminal);
     }
 
-    let profile = profile
+    let profile = args
+        .profile
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| context.config.active_profile());

@@ -114,14 +114,14 @@ fn repl_exit_behaves_differently_for_root_and_nested_shells_unit() {
     let mut root = AppSession::with_cache_limit(4);
     assert!(matches!(
         handle_repl_exit_request(&mut root),
-        Some(ReplLineResult::Exit(0))
+        ReplLineResult::Exit(0)
     ));
 
     let mut nested = AppSession::with_cache_limit(4);
     nested.scope.enter("ldap");
     assert!(matches!(
         handle_repl_exit_request(&mut nested),
-        Some(ReplLineResult::Continue(message))
+        ReplLineResult::Continue(message)
             if message == "Leaving ldap shell. Back at root.\n"
     ));
     assert!(nested.scope.is_root());
@@ -149,14 +149,8 @@ fn repl_restart_detection_covers_mutating_commands_unit() {
         command: ConfigCommands::Set(ConfigSetArgs {
             key: "ui.format".to_string(),
             value: "json".to_string(),
-            global: false,
-            profile: None,
-            profile_all: false,
-            terminal: None,
-            session: false,
-            config_store: false,
-            secrets: false,
-            save: false,
+            scope: crate::cli::ConfigScopeArgs::default(),
+            store: crate::cli::ConfigStoreArgs::default(),
             dry_run: false,
             yes: false,
             explain: false,
@@ -169,14 +163,8 @@ fn repl_restart_detection_covers_mutating_commands_unit() {
     let config_unset_dry_run = Commands::Config(ConfigArgs {
         command: ConfigCommands::Unset(ConfigUnsetArgs {
             key: "ui.format".to_string(),
-            global: false,
-            profile: None,
-            profile_all: false,
-            terminal: None,
-            session: false,
-            config_store: false,
-            secrets: false,
-            save: false,
+            scope: crate::cli::ConfigScopeArgs::default(),
+            store: crate::cli::ConfigStoreArgs::default(),
             dry_run: true,
         }),
     });
@@ -187,10 +175,10 @@ fn repl_restart_detection_covers_mutating_commands_unit() {
 
     let plugins_enable = Commands::Plugins(PluginsArgs {
         command: PluginsCommands::Enable(crate::cli::PluginCommandStateArgs {
-            command: "orch".to_string(),
-            global: false,
-            profile: None,
-            terminal: None,
+            target: crate::cli::PluginCommandTargetArgs {
+                command: "orch".to_string(),
+                scope: crate::cli::PluginScopeArgs::default(),
+            },
         }),
     });
     let plugins_enable_effects = command_side_effects(&plugins_enable);
@@ -218,7 +206,7 @@ fn leave_repl_shell_returns_none_at_root_unit() {
     let mut session = AppSession::with_cache_limit(4);
     assert!(leave_repl_shell(&mut session).is_none());
     assert!(matches!(
-        finalize_repl_command(&session, String::new(), true, false),
+        finalize_repl_command(String::new(), true, false),
         ReplLineResult::Restart {
             output,
             reload: ReplReloadKind::Default
@@ -228,9 +216,8 @@ fn leave_repl_shell_returns_none_at_root_unit() {
 
 #[test]
 fn finalize_repl_command_uses_intro_reload_when_requested_unit() {
-    let session = AppSession::with_cache_limit(4);
     assert!(matches!(
-        finalize_repl_command(&session, "saved\n".to_string(), true, true),
+        finalize_repl_command("saved\n".to_string(), true, true),
         ReplLineResult::Restart {
             output,
             reload: ReplReloadKind::WithIntro
@@ -370,14 +357,8 @@ fn intro_reload_keys_cover_theme_color_and_palette_mutations_unit() {
     let config_unset = Commands::Config(ConfigArgs {
         command: ConfigCommands::Unset(ConfigUnsetArgs {
             key: "color.message.info".to_string(),
-            global: false,
-            profile: None,
-            profile_all: false,
-            terminal: None,
-            session: false,
-            config_store: false,
-            secrets: false,
-            save: false,
+            scope: crate::cli::ConfigScopeArgs::default(),
+            store: crate::cli::ConfigStoreArgs::default(),
             dry_run: false,
         }),
     });
@@ -404,7 +385,7 @@ fn make_state_with_plugins(plugins: crate::plugin::PluginManager) -> AppState {
         debug_verbosity: 0,
         plugins,
         native_commands: crate::native::NativeCommandRegistry::default(),
-        themes: crate::ui::theme_loader::ThemeCatalog::default(),
+        themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),
     })
 }
@@ -684,7 +665,7 @@ fn intro_value_pipeline_prefers_matching_entry_content_unit() {
 fn theme_show_value_pipeline_renders_selected_field_rhs_unit() {
     let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
     state.runtime.themes =
-        crate::ui::theme_loader::load_theme_catalog(state.runtime.config.resolved());
+        crate::ui::theme_catalog::load_theme_catalog(state.runtime.config.resolved());
     let mut invocation = super::base_repl_invocation(&state.runtime);
     invocation.ui.render_settings.format = OutputFormat::Value;
     invocation.ui.render_settings.format_explicit = true;
@@ -816,6 +797,7 @@ printf '%s\n' '{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":n
     let mut state =
         make_state_with_plugins(crate::plugin::PluginManager::new(vec![plugins_dir.clone()]));
     let invocation = super::base_repl_invocation(&state.runtime);
+    let mut sink = crate::app::sink::BufferedUiSink::default();
 
     let entered = enter_repl_shell(
         &mut state.runtime,
@@ -823,6 +805,7 @@ printf '%s\n' '{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":n
         &state.clients,
         "cache",
         &invocation,
+        &mut sink,
     )
     .expect("shell entry should succeed");
     assert!(entered.contains("Entering cache shell"));

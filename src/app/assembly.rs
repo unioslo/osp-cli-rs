@@ -17,7 +17,7 @@ use crate::plugin::PluginManager;
 use crate::plugin::state::PluginCommandPreferences;
 use crate::ui::RenderSettings;
 use crate::ui::theme::DEFAULT_THEME_NAME;
-use crate::ui::theme_loader::ThemeCatalog;
+use crate::ui::theme_catalog::ThemeCatalog;
 
 use super::{
     AppSession, LaunchContext, RuntimeContext, TerminalKind, UiState, build_logging_config,
@@ -65,6 +65,14 @@ pub(crate) struct ResolvedHostInputs {
     pub(crate) default_session: AppSession,
 }
 
+/// Config-derived host defaults reused when callers need only part of the
+/// startup snapshot.
+pub(crate) struct ResolvedHostDefaults {
+    pub(crate) themes: ThemeCatalog,
+    pub(crate) plugins: PluginManager,
+    pub(crate) default_session: AppSession,
+}
+
 impl ResolvedHostInputs {
     /// Derives the host-facing UI/theme/plugin/session inputs from one
     /// authoritative config snapshot.
@@ -77,21 +85,102 @@ impl ResolvedHostInputs {
         plugin_preferences_override: Option<PluginCommandPreferences>,
         session_overrides: Option<crate::config::ConfigLayer>,
     ) -> Result<Self> {
-        let themes = crate::ui::theme_loader::load_theme_catalog(config);
-        let ui = derive_ui_state(context, config, &themes, render_seed, theme_name_override)?;
-        let plugins = build_plugin_manager(config, launch, plugin_preferences_override.as_ref());
-        let default_session = match session_overrides {
-            Some(overrides) => AppSession::from_resolved_config_with_overrides(config, overrides),
-            None => AppSession::from_resolved_config(config),
-        };
+        let defaults = derive_host_defaults(
+            config,
+            launch,
+            plugin_preferences_override,
+            session_overrides,
+        );
+        let ui = derive_ui_state(
+            context,
+            config,
+            &defaults.themes,
+            render_seed,
+            theme_name_override,
+        )?;
 
         Ok(Self {
-            themes,
+            themes: defaults.themes,
             ui,
-            plugins,
-            default_session,
+            plugins: defaults.plugins,
+            default_session: defaults.default_session,
         })
     }
+}
+
+pub(crate) fn derive_host_defaults(
+    config: &ResolvedConfig,
+    launch: &LaunchContext,
+    plugin_preferences_override: Option<PluginCommandPreferences>,
+    session_overrides: Option<crate::config::ConfigLayer>,
+) -> ResolvedHostDefaults {
+    let themes = crate::ui::theme_catalog::load_theme_catalog(config);
+    let plugins = build_plugin_manager(config, launch, plugin_preferences_override.as_ref());
+    let default_session = match session_overrides {
+        Some(overrides) => AppSession::from_resolved_config_with_overrides(config, overrides),
+        None => AppSession::from_resolved_config(config),
+    };
+
+    ResolvedHostDefaults {
+        themes,
+        plugins,
+        default_session,
+    }
+}
+
+/// Derives UI state from resolved config and a settings baseline.
+pub(crate) fn derive_render_settings(
+    context: &RuntimeContext,
+    config: &ResolvedConfig,
+    themes: &ThemeCatalog,
+    render_seed: RenderSettingsSeed,
+    theme_name_override: Option<&str>,
+) -> Result<RenderSettings> {
+    let mut render_settings = derive_base_render_settings(context, config, render_seed);
+    let selected_theme = selected_theme_name(config, theme_name_override);
+    render_settings.theme_name = resolve_known_theme_name(selected_theme, themes)?;
+    render_settings.theme = themes
+        .resolve(&render_settings.theme_name)
+        .map(|entry| entry.theme.clone());
+    Ok(render_settings)
+}
+
+pub(crate) fn derive_render_settings_or_fallback(
+    context: &RuntimeContext,
+    config: &ResolvedConfig,
+    themes: &ThemeCatalog,
+    render_seed: RenderSettingsSeed,
+    theme_name_override: Option<&str>,
+) -> RenderSettings {
+    let mut render_settings = derive_base_render_settings(context, config, render_seed);
+    let selected_theme = selected_theme_name(config, theme_name_override);
+    render_settings.theme_name = resolve_known_theme_name(selected_theme, themes)
+        .unwrap_or_else(|_| DEFAULT_THEME_NAME.to_string());
+    render_settings.theme = themes
+        .resolve(&render_settings.theme_name)
+        .map(|entry| entry.theme.clone());
+    render_settings
+}
+
+fn derive_base_render_settings(
+    context: &RuntimeContext,
+    config: &ResolvedConfig,
+    render_seed: RenderSettingsSeed,
+) -> RenderSettings {
+    let mut render_settings = render_seed.into_settings(context);
+    crate::ui::settings::apply_render_config_overrides(&mut render_settings, config);
+    apply_repl_render_defaults(context, config, &mut render_settings);
+    render_settings.width = Some(resolve_default_render_width(config));
+    render_settings
+}
+
+fn selected_theme_name<'a>(
+    config: &'a ResolvedConfig,
+    theme_name_override: Option<&'a str>,
+) -> &'a str {
+    theme_name_override
+        .or_else(|| config.get_string("theme.name"))
+        .unwrap_or(DEFAULT_THEME_NAME)
 }
 
 /// Derives UI state from resolved config and a settings baseline.
@@ -102,17 +191,8 @@ pub(crate) fn derive_ui_state(
     render_seed: RenderSettingsSeed,
     theme_name_override: Option<&str>,
 ) -> Result<UiState> {
-    let mut render_settings = render_seed.into_settings(context);
-    crate::cli::apply_render_settings_from_config(&mut render_settings, config);
-    apply_repl_render_defaults(context, config, &mut render_settings);
-    render_settings.width = Some(resolve_default_render_width(config));
-    let selected_theme = theme_name_override
-        .or_else(|| config.get_string("theme.name"))
-        .unwrap_or(DEFAULT_THEME_NAME);
-    render_settings.theme_name = resolve_known_theme_name(selected_theme, themes)?;
-    render_settings.theme = themes
-        .resolve(&render_settings.theme_name)
-        .map(|entry| entry.theme.clone());
+    let render_settings =
+        derive_render_settings(context, config, themes, render_seed, theme_name_override)?;
 
     Ok(UiState::new(
         render_settings,
@@ -166,12 +246,15 @@ pub(crate) fn apply_runtime_side_effects(
     themes: &ThemeCatalog,
 ) {
     super::logging::init_developer_logging(build_logging_config(config, debug_verbosity));
-    crate::ui::theme_loader::log_theme_issues(&themes.issues);
+    crate::ui::theme_catalog::log_theme_issues(&themes.issues);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderSettingsSeed, ResolvedHostInputs, build_plugin_manager, derive_ui_state};
+    use super::{
+        RenderSettingsSeed, ResolvedHostInputs, build_plugin_manager,
+        derive_render_settings_or_fallback, derive_ui_state,
+    };
     use crate::app::{LaunchContext, RuntimeContext, TerminalKind};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
 
@@ -193,7 +276,7 @@ mod tests {
     fn derive_ui_state_layers_config_runtime_and_theme_selection_unit() {
         let config = resolved(&[("theme.name", "plain"), ("ui.margin", "3")]);
         let context = RuntimeContext::new(None, TerminalKind::Cli, Some("xterm".to_string()));
-        let themes = crate::ui::theme_loader::load_theme_catalog(&config);
+        let themes = crate::ui::theme_catalog::load_theme_catalog(&config);
 
         let ui = derive_ui_state(
             &context,
@@ -215,7 +298,7 @@ mod tests {
     #[test]
     fn derive_ui_state_applies_repl_margin_default_without_affecting_cli_unit() {
         let config = resolved(&[]);
-        let themes = crate::ui::theme_loader::load_theme_catalog(&config);
+        let themes = crate::ui::theme_catalog::load_theme_catalog(&config);
 
         let repl = derive_ui_state(
             &RuntimeContext::new(None, TerminalKind::Repl, Some("xterm".to_string())),
@@ -274,5 +357,28 @@ mod tests {
                 .preferred_provider_for("ldap user"),
             Some("demo")
         );
+    }
+
+    #[test]
+    fn derive_render_settings_or_fallback_preserves_existing_seed_runtime_facts_unit() {
+        let config = resolved(&[("theme.name", "missing-theme")]);
+        let context = RuntimeContext::new(None, TerminalKind::Cli, Some("xterm".to_string()));
+        let themes = crate::ui::theme_catalog::load_theme_catalog(&config);
+        let mut existing = crate::ui::RenderSettings::default();
+        existing.runtime.terminal = Some("preserved-terminal".to_string());
+
+        let derived = derive_render_settings_or_fallback(
+            &context,
+            &config,
+            &themes,
+            RenderSettingsSeed::Existing(Box::new(existing)),
+            None,
+        );
+
+        assert_eq!(
+            derived.runtime.terminal.as_deref(),
+            Some("preserved-terminal")
+        );
+        assert_eq!(derived.theme_name, crate::ui::DEFAULT_THEME_NAME);
     }
 }

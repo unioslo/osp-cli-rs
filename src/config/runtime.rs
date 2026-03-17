@@ -32,64 +32,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 use directories::{BaseDirs, ProjectDirs};
 
 use crate::config::{
-    ChainedLoader, ConfigLayer, EnvSecretsLoader, EnvVarLoader, LoaderPipeline, ResolvedConfig,
-    SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
+    ChainedLoader, ConfigLayer, DEFAULT_PROFILE_NAME, EnvSecretsLoader, EnvVarLoader,
+    LoaderPipeline, ResolvedConfig, SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
+    build_builtin_defaults,
 };
-
-/// Default logical profile name used when no profile override is active.
-pub const DEFAULT_PROFILE_NAME: &str = "default";
-/// Default maximum number of REPL history entries to keep.
-pub const DEFAULT_REPL_HISTORY_MAX_ENTRIES: i64 = 1000;
-/// Default toggle for persistent REPL history.
-pub const DEFAULT_REPL_HISTORY_ENABLED: bool = true;
-/// Default toggle for deduplicating REPL history entries.
-pub const DEFAULT_REPL_HISTORY_DEDUPE: bool = true;
-/// Default toggle for profile-scoped REPL history storage.
-pub const DEFAULT_REPL_HISTORY_PROFILE_SCOPED: bool = true;
-/// Default maximum number of rows shown in the REPL history search menu.
-pub const DEFAULT_REPL_HISTORY_MENU_ROWS: i64 = 5;
-/// Default upper bound for cached session results.
-pub const DEFAULT_SESSION_CACHE_MAX_RESULTS: i64 = 64;
-/// Default debug verbosity level.
-pub const DEFAULT_DEBUG_LEVEL: i64 = 0;
-/// Default toggle for file logging.
-pub const DEFAULT_LOG_FILE_ENABLED: bool = false;
-/// Default log level used for file logging.
-pub const DEFAULT_LOG_FILE_LEVEL: &str = "warn";
-/// Default render width hint.
-pub const DEFAULT_UI_WIDTH: i64 = 72;
-/// Default left margin for rendered output.
-pub const DEFAULT_UI_MARGIN: i64 = 0;
-/// Default indentation width for nested output.
-pub const DEFAULT_UI_INDENT: i64 = 2;
-/// Default presentation preset name.
-pub const DEFAULT_UI_PRESENTATION: &str = "expressive";
-/// Default semantic guide-format preference.
-pub const DEFAULT_UI_GUIDE_DEFAULT_FORMAT: &str = "guide";
-/// Default grouped-message layout mode.
-pub const DEFAULT_UI_MESSAGES_LAYOUT: &str = "grouped";
-/// Default section chrome frame style.
-pub const DEFAULT_UI_CHROME_FRAME: &str = "top";
-/// Default rule-sharing policy for sibling section chrome.
-pub const DEFAULT_UI_CHROME_RULE_POLICY: &str = "shared";
-/// Default table border style.
-pub const DEFAULT_UI_TABLE_BORDER: &str = "square";
-/// Default REPL intro mode.
-pub const DEFAULT_REPL_INTRO: &str = "full";
-/// Default threshold for rendering short lists compactly.
-pub const DEFAULT_UI_SHORT_LIST_MAX: i64 = 1;
-/// Default threshold for rendering medium lists before expanding further.
-pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
-/// Default grid column padding.
-pub const DEFAULT_UI_GRID_PADDING: i64 = 4;
-/// Default adaptive grid column weight.
-pub const DEFAULT_UI_COLUMN_WEIGHT: i64 = 3;
-/// Default minimum width before MREG output stacks columns.
-pub const DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH: i64 = 10;
-/// Default threshold for stacked MREG overflow behavior.
-pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
-/// Default table overflow strategy.
-pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "clip";
 
 const PROJECT_APPLICATION_NAME: &str = "osp";
 
@@ -399,91 +345,9 @@ impl RuntimeDefaults {
         default_theme_name: &str,
         default_repl_prompt: &str,
     ) -> Self {
-        let mut layer = ConfigLayer::default();
-
-        macro_rules! set_defaults {
-            ($($key:literal => $value:expr),* $(,)?) => {
-                $(layer.set($key, $value);)*
-            };
+        Self {
+            layer: build_builtin_defaults(env, default_theme_name, default_repl_prompt),
         }
-
-        set_defaults! {
-            "profile.default" => DEFAULT_PROFILE_NAME.to_string(),
-            "theme.name" => default_theme_name.to_string(),
-            "user.name" => env.user_name(),
-            "domain" => env.domain_name(),
-            "repl.prompt" => default_repl_prompt.to_string(),
-            "repl.input_mode" => "auto".to_string(),
-            "repl.simple_prompt" => false,
-            "repl.shell_indicator" => "[{shell}]".to_string(),
-            "repl.intro" => DEFAULT_REPL_INTRO.to_string(),
-            "repl.history.path" => env.repl_history_path(),
-            "repl.history.max_entries" => DEFAULT_REPL_HISTORY_MAX_ENTRIES,
-            "repl.history.enabled" => DEFAULT_REPL_HISTORY_ENABLED,
-            "repl.history.dedupe" => DEFAULT_REPL_HISTORY_DEDUPE,
-            "repl.history.profile_scoped" => DEFAULT_REPL_HISTORY_PROFILE_SCOPED,
-            "repl.history.menu_rows" => DEFAULT_REPL_HISTORY_MENU_ROWS,
-            "session.cache.max_results" => DEFAULT_SESSION_CACHE_MAX_RESULTS,
-            "debug.level" => DEFAULT_DEBUG_LEVEL,
-            "log.file.enabled" => DEFAULT_LOG_FILE_ENABLED,
-            "log.file.path" => env.log_file_path(),
-            "log.file.level" => DEFAULT_LOG_FILE_LEVEL.to_string(),
-            "ui.width" => DEFAULT_UI_WIDTH,
-            "ui.margin" => DEFAULT_UI_MARGIN,
-            "ui.indent" => DEFAULT_UI_INDENT,
-            "ui.presentation" => DEFAULT_UI_PRESENTATION.to_string(),
-            "ui.help.level" => "inherit".to_string(),
-            "ui.guide.default_format" => DEFAULT_UI_GUIDE_DEFAULT_FORMAT.to_string(),
-            "ui.messages.layout" => DEFAULT_UI_MESSAGES_LAYOUT.to_string(),
-            "ui.message.verbosity" => "success".to_string(),
-            "ui.chrome.frame" => DEFAULT_UI_CHROME_FRAME.to_string(),
-            "ui.chrome.rule_policy" => DEFAULT_UI_CHROME_RULE_POLICY.to_string(),
-            "ui.table.overflow" => DEFAULT_UI_TABLE_OVERFLOW.to_string(),
-            "ui.table.border" => DEFAULT_UI_TABLE_BORDER.to_string(),
-            "ui.help.table_chrome" => "none".to_string(),
-            "ui.help.entry_indent" => "inherit".to_string(),
-            "ui.help.entry_gap" => "inherit".to_string(),
-            "ui.help.section_spacing" => "inherit".to_string(),
-            "ui.short_list_max" => DEFAULT_UI_SHORT_LIST_MAX,
-            "ui.medium_list_max" => DEFAULT_UI_MEDIUM_LIST_MAX,
-            "ui.grid_padding" => DEFAULT_UI_GRID_PADDING,
-            "ui.column_weight" => DEFAULT_UI_COLUMN_WEIGHT,
-            "ui.mreg.stack_min_col_width" => DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH,
-            "ui.mreg.stack_overflow_ratio" => DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO,
-            "extensions.plugins.timeout_ms" => 10_000,
-            "extensions.plugins.discovery.path" => false,
-        }
-
-        let theme_path = env.theme_paths();
-        if !theme_path.is_empty() {
-            layer.set("theme.path", theme_path);
-        }
-
-        for key in [
-            "color.text",
-            "color.text.muted",
-            "color.key",
-            "color.border",
-            "color.prompt.text",
-            "color.prompt.command",
-            "color.table.header",
-            "color.mreg.key",
-            "color.value",
-            "color.value.number",
-            "color.value.bool_true",
-            "color.value.bool_false",
-            "color.value.null",
-            "color.value.ipv4",
-            "color.value.ipv6",
-            "color.panel.border",
-            "color.panel.title",
-            "color.code",
-            "color.json.key",
-        ] {
-            layer.set(key, String::new());
-        }
-
-        Self { layer }
     }
 
     /// Returns a default string value by key from the global scope.
@@ -638,7 +502,7 @@ pub fn default_home_dir() -> Option<PathBuf> {
 }
 
 #[derive(Debug, Clone, Default)]
-struct RuntimeEnvironment {
+pub(super) struct RuntimeEnvironment {
     vars: BTreeMap<String, String>,
     prefer_platform_dirs: bool,
 }
@@ -702,21 +566,21 @@ impl RuntimeEnvironment {
         self.config_root_dir().map(|root| join_path(root, &[leaf]))
     }
 
-    fn theme_paths(&self) -> Vec<String> {
+    pub(super) fn theme_paths(&self) -> Vec<String> {
         self.config_root_dir()
             .map(|root| join_path(root, &["themes"]).to_string_lossy().to_string())
             .into_iter()
             .collect()
     }
 
-    fn user_name(&self) -> String {
+    pub(super) fn user_name(&self) -> String {
         self.get_nonempty("USER")
             .or_else(|| self.get_nonempty("USERNAME"))
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| "anonymous".to_string())
     }
 
-    fn domain_name(&self) -> String {
+    pub(super) fn domain_name(&self) -> String {
         self.get_nonempty("HOSTNAME")
             .or_else(|| self.get_nonempty("COMPUTERNAME"))
             .unwrap_or("localhost")
@@ -726,7 +590,7 @@ impl RuntimeEnvironment {
             .unwrap_or_else(|| "local".to_string())
     }
 
-    fn repl_history_path(&self) -> String {
+    pub(super) fn repl_history_path(&self) -> String {
         join_path(
             self.state_root_dir_or_temp(),
             &["history", "${user.name}@${profile.active}.history"],
@@ -735,7 +599,7 @@ impl RuntimeEnvironment {
         .to_string()
     }
 
-    fn log_file_path(&self) -> String {
+    pub(super) fn log_file_path(&self) -> String {
         join_path(self.state_root_dir_or_temp(), &["osp.log"])
             .display()
             .to_string()
@@ -802,7 +666,11 @@ mod tests {
         DEFAULT_PROFILE_NAME, RuntimeBootstrapMode, RuntimeConfigPaths, RuntimeDefaults,
         RuntimeEnvironment, RuntimeLoadOptions,
     };
-    use crate::config::{ConfigLayer, ConfigValue, Scope};
+    use crate::config::{
+        ConfigLayer, ConfigValue, DEFAULT_REPL_HISTORY_MAX_ENTRIES, DEFAULT_REPL_HISTORY_MENU_ROWS,
+        DEFAULT_REPL_INTRO, DEFAULT_UI_CHROME_FRAME, DEFAULT_UI_MESSAGES_LAYOUT,
+        DEFAULT_UI_PRESENTATION, DEFAULT_UI_TABLE_BORDER, DEFAULT_UI_WIDTH, Scope,
+    };
 
     fn find_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {
         layer
@@ -831,27 +699,23 @@ mod tests {
         );
         assert_eq!(
             find_value(&defaults, "repl.intro"),
-            Some(&ConfigValue::String(super::DEFAULT_REPL_INTRO.to_string()))
+            Some(&ConfigValue::String(DEFAULT_REPL_INTRO.to_string()))
         );
         assert_eq!(
             find_value(&defaults, "repl.history.max_entries"),
-            Some(&ConfigValue::Integer(
-                super::DEFAULT_REPL_HISTORY_MAX_ENTRIES
-            ))
+            Some(&ConfigValue::Integer(DEFAULT_REPL_HISTORY_MAX_ENTRIES))
         );
         assert_eq!(
             find_value(&defaults, "repl.history.menu_rows"),
-            Some(&ConfigValue::Integer(super::DEFAULT_REPL_HISTORY_MENU_ROWS))
+            Some(&ConfigValue::Integer(DEFAULT_REPL_HISTORY_MENU_ROWS))
         );
         assert_eq!(
             find_value(&defaults, "ui.width"),
-            Some(&ConfigValue::Integer(super::DEFAULT_UI_WIDTH))
+            Some(&ConfigValue::Integer(DEFAULT_UI_WIDTH))
         );
         assert_eq!(
             find_value(&defaults, "ui.presentation"),
-            Some(&ConfigValue::String(
-                super::DEFAULT_UI_PRESENTATION.to_string()
-            ))
+            Some(&ConfigValue::String(DEFAULT_UI_PRESENTATION.to_string()))
         );
         assert_eq!(
             find_value(&defaults, "ui.help.level"),
@@ -859,9 +723,7 @@ mod tests {
         );
         assert_eq!(
             find_value(&defaults, "ui.messages.layout"),
-            Some(&ConfigValue::String(
-                super::DEFAULT_UI_MESSAGES_LAYOUT.to_string()
-            ))
+            Some(&ConfigValue::String(DEFAULT_UI_MESSAGES_LAYOUT.to_string()))
         );
         assert_eq!(
             find_value(&defaults, "ui.message.verbosity"),
@@ -869,15 +731,11 @@ mod tests {
         );
         assert_eq!(
             find_value(&defaults, "ui.chrome.frame"),
-            Some(&ConfigValue::String(
-                super::DEFAULT_UI_CHROME_FRAME.to_string()
-            ))
+            Some(&ConfigValue::String(DEFAULT_UI_CHROME_FRAME.to_string()))
         );
         assert_eq!(
             find_value(&defaults, "ui.table.border"),
-            Some(&ConfigValue::String(
-                super::DEFAULT_UI_TABLE_BORDER.to_string()
-            ))
+            Some(&ConfigValue::String(DEFAULT_UI_TABLE_BORDER.to_string()))
         );
         assert_eq!(
             find_value(&defaults, "color.prompt.text"),

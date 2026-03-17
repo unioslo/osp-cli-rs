@@ -31,10 +31,29 @@ use crate::core::command_def::{ArgDef, CommandDef, FlagDef};
 use crate::core::output_model::{
     OutputDocument, OutputDocumentKind, OutputItems, OutputResult, RenderRecommendation,
 };
-use crate::ui::document_model::DocumentModel;
-use crate::ui::presentation::HelpLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum HelpLevel {
+    None,
+    Tiny,
+    #[default]
+    Normal,
+    Verbose,
+}
+
+impl HelpLevel {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" | "off" => Some(Self::None),
+            "tiny" => Some(Self::Tiny),
+            "normal" => Some(Self::Normal),
+            "verbose" => Some(Self::Verbose),
+            _ => None,
+        }
+    }
+}
 
 /// Structured help/guide payload shared by the CLI, REPL, renderers, and
 /// semantic output pipeline.
@@ -250,6 +269,16 @@ impl GuideView {
         Self::try_from_row(&rows[0])
     }
 
+    /// Attempts to recover a guide from the row projection even when a carried
+    /// semantic document is no longer restorable after DSL narrowing.
+    pub(crate) fn try_from_row_projection(output: &OutputResult) -> Option<Self> {
+        let rows = match &output.items {
+            OutputItems::Rows(rows) if rows.len() == 1 => rows,
+            _ => return None,
+        };
+        Self::try_from_row(&rows[0])
+    }
+
     /// Renders the guide as Markdown using the default width policy.
     ///
     /// # Examples
@@ -280,7 +309,18 @@ impl GuideView {
 
     /// Renders the guide as Markdown using an optional target width.
     pub fn to_markdown_with_width(&self, width: Option<usize>) -> String {
-        DocumentModel::from_guide_view(self).to_markdown_with_width(width)
+        let mut settings = crate::ui::RenderSettings {
+            format: crate::core::output::OutputFormat::Markdown,
+            format_explicit: true,
+            ..crate::ui::RenderSettings::default()
+        };
+        settings.width = width;
+        crate::ui::render_structured_output_with_source_guide(
+            &self.to_output_result(),
+            Some(self),
+            &settings,
+            crate::ui::HelpLayout::Full,
+        )
     }
 
     /// Flattens the guide into value-oriented text lines.

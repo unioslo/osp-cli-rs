@@ -90,6 +90,10 @@ fn repl_help_alias_parsing_and_completion_cover_root_and_scoped_paths_unit() {
         vec!["list", "prune", "clear"]
     );
     assert_eq!(
+        projected_visible_values(&engine, state.runtime.config.resolved(), "history "),
+        vec!["list", "prune", "clear"]
+    );
+    assert_eq!(
         projected_visible_values(&engine, state.runtime.config.resolved(), "help history -"),
         vec!["--verbose"]
     );

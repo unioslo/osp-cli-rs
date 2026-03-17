@@ -30,6 +30,8 @@ use reedline::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::normalize::normalize_optional_identifier;
+
 /// Configuration for REPL history persistence, visibility, and shell scoping.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -98,8 +100,8 @@ impl HistoryConfig {
     pub fn normalized(mut self) -> Self {
         self.exclude_patterns =
             normalize_exclude_patterns(std::mem::take(&mut self.exclude_patterns));
-        self.profile = normalize_identifier(self.profile.take());
-        self.terminal = normalize_identifier(self.terminal.take());
+        self.profile = normalize_optional_identifier(self.profile.take());
+        self.terminal = normalize_optional_identifier(self.terminal.take());
         self
     }
 
@@ -468,13 +470,9 @@ impl OspHistoryStore {
     ///
     /// Profile scoping and exclusion patterns still apply.
     pub fn recent_commands_for(&self, shell_prefix: Option<&str>) -> Vec<String> {
-        let shell_prefix = normalize_scope_prefix(shell_prefix);
-        self.records
-            .iter()
-            .filter_map(|record| {
-                self.record_view_if_allowed(record, shell_prefix.as_deref(), true)
-                    .map(|_| record.command_line.clone())
-            })
+        self.visible_record_indices_for(shell_prefix)
+            .into_iter()
+            .map(|record_index| self.records[record_index].command_line.clone())
             .collect()
     }
 
@@ -491,21 +489,18 @@ impl OspHistoryStore {
             return Vec::new();
         }
         let shell_prefix = normalize_scope_prefix(shell_prefix);
-        let mut out = Vec::new();
-        let mut id = 0i64;
-        for record in &self.records {
-            let Some(view) = self.record_view_if_allowed(record, shell_prefix.as_deref(), true)
-            else {
-                continue;
-            };
-            id += 1;
-            out.push(HistoryEntry {
-                id,
-                timestamp_ms: record.timestamp_ms,
-                command: view,
-            });
-        }
-        out
+        self.visible_record_indices_for(shell_prefix.as_deref())
+            .into_iter()
+            .enumerate()
+            .map(|(idx, record_index)| HistoryEntry {
+                id: idx as i64 + 1,
+                timestamp_ms: self.records[record_index].timestamp_ms,
+                command: self.view_command_line(
+                    &self.records[record_index].command_line,
+                    shell_prefix.as_deref(),
+                ),
+            })
+            .collect()
     }
 
     /// Removes the oldest visible entries, keeping at most `keep` in the active
@@ -525,16 +520,7 @@ impl OspHistoryStore {
         if !self.history_enabled() {
             return Ok(0);
         }
-        let shell_prefix = normalize_scope_prefix(shell_prefix);
-        let mut eligible = Vec::new();
-        for (idx, record) in self.records.iter().enumerate() {
-            if self
-                .record_view_if_allowed(record, shell_prefix.as_deref(), true)
-                .is_some()
-            {
-                eligible.push(idx);
-            }
-        }
+        let eligible = self.visible_record_indices_for(shell_prefix);
 
         if keep == 0 {
             return self.remove_records(&eligible);
@@ -607,6 +593,21 @@ impl OspHistoryStore {
             return None;
         }
         Some(view_command)
+    }
+
+    fn visible_record_indices_for(&self, shell_prefix: Option<&str>) -> Vec<usize> {
+        let shell_prefix = normalize_scope_prefix(shell_prefix);
+        let mut out = Vec::new();
+        for (record_index, record) in self.records.iter().enumerate() {
+            if self
+                .record_view_if_allowed(record, shell_prefix.as_deref(), true)
+                .is_none()
+            {
+                continue;
+            }
+            out.push(record_index);
+        }
+        out
     }
 
     fn is_command_excluded(&self, command: &str) -> bool {
@@ -702,16 +703,9 @@ impl OspHistoryStore {
         filter: &SearchFilter,
         shell_prefix: Option<&str>,
     ) -> bool {
-        if !self.profile_allows(record) {
+        let Some(view_command) = self.record_view_if_allowed(record, shell_prefix, true) else {
             return false;
-        }
-        if !self.shell_allows(record, shell_prefix) {
-            return false;
-        }
-        let view_command = self.view_command_line(&record.command_line, shell_prefix);
-        if self.is_command_excluded(&view_command) {
-            return false;
-        }
+        };
         if let Some(search) = &filter.command_line {
             let matches = match search {
                 CommandLineSearch::Prefix(prefix) => view_command.starts_with(prefix),
@@ -1111,12 +1105,6 @@ fn load_records(path: &Path) -> Vec<HistoryRecord> {
         records.push(record);
     }
     records
-}
-
-fn normalize_identifier(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
 }
 
 fn normalize_exclude_patterns(patterns: Vec<String>) -> Vec<String> {

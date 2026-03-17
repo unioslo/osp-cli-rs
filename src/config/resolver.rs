@@ -53,10 +53,12 @@ struct ResolvedMaps {
 impl ConfigResolver {
     /// Creates a resolver from pre-loaded config layers.
     pub fn from_loaded_layers(layers: LoadedLayers) -> Self {
-        Self {
-            layers,
-            schema: ConfigSchema::default(),
-        }
+        Self::from_loaded_layers_with_schema(layers, ConfigSchema::default())
+    }
+
+    /// Creates a resolver from pre-loaded config layers and an explicit schema.
+    pub fn from_loaded_layers_with_schema(layers: LoadedLayers, schema: ConfigSchema) -> Self {
+        Self { layers, schema }
     }
 
     /// Replaces the schema used for validation and adaptation.

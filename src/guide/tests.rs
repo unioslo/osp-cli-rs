@@ -1,7 +1,7 @@
 use super::{GuideEntry, GuideSection, GuideSectionKind, GuideView};
 use crate::core::command_def::{ArgDef, CommandDef, FlagDef};
 use crate::core::output_model::{OutputDocument, OutputDocumentKind, OutputItems, OutputResult};
-use crate::ui::presentation::HelpLevel;
+use crate::guide::HelpLevel;
 use serde_json::Value;
 use serde_json::json;
 

@@ -17,7 +17,7 @@ use crate::completion::{
 use crate::dsl::parse::pipeline::parse_stage;
 use crate::dsl::{VerbStreaming, registered_verbs, render_streaming_badge, verb_info};
 use crate::repl::default_pipe_verbs;
-use crate::ui::chrome::{
+use crate::ui::section_chrome::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
 };
 use crate::ui::style::StyleToken;

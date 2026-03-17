@@ -2,14 +2,16 @@ use crate::completion::tree::command_spec_from_command_def;
 use crate::completion::{ArgNode, CommandSpec, FlagNode, SuggestionEntry};
 use crate::config::{ConfigSchema, SchemaValueType};
 use crate::core::command_def::CommandDef;
+use crate::guide::HelpLevel;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::app::help::help_level;
 use crate::app::{
     CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_LIST, CMD_PLUGINS, CMD_SHOW, CMD_THEME, CMD_USE,
     CURRENT_TERMINAL_SENTINEL,
 };
 use crate::plugin::CommandCatalogEntry;
-use crate::ui::presentation::{HelpLayout, HelpLevel, help_layout, help_level};
+use crate::ui::{HelpLayout, help_layout_from_config};
 
 use super::ReplViewContext;
 use super::history;
@@ -43,7 +45,7 @@ pub(crate) fn build_repl_surface(
 ) -> ReplSurface {
     let history_enabled = history::repl_history_enabled(view.config);
     let aliases = collect_alias_entries(view.config);
-    let help_layout = help_layout(view.config);
+    let help_layout = help_layout_from_config(view.config);
     let help_level = help_level(view.config, 0, 0);
 
     let mut root_words = catalog_completion_words(catalog);
@@ -497,7 +499,10 @@ fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
 
     CommandSpec::new(CMD_CONFIG)
         .tooltip("Inspect and edit runtime config")
-        .sort(command_sort_key(CMD_CONFIG, help_layout(view.config)))
+        .sort(command_sort_key(
+            CMD_CONFIG,
+            help_layout_from_config(view.config),
+        ))
         .subcommands([
             CommandSpec::new(CMD_SHOW)
                 .tooltip("Show current config")

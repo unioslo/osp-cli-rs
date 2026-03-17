@@ -1,41 +1,34 @@
 use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
-use crate::core::output_model::{OutputResult, RenderRecommendation};
+use crate::core::output_model::{OutputResult, RenderRecommendation, rows_from_value};
 use crate::core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use crate::dsl::apply_output_pipeline;
 use crate::guide::GuideView;
 use crate::ui::clipboard::ClipboardService;
-use crate::ui::document::{Block, Document, JsonBlock, LineBlock, LinePart};
 use crate::ui::messages::{MessageBuffer, MessageLevel};
 use crate::ui::{
-    RenderSettings, copy_output_to_clipboard, render_document, render_guide_payload,
-    render_structured_output,
+    copy_output_to_clipboard, render_json_value, render_output, render_structured_output,
+    render_structured_output_with_source_guide,
 };
 use miette::Result;
 
-use crate::app::UiState;
 use crate::app::resolve_render_settings_with_hint;
 use crate::app::sink::UiSink;
-use crate::cli::rows::output::plugin_data_to_output_result;
-use crate::ui::presentation::message_layout;
+use crate::app::{AppSession, UiState};
+use crate::cli::rows::output::{
+    output_to_rows, plugin_data_to_output_result, rows_to_output_result,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum ReplCommandOutput {
-    Output {
-        output: OutputResult,
-        format_hint: Option<OutputFormat>,
-    },
-    Guide(GuideCommandOutput),
-    Document {
-        document: Document,
-        format_hint: Option<OutputFormat>,
-    },
+    Output(StructuredCommandOutput),
+    Json(serde_json::Value),
     Text(String),
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct GuideCommandOutput {
-    pub(crate) guide: GuideView,
+pub(crate) struct StructuredCommandOutput {
+    pub(crate) source_guide: Option<GuideView>,
     pub(crate) output: OutputResult,
     pub(crate) format_hint: Option<OutputFormat>,
 }
@@ -80,16 +73,16 @@ impl CliCommandResult {
         Self {
             exit_code: 0,
             messages: MessageBuffer::default(),
-            output: Some(ReplCommandOutput::Output {
+            output: Some(ReplCommandOutput::Output(StructuredCommandOutput {
+                source_guide: None,
                 output,
                 format_hint,
-            }),
+            })),
             stderr_text: None,
             failure_report: None,
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn text(text: impl Into<String>) -> Self {
         Self {
             exit_code: 0,
@@ -100,21 +93,11 @@ impl CliCommandResult {
         }
     }
 
-    pub(crate) fn document(document: Document) -> Self {
-        Self::document_with_format(document, None)
-    }
-
-    pub(crate) fn document_with_format(
-        document: Document,
-        format_hint: Option<OutputFormat>,
-    ) -> Self {
+    pub(crate) fn json(payload: serde_json::Value) -> Self {
         Self {
             exit_code: 0,
             messages: MessageBuffer::default(),
-            output: Some(ReplCommandOutput::Document {
-                document,
-                format_hint,
-            }),
+            output: Some(ReplCommandOutput::Json(payload)),
             stderr_text: None,
             failure_report: None,
         }
@@ -128,20 +111,47 @@ impl CliCommandResult {
 
     pub(crate) fn guide_with_output(
         guide: impl Into<GuideView>,
-        output: OutputResult,
+        mut output: OutputResult,
         format_hint: Option<OutputFormat>,
     ) -> Self {
         let guide = guide.into();
+        output
+            .meta
+            .render_recommendation
+            .get_or_insert(RenderRecommendation::Guide);
         Self {
             exit_code: 0,
             messages: MessageBuffer::default(),
-            output: Some(ReplCommandOutput::Guide(GuideCommandOutput {
-                guide,
+            output: Some(ReplCommandOutput::Output(StructuredCommandOutput {
+                source_guide: Some(guide),
                 output,
                 format_hint,
             })),
             stderr_text: None,
             failure_report: None,
+        }
+    }
+
+    pub(crate) fn from_prepared_plugin_response(prepared: PreparedPluginResponse) -> Self {
+        match prepared {
+            PreparedPluginResponse::Failure(failure) => Self {
+                exit_code: 1,
+                messages: failure.messages,
+                output: None,
+                stderr_text: None,
+                failure_report: Some(failure.report),
+            },
+            PreparedPluginResponse::Output(prepared) => Self {
+                exit_code: 0,
+                messages: prepared.messages,
+                output: Some(ReplCommandOutput::Output(StructuredCommandOutput {
+                    source_guide: None,
+                    output: prepared.output,
+                    format_hint: prepared.format_hint,
+                })),
+                stderr_text: None,
+                failure_report: None,
+            },
         }
     }
 }
@@ -190,6 +200,24 @@ pub(crate) fn run_cli_command(
     Ok(result.exit_code)
 }
 
+pub(crate) fn run_cli_command_with_ui(
+    config: &ResolvedConfig,
+    ui: &UiState,
+    result: CliCommandResult,
+    sink: &mut dyn UiSink,
+) -> Result<i32> {
+    run_cli_command(&CommandRenderRuntime::new(config, ui), result, sink)
+}
+
+pub(crate) fn cli_result_from_plugin_response(
+    response: ResponseV1,
+    stages: &[String],
+) -> Result<CliCommandResult> {
+    let prepared =
+        prepare_plugin_response(response, stages).map_err(|err| miette::miette!("{err:#}"))?;
+    Ok(CliCommandResult::from_prepared_plugin_response(prepared))
+}
+
 pub(crate) fn emit_messages_for_ui(
     config: &ResolvedConfig,
     ui: &UiState,
@@ -197,19 +225,7 @@ pub(crate) fn emit_messages_for_ui(
     verbosity: MessageLevel,
     sink: &mut dyn UiSink,
 ) {
-    let resolved = ui.render_settings.resolve_render_settings();
-    let message_layout = message_layout(config);
-    let rendered =
-        messages.render_grouped_with_options(crate::ui::messages::GroupedRenderOptions {
-            max_level: verbosity,
-            color: resolved.color,
-            unicode: resolved.unicode,
-            width: resolved.width,
-            theme: &resolved.theme,
-            layout: message_layout,
-            chrome_frame: resolved.chrome_frame,
-            style_overrides: resolved.style_overrides.clone(),
-        });
+    let rendered = crate::ui::render_messages(config, &ui.render_settings, messages, verbosity);
     if !rendered.is_empty() {
         sink.write_stderr(&rendered);
     }
@@ -238,29 +254,6 @@ pub(crate) fn maybe_copy_output_with_runtime(
         messages.warning(format!("clipboard copy failed: {err}"));
         emit_messages_with_runtime(runtime, &messages, runtime.ui().message_verbosity, sink);
     }
-}
-
-pub(crate) fn guide_prefers_semantic_rendering(
-    guide: &GuideView,
-    settings: &RenderSettings,
-) -> bool {
-    matches!(
-        crate::ui::format::resolve_output_format(&guide.to_output_result(), settings),
-        OutputFormat::Guide
-    )
-}
-
-pub(crate) fn render_guide_or_structured_output(
-    config: &ResolvedConfig,
-    settings: &RenderSettings,
-    guide: &GuideView,
-    output: &OutputResult,
-) -> String {
-    if guide_prefers_semantic_rendering(guide, settings) {
-        return render_guide_payload(config, settings, guide);
-    }
-
-    render_structured_output(config, settings, output)
 }
 
 pub(crate) fn prepare_plugin_response(
@@ -350,73 +343,184 @@ pub(crate) fn parse_output_format_hint(value: Option<&str>) -> Option<OutputForm
     }
 }
 
-pub(crate) fn document_from_text(text: &str) -> Document {
-    let normalized = text.trim_end_matches('\n');
-    if normalized.is_empty() {
-        return Document::default();
-    }
-
-    Document {
-        blocks: normalized
-            .split('\n')
-            .map(|line| {
-                Block::Line(LineBlock {
-                    parts: vec![LinePart {
-                        text: line.to_string(),
-                        token: None,
-                    }],
-                })
-            })
-            .collect(),
-    }
-}
-
-pub(crate) fn document_from_json(payload: serde_json::Value) -> Document {
-    Document {
-        blocks: vec![Block::Json(JsonBlock { payload })],
-    }
-}
-
 fn render_cli_output(
     runtime: &CommandRenderRuntime<'_>,
     output: ReplCommandOutput,
     sink: &mut dyn UiSink,
 ) {
-    match output {
-        ReplCommandOutput::Output {
-            output,
-            format_hint,
-        } => {
-            let effective =
-                resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
-            sink.write_stdout(&render_structured_output(
-                runtime.config(),
-                &effective,
-                &output,
-            ));
-            maybe_copy_output_with_runtime(runtime, &output, sink);
-        }
-        ReplCommandOutput::Guide(guide) => {
-            let effective =
-                resolve_render_settings_with_hint(&runtime.ui().render_settings, guide.format_hint);
-            sink.write_stdout(&render_guide_or_structured_output(
-                runtime.config(),
-                &effective,
-                &guide.guide,
-                &guide.output,
-            ));
-            maybe_copy_output_with_runtime(runtime, &guide.output, sink);
-        }
-        ReplCommandOutput::Document {
-            document,
-            format_hint,
-        } => {
-            let effective =
-                resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
-            sink.write_stdout(&render_document(&document, &effective));
-        }
-        ReplCommandOutput::Text(text) => {
-            sink.write_stdout(&text);
-        }
+    sink.write_stdout(&render_repl_output_with_runtime(runtime, &output));
+    if let ReplCommandOutput::Output(structured) = output {
+        maybe_copy_output_with_runtime(runtime, &structured.output, sink);
     }
+}
+
+pub(crate) fn render_repl_output_with_runtime(
+    runtime: &CommandRenderRuntime<'_>,
+    output: &ReplCommandOutput,
+) -> String {
+    match output {
+        ReplCommandOutput::Output(structured) => render_structured_repl_output(
+            runtime.config(),
+            &runtime.ui().render_settings,
+            &structured.output,
+            structured.format_hint,
+            structured.source_guide.as_ref(),
+        ),
+        ReplCommandOutput::Json(payload) => {
+            let effective = resolve_render_settings_with_hint(
+                &runtime.ui().render_settings,
+                Some(OutputFormat::Json),
+            );
+            render_json_value(payload, &effective)
+        }
+        ReplCommandOutput::Text(text) => text.clone(),
+    }
+}
+
+pub(crate) fn render_repl_command_with_runtime(
+    runtime: &CommandRenderRuntime<'_>,
+    session: &mut AppSession,
+    line: &str,
+    stages: &[String],
+    result: CliCommandResult,
+    sink: &mut dyn UiSink,
+) -> Result<String> {
+    let CliCommandResult {
+        exit_code,
+        messages,
+        output,
+        stderr_text,
+        failure_report,
+        ..
+    } = result;
+
+    if exit_code != 0
+        && let Some(report) = failure_report
+    {
+        return Err(miette::miette!("{report}"));
+    }
+
+    if !messages.is_empty() {
+        emit_messages_with_runtime(runtime, &messages, runtime.ui().message_verbosity, sink);
+    }
+
+    let rendered = match output {
+        Some(ReplCommandOutput::Output(structured)) => {
+            render_repl_structured_command(runtime, session, line, stages, structured, sink)?
+        }
+        Some(ReplCommandOutput::Text(text)) => {
+            if stages.is_empty() {
+                text
+            } else {
+                render_staged_textual_command(runtime, session, line, stages, text, sink)?
+            }
+        }
+        Some(ReplCommandOutput::Json(payload)) => {
+            if stages.is_empty() {
+                render_repl_output_with_runtime(runtime, &ReplCommandOutput::Json(payload))
+            } else {
+                let (output, format_hint) = apply_output_stages(
+                    rows_to_output_result(rows_from_value(payload)),
+                    stages,
+                    Some(OutputFormat::Value),
+                )
+                .map_err(|err| miette::miette!("{err:#}"))?;
+                let render_settings =
+                    resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
+                let rendered = render_output(&output, &render_settings);
+                session.record_result(line, output_to_rows(&output));
+                maybe_copy_output_with_runtime(runtime, &output, sink);
+                rendered
+            }
+        }
+        None => String::new(),
+    };
+
+    if let Some(stderr_text) = stderr_text
+        && !stderr_text.is_empty()
+    {
+        sink.write_stderr(&stderr_text);
+    }
+
+    Ok(rendered)
+}
+
+pub(crate) fn render_structured_repl_output(
+    config: &ResolvedConfig,
+    render_settings: &crate::ui::RenderSettings,
+    output: &OutputResult,
+    format_hint: Option<OutputFormat>,
+    source_guide: Option<&GuideView>,
+) -> String {
+    let effective = resolve_render_settings_with_hint(render_settings, format_hint);
+    render_structured_output_with_source_guide(
+        output,
+        source_guide,
+        &effective,
+        crate::ui::help_layout_from_config(config),
+    )
+}
+
+fn render_repl_structured_command(
+    runtime: &CommandRenderRuntime<'_>,
+    session: &mut AppSession,
+    line: &str,
+    stages: &[String],
+    structured: StructuredCommandOutput,
+    sink: &mut dyn UiSink,
+) -> Result<String> {
+    let StructuredCommandOutput {
+        source_guide,
+        output,
+        format_hint,
+    } = structured;
+    let (output, format_hint) = apply_output_stages(output, stages, format_hint)
+        .map_err(|err| miette::miette!("{err:#}"))?;
+    let render_settings =
+        resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
+    let rendered = if stages.is_empty() {
+        render_structured_repl_output(
+            runtime.config(),
+            &render_settings,
+            &output,
+            format_hint,
+            source_guide.as_ref(),
+        )
+    } else {
+        render_structured_output(runtime.config(), &render_settings, &output)
+    };
+    session.record_result(line, output_to_rows(&output));
+    maybe_copy_output_with_runtime(runtime, &output, sink);
+    Ok(rendered)
+}
+
+fn render_staged_textual_command(
+    runtime: &CommandRenderRuntime<'_>,
+    session: &mut AppSession,
+    line: &str,
+    stages: &[String],
+    text: String,
+    sink: &mut dyn UiSink,
+) -> Result<String> {
+    let (output, format_hint) = apply_output_stages(
+        text_output_to_rows(&text),
+        stages,
+        Some(OutputFormat::Value),
+    )
+    .map_err(|err| miette::miette!("{err:#}"))?;
+    let render_settings =
+        resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
+    let rendered = render_output(&output, &render_settings);
+    session.record_result(line, output_to_rows(&output));
+    maybe_copy_output_with_runtime(runtime, &output, sink);
+    Ok(rendered)
+}
+
+fn text_output_to_rows(text: &str) -> OutputResult {
+    rows_to_output_result(
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| crate::row! { "value" => line })
+            .collect(),
+    )
 }

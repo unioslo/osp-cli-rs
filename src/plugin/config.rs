@@ -16,6 +16,21 @@ pub(crate) struct PluginConfigEnv {
     pub(crate) by_plugin_id: HashMap<String, Vec<PluginConfigEntry>>,
 }
 
+impl PluginConfigEnv {
+    pub(crate) fn effective_entries(&self, plugin_id: &str) -> Vec<PluginConfigEntry> {
+        let mut effective = BTreeMap::new();
+        for entry in &self.shared {
+            effective.insert(entry.env_key.clone(), entry.clone());
+        }
+        if let Some(entries) = self.by_plugin_id.get(plugin_id) {
+            for entry in entries {
+                effective.insert(entry.env_key.clone(), entry.clone());
+            }
+        }
+        effective.into_values().collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PluginConfigScope {
     Shared,
@@ -131,17 +146,7 @@ pub(crate) fn plugin_config_entries(
     config: &ResolvedConfig,
     plugin_id: &str,
 ) -> Vec<PluginConfigEntry> {
-    let config_env = collect_plugin_config_env(config);
-    let mut effective = BTreeMap::new();
-    for entry in config_env.shared {
-        effective.insert(entry.env_key.clone(), entry);
-    }
-    if let Some(entries) = config_env.by_plugin_id.get(plugin_id) {
-        for entry in entries {
-            effective.insert(entry.env_key.clone(), entry.clone());
-        }
-    }
-    effective.into_values().collect()
+    collect_plugin_config_env(config).effective_entries(plugin_id)
 }
 
 fn plugin_env_mapping(

@@ -11,9 +11,8 @@ use crate::cli::{Commands, IntroArgs};
 use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use crate::core::output::OutputFormat;
 use crate::repl::input::ReplParsedLine;
-use crate::ui::document::{Block, LineBlock, LinePart};
+use crate::ui::RenderSettings;
 use crate::ui::messages::MessageLevel;
-use crate::ui::{Document, RenderSettings};
 
 fn base_invocation(state: &AppState) -> crate::app::ResolvedInvocation {
     crate::app::resolve_invocation_ui(
@@ -40,7 +39,7 @@ fn make_state() -> AppState {
         debug_verbosity: 0,
         plugins: crate::plugin::PluginManager::new(Vec::new()),
         native_commands: crate::native::NativeCommandRegistry::default(),
-        themes: crate::ui::theme_loader::ThemeCatalog::default(),
+        themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),
     })
 }
@@ -172,47 +171,31 @@ fn repl_cache_key_covers_disabled_builtin_and_external_paths_unit() {
 }
 
 #[test]
-fn render_repl_command_output_covers_document_and_text_pipeline_paths_unit() {
+fn render_repl_command_output_covers_json_and_text_pipeline_paths_unit() {
     let mut state = make_state();
     let invocation = base_invocation(&state);
     let mut sink = BufferedUiSink::default();
 
-    let document_result = CliCommandResult {
+    let json_result = CliCommandResult {
         exit_code: 0,
         messages: Default::default(),
-        output: Some(ReplCommandOutput::Document {
-            document: Document {
-                blocks: vec![
-                    Block::Line(LineBlock {
-                        parts: vec![LinePart {
-                            text: "alpha".to_string(),
-                            token: None,
-                        }],
-                    }),
-                    Block::Line(LineBlock {
-                        parts: vec![LinePart {
-                            text: "beta".to_string(),
-                            token: None,
-                        }],
-                    }),
-                ],
-            },
-            format_hint: None,
-        }),
+        output: Some(ReplCommandOutput::Json(serde_json::json!([
+            "alpha", "beta"
+        ]))),
         stderr_text: None,
         failure_report: None,
     };
-    let document_rendered = render_repl_command_output(
+    let json_rendered = render_repl_command_output(
         &state.runtime,
         &mut state.session,
         "intro | beta",
         &["beta".to_string()],
-        document_result,
+        json_result,
         &invocation,
         &mut sink,
     )
-    .expect("document pipeline should render");
-    assert_eq!(document_rendered.trim(), "beta");
+    .expect("json pipeline should render");
+    assert_eq!(json_rendered.trim(), "beta");
 
     let text_result = CliCommandResult {
         exit_code: 0,

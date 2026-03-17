@@ -162,6 +162,44 @@ fn plugin_dispatch_context_refreshes_cached_plugin_env_after_config_change() {
     );
 }
 
+#[test]
+fn plugin_dispatch_context_owns_invocation_provider_override_unit() {
+    let state = make_completion_state_with_entries(None, &[]);
+    let invocation = crate::app::ResolvedInvocation {
+        ui: state.runtime.ui.clone(),
+        plugin_provider: Some("cfg".to_string()),
+        help_level: crate::guide::HelpLevel::default(),
+    };
+
+    let context = super::plugin_dispatch_context_for_runtime(
+        &state.runtime,
+        &state.clients,
+        Some(&invocation),
+    );
+
+    assert_eq!(context.provider_override.as_deref(), Some("cfg"));
+}
+
+#[test]
+fn app_clients_plugin_config_entries_match_shared_projection_helper_unit() {
+    let state = make_completion_state_with_entries(
+        None,
+        &[
+            ("extensions.plugins.env.endpoint", "shared"),
+            ("extensions.plugins.cfg.env.endpoint", "plugin"),
+            ("extensions.plugins.cfg.env.api.token", "token-123"),
+        ],
+    );
+
+    let from_clients = state
+        .clients
+        .plugin_config_entries(&state.runtime.config, "cfg");
+    let from_helper =
+        crate::plugin::config::plugin_config_entries(state.runtime.config.resolved(), "cfg");
+
+    assert_eq!(from_clients, from_helper);
+}
+
 #[cfg(unix)]
 #[test]
 fn app_state_seeds_plugin_command_policy_registry_unit() {

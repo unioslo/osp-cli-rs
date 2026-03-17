@@ -200,6 +200,48 @@ impl ReplScopeStack {
         }
     }
 
+    /// Returns the active history scope prefix, if the REPL is inside a shell.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::ReplScopeStack;
+    ///
+    /// let mut scope = ReplScopeStack::default();
+    /// assert_eq!(scope.history_scope_prefix(), None);
+    ///
+    /// scope.enter("theme");
+    /// assert_eq!(scope.history_scope_prefix(), Some("theme ".to_string()));
+    /// ```
+    pub fn history_scope_prefix(&self) -> Option<String> {
+        let prefix = self.history_prefix();
+        if prefix.is_empty() {
+            None
+        } else {
+            Some(prefix)
+        }
+    }
+
+    /// Returns the user-facing label for the current history scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::app::ReplScopeStack;
+    ///
+    /// let mut scope = ReplScopeStack::default();
+    /// assert_eq!(scope.history_scope_label(), "root history");
+    ///
+    /// scope.enter("theme");
+    /// scope.enter("show");
+    /// assert_eq!(scope.history_scope_label(), "theme / show shell history");
+    /// ```
+    pub fn history_scope_label(&self) -> String {
+        self.display_label()
+            .map(|label| format!("{label} shell history"))
+            .unwrap_or_else(|| "root history".to_string())
+    }
+
     /// Prepends the active scope path unless the tokens are already scoped.
     ///
     /// # Examples
@@ -288,6 +330,61 @@ pub struct LastFailure {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReplExitTransition {
+    ExitRoot,
+    LeftShell {
+        frame: ReplScopeFrame,
+        now_root: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AppSessionRebuildState {
+    prompt_prefix: String,
+    history_enabled: bool,
+    history_shell: HistoryShellContext,
+    prompt_timing: DebugTimingState,
+    startup_prompt_timing_pending: bool,
+    scope: ReplScopeStack,
+    last_rows: Vec<Row>,
+    last_failure: Option<LastFailure>,
+    result_cache: HashMap<String, Vec<Row>>,
+    cache_order: VecDeque<String>,
+    max_cached_results: usize,
+    config_overrides: ConfigLayer,
+}
+
+impl AppSessionRebuildState {
+    pub(crate) fn is_scoped(&self) -> bool {
+        !self.scope.is_root()
+    }
+
+    pub(crate) fn session_layer(&self) -> Option<ConfigLayer> {
+        (!self.config_overrides.entries().is_empty()).then(|| self.config_overrides.clone())
+    }
+
+    fn restore_into(self, next: &mut AppSession) {
+        next.prompt_prefix = self.prompt_prefix;
+        next.history_enabled = self.history_enabled;
+        next.history_shell = self.history_shell;
+        next.prompt_timing = self.prompt_timing;
+        next.startup_prompt_timing_pending = self.startup_prompt_timing_pending;
+        next.scope = self.scope;
+        next.last_rows = self.last_rows;
+        next.last_failure = self.last_failure;
+        next.result_cache = self.result_cache;
+        next.cache_order = self.cache_order;
+        // Command execution results depend on live runtime/plugin/config state,
+        // so a rebuild keeps row history but must drop command-result caches.
+        next.command_cache.clear();
+        next.command_cache_order.clear();
+        next.max_cached_results = self.max_cached_results;
+        next.config_overrides = self.config_overrides;
+        next.sync_history_shell_context();
+    }
+}
+
 impl AppSession {
     /// Starts the builder for session-scoped host state.
     ///
@@ -348,7 +445,7 @@ impl AppSession {
 
     /// Creates the default session snapshot for the current resolved config.
     pub(crate) fn from_resolved_config(config: &crate::config::ResolvedConfig) -> Self {
-        let session_cache_max_results = crate::app::host::config_usize(
+        let session_cache_max_results = crate::app::config_usize(
             config,
             "session.cache.max_results",
             DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
@@ -362,7 +459,7 @@ impl AppSession {
         config: &crate::config::ResolvedConfig,
         config_overrides: ConfigLayer,
     ) -> Self {
-        Self::with_cache_limit(crate::app::host::config_usize(
+        Self::with_cache_limit(crate::app::config_usize(
             config,
             "session.cache.max_results",
             DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
@@ -392,6 +489,63 @@ impl AppSession {
     pub fn with_config_overrides(mut self, config_overrides: ConfigLayer) -> Self {
         self.config_overrides = config_overrides;
         self
+    }
+
+    /// Enters a nested REPL shell scope and synchronizes history context.
+    pub fn enter_repl_scope(&mut self, command: impl Into<String>) {
+        self.scope.enter(command);
+        self.sync_history_shell_context();
+    }
+
+    /// Leaves the current REPL shell scope and synchronizes history context.
+    pub fn leave_repl_scope(&mut self) -> Option<ReplScopeFrame> {
+        let frame = self.scope.leave()?;
+        self.sync_history_shell_context();
+        Some(frame)
+    }
+
+    /// Applies a user `exit` request against the current REPL scope.
+    pub(crate) fn request_repl_exit(&mut self) -> ReplExitTransition {
+        if self.scope.is_root() {
+            self.sync_history_shell_context();
+            ReplExitTransition::ExitRoot
+        } else {
+            match self.leave_repl_scope() {
+                Some(frame) => ReplExitTransition::LeftShell {
+                    now_root: self.scope.is_root(),
+                    frame,
+                },
+                None => ReplExitTransition::ExitRoot,
+            }
+        }
+    }
+
+    /// Finalizes a completed REPL line by synchronizing derived session state.
+    pub(crate) fn finish_repl_line(&self) {
+        self.sync_history_shell_context();
+    }
+
+    /// Captures the session-scoped state that must survive a runtime rebuild.
+    pub(crate) fn capture_rebuild_state(&self) -> AppSessionRebuildState {
+        AppSessionRebuildState {
+            prompt_prefix: self.prompt_prefix.clone(),
+            history_enabled: self.history_enabled,
+            history_shell: self.history_shell.clone(),
+            prompt_timing: self.prompt_timing.clone(),
+            startup_prompt_timing_pending: self.startup_prompt_timing_pending,
+            scope: self.scope.clone(),
+            last_rows: self.last_rows.clone(),
+            last_failure: self.last_failure.clone(),
+            result_cache: self.result_cache.clone(),
+            cache_order: self.cache_order.clone(),
+            max_cached_results: self.max_cached_results,
+            config_overrides: self.config_overrides.clone(),
+        }
+    }
+
+    /// Restores session-scoped state after a runtime rebuild.
+    pub(crate) fn restore_rebuild_state(&mut self, state: AppSessionRebuildState) {
+        state.restore_into(self);
     }
 
     /// Stores the latest successful row output and updates the result cache.
@@ -519,6 +673,106 @@ impl Default for AppSession {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::Value;
+
+    use super::{AppSession, ReplExitTransition};
+    use crate::config::ConfigLayer;
+
+    #[test]
+    fn request_repl_exit_tracks_root_and_nested_scope_transitions_unit() {
+        let mut root = AppSession::with_cache_limit(4);
+        assert!(matches!(
+            root.request_repl_exit(),
+            ReplExitTransition::ExitRoot
+        ));
+
+        let mut nested = AppSession::with_cache_limit(4);
+        nested.enter_repl_scope("ldap");
+        assert!(matches!(
+            nested.request_repl_exit(),
+            ReplExitTransition::LeftShell {
+                now_root: true,
+                frame,
+            } if frame.command() == "ldap"
+        ));
+        assert!(nested.scope.is_root());
+
+        let mut deep = AppSession::with_cache_limit(4);
+        deep.enter_repl_scope("ldap");
+        deep.enter_repl_scope("user");
+        assert!(matches!(
+            deep.request_repl_exit(),
+            ReplExitTransition::LeftShell {
+                now_root: false,
+                frame,
+            } if frame.command() == "user"
+        ));
+        assert_eq!(deep.scope.commands(), vec!["ldap".to_string()]);
+    }
+
+    #[test]
+    fn rebuild_state_round_trip_preserves_rows_and_scope_unit() {
+        let mut session = AppSession::with_cache_limit(4)
+            .with_prompt_prefix("osp-dev")
+            .with_history_enabled(false);
+        let mut overrides = ConfigLayer::default();
+        overrides.set("ui.format", "json");
+        session = session.with_config_overrides(overrides);
+        session.max_cached_results = 7;
+        session.enter_repl_scope("ldap");
+        session.enter_repl_scope("user");
+        session.record_prompt_timing(2, Duration::from_secs(3), None, None, None);
+        session.startup_prompt_timing_pending = false;
+
+        let mut row = crate::core::row::Row::new();
+        row.insert("name".to_string(), Value::from("alice"));
+        session.record_result("list users", vec![row.clone()]);
+        session.record_failure("list users", "Command failed", "detail");
+        session.record_cached_command("config show", &super::CliCommandResult::text("cached"));
+
+        let snapshot = session.capture_rebuild_state();
+        let mut restored = AppSession::with_cache_limit(1);
+        restored.restore_rebuild_state(snapshot);
+
+        assert_eq!(restored.prompt_prefix, "osp-dev");
+        assert!(!restored.history_enabled);
+        assert_eq!(restored.max_cached_results, 7);
+        assert_eq!(
+            restored.scope.commands(),
+            vec!["ldap".to_string(), "user".to_string()]
+        );
+        assert_eq!(
+            restored.history_shell.prefix(),
+            Some("ldap user ".to_string())
+        );
+        assert_eq!(restored.cached_rows("list users"), Some(&[row][..]));
+        assert!(restored.command_cache.is_empty());
+        assert!(restored.command_cache_order.is_empty());
+        assert_eq!(
+            restored
+                .last_failure
+                .as_ref()
+                .map(|failure| failure.summary.as_str()),
+            Some("Command failed")
+        );
+        assert_eq!(
+            restored.prompt_timing.badge().map(|badge| badge.level),
+            Some(2)
+        );
+        assert!(!restored.startup_prompt_timing_pending);
+        assert_eq!(restored.config_overrides.entries().len(), 1);
+        assert_eq!(restored.config_overrides.entries()[0].key, "ui.format");
+        assert_eq!(
+            restored.config_overrides.entries()[0].value.to_string(),
+            "json"
+        );
+    }
+}
+
 /// Builder for [`AppSession`].
 ///
 /// Prefer this when callers want a neutral session-construction entrypoint and
@@ -598,7 +852,7 @@ pub(crate) struct AppStateInit {
     pub debug_verbosity: u8,
     pub plugins: crate::plugin::PluginManager,
     pub native_commands: NativeCommandRegistry,
-    pub themes: crate::ui::theme_loader::ThemeCatalog,
+    pub themes: crate::ui::theme_catalog::ThemeCatalog,
     pub launch: LaunchContext,
 }
 
@@ -791,7 +1045,7 @@ pub struct AppStateBuilder {
     plugins: Option<PluginManager>,
     native_commands: NativeCommandRegistry,
     session: Option<AppSession>,
-    themes: Option<crate::ui::theme_loader::ThemeCatalog>,
+    themes: Option<crate::ui::theme_catalog::ThemeCatalog>,
 }
 
 impl AppStateBuilder {
@@ -818,6 +1072,23 @@ impl AppStateBuilder {
         }
     }
 
+    pub(crate) fn from_host_inputs(
+        context: RuntimeContext,
+        config: crate::config::ResolvedConfig,
+        host_inputs: crate::app::assembly::ResolvedHostInputs,
+    ) -> Self {
+        Self {
+            context,
+            config,
+            ui: host_inputs.ui,
+            launch: LaunchContext::default(),
+            plugins: Some(host_inputs.plugins),
+            native_commands: NativeCommandRegistry::default(),
+            session: Some(host_inputs.default_session),
+            themes: Some(host_inputs.themes),
+        }
+    }
+
     /// Starts a builder by deriving UI state from the resolved config and
     /// runtime context.
     ///
@@ -828,7 +1099,10 @@ impl AppStateBuilder {
         config: crate::config::ResolvedConfig,
     ) -> miette::Result<Self> {
         // This path is the canonical embedder factory: derive host inputs once
-        // and hand callers a coherent runtime/session/client snapshot.
+        // and hand callers a coherent runtime/session snapshot. Plugins are
+        // intentionally derived later at build time from the final launch
+        // context, because callers may still override launch roots before the
+        // state is assembled.
         let host_inputs = crate::app::assembly::ResolvedHostInputs::derive(
             &context,
             &config,
@@ -838,7 +1112,7 @@ impl AppStateBuilder {
             None,
             None,
         )?;
-        crate::ui::theme_loader::log_theme_issues(&host_inputs.themes.issues);
+        crate::ui::theme_catalog::log_theme_issues(&host_inputs.themes.issues);
         Ok(Self {
             context,
             config,
@@ -886,54 +1160,74 @@ impl AppStateBuilder {
         self
     }
 
-    /// Replaces the loaded theme catalog used during state assembly.
-    pub(crate) fn with_themes(mut self, themes: crate::ui::theme_loader::ThemeCatalog) -> Self {
-        self.themes = Some(themes);
-        self
-    }
-
     /// Builds the configured [`AppState`].
     ///
     /// This assembles one coherent runtime/session/client snapshot, deriving any
     /// omitted pieces such as themes, plugin manager, and default session before
     /// returning the final value.
     pub fn build(self) -> AppState {
-        let themes = self.themes.unwrap_or_else(|| {
-            let themes = crate::ui::theme_loader::load_theme_catalog(&self.config);
-            crate::ui::theme_loader::log_theme_issues(&themes.issues);
-            themes
+        let Self {
+            context,
+            config,
+            ui,
+            launch,
+            plugins,
+            native_commands,
+            session,
+            themes,
+        } = self;
+        let should_log_theme_issues = themes.is_none();
+        let derived_defaults = if themes.is_none() || plugins.is_none() || session.is_none() {
+            Some(crate::app::assembly::derive_host_defaults(
+                &config, &launch, None, None,
+            ))
+        } else {
+            None
+        };
+        let (derived_themes, derived_plugins, derived_session) = match derived_defaults {
+            Some(defaults) => (
+                Some(defaults.themes),
+                Some(defaults.plugins),
+                Some(defaults.default_session),
+            ),
+            None => (None, None, None),
+        };
+        let themes = themes.or(derived_themes).unwrap_or_else(|| {
+            crate::app::assembly::derive_host_defaults(&config, &launch, None, None).themes
         });
-        let plugins = self
-            .plugins
-            .unwrap_or_else(|| default_plugin_manager(&self.config, &self.launch));
+        let plugins = plugins.or(derived_plugins).unwrap_or_else(|| {
+            crate::app::assembly::derive_host_defaults(&config, &launch, None, None).plugins
+        });
+        let session = session.or(derived_session).or_else(|| {
+            Some(
+                crate::app::assembly::derive_host_defaults(&config, &launch, None, None)
+                    .default_session,
+            )
+        });
+        if should_log_theme_issues {
+            crate::ui::theme_catalog::log_theme_issues(&themes.issues);
+        }
 
         let crate::app::UiState {
             render_settings,
             message_verbosity,
             debug_verbosity,
             ..
-        } = self.ui;
+        } = ui;
 
         AppState::from_parts(AppStateParts::from_init(
             AppStateInit {
-                context: self.context,
-                config: self.config,
+                context,
+                config,
                 render_settings,
                 message_verbosity,
                 debug_verbosity,
                 plugins,
-                native_commands: self.native_commands,
+                native_commands,
                 themes,
-                launch: self.launch,
+                launch,
             },
-            self.session,
+            session,
         ))
     }
-}
-
-fn default_plugin_manager(
-    config: &crate::config::ResolvedConfig,
-    launch: &LaunchContext,
-) -> PluginManager {
-    crate::app::assembly::build_plugin_manager(config, launch, None)
 }

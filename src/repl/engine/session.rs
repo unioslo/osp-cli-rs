@@ -37,7 +37,7 @@ pub(crate) struct SubmissionContext<'a, F> {
 
 impl<'a, F> SubmissionContext<'a, F> where F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult> {}
 
-pub(crate) fn process_submission<F>(
+pub(crate) fn evaluate_repl_submission<F>(
     raw: &str,
     ctx: &mut SubmissionContext<'_, F>,
 ) -> Result<SubmissionResult>
@@ -182,18 +182,9 @@ where
             return Ok(ReplRunResult::Exit(0));
         }
 
-        match process_submission(&line, submission)? {
-            SubmissionResult::Noop => continue,
-            SubmissionResult::Print(output) => print!("{output}"),
-            SubmissionResult::ReplaceInput(buffer) => {
-                println!("{buffer}");
-                continue;
-            }
-            SubmissionResult::Exit(code) => return Ok(ReplRunResult::Exit(code)),
-            SubmissionResult::Restart { output, reload } => {
-                print!("{output}");
-                return Ok(ReplRunResult::Restart { output, reload });
-            }
+        match apply_basic_submission(evaluate_repl_submission(&line, submission)?) {
+            BasicSubmissionAction::Continue => continue,
+            BasicSubmissionAction::Return(result) => return Ok(result),
         }
     }
 }
@@ -257,14 +248,38 @@ where
             Ok(None)
         }
         Signal::Success(line) => {
-            handle_submission_result(process_submission(&line, submission)?, editor)
+            apply_interactive_submission(evaluate_repl_submission(&line, submission)?, editor)
         }
         Signal::CtrlD => Ok(Some(ReplRunResult::Exit(0))),
         Signal::CtrlC => Ok(None),
     }
 }
 
-fn handle_submission_result(
+enum BasicSubmissionAction {
+    Continue,
+    Return(ReplRunResult),
+}
+
+fn apply_basic_submission(result: SubmissionResult) -> BasicSubmissionAction {
+    match result {
+        SubmissionResult::Noop => BasicSubmissionAction::Continue,
+        SubmissionResult::Print(output) => {
+            print!("{output}");
+            BasicSubmissionAction::Continue
+        }
+        SubmissionResult::ReplaceInput(buffer) => {
+            println!("{buffer}");
+            BasicSubmissionAction::Continue
+        }
+        SubmissionResult::Exit(code) => BasicSubmissionAction::Return(ReplRunResult::Exit(code)),
+        SubmissionResult::Restart { output, reload } => {
+            print!("{output}");
+            BasicSubmissionAction::Return(ReplRunResult::Restart { output, reload })
+        }
+    }
+}
+
+fn apply_interactive_submission(
     result: SubmissionResult,
     editor: &mut Reedline,
 ) -> Result<Option<ReplRunResult>> {
@@ -337,22 +352,25 @@ mod tests {
     }
 
     #[test]
-    fn handle_submission_result_covers_editor_update_and_terminal_outcomes_unit() {
+    fn apply_interactive_submission_covers_editor_update_and_terminal_outcomes_unit() {
         let mut editor = Reedline::create();
 
         assert!(
-            handle_submission_result(SubmissionResult::Noop, &mut editor)
+            apply_interactive_submission(SubmissionResult::Noop, &mut editor)
                 .expect("noop should succeed")
                 .is_none()
         );
         assert!(
-            handle_submission_result(SubmissionResult::Print("printed".to_string()), &mut editor)
-                .expect("print should succeed")
-                .is_none()
+            apply_interactive_submission(
+                SubmissionResult::Print("printed".to_string()),
+                &mut editor
+            )
+            .expect("print should succeed")
+            .is_none()
         );
 
         assert!(
-            handle_submission_result(
+            apply_interactive_submission(
                 SubmissionResult::ReplaceInput("config show".to_string()),
                 &mut editor,
             )
@@ -362,12 +380,12 @@ mod tests {
         assert_eq!(editor.current_buffer_contents(), "config show");
 
         assert!(matches!(
-            handle_submission_result(SubmissionResult::Exit(7), &mut editor)
+            apply_interactive_submission(SubmissionResult::Exit(7), &mut editor)
                 .expect("exit should succeed"),
             Some(ReplRunResult::Exit(7))
         ));
         assert!(matches!(
-            handle_submission_result(
+            apply_interactive_submission(
                 SubmissionResult::Restart {
                     output: "reload".to_string(),
                     reload: ReplReloadKind::Default,

@@ -1,7 +1,10 @@
 #[test]
 fn parse_input_value_covers_float_unknown_and_allowed_scope_paths_unit() {
     let mut schema = ConfigSchema::default();
-    schema.insert("demo.float", super::SchemaEntry::float());
+    schema.insert(
+        "demo.float",
+        super::SchemaEntry::float().with_doc("Demo floating-point value"),
+    );
 
     assert_eq!(
         schema
@@ -25,6 +28,8 @@ fn parse_input_value_covers_float_unknown_and_allowed_scope_paths_unit() {
             .expect_err("unknown keys should fail"),
         crate::config::ConfigError::UnknownConfigKeys { keys } if keys == vec!["not.real".to_string()]
     ));
+    assert_eq!(schema.doc_for_key("demo.float"), Some("Demo floating-point value"));
+    assert_eq!(schema.doc_for_key("not.real"), None);
 
     validate_key_scope("profile.default", &Scope::terminal("repl"))
         .expect("bootstrap profile.default is allowed on terminal scope");

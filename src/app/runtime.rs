@@ -37,7 +37,7 @@ use crate::plugin::PluginManager;
 use crate::plugin::config::{PluginConfigEntry, PluginConfigEnv, PluginConfigEnvCache};
 use crate::ui::RenderSettings;
 use crate::ui::messages::MessageLevel;
-use crate::ui::theme_loader::ThemeCatalog;
+use crate::ui::theme_catalog::ThemeCatalog;
 
 /// Identifies which top-level host surface is currently active.
 ///
@@ -245,7 +245,7 @@ impl UiState {
         context: &RuntimeContext,
         config: &ResolvedConfig,
     ) -> miette::Result<Self> {
-        let themes = crate::ui::theme_loader::load_theme_catalog(config);
+        let themes = crate::ui::theme_catalog::load_theme_catalog(config);
         crate::app::assembly::derive_ui_state(
             context,
             config,
@@ -433,17 +433,7 @@ impl AppClients {
         config: &ConfigState,
         plugin_id: &str,
     ) -> Vec<PluginConfigEntry> {
-        let config_env = self.plugin_config_env(config);
-        let mut merged = std::collections::BTreeMap::new();
-        for entry in config_env.shared {
-            merged.insert(entry.env_key.clone(), entry);
-        }
-        if let Some(entries) = config_env.by_plugin_id.get(plugin_id) {
-            for entry in entries {
-                merged.insert(entry.env_key.clone(), entry.clone());
-            }
-        }
-        merged.into_values().collect()
+        self.plugin_config_env(config).effective_entries(plugin_id)
     }
 }
 

@@ -37,10 +37,8 @@ mod tests {
 
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
         let output = match result.output? {
-            ReplCommandOutput::Output { output, .. } => output,
-            ReplCommandOutput::Guide(_)
-            | ReplCommandOutput::Document { .. }
-            | ReplCommandOutput::Text(_) => return None,
+            ReplCommandOutput::Output(output) => output.output,
+            ReplCommandOutput::Json(_) | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
     }
@@ -59,14 +57,18 @@ mod tests {
     fn history_output_helpers_wrap_rows_and_ignore_text_results_unit() {
         let temp_dir = make_temp_dir("osp-cli-history-wrapper");
         let history = crate::repl::SharedHistory::new(
-            HistoryConfig::builder()
-                .with_path(Some(temp_dir.join("history.jsonl")))
-                .with_max_entries(32)
-                .with_enabled(true)
-                .with_dedupe(true)
-                .with_profile_scoped(false)
-                .with_shell_context(crate::repl::HistoryShellContext::default())
-                .build(),
+            HistoryConfig {
+                path: Some(temp_dir.join("history.jsonl")),
+                max_entries: 32,
+                enabled: true,
+                dedupe: true,
+                profile_scoped: false,
+                exclude_patterns: Vec::new(),
+                profile: None,
+                terminal: None,
+                shell_context: crate::repl::HistoryShellContext::default(),
+            }
+            .normalized(),
         );
         history
             .save_command_line("config show")

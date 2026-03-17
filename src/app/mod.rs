@@ -71,14 +71,17 @@
 use crate::config::ConfigLayer;
 use crate::native::NativeCommandRegistry;
 use crate::ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity};
+use crate::ui::{RenderSettings, render_messages_without_config};
 use std::ffi::OsString;
 
 pub(crate) mod assembly;
 pub(crate) mod bootstrap;
+pub(crate) mod builtin;
 pub(crate) mod command_output;
 pub(crate) mod config_explain;
 pub(crate) mod dispatch;
 pub(crate) mod external;
+pub(crate) mod facts;
 pub(crate) mod help;
 pub(crate) mod host;
 pub(crate) mod logging;
@@ -93,7 +96,14 @@ mod tests;
 pub(crate) mod timing;
 
 pub(crate) use bootstrap::*;
+pub(crate) use builtin::*;
 pub(crate) use command_output::*;
+pub(crate) use config_explain::{
+    ConfigExplainContext, config_explain_json, config_explain_result, config_value_to_json,
+    explain_runtime_config, format_scope, is_sensitive_key, push_missing_config_key_messages,
+    render_config_explain_text,
+};
+pub(crate) use facts::*;
 pub use host::run_from;
 pub(crate) use host::*;
 pub(crate) use repl_lifecycle::rebuild_repl_in_place;
@@ -346,7 +356,11 @@ impl App {
             Err(err) => {
                 let mut messages = MessageBuffer::default();
                 messages.error(render_report_message(&err, message_verbosity));
-                sink.write_stderr(&messages.render_grouped(message_verbosity));
+                sink.write_stderr(&render_messages_without_config(
+                    &RenderSettings::test_plain(crate::core::output::OutputFormat::Auto),
+                    &messages,
+                    message_verbosity,
+                ));
                 classify_exit_code(&err)
             }
         }
@@ -571,7 +585,11 @@ where
         Err(err) => {
             let mut messages = MessageBuffer::default();
             messages.error(render_report_message(&err, message_verbosity));
-            sink.write_stderr(&messages.render_grouped(message_verbosity));
+            sink.write_stderr(&render_messages_without_config(
+                &RenderSettings::test_plain(crate::core::output::OutputFormat::Auto),
+                &messages,
+                message_verbosity,
+            ));
             classify_exit_code(&err)
         }
     }

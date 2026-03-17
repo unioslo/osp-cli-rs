@@ -305,6 +305,7 @@ pub use crate::native::{
 };
 
 mod native;
+mod normalize;
 
 #[cfg(test)]
 mod tests;

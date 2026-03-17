@@ -33,8 +33,7 @@ use super::{ReplViewContext, completion, input};
 
 use builtins::{ReplBuiltin, execute_repl_builtin, is_repl_bang_request, parse_repl_builtin};
 use command::{
-    ParsedReplDispatch, ParsedReplInvocation, finalize_repl_command, parse_repl_invocation,
-    render_repl_command_output, run_repl_command,
+    ExecutedReplCommand, ParsedReplDispatch, execute_repl_command_dispatch, parse_repl_invocation,
 };
 use shell::{ReplShortcutPlan, classify_repl_shortcut, execute_repl_shortcut};
 
@@ -46,8 +45,8 @@ use builtins::{
 pub(crate) use command::repl_command_spec;
 #[cfg(test)]
 use command::{
-    command_side_effects, config_key_change_requires_intro, parse_clap_help,
-    renders_repl_inline_help,
+    command_side_effects, config_key_change_requires_intro, finalize_repl_command, parse_clap_help,
+    render_repl_command_output, renders_repl_inline_help, run_repl_command,
 };
 #[cfg(test)]
 pub(crate) use shell::apply_repl_shell_prefix;
@@ -70,12 +69,7 @@ enum ReplLinePlan {
         parsed: input::ReplParsedLine,
         shortcut: Box<ReplShortcutPlan>,
     },
-    Help {
-        result: Box<crate::app::CliCommandResult>,
-        effective: Box<ResolvedInvocation>,
-        stages: Vec<String>,
-    },
-    Invocation(Box<ParsedReplInvocation>),
+    Command(Box<ParsedReplDispatch>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -96,6 +90,50 @@ enum ReplTimingPlan {
 struct ExecutedReplLine {
     result: ReplLineResult,
     timing: ReplTimingPlan,
+}
+
+impl ExecutedReplLine {
+    fn flat(result: ReplLineResult, debug_verbosity: u8) -> Self {
+        Self {
+            result,
+            timing: ReplTimingPlan::Flat { debug_verbosity },
+        }
+    }
+
+    fn parse_only(result: ReplLineResult, debug_verbosity: u8) -> Self {
+        Self {
+            result,
+            timing: ReplTimingPlan::ParseOnly { debug_verbosity },
+        }
+    }
+
+    fn invocation(
+        result: ReplLineResult,
+        debug_verbosity: u8,
+        parse_finished: Instant,
+        execute_finished: Instant,
+    ) -> Self {
+        Self {
+            result,
+            timing: ReplTimingPlan::Invocation {
+                debug_verbosity,
+                parse_finished,
+                execute_finished,
+            },
+        }
+    }
+
+    fn command(parse_finished: Instant, executed: ExecutedReplCommand) -> Self {
+        match executed.execute_finished {
+            Some(execute_finished) => Self::invocation(
+                executed.result,
+                executed.debug_verbosity,
+                parse_finished,
+                execute_finished,
+            ),
+            None => Self::parse_only(executed.result, executed.debug_verbosity),
+        }
+    }
 }
 
 struct ReplExecutionContext<'a, 'sink> {
@@ -125,8 +163,10 @@ impl ReplLinePlan {
             ReplLinePlan::Blank => ReplLinePlanKind::Blank,
             ReplLinePlan::DslHelp { .. } => ReplLinePlanKind::DslHelp,
             ReplLinePlan::Shortcut { .. } => ReplLinePlanKind::Shortcut,
-            ReplLinePlan::Help { .. } => ReplLinePlanKind::Help,
-            ReplLinePlan::Invocation(_) => ReplLinePlanKind::Invocation,
+            ReplLinePlan::Command(dispatch) => match dispatch.as_ref() {
+                ParsedReplDispatch::Help { .. } => ReplLinePlanKind::Help,
+                ParsedReplDispatch::Invocation(_) => ReplLinePlanKind::Invocation,
+            },
         }
     }
 }
@@ -142,10 +182,12 @@ pub(crate) fn execute_repl_plugin_line(
     let mut sink = StdIoUiSink;
     match execute_repl_plugin_line_inner(runtime, session, clients, history, line, &mut sink) {
         Ok(executed) => {
+            session.finish_repl_line();
             record_repl_timing(session, started, executed.timing);
             Ok(executed.result)
         }
         Err(err) => {
+            session.finish_repl_line();
             if runtime.ui.debug_verbosity > 0 {
                 session.record_prompt_timing(
                     runtime.ui.debug_verbosity,
@@ -194,50 +236,79 @@ fn classify_repl_line(
     session: &AppSession,
     line: &str,
 ) -> Result<ReplLinePlan> {
+    // 1. Classify builtins and blank lines before any normal parsing.
     let raw = line.trim();
+    if let Some(plan) = classify_builtin_or_blank(raw)? {
+        return Ok(plan);
+    }
+
+    // 2. Parse the line into REPL-local command/stage shape.
+    let parsed = parse_repl_dispatch_line(runtime, line)?;
+
+    // 3. Handle REPL-local affordances before normal command dispatch.
+    if let Some(plan) = classify_repl_local_plan(runtime, session, &parsed)? {
+        return Ok(plan);
+    }
+
+    // 4. Resolve the remaining line as ordinary command/help dispatch.
+    classify_repl_command_plan(runtime, session, parsed)
+}
+
+fn classify_builtin_or_blank(raw: &str) -> Result<Option<ReplLinePlan>> {
     // Builtins and bang expansion must run before full line parsing so REPL
     // control verbs keep working even when the rest of the line is not a valid
     // command invocation.
     if let Some(builtin) = parse_repl_builtin(raw)? {
-        return Ok(ReplLinePlan::Builtin {
+        return Ok(Some(ReplLinePlan::Builtin {
             raw: raw.to_string(),
             builtin,
-        });
+        }));
     }
 
-    let parsed = input::ReplParsedLine::parse(line, runtime.config.resolved())?;
-    if parsed.is_empty() {
-        return Ok(ReplLinePlan::Blank);
+    if raw.is_empty() {
+        return Ok(Some(ReplLinePlan::Blank));
     }
+
+    Ok(None)
+}
+
+fn parse_repl_dispatch_line(runtime: &AppRuntime, line: &str) -> Result<input::ReplParsedLine> {
+    input::ReplParsedLine::parse(line, runtime.config.resolved())
+}
+
+fn classify_repl_local_plan(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    parsed: &input::ReplParsedLine,
+) -> Result<Option<ReplLinePlan>> {
     // DSL help is a REPL-local affordance over raw stage text, so surface it
     // before command dispatch rather than forcing it through normal execution.
     if let Some(help) = completion::maybe_render_dsl_help(
         ReplViewContext::from_parts(runtime, session),
         &parsed.stages,
     ) {
-        return Ok(ReplLinePlan::DslHelp { help });
+        return Ok(Some(ReplLinePlan::DslHelp { help }));
     }
 
     let base_invocation = base_repl_invocation(runtime);
-    if let Some(shortcut) = classify_repl_shortcut(runtime, session, &parsed, &base_invocation)? {
-        return Ok(ReplLinePlan::Shortcut {
-            parsed,
+    if let Some(shortcut) = classify_repl_shortcut(runtime, session, parsed, &base_invocation)? {
+        return Ok(Some(ReplLinePlan::Shortcut {
+            parsed: parsed.clone(),
             shortcut: Box::new(shortcut),
-        });
+        }));
     }
 
-    match parse_repl_invocation(runtime, session, &parsed)? {
-        ParsedReplDispatch::Help {
-            result,
-            effective,
-            stages,
-        } => Ok(ReplLinePlan::Help {
-            result,
-            effective,
-            stages,
-        }),
-        ParsedReplDispatch::Invocation(invocation) => Ok(ReplLinePlan::Invocation(invocation)),
-    }
+    Ok(None)
+}
+
+fn classify_repl_command_plan(
+    runtime: &AppRuntime,
+    session: &AppSession,
+    parsed: input::ReplParsedLine,
+) -> Result<ReplLinePlan> {
+    Ok(ReplLinePlan::Command(Box::new(parse_repl_invocation(
+        runtime, session, &parsed,
+    )?)))
 }
 
 fn execute_repl_line_plan(
@@ -255,87 +326,34 @@ fn execute_repl_line_plan(
     } = context;
     match plan {
         ReplLinePlan::Builtin { raw, builtin } => {
-            let result = execute_repl_builtin(runtime, session, clients, history, &raw, builtin)?;
-            Ok(ExecutedReplLine {
-                result,
-                timing: ReplTimingPlan::Flat {
-                    debug_verbosity: runtime.ui.debug_verbosity,
-                },
-            })
+            let result =
+                execute_repl_builtin(runtime, session, clients, history, &raw, builtin, sink)?;
+            Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity))
         }
-        ReplLinePlan::Blank => Ok(ExecutedReplLine {
-            result: ReplLineResult::Continue(String::new()),
-            timing: ReplTimingPlan::Flat {
-                debug_verbosity: runtime.ui.debug_verbosity,
-            },
-        }),
-        ReplLinePlan::DslHelp { help } => {
-            session.sync_history_shell_context();
-            Ok(ExecutedReplLine {
-                result: ReplLineResult::Continue(help),
-                timing: ReplTimingPlan::Flat {
-                    debug_verbosity: runtime.ui.debug_verbosity,
-                },
-            })
-        }
+        ReplLinePlan::Blank => Ok(ExecutedReplLine::flat(
+            ReplLineResult::Continue(String::new()),
+            runtime.ui.debug_verbosity,
+        )),
+        ReplLinePlan::DslHelp { help } => Ok(ExecutedReplLine::flat(
+            ReplLineResult::Continue(help),
+            runtime.ui.debug_verbosity,
+        )),
         ReplLinePlan::Shortcut { parsed, shortcut } => {
             let result =
                 execute_repl_shortcut(runtime, session, clients, &parsed, *shortcut, line, sink)?;
-            Ok(ExecutedReplLine {
-                result,
-                timing: ReplTimingPlan::Flat {
-                    debug_verbosity: runtime.ui.debug_verbosity,
-                },
-            })
+            Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity))
         }
-        ReplLinePlan::Help {
-            result,
-            effective,
-            stages,
-        } => {
-            let rendered = render_repl_command_output(
-                runtime, session, line, &stages, *result, &effective, sink,
-            )?;
-            Ok(ExecutedReplLine {
-                result: ReplLineResult::Continue(rendered),
-                timing: ReplTimingPlan::ParseOnly {
-                    debug_verbosity: effective.ui.debug_verbosity,
-                },
-            })
-        }
-        ReplLinePlan::Invocation(invocation) => {
-            let output = run_repl_command(
+        ReplLinePlan::Command(dispatch) => {
+            let executed = execute_repl_command_dispatch(
                 runtime,
                 session,
                 clients,
-                invocation.command,
-                &invocation.effective,
-                history,
-                invocation.cache_key.as_deref(),
-            )?;
-            let execute_finished = Instant::now();
-            let rendered = render_repl_command_output(
-                runtime,
-                session,
+                Some(history),
                 line,
-                &invocation.stages,
-                output,
-                &invocation.effective,
+                *dispatch,
                 sink,
             )?;
-            Ok(ExecutedReplLine {
-                result: finalize_repl_command(
-                    session,
-                    rendered,
-                    invocation.side_effects.restart_repl,
-                    invocation.side_effects.show_intro_on_reload,
-                ),
-                timing: ReplTimingPlan::Invocation {
-                    debug_verbosity: invocation.effective.ui.debug_verbosity,
-                    parse_finished,
-                    execute_finished,
-                },
-            })
+            Ok(ExecutedReplLine::command(parse_finished, executed))
         }
     }
 }

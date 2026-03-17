@@ -7,7 +7,7 @@ use super::{
 };
 use crate::app::ReplCommandOutput;
 use crate::app::{RuntimeContext, TerminalKind, UiState};
-use crate::cli::{ConfigSetArgs, ConfigUnsetArgs};
+use crate::cli::{ConfigScopeArgs, ConfigSetArgs, ConfigStoreArgs, ConfigUnsetArgs};
 use crate::config::{
     ConfigLayer, ConfigResolver, ResolveOptions, ResolvedConfig, RuntimeLoadOptions, Scope,
 };
@@ -15,7 +15,7 @@ use crate::core::output::OutputFormat;
 use crate::ui::RenderSettings;
 use crate::ui::messages::MessageBuffer;
 use crate::ui::messages::MessageLevel;
-use crate::ui::theme_loader::ThemeCatalog;
+use crate::ui::theme_catalog::ThemeCatalog;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -116,14 +116,8 @@ fn config_set_args(key: &str, value: &str) -> ConfigSetArgs {
     ConfigSetArgs {
         key: key.to_string(),
         value: value.to_string(),
-        global: false,
-        profile: None,
-        profile_all: false,
-        terminal: None,
-        session: false,
-        config_store: false,
-        secrets: false,
-        save: false,
+        scope: ConfigScopeArgs::default(),
+        store: ConfigStoreArgs::default(),
         yes: false,
         explain: false,
         dry_run: false,
@@ -133,14 +127,8 @@ fn config_set_args(key: &str, value: &str) -> ConfigSetArgs {
 fn config_unset_args(key: &str) -> ConfigUnsetArgs {
     ConfigUnsetArgs {
         key: key.to_string(),
-        global: false,
-        profile: None,
-        profile_all: false,
-        terminal: None,
-        session: false,
-        config_store: false,
-        secrets: false,
-        save: false,
+        scope: ConfigScopeArgs::default(),
+        store: ConfigStoreArgs::default(),
         dry_run: false,
     }
 }
@@ -368,8 +356,10 @@ fn config_get_rows_and_run_config_get_cover_bootstrap_alias_and_missing_paths_un
         read_context(TerminalKind::Cli),
         &crate::cli::ConfigGetArgs {
             key: "profile.default".to_string(),
-            sources: true,
-            raw: false,
+            output: crate::cli::ConfigReadOutputArgs {
+                sources: true,
+                raw: false,
+            },
         },
         &mut messages,
     )
@@ -396,23 +386,27 @@ fn config_get_rows_and_run_config_get_cover_bootstrap_alias_and_missing_paths_un
         context,
         crate::cli::ConfigGetArgs {
             key: "lookup".to_string(),
-            sources: false,
-            raw: false,
+            output: crate::cli::ConfigReadOutputArgs {
+                sources: false,
+                raw: false,
+            },
         },
     )
     .expect("alias lookup should succeed");
     assert_eq!(alias_result.exit_code, 0);
     assert!(matches!(
         alias_result.output,
-        Some(ReplCommandOutput::Output { .. })
+        Some(ReplCommandOutput::Output(_))
     ));
 
     let missing_result = run_config_get(
         context,
         crate::cli::ConfigGetArgs {
             key: "missing.key".to_string(),
-            sources: false,
-            raw: false,
+            output: crate::cli::ConfigReadOutputArgs {
+                sources: false,
+                raw: false,
+            },
         },
     )
     .expect("missing key should return a structured miss");
@@ -460,7 +454,7 @@ fn run_config_set_and_unset_cover_session_paths_and_explain_output_unit() {
     assert_eq!(set_result.exit_code, 0);
     assert!(matches!(
         set_result.output,
-        Some(ReplCommandOutput::Output { .. })
+        Some(ReplCommandOutput::Output(_))
     ));
     assert!(
         set_result
@@ -481,7 +475,7 @@ fn run_config_set_and_unset_cover_session_paths_and_explain_output_unit() {
 
     assert!(matches!(
         unset_result.output,
-        Some(ReplCommandOutput::Output { .. })
+        Some(ReplCommandOutput::Output(_))
     ));
     assert!(
         unset_result
@@ -497,22 +491,19 @@ fn run_config_set_and_unset_cover_session_paths_and_explain_output_unit() {
         explain_args,
     )
     .expect("session config set explain should succeed");
-    assert!(matches!(
-        result.output,
-        Some(ReplCommandOutput::Document { .. })
-    ));
+    assert!(matches!(result.output, Some(ReplCommandOutput::Json(_))));
 }
 
 #[test]
 fn run_config_set_and_unset_reject_derived_profile_active_unit() {
     let mut set_args = config_set_args("profile.active", "ops");
-    set_args.global = true;
+    set_args.scope.global = true;
     let set_err = run_config_set(command_context(TerminalKind::Cli), set_args)
         .expect_err("profile.active set should be rejected");
     assert!(set_err.to_string().contains("read-only"));
 
     let mut unset_args = config_unset_args("profile.active");
-    unset_args.global = true;
+    unset_args.scope.global = true;
     let unset_err = run_config_unset(command_context(TerminalKind::Cli), unset_args)
         .expect_err("profile.active unset should be rejected");
     assert!(unset_err.to_string().contains("read-only"));
@@ -522,7 +513,7 @@ fn run_config_set_and_unset_reject_derived_profile_active_unit() {
 fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
     with_temp_config_paths(|config_path, secrets_path| {
         let mut config_args = config_set_args("ui.format", "json");
-        config_args.config_store = true;
+        config_args.store.config_store = true;
         let config_set = run_config_set(command_context(TerminalKind::Cli), config_args)
             .expect("persistent config set should succeed");
         assert!(config_path.exists());
@@ -556,7 +547,7 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
         );
 
         let mut secrets_args = config_set_args("ui.format", "table");
-        secrets_args.secrets = true;
+        secrets_args.store.secrets = true;
         let secrets_set = run_config_set(command_context(TerminalKind::Cli), secrets_args)
             .expect("persistent secrets set should succeed");
         assert!(secrets_path.exists());
@@ -590,7 +581,7 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
         );
 
         let mut unset_args = config_unset_args("ui.format");
-        unset_args.secrets = true;
+        unset_args.store.secrets = true;
         let secrets_unset = run_config_unset(command_context(TerminalKind::Cli), unset_args)
             .expect("persistent secrets unset should succeed");
         assert!(
@@ -614,7 +605,7 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
         );
 
         let mut missing_args = config_unset_args("ui.margin");
-        missing_args.config_store = true;
+        missing_args.store.config_store = true;
         let missing_unset = run_config_unset(command_context(TerminalKind::Cli), missing_args)
             .expect("missing persistent unset should still succeed");
         assert!(

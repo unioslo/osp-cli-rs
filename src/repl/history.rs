@@ -11,10 +11,90 @@ use std::path::PathBuf;
 use crate::app::{AppRuntime, AppSession};
 use crate::cli::{HistoryArgs, HistoryCommands, HistoryPruneArgs};
 
-use crate::app::{CMD_HISTORY, CMD_LIST, DEFAULT_REPL_PROMPT, ReplCommandOutput, config_usize};
+use crate::app::{
+    CMD_HISTORY, CMD_LIST, DEFAULT_REPL_PROMPT, ReplCommandOutput, StructuredCommandOutput,
+    config_usize,
+};
 use crate::cli::rows::output::rows_to_output_result;
 
 const DEFAULT_REPL_HISTORY_EXCLUDES: [&str; 4] = ["exit", "quit", "help", "history list"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplHistoryPolicy {
+    max_entries: usize,
+    enabled: bool,
+    path: PathBuf,
+    dedupe: bool,
+    profile_scoped: bool,
+    exclude_patterns: Vec<String>,
+}
+
+impl ReplHistoryPolicy {
+    fn from_config(config: &ResolvedConfig) -> Self {
+        let max_entries = config_usize(
+            config,
+            "repl.history.max_entries",
+            DEFAULT_REPL_HISTORY_MAX_ENTRIES as usize,
+        );
+        let enabled = config.get_bool("repl.history.enabled").unwrap_or(true) && max_entries > 0;
+        let path = config
+            .get_string("repl.history.path")
+            .map(PathBuf::from)
+            .unwrap_or_else(default_repl_history_path);
+        let dedupe = config.get_bool("repl.history.dedupe").unwrap_or(true);
+        let profile_scoped = config
+            .get_bool("repl.history.profile_scoped")
+            .unwrap_or(true);
+
+        Self {
+            max_entries,
+            enabled,
+            path,
+            dedupe,
+            profile_scoped,
+            exclude_patterns: repl_history_exclude_patterns(config),
+        }
+    }
+
+    fn history_config(&self, runtime: &AppRuntime, session: &AppSession) -> HistoryConfig {
+        session.sync_history_shell_context();
+        let history_shell = session.history_shell.clone();
+
+        HistoryConfig {
+            path: Some(self.path.clone()),
+            max_entries: self.max_entries,
+            enabled: self.enabled,
+            dedupe: self.dedupe,
+            profile_scoped: self.profile_scoped,
+            exclude_patterns: self.exclude_patterns.clone(),
+            profile: Some(runtime.config.resolved().active_profile().to_string()),
+            terminal: Some(
+                runtime
+                    .context
+                    .terminal_kind()
+                    .as_config_terminal()
+                    .to_string(),
+            ),
+            shell_context: history_shell,
+        }
+        .normalized()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HistoryScopeView {
+    prefix: Option<String>,
+    label: String,
+}
+
+impl HistoryScopeView {
+    fn from_session(session: &AppSession) -> Self {
+        Self {
+            prefix: session.scope.history_scope_prefix(),
+            label: session.scope.history_scope_label(),
+        }
+    }
+}
 
 pub(crate) fn history_command_def(sort_key: impl Into<String>) -> CommandDef {
     CommandDef::new(CMD_HISTORY)
@@ -32,60 +112,11 @@ pub(crate) fn history_command_def(sort_key: impl Into<String>) -> CommandDef {
 }
 
 pub(crate) fn build_history_config(runtime: &AppRuntime, session: &AppSession) -> HistoryConfig {
-    let config = runtime.config.resolved();
-    let history_max_entries = config_usize(
-        config,
-        "repl.history.max_entries",
-        DEFAULT_REPL_HISTORY_MAX_ENTRIES as usize,
-    );
-    let history_enabled =
-        config.get_bool("repl.history.enabled").unwrap_or(true) && history_max_entries > 0;
-    let history_path = config
-        .get_string("repl.history.path")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let defaults =
-                RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
-            PathBuf::from(
-                defaults
-                    .get_string("repl.history.path")
-                    .unwrap_or("${user.name}@${profile.active}.history"),
-            )
-        });
-    let history_dedupe = config.get_bool("repl.history.dedupe").unwrap_or(true);
-    let history_profile_scoped = config
-        .get_bool("repl.history.profile_scoped")
-        .unwrap_or(true);
-    let history_exclude = repl_history_exclude_patterns(config);
-    let history_shell = session.history_shell.clone();
-    session.sync_history_shell_context();
-
-    HistoryConfig::builder()
-        .with_path(Some(history_path))
-        .with_max_entries(history_max_entries)
-        .with_enabled(history_enabled)
-        .with_dedupe(history_dedupe)
-        .with_profile_scoped(history_profile_scoped)
-        .with_exclude_patterns(history_exclude)
-        .with_profile(Some(config.active_profile().to_string()))
-        .with_terminal(Some(
-            runtime
-                .context
-                .terminal_kind()
-                .as_config_terminal()
-                .to_string(),
-        ))
-        .with_shell_context(history_shell)
-        .build()
+    ReplHistoryPolicy::from_config(runtime.config.resolved()).history_config(runtime, session)
 }
 
 pub(crate) fn repl_history_enabled(config: &ResolvedConfig) -> bool {
-    let max_entries = config_usize(
-        config,
-        "repl.history.max_entries",
-        DEFAULT_REPL_HISTORY_MAX_ENTRIES as usize,
-    );
-    config.get_bool("repl.history.enabled").unwrap_or(true) && max_entries > 0
+    ReplHistoryPolicy::from_config(config).enabled
 }
 
 pub(crate) fn run_history_repl_command(
@@ -99,37 +130,38 @@ pub(crate) fn run_history_repl_command(
         ));
     }
 
-    let scope = repl_history_scope(session);
-    let scope_label = history_scope_label(session);
+    let scope = HistoryScopeView::from_session(session);
     match args.command {
         HistoryCommands::List => {
-            let rows = history_entries_rows(history.list_entries_for(scope.as_deref()));
-            Ok(ReplCommandOutput::Output {
+            let rows = history_entries_rows(history.list_entries_for(scope.prefix.as_deref()));
+            Ok(ReplCommandOutput::Output(StructuredCommandOutput {
+                source_guide: None,
                 output: rows_to_output_result(rows),
                 format_hint: None,
-            })
+            }))
         }
         HistoryCommands::Prune(HistoryPruneArgs { keep }) => {
             let removed = history
-                .prune_for(keep, scope.as_deref())
+                .prune_for(keep, scope.prefix.as_deref())
                 .map_err(|err| miette!(err.to_string()))?;
             Ok(ReplCommandOutput::Text(if removed == 0 {
-                format!("No entries removed from {scope_label}.\n")
+                format!("No entries removed from {}.\n", scope.label)
             } else {
                 format!(
-                    "Removed {removed} entr{} from {scope_label}.\n",
-                    if removed == 1 { "y" } else { "ies" }
+                    "Removed {removed} entr{} from {}.\n",
+                    if removed == 1 { "y" } else { "ies" },
+                    scope.label
                 )
             }))
         }
         HistoryCommands::Clear => {
             let removed = history
-                .clear_for(scope.as_deref())
+                .clear_for(scope.prefix.as_deref())
                 .map_err(|err| miette!(err.to_string()))?;
             Ok(ReplCommandOutput::Text(if removed == 0 {
-                format!("{scope_label} is already empty.\n")
+                format!("{} is already empty.\n", scope.label)
             } else {
-                format!("Cleared {scope_label}.\n")
+                format!("Cleared {}.\n", scope.label)
             }))
         }
     }
@@ -179,35 +211,28 @@ fn repl_history_exclude_patterns(config: &ResolvedConfig) -> Vec<String> {
     patterns
 }
 
-fn repl_history_scope(session: &AppSession) -> Option<String> {
-    let prefix = session.scope.history_prefix();
-    if prefix.is_empty() {
-        None
-    } else {
-        Some(prefix)
-    }
-}
-
-fn history_scope_label(session: &AppSession) -> String {
-    session
-        .scope
-        .display_label()
-        .map(|label| format!("{label} shell history"))
-        .unwrap_or_else(|| "root history".to_string())
+fn default_repl_history_path() -> PathBuf {
+    let defaults = RuntimeDefaults::from_process_env(DEFAULT_THEME_NAME, DEFAULT_REPL_PROMPT);
+    PathBuf::from(
+        defaults
+            .get_string("repl.history.path")
+            .unwrap_or("${user.name}@${profile.active}.history"),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        history_command_def, history_scope_label, repl_history_enabled,
-        repl_history_exclude_patterns, run_history_repl_command,
+        HistoryScopeView, ReplHistoryPolicy, build_history_config, history_command_def,
+        repl_history_enabled, repl_history_exclude_patterns, run_history_repl_command,
     };
-    use crate::app::AppSession;
     use crate::app::ReplCommandOutput;
+    use crate::app::{AppSession, AppState, RuntimeContext, TerminalKind};
     use crate::cli::{HistoryArgs, HistoryCommands, HistoryPruneArgs};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::repl::{HistoryConfig, SharedHistory};
     use serde_json::Value;
+    use std::path::PathBuf;
 
     #[test]
     fn history_exclude_patterns_include_repl_defaults() {
@@ -253,11 +278,16 @@ mod tests {
     #[test]
     fn history_scope_label_tracks_current_shell_unit() {
         let mut session = AppSession::with_cache_limit(8);
-        assert_eq!(history_scope_label(&session), "root history");
+        assert_eq!(
+            HistoryScopeView::from_session(&session).label,
+            "root history"
+        );
 
         session.scope.enter("orch");
         session.scope.enter("vm");
-        assert_eq!(history_scope_label(&session), "orch / vm shell history");
+        let scope = HistoryScopeView::from_session(&session);
+        assert_eq!(scope.prefix.as_deref(), Some("orch vm "));
+        assert_eq!(scope.label, "orch / vm shell history");
     }
 
     #[test]
@@ -289,6 +319,48 @@ mod tests {
 
         let enabled = config_with_entries(&[("profile.default", "default")]);
         assert!(repl_history_enabled(&enabled));
+    }
+
+    #[test]
+    fn repl_history_policy_reads_effective_defaults_and_overrides_unit() {
+        let config = config_with_entries(&[
+            ("profile.default", "default"),
+            ("repl.history.max_entries", "42"),
+            ("repl.history.enabled", "true"),
+            ("repl.history.dedupe", "false"),
+            ("repl.history.profile_scoped", "false"),
+            ("repl.history.path", "/tmp/custom-history.jsonl"),
+            ("repl.history.exclude", "help"),
+        ]);
+
+        let policy = ReplHistoryPolicy::from_config(&config);
+
+        assert_eq!(policy.max_entries, 42);
+        assert!(policy.enabled);
+        assert_eq!(policy.path, PathBuf::from("/tmp/custom-history.jsonl"));
+        assert!(!policy.dedupe);
+        assert!(!policy.profile_scoped);
+        assert!(policy.exclude_patterns.contains(&"help".to_string()));
+        assert!(policy.exclude_patterns.contains(&"exit".to_string()));
+    }
+
+    #[test]
+    fn build_history_config_tracks_current_shell_scope_without_manual_sync_unit() {
+        let config = config_with_entries(&[("profile.default", "default")]);
+        let mut state = AppState::from_resolved_config(
+            RuntimeContext::new(None, TerminalKind::Repl, None),
+            config,
+        )
+        .expect("app state should build");
+
+        state.session.enter_repl_scope("ldap");
+
+        let history_config = build_history_config(&state.runtime, &state.session);
+
+        assert_eq!(
+            history_config.shell_context.prefix().as_deref(),
+            Some("ldap ")
+        );
     }
 
     #[test]
@@ -329,8 +401,8 @@ mod tests {
         .expect("history list should succeed");
 
         match output {
-            ReplCommandOutput::Output { output, .. } => {
-                let rows = output.into_rows().expect("list should produce rows");
+            ReplCommandOutput::Output(output) => {
+                let rows = output.output.into_rows().expect("list should produce rows");
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0]["command"], Value::String("config show".to_string()));
                 assert!(rows[0].contains_key("timestamp_ms"));
@@ -405,14 +477,18 @@ mod tests {
     fn shared_history(enabled: bool) -> SharedHistory {
         let temp_dir = make_temp_dir("osp-cli-repl-history");
         SharedHistory::new(
-            HistoryConfig::builder()
-                .with_path(Some(temp_dir.join("history.jsonl")))
-                .with_max_entries(32)
-                .with_enabled(enabled)
-                .with_dedupe(false)
-                .with_profile_scoped(false)
-                .with_shell_context(crate::repl::HistoryShellContext::default())
-                .build(),
+            HistoryConfig {
+                path: Some(temp_dir.join("history.jsonl")),
+                max_entries: 32,
+                enabled,
+                dedupe: false,
+                profile_scoped: false,
+                exclude_patterns: Vec::new(),
+                profile: None,
+                terminal: None,
+                shell_context: crate::repl::HistoryShellContext::default(),
+            }
+            .normalized(),
         )
     }
 

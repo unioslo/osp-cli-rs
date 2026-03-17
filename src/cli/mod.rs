@@ -52,18 +52,11 @@ pub(crate) mod commands;
 pub(crate) mod invocation;
 pub(crate) mod pipeline;
 pub(crate) mod rows;
-use crate::config::{ConfigLayer, ConfigValue, ResolvedConfig, RuntimeLoadOptions};
-use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use crate::ui::chrome::{RuledSectionPolicy, SectionFrameStyle};
-use crate::ui::theme::DEFAULT_THEME_NAME;
-use crate::ui::{
-    GuideDefaultFormat, HelpTableChrome, RenderSettings, StyleOverrides, TableBorderStyle,
-    TableOverflow,
-};
+use crate::config::{ConfigLayer, RuntimeLoadOptions};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-use crate::ui::presentation::UiPresentation;
+use crate::ui::UiPresentation;
 
 pub use pipeline::{
     ParsedCommandLine, is_cli_help_stage, parse_command_text_with_aliases,
@@ -151,13 +144,7 @@ pub struct Cli {
 impl Cli {
     /// Returns the runtime source-loading options implied by global CLI flags.
     pub fn runtime_load_options(&self) -> RuntimeLoadOptions {
-        if self.defaults_only {
-            RuntimeLoadOptions::defaults_only()
-        } else {
-            RuntimeLoadOptions::new()
-                .with_env(!self.no_env)
-                .with_config_file(!self.no_config_file)
-        }
+        runtime_load_options_from_flags(self.no_env, self.no_config_file, self.defaults_only)
     }
 }
 
@@ -356,11 +343,8 @@ pub struct ThemeUseArgs {
 }
 
 /// Shared arguments for enabling or disabling a plugin command.
-#[derive(Debug, Args)]
-pub struct PluginCommandStateArgs {
-    /// Command name to enable or disable.
-    pub command: String,
-
+#[derive(Debug, Args, Clone, Default)]
+pub struct PluginScopeArgs {
     /// Apply the change globally instead of to a profile.
     #[arg(long = "global", conflicts_with = "profile")]
     pub global: bool,
@@ -376,77 +360,108 @@ pub struct PluginCommandStateArgs {
         default_missing_value = "__current__"
     )]
     pub terminal: Option<String>,
+}
+
+/// Shared config write scope arguments.
+#[derive(Debug, Args, Clone, Default)]
+pub struct ConfigScopeArgs {
+    /// Write to the global store instead of a profile-scoped store.
+    #[arg(long = "global", conflicts_with_all = ["profile", "profile_all"])]
+    pub global: bool,
+
+    /// Write to a single named profile.
+    #[arg(long = "profile", conflicts_with = "profile_all")]
+    pub profile: Option<String>,
+
+    /// Write to every known profile store.
+    #[arg(long = "profile-all", conflicts_with = "profile")]
+    pub profile_all: bool,
+
+    /// Write to a terminal-scoped store, or the current terminal when omitted.
+    #[arg(
+        long = "terminal",
+        num_args = 0..=1,
+        default_missing_value = "__current__"
+    )]
+    pub terminal: Option<String>,
+}
+
+/// Shared config store-selection arguments.
+#[derive(Debug, Args, Clone, Default)]
+pub struct ConfigStoreArgs {
+    /// Apply the change only to the current in-memory session.
+    #[arg(long = "session", conflicts_with_all = ["config_store", "secrets", "save"])]
+    pub session: bool,
+
+    /// Force the regular config store as the destination.
+    #[arg(long = "config", conflicts_with_all = ["session", "secrets"])]
+    pub config_store: bool,
+
+    /// Force the secrets store as the destination.
+    #[arg(long = "secrets", conflicts_with_all = ["session", "config_store"])]
+    pub secrets: bool,
+
+    /// Persist the change immediately after validation.
+    #[arg(long = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
+    pub save: bool,
+}
+
+/// Shared plugin command target arguments.
+#[derive(Debug, Args, Clone)]
+pub struct PluginCommandTargetArgs {
+    /// Command name to mutate.
+    pub command: String,
+
+    /// Shared global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub scope: PluginScopeArgs,
+}
+
+/// Shared config read-output arguments.
+#[derive(Debug, Args, Clone, Default)]
+pub struct ConfigReadOutputArgs {
+    /// Include source provenance for returned keys.
+    #[arg(long = "sources")]
+    pub sources: bool,
+
+    /// Emit raw stored values without presentation formatting.
+    #[arg(long = "raw")]
+    pub raw: bool,
+}
+
+/// Shared arguments for enabling or disabling a plugin command.
+#[derive(Debug, Args)]
+pub struct PluginCommandStateArgs {
+    /// Shared command name plus global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub target: PluginCommandTargetArgs,
 }
 
 /// Arguments for clearing persisted command state.
 #[derive(Debug, Args)]
 pub struct PluginCommandClearArgs {
-    /// Command name whose state should be cleared.
-    pub command: String,
-
-    /// Clear global state instead of profile-scoped state.
-    #[arg(long = "global", conflicts_with = "profile")]
-    pub global: bool,
-
-    /// Clear state for a named profile.
-    #[arg(long = "profile")]
-    pub profile: Option<String>,
-
-    /// Target a specific terminal context, or the current one when omitted.
-    #[arg(
-        long = "terminal",
-        num_args = 0..=1,
-        default_missing_value = "__current__"
-    )]
-    pub terminal: Option<String>,
+    /// Shared command name plus global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub target: PluginCommandTargetArgs,
 }
 
 /// Arguments for selecting a provider implementation for a command.
 #[derive(Debug, Args)]
 pub struct PluginProviderSelectArgs {
-    /// Command name whose provider should be selected.
-    pub command: String,
+    /// Shared command name plus global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub target: PluginCommandTargetArgs,
+
     /// Plugin identifier to bind to the command.
     pub plugin_id: String,
-
-    /// Apply the change globally instead of to a profile.
-    #[arg(long = "global", conflicts_with = "profile")]
-    pub global: bool,
-
-    /// Apply the change to a named profile.
-    #[arg(long = "profile")]
-    pub profile: Option<String>,
-
-    /// Target a specific terminal context, or the current one when omitted.
-    #[arg(
-        long = "terminal",
-        num_args = 0..=1,
-        default_missing_value = "__current__"
-    )]
-    pub terminal: Option<String>,
 }
 
 /// Arguments for clearing a provider selection.
 #[derive(Debug, Args)]
 pub struct PluginProviderClearArgs {
-    /// Command name whose provider binding should be removed.
-    pub command: String,
-
-    /// Clear the global binding instead of a profile-scoped binding.
-    #[arg(long = "global", conflicts_with = "profile")]
-    pub global: bool,
-
-    /// Clear the binding for a named profile.
-    #[arg(long = "profile")]
-    pub profile: Option<String>,
-
-    /// Target a specific terminal context, or the current one when omitted.
-    #[arg(
-        long = "terminal",
-        num_args = 0..=1,
-        default_missing_value = "__current__"
-    )]
-    pub terminal: Option<String>,
+    /// Shared command name plus global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub target: PluginCommandTargetArgs,
 }
 
 /// Arguments for `plugins config`.
@@ -515,13 +530,9 @@ pub enum ConfigCommands {
 /// Arguments for `config show`.
 #[derive(Debug, Args)]
 pub struct ConfigShowArgs {
-    /// Include source provenance for each returned key.
-    #[arg(long = "sources")]
-    pub sources: bool,
-
-    /// Emit raw stored values without presentation formatting.
-    #[arg(long = "raw")]
-    pub raw: bool,
+    /// Shared source/raw output flags for config reads.
+    #[command(flatten)]
+    pub output: ConfigReadOutputArgs,
 }
 
 /// Arguments for `config get`.
@@ -530,13 +541,9 @@ pub struct ConfigGetArgs {
     /// Config key to read.
     pub key: String,
 
-    /// Include source provenance for the resolved key.
-    #[arg(long = "sources")]
-    pub sources: bool,
-
-    /// Emit the raw stored value without presentation formatting.
-    #[arg(long = "raw")]
-    pub raw: bool,
+    /// Shared source/raw output flags for config reads.
+    #[command(flatten)]
+    pub output: ConfigReadOutputArgs,
 }
 
 /// Arguments for `config explain`.
@@ -558,41 +565,13 @@ pub struct ConfigSetArgs {
     /// Config value to write.
     pub value: String,
 
-    /// Write to the global store instead of a profile-scoped store.
-    #[arg(long = "global", conflicts_with_all = ["profile", "profile_all"])]
-    pub global: bool,
+    /// Shared global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub scope: ConfigScopeArgs,
 
-    /// Write to a single named profile.
-    #[arg(long = "profile", conflicts_with = "profile_all")]
-    pub profile: Option<String>,
-
-    /// Write to every known profile store.
-    #[arg(long = "profile-all", conflicts_with = "profile")]
-    pub profile_all: bool,
-
-    /// Write to a terminal-scoped store, or the current terminal when omitted.
-    #[arg(
-        long = "terminal",
-        num_args = 0..=1,
-        default_missing_value = "__current__"
-    )]
-    pub terminal: Option<String>,
-
-    /// Apply the change only to the current in-memory session.
-    #[arg(long = "session", conflicts_with_all = ["config_store", "secrets", "save"])]
-    pub session: bool,
-
-    /// Force the regular config store as the destination.
-    #[arg(long = "config", conflicts_with_all = ["session", "secrets"])]
-    pub config_store: bool,
-
-    /// Force the secrets store as the destination.
-    #[arg(long = "secrets", conflicts_with_all = ["session", "config_store"])]
-    pub secrets: bool,
-
-    /// Persist the change immediately after validation.
-    #[arg(long = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
-    pub save: bool,
+    /// Shared config/session/secrets store-selection flags.
+    #[command(flatten)]
+    pub store: ConfigStoreArgs,
 
     /// Show the resolved write plan without applying it.
     #[arg(long = "dry-run")]
@@ -613,41 +592,13 @@ pub struct ConfigUnsetArgs {
     /// Config key to remove.
     pub key: String,
 
-    /// Remove the key from the global store instead of a profile-scoped store.
-    #[arg(long = "global", conflicts_with_all = ["profile", "profile_all"])]
-    pub global: bool,
+    /// Shared global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub scope: ConfigScopeArgs,
 
-    /// Remove the key from a single named profile.
-    #[arg(long = "profile", conflicts_with = "profile_all")]
-    pub profile: Option<String>,
-
-    /// Remove the key from every known profile store.
-    #[arg(long = "profile-all", conflicts_with = "profile")]
-    pub profile_all: bool,
-
-    /// Remove the key from a terminal-scoped store, or the current terminal when omitted.
-    #[arg(
-        long = "terminal",
-        num_args = 0..=1,
-        default_missing_value = "__current__"
-    )]
-    pub terminal: Option<String>,
-
-    /// Remove the key only from the current in-memory session.
-    #[arg(long = "session", conflicts_with_all = ["config_store", "secrets", "save"])]
-    pub session: bool,
-
-    /// Force the regular config store as the source to edit.
-    #[arg(long = "config", conflicts_with_all = ["session", "secrets"])]
-    pub config_store: bool,
-
-    /// Force the secrets store as the source to edit.
-    #[arg(long = "secrets", conflicts_with_all = ["session", "config_store"])]
-    pub secrets: bool,
-
-    /// Persist the change immediately after validation.
-    #[arg(long = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
-    pub save: bool,
+    /// Shared config/session/secrets store-selection flags.
+    #[command(flatten)]
+    pub store: ConfigStoreArgs,
 
     /// Show the resolved removal plan without applying it.
     #[arg(long = "dry-run")]
@@ -655,45 +606,6 @@ pub struct ConfigUnsetArgs {
 }
 
 impl Cli {
-    pub(crate) fn default_invocation() -> Self {
-        Self {
-            user: None,
-            incognito: false,
-            profile: None,
-            no_env: false,
-            no_config_file: false,
-            defaults_only: false,
-            plugin_dirs: Vec::new(),
-            theme: None,
-            presentation: None,
-            gammel_og_bitter: false,
-            command: None,
-        }
-    }
-
-    /// Returns the default render settings for this CLI invocation.
-    pub fn render_settings(&self) -> RenderSettings {
-        default_render_settings()
-    }
-
-    /// Applies config-backed render settings to an existing settings struct.
-    pub fn seed_render_settings_from_config(
-        &self,
-        settings: &mut RenderSettings,
-        config: &ResolvedConfig,
-    ) {
-        apply_render_settings_from_config(settings, config);
-    }
-
-    /// Returns the theme name selected by CLI override or resolved config.
-    pub fn selected_theme_name(&self, config: &ResolvedConfig) -> String {
-        self.theme
-            .as_deref()
-            .or_else(|| config.get_string("theme.name"))
-            .unwrap_or(DEFAULT_THEME_NAME)
-            .to_string()
-    }
-
     pub(crate) fn append_static_session_overrides(&self, layer: &mut ConfigLayer) {
         if let Some(user) = self
             .user
@@ -706,270 +618,42 @@ impl Cli {
         if self.incognito {
             layer.set("repl.history.enabled", false);
         }
-        if let Some(theme) = self
-            .theme
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            layer.set("theme.name", theme);
-        }
-        if self.gammel_og_bitter {
-            layer.set("ui.presentation", UiPresentation::Austere.as_config_value());
-        } else if let Some(presentation) = self.presentation {
-            layer.set(
-                "ui.presentation",
-                UiPresentation::from(presentation).as_config_value(),
-            );
-        }
-    }
-}
-
-pub(crate) fn default_render_settings() -> RenderSettings {
-    RenderSettings::default()
-}
-
-pub(crate) fn apply_render_settings_from_config(
-    settings: &mut RenderSettings,
-    config: &ResolvedConfig,
-) {
-    if let Some(value) = config.get_string("ui.format")
-        && let Some(parsed) = parse_output_format(value)
-    {
-        settings.format = parsed;
-    }
-
-    if let Some(value) = config.get_string("ui.mode")
-        && let Some(parsed) = parse_render_mode(value)
-    {
-        settings.mode = parsed;
-    }
-
-    if let Some(value) = config.get_string("ui.unicode.mode")
-        && let Some(parsed) = parse_unicode_mode(value)
-    {
-        settings.unicode = parsed;
-    }
-
-    if let Some(value) = config.get_string("ui.color.mode")
-        && let Some(parsed) = parse_color_mode(value)
-    {
-        settings.color = parsed;
-    }
-
-    if let Some(value) = config.get_string("ui.chrome.frame")
-        && let Some(parsed) = SectionFrameStyle::parse(value)
-    {
-        settings.chrome_frame = parsed;
-    }
-
-    if let Some(value) = config.get_string("ui.chrome.rule_policy")
-        && let Some(parsed) = RuledSectionPolicy::parse(value)
-    {
-        settings.ruled_section_policy = parsed;
-    }
-
-    if let Some(value) = config.get_string("ui.guide.default_format")
-        && let Some(parsed) = GuideDefaultFormat::parse(value)
-    {
-        settings.guide_default_format = parsed;
-    }
-
-    if settings.width.is_none() {
-        match config.get("ui.width").map(ConfigValue::reveal) {
-            Some(ConfigValue::Integer(width)) if *width > 0 => {
-                settings.width = Some(*width as usize);
-            }
-            Some(ConfigValue::String(raw)) => {
-                if let Ok(width) = raw.trim().parse::<usize>()
-                    && width > 0
-                {
-                    settings.width = Some(width);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    sync_render_settings_from_config(settings, config);
-}
-
-pub(crate) fn sync_render_settings_from_config(
-    settings: &mut RenderSettings,
-    config: &ResolvedConfig,
-) {
-    if let Some(value) = config_int(config, "ui.margin")
-        && value >= 0
-    {
-        settings.margin = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.indent")
-        && value > 0
-    {
-        settings.indent_size = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.short_list_max")
-        && value > 0
-    {
-        settings.short_list_max = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.medium_list_max")
-        && value > 0
-    {
-        settings.medium_list_max = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.grid_padding")
-        && value > 0
-    {
-        settings.grid_padding = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.grid_columns") {
-        settings.grid_columns = if value > 0 {
-            Some(value as usize)
-        } else {
-            None
-        };
-    }
-
-    if let Some(value) = config_int(config, "ui.column_weight")
-        && value > 0
-    {
-        settings.column_weight = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.mreg.stack_min_col_width")
-        && value > 0
-    {
-        settings.mreg_stack_min_col_width = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.mreg.stack_overflow_ratio")
-        && value >= 100
-    {
-        settings.mreg_stack_overflow_ratio = value as usize;
-    }
-
-    if let Some(value) = config.get_string("ui.table.overflow")
-        && let Some(parsed) = TableOverflow::parse(value)
-    {
-        settings.table_overflow = parsed;
-    }
-
-    if let Some(value) = config.get_string("ui.table.border")
-        && let Some(parsed) = TableBorderStyle::parse(value)
-    {
-        settings.table_border = parsed;
-    }
-
-    if let Some(value) = config.get_string("ui.help.table_chrome")
-        && let Some(parsed) = HelpTableChrome::parse(value)
-    {
-        settings.help_chrome.table_chrome = parsed;
-    }
-
-    settings.help_chrome.entry_indent = config_usize_override(config, "ui.help.entry_indent");
-    settings.help_chrome.entry_gap = config_usize_override(config, "ui.help.entry_gap");
-    settings.help_chrome.section_spacing = config_usize_override(config, "ui.help.section_spacing");
-
-    settings.style_overrides = StyleOverrides {
-        text: config_non_empty_string(config, "color.text"),
-        key: config_non_empty_string(config, "color.key"),
-        muted: config_non_empty_string(config, "color.text.muted"),
-        table_header: config_non_empty_string(config, "color.table.header"),
-        mreg_key: config_non_empty_string(config, "color.mreg.key"),
-        value: config_non_empty_string(config, "color.value"),
-        number: config_non_empty_string(config, "color.value.number"),
-        bool_true: config_non_empty_string(config, "color.value.bool_true"),
-        bool_false: config_non_empty_string(config, "color.value.bool_false"),
-        null_value: config_non_empty_string(config, "color.value.null"),
-        ipv4: config_non_empty_string(config, "color.value.ipv4"),
-        ipv6: config_non_empty_string(config, "color.value.ipv6"),
-        panel_border: config_non_empty_string(config, "color.panel.border")
-            .or_else(|| config_non_empty_string(config, "color.border")),
-        panel_title: config_non_empty_string(config, "color.panel.title"),
-        code: config_non_empty_string(config, "color.code"),
-        json_key: config_non_empty_string(config, "color.json.key"),
-        message_error: config_non_empty_string(config, "color.message.error"),
-        message_warning: config_non_empty_string(config, "color.message.warning"),
-        message_success: config_non_empty_string(config, "color.message.success"),
-        message_info: config_non_empty_string(config, "color.message.info"),
-        message_trace: config_non_empty_string(config, "color.message.trace"),
-    };
-}
-
-fn parse_output_format(value: &str) -> Option<OutputFormat> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(OutputFormat::Auto),
-        "guide" => Some(OutputFormat::Guide),
-        "json" => Some(OutputFormat::Json),
-        "table" => Some(OutputFormat::Table),
-        "md" | "markdown" => Some(OutputFormat::Markdown),
-        "mreg" => Some(OutputFormat::Mreg),
-        "value" => Some(OutputFormat::Value),
-        _ => None,
-    }
-}
-
-fn parse_render_mode(value: &str) -> Option<RenderMode> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(RenderMode::Auto),
-        "plain" => Some(RenderMode::Plain),
-        "rich" => Some(RenderMode::Rich),
-        _ => None,
-    }
-}
-
-fn parse_color_mode(value: &str) -> Option<ColorMode> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(ColorMode::Auto),
-        "always" => Some(ColorMode::Always),
-        "never" => Some(ColorMode::Never),
-        _ => None,
-    }
-}
-
-fn parse_unicode_mode(value: &str) -> Option<UnicodeMode> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(UnicodeMode::Auto),
-        "always" => Some(UnicodeMode::Always),
-        "never" => Some(UnicodeMode::Never),
-        _ => None,
-    }
-}
-
-fn config_int(config: &ResolvedConfig, key: &str) -> Option<i64> {
-    match config.get(key).map(ConfigValue::reveal) {
-        Some(ConfigValue::Integer(value)) => Some(*value),
-        Some(ConfigValue::String(raw)) => raw.trim().parse::<i64>().ok(),
-        _ => None,
-    }
-}
-
-fn config_non_empty_string(config: &ResolvedConfig, key: &str) -> Option<String> {
-    config
-        .get_string(key)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn config_usize_override(config: &ResolvedConfig, key: &str) -> Option<usize> {
-    match config.get(key).map(ConfigValue::reveal) {
-        Some(ConfigValue::Integer(value)) if *value >= 0 => Some(*value as usize),
-        Some(ConfigValue::String(raw)) => {
-            let trimmed = raw.trim();
-            if trimmed.eq_ignore_ascii_case("inherit") || trimmed.is_empty() {
-                None
+        append_appearance_overrides(
+            layer,
+            self.theme.as_deref(),
+            if self.gammel_og_bitter {
+                Some(UiPresentation::Austere)
             } else {
-                trimmed.parse::<usize>().ok()
-            }
-        }
-        _ => None,
+                self.presentation.map(UiPresentation::from)
+            },
+        );
+    }
+}
+
+pub(crate) fn append_appearance_overrides(
+    layer: &mut ConfigLayer,
+    theme: Option<&str>,
+    presentation: Option<UiPresentation>,
+) {
+    if let Some(theme) = theme.map(str::trim).filter(|value| !value.is_empty()) {
+        layer.set("theme.name", theme);
+    }
+    if let Some(presentation) = presentation {
+        layer.set("ui.presentation", presentation.as_config_value());
+    }
+}
+
+pub(crate) fn runtime_load_options_from_flags(
+    no_env: bool,
+    no_config_file: bool,
+    defaults_only: bool,
+) -> RuntimeLoadOptions {
+    if defaults_only {
+        RuntimeLoadOptions::defaults_only()
+    } else {
+        RuntimeLoadOptions::new()
+            .with_env(!no_env)
+            .with_config_file(!no_config_file)
     }
 }
 
@@ -1008,154 +692,11 @@ pub fn parse_inline_command_tokens(tokens: &[String]) -> Result<Option<Commands>
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, ColorMode, Commands, ConfigCommands, InlineCommandCli, OutputFormat, RenderMode,
-        RuntimeLoadOptions, SectionFrameStyle, TableBorderStyle, TableOverflow, UnicodeMode,
-        apply_render_settings_from_config, config_int, config_non_empty_string,
-        config_usize_override, parse_color_mode, parse_inline_command_tokens, parse_output_format,
-        parse_render_mode, parse_unicode_mode,
+        Cli, Commands, ConfigCommands, InlineCommandCli, RuntimeLoadOptions,
+        append_appearance_overrides, parse_inline_command_tokens,
     };
-    use crate::config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions};
-    use crate::ui::presentation::build_presentation_defaults_layer;
-    use crate::ui::{GuideDefaultFormat, RenderSettings};
+    use crate::config::{ConfigLayer, ConfigValue};
     use clap::Parser;
-
-    fn resolved(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
-        let mut defaults = ConfigLayer::default();
-        defaults.set("profile.default", "default");
-        for (key, value) in entries {
-            defaults.set(*key, *value);
-        }
-        let mut resolver = ConfigResolver::default();
-        resolver.set_defaults(defaults);
-        let options = ResolveOptions::default().with_terminal("cli");
-        let base = resolver
-            .resolve(options.clone())
-            .expect("base test config should resolve");
-        resolver.set_presentation(build_presentation_defaults_layer(&base));
-        resolver
-            .resolve(options)
-            .expect("test config should resolve")
-    }
-
-    fn resolved_with_session(
-        defaults_entries: &[(&str, &str)],
-        session_entries: &[(&str, &str)],
-    ) -> crate::config::ResolvedConfig {
-        let mut defaults = ConfigLayer::default();
-        defaults.set("profile.default", "default");
-        for (key, value) in defaults_entries {
-            defaults.set(*key, *value);
-        }
-
-        let mut resolver = ConfigResolver::default();
-        resolver.set_defaults(defaults);
-
-        let mut session = ConfigLayer::default();
-        for (key, value) in session_entries {
-            session.set(*key, *value);
-        }
-        resolver.set_session(session);
-
-        let options = ResolveOptions::default().with_terminal("cli");
-        let base = resolver
-            .resolve(options.clone())
-            .expect("base test config should resolve");
-        resolver.set_presentation(build_presentation_defaults_layer(&base));
-        resolver
-            .resolve(options)
-            .expect("test config should resolve")
-    }
-
-    #[test]
-    fn parse_mode_and_config_helpers_normalize_strings_blanks_and_integers_unit() {
-        assert_eq!(parse_output_format(" guide "), Some(OutputFormat::Guide));
-        assert_eq!(
-            parse_output_format(" markdown "),
-            Some(OutputFormat::Markdown)
-        );
-        assert_eq!(parse_render_mode(" Rich "), Some(RenderMode::Rich));
-        assert_eq!(parse_color_mode(" NEVER "), Some(ColorMode::Never));
-        assert_eq!(parse_unicode_mode(" always "), Some(UnicodeMode::Always));
-        assert_eq!(parse_output_format("yaml"), None);
-
-        let config = resolved(&[
-            ("ui.width", "120"),
-            ("color.text", "  "),
-            ("ui.margin", "3"),
-        ]);
-
-        assert_eq!(config_int(&config, "ui.width"), Some(120));
-        assert_eq!(config_int(&config, "ui.margin"), Some(3));
-        assert_eq!(config_non_empty_string(&config, "color.text"), None);
-    }
-
-    #[test]
-    fn render_settings_apply_presentation_defaults_explicit_overrides_and_help_spacing_unit() {
-        let config = resolved_with_session(
-            &[("ui.width", "88")],
-            &[
-                ("ui.chrome.frame", "round"),
-                ("ui.chrome.rule_policy", "stacked"),
-                ("ui.table.border", "square"),
-                ("ui.table.overflow", "wrap"),
-            ],
-        );
-        let mut settings = RenderSettings::test_plain(OutputFormat::Table);
-
-        apply_render_settings_from_config(&mut settings, &config);
-
-        assert_eq!(settings.width, Some(88));
-        assert_eq!(settings.chrome_frame, SectionFrameStyle::Round);
-        assert_eq!(
-            settings.ruled_section_policy,
-            crate::ui::RuledSectionPolicy::Shared
-        );
-        assert_eq!(settings.table_border, TableBorderStyle::Square);
-        assert_eq!(settings.table_overflow, TableOverflow::Wrap);
-
-        let config = resolved(&[("ui.presentation", "expressive")]);
-        let mut settings = RenderSettings::test_plain(OutputFormat::Table);
-
-        apply_render_settings_from_config(&mut settings, &config);
-
-        assert_eq!(settings.chrome_frame, SectionFrameStyle::TopBottom);
-        assert_eq!(settings.table_border, TableBorderStyle::Round);
-
-        let config = resolved_with_session(
-            &[("ui.presentation", "expressive")],
-            &[("ui.chrome.frame", "square"), ("ui.table.border", "none")],
-        );
-        let mut settings = RenderSettings::test_plain(OutputFormat::Table);
-
-        apply_render_settings_from_config(&mut settings, &config);
-
-        assert_eq!(settings.chrome_frame, SectionFrameStyle::Square);
-        assert_eq!(settings.table_border, TableBorderStyle::None);
-
-        let config = resolved(&[("ui.guide.default_format", "inherit")]);
-        let mut settings = RenderSettings::test_plain(OutputFormat::Json);
-
-        apply_render_settings_from_config(&mut settings, &config);
-
-        assert_eq!(settings.guide_default_format, GuideDefaultFormat::Inherit);
-
-        let config = resolved(&[
-            ("ui.help.entry_indent", "4"),
-            ("ui.help.entry_gap", "3"),
-            ("ui.help.section_spacing", "inherit"),
-        ]);
-        let mut settings = RenderSettings::test_plain(OutputFormat::Guide);
-
-        apply_render_settings_from_config(&mut settings, &config);
-
-        assert_eq!(
-            config_usize_override(&config, "ui.help.entry_indent"),
-            Some(4)
-        );
-        assert_eq!(settings.help_chrome.entry_indent, Some(4));
-        assert_eq!(settings.help_chrome.entry_gap, Some(3));
-        assert_eq!(settings.help_chrome.section_spacing, None);
-    }
 
     #[test]
     fn parse_inline_command_tokens_accepts_builtin_and_external_commands_unit() {
@@ -1206,6 +747,33 @@ mod tests {
                 .find(|entry| entry.key == "ui.presentation")
                 .map(|entry| &entry.value),
             Some(&ConfigValue::from("austere"))
+        );
+    }
+
+    #[test]
+    fn appearance_overrides_trim_theme_and_apply_presentation_unit() {
+        let mut layer = ConfigLayer::default();
+        append_appearance_overrides(
+            &mut layer,
+            Some(" nord "),
+            Some(crate::ui::UiPresentation::Compact),
+        );
+
+        assert_eq!(
+            layer
+                .entries()
+                .iter()
+                .find(|entry| entry.key == "theme.name")
+                .map(|entry| &entry.value),
+            Some(&ConfigValue::from("nord"))
+        );
+        assert_eq!(
+            layer
+                .entries()
+                .iter()
+                .find(|entry| entry.key == "ui.presentation")
+                .map(|entry| &entry.value),
+            Some(&ConfigValue::from("compact"))
         );
     }
 }

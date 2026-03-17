@@ -1,4 +1,4 @@
-use crate::app::UiState;
+use crate::app::{AppRuntime, UiState};
 use crate::app::{CliCommandResult, resolve_known_theme_name};
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{ThemeArgs, ThemeCommands, ThemeShowArgs, ThemeUseArgs};
@@ -6,7 +6,7 @@ use crate::config::ConfigLayer;
 use crate::core::command_def::{ArgDef, CommandDef, ValueChoice};
 use crate::core::row::Row;
 use crate::ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
-use crate::ui::theme_loader::{ThemeCatalog, ThemeSource};
+use crate::ui::theme_catalog::{ThemeCatalog, ThemeSource};
 use miette::Result;
 use miette::miette;
 
@@ -14,6 +14,15 @@ use miette::miette;
 pub(crate) struct ThemeCommandContext<'a> {
     pub(crate) ui: &'a UiState,
     pub(crate) themes: &'a ThemeCatalog,
+}
+
+impl<'a> ThemeCommandContext<'a> {
+    pub(crate) fn from_parts(runtime: &'a AppRuntime, ui: &'a UiState) -> Self {
+        Self {
+            ui,
+            themes: &runtime.themes,
+        }
+    }
 }
 
 pub(crate) fn run_theme_command(
@@ -182,7 +191,7 @@ mod tests {
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
     use crate::ui::theme::find_builtin_theme;
-    use crate::ui::theme_loader::{ThemeCatalog, ThemeEntry, ThemeSource};
+    use crate::ui::theme_catalog::{ThemeCatalog, ThemeEntry, ThemeSource};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -224,10 +233,8 @@ mod tests {
 
     fn extract_output_rows(result: CliCommandResult) -> Option<Vec<Row>> {
         let output = match result.output? {
-            ReplCommandOutput::Output { output, .. } => output,
-            ReplCommandOutput::Guide(_)
-            | ReplCommandOutput::Document { .. }
-            | ReplCommandOutput::Text(_) => return None,
+            ReplCommandOutput::Output(output) => output.output,
+            ReplCommandOutput::Json(_) | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
     }

@@ -2,8 +2,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
-use crate::guide::GuideView;
-use crate::ui::presentation::HelpLevel;
+use crate::guide::{GuideView, HelpLevel};
 use miette::{Result, miette};
 
 pub(crate) const INVOCATION_HELP_SECTION: &str = r#"Common Invocation Options:
@@ -489,7 +488,7 @@ mod tests {
     };
     use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
     use crate::guide::GuideView;
-    use crate::ui::presentation::HelpLevel;
+    use crate::guide::HelpLevel;
     use std::ffi::OsString;
 
     fn scan(tokens: &[&str]) -> super::ScannedCommandTokens {

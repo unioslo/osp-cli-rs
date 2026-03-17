@@ -1,6 +1,6 @@
 use crate::core::output_model::{
-    ColumnAlignment, Group, OutputItems, OutputMeta, OutputResult,
-    compute_key_index as core_compute_key_index,
+    ColumnAlignment, OutputItems, OutputMeta, OutputResult,
+    compute_key_index as core_compute_key_index, output_items_to_rows,
 };
 use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
 use crate::core::row::Row;
@@ -10,22 +10,7 @@ pub(crate) fn rows_to_output_result(rows: Vec<Row>) -> OutputResult {
 }
 
 pub(crate) fn output_to_rows(output: &OutputResult) -> Vec<Row> {
-    match &output.items {
-        OutputItems::Rows(rows) => rows.clone(),
-        OutputItems::Groups(groups) => {
-            let mut out = Vec::new();
-            for group in groups {
-                if group.rows.is_empty() {
-                    out.push(merge_group_header_row(group));
-                    continue;
-                }
-                for row in &group.rows {
-                    out.push(merge_group_row(group, row));
-                }
-            }
-            out
-        }
-    }
+    output_items_to_rows(&output.items)
 }
 
 pub(crate) fn plugin_data_to_output_result(
@@ -87,25 +72,6 @@ fn response_to_rows(data: serde_json::Value) -> Vec<Row> {
 
 fn compute_key_index(rows: &[Row]) -> Vec<String> {
     core_compute_key_index(rows)
-}
-
-fn merge_group_header_row(group: &Group) -> Row {
-    let mut row = group.groups.clone();
-    for (key, value) in &group.aggregates {
-        row.insert(key.clone(), value.clone());
-    }
-    row
-}
-
-fn merge_group_row(group: &Group, row: &Row) -> Row {
-    let mut merged = group.groups.clone();
-    for (key, value) in &group.aggregates {
-        merged.insert(key.clone(), value.clone());
-    }
-    for (key, value) in row {
-        merged.insert(key.clone(), value.clone());
-    }
-    merged
 }
 
 #[cfg(test)]

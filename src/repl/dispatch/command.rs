@@ -1,7 +1,7 @@
 use std::borrow::Cow;
+use std::time::Instant;
 
 use crate::repl::{ReplLineResult, ReplReloadKind, SharedHistory};
-use crate::ui::{render_document, render_output, render_structured_output};
 use miette::{Result, miette};
 
 use crate::app;
@@ -12,13 +12,11 @@ use crate::app::{
     ResolvedInvocation,
 };
 use crate::cli::invocation::{extend_with_invocation_help, scan_command_tokens};
-use crate::cli::rows::output::{output_to_rows, rows_to_output_result};
 use crate::cli::{
-    Commands, ConfigArgs, ConfigCommands, DoctorCommands, HistoryCommands, PluginCommandClearArgs,
+    Commands, ConfigCommands, DoctorCommands, HistoryCommands, PluginCommandClearArgs,
     PluginCommandStateArgs, PluginProviderClearArgs, PluginProviderSelectArgs, PluginsCommands,
-    ThemeArgs, ThemeCommands, parse_inline_command_tokens,
+    ThemeCommands, parse_inline_command_tokens,
 };
-use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 
 use crate::repl::{completion, input};
@@ -32,6 +30,7 @@ pub(super) struct ParsedReplInvocation {
     pub(super) side_effects: CommandSideEffects,
 }
 
+#[derive(Debug)]
 pub(super) enum ParsedReplDispatch {
     Help {
         result: Box<crate::app::CliCommandResult>,
@@ -39,6 +38,30 @@ pub(super) enum ParsedReplDispatch {
         stages: Vec<String>,
     },
     Invocation(Box<ParsedReplInvocation>),
+}
+
+pub(super) struct ExecutedReplCommand {
+    pub(super) result: ReplLineResult,
+    pub(super) debug_verbosity: u8,
+    pub(super) execute_finished: Option<Instant>,
+}
+
+impl ExecutedReplCommand {
+    fn parse_only(result: ReplLineResult, debug_verbosity: u8) -> Self {
+        Self {
+            result,
+            debug_verbosity,
+            execute_finished: None,
+        }
+    }
+
+    fn invocation(result: ReplLineResult, debug_verbosity: u8, execute_finished: Instant) -> Self {
+        Self {
+            result,
+            debug_verbosity,
+            execute_finished: Some(execute_finished),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -51,6 +74,13 @@ pub(super) struct CommandSideEffects {
 pub(super) struct ParsedClapHelp<'a> {
     pub(super) summary: Option<&'a str>,
     pub(super) body: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplCommandBehavior<'a> {
+    name: Cow<'a, str>,
+    supports_dsl: bool,
+    side_effects: CommandSideEffects,
 }
 
 pub(super) fn parse_repl_invocation(
@@ -76,17 +106,17 @@ pub(super) fn parse_repl_invocation(
             };
             return Err(miette!("{detail}"));
         }
-        return Ok(ParsedReplDispatch::Help {
-            result: Box::new(crate::app::CliCommandResult::guide(
+        return Ok(repl_help_dispatch(
+            parsed,
+            &effective,
+            crate::app::CliCommandResult::guide(
                 render_invalid_help_alias(input::help_alias_target_at(
                     &scanned.tokens,
                     command_index,
                 ))
                 .filtered_for_help_level(effective.help_level),
-            )),
-            effective: Box::new(effective.clone()),
-            stages: parsed.stages.clone(),
-        });
+            ),
+        ));
     }
     // Rewrite scoped help aliases back into ordinary command tokens before
     // clap parsing so the rest of dispatch only has to reason about one shape.
@@ -100,14 +130,14 @@ pub(super) fn parse_repl_invocation(
                 if !parsed.stages.is_empty() {
                     return Err(miette!(err.to_string()));
                 }
-                return Ok(ParsedReplDispatch::Help {
-                    result: Box::new(crate::app::CliCommandResult::guide(render_repl_parse_help(
+                return Ok(repl_help_dispatch(
+                    parsed,
+                    &effective,
+                    crate::app::CliCommandResult::guide(render_repl_parse_help(
                         effective.help_level,
                         &err.to_string(),
-                    ))),
-                    effective: Box::new(effective.clone()),
-                    stages: parsed.stages.clone(),
-                });
+                    )),
+                ));
             }
             return Err(miette!(err.to_string()));
         }
@@ -127,6 +157,18 @@ pub(super) fn parse_repl_invocation(
             stages: parsed.stages.clone(),
         },
     )))
+}
+
+fn repl_help_dispatch(
+    parsed: &input::ReplParsedLine,
+    effective: &ResolvedInvocation,
+    result: crate::app::CliCommandResult,
+) -> ParsedReplDispatch {
+    ParsedReplDispatch::Help {
+        result: Box::new(result),
+        effective: Box::new(effective.clone()),
+        stages: parsed.stages.clone(),
+    }
 }
 
 fn render_invalid_help_alias(target: Option<&str>) -> GuideView {
@@ -164,10 +206,7 @@ pub(super) fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {
     )
 }
 
-fn render_repl_parse_help(
-    help_level: crate::ui::presentation::HelpLevel,
-    error_text: &str,
-) -> GuideView {
+fn render_repl_parse_help(help_level: crate::guide::HelpLevel, error_text: &str) -> GuideView {
     let parsed = parse_clap_help(error_text);
     let mut view = GuideView::from_text(parsed.body);
     extend_with_invocation_help(&mut view, help_level);
@@ -266,39 +305,7 @@ fn encode_cache_key_tokens(tokens: &[String]) -> String {
 }
 
 pub(super) fn command_side_effects(command: &Commands) -> CommandSideEffects {
-    match command {
-        Commands::Theme(ThemeArgs {
-            command: ThemeCommands::Use(_),
-        }) => CommandSideEffects {
-            restart_repl: true,
-            show_intro_on_reload: true,
-        },
-        Commands::Config(ConfigArgs {
-            command: ConfigCommands::Set(set),
-        }) if !set.dry_run => CommandSideEffects {
-            restart_repl: true,
-            show_intro_on_reload: config_key_change_requires_intro(&set.key),
-        },
-        Commands::Config(ConfigArgs {
-            command: ConfigCommands::Unset(unset),
-        }) if !unset.dry_run => CommandSideEffects {
-            restart_repl: true,
-            show_intro_on_reload: config_key_change_requires_intro(&unset.key),
-        },
-        Commands::Plugins(crate::cli::PluginsArgs {
-            command:
-                PluginsCommands::Enable(PluginCommandStateArgs { .. })
-                | PluginsCommands::Disable(PluginCommandStateArgs { .. })
-                | PluginsCommands::ClearState(PluginCommandClearArgs { .. })
-                | PluginsCommands::Refresh
-                | PluginsCommands::SelectProvider(PluginProviderSelectArgs { .. })
-                | PluginsCommands::ClearProvider(PluginProviderClearArgs { .. }),
-        }) => CommandSideEffects {
-            restart_repl: true,
-            show_intro_on_reload: false,
-        },
-        _ => CommandSideEffects::default(),
-    }
+    repl_command_behavior(command).side_effects
 }
 
 pub(super) fn config_key_change_requires_intro(key: &str) -> bool {
@@ -318,204 +325,82 @@ pub(super) fn render_repl_command_output(
     invocation: &ResolvedInvocation,
     sink: &mut dyn UiSink,
 ) -> Result<String> {
-    let crate::app::CliCommandResult {
-        exit_code,
-        messages,
-        output,
-        stderr_text,
-        failure_report,
-        ..
-    } = result;
-
-    if exit_code != 0
-        && let Some(report) = failure_report
-    {
-        return Err(miette!("{report}"));
-    }
-
-    if !messages.is_empty() {
-        app::emit_messages_for_ui(
-            runtime.config.resolved(),
-            &invocation.ui,
-            &messages,
-            invocation.ui.message_verbosity,
-            sink,
-        );
-    }
-
-    let rendered = match output {
-        Some(crate::app::ReplCommandOutput::Output {
-            output,
-            format_hint,
-        }) => {
-            // Structured output is the only path where pipes operate on the
-            // semantic payload. Record the post-pipeline rows so history/cache
-            // introspection reflects what the user actually saw.
-            let (output, format_hint) = app::apply_output_stages(output, stages, format_hint)
-                .map_err(|err| miette!("{err:#}"))?;
-
-            let render_settings =
-                app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
-            let rendered =
-                render_structured_output(runtime.config.resolved(), &render_settings, &output);
-            session.record_result(line, output_to_rows(&output));
-            app::maybe_copy_output_with_runtime(
-                &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
-                &output,
-                sink,
-            );
-            rendered
-        }
-        Some(crate::app::ReplCommandOutput::Guide(guide)) => {
-            let crate::app::GuideCommandOutput {
-                guide,
-                output,
-                format_hint,
-            } = guide;
-
-            if stages.is_empty() {
-                let render_settings = app::resolve_render_settings_with_hint(
-                    &invocation.ui.render_settings,
-                    format_hint,
-                );
-                let rendered = app::render_guide_or_structured_output(
-                    runtime.config.resolved(),
-                    &render_settings,
-                    &guide,
-                    &output,
-                );
-                session.record_result(line, output_to_rows(&output));
-                app::maybe_copy_output_with_runtime(
-                    &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
-                    &output,
-                    sink,
-                );
-                rendered
-            } else {
-                let (output, format_hint) = app::apply_output_stages(output, stages, format_hint)
-                    .map_err(|err| miette!("{err:#}"))?;
-
-                let render_settings = app::resolve_render_settings_with_hint(
-                    &invocation.ui.render_settings,
-                    format_hint,
-                );
-                let rendered =
-                    render_structured_output(runtime.config.resolved(), &render_settings, &output);
-                session.record_result(line, output_to_rows(&output));
-                app::maybe_copy_output_with_runtime(
-                    &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
-                    &output,
-                    sink,
-                );
-                rendered
-            }
-        }
-        Some(crate::app::ReplCommandOutput::Document {
-            document,
-            format_hint,
-        }) => {
-            if stages.is_empty() {
-                let render_settings = app::resolve_render_settings_with_hint(
-                    &invocation.ui.render_settings,
-                    format_hint,
-                );
-                render_document(&document, &render_settings)
-            } else {
-                // Textual/document outputs are re-rendered through a plain
-                // value projection before piping so DSL stages operate on
-                // stable rows instead of ANSI/rendering artifacts.
-                render_staged_textual_output(
-                    runtime,
-                    session,
-                    line,
-                    stages,
-                    render_document_for_stages(&document, &invocation.ui.render_settings),
-                    invocation,
-                    sink,
-                )?
-            }
-        }
-        Some(crate::app::ReplCommandOutput::Text(text)) => {
-            if stages.is_empty() {
-                text
-            } else {
-                render_staged_textual_output(
-                    runtime, session, line, stages, text, invocation, sink,
-                )?
-            }
-        }
-        None => String::new(),
-    };
-
-    if let Some(stderr_text) = stderr_text
-        && !stderr_text.is_empty()
-    {
-        sink.write_stderr(&stderr_text);
-    }
-
-    Ok(rendered)
-}
-
-fn render_staged_textual_output(
-    runtime: &AppRuntime,
-    session: &mut AppSession,
-    line: &str,
-    stages: &[String],
-    text: String,
-    invocation: &ResolvedInvocation,
-    sink: &mut dyn UiSink,
-) -> Result<String> {
-    // Once output is textual, the REPL can only offer row-wise DSL stages by
-    // treating each visible line as a `value` row. This keeps the feature
-    // useful without pretending the original structure still exists.
-    let (output, format_hint) = app::apply_output_stages(
-        text_output_to_rows(&text),
-        stages,
-        Some(OutputFormat::Value),
-    )
-    .map_err(|err| miette!("{err:#}"))?;
-
-    let render_settings =
-        app::resolve_render_settings_with_hint(&invocation.ui.render_settings, format_hint);
-    let rendered = render_output(&output, &render_settings);
-    session.record_result(line, output_to_rows(&output));
-    app::maybe_copy_output_with_runtime(
+    app::render_repl_command_with_runtime(
         &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
-        &output,
+        session,
+        line,
+        stages,
+        result,
         sink,
-    );
-    Ok(rendered)
-}
-
-fn text_output_to_rows(text: &str) -> crate::core::output_model::OutputResult {
-    rows_to_output_result(
-        text.lines()
-            .filter(|line| !line.is_empty())
-            .map(|line| crate::row! { "value" => line })
-            .collect(),
     )
+    .map_err(|err| miette!("{err:#}"))
 }
 
-fn render_document_for_stages(
-    document: &crate::ui::Document,
-    settings: &crate::ui::RenderSettings,
-) -> String {
-    let mut plain = settings.clone();
-    plain.mode = RenderMode::Plain;
-    plain.color = ColorMode::Never;
-    plain.unicode = UnicodeMode::Never;
-    render_document(document, &plain)
+pub(super) fn execute_repl_command_dispatch(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: Option<&SharedHistory>,
+    line: &str,
+    dispatch: ParsedReplDispatch,
+    sink: &mut dyn UiSink,
+) -> Result<ExecutedReplCommand> {
+    match dispatch {
+        ParsedReplDispatch::Help {
+            result,
+            effective,
+            stages,
+        } => {
+            let rendered = render_repl_command_output(
+                runtime, session, line, &stages, *result, &effective, sink,
+            )?;
+            Ok(ExecutedReplCommand::parse_only(
+                ReplLineResult::Continue(rendered),
+                effective.ui.debug_verbosity,
+            ))
+        }
+        ParsedReplDispatch::Invocation(invocation) => {
+            let ParsedReplInvocation {
+                command,
+                effective,
+                stages,
+                cache_key,
+                side_effects,
+            } = *invocation;
+            let history = history.ok_or_else(|| {
+                miette!("REPL command execution requires history when running an invocation")
+            })?;
+            let output = run_repl_command(
+                runtime,
+                session,
+                clients,
+                command,
+                &effective,
+                history,
+                cache_key.as_deref(),
+            )?;
+            let execute_finished = Instant::now();
+            let rendered = render_repl_command_output(
+                runtime, session, line, &stages, output, &effective, sink,
+            )?;
+            Ok(ExecutedReplCommand::invocation(
+                finalize_repl_command(
+                    rendered,
+                    side_effects.restart_repl,
+                    side_effects.show_intro_on_reload,
+                ),
+                effective.ui.debug_verbosity,
+                execute_finished,
+            ))
+        }
+    }
 }
 
 pub(super) fn finalize_repl_command(
-    session: &AppSession,
     rendered: String,
     restart_repl: bool,
     show_intro_on_reload: bool,
 ) -> ReplLineResult {
-    // Sync shell scope before deciding the final control flow so history
-    // expansion and the next prompt both see the post-command scope.
-    session.sync_history_shell_context();
     if restart_repl {
         tracing::debug!(
             show_intro = show_intro_on_reload,
@@ -557,22 +442,16 @@ pub(super) fn run_repl_command(
         Commands::External(tokens) => {
             run_repl_external_command(runtime, clients, session, tokens, invocation)
         }
-        builtin => app::dispatch_builtin_command_parts(
-            runtime,
-            session,
-            clients,
-            Some(history),
-            Some(invocation),
-            builtin,
-        )
-        .and_then(|result| result.ok_or_else(|| miette!("expected builtin command"))),
+        builtin => {
+            app::run_repl_builtin_command(runtime, session, clients, history, invocation, builtin)
+        }
     }?;
 
     if let Some(cache_key) = cache_key
         && result.exit_code == 0
         && matches!(
             &result.output,
-            Some(crate::app::ReplCommandOutput::Output { .. })
+            Some(crate::app::ReplCommandOutput::Output(_))
         )
     {
         // Only cache successful structured payloads. Text/help/error output is
@@ -603,8 +482,16 @@ pub(super) fn run_repl_external_command(
 }
 
 pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
+    let behavior = repl_command_behavior(command);
+    ReplCommandSpec {
+        name: Cow::Owned(behavior.name.into_owned()),
+        supports_dsl: behavior.supports_dsl,
+    }
+}
+
+fn repl_command_behavior(command: &Commands) -> ReplCommandBehavior<'_> {
     match command {
-        Commands::External(tokens) => ReplCommandSpec {
+        Commands::External(tokens) => ReplCommandBehavior {
             name: Cow::Owned(
                 tokens
                     .first()
@@ -612,8 +499,9 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
                     .unwrap_or_else(|| "external".to_string()),
             ),
             supports_dsl: true,
+            side_effects: CommandSideEffects::default(),
         },
-        Commands::Plugins(args) => ReplCommandSpec {
+        Commands::Plugins(args) => ReplCommandBehavior {
             name: Cow::Borrowed(CMD_PLUGINS),
             supports_dsl: matches!(
                 args.command,
@@ -622,8 +510,24 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
                     | PluginsCommands::Doctor
                     | PluginsCommands::Config(_)
             ),
+            side_effects: if matches!(
+                args.command,
+                PluginsCommands::Enable(PluginCommandStateArgs { .. })
+                    | PluginsCommands::Disable(PluginCommandStateArgs { .. })
+                    | PluginsCommands::ClearState(PluginCommandClearArgs { .. })
+                    | PluginsCommands::Refresh
+                    | PluginsCommands::SelectProvider(PluginProviderSelectArgs { .. })
+                    | PluginsCommands::ClearProvider(PluginProviderClearArgs { .. })
+            ) {
+                CommandSideEffects {
+                    restart_repl: true,
+                    show_intro_on_reload: false,
+                }
+            } else {
+                CommandSideEffects::default()
+            },
         },
-        Commands::Doctor(args) => ReplCommandSpec {
+        Commands::Doctor(args) => ReplCommandBehavior {
             name: Cow::Borrowed(CMD_DOCTOR),
             supports_dsl: matches!(
                 args.command,
@@ -631,29 +535,52 @@ pub(crate) fn repl_command_spec(command: &Commands) -> ReplCommandSpec {
                     | Some(DoctorCommands::Plugins)
                     | Some(DoctorCommands::Theme)
             ),
+            side_effects: CommandSideEffects::default(),
         },
-        Commands::History(args) => ReplCommandSpec {
+        Commands::History(args) => ReplCommandBehavior {
             name: Cow::Borrowed(CMD_HISTORY),
             supports_dsl: matches!(args.command, HistoryCommands::List),
+            side_effects: CommandSideEffects::default(),
         },
-        Commands::Config(args) => ReplCommandSpec {
+        Commands::Config(args) => ReplCommandBehavior {
             name: Cow::Borrowed(CMD_CONFIG),
             supports_dsl: matches!(
                 args.command,
                 ConfigCommands::Show(_) | ConfigCommands::Get(_) | ConfigCommands::Doctor
             ),
+            side_effects: match &args.command {
+                ConfigCommands::Set(set) if !set.dry_run => CommandSideEffects {
+                    restart_repl: true,
+                    show_intro_on_reload: config_key_change_requires_intro(&set.key),
+                },
+                ConfigCommands::Unset(unset) if !unset.dry_run => CommandSideEffects {
+                    restart_repl: true,
+                    show_intro_on_reload: config_key_change_requires_intro(&unset.key),
+                },
+                _ => CommandSideEffects::default(),
+            },
         },
-        Commands::Theme(args) => ReplCommandSpec {
+        Commands::Theme(args) => ReplCommandBehavior {
             name: Cow::Borrowed("theme"),
             supports_dsl: matches!(args.command, ThemeCommands::List | ThemeCommands::Show(_)),
+            side_effects: if matches!(args.command, ThemeCommands::Use(_)) {
+                CommandSideEffects {
+                    restart_repl: true,
+                    show_intro_on_reload: true,
+                }
+            } else {
+                CommandSideEffects::default()
+            },
         },
-        Commands::Intro(_) => ReplCommandSpec {
+        Commands::Intro(_) => ReplCommandBehavior {
             name: Cow::Borrowed(CMD_INTRO),
             supports_dsl: true,
+            side_effects: CommandSideEffects::default(),
         },
-        Commands::Repl(_) => ReplCommandSpec {
+        Commands::Repl(_) => ReplCommandBehavior {
             name: Cow::Borrowed("repl"),
             supports_dsl: false,
+            side_effects: CommandSideEffects::default(),
         },
     }
 }

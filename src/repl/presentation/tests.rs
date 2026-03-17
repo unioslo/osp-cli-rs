@@ -3,6 +3,12 @@ use super::{
     render_repl_command_overview, render_repl_intro, render_repl_prompt_right_for_test,
     theme_display_name,
 };
+mod output_support {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/output.rs"
+    ));
+}
 use crate::app::TimingSummary;
 use crate::app::{
     AppState, AppStateInit, DebugTimingBadge, DebugTimingState, LaunchContext, RuntimeContext,
@@ -16,8 +22,8 @@ use crate::plugin::PluginManager;
 use crate::repl::ReplViewContext;
 use crate::repl::surface::{ReplOverviewEntry, ReplSurface};
 use crate::ui::RenderSettings;
+use crate::ui::build_presentation_defaults_layer;
 use crate::ui::messages::MessageLevel;
-use crate::ui::presentation::build_presentation_defaults_layer;
 use serde_json::json;
 use std::time::Duration;
 
@@ -53,7 +59,7 @@ fn make_state(entries: &[(&str, &str)]) -> AppState {
         debug_verbosity: 0,
         plugins: PluginManager::new(Vec::new()),
         native_commands: crate::native::NativeCommandRegistry::default(),
-        themes: crate::ui::theme_loader::ThemeCatalog::default(),
+        themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),
     })
 }
@@ -87,7 +93,7 @@ fn make_intro_state(
 ) -> AppState {
     let mut state = make_state(entries);
     configure_render_runtime(&mut state, mode, color, unicode);
-    crate::cli::apply_render_settings_from_config(
+    crate::ui::settings::apply_render_config_overrides(
         &mut state.runtime.ui.render_settings,
         state.runtime.config.resolved(),
     );
@@ -101,28 +107,6 @@ fn make_intro_state(
     state.runtime.ui.render_settings.theme_name = theme_name.clone();
     state.runtime.ui.render_settings.theme = Some(crate::ui::theme::resolve_theme(&theme_name));
     state
-}
-
-fn strip_ansi(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' {
-            if matches!(chars.peek(), Some('[')) {
-                let _ = chars.next();
-                for next in chars.by_ref() {
-                    if ('@'..='~').contains(&next) {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        out.push(ch);
-    }
-
-    out
 }
 
 fn intro_commands(commands: &[&str]) -> Vec<String> {
@@ -189,7 +173,7 @@ fn rich_prompt_right_settings() -> crate::ui::ResolvedRenderSettings {
 mod shape_contracts {
     use super::{
         ColorMode, MessageLevel, RenderMode, UnicodeMode, intro_surface_with_overview,
-        make_intro_state, render_repl_intro, repl_view, strip_ansi,
+        make_intro_state, output_support, render_repl_intro, repl_view,
     };
 
     fn render_style(
@@ -211,7 +195,7 @@ mod shape_contracts {
             UnicodeMode::Always,
         );
         state.runtime.ui.message_verbosity = verbosity;
-        strip_ansi(&render_repl_intro(
+        output_support::strip_ansi(&render_repl_intro(
             repl_view(&state),
             &intro_surface_with_overview(&["help", "config", "theme", "plugins"]),
         ))
@@ -441,7 +425,7 @@ fn repl_prompt_variants_render_scope_indicator_and_prompt_right_unit() {
 
     let resolved = rich_prompt_right_settings();
     let incognito =
-        render_repl_prompt_right_for_test(&resolved, false, &DebugTimingState::default());
+        render_repl_prompt_right_for_test(&resolved, None, false, &DebugTimingState::default());
     assert!(incognito.contains("(⌐■_■)"));
 
     let timing = DebugTimingState::default();
@@ -455,7 +439,7 @@ fn repl_prompt_variants_render_scope_indicator_and_prompt_right_unit() {
         },
     });
 
-    let rendered = render_repl_prompt_right_for_test(&resolved, false, &timing);
+    let rendered = render_repl_prompt_right_for_test(&resolved, None, false, &timing);
     assert!(rendered.contains("(⌐■_■)"));
     assert!(rendered.contains("120"));
 }
@@ -632,6 +616,46 @@ fn repl_prompt_renders_custom_template_with_prompt_style() {
 }
 
 #[test]
+fn repl_prompt_templates_decode_escaped_newlines_and_user_rhs_overrides_unit() {
+    let mut state = make_state(&[
+        ("repl.prompt", "{user}\\n{profile}> "),
+        ("repl.prompt_right", "{incognito}\\n{timing}"),
+    ]);
+    state.runtime.ui.render_settings.unicode = crate::core::output::UnicodeMode::Always;
+
+    let prompt = build_repl_prompt(repl_view(&state)).left;
+    assert!(prompt.contains("anonymous\ndefault> "));
+
+    let timing = DebugTimingState::default();
+    timing.set(DebugTimingBadge {
+        level: 1,
+        summary: TimingSummary {
+            total: Duration::from_millis(120),
+            parse: None,
+            execute: None,
+            render: None,
+        },
+    });
+    let prompt_right = render_repl_prompt_right_for_test(
+        &rich_prompt_right_settings(),
+        Some("{incognito}\\n{timing}"),
+        false,
+        &timing,
+    );
+    let prompt_right_plain = output_support::strip_ansi(&prompt_right);
+    assert!(prompt_right_plain.contains("(⌐■_■)\n"));
+    assert!(prompt_right_plain.contains("120"));
+
+    let replaced = render_repl_prompt_right_for_test(
+        &rich_prompt_right_settings(),
+        Some("rhs"),
+        false,
+        &timing,
+    );
+    assert_eq!(replaced, "rhs");
+}
+
+#[test]
 fn intro_template_parser_expands_all_help_sections_and_merges_repeated_data_blocks() {
     let help = GuideView {
         usage: vec!["osp [OPTIONS] COMMAND".to_string()],
@@ -755,7 +779,7 @@ fn intro_template_expansion_handles_scalars_sensitive_keys_and_malformed_placeho
         debug_verbosity: 0,
         plugins: PluginManager::new(Vec::new()),
         native_commands: crate::native::NativeCommandRegistry::default(),
-        themes: crate::ui::theme_loader::ThemeCatalog::default(),
+        themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),
     });
     let expanded = super::expand_intro_template(

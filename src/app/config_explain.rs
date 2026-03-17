@@ -1,21 +1,18 @@
 use crate::config::{
-    BootstrapScopeRule, ConfigExplain, ConfigResolver, ConfigSchema, ConfigValue, ResolveOptions,
-    ResolvedConfig, RuntimeConfigPaths, RuntimeDefaults, bootstrap_key_spec,
-    build_runtime_pipeline, is_bootstrap_only_key,
+    BootstrapScopeRule, ConfigExplain, ConfigSchema, ConfigValue, ResolvedConfig,
+    bootstrap_key_spec, is_bootstrap_only_key,
 };
+use crate::core::fuzzy::{config_fuzzy_matcher, fold_case};
 use crate::core::output::OutputFormat;
 use crate::ui::messages::MessageBuffer;
-use crate::ui::theme::DEFAULT_THEME_NAME;
 use miette::{IntoDiagnostic, Result, WrapErr};
+use skim::fuzzy_matcher::FuzzyMatcher;
 
 use crate::app::{RuntimeContext, UiState};
 use crate::cli::ConfigExplainArgs;
-use crate::ui::presentation::{build_presentation_defaults_layer, explain_presentation_effect};
+use crate::ui::explain_presentation_effect;
 
-use super::{
-    CliCommandResult, DEFAULT_REPL_PROMPT, RuntimeConfigRequest, document_from_json,
-    document_from_text,
-};
+use super::{CliCommandResult, RuntimeConfigRequest, prepare_runtime_config};
 
 pub(crate) struct ConfigExplainContext<'a> {
     pub(crate) context: &'a RuntimeContext,
@@ -42,12 +39,8 @@ pub(crate) fn config_explain_result(
     )?;
 
     if explain.final_entry.is_none() && explain.layers.is_empty() {
-        let suggestions = suggest_config_keys(context.config, &args.key);
         let mut messages = MessageBuffer::default();
-        messages.error(format!("config key not found: {}", args.key));
-        if !suggestions.is_empty() {
-            messages.info(format!("did you mean: {}", suggestions.join(", ")));
-        }
+        push_missing_config_key_messages(&mut messages, context.config, &args.key);
         return Ok(CliCommandResult {
             exit_code: 1,
             messages,
@@ -59,14 +52,13 @@ pub(crate) fn config_explain_result(
 
     if matches!(context.ui.render_settings.format, OutputFormat::Json) {
         let payload = config_explain_json(&explain, context.config, args.show_secrets);
-        return Ok(CliCommandResult::document_with_format(
-            document_from_json(payload),
-            Some(OutputFormat::Json),
-        ));
+        return Ok(CliCommandResult::json(payload));
     }
 
-    Ok(CliCommandResult::document(document_from_text(
-        &render_config_explain_text(&explain, context.config, args.show_secrets),
+    Ok(CliCommandResult::text(render_config_explain_text(
+        &explain,
+        context.config,
+        args.show_secrets,
     )))
 }
 
@@ -94,65 +86,8 @@ pub(crate) fn explain_runtime_config(
     request: RuntimeConfigRequest,
     key: &str,
 ) -> Result<ConfigExplain> {
-    let paths = RuntimeConfigPaths::discover_with(request.runtime_load);
-    let base_pipeline = build_runtime_pipeline(
-        {
-            let mut defaults = RuntimeDefaults::from_runtime_load(
-                request.runtime_load,
-                DEFAULT_THEME_NAME,
-                DEFAULT_REPL_PROMPT,
-            )
-            .to_layer();
-            defaults.extend_from_layer(&request.product_defaults);
-            defaults
-        },
-        None,
-        &paths,
-        request.runtime_load,
-        None,
-        request.session_layer.clone(),
-    );
-    // Explain mirrors the runtime bootstrap path. We resolve once to discover the selected
-    // presentation preset, synthesize that into a normal config layer, and then explain against
-    // the fully shaped config so `config explain` matches the runtime users actually get.
-    let base_config = base_pipeline
-        .resolve(
-            ResolveOptions::new()
-                .with_profile_override(request.profile_override.clone())
-                .with_terminal_override(request.terminal.clone()),
-        )
-        .into_diagnostic()
-        .wrap_err("failed to resolve config before explaining presentation defaults")?;
-    let pipeline = build_runtime_pipeline(
-        {
-            let mut defaults = RuntimeDefaults::from_runtime_load(
-                request.runtime_load,
-                DEFAULT_THEME_NAME,
-                DEFAULT_REPL_PROMPT,
-            )
-            .to_layer();
-            defaults.extend_from_layer(&request.product_defaults);
-            defaults
-        },
-        Some(build_presentation_defaults_layer(&base_config)),
-        &paths,
-        request.runtime_load,
-        None,
-        request.session_layer,
-    );
-
-    let layers = pipeline
-        .load_layers()
-        .into_diagnostic()
-        .wrap_err("failed to load config layers (file, env, secrets)")?;
-    let resolver = ConfigResolver::from_loaded_layers(layers);
-    resolver
-        .explain_key(
-            key,
-            ResolveOptions::new()
-                .with_profile_override(request.profile_override)
-                .with_terminal_override(request.terminal),
-        )
+    prepare_runtime_config(request)
+        .and_then(|prepared| prepared.explain_key(key))
         .into_diagnostic()
         .wrap_err_with(|| format!("failed to explain config key `{key}`"))
 }
@@ -172,6 +107,10 @@ pub(crate) fn render_config_explain_text(
             "runtime"
         }
     ));
+    if let Some(doc) = config_key_doc(&explain.key) {
+        out.push_str(&format!("description: {doc}\n"));
+    }
+    out.push('\n');
 
     if let Some(final_entry) = &explain.final_entry {
         let value_display = display_value(&explain.key, &final_entry.value, show_secrets);
@@ -292,6 +231,10 @@ pub(crate) fn config_explain_json(
             "runtime"
         }
         .into(),
+    );
+    root.insert(
+        "description".to_string(),
+        config_key_doc(&explain.key).map_or(serde_json::Value::Null, Into::into),
     );
     root.insert(
         "active_profile".to_string(),
@@ -486,6 +429,10 @@ fn config_value_type(value: &ConfigValue) -> &'static str {
     }
 }
 
+fn config_key_doc(key: &str) -> Option<&'static str> {
+    ConfigSchema::default().doc_for_key(key)
+}
+
 fn redact_value_json(key: &str, value: &ConfigValue, show_secrets: bool) -> serde_json::Value {
     if value.is_secret() {
         return if show_secrets {
@@ -582,8 +529,20 @@ fn bootstrap_scope_policy(key: &str) -> Option<&'static str> {
     })
 }
 
-fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
-    let key_lc = key.to_ascii_lowercase();
+pub(crate) fn push_missing_config_key_messages(
+    messages: &mut MessageBuffer,
+    config: &ResolvedConfig,
+    key: &str,
+) {
+    let suggestions = suggest_config_keys(config, key);
+    messages.error(format!("config key not found: {key}"));
+    if !suggestions.is_empty() {
+        messages.warning(format!("did you mean: {}", suggestions.join(", ")));
+    }
+}
+
+pub(crate) fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
+    let key_lc = fold_case(key);
     let schema = ConfigSchema::default();
     let schema_keys = schema.entries().map(|(key, _)| key.to_string());
     let all_keys = config
@@ -598,18 +557,58 @@ fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
 
     let mut prefix_matches = all_keys
         .iter()
-        .filter(|candidate| candidate.starts_with(&key_lc) || candidate.contains(&key_lc))
+        .filter(|candidate| {
+            let candidate_lc = fold_case(candidate);
+            candidate_lc.starts_with(&key_lc) || candidate_lc.contains(&key_lc)
+        })
         .take(5)
         .cloned()
         .collect::<Vec<String>>();
 
     if prefix_matches.is_empty() {
+        let key_root = key_lc.split('.').next().unwrap_or_default();
+        let key_leaf = key_lc.rsplit('.').next().unwrap_or_default();
+        let matcher = config_fuzzy_matcher();
+        let mut fuzzy_matches = all_keys
+            .iter()
+            .filter_map(|candidate| {
+                let candidate_lc = fold_case(candidate);
+                let candidate_root = candidate_lc.split('.').next().unwrap_or_default();
+                let candidate_leaf = candidate_lc.rsplit('.').next().unwrap_or_default();
+                let same_root = candidate_root == key_root;
+                if !same_root {
+                    return None;
+                }
+                let leaf_score = same_root
+                    .then(|| matcher.fuzzy_match(candidate_leaf, key_leaf))
+                    .flatten();
+                let full_score = matcher.fuzzy_match(&candidate_lc, &key_lc);
+                let score = leaf_score.or(full_score)?;
+                Some((
+                    !same_root,
+                    leaf_score.is_none(),
+                    std::cmp::Reverse(leaf_score.unwrap_or(i64::MIN)),
+                    std::cmp::Reverse(full_score.unwrap_or(score)),
+                    candidate.matches('.').count(),
+                    candidate.len(),
+                    candidate.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        fuzzy_matches.sort();
+        prefix_matches = fuzzy_matches
+            .into_iter()
+            .take(5)
+            .map(|(_, _, _, _, _, _, candidate)| candidate)
+            .collect();
+    }
+
+    if prefix_matches.is_empty() {
+        let key_root = key_lc.split('.').next().unwrap_or_default();
         prefix_matches = all_keys
             .iter()
             .filter(|candidate| {
-                let left = candidate.split('.').next().unwrap_or_default();
-                let right = key_lc.split('.').next().unwrap_or_default();
-                left == right
+                fold_case(candidate).split('.').next().unwrap_or_default() == key_root
             })
             .take(5)
             .cloned()
@@ -622,10 +621,13 @@ fn suggest_config_keys(config: &ResolvedConfig, key: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::resolve_runtime_config;
     use crate::config::{
         ActiveProfileSource, ConfigLayer, ConfigResolver, ConfigSource, ConfigValue,
-        ExplainInterpolation, ExplainInterpolationStep, ResolveOptions, ResolvedValue, Scope,
+        ExplainInterpolation, ExplainInterpolationStep, ResolveOptions, ResolvedValue,
+        RuntimeLoadOptions, Scope,
     };
+    use crate::ui::build_presentation_defaults_layer;
     use std::collections::BTreeSet;
 
     fn resolved_config_and_explain(
@@ -730,5 +732,49 @@ mod tests {
 
         let suggestions = suggest_config_keys(&config, "ui.for");
         assert!(suggestions.iter().any(|candidate| candidate == "ui.format"));
+        let typo_suggestions = suggest_config_keys(&config, "ui.formt");
+        assert!(
+            typo_suggestions
+                .iter()
+                .any(|candidate| candidate == "ui.format")
+        );
+        assert_eq!(config_key_doc("ui.format"), Some("Default output format"));
+        assert_eq!(config_key_doc("extensions.demo.token"), None);
+    }
+
+    #[test]
+    fn config_explain_includes_schema_description_in_text_and_json_unit() {
+        let (config, explain) =
+            resolved_config_and_explain("ui.format", &[("ui.format", "json")], &[], &[]);
+
+        let text = render_config_explain_text(&explain, &config, false);
+        let json = config_explain_json(&explain, &config, false);
+
+        assert!(text.contains("description: Default output format"));
+        assert_eq!(json["description"], "Default output format");
+    }
+
+    #[test]
+    fn explain_runtime_config_matches_resolved_runtime_presentation_defaults_unit() {
+        let mut product_defaults = ConfigLayer::default();
+        product_defaults.set("profile.default", "default");
+        product_defaults.set("ui.presentation", "compact");
+        let request = RuntimeConfigRequest::new(None, Some("repl"))
+            .with_runtime_load(RuntimeLoadOptions::defaults_only())
+            .with_product_defaults(product_defaults);
+
+        let resolved = resolve_runtime_config(request.clone())
+            .expect("runtime config should resolve through the shared bootstrap path");
+        let resolved_entry = resolved
+            .get_value_entry("repl.intro")
+            .expect("presentation shaping should seed repl.intro");
+        let explain = explain_runtime_config(request, "repl.intro")
+            .expect("config explain should use the same shaped runtime path");
+        let final_entry = explain
+            .final_entry
+            .expect("repl.intro should have a winning explained value");
+
+        assert_eq!(final_entry.value.reveal(), resolved_entry.value.reveal());
+        assert_eq!(final_entry.source, resolved_entry.source);
     }
 }

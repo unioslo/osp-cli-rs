@@ -1,27 +1,20 @@
 use crate::config::ResolvedConfig;
-use crate::repl::{DebugStep, ReplRunConfig, run_repl};
+use crate::repl::{DebugStep, run_repl};
 use anyhow::anyhow;
 use miette::{Result, miette};
-use std::sync::Arc;
 
-use super::{completion, dispatch, input, lifecycle, presentation, surface};
+use super::{dispatch, input, lifecycle};
 use crate::app::sink::StdIoUiSink;
 use crate::app::{AppRuntime, AppSession, AppState};
 use crate::app::{AuthState, ReplScopeStack, UiState};
-use crate::ui::theme_loader::ThemeCatalog;
+use crate::ui::theme_catalog::ThemeCatalog;
 
 use super::history;
-use crate::app;
-use crate::app::{CliCommandResult, document_from_json};
+use super::presentation::{ReplIntroStyle, intro_style, intro_style_with_verbosity};
+use crate::app::CliCommandResult;
 use crate::cli::{DebugCompleteArgs, DebugHighlightArgs, DebugMenuArg, ReplArgs, ReplCommands};
-use crate::completion::CompletionTree;
 use crate::ui::messages::MessageLevel;
-use crate::ui::presentation::{
-    ReplInputMode, intro_style, intro_style_with_verbosity, repl_input_mode,
-};
 pub(crate) use dispatch::repl_command_spec;
-use presentation::{build_repl_appearance, build_repl_prompt_right_renderer};
-use surface::ReplSurface;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ReplViewContext<'a> {
@@ -54,70 +47,54 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
     let mut sink = StdIoUiSink;
 
     loop {
+        // 1. Prepare the next REPL cycle from current runtime/session state.
         let cycle = loop_state.prepare_cycle(state)?;
-        loop_state.render_cycle_chrome(
-            &mut sink,
-            ReplViewContext::from_parts(&state.runtime, &state.session),
-            &cycle.help_text,
-        );
 
-        state.session.seed_startup_prompt_timing(
-            state.runtime.ui.debug_verbosity,
-            state.runtime.launch.startup_started_at.elapsed(),
-        );
+        // 2. Print any intro/help chrome and pending restart output.
+        loop_state.render_cycle_chrome(&mut sink, &cycle.help_text);
 
-        let result = run_repl(
-            ReplRunConfig::builder(cycle.prompt, cycle.history_config)
-                .with_completion_words(cycle.root_words)
-                .with_completion_tree(Some(cycle.completion_tree))
-                .with_appearance(cycle.appearance)
-                .with_input_mode(map_repl_input_mode(repl_input_mode(
-                    state.runtime.config.resolved(),
-                )))
-                .with_prompt_right(Some(build_repl_prompt_right_renderer(
-                    ReplViewContext::from_parts(&state.runtime, &state.session),
-                    state.session.prompt_timing.clone(),
-                )))
-                .with_line_projector(Some(build_repl_ui_line_projector(
-                    state.runtime.config.resolved(),
-                )))
-                .build(),
-            |line, history| {
-                dispatch::execute_repl_plugin_line(
-                    &mut state.runtime,
-                    &mut state.session,
-                    &state.clients,
-                    history,
-                    line,
-                )
-                .map_err(|err| {
-                    anyhow!(
-                        "{}",
-                        crate::app::render_report_message(&err, state.runtime.ui.message_verbosity)
-                    )
-                })
-            },
-        )
-        .map_err(|err| miette!("{err:#}"))?;
+        // 3. Run the editor-owned REPL engine for this prepared cycle.
+        let result = run_repl_cycle(state, cycle)?;
+
+        // 4. Apply restart/exit effects back to lifecycle state.
         if let Some(code) = loop_state.apply_run_result(&mut sink, result) {
             return Ok(code);
         }
     }
 }
 
+fn run_repl_cycle(
+    state: &mut AppState,
+    cycle: lifecycle::ReplCycle,
+) -> Result<crate::repl::ReplRunResult> {
+    state.session.seed_startup_prompt_timing(
+        state.runtime.ui.debug_verbosity,
+        state.runtime.launch.startup_started_at.elapsed(),
+    );
+
+    run_repl(cycle.run_config, |line, history| {
+        dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            history,
+            line,
+        )
+        .map_err(|err| {
+            anyhow!(
+                "{}",
+                crate::app::render_report_message(&err, state.runtime.ui.message_verbosity)
+            )
+        })
+    })
+    .map_err(|err| miette!("{err:#}"))
+}
+
 fn should_show_repl_intro(config: &ResolvedConfig, verbosity: MessageLevel) -> bool {
     !matches!(
         intro_style_with_verbosity(intro_style(config), verbosity),
-        crate::ui::presentation::ReplIntroStyle::None
+        ReplIntroStyle::None
     )
-}
-
-fn map_repl_input_mode(mode: ReplInputMode) -> crate::repl::ReplInputMode {
-    match mode {
-        ReplInputMode::Auto => crate::repl::ReplInputMode::Auto,
-        ReplInputMode::Interactive => crate::repl::ReplInputMode::Interactive,
-        ReplInputMode::Basic => crate::repl::ReplInputMode::Basic,
-    }
 }
 
 pub(crate) fn run_repl_debug_command_for(
@@ -142,11 +119,7 @@ fn run_repl_debug_complete(
     clients: &crate::app::AppClients,
     args: DebugCompleteArgs,
 ) -> Result<CliCommandResult> {
-    let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
-    let view = ReplViewContext::from_parts(runtime, session);
-    let surface = surface::build_repl_surface(view, &catalog);
-    let completion_tree = build_repl_completion_tree(view, &surface)?;
-    let appearance = build_repl_appearance(view);
+    let prepared = lifecycle::prepare_repl_surface_state(runtime, session, clients)?;
     let cursor = args.cursor.unwrap_or(args.line.len());
 
     let steps = args
@@ -160,10 +133,10 @@ fn run_repl_debug_complete(
         let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
             .with_ansi(args.menu_ansi)
             .with_unicode(args.menu_unicode)
-            .with_appearance(Some(&appearance));
+            .with_appearance(Some(&prepared.appearance));
         let debug = match args.menu {
             DebugMenuArg::Completion => crate::repl::debug_completion(
-                &completion_tree,
+                &prepared.completion_tree,
                 &projected_line.line,
                 cursor,
                 options,
@@ -181,10 +154,10 @@ fn run_repl_debug_complete(
         let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
             .with_ansi(args.menu_ansi)
             .with_unicode(args.menu_unicode)
-            .with_appearance(Some(&appearance));
+            .with_appearance(Some(&prepared.appearance));
         let frames = match args.menu {
             DebugMenuArg::Completion => crate::repl::debug_completion_steps(
-                &completion_tree,
+                &prepared.completion_tree,
                 &projected_line.line,
                 cursor,
                 options,
@@ -206,10 +179,7 @@ fn run_repl_debug_complete(
         serde_json::to_string_pretty(&frames).map_err(|err| miette!("{err:#}"))?
     };
     let payload = serde_json::from_str(&payload).map_err(|err| miette!("{err:#}"))?;
-    Ok(CliCommandResult::document_with_format(
-        document_from_json(payload),
-        Some(crate::core::output::OutputFormat::Json),
-    ))
+    Ok(CliCommandResult::json(payload))
 }
 
 fn run_repl_debug_highlight(
@@ -218,22 +188,21 @@ fn run_repl_debug_highlight(
     clients: &crate::app::AppClients,
     args: DebugHighlightArgs,
 ) -> Result<CliCommandResult> {
-    let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
-    let view = ReplViewContext::from_parts(runtime, session);
-    let surface = surface::build_repl_surface(view, &catalog);
-    let completion_tree = build_repl_completion_tree(view, &surface)?;
-    let appearance = build_repl_appearance(view);
+    let prepared = lifecycle::prepare_repl_surface_state(runtime, session, clients)?;
     let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
-    let command_color = appearance
+    let command_color = prepared
+        .appearance
         .command_highlight_style
         .as_deref()
         .and_then(crate::repl::color_from_style_spec)
         .unwrap_or(nu_ansi_term::Color::Green);
     let spans = crate::repl::debug_highlight(
-        &completion_tree,
+        &prepared.completion_tree,
         &args.line,
         command_color,
-        Some(build_repl_ui_line_projector(runtime.config.resolved())),
+        Some(input::build_repl_ui_line_projector(
+            runtime.config.resolved(),
+        )),
     );
     let payload = serde_json::json!({
         "line": args.line,
@@ -241,35 +210,12 @@ fn run_repl_debug_highlight(
         "hidden_suggestions": projected_line.hidden_suggestions,
         "spans": spans,
     });
-    Ok(CliCommandResult::document_with_format(
-        document_from_json(payload),
-        Some(crate::core::output::OutputFormat::Json),
-    ))
-}
-
-fn build_repl_completion_tree(
-    view: ReplViewContext<'_>,
-    surface: &ReplSurface,
-) -> Result<CompletionTree> {
-    completion::build_repl_completion_tree(view, surface)
-}
-
-fn build_repl_ui_line_projector(
-    config: &ResolvedConfig,
-) -> Arc<dyn Fn(&str) -> crate::repl::LineProjection + Send + Sync> {
-    let config = config.clone();
-    Arc::new(move |line| {
-        input::project_repl_ui_line(line, &config)
-            .unwrap_or_else(|_| crate::repl::LineProjection::passthrough(line))
-    })
+    Ok(CliCommandResult::json(payload))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_repl_ui_line_projector, map_repl_input_mode, run_repl_debug_command_for,
-        should_show_repl_intro,
-    };
+    use super::{run_repl_debug_command_for, should_show_repl_intro};
     use crate::app::{
         AppClients, AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext,
         TerminalKind,
@@ -280,7 +226,6 @@ mod tests {
     use crate::repl::lifecycle::build_cycle_chrome_output;
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
-    use crate::ui::presentation::ReplInputMode;
 
     fn make_state() -> (AppRuntime, AppSession, AppClients) {
         let mut defaults = ConfigLayer::default();
@@ -301,7 +246,7 @@ mod tests {
             debug_verbosity: 0,
             plugins: crate::plugin::PluginManager::new(Vec::new()),
             native_commands: crate::native::NativeCommandRegistry::default(),
-            themes: crate::ui::theme_loader::ThemeCatalog::default(),
+            themes: crate::ui::theme_catalog::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         });
         (state.runtime, state.session, state.clients)
@@ -309,13 +254,7 @@ mod tests {
 
     #[test]
     fn cycle_chrome_renders_intro_then_help_then_pending_output() {
-        let (runtime, session, _) = make_state();
-        let output = build_cycle_chrome_output(
-            super::ReplViewContext::from_parts(&runtime, &session),
-            "Welcome anonymous.\nHELP\n",
-            true,
-            "PENDING\n",
-        );
+        let output = build_cycle_chrome_output("Welcome anonymous.\nHELP\n", true, "PENDING\n");
 
         let intro_pos = output.find("Welcome").expect("intro should render");
         let help_pos = output.find("HELP").expect("help should render");
@@ -330,31 +269,9 @@ mod tests {
 
     #[test]
     fn cycle_chrome_without_intro_keeps_pending_output_only() {
-        let (runtime, session, _) = make_state();
-        let output = build_cycle_chrome_output(
-            super::ReplViewContext::from_parts(&runtime, &session),
-            "HELP\n",
-            false,
-            "PENDING\n",
-        );
+        let output = build_cycle_chrome_output("HELP\n", false, "PENDING\n");
 
         assert_eq!(output, "PENDING\n");
-    }
-
-    #[test]
-    fn repl_input_mode_mapping_covers_all_variants_unit() {
-        assert_eq!(
-            map_repl_input_mode(ReplInputMode::Auto),
-            crate::repl::ReplInputMode::Auto
-        );
-        assert_eq!(
-            map_repl_input_mode(ReplInputMode::Interactive),
-            crate::repl::ReplInputMode::Interactive
-        );
-        assert_eq!(
-            map_repl_input_mode(ReplInputMode::Basic),
-            crate::repl::ReplInputMode::Basic
-        );
     }
 
     #[test]
@@ -369,15 +286,6 @@ mod tests {
 
         assert!(should_show_repl_intro(&config, MessageLevel::Success));
         assert!(!should_show_repl_intro(&config, MessageLevel::Warning));
-    }
-
-    #[test]
-    fn repl_ui_line_projector_falls_back_to_passthrough_on_parse_error_unit() {
-        let (runtime, _, _) = make_state();
-        let projector = build_repl_ui_line_projector(runtime.config.resolved());
-        let projected = projector("config \"unterminated");
-
-        assert_eq!(projected.line, "config \"unterminated");
     }
 
     #[test]
@@ -404,7 +312,7 @@ mod tests {
         .expect("debug complete should succeed");
         assert!(matches!(
             complete.output,
-            Some(crate::app::ReplCommandOutput::Document { .. })
+            Some(crate::app::ReplCommandOutput::Json(_))
         ));
 
         let history_complete = run_repl_debug_command_for(
@@ -427,7 +335,7 @@ mod tests {
         .expect("history debug complete should succeed");
         assert!(matches!(
             history_complete.output,
-            Some(crate::app::ReplCommandOutput::Document { .. })
+            Some(crate::app::ReplCommandOutput::Json(_))
         ));
 
         let highlight = run_repl_debug_command_for(
@@ -443,7 +351,7 @@ mod tests {
         .expect("debug highlight should succeed");
         assert!(matches!(
             highlight.output,
-            Some(crate::app::ReplCommandOutput::Document { .. })
+            Some(crate::app::ReplCommandOutput::Json(_))
         ));
     }
 }

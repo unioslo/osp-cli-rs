@@ -1,9 +1,8 @@
 use miette::Result;
 
-use crate::app::{AuthState, LastFailure, UiState};
+use crate::app::{AppClients, AppRuntime, AppSession, AuthState, LastFailure, UiState};
 use crate::app::{
-    CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, document_from_json, document_from_text,
-    ensure_builtin_visible_for,
+    CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, ensure_builtin_visible_for,
 };
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{DoctorArgs, DoctorCommands, PluginsArgs, PluginsCommands};
@@ -12,8 +11,7 @@ use crate::core::output::OutputFormat;
 use crate::core::output_model::OutputResult;
 use crate::core::row::Row;
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
-use crate::ui::document::Document;
-use crate::ui::theme_loader::ThemeCatalog;
+use crate::ui::theme_catalog::ThemeCatalog;
 use serde_json::{Map, Value};
 
 use super::{config as config_cmd, plugins as plugins_cmd};
@@ -26,6 +24,24 @@ pub(crate) struct DoctorCommandContext<'a> {
     pub(crate) auth: &'a AuthState,
     pub(crate) themes: &'a ThemeCatalog,
     pub(crate) last_failure: Option<&'a LastFailure>,
+}
+
+impl<'a> DoctorCommandContext<'a> {
+    pub(crate) fn from_parts(
+        runtime: &'a AppRuntime,
+        session: &'a AppSession,
+        clients: &'a AppClients,
+        ui: &'a UiState,
+    ) -> Self {
+        Self {
+            config: config_cmd::ConfigReadContext::from_parts(runtime, session, ui),
+            plugins: plugins_cmd::PluginsCommandContext::from_parts(runtime, clients),
+            ui,
+            auth: &runtime.auth,
+            themes: &runtime.themes,
+            last_failure: session.last_failure.as_ref(),
+        }
+    }
 }
 
 pub(crate) fn run_doctor_command(
@@ -50,10 +66,10 @@ pub(crate) fn run_doctor_command(
                 },
             )
         }
-        DoctorCommands::Last => Ok(CliCommandResult::document(render_last_failure_document(
+        DoctorCommands::Last => Ok(render_last_failure_document(
             context.ui,
             context.last_failure,
-        ))),
+        )),
         DoctorCommands::Theme => {
             ensure_builtin_visible_for(context.auth, CMD_THEME)?;
             Ok(CliCommandResult::output(
@@ -106,14 +122,11 @@ fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult>
     }
 
     if matches!(context.ui.render_settings.format, OutputFormat::Json) {
-        return Ok(CliCommandResult::document_with_format(
-            document_from_json(doctor_report_json_value(&sections)),
-            Some(OutputFormat::Json),
-        ));
+        return Ok(CliCommandResult::json(doctor_report_json_value(&sections)));
     }
 
     if sections.is_empty() {
-        return Ok(CliCommandResult::document(Document::default()));
+        return Ok(CliCommandResult::text(String::new()));
     }
 
     Ok(CliCommandResult::guide_with_output(
@@ -196,9 +209,12 @@ fn theme_doctor_rows(themes: &ThemeCatalog) -> Vec<Row> {
         .collect()
 }
 
-fn render_last_failure_document(ui: &UiState, last_failure: Option<&LastFailure>) -> Document {
+fn render_last_failure_document(
+    ui: &UiState,
+    last_failure: Option<&LastFailure>,
+) -> crate::app::CliCommandResult {
     let Some(last) = last_failure else {
-        return document_from_text("No recorded REPL failure in this session.\n");
+        return CliCommandResult::text("No recorded REPL failure in this session.\n");
     };
 
     if matches!(ui.render_settings.format, OutputFormat::Json) {
@@ -208,7 +224,7 @@ fn render_last_failure_document(ui: &UiState, last_failure: Option<&LastFailure>
             "summary": last.summary,
             "detail": last.detail,
         });
-        return document_from_json(payload);
+        return CliCommandResult::json(payload);
     }
 
     let mut out = String::new();
@@ -224,7 +240,7 @@ fn render_last_failure_document(ui: &UiState, last_failure: Option<&LastFailure>
             out.push('\n');
         }
     }
-    document_from_text(&out)
+    CliCommandResult::text(out)
 }
 
 #[cfg(test)]
@@ -241,9 +257,8 @@ mod tests {
     use crate::core::output::OutputFormat;
     use crate::plugin::PluginManager;
     use crate::ui::RenderSettings;
-    use crate::ui::document::{Block, LinePart};
     use crate::ui::messages::MessageLevel;
-    use crate::ui::theme_loader::{ThemeCatalog, ThemeLoadIssue};
+    use crate::ui::theme_catalog::{ThemeCatalog, ThemeLoadIssue};
     use serde_json::Value;
     use std::path::PathBuf;
 
@@ -309,7 +324,10 @@ mod tests {
     #[test]
     fn doctor_last_rendering_covers_empty_text_debug_and_json_modes_unit() {
         let empty = render_last_failure_document(&ui_state(OutputFormat::Table, 0), None);
-        assert!(render_line_blocks(&empty.blocks).contains("No recorded REPL failure"));
+        let Some(ReplCommandOutput::Text(empty_text)) = empty.output else {
+            panic!("expected text output");
+        };
+        assert!(empty_text.contains("No recorded REPL failure"));
 
         let failure = LastFailure {
             command_line: "ldap user nope".to_string(),
@@ -319,31 +337,35 @@ mod tests {
 
         let verbose =
             render_last_failure_document(&ui_state(OutputFormat::Table, 1), Some(&failure));
-        let verbose_rendered = render_line_blocks(&verbose.blocks);
-        assert!(verbose_rendered.contains("Command: ldap user nope"));
-        assert!(verbose_rendered.contains("Error:   request failed"));
-        assert!(verbose_rendered.contains("Detail:"));
-        assert!(verbose_rendered.contains("backend said no"));
+        let Some(ReplCommandOutput::Text(verbose_text)) = verbose.output else {
+            panic!("expected text output");
+        };
+        assert!(verbose_text.contains("Command: ldap user nope"));
+        assert!(verbose_text.contains("Error:   request failed"));
+        assert!(verbose_text.contains("Detail:"));
+        assert!(verbose_text.contains("backend said no"));
 
         let compact =
             render_last_failure_document(&ui_state(OutputFormat::Table, 0), Some(&failure));
-        let compact_rendered = render_line_blocks(&compact.blocks);
-        assert!(compact_rendered.contains("Error:   request failed"));
-        assert!(!compact_rendered.contains("Detail:"));
+        let Some(ReplCommandOutput::Text(compact_text)) = compact.output else {
+            panic!("expected text output");
+        };
+        assert!(compact_text.contains("Error:   request failed"));
+        assert!(!compact_text.contains("Detail:"));
 
         let json_failure = LastFailure {
             command_line: "plugins refresh".to_string(),
             summary: "plugin failed".to_string(),
             detail: "plugin failed".to_string(),
         };
-        let json_document =
+        let json_result =
             render_last_failure_document(&ui_state(OutputFormat::Json, 0), Some(&json_failure));
-        let Some(Block::Json(json)) = json_document.blocks.first() else {
-            panic!("expected json block");
+        let Some(ReplCommandOutput::Json(json)) = json_result.output else {
+            panic!("expected json output");
         };
-        assert_eq!(json.payload["status"], Value::String("error".to_string()));
+        assert_eq!(json["status"], Value::String("error".to_string()));
         assert_eq!(
-            json.payload["command"],
+            json["command"],
             Value::String("plugins refresh".to_string())
         );
 
@@ -380,15 +402,12 @@ mod tests {
             },
         )
         .expect("doctor all should succeed");
-        let Some(ReplCommandOutput::Document { document, .. }) = visible.output else {
-            panic!("expected document output");
+        let Some(ReplCommandOutput::Json(json)) = visible.output else {
+            panic!("expected json output");
         };
-        let Some(Block::Json(json)) = document.blocks.first() else {
-            panic!("expected json block");
-        };
-        assert!(json.payload.get("config").is_some());
-        assert!(json.payload.get("plugins").is_some());
-        assert!(json.payload.get("theme").is_some());
+        assert!(json.get("config").is_some());
+        assert!(json.get("plugins").is_some());
+        assert!(json.get("theme").is_some());
 
         let filtered = run_doctor_command(
             doctor_context(OutputFormat::Json, Some("theme")),
@@ -397,15 +416,12 @@ mod tests {
             },
         )
         .expect("doctor all should succeed");
-        let Some(ReplCommandOutput::Document { document, .. }) = filtered.output else {
-            panic!("expected document output");
+        let Some(ReplCommandOutput::Json(json)) = filtered.output else {
+            panic!("expected json output");
         };
-        let Some(Block::Json(json)) = document.blocks.first() else {
-            panic!("expected json block");
-        };
-        assert!(json.payload.get("theme").is_some());
-        assert!(json.payload.get("config").is_none());
-        assert!(json.payload.get("plugins").is_none());
+        assert!(json.get("theme").is_some());
+        assert!(json.get("config").is_none());
+        assert!(json.get("plugins").is_none());
 
         let theme = run_doctor_command(
             doctor_context(OutputFormat::Table, Some("theme")),
@@ -424,12 +440,13 @@ mod tests {
             },
         )
         .expect("doctor all should succeed");
-        let Some(ReplCommandOutput::Guide(guide)) = table.output else {
+        let Some(ReplCommandOutput::Output(guide)) = table.output else {
             panic!("expected guide output");
         };
         assert!(
             guide
-                .guide
+                .source_guide
+                .expect("expected semantic guide payload")
                 .sections
                 .iter()
                 .all(|section| section.data.is_some())
@@ -469,21 +486,5 @@ mod tests {
         assert_eq!(def.name, "doctor");
         assert_eq!(def.sort_key.as_deref(), Some("30"));
         assert_eq!(names, vec!["all", "config", "last", "plugins", "theme"]);
-    }
-
-    fn render_line_blocks(blocks: &[Block]) -> String {
-        blocks
-            .iter()
-            .filter_map(|block| match block {
-                Block::Line(line) => Some(
-                    line.parts
-                        .iter()
-                        .map(|LinePart { text, .. }| text.as_str())
-                        .collect::<String>(),
-                ),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 }

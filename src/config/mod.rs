@@ -111,6 +111,7 @@
 
 mod bootstrap;
 mod core;
+mod defaults;
 mod error;
 mod explain;
 mod interpolate;
@@ -121,6 +122,7 @@ mod selector;
 mod store;
 
 pub use core::*;
+pub use defaults::*;
 pub use error::*;
 pub use loader::*;
 pub use resolver::*;

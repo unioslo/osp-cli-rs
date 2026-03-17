@@ -14,6 +14,14 @@ mod bootstrap_registry_contracts {
         assert!(schema.is_known_key("profile.default"));
         assert!(!schema.is_runtime_visible_key("profile.default"));
         assert!(schema.is_runtime_visible_key("profile.active"));
+        assert_eq!(
+            schema.doc_for_key("profile.default"),
+            Some("Default profile selected when no override is provided")
+        );
+        assert_eq!(
+            schema.doc_for_key("profile.active"),
+            Some("Active profile derived during resolution")
+        );
 
         let err = validate_key_scope("profile.default", &Scope::profile("work"))
             .expect_err("profile scope should be rejected");
@@ -122,6 +130,7 @@ mod schema_value_contracts {
             read_only,
             crate::config::ConfigError::ReadOnlyConfigKey { key, .. } if key == "profile.active"
         ));
+        assert_eq!(schema.doc_for_key("ui.format"), Some("Default output format"));
     }
 
     #[test]

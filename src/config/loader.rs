@@ -516,6 +516,16 @@ impl LoaderPipeline {
         Ok(layers)
     }
 
+    /// Loads all layers and returns a resolver configured with this pipeline's
+    /// schema.
+    pub fn resolver(&self) -> Result<ConfigResolver, ConfigError> {
+        let layers = self.load_layers()?;
+        Ok(ConfigResolver::from_loaded_layers_with_schema(
+            layers,
+            self.schema.clone(),
+        ))
+    }
+
     /// Loads all layers and resolves them into a runtime config.
     ///
     /// # Examples
@@ -534,10 +544,7 @@ impl LoaderPipeline {
     /// assert_eq!(resolved.get_string("theme.name"), Some("dracula"));
     /// ```
     pub fn resolve(&self, options: ResolveOptions) -> Result<ResolvedConfig, ConfigError> {
-        let layers = self.load_layers()?;
-        let mut resolver = ConfigResolver::from_loaded_layers(layers);
-        resolver.set_schema(self.schema.clone());
-        resolver.resolve(options)
+        self.resolver()?.resolve(options)
     }
 }
 
