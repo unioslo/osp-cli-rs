@@ -51,7 +51,8 @@ pub(crate) fn run_inline_builtin_command(
     let ui = invocation
         .map(|invocation| invocation.ui.clone())
         .unwrap_or_else(|| runtime.ui.clone());
-    BuiltinExecutor::new(runtime, session, clients).dispatch(BuiltinSurface::Inline(ui), command)
+    BuiltinExecutor::new(runtime, session, clients)
+        .dispatch(BuiltinSurface::Inline(Box::new(ui)), command)
 }
 
 pub(crate) fn run_repl_builtin_command(
@@ -199,7 +200,7 @@ impl<'a> BuiltinExecutor<'a> {
 
 enum BuiltinSurface<'a> {
     Cli(&'a UiState),
-    Inline(UiState),
+    Inline(Box<UiState>),
     Repl {
         history: &'a SharedHistory,
         ui: &'a UiState,

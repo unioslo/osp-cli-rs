@@ -136,31 +136,6 @@ fn repl_help_result(
     )?))
 }
 
-fn execute_repl_help_dispatch(
-    runtime: &mut AppRuntime,
-    session: &mut AppSession,
-    clients: &AppClients,
-    line: &str,
-    stages: Vec<String>,
-    result: CliCommandResult,
-    invocation: &ResolvedInvocation,
-    sink: &mut dyn UiSink,
-) -> Result<super::command::ExecutedReplCommand> {
-    execute_repl_command_dispatch(
-        runtime,
-        session,
-        clients,
-        None,
-        line,
-        ParsedReplDispatch::Help {
-            result: Box::new(result),
-            effective: Box::new(invocation.clone()),
-            stages,
-        },
-        sink,
-    )
-}
-
 pub(super) fn handle_repl_exit_request(session: &mut AppSession) -> ReplLineResult {
     match session.request_repl_exit() {
         crate::app::session::ReplExitTransition::ExitRoot => ReplLineResult::Exit(0),
@@ -230,14 +205,17 @@ pub(super) fn render_repl_help_for_scope(
     sink: &mut dyn UiSink,
 ) -> Result<String> {
     let result = repl_help_command_result_for_scope(runtime, session, clients, invocation)?;
-    match execute_repl_help_dispatch(
+    match execute_repl_command_dispatch(
         runtime,
         session,
         clients,
+        None,
         line,
-        stages.to_vec(),
-        result,
-        invocation,
+        ParsedReplDispatch::Help {
+            result: Box::new(result),
+            effective: Box::new(invocation.clone()),
+            stages: stages.to_vec(),
+        },
         sink,
     )?
     .result

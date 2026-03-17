@@ -134,11 +134,13 @@ pub(crate) fn run_history_repl_command(
     match args.command {
         HistoryCommands::List => {
             let rows = history_entries_rows(history.list_entries_for(scope.prefix.as_deref()));
-            Ok(ReplCommandOutput::Output(StructuredCommandOutput {
-                source_guide: None,
-                output: rows_to_output_result(rows),
-                format_hint: None,
-            }))
+            Ok(ReplCommandOutput::Output(Box::new(
+                StructuredCommandOutput {
+                    source_guide: None,
+                    output: rows_to_output_result(rows),
+                    format_hint: None,
+                },
+            )))
         }
         HistoryCommands::Prune(HistoryPruneArgs { keep }) => {
             let removed = history

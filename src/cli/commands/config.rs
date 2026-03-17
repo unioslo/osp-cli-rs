@@ -145,13 +145,13 @@ fn run_config_get(context: ConfigReadContext<'_>, args: ConfigGetArgs) -> Result
         Some(rows) => Ok(CliCommandResult {
             exit_code: 0,
             messages,
-            output: Some(ReplCommandOutput::Output(
+            output: Some(ReplCommandOutput::Output(Box::new(
                 crate::app::StructuredCommandOutput {
                     source_guide: None,
                     output: rows_to_output_result(rows),
                     format_hint: None,
                 },
-            )),
+            ))),
             stderr_text: None,
             failure_report: None,
         }),
@@ -508,11 +508,11 @@ fn run_config_set(
             ReplCommandOutput::Text(render_config_explain_text(&explain, &config, false))
         }
     } else {
-        ReplCommandOutput::Output(crate::app::StructuredCommandOutput {
+        ReplCommandOutput::Output(Box::new(crate::app::StructuredCommandOutput {
             source_guide: None,
             output: rows_to_output_result(rows),
             format_hint: None,
-        })
+        }))
     };
 
     messages.success(format!(
@@ -668,13 +668,13 @@ fn run_config_unset(
     Ok(CliCommandResult {
         exit_code: 0,
         messages,
-        output: Some(ReplCommandOutput::Output(
+        output: Some(ReplCommandOutput::Output(Box::new(
             crate::app::StructuredCommandOutput {
                 source_guide: None,
                 output: rows_to_output_result(rows),
                 format_hint: None,
             },
-        )),
+        ))),
         stderr_text: None,
         failure_report: None,
     })

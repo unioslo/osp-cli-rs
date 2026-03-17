@@ -673,106 +673,6 @@ impl Default for AppSession {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use serde_json::Value;
-
-    use super::{AppSession, ReplExitTransition};
-    use crate::config::ConfigLayer;
-
-    #[test]
-    fn request_repl_exit_tracks_root_and_nested_scope_transitions_unit() {
-        let mut root = AppSession::with_cache_limit(4);
-        assert!(matches!(
-            root.request_repl_exit(),
-            ReplExitTransition::ExitRoot
-        ));
-
-        let mut nested = AppSession::with_cache_limit(4);
-        nested.enter_repl_scope("ldap");
-        assert!(matches!(
-            nested.request_repl_exit(),
-            ReplExitTransition::LeftShell {
-                now_root: true,
-                frame,
-            } if frame.command() == "ldap"
-        ));
-        assert!(nested.scope.is_root());
-
-        let mut deep = AppSession::with_cache_limit(4);
-        deep.enter_repl_scope("ldap");
-        deep.enter_repl_scope("user");
-        assert!(matches!(
-            deep.request_repl_exit(),
-            ReplExitTransition::LeftShell {
-                now_root: false,
-                frame,
-            } if frame.command() == "user"
-        ));
-        assert_eq!(deep.scope.commands(), vec!["ldap".to_string()]);
-    }
-
-    #[test]
-    fn rebuild_state_round_trip_preserves_rows_and_scope_unit() {
-        let mut session = AppSession::with_cache_limit(4)
-            .with_prompt_prefix("osp-dev")
-            .with_history_enabled(false);
-        let mut overrides = ConfigLayer::default();
-        overrides.set("ui.format", "json");
-        session = session.with_config_overrides(overrides);
-        session.max_cached_results = 7;
-        session.enter_repl_scope("ldap");
-        session.enter_repl_scope("user");
-        session.record_prompt_timing(2, Duration::from_secs(3), None, None, None);
-        session.startup_prompt_timing_pending = false;
-
-        let mut row = crate::core::row::Row::new();
-        row.insert("name".to_string(), Value::from("alice"));
-        session.record_result("list users", vec![row.clone()]);
-        session.record_failure("list users", "Command failed", "detail");
-        session.record_cached_command("config show", &super::CliCommandResult::text("cached"));
-
-        let snapshot = session.capture_rebuild_state();
-        let mut restored = AppSession::with_cache_limit(1);
-        restored.restore_rebuild_state(snapshot);
-
-        assert_eq!(restored.prompt_prefix, "osp-dev");
-        assert!(!restored.history_enabled);
-        assert_eq!(restored.max_cached_results, 7);
-        assert_eq!(
-            restored.scope.commands(),
-            vec!["ldap".to_string(), "user".to_string()]
-        );
-        assert_eq!(
-            restored.history_shell.prefix(),
-            Some("ldap user ".to_string())
-        );
-        assert_eq!(restored.cached_rows("list users"), Some(&[row][..]));
-        assert!(restored.command_cache.is_empty());
-        assert!(restored.command_cache_order.is_empty());
-        assert_eq!(
-            restored
-                .last_failure
-                .as_ref()
-                .map(|failure| failure.summary.as_str()),
-            Some("Command failed")
-        );
-        assert_eq!(
-            restored.prompt_timing.badge().map(|badge| badge.level),
-            Some(2)
-        );
-        assert!(!restored.startup_prompt_timing_pending);
-        assert_eq!(restored.config_overrides.entries().len(), 1);
-        assert_eq!(restored.config_overrides.entries()[0].key, "ui.format");
-        assert_eq!(
-            restored.config_overrides.entries()[0].value.to_string(),
-            "json"
-        );
-    }
-}
-
 /// Builder for [`AppSession`].
 ///
 /// Prefer this when callers want a neutral session-construction entrypoint and
@@ -1229,5 +1129,105 @@ impl AppStateBuilder {
             },
             session,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::Value;
+
+    use super::{AppSession, ReplExitTransition};
+    use crate::config::ConfigLayer;
+
+    #[test]
+    fn request_repl_exit_tracks_root_and_nested_scope_transitions_unit() {
+        let mut root = AppSession::with_cache_limit(4);
+        assert!(matches!(
+            root.request_repl_exit(),
+            ReplExitTransition::ExitRoot
+        ));
+
+        let mut nested = AppSession::with_cache_limit(4);
+        nested.enter_repl_scope("ldap");
+        assert!(matches!(
+            nested.request_repl_exit(),
+            ReplExitTransition::LeftShell {
+                now_root: true,
+                frame,
+            } if frame.command() == "ldap"
+        ));
+        assert!(nested.scope.is_root());
+
+        let mut deep = AppSession::with_cache_limit(4);
+        deep.enter_repl_scope("ldap");
+        deep.enter_repl_scope("user");
+        assert!(matches!(
+            deep.request_repl_exit(),
+            ReplExitTransition::LeftShell {
+                now_root: false,
+                frame,
+            } if frame.command() == "user"
+        ));
+        assert_eq!(deep.scope.commands(), vec!["ldap".to_string()]);
+    }
+
+    #[test]
+    fn rebuild_state_round_trip_preserves_rows_and_scope_unit() {
+        let mut session = AppSession::with_cache_limit(4)
+            .with_prompt_prefix("osp-dev")
+            .with_history_enabled(false);
+        let mut overrides = ConfigLayer::default();
+        overrides.set("ui.format", "json");
+        session = session.with_config_overrides(overrides);
+        session.max_cached_results = 7;
+        session.enter_repl_scope("ldap");
+        session.enter_repl_scope("user");
+        session.record_prompt_timing(2, Duration::from_secs(3), None, None, None);
+        session.startup_prompt_timing_pending = false;
+
+        let mut row = crate::core::row::Row::new();
+        row.insert("name".to_string(), Value::from("alice"));
+        session.record_result("list users", vec![row.clone()]);
+        session.record_failure("list users", "Command failed", "detail");
+        session.record_cached_command("config show", &super::CliCommandResult::text("cached"));
+
+        let snapshot = session.capture_rebuild_state();
+        let mut restored = AppSession::with_cache_limit(1);
+        restored.restore_rebuild_state(snapshot);
+
+        assert_eq!(restored.prompt_prefix, "osp-dev");
+        assert!(!restored.history_enabled);
+        assert_eq!(restored.max_cached_results, 7);
+        assert_eq!(
+            restored.scope.commands(),
+            vec!["ldap".to_string(), "user".to_string()]
+        );
+        assert_eq!(
+            restored.history_shell.prefix(),
+            Some("ldap user ".to_string())
+        );
+        assert_eq!(restored.cached_rows("list users"), Some(&[row][..]));
+        assert!(restored.command_cache.is_empty());
+        assert!(restored.command_cache_order.is_empty());
+        assert_eq!(
+            restored
+                .last_failure
+                .as_ref()
+                .map(|failure| failure.summary.as_str()),
+            Some("Command failed")
+        );
+        assert_eq!(
+            restored.prompt_timing.badge().map(|badge| badge.level),
+            Some(2)
+        );
+        assert!(!restored.startup_prompt_timing_pending);
+        assert_eq!(restored.config_overrides.entries().len(), 1);
+        assert_eq!(restored.config_overrides.entries()[0].key, "ui.format");
+        assert_eq!(
+            restored.config_overrides.entries()[0].value.to_string(),
+            "json"
+        );
     }
 }

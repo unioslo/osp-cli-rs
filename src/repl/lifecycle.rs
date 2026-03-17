@@ -36,8 +36,8 @@ impl ReplLoopState {
             app::rebuild_repl_in_place(state)?;
         }
         ReplCycle::prepare(
-            &mut state.runtime,
-            &mut state.session,
+            &state.runtime,
+            &state.session,
             &state.clients,
             self.show_intro,
         )

@@ -46,7 +46,7 @@ struct ParsedExternalInvocation {
 }
 
 enum ExternalParse {
-    Handled(CliCommandResult),
+    Handled(Box<CliCommandResult>),
     Invocation(ParsedExternalInvocation),
 }
 
@@ -86,7 +86,7 @@ pub(crate) fn run_external_command_with_help_renderer(
                 tokens.first().map(String::as_str).unwrap_or("external")
             )
         })? {
-        ExternalParse::Handled(result) => return Ok(result),
+        ExternalParse::Handled(result) => return Ok(*result),
         ExternalParse::Invocation(parsed) => parsed,
     };
 
@@ -177,9 +177,9 @@ fn parse_external_invocation(
         ReplViewContext::from_parts(runtime, session),
         &parsed.stages,
     ) {
-        return Ok(ExternalParse::Handled(CliCommandResult::guide(
+        return Ok(ExternalParse::Handled(Box::new(CliCommandResult::guide(
             GuideView::from_text(&help),
-        )));
+        ))));
     }
 
     let inline_command = match parse_inline_command_tokens(&parsed.tokens) {
@@ -190,9 +190,9 @@ fn parse_external_invocation(
             {
                 let mut view = GuideView::from_text(&err.to_string());
                 extend_with_invocation_help(&mut view, help_level);
-                return Ok(ExternalParse::Handled(CliCommandResult::guide(
+                return Ok(ExternalParse::Handled(Box::new(CliCommandResult::guide(
                     view.filtered_for_help_level(help_level),
-                )));
+                ))));
             }
             return Err(miette!(err.to_string()));
         }
@@ -392,7 +392,7 @@ mod tests {
             .expect("help should parse");
         assert!(matches!(
             parsed,
-            ExternalParse::Handled(CliCommandResult {
+            ExternalParse::Handled(result) if matches!(*result, CliCommandResult {
                 exit_code: 0,
                 output: Some(ReplCommandOutput::Output(_)),
                 ..

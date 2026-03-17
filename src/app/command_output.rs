@@ -21,7 +21,7 @@ use crate::cli::rows::output::{
 
 #[derive(Debug, Clone)]
 pub(crate) enum ReplCommandOutput {
-    Output(StructuredCommandOutput),
+    Output(Box<StructuredCommandOutput>),
     Json(serde_json::Value),
     Text(String),
 }
@@ -73,11 +73,13 @@ impl CliCommandResult {
         Self {
             exit_code: 0,
             messages: MessageBuffer::default(),
-            output: Some(ReplCommandOutput::Output(StructuredCommandOutput {
-                source_guide: None,
-                output,
-                format_hint,
-            })),
+            output: Some(ReplCommandOutput::Output(Box::new(
+                StructuredCommandOutput {
+                    source_guide: None,
+                    output,
+                    format_hint,
+                },
+            ))),
             stderr_text: None,
             failure_report: None,
         }
@@ -122,11 +124,13 @@ impl CliCommandResult {
         Self {
             exit_code: 0,
             messages: MessageBuffer::default(),
-            output: Some(ReplCommandOutput::Output(StructuredCommandOutput {
-                source_guide: Some(guide),
-                output,
-                format_hint,
-            })),
+            output: Some(ReplCommandOutput::Output(Box::new(
+                StructuredCommandOutput {
+                    source_guide: Some(guide),
+                    output,
+                    format_hint,
+                },
+            ))),
             stderr_text: None,
             failure_report: None,
         }
@@ -144,11 +148,13 @@ impl CliCommandResult {
             PreparedPluginResponse::Output(prepared) => Self {
                 exit_code: 0,
                 messages: prepared.messages,
-                output: Some(ReplCommandOutput::Output(StructuredCommandOutput {
-                    source_guide: None,
-                    output: prepared.output,
-                    format_hint: prepared.format_hint,
-                })),
+                output: Some(ReplCommandOutput::Output(Box::new(
+                    StructuredCommandOutput {
+                        source_guide: None,
+                        output: prepared.output,
+                        format_hint: prepared.format_hint,
+                    },
+                ))),
                 stderr_text: None,
                 failure_report: None,
             },
@@ -406,7 +412,7 @@ pub(crate) fn render_repl_command_with_runtime(
 
     let rendered = match output {
         Some(ReplCommandOutput::Output(structured)) => {
-            render_repl_structured_command(runtime, session, line, stages, structured, sink)?
+            render_repl_structured_command(runtime, session, line, stages, *structured, sink)?
         }
         Some(ReplCommandOutput::Text(text)) => {
             if stages.is_empty() {

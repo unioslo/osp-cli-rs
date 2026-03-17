@@ -114,7 +114,7 @@ mod tests {
                 key: "display_name".to_string(),
                 value: "Alice Example".to_string(),
                 indent: ">".to_string(),
-                value_spacing: " ".repeat(1),
+                value_spacing: " ".to_string(),
             }
         );
     }

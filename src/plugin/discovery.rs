@@ -96,10 +96,7 @@ enum DiscoveryPolicy {
 }
 
 impl DiscoveryPolicy {
-    fn cache<'a>(
-        self,
-        manager: &'a PluginManager,
-    ) -> &'a std::sync::RwLock<Option<Arc<[DiscoveredPlugin]>>> {
+    fn cache(self, manager: &PluginManager) -> &std::sync::RwLock<Option<Arc<[DiscoveredPlugin]>>> {
         match self {
             Self::Passive => &manager.discovered_cache,
             Self::Dispatch => &manager.dispatch_discovered_cache,
@@ -615,13 +612,15 @@ fn finalize_seeded_candidate(
     );
     apply_describe_phase(
         &mut candidate.plugin,
-        candidate.source,
-        manifest_state,
-        candidate.manifest_entry.as_ref(),
-        &candidate.executable,
-        policy,
+        DescribePhaseInput {
+            source: candidate.source,
+            manifest_state,
+            manifest_entry: candidate.manifest_entry.as_ref(),
+            executable: &candidate.executable,
+            policy,
+            process_timeout,
+        },
         describe_cache,
-        process_timeout,
     );
 
     tracing::debug!(
@@ -694,26 +693,30 @@ fn apply_manifest_discovery_issue(
     }
 }
 
+struct DescribePhaseInput<'a> {
+    source: PluginSource,
+    manifest_state: &'a ManifestState,
+    manifest_entry: Option<&'a ManifestPlugin>,
+    executable: &'a Path,
+    policy: DiscoveryPolicy,
+    process_timeout: Duration,
+}
+
 fn apply_describe_phase(
     plugin: &mut DiscoveredPlugin,
-    source: PluginSource,
-    manifest_state: &ManifestState,
-    manifest_entry: Option<&ManifestPlugin>,
-    executable: &Path,
-    policy: DiscoveryPolicy,
+    input: DescribePhaseInput<'_>,
     describe_cache: &mut DescribeCacheState<'_>,
-    process_timeout: Duration,
 ) {
     match resolve_describe_phase(
-        source,
-        manifest_state,
-        manifest_entry,
-        executable,
-        policy,
+        input.source,
+        input.manifest_state,
+        input.manifest_entry,
+        input.executable,
+        input.policy,
         describe_cache,
-        process_timeout,
+        input.process_timeout,
     ) {
-        Ok(Some(describe)) => apply_describe_metadata(plugin, &describe, manifest_entry),
+        Ok(Some(describe)) => apply_describe_metadata(plugin, &describe, input.manifest_entry),
         Ok(None) => {}
         Err(err) => super::state::merge_issue(&mut plugin.issue, err.to_string()),
     }
