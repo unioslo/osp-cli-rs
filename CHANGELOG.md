@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The current release flow requires one versioned changelog section and one
 matching `docs/releases/vX.Y.Z.md` file before a tag can be published.
 
+## [1.5.1] - 2026-03-17
+
+- Stabilizes the internal host, UI, config, and REPL architecture with a broad behavior-preserving cleanup that centralizes ownership without changing the public release shape.
+- Tightens rustdoc, release metadata, and local gate discipline so public API examples, release checks, and coverage/readiness contracts stay aligned with the crate surface.
+- Removes low-signal duplicate tests, restores changed-file coverage on the app host facade, and keeps the full test and coverage gates green after the internal reorganization.
+
 ## [1.4.5] - 2026-03-08
 
 - First real public binary release of the Rust `osp` CLI, aligned to the current `osprov-cli` version line.
