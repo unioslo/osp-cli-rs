@@ -4,7 +4,7 @@ use super::{
     ClipboardError, ClipboardService,
     backend::{
         ClipboardCommand, OSC52_MAX_BYTES_DEFAULT, base64_encode, base64_encoded_len,
-        copy_via_command, osc52_enabled, osc52_max_bytes, platform_backends,
+        copy_via_command, osc52_enabled, osc52_max_bytes, osc52_payload, platform_backends,
     },
 };
 
@@ -247,9 +247,66 @@ fn clipboard_service_builders_toggle_osc52_preference() {
 }
 
 #[test]
-fn copy_via_osc52_writer_is_callable_unit() {
+fn clipboard_plan_prefers_osc52_only_when_tty_and_payload_fit_unit() {
     let _guard = acquire_env_lock();
-    ClipboardService::new()
-        .copy_via_osc52("ping")
-        .expect("osc52 writer should succeed on stdout");
+    let osc52_original = std::env::var("OSC52").ok();
+    let max_original = std::env::var("OSC52_MAX_BYTES").ok();
+    set_env_for_test("OSC52", Some("yes"));
+    set_env_for_test("OSC52_MAX_BYTES", Some("128"));
+
+    let service = ClipboardService::new();
+    let tty_plan = service.plan_copy("hello", true);
+    assert!(tty_plan.use_osc52);
+    assert_eq!(tty_plan.attempts, vec!["osc52".to_string()]);
+
+    let non_tty_plan = service.plan_copy("hello", false);
+    assert!(!non_tty_plan.use_osc52);
+
+    set_env_for_test("OSC52_MAX_BYTES", Some("4"));
+    let oversized_plan = service.plan_copy("hello", true);
+    assert!(!oversized_plan.use_osc52);
+    assert!(oversized_plan.attempts[0].starts_with("osc52 (payload"));
+
+    set_env_for_test("OSC52", osc52_original.as_deref());
+    set_env_for_test("OSC52_MAX_BYTES", max_original.as_deref());
+}
+
+#[test]
+fn clipboard_command_loop_reports_success_and_real_failures_unit() {
+    let service = ClipboardService::new();
+    service
+        .copy_with_commands(
+            "hello",
+            Vec::new(),
+            vec![ClipboardCommand {
+                command: "/bin/sh",
+                args: &["-c", "cat >/dev/null"],
+            }],
+        )
+        .expect("shell sink should succeed");
+
+    let err = service
+        .copy_with_commands(
+            "hello",
+            vec!["osc52".to_string()],
+            vec![ClipboardCommand {
+                command: "/bin/sh",
+                args: &["-c", "echo nope >&2; exit 7"],
+            }],
+        )
+        .expect_err("non-zero clipboard command should fail");
+
+    assert!(matches!(
+        err,
+        ClipboardError::CommandFailed {
+            status: 7,
+            ref stderr,
+            ..
+        } if stderr.contains("nope")
+    ));
+}
+
+#[test]
+fn osc52_payload_wraps_encoded_text_without_touching_stdout_unit() {
+    assert_eq!(osc52_payload("ping"), "\u{1b}]52;c;cGluZw==\u{7}");
 }

@@ -18,6 +18,13 @@ pub struct ClipboardService {
     prefer_osc52: bool,
 }
 
+#[derive(Debug, Clone)]
+struct ClipboardPlan {
+    use_osc52: bool,
+    attempts: Vec<String>,
+    commands: Vec<backend::ClipboardCommand>,
+}
+
 impl Default for ClipboardService {
     fn default() -> Self {
         Self { prefer_osc52: true }
@@ -106,20 +113,57 @@ impl ClipboardService {
     ///
     /// Returns an error if no backend succeeds or if a backend fails after starting.
     pub fn copy_text(&self, text: &str) -> Result<(), ClipboardError> {
-        let mut attempts = Vec::new();
+        let plan = self.plan_copy(text, std::io::stdout().is_terminal());
+        if plan.use_osc52 {
+            return self.copy_via_osc52(text);
+        }
+        self.copy_with_commands(text, plan.attempts, plan.commands)
+    }
 
-        if self.prefer_osc52 && std::io::stdout().is_terminal() && backend::osc52_enabled() {
+    fn copy_via_osc52(&self, text: &str) -> Result<(), ClipboardError> {
+        let payload = backend::osc52_payload(text);
+        let mut stdout = std::io::stdout();
+        if let Err(err) = stdout.write_all(payload.as_bytes()) {
+            return Err(ClipboardError::Io(err.to_string()));
+        }
+        if let Err(err) = stdout.flush() {
+            return Err(ClipboardError::Io(err.to_string()));
+        }
+        Ok(())
+    }
+
+    fn plan_copy(&self, text: &str, stdout_is_tty: bool) -> ClipboardPlan {
+        let mut attempts = Vec::new();
+        let commands = backend::platform_backends();
+
+        if self.prefer_osc52 && stdout_is_tty && backend::osc52_enabled() {
             let max_bytes = backend::osc52_max_bytes();
             let encoded_len = backend::base64_encoded_len(text.len());
             if encoded_len <= max_bytes {
                 attempts.push("osc52".to_string());
-                self.copy_via_osc52(text)?;
-                return Ok(());
+                return ClipboardPlan {
+                    use_osc52: true,
+                    attempts,
+                    commands,
+                };
             }
             attempts.push(format!("osc52 (payload {encoded_len} > {max_bytes})"));
         }
 
-        for command in backend::platform_backends() {
+        ClipboardPlan {
+            use_osc52: false,
+            attempts,
+            commands,
+        }
+    }
+
+    fn copy_with_commands(
+        &self,
+        text: &str,
+        mut attempts: Vec<String>,
+        commands: Vec<backend::ClipboardCommand>,
+    ) -> Result<(), ClipboardError> {
+        for command in commands {
             attempts.push(command.command.to_string());
             match backend::copy_via_command(command, text) {
                 Ok(()) => return Ok(()),
@@ -129,16 +173,5 @@ impl ClipboardService {
         }
 
         Err(ClipboardError::NoBackendAvailable { attempts })
-    }
-
-    fn copy_via_osc52(&self, text: &str) -> Result<(), ClipboardError> {
-        let payload = backend::osc52_payload(text);
-        std::io::stdout()
-            .write_all(payload.as_bytes())
-            .map_err(|err| ClipboardError::Io(err.to_string()))?;
-        std::io::stdout()
-            .flush()
-            .map_err(|err| ClipboardError::Io(err.to_string()))?;
-        Ok(())
     }
 }
