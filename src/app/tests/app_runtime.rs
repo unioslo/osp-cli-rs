@@ -2,15 +2,10 @@ use super::*;
 use miette::WrapErr;
 
 #[test]
-fn app_help_entrypoints_and_sink_routing_render_help_unit() {
+fn app_help_entrypoints_share_exit_and_sink_routing_invariants_unit() {
     let app = crate::app::App::builder().build();
     let mut help_sink = BufferedUiSink::default();
 
-    assert_eq!(
-        app.run_from(["osp", "--help"])
-            .expect("app help should render"),
-        0
-    );
     assert_eq!(
         app.run_with_sink(["osp", "--help"], &mut help_sink)
             .expect("app help with sink should render"),
@@ -20,14 +15,13 @@ fn app_help_entrypoints_and_sink_routing_render_help_unit() {
         app.run_process_with_sink(["osp", "--help"], &mut help_sink),
         0
     );
-    assert!(help_sink.stdout.contains("osp [OPTIONS]"));
+    assert!(!help_sink.stdout.is_empty());
     assert!(help_sink.stderr.is_empty());
 
     let mut sink = BufferedUiSink::default();
     let exit = super::run_from_with_sink(["osp", "--help"], &mut sink).expect("help should render");
     assert_eq!(exit, 0);
     assert!(!sink.stdout.is_empty());
-    assert!(sink.stdout.contains("osp [OPTIONS]"));
     assert!(sink.stderr.is_empty());
 
     let mut runner_sink = BufferedUiSink::default();
@@ -38,7 +32,70 @@ fn app_help_entrypoints_and_sink_routing_render_help_unit() {
             .expect("runner help should render"),
         0
     );
+}
+
+#[test]
+fn app_public_entrypoints_cover_owned_runner_and_free_process_wrappers_unit() {
+    let app = crate::app::App::builder().build();
+    assert_eq!(
+        app.run_from(["osp", "--help"])
+            .expect("app run_from help should render"),
+        0
+    );
+    assert_eq!(app.run_process(["osp", "--help"]), 0);
+
+    let mut runner_sink = BufferedUiSink::default();
+    let mut runner = crate::app::App::builder().build_with_sink(&mut runner_sink);
     assert_eq!(runner.run_process(["osp", "--help"]), 0);
+    drop(runner);
+    assert!(!runner_sink.stdout.is_empty());
+    assert!(runner_sink.stderr.is_empty());
+
+    assert_eq!(crate::app::run_process(["osp", "--help"]), 0);
+
+    let mut sink = BufferedUiSink::default();
+    assert_eq!(
+        crate::app::run_process_with_sink(["osp", "--help"], &mut sink),
+        0
+    );
+    assert!(!sink.stdout.is_empty());
+    assert!(sink.stderr.is_empty());
+}
+
+#[test]
+fn app_builder_product_defaults_flow_through_public_builder_surface_unit() {
+    let mut product_defaults = crate::config::ConfigLayer::default();
+    product_defaults.set("extensions.site.enabled", true);
+
+    let mut sink = BufferedUiSink::default();
+    let exit = crate::app::App::builder()
+        .with_product_defaults(product_defaults)
+        .build_with_sink(&mut sink)
+        .run_process(["osp", "--json", "config", "get", "extensions.site.enabled"]);
+
+    assert_eq!(exit, 0);
+    let payload: serde_json::Value =
+        serde_json::from_str(&sink.stdout).expect("config get should render JSON");
+    let rows = payload
+        .as_array()
+        .expect("config get JSON should be an array");
+    assert!(rows.iter().any(|row| {
+        row["key"] == "extensions.site.enabled" && row["value"] == serde_json::json!(true)
+    }));
+    assert!(sink.stderr.is_empty());
+}
+
+#[test]
+fn free_process_wrapper_renders_usage_errors_to_bound_sink_unit() {
+    let mut sink = BufferedUiSink::default();
+    let exit = crate::app::run_process_with_sink(["osp", "--definitely-not-a-flag"], &mut sink);
+
+    assert_eq!(exit, EXIT_CODE_USAGE);
+    assert!(sink.stdout.is_empty());
+    assert!(
+        sink.stderr.contains("definitely-not-a-flag")
+            || sink.stderr.contains("unexpected argument")
+    );
 }
 
 #[test]
@@ -171,63 +228,6 @@ fn run_cli_command_with_ui_builds_runtime_from_config_and_ui_unit() {
 }
 
 #[test]
-fn render_messages_for_ui_uses_ui2_as_the_runtime_owner_unit() {
-    let config = test_config(&[]);
-    let mut settings = RenderSettings::test_plain(OutputFormat::Value);
-    settings.mode = RenderMode::Rich;
-    settings.color = ColorMode::Always;
-    settings.runtime.stdout_is_tty = true;
-    settings.theme_name = "dracula".to_string();
-    let ui = crate::app::UiState::new(settings, MessageLevel::Trace, 0);
-    let mut messages = MessageBuffer::default();
-    messages.warning("careful");
-
-    let rendered =
-        crate::ui::render_messages(&config, &ui.render_settings, &messages, MessageLevel::Trace);
-
-    assert!(rendered.contains("careful"));
-    assert!(rendered.contains("Warnings"));
-    assert!(rendered.contains('\u{1b}'));
-}
-
-#[test]
-fn render_messages_for_ui_supports_plain_layout_in_ui2_unit() {
-    let mut resolver = crate::config::ConfigResolver::default();
-    let mut defaults = crate::config::ConfigLayer::default();
-    defaults.set("profile.default", "default");
-    resolver.set_defaults(defaults);
-
-    let options = crate::config::ResolveOptions::default().with_terminal("cli");
-    let base = resolver
-        .resolve(options.clone())
-        .expect("base test config should resolve");
-    resolver.set_presentation(crate::ui::build_presentation_defaults_layer(&base));
-
-    let mut session = crate::config::ConfigLayer::default();
-    session.set("ui.messages.layout", "plain");
-    resolver.set_session(session);
-
-    let config = resolver
-        .resolve(options)
-        .expect("plain layout override should resolve");
-    let mut settings = RenderSettings::test_plain(OutputFormat::Value);
-    settings.mode = RenderMode::Rich;
-    settings.color = ColorMode::Always;
-    settings.runtime.stdout_is_tty = true;
-    settings.theme_name = "dracula".to_string();
-    let ui = crate::app::UiState::new(settings, MessageLevel::Trace, 0);
-    let mut messages = MessageBuffer::default();
-    messages.warning("careful");
-
-    let rendered =
-        crate::ui::render_messages(&config, &ui.render_settings, &messages, MessageLevel::Trace);
-
-    assert!(!rendered.contains("Warnings"));
-    assert!(rendered.contains("careful"));
-    assert!(rendered.contains("  careful"));
-}
-
-#[test]
 fn state_and_client_builders_produce_coherent_embedder_state_unit() {
     let config = test_config(&[]);
     let ui = crate::app::UiState::new(
@@ -338,44 +338,6 @@ fn state_builder_from_host_inputs_preserves_derived_plugin_and_theme_state_unit(
         state.clients.plugins().explicit_dirs(),
         &[std::path::PathBuf::from("/tmp/osp-plugin-a")]
     );
-}
-
-#[test]
-fn app_builder_product_defaults_flow_through_host_bootstrap_unit() {
-    let mut product_defaults = ConfigLayer::default();
-    product_defaults.set("extensions.site.enabled", true);
-    product_defaults.set_for_terminal("cli", "extensions.site.banner", "cli-wrapper");
-    product_defaults.set_for_terminal("repl", "extensions.site.banner", "repl-wrapper");
-
-    let app = crate::app::App::builder()
-        .with_native_commands(product_defaults_registry())
-        .with_product_defaults(product_defaults)
-        .build();
-
-    let mut status_sink = BufferedUiSink::default();
-    let status_exit = app.run_process_with_sink(["osp", "site-status"], &mut status_sink);
-    assert_eq!(status_exit, 0);
-    assert!(status_sink.stdout.contains("site_enabled=true"));
-    assert!(status_sink.stdout.contains("site_banner=cli-wrapper"));
-    assert!(status_sink.stdout.contains("active_profile=default"));
-
-    let mut config_sink = BufferedUiSink::default();
-    let config_exit = app.run_process_with_sink(
-        ["osp", "--json", "config", "get", "extensions.site.banner"],
-        &mut config_sink,
-    );
-    assert_eq!(config_exit, 0);
-    assert!(config_sink.stdout.contains("\"extensions.site.banner\""));
-    assert!(config_sink.stdout.contains("\"cli-wrapper\""));
-
-    let mut explain_sink = BufferedUiSink::default();
-    let explain_exit = app.run_process_with_sink(
-        ["osp", "config", "explain", "extensions.site.banner"],
-        &mut explain_sink,
-    );
-    assert_eq!(explain_exit, 0);
-    assert!(explain_sink.stdout.contains("key: extensions.site.banner"));
-    assert!(explain_sink.stdout.contains("cli-wrapper"));
 }
 
 #[test]

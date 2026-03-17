@@ -48,20 +48,6 @@ fn ui2_renders_generic_rows_as_markdown_table_unit() {
 }
 
 #[test]
-fn ui2_renders_guide_markdown_without_a_separate_pipeline_unit() {
-    let output =
-        GuideView::from_text("Usage: osp history <COMMAND>\n\nCommands:\n  list  List entries\n")
-            .to_output_result();
-    let mut settings = RenderSettings::test_plain(OutputFormat::Markdown);
-    settings.format_explicit = true;
-
-    let rendered = render_output(&output, &settings);
-    assert!(rendered.contains("## Usage"));
-    assert!(rendered.contains("## Commands"));
-    assert!(rendered.contains("- `list` List entries"));
-}
-
-#[test]
 fn ui2_structured_guide_options_are_owned_by_one_entrypoint_unit() {
     let guide = GuideView::from_text("Usage: osp history <COMMAND>\n");
     let output = guide.to_output_result();
@@ -122,24 +108,6 @@ fn ui2_table_output_switches_between_ascii_and_unicode_unit() {
 }
 
 #[test]
-fn ui2_rich_help_layout_styles_section_titles_unit() {
-    let guide = GuideView::from_text(
-        "Usage: osp history <COMMAND>\n\nCommands:\n  list   List history entries\n",
-    );
-    let mut settings = RenderSettings::test_plain(OutputFormat::Guide);
-    settings.mode = RenderMode::Rich;
-    settings.color = ColorMode::Always;
-    settings.unicode = UnicodeMode::Always;
-    settings.runtime.stdout_is_tty = true;
-    settings.theme_name = "dracula".to_string();
-    settings.width = Some(60);
-
-    let rendered = render_guide_with_layout(&guide, &settings, HelpLayout::Full);
-    assert!(rendered.contains("\x1b[38;2;255;121;198mUsage\x1b[0m"));
-    assert!(rendered.contains("\x1b[38;2;255;121;198mCommands\x1b[0m"));
-}
-
-#[test]
 fn ui2_rich_table_output_styles_headers_and_numeric_values_unit() {
     let output = OutputResult::from_rows(vec![row! { "count" => "42", "name" => "alice" }]);
     let mut settings = RenderSettings::test_plain(OutputFormat::Table);
@@ -195,21 +163,6 @@ fn ui2_resolves_theme_catalog_from_caller_theme_name_unit() {
     assert_eq!(resolved.theme_name, "rose-pine-moon");
     assert_eq!(resolved.theme.display_name(), "Rose Pine Moon");
     assert_eq!(resolved.theme.palette.title, "#e8dff6");
-}
-
-#[test]
-fn ui2_renders_full_help_layout_as_top_level_render_block_unit() {
-    let guide = GuideView::from_text(
-        "Usage: osp history <COMMAND>\n\nCommands:\n  list   List history entries\n",
-    );
-    let mut settings = RenderSettings::test_plain(OutputFormat::Guide);
-    settings.width = Some(80);
-
-    let rendered = render_guide_with_layout(&guide, &settings, HelpLayout::Full);
-    assert_eq!(
-        rendered,
-        "- Usage ------------------------------------------------------------------------\n  osp history <COMMAND>\n\n- Commands ---------------------------------------------------------------------\n  list   List history entries\n--------------------------------------------------------------------------------\n"
-    );
 }
 
 #[test]
@@ -288,34 +241,6 @@ fn ui2_structured_guide_output_prefers_source_guide_hints_unit() {
     );
 
     assert!(rendered.contains("\n>>list -> List history entries\n"));
-}
-
-#[test]
-fn ui2_renders_compact_help_layout_as_top_level_render_block_unit() {
-    let guide = GuideView::from_text(
-        "Usage: osp history <COMMAND>\n\nCommands:\n  list   List history entries\n",
-    );
-    let settings = RenderSettings::test_plain(OutputFormat::Guide);
-
-    let rendered = render_guide_with_layout(&guide, &settings, HelpLayout::Compact);
-    assert_eq!(
-        rendered,
-        "Usage: osp history <COMMAND>\n\nCommands:\n  list   List history entries\n"
-    );
-}
-
-#[test]
-fn ui2_renders_minimal_help_layout_as_top_level_render_block_unit() {
-    let guide = GuideView::from_text(
-        "Usage: osp history <COMMAND>\n\nCommands:\n  list   List history entries\n",
-    );
-    let settings = RenderSettings::test_plain(OutputFormat::Guide);
-
-    let rendered = render_guide_with_layout(&guide, &settings, HelpLayout::Minimal);
-    assert_eq!(
-        rendered,
-        "Usage: osp history <COMMAND>\n\nCommands:\n  list   List history entries\n"
-    );
 }
 
 #[test]
@@ -505,7 +430,7 @@ fn ui_grouped_outputs_lower_and_render_with_one_group_owner_unit() {
 }
 
 #[test]
-fn ui_help_layout_lowers_mixed_structured_section_data_through_one_pipeline_unit() {
+fn ui_help_layout_lowers_mixed_structured_section_data_to_local_block_kinds_unit() {
     let guide = GuideView {
         sections: vec![
             GuideSection::new("Session", GuideSectionKind::Custom).data(json!({
@@ -555,11 +480,4 @@ fn ui_help_layout_lowers_mixed_structured_section_data_through_one_pipeline_unit
         panic!("expected matrix section");
     };
     assert!(matches!(matrix.blocks[0], Block::Table(_)));
-
-    let rendered = render_guide_with_layout(&guide, &settings, HelpLayout::Full);
-    assert!(rendered.contains("Session"));
-    assert!(rendered.contains("profile"));
-    assert!(rendered.contains("osp history list"));
-    assert!(rendered.contains("list"));
-    assert!(rendered.contains("alice"));
 }

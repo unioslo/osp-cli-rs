@@ -125,8 +125,6 @@ fn make_completion_state_with_entries_and_native(
 
 struct TestNativeCommand;
 
-struct ProductDefaultsCommand;
-
 impl NativeCommand for TestNativeCommand {
     fn command(&self) -> Command {
         Command::new("ldap")
@@ -181,36 +179,6 @@ impl NativeCommand for TestNativeCommand {
 
 fn test_native_registry() -> NativeCommandRegistry {
     NativeCommandRegistry::new().with_command(TestNativeCommand)
-}
-
-impl NativeCommand for ProductDefaultsCommand {
-    fn command(&self) -> Command {
-        Command::new("site-status").about("Show wrapper defaults from resolved config")
-    }
-
-    fn execute(
-        &self,
-        _args: &[String],
-        context: &NativeCommandContext<'_>,
-    ) -> anyhow::Result<NativeCommandOutcome> {
-        let enabled = context
-            .config
-            .get_bool("extensions.site.enabled")
-            .unwrap_or(false);
-        let profile_banner = context
-            .config
-            .get_string("extensions.site.banner")
-            .unwrap_or("missing");
-
-        Ok(NativeCommandOutcome::Help(format!(
-            "site_enabled={enabled}\nsite_banner={profile_banner}\nactive_profile={}\n",
-            context.config.active_profile()
-        )))
-    }
-}
-
-fn product_defaults_registry() -> NativeCommandRegistry {
-    NativeCommandRegistry::new().with_command(ProductDefaultsCommand)
 }
 
 fn test_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {

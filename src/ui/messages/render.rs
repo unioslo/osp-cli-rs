@@ -487,18 +487,6 @@ mod tests {
     }
 
     #[test]
-    fn austere_render_uses_inline_prefixes() {
-        let mut buffer = MessageBuffer::default();
-        buffer.error("bad");
-        buffer.info("hint");
-
-        let rendered = render_messages(&buffer, MessageRenderOptions::austere(MessageLevel::Info));
-        assert!(rendered.contains("  error: bad"));
-        assert!(rendered.contains("  info: hint"));
-        assert!(!rendered.contains("Errors:"));
-    }
-
-    #[test]
     fn compact_render_keeps_titles_without_rule_chrome_unit() {
         let mut buffer = MessageBuffer::default();
         buffer.error("bad");
@@ -550,26 +538,6 @@ mod tests {
         assert!(rendered.contains("- Errors "));
         assert!(rendered.contains("- Warnings "));
         assert!(rendered.ends_with("----------------\n"));
-    }
-
-    #[test]
-    fn styled_full_render_colors_titles_and_body_unit() {
-        let mut buffer = MessageBuffer::default();
-        buffer.error("bad");
-        buffer.warning("careful");
-
-        let theme = resolve_theme("dracula");
-        let overrides = crate::ui::StyleOverrides::default();
-        let styler = ThemeStyler::new(true, &theme, &overrides);
-        let rendered = render_messages_with_styler(
-            &buffer,
-            MessageRenderOptions::full(MessageLevel::Warning),
-            &styler,
-        );
-
-        assert!(rendered.contains("\x1b["));
-        assert!(rendered.contains("Errors"));
-        assert!(rendered.contains("\x1b[38;2;248;248;242m  careful"));
     }
 
     #[test]

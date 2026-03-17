@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-03-07",
-  "overall_line_percent": 86.42,
+  "generated_at": "2026-03-17",
+  "overall_line_percent": 92.95,
   "changed_file_min_line_percent": 85.0,
   "min_executable_lines": 20,
   "notes": "Full coverage gate in CI and release checks; fast changed-file gate locally."
