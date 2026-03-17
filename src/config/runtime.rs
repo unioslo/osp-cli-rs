@@ -515,7 +515,7 @@ impl RuntimeEnvironment {
         }
     }
 
-    fn defaults_only() -> Self {
+    pub(super) fn defaults_only() -> Self {
         Self {
             vars: BTreeMap::new(),
             prefer_platform_dirs: false,
@@ -523,7 +523,7 @@ impl RuntimeEnvironment {
     }
 
     #[cfg(test)]
-    fn from_pairs<I, K, V>(vars: I) -> Self
+    pub(super) fn from_pairs<I, K, V>(vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,

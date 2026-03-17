@@ -231,3 +231,87 @@ fn seed_computed_defaults(
         layer.set("theme.path", theme_path);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ConfigResolver, ResolveOptions};
+
+    fn resolve_defaults(
+        env: RuntimeEnvironment,
+        default_theme_name: &str,
+        default_repl_prompt: &str,
+    ) -> crate::config::ResolvedConfig {
+        let mut resolver = ConfigResolver::default();
+        resolver.set_defaults(build_builtin_defaults(
+            &env,
+            default_theme_name,
+            default_repl_prompt,
+        ));
+        resolver
+            .resolve(ResolveOptions::default().with_terminal("cli"))
+            .expect("builtin defaults should resolve")
+    }
+
+    #[test]
+    fn literal_default_helpers_seed_string_bool_and_integer_entries_unit() {
+        let mut layer = ConfigLayer::default();
+        LiteralDefault::string("test.string", "alpha").seed(&mut layer);
+        LiteralDefault::bool("test.bool", true).seed(&mut layer);
+        LiteralDefault::int("test.int", 7).seed(&mut layer);
+
+        assert_eq!(layer.entries().len(), 3);
+        assert_eq!(layer.entries()[0].key, "test.string");
+        assert_eq!(layer.entries()[1].key, "test.bool");
+        assert_eq!(layer.entries()[2].key, "test.int");
+    }
+
+    #[test]
+    fn builtin_defaults_seed_literal_and_computed_environment_values_unit() {
+        let resolved = resolve_defaults(
+            RuntimeEnvironment::from_pairs([
+                ("XDG_CONFIG_HOME", "/tmp/osp-config"),
+                ("XDG_STATE_HOME", "/tmp/osp-state"),
+                ("USER", "alice"),
+                ("HOSTNAME", "shell.example.com"),
+            ]),
+            "nord",
+            "osp> ",
+        );
+
+        assert_eq!(resolved.active_profile(), DEFAULT_PROFILE_NAME);
+        assert_eq!(
+            resolved.get_bool("repl.history.enabled"),
+            Some(DEFAULT_REPL_HISTORY_ENABLED)
+        );
+        assert_eq!(resolved.get_string("theme.name"), Some("nord"));
+        assert_eq!(resolved.get_string("user.name"), Some("alice"));
+        assert_eq!(resolved.get_string("domain"), Some("example.com"));
+        assert_eq!(resolved.get_string("repl.prompt"), Some("osp> "));
+        assert_eq!(resolved.get_string("color.text"), Some(""));
+        assert_eq!(
+            resolved.get_string_list("theme.path"),
+            Some(vec!["/tmp/osp-config/osp/themes".to_string()])
+        );
+        assert_eq!(
+            resolved.get_string("repl.history.path"),
+            Some("/tmp/osp-state/osp/history/alice@default.history")
+        );
+        assert_eq!(
+            resolved.get_string("log.file.path"),
+            Some("/tmp/osp-state/osp/osp.log")
+        );
+    }
+
+    #[test]
+    fn builtin_defaults_fall_back_without_theme_path_when_config_root_is_missing_unit() {
+        let resolved = resolve_defaults(RuntimeEnvironment::defaults_only(), "dracula", "osp> ");
+
+        assert_eq!(resolved.get_string("theme.name"), Some("dracula"));
+        assert_eq!(resolved.get_string("user.name"), Some("anonymous"));
+        assert_eq!(resolved.get_string("domain"), Some("local"));
+        assert_eq!(resolved.get_string_list("theme.path"), None);
+        assert!(resolved.get_string("repl.history.path").is_some());
+        assert!(resolved.get_string("log.file.path").is_some());
+    }
+}

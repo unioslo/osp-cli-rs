@@ -402,6 +402,26 @@ fn aggregate_and_count_aliases_produce_same_nested_semantic_count_unit() {
 }
 
 #[test]
+fn collapse_summarizes_grouped_semantic_values_unit() {
+    let collapsed = apply_stage(
+        json!([
+            {
+                "groups": {"team": "ops"},
+                "aggregates": {"member_count": 2},
+                "rows": [
+                    {"uid": "alice"},
+                    {"uid": "bob"}
+                ]
+            }
+        ]),
+        &CompiledStage::Collapse,
+    )
+    .expect("collapse stage should succeed");
+
+    assert_eq!(collapsed, json!([{"team": "ops", "member_count": 2}]));
+}
+
+#[test]
 fn unroll_expands_nested_semantic_entry_collections_unit() {
     let unrolled = apply_stage(
         json!({
@@ -467,4 +487,23 @@ fn value_stage_extracts_nested_semantic_values_unit() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["value"], json!("help"));
     assert_eq!(rows[1]["value"], json!("exit"));
+}
+
+#[test]
+fn copy_stage_preserves_semantic_value_verbatim_unit() {
+    let value = guide_like_value();
+    let copied =
+        apply_stage(value.clone(), &CompiledStage::Copy).expect("copy stage should succeed");
+    assert_eq!(copied, value);
+}
+
+#[test]
+fn jq_stage_transforms_semantic_values_with_real_jaq_unit() {
+    let value = json!([
+        {"uid": "alice", "team": "ops"},
+        {"uid": "bob", "team": "eng"}
+    ]);
+    let transformed = apply_stage(value, &CompiledStage::Jq("map(.uid)".to_string()))
+        .expect("jq stage should succeed");
+    assert_eq!(transformed, json!(["alice", "bob"]));
 }
