@@ -1,11 +1,11 @@
 use serde_json::json;
 
 use super::{
-    JqError, apply_value_with_expr, apply_with_expr, compile, compile_program, json_to_rows,
-    run_jaq, value_to_group,
+    JqError, apply_value_with_expr, apply_with_expr, compile, compile_program, run_jaq,
+    value_to_group,
 };
 use crate::core::{
-    output_model::{Group, OutputItems},
+    output_model::{Group, OutputItems, rows_from_value},
     row::Row,
 };
 
@@ -26,7 +26,7 @@ fn compile_rejects_empty_expressions_and_normalizes_quotes_unit() {
 #[test]
 fn json_helpers_wrap_scalars_and_restore_group_fallback_metadata_unit() {
     assert_eq!(
-        json_to_rows(json!(["alice", {"uid": "bob"}])),
+        rows_from_value(json!(["alice", {"uid": "bob"}])),
         vec![row(json!({"value": "alice"})), row(json!({"uid": "bob"}))]
     );
 

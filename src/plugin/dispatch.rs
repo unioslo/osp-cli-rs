@@ -39,6 +39,73 @@ enum CommandRunError {
     TimedOut { timeout: Duration, stderr: Vec<u8> },
 }
 
+struct ExecutedPluginCommand {
+    provider: DiscoveredPlugin,
+    raw: RawPluginOutput,
+}
+
+impl ExecutedPluginCommand {
+    fn run(
+        manager: &PluginManager,
+        command: &str,
+        args: &[String],
+        context: &PluginDispatchContext,
+    ) -> std::result::Result<Self, PluginDispatchError> {
+        let provider = manager.resolve_provider(command, context.provider_override.as_deref())?;
+        let raw = run_provider(&provider, command, args, context, manager.process_timeout)?;
+        Ok(Self { provider, raw })
+    }
+
+    fn into_raw(self) -> RawPluginOutput {
+        self.raw
+    }
+
+    fn into_response(self, command: &str) -> std::result::Result<ResponseV1, PluginDispatchError> {
+        if self.raw.status_code != 0 {
+            tracing::warn!(
+                plugin_id = %self.provider.plugin_id,
+                command = %command,
+                status_code = self.raw.status_code,
+                stderr = %self.raw.stderr.trim(),
+                "plugin command exited with non-zero status"
+            );
+            return Err(PluginDispatchError::NonZeroExit {
+                plugin_id: self.provider.plugin_id,
+                status_code: self.raw.status_code,
+                stderr: self.raw.stderr,
+            });
+        }
+
+        let response: ResponseV1 = serde_json::from_str(&self.raw.stdout).map_err(|source| {
+            tracing::warn!(
+                plugin_id = %self.provider.plugin_id,
+                command = %command,
+                error = %source,
+                "plugin command returned invalid JSON"
+            );
+            PluginDispatchError::InvalidJsonResponse {
+                plugin_id: self.provider.plugin_id.clone(),
+                source,
+            }
+        })?;
+
+        response.validate_v1().map_err(|reason| {
+            tracing::warn!(
+                plugin_id = %self.provider.plugin_id,
+                command = %command,
+                reason = %reason,
+                "plugin command returned invalid payload"
+            );
+            PluginDispatchError::InvalidResponsePayload {
+                plugin_id: self.provider.plugin_id,
+                reason,
+            }
+        })?;
+
+        Ok(response)
+    }
+}
+
 impl PluginManager {
     /// Runs a plugin command and returns its validated structured response.
     ///
@@ -71,51 +138,7 @@ impl PluginManager {
         args: &[String],
         context: &PluginDispatchContext,
     ) -> std::result::Result<ResponseV1, PluginDispatchError> {
-        let provider = self.resolve_provider(command, context.provider_override.as_deref())?;
-
-        let raw = run_provider(&provider, command, args, context, self.process_timeout)?;
-        if raw.status_code != 0 {
-            tracing::warn!(
-                plugin_id = %provider.plugin_id,
-                command = %command,
-                status_code = raw.status_code,
-                stderr = %raw.stderr.trim(),
-                "plugin command exited with non-zero status"
-            );
-            return Err(PluginDispatchError::NonZeroExit {
-                plugin_id: provider.plugin_id.clone(),
-                status_code: raw.status_code,
-                stderr: raw.stderr,
-            });
-        }
-
-        let response: ResponseV1 = serde_json::from_str(&raw.stdout).map_err(|source| {
-            tracing::warn!(
-                plugin_id = %provider.plugin_id,
-                command = %command,
-                error = %source,
-                "plugin command returned invalid JSON"
-            );
-            PluginDispatchError::InvalidJsonResponse {
-                plugin_id: provider.plugin_id.clone(),
-                source,
-            }
-        })?;
-
-        response.validate_v1().map_err(|reason| {
-            tracing::warn!(
-                plugin_id = %provider.plugin_id,
-                command = %command,
-                reason = %reason,
-                "plugin command returned invalid payload"
-            );
-            PluginDispatchError::InvalidResponsePayload {
-                plugin_id: provider.plugin_id.clone(),
-                reason,
-            }
-        })?;
-
-        Ok(response)
+        ExecutedPluginCommand::run(self, command, args, context)?.into_response(command)
     }
 
     /// Runs a plugin command and returns raw stdout, stderr, and exit status.
@@ -147,8 +170,7 @@ impl PluginManager {
         args: &[String],
         context: &PluginDispatchContext,
     ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
-        let provider = self.resolve_provider(command, context.provider_override.as_deref())?;
-        run_provider(&provider, command, args, context, self.process_timeout)
+        Ok(ExecutedPluginCommand::run(self, command, args, context)?.into_raw())
     }
 }
 

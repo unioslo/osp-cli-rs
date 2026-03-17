@@ -297,54 +297,39 @@ impl CompletionTreeBuilder {
 }
 
 pub(crate) fn command_spec_from_command_def(def: &CommandDef) -> CommandSpec {
-    let mut spec = CommandSpec::new(def.name.clone())
-        .args(def.args.iter().map(arg_node_from_def))
-        .flags(
-            def.flags
-                .iter()
-                .flat_map(flag_entries_from_def)
-                .collect::<Vec<_>>(),
-        )
-        .subcommands(def.subcommands.iter().map(command_spec_from_command_def));
-
-    if let Some(about) = def.about.as_deref() {
-        spec = spec.tooltip(about);
+    CommandSpec {
+        name: def.name.clone(),
+        tooltip: def.about.clone(),
+        sort: def.sort_key.clone(),
+        args: def.args.iter().map(arg_node_from_def).collect(),
+        flags: def.flags.iter().flat_map(flag_entries_from_def).collect(),
+        subcommands: def
+            .subcommands
+            .iter()
+            .map(command_spec_from_command_def)
+            .collect(),
     }
-    if let Some(sort_key) = def.sort_key.as_deref() {
-        spec = spec.sort(sort_key);
-    }
-    spec
 }
 
 fn arg_node_from_def(arg: &ArgDef) -> ArgNode {
-    let mut node = ArgNode::named(arg.value_name.as_deref().unwrap_or(&arg.id))
-        .suggestions(arg.choices.iter().map(suggestion_from_choice));
-    if let Some(help) = arg.help.as_deref() {
-        node = node.tooltip(help);
+    ArgNode {
+        name: Some(arg.value_name.as_deref().unwrap_or(&arg.id).to_string()),
+        tooltip: arg.help.clone(),
+        multi: arg.multi,
+        value_type: to_completion_value_type(arg.value_kind),
+        suggestions: arg.choices.iter().map(suggestion_from_choice).collect(),
     }
-    if arg.multi {
-        node = node.multi();
-    }
-    if let Some(value_type) = to_completion_value_type(arg.value_kind) {
-        node = node.value_type(value_type);
-    }
-    node
 }
 
 fn flag_entries_from_def(flag: &FlagDef) -> Vec<(String, FlagNode)> {
-    let mut node = FlagNode::new().suggestions(flag.choices.iter().map(suggestion_from_choice));
-    if let Some(help) = flag.help.as_deref() {
-        node = node.tooltip(help);
-    }
-    if !flag.takes_value {
-        node = node.flag_only();
-    }
-    if flag.multi {
-        node = node.multi();
-    }
-    if let Some(value_type) = to_completion_value_type(flag.value_kind) {
-        node = node.value_type(value_type);
-    }
+    let node = FlagNode {
+        tooltip: flag.help.clone(),
+        flag_only: !flag.takes_value,
+        multi: flag.multi,
+        value_type: to_completion_value_type(flag.value_kind),
+        suggestions: flag.choices.iter().map(suggestion_from_choice).collect(),
+        ..FlagNode::default()
+    };
 
     flag_spellings(flag)
         .into_iter()
@@ -365,17 +350,12 @@ fn flag_spellings(flag: &FlagDef) -> Vec<String> {
 }
 
 fn suggestion_from_choice(choice: &ValueChoice) -> SuggestionEntry {
-    let mut entry = SuggestionEntry::value(choice.value.clone());
-    if let Some(meta) = choice.help.as_deref() {
-        entry = entry.meta(meta);
+    SuggestionEntry {
+        value: choice.value.clone(),
+        meta: choice.help.clone(),
+        display: choice.display.clone(),
+        sort: choice.sort_key.clone(),
     }
-    if let Some(display) = choice.display.as_deref() {
-        entry = entry.display(display);
-    }
-    if let Some(sort_key) = choice.sort_key.as_deref() {
-        entry = entry.sort(sort_key);
-    }
-    entry
 }
 
 fn to_completion_value_type(value_kind: Option<ValueKind>) -> Option<crate::completion::ValueType> {

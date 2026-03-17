@@ -39,17 +39,21 @@ pub(crate) fn plugin_enabled(
     plugin: &DiscoveredPlugin,
     preferences: &PluginCommandPreferences,
 ) -> bool {
-    if plugin.commands.is_empty() {
+    let commands = plugin.canonical_command_names();
+    if commands.is_empty() {
         return plugin.default_enabled;
     }
-    plugin
-        .commands
-        .iter()
+    commands
+        .into_iter()
         .any(|command| provider_available(plugin, command, preferences))
 }
 
 pub(crate) fn plugin_label(plugin: &DiscoveredPlugin) -> String {
     format!("{} ({})", plugin.plugin_id, plugin.source)
+}
+
+pub(crate) fn provider_labels(plugins: &[&DiscoveredPlugin]) -> Vec<String> {
+    plugins.iter().copied().map(plugin_label).collect()
 }
 
 pub(crate) fn providers_for_command<'a>(
@@ -70,12 +74,12 @@ pub(crate) fn provider_labels_by_command(
     let mut index = HashMap::new();
     for plugin in plugins {
         let label = plugin_label(plugin);
-        for command in &plugin.commands {
+        for command in plugin.canonical_command_names() {
             if !provider_available(plugin, command, preferences) {
                 continue;
             }
             index
-                .entry(command.clone())
+                .entry(command.to_string())
                 .or_insert_with(Vec::new)
                 .push(label.clone());
         }
@@ -88,7 +92,7 @@ pub(crate) fn provider_available(
     command: &str,
     preferences: &PluginCommandPreferences,
 ) -> bool {
-    if !plugin_provides_command(plugin, command) {
+    if plugin.canonical_command(command).is_none() {
         return false;
     }
     match preferences.state_for(command) {
@@ -160,10 +164,10 @@ pub(crate) fn resolve_provider_for_command<'a>(
 }
 
 fn plugin_provides_command(plugin: &DiscoveredPlugin, command: &str) -> bool {
-    plugin.commands.iter().any(|name| name == command)
+    plugin.canonical_command(command).is_some()
 }
 
-fn available_providers_for_command<'a>(
+pub(crate) fn available_providers_for_command<'a>(
     command: &str,
     plugins: &[&'a DiscoveredPlugin],
     preferences: &PluginCommandPreferences,
@@ -253,5 +257,30 @@ mod tests {
 
         preferences.set_state("shared", PluginCommandState::Enabled);
         assert!(provider_available(&plugin, "shared", &preferences));
+    }
+
+    #[test]
+    fn canonical_command_identity_drives_provider_lookup_unit() {
+        let plugin = DiscoveredPlugin {
+            plugin_id: "alpha".to_string(),
+            plugin_version: Some("0.1.0".to_string()),
+            executable: PathBuf::from("/tmp/osp-alpha"),
+            source: PluginSource::Explicit,
+            commands: Vec::new(),
+            describe_commands: Vec::new(),
+            command_specs: vec![CommandSpec::new("shared")],
+            issue: None,
+            default_enabled: true,
+        };
+        let preferences = PluginCommandPreferences::default();
+
+        assert!(provider_available(&plugin, "shared", &preferences));
+        assert_eq!(
+            providers_for_command("shared", &[&plugin])
+                .into_iter()
+                .map(|provider| provider.plugin_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha"]
+        );
     }
 }

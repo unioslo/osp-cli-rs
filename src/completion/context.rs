@@ -1,4 +1,5 @@
 use crate::completion::model::{CommandLine, CompletionContext, CompletionNode, CompletionTree};
+use std::collections::BTreeSet;
 
 pub(crate) struct ResolvedNodes<'a> {
     pub(crate) context_node: &'a CompletionNode,
@@ -37,13 +38,13 @@ impl<'a> TreeResolver<'a> {
 
     pub(crate) fn resolved_nodes(&self, context: &CompletionContext) -> ResolvedNodes<'a> {
         ResolvedNodes {
-            context_node: self
-                .resolve_exact(&context.matched_path)
-                .unwrap_or(&self.tree.root),
-            flag_scope_node: self
-                .resolve_exact(&context.flag_scope_path)
-                .unwrap_or(&self.tree.root),
+            context_node: self.resolve_exact_or_root(&context.matched_path),
+            flag_scope_node: self.resolve_exact_or_root(&context.flag_scope_path),
         }
+    }
+
+    pub(crate) fn resolve_exact_or_root(&self, path: &[String]) -> &'a CompletionNode {
+        self.resolve_exact(path).unwrap_or(&self.tree.root)
     }
 
     pub(crate) fn resolve_flag_scope_path(&self, matched_path: &[String]) -> Vec<String> {
@@ -62,6 +63,17 @@ impl<'a> TreeResolver<'a> {
         } else {
             matched_path.to_vec()
         }
+    }
+
+    pub(crate) fn scoped_flag_names(&self, matched_path: &[String]) -> BTreeSet<String> {
+        let mut scoped_flags = BTreeSet::new();
+        for i in (0..=matched_path.len()).rev() {
+            let path = &matched_path[..i];
+            if let Some(node) = self.resolve_exact(path) {
+                scoped_flags.extend(node.flags.keys().cloned());
+            }
+        }
+        scoped_flags
     }
 
     pub(crate) fn resolve_context(&self, path: &[String]) -> (&'a CompletionNode, Vec<String>) {

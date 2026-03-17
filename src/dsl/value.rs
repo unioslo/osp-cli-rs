@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::dsl::compiled::CompiledStage;
@@ -13,8 +13,11 @@ use crate::dsl::verbs::{
 /// collections, but the executor itself no longer treats those projections as
 /// the canonical substrate.
 pub(crate) fn apply_stage(value: Value, stage: &CompiledStage) -> Result<Value> {
+    if let Some(plan) = stage.quick_plan() {
+        return quick::apply_value_with_plan(value, plan);
+    }
+
     match stage {
-        CompiledStage::Quick(plan) => quick::apply_value_with_plan(value, plan),
         CompiledStage::Filter(plan) => filter::apply_value_with_plan(value, plan),
         CompiledStage::Project(plan) => project::apply_value_with_plan(value, plan),
         CompiledStage::Unroll(plan) => unroll::apply_value_with_plan(value, plan),
@@ -26,11 +29,14 @@ pub(crate) fn apply_stage(value: Value, stage: &CompiledStage) -> Result<Value> 
         CompiledStage::CountMacro => aggregate::count_macro_value(value, ""),
         CompiledStage::Copy => Ok(value),
         CompiledStage::Clean => question::apply_value(value, ""),
-        CompiledStage::Question(plan)
-        | CompiledStage::ValueQuick(plan)
-        | CompiledStage::KeyQuick(plan) => quick::apply_value_with_plan(value, plan),
         CompiledStage::Jq(expr) => jq::apply_value_with_expr(value, expr),
         CompiledStage::Values(plan) => values::apply_value_with_plan(value, plan),
+        CompiledStage::Quick(_)
+        | CompiledStage::Question(_)
+        | CompiledStage::ValueQuick(_)
+        | CompiledStage::KeyQuick(_) => Err(anyhow!(
+            "quick family should have been handled before value-stage dispatch"
+        )),
     }
 }
 

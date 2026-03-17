@@ -53,13 +53,13 @@ fn provider_selection_validation_rejects_empty_unknown_and_mismatched_inputs_uni
         .expect_err("unknown command should fail");
     assert!(
         err.to_string()
-            .contains("no healthy plugin provides command")
+            .contains("no available plugin provides command")
     );
 
     let err = manager
         .select_provider("shared", "beta")
         .expect_err("unknown provider should fail");
-    assert!(err.to_string().contains("does not provide healthy command"));
+    assert!(err.to_string().contains("is not currently available"));
 }
 
 #[cfg(unix)]
@@ -84,7 +84,6 @@ fn disabling_a_command_updates_only_that_command_in_memory_unit() {
         catalog.iter().any(|entry| entry.name == "extra"),
         "other commands from the same plugin should remain available"
     );
-
 }
 
 #[cfg(unix)]
@@ -119,8 +118,35 @@ fn config_backed_preferences_can_disable_and_route_commands_unit() {
     manager
         .set_command_state("shared", PluginCommandState::Enabled)
         .expect("re-enabling selected command should work");
-    let provider = manager
-        .selected_provider_label("shared");
+    let provider = manager.selected_provider_label("shared");
     assert_eq!(provider.as_deref(), Some("beta (explicit)"));
+}
 
+#[cfg(unix)]
+#[test]
+fn provider_selection_validation_respects_current_command_availability_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-provider-availability");
+    let plugins_dir = root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    defaults.set("plugins.shared.state", "disabled");
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    let resolved = resolver
+        .resolve(ResolveOptions::default().with_terminal("cli"))
+        .expect("config should resolve");
+
+    let manager = PluginManager::new(vec![plugins_dir])
+        .with_command_preferences(PluginCommandPreferences::from_resolved(&resolved));
+
+    let err = manager
+        .validate_provider_selection("shared", "alpha")
+        .expect_err("disabled command should not accept provider selections");
+    assert!(
+        err.to_string()
+            .contains("no available plugin provides command `shared`")
+    );
 }

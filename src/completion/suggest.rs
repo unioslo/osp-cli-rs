@@ -34,6 +34,7 @@ struct PositionalRequest<'a> {
     arg_index: usize,
     stub: &'a str,
     cmd: &'a CommandLine,
+    provider: &'a ProviderSelection<'a>,
     show_subcommands: bool,
     show_flag_names: bool,
 }
@@ -109,46 +110,32 @@ impl SuggestionEngine {
         let cmd = &analysis.parsed.cursor_cmd;
         let stub = analysis.cursor.token_stub.as_str();
         let resolver = TreeResolver::new(&self.tree);
+        let nodes = resolver.resolved_nodes(&analysis.context);
+        let provider = ProviderSelection::from_command(cmd);
 
         let mut out = match request {
             CompletionRequest::Pipe => self.pipe_suggestions(stub),
-            CompletionRequest::FlagNames { flag_scope_path } => {
-                let flag_scope_node = resolver
-                    .resolve_exact(flag_scope_path)
-                    .unwrap_or(&self.tree.root);
-                self.flag_name_suggestions(flag_scope_node, stub, cmd)
-                    .into_iter()
-                    .map(SuggestionOutput::Item)
-                    .collect()
-            }
-            CompletionRequest::FlagValues {
-                flag_scope_path,
-                flag,
-            } => {
-                let flag_scope_node = resolver
-                    .resolve_exact(flag_scope_path)
-                    .unwrap_or(&self.tree.root);
-                self.flag_value_suggestions(flag_scope_node, flag, stub, cmd)
+            CompletionRequest::FlagNames { .. } => self
+                .flag_name_suggestions(nodes.flag_scope_node, stub, cmd, &provider)
+                .into_iter()
+                .map(SuggestionOutput::Item)
+                .collect(),
+            CompletionRequest::FlagValues { flag, .. } => {
+                self.flag_value_suggestions(nodes.flag_scope_node, flag, stub, &provider)
             }
             CompletionRequest::Positionals {
-                context_path,
-                flag_scope_path,
                 arg_index,
                 show_subcommands,
                 show_flag_names,
+                ..
             } => {
-                let context_node = resolver
-                    .resolve_exact(context_path)
-                    .unwrap_or(&self.tree.root);
-                let flag_scope_node = resolver
-                    .resolve_exact(flag_scope_path)
-                    .unwrap_or(&self.tree.root);
                 let request = PositionalRequest {
-                    context_node,
-                    flag_scope_node,
+                    context_node: nodes.context_node,
+                    flag_scope_node: nodes.flag_scope_node,
                     arg_index: *arg_index,
                     stub,
                     cmd,
+                    provider: &provider,
                     show_subcommands: *show_subcommands,
                     show_flag_names: *show_flag_names,
                 };
@@ -186,9 +173,14 @@ impl SuggestionEngine {
 
         if request.show_flag_names {
             out.extend(
-                self.flag_name_suggestions(request.flag_scope_node, request.stub, request.cmd)
-                    .into_iter()
-                    .map(SuggestionOutput::Item),
+                self.flag_name_suggestions(
+                    request.flag_scope_node,
+                    request.stub,
+                    request.cmd,
+                    request.provider,
+                )
+                .into_iter()
+                .map(SuggestionOutput::Item),
             );
         }
 
@@ -218,9 +210,10 @@ impl SuggestionEngine {
         node: &CompletionNode,
         stub: &str,
         cmd: &CommandLine,
+        provider: &ProviderSelection<'_>,
     ) -> Vec<Suggestion> {
-        let allowlist = self.resolved_flag_allowlist(node, cmd);
-        let required = self.required_flags(node, cmd);
+        let allowlist = self.resolved_flag_allowlist(node, cmd, provider);
+        let required = self.required_flags(node, provider);
         let flag_stub = if node.flags.contains_key(stub) {
             ""
         } else {
@@ -255,7 +248,7 @@ impl SuggestionEngine {
         node: &CompletionNode,
         flag: &str,
         stub: &str,
-        cmd: &CommandLine,
+        provider: &ProviderSelection<'_>,
     ) -> Vec<SuggestionOutput> {
         let Some(flag_node) = node.flags.get(flag) else {
             return Vec::new();
@@ -270,7 +263,7 @@ impl SuggestionEngine {
         }
 
         if let Some(output) =
-            self.provider_specific_flag_value_suggestions(flag_node, flag, stub, cmd)
+            self.provider_specific_flag_value_suggestions(flag_node, flag, stub, provider)
         {
             return output;
         }
@@ -316,7 +309,7 @@ impl SuggestionEngine {
         flag_node: &crate::completion::model::FlagNode,
         flag: &str,
         stub: &str,
-        cmd: &CommandLine,
+        provider: &ProviderSelection<'_>,
     ) -> Option<Vec<SuggestionOutput>> {
         // Provider completion has two special cases:
         // - selecting `--provider` may be constrained by the current `--os`
@@ -326,8 +319,6 @@ impl SuggestionEngine {
         // `repl/completion.rs`; the suggestion engine still needs a small
         // amount of flag-name-specific logic until that relationship is fully
         // expressed in completion metadata.
-        let provider = ProviderSelection::from_command(cmd);
-
         if flag == "--provider" {
             let os_token = provider.normalized_os();
             if let Some(os_token) = os_token {
@@ -409,11 +400,12 @@ impl SuggestionEngine {
         &self,
         node: &CompletionNode,
         cmd: &CommandLine,
+        provider: &ProviderSelection<'_>,
     ) -> Option<BTreeSet<String>> {
         let hints = node.flag_hints.as_ref()?;
         let mut allowed = hints.common.iter().cloned().collect::<BTreeSet<_>>();
 
-        if let Some(provider) = ProviderSelection::from_command(cmd).name() {
+        if let Some(provider) = provider.name() {
             if let Some(provider_specific) = hints.by_provider.get(provider) {
                 allowed.extend(provider_specific.iter().cloned());
             }
@@ -433,14 +425,18 @@ impl SuggestionEngine {
         Some(allowed)
     }
 
-    fn required_flags(&self, node: &CompletionNode, cmd: &CommandLine) -> BTreeSet<String> {
+    fn required_flags(
+        &self,
+        node: &CompletionNode,
+        provider: &ProviderSelection<'_>,
+    ) -> BTreeSet<String> {
         let mut required = BTreeSet::new();
         let Some(hints) = node.flag_hints.as_ref() else {
             return required;
         };
 
         required.extend(hints.required_common.iter().cloned());
-        if let Some(provider) = ProviderSelection::from_command(cmd).name()
+        if let Some(provider) = provider.name()
             && let Some(provider_required) = hints.required_by_provider.get(provider)
         {
             required.extend(provider_required.iter().cloned());

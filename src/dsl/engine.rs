@@ -43,7 +43,7 @@ use crate::dsl::verbs::{
     values,
 };
 use crate::dsl::{
-    compiled::{CompiledPipeline, CompiledStage, SemanticEffect},
+    compiled::{CompiledPipeline, CompiledStage, SemanticEffect, StageBehavior},
     eval::context::RowContext,
     parse::pipeline::parse_stage_list,
 };
@@ -217,6 +217,13 @@ enum PipelineItems {
     Semantic(serde_json::Value),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StageExecutionRoute {
+    Semantic(SemanticEffect),
+    Stream,
+    Materialized,
+}
+
 struct PipelineExecutor {
     items: PipelineItems,
     document: Option<OutputDocument>,
@@ -279,29 +286,37 @@ impl PipelineExecutor {
     }
 
     fn apply_stage(&mut self, stage: &CompiledStage) -> Result<()> {
-        if !stage.preserves_render_recommendation() {
+        let behavior = stage.behavior();
+        self.apply_stage_side_effects(stage);
+        if !behavior.preserves_render_recommendation {
             self.render_recommendation = None;
         }
 
-        if matches!(self.items, PipelineItems::Semantic(_)) {
-            self.apply_semantic_stage(stage)?;
-            return Ok(());
+        match resolve_stage_execution_route(&self.items, behavior) {
+            StageExecutionRoute::Semantic(semantic_effect) => {
+                self.apply_semantic_stage(stage, semantic_effect)
+            }
+            StageExecutionRoute::Stream => self.apply_stream_stage(stage),
+            StageExecutionRoute::Materialized => {
+                let items = self.materialize_items()?;
+                self.items = PipelineItems::Materialized(self.apply_flat_stage(items, stage)?);
+                self.sync_document_to_items();
+                Ok(())
+            }
         }
-
-        if stage.can_stream()
-            && let PipelineItems::RowStream(_) = self.items
-        {
-            self.apply_stream_stage(stage)?;
-            return Ok(());
-        }
-
-        let items = self.materialize_items()?;
-        self.items = PipelineItems::Materialized(self.apply_flat_stage(items, stage)?);
-        self.sync_document_to_items();
-        Ok(())
     }
 
-    fn apply_semantic_stage(&mut self, stage: &CompiledStage) -> Result<()> {
+    fn apply_stage_side_effects(&mut self, stage: &CompiledStage) {
+        if matches!(stage, CompiledStage::Copy) {
+            self.wants_copy = true;
+        }
+    }
+
+    fn apply_semantic_stage(
+        &mut self,
+        stage: &CompiledStage,
+        semantic_effect: SemanticEffect,
+    ) -> Result<()> {
         let items = std::mem::replace(
             &mut self.items,
             PipelineItems::Semantic(serde_json::Value::Null),
@@ -311,13 +326,9 @@ impl PipelineExecutor {
             return Err(anyhow!("semantic stage dispatch requires semantic items"));
         };
 
-        if matches!(stage, CompiledStage::Copy) {
-            self.wants_copy = true;
-        }
-
         let transformed = value_stage::apply_stage(value, stage)?;
         self.items = PipelineItems::Semantic(transformed);
-        match stage.semantic_effect() {
+        match semantic_effect {
             // Preserve/transform both keep the semantic payload attached. The
             // renderer decides later whether the transformed JSON still
             // restores as the original semantic kind.
@@ -357,10 +368,13 @@ impl PipelineExecutor {
             }
         };
 
+        if let Some(plan) = stage.quick_plan().cloned() {
+            self.items =
+                PipelineItems::RowStream(Box::new(quick::stream_rows_with_plan(stream, plan)));
+            return Ok(());
+        }
+
         self.items = PipelineItems::RowStream(match stage {
-            CompiledStage::Quick(plan) => {
-                Box::new(quick::stream_rows_with_plan(stream, plan.clone()))
-            }
             CompiledStage::Filter(plan) => {
                 let plan = plan.clone();
                 Box::new(stream.filter_map(move |row| match row {
@@ -389,15 +403,7 @@ impl PipelineExecutor {
                         .take(spec.count.max(0) as usize),
                 )
             }
-            CompiledStage::Copy => {
-                self.wants_copy = true;
-                stream
-            }
-            CompiledStage::ValueQuick(plan)
-            | CompiledStage::KeyQuick(plan)
-            | CompiledStage::Question(plan) => {
-                Box::new(quick::stream_rows_with_plan(stream, plan.clone()))
-            }
+            CompiledStage::Copy => stream,
             CompiledStage::Clean => Box::new(stream.filter_map(|row| match row {
                 Ok(row) => question::clean_row(row).map(Ok),
                 Err(err) => Some(Err(err)),
@@ -417,15 +423,18 @@ impl PipelineExecutor {
         items: OutputItems,
         stage: &CompiledStage,
     ) -> Result<OutputItems> {
-        match stage {
-            CompiledStage::Quick(plan) => match items {
+        if let Some(plan) = stage.quick_plan() {
+            return match items {
                 OutputItems::Rows(rows) => {
                     quick::apply_with_plan(rows, plan).map(OutputItems::Rows)
                 }
                 OutputItems::Groups(groups) => {
                     quick::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
                 }
-            },
+            };
+        }
+
+        match stage {
             CompiledStage::Filter(plan) => match items {
                 OutputItems::Rows(rows) => {
                     filter::apply_with_plan(rows, plan).map(OutputItems::Rows)
@@ -458,16 +467,6 @@ impl PipelineExecutor {
                     values::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
                 }
             },
-            CompiledStage::ValueQuick(plan)
-            | CompiledStage::KeyQuick(plan)
-            | CompiledStage::Question(plan) => match items {
-                OutputItems::Rows(rows) => {
-                    quick::apply_with_plan(rows, plan).map(OutputItems::Rows)
-                }
-                OutputItems::Groups(groups) => {
-                    quick::apply_groups_with_plan(groups, plan).map(OutputItems::Groups)
-                }
-            },
             CompiledStage::Limit(spec) => match items {
                 OutputItems::Rows(rows) => {
                     Ok(OutputItems::Rows(limit::apply_with_spec(rows, *spec)))
@@ -488,15 +487,18 @@ impl PipelineExecutor {
             CompiledStage::Aggregate(plan) => aggregate::apply_with_plan(items, plan),
             CompiledStage::Collapse => collapse::apply(items),
             CompiledStage::CountMacro => aggregate::count_macro(items, ""),
-            CompiledStage::Copy => {
-                self.wants_copy = true;
-                Ok(match items {
-                    OutputItems::Rows(rows) => OutputItems::Rows(copy::apply(rows)),
-                    OutputItems::Groups(groups) => OutputItems::Groups(groups),
-                })
-            }
+            CompiledStage::Copy => Ok(match items {
+                OutputItems::Rows(rows) => OutputItems::Rows(copy::apply(rows)),
+                OutputItems::Groups(groups) => OutputItems::Groups(groups),
+            }),
             CompiledStage::Clean => Ok(question::clean_items(items)),
             CompiledStage::Jq(expr) => jq::apply_with_expr(items, expr),
+            CompiledStage::Quick(_)
+            | CompiledStage::Question(_)
+            | CompiledStage::ValueQuick(_)
+            | CompiledStage::KeyQuick(_) => Err(anyhow!(
+                "quick family should have been handled before flat-stage dispatch"
+            )),
         }
     }
 
@@ -616,6 +618,19 @@ fn merged_group_header(group: &crate::core::output_model::Group) -> Row {
     let mut row = group.groups.clone();
     row.extend(group.aggregates.clone());
     row
+}
+
+fn resolve_stage_execution_route(
+    items: &PipelineItems,
+    behavior: StageBehavior,
+) -> StageExecutionRoute {
+    match items {
+        PipelineItems::Semantic(_) => StageExecutionRoute::Semantic(behavior.semantic_effect),
+        PipelineItems::RowStream(_) if behavior.can_stream => StageExecutionRoute::Stream,
+        PipelineItems::RowStream(_) | PipelineItems::Materialized(_) => {
+            StageExecutionRoute::Materialized
+        }
+    }
 }
 
 #[cfg(test)]

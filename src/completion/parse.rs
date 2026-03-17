@@ -250,45 +250,8 @@ impl CommandLineParser {
     pub fn analyze(&self, line: &str, cursor: usize) -> ParsedCursorLine {
         let safe_cursor = clamp_to_char_boundary(line, cursor.min(line.len()));
         let before_cursor = &line[..safe_cursor];
-
-        if let Some(tokenized) = self.tokenize_with_cursor_inner(line, safe_cursor) {
-            let full_cmd = self.parse(&tokenized.full_tokens);
-            let cursor_cmd = self.parse(&tokenized.cursor_tokens);
-            let cursor = self.build_cursor_state(
-                before_cursor,
-                safe_cursor,
-                &tokenized.cursor_tokens,
-                tokenized.cursor_quote_style,
-            );
-
-            return ParsedCursorLine {
-                parsed: ParsedLine {
-                    safe_cursor,
-                    full_tokens: tokenized.full_tokens,
-                    cursor_tokens: tokenized.cursor_tokens,
-                    full_cmd,
-                    cursor_cmd,
-                },
-                cursor,
-            };
-        }
-
-        let full_tokens = self.tokenize(line);
-        let cursor_tokens = self.tokenize(before_cursor);
-        let full_cmd = self.parse(&full_tokens);
-        let cursor_cmd = self.parse(&cursor_tokens);
-        let cursor = self.cursor_state(before_cursor, safe_cursor);
-
-        ParsedCursorLine {
-            parsed: ParsedLine {
-                safe_cursor,
-                full_tokens,
-                cursor_tokens,
-                full_cmd,
-                cursor_cmd,
-            },
-            cursor,
-        }
+        let lexical = self.lex_cursor_line(line, before_cursor, safe_cursor);
+        self.assemble_parsed_cursor_line(before_cursor, safe_cursor, lexical)
     }
 
     fn tokenize_inner(&self, line: &str) -> Option<Vec<String>> {
@@ -626,6 +589,79 @@ impl CommandLineParser {
     pub fn compute_stub_quote(&self, text_before_cursor: &str) -> Option<QuoteStyle> {
         current_quote_state(text_before_cursor)
     }
+
+    fn lex_cursor_line(
+        &self,
+        line: &str,
+        before_cursor: &str,
+        safe_cursor: usize,
+    ) -> CursorLexicalState {
+        match self.tokenize_with_cursor_inner(line, safe_cursor) {
+            Some(tokenized) => CursorLexicalState::Structured(tokenized),
+            None => CursorLexicalState::Fallback {
+                full_tokens: self.tokenize(line),
+                cursor_tokens: self.tokenize(before_cursor),
+            },
+        }
+    }
+
+    fn assemble_parsed_cursor_line(
+        &self,
+        before_cursor: &str,
+        safe_cursor: usize,
+        lexical: CursorLexicalState,
+    ) -> ParsedCursorLine {
+        match lexical {
+            CursorLexicalState::Structured(tokenized) => {
+                let full_cmd = self.parse(&tokenized.full_tokens);
+                let cursor_cmd = self.parse(&tokenized.cursor_tokens);
+                let cursor = self.build_cursor_state(
+                    before_cursor,
+                    safe_cursor,
+                    &tokenized.cursor_tokens,
+                    tokenized.cursor_quote_style,
+                );
+
+                ParsedCursorLine {
+                    parsed: ParsedLine {
+                        safe_cursor,
+                        full_tokens: tokenized.full_tokens,
+                        cursor_tokens: tokenized.cursor_tokens,
+                        full_cmd,
+                        cursor_cmd,
+                    },
+                    cursor,
+                }
+            }
+            CursorLexicalState::Fallback {
+                full_tokens,
+                cursor_tokens,
+            } => {
+                let full_cmd = self.parse(&full_tokens);
+                let cursor_cmd = self.parse(&cursor_tokens);
+                let cursor = self.cursor_state(before_cursor, safe_cursor);
+
+                ParsedCursorLine {
+                    parsed: ParsedLine {
+                        safe_cursor,
+                        full_tokens,
+                        cursor_tokens,
+                        full_cmd,
+                        cursor_cmd,
+                    },
+                    cursor,
+                }
+            }
+        }
+    }
+}
+
+enum CursorLexicalState {
+    Structured(CursorTokenization),
+    Fallback {
+        full_tokens: Vec<String>,
+        cursor_tokens: Vec<String>,
+    },
 }
 
 fn snapshot_tokens(out: &[String], current: &str) -> Vec<String> {

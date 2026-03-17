@@ -724,7 +724,9 @@ fn key_value_from_map(
     let mut seen = BTreeSet::new();
     if let Some(order) = preferred_keys {
         for key in order {
-            if seen.insert(key.clone()) && let Some(value) = map.get(key) {
+            if seen.insert(key.clone())
+                && let Some(value) = map.get(key)
+            {
                 rows.push(KeyValueRow {
                     key: key.clone(),
                     value: display_value(value),

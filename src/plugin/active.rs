@@ -8,8 +8,8 @@
 
 use super::manager::DiscoveredPlugin;
 use super::selection::{
-    ProviderResolution, ProviderResolutionError, healthy_plugins, provider_labels_by_command,
-    providers_for_command, resolve_provider_for_command,
+    ProviderResolution, ProviderResolutionError, available_providers_for_command, healthy_plugins,
+    provider_labels_by_command, providers_for_command, resolve_provider_for_command,
 };
 use super::state::PluginCommandPreferences;
 use std::collections::{BTreeSet, HashMap};
@@ -23,6 +23,26 @@ pub(crate) struct ActivePluginView<'a> {
     active_command_names: BTreeSet<String>,
 }
 
+pub(crate) struct ResolvedActiveCommand<'a> {
+    command: String,
+    providers: Vec<String>,
+    resolution: ProviderResolution<'a>,
+}
+
+impl<'a> ResolvedActiveCommand<'a> {
+    pub(crate) fn command(&self) -> &str {
+        self.command.as_str()
+    }
+
+    pub(crate) fn providers(&self) -> &[String] {
+        &self.providers
+    }
+
+    pub(crate) fn resolution(&self) -> &ProviderResolution<'a> {
+        &self.resolution
+    }
+}
+
 impl<'a> ActivePluginView<'a> {
     /// Builds the shared plugin working set from one discovery snapshot plus
     /// one command-preference snapshot.
@@ -32,11 +52,7 @@ impl<'a> ActivePluginView<'a> {
     ) -> Self {
         let healthy = healthy_plugins(discovered).collect::<Vec<_>>();
         let available_provider_labels = provider_labels_by_command(&healthy, preferences);
-        let active_command_names = healthy
-            .iter()
-            .flat_map(|plugin| plugin.command_specs.iter().map(|spec| spec.name.clone()))
-            .filter(|command| available_provider_labels.contains_key(command))
-            .collect();
+        let active_command_names = available_provider_labels.keys().cloned().collect();
 
         Self {
             discovered,
@@ -78,12 +94,40 @@ impl<'a> ActivePluginView<'a> {
         providers_for_command(command, &self.healthy)
     }
 
+    pub(crate) fn available_providers(&self, command: &str) -> Vec<&'a DiscoveredPlugin> {
+        available_providers_for_command(command, &self.healthy, self.preferences)
+    }
+
     pub(crate) fn resolve_provider(
         &self,
         command: &str,
         provider_override: Option<&str>,
     ) -> std::result::Result<ProviderResolution<'a>, ProviderResolutionError<'a>> {
         resolve_provider_for_command(command, &self.healthy, self.preferences, provider_override)
+    }
+
+    pub(crate) fn resolved_active_commands(&self) -> Vec<ResolvedActiveCommand<'a>> {
+        let mut out = Vec::new();
+        for command in self.active_command_names() {
+            let providers = self.provider_labels(command);
+            let resolution = match self.resolve_provider(command, None) {
+                Ok(resolution) => resolution,
+                Err(err) => {
+                    tracing::debug!(
+                        command = %command,
+                        error = ?err,
+                        "skipping inconsistent active command during resolved command build"
+                    );
+                    continue;
+                }
+            };
+            out.push(ResolvedActiveCommand {
+                command: command.to_string(),
+                providers,
+                resolution,
+            });
+        }
+        out
     }
 }
 

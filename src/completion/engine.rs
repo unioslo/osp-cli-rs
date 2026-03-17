@@ -113,25 +113,11 @@ impl CompletionEngine {
         mut parsed: ParsedLine,
         cursor: CursorState,
     ) -> CompletionAnalysis {
-        // Prefilled alias and shell defaults can change the effective scope, so
-        // resolve once to inject them and then resolve again against the
-        // completed command state.
-        let mut context =
-            self.resolve_completion_context(&parsed.cursor_cmd, cursor.token_stub.as_str());
-        self.merge_prefilled_values(&mut parsed.cursor_cmd, &context.matched_path);
-        context = self.resolve_completion_context(&parsed.cursor_cmd, cursor.token_stub.as_str());
-
-        // Context-only flags can appear later in the line than the cursor.
-        // Merge them before scope resolution so completion reflects the user's
-        // effective command state, not just the prefix before the cursor.
-        if !parsed.cursor_cmd.has_pipe() {
-            self.merge_context_flags(
-                &mut parsed.cursor_cmd,
-                &parsed.full_cmd,
-                cursor.token_stub.as_str(),
-            );
-        }
-
+        let context = self.prepare_cursor_command_state(
+            &mut parsed.cursor_cmd,
+            &parsed.full_cmd,
+            cursor.token_stub.as_str(),
+        );
         let request = self.build_completion_request(&parsed.cursor_cmd, &cursor, &context);
 
         CompletionAnalysis {
@@ -172,6 +158,31 @@ impl CompletionEngine {
         MatchKind::Value
     }
 
+    fn prepare_cursor_command_state(
+        &self,
+        cursor_cmd: &mut CommandLine,
+        full_cmd: &CommandLine,
+        stub: &str,
+    ) -> CompletionContext {
+        // Prefilled alias and shell defaults can change the effective scope, so
+        // resolve once to inject them and then resolve again against the
+        // completed command state.
+        let mut context = self.resolve_completion_context(cursor_cmd, stub);
+        self.merge_prefilled_values(cursor_cmd, &context.matched_path);
+        context = self.resolve_completion_context(cursor_cmd, stub);
+
+        // Context-only flags can appear later in the line than the cursor.
+        // Merge them before the final request is derived so completion reflects
+        // the user's effective command state, not just the prefix before the
+        // cursor.
+        if !cursor_cmd.has_pipe() {
+            self.merge_context_flags(cursor_cmd, full_cmd, stub);
+            context = self.resolve_completion_context(cursor_cmd, stub);
+        }
+
+        context
+    }
+
     fn merge_context_flags(
         &self,
         cursor_cmd: &mut CommandLine,
@@ -179,14 +190,8 @@ impl CompletionEngine {
         stub: &str,
     ) {
         let context = self.resolve_completion_context(cursor_cmd, stub);
-        let mut scoped_flags = BTreeSet::new();
         let resolver = TreeResolver::new(&self.tree);
-        for i in (0..=context.matched_path.len()).rev() {
-            let (node, matched) = resolver.resolve_context(&context.matched_path[..i]);
-            if matched.len() == i {
-                scoped_flags.extend(node.flags.keys().cloned());
-            }
-        }
+        let mut scoped_flags = resolver.scoped_flag_names(&context.matched_path);
         scoped_flags.extend(self.global_context_flags.iter().cloned());
 
         for item in full_cmd.tail().iter().skip(cursor_cmd.tail_len()) {
@@ -265,7 +270,7 @@ impl CompletionEngine {
             )
             .collect();
 
-        let context_node = resolver.resolve_exact(&matched).unwrap_or(&self.tree.root);
+        let context_node = resolver.resolve_exact_or_root(&matched);
         let has_subcommands = !context_node.children.is_empty();
         let subcommand_context =
             context_node.value_key || (has_subcommands && arg_tokens.is_empty());
@@ -295,9 +300,7 @@ impl CompletionEngine {
         }
 
         let resolver = TreeResolver::new(&self.tree);
-        let flag_scope_node = resolver
-            .resolve_exact(&context.flag_scope_path)
-            .unwrap_or(&self.tree.root);
+        let flag_scope_node = resolver.resolve_exact_or_root(&context.flag_scope_path);
         let (needs_flag_value, last_flag) = last_flag_needs_value(flag_scope_node, cmd, stub);
         if needs_flag_value && let Some(flag) = last_flag {
             return CompletionRequest::FlagValues {

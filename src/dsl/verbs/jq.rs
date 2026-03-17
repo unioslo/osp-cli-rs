@@ -1,5 +1,5 @@
 use crate::core::{
-    output_model::{Group, OutputItems},
+    output_model::{Group, OutputItems, rows_from_value},
     row::Row,
 };
 use anyhow::Result;
@@ -81,7 +81,7 @@ fn apply_rows(rows: Vec<Row>, program: &JaqProgram) -> Result<Vec<Row>> {
     let payload = Value::Array(rows.into_iter().map(Value::Object).collect());
     match run_jaq(program, &payload)? {
         None => Ok(Vec::new()),
-        Some(value) => Ok(json_to_rows(value)),
+        Some(value) => Ok(rows_from_value(value)),
     }
 }
 
@@ -99,7 +99,7 @@ fn apply_groups(groups: Vec<Group>, program: &JaqProgram) -> Result<Vec<Group>> 
                 if let Some(replacement) = value_to_group(&value, &group) {
                     out.push(replacement);
                 } else {
-                    let rows = json_to_rows(value);
+                    let rows = rows_from_value(value);
                     out.push(Group {
                         groups: group.groups,
                         aggregates: group.aggregates,
@@ -153,26 +153,8 @@ fn value_to_group(value: &Value, fallback: &Group) -> Option<Group> {
     Some(Group {
         groups,
         aggregates,
-        rows: json_to_rows(rows_value),
+        rows: rows_from_value(rows_value),
     })
-}
-
-fn json_to_rows(value: Value) -> Vec<Row> {
-    match value {
-        Value::Array(values) => values.into_iter().flat_map(json_value_to_row).collect(),
-        other => json_value_to_row(other),
-    }
-}
-
-fn json_value_to_row(value: Value) -> Vec<Row> {
-    match value {
-        Value::Object(map) => vec![map],
-        other => {
-            let mut row = Row::new();
-            row.insert("value".to_string(), other);
-            vec![row]
-        }
-    }
 }
 
 // Keep the public DSL verb name `JQ`, but execute it in-process through jaq

@@ -23,6 +23,36 @@ pub(super) struct SearchRoot {
     pub(super) source: PluginSource,
 }
 
+#[derive(Debug, Clone)]
+struct ScannedPluginCandidate {
+    source: PluginSource,
+    executable: PathBuf,
+    file_name: String,
+}
+
+impl ScannedPluginCandidate {
+    fn new(source: PluginSource, executable: PathBuf) -> Self {
+        let file_name = executable
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        Self {
+            source,
+            executable,
+            file_name,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SeededPluginCandidate {
+    source: PluginSource,
+    executable: PathBuf,
+    plugin: DiscoveredPlugin,
+    manifest_entry: Option<ManifestPlugin>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct BundledManifest {
     protocol_version: u32,
@@ -60,15 +90,69 @@ enum DescribeEligibility {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DiscoveryMode {
+enum DiscoveryPolicy {
     Passive,
     Dispatch,
+}
+
+impl DiscoveryPolicy {
+    fn cache<'a>(
+        self,
+        manager: &'a PluginManager,
+    ) -> &'a std::sync::RwLock<Option<Arc<[DiscoveredPlugin]>>> {
+        match self {
+            Self::Passive => &manager.discovered_cache,
+            Self::Dispatch => &manager.dispatch_discovered_cache,
+        }
+    }
+
+    fn allows_uncached_describe(self, source: PluginSource) -> bool {
+        !(source == PluginSource::Path && self == Self::Passive)
+    }
+
+    fn describe_blocked_reason(self, path: &Path) -> anyhow::Error {
+        anyhow!(
+            "path-discovered plugin metadata unavailable until first command execution for {}; passive discovery does not execute PATH plugins",
+            path.display()
+        )
+    }
 }
 
 struct DescribeCacheState<'a> {
     file: &'a mut DescribeCacheFile,
     seen_paths: &'a mut HashSet<String>,
     dirty: &'a mut bool,
+}
+
+struct DescribeCacheSession {
+    file: DescribeCacheFile,
+    seen_paths: HashSet<String>,
+    dirty: bool,
+}
+
+impl DescribeCacheSession {
+    fn load(manager: &PluginManager) -> Self {
+        Self {
+            file: manager.load_describe_cache_or_warn(),
+            seen_paths: HashSet::new(),
+            dirty: false,
+        }
+    }
+
+    fn state(&mut self) -> DescribeCacheState<'_> {
+        DescribeCacheState {
+            file: &mut self.file,
+            seen_paths: &mut self.seen_paths,
+            dirty: &mut self.dirty,
+        }
+    }
+
+    fn finish(mut self, manager: &PluginManager) {
+        self.dirty |= prune_stale_describe_cache_entries(&mut self.file, &self.seen_paths);
+        if self.dirty {
+            manager.save_describe_cache_or_warn(&self.file);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -118,18 +202,15 @@ impl PluginManager {
     }
 
     pub(super) fn discover(&self) -> Arc<[DiscoveredPlugin]> {
-        self.discover_with_mode(DiscoveryMode::Passive)
+        self.discover_with_policy(DiscoveryPolicy::Passive)
     }
 
     pub(super) fn discover_for_dispatch(&self) -> Arc<[DiscoveredPlugin]> {
-        self.discover_with_mode(DiscoveryMode::Dispatch)
+        self.discover_with_policy(DiscoveryPolicy::Dispatch)
     }
 
-    fn discover_with_mode(&self, mode: DiscoveryMode) -> Arc<[DiscoveredPlugin]> {
-        let cache = match mode {
-            DiscoveryMode::Passive => &self.discovered_cache,
-            DiscoveryMode::Dispatch => &self.dispatch_discovered_cache,
-        };
+    fn discover_with_policy(&self, policy: DiscoveryPolicy) -> Arc<[DiscoveredPlugin]> {
+        let cache = policy.cache(self);
         if let Some(cached) = cache.read().unwrap_or_else(|err| err.into_inner()).clone() {
             return cached;
         }
@@ -138,42 +219,31 @@ impl PluginManager {
         if let Some(cached) = guard.clone() {
             return cached;
         }
-        let discovered = self.discover_uncached(mode);
+        let discovered = self.discover_uncached(policy);
         let shared = Arc::<[DiscoveredPlugin]>::from(discovered);
         *guard = Some(shared.clone());
         shared
     }
 
-    fn discover_uncached(&self, mode: DiscoveryMode) -> Vec<DiscoveredPlugin> {
+    fn discover_uncached(&self, policy: DiscoveryPolicy) -> Vec<DiscoveredPlugin> {
         let roots = self.search_roots();
         let mut plugins: Vec<DiscoveredPlugin> = Vec::new();
         let mut seen_paths: HashSet<PathBuf> = HashSet::new();
-        let mut describe_cache = self.load_describe_cache_or_warn();
-        let mut seen_describe_paths: HashSet<String> = HashSet::new();
-        let mut cache_dirty = false;
-        let mut describe_cache_state = DescribeCacheState {
-            file: &mut describe_cache,
-            seen_paths: &mut seen_describe_paths,
-            dirty: &mut cache_dirty,
-        };
+        let mut describe_cache = DescribeCacheSession::load(self);
 
         for root in &roots {
+            let mut describe_cache_state = describe_cache.state();
             plugins.extend(discover_plugins_in_root(
                 root,
                 &mut seen_paths,
                 &mut describe_cache_state,
                 self.process_timeout,
-                mode,
+                policy,
             ));
         }
 
         mark_duplicate_plugin_ids(&mut plugins);
-
-        cache_dirty |=
-            prune_stale_describe_cache_entries(&mut describe_cache, &seen_describe_paths);
-        if cache_dirty {
-            self.save_describe_cache_or_warn(&describe_cache);
-        }
+        describe_cache.finish(self);
 
         tracing::debug!(
             discovered_plugins = plugins.len(),
@@ -386,20 +456,18 @@ fn discover_plugins_in_root(
     seen_paths: &mut HashSet<PathBuf>,
     describe_cache: &mut DescribeCacheState<'_>,
     process_timeout: Duration,
-    mode: DiscoveryMode,
+    policy: DiscoveryPolicy,
 ) -> Vec<DiscoveredPlugin> {
     let manifest_state = load_manifest_state(root);
-    let plugins = discover_root_executables(&root.path)
+    let plugins = seed_root_candidates(root, &manifest_state, seen_paths)
         .into_iter()
-        .filter(|path| seen_paths.insert(path.clone()))
-        .map(|executable| {
-            assemble_discovered_plugin_with_mode(
-                root.source,
-                executable,
+        .map(|candidate| {
+            finalize_seeded_candidate(
+                candidate,
                 &manifest_state,
                 describe_cache,
                 process_timeout,
-                mode,
+                policy,
             )
         })
         .collect::<Vec<_>>();
@@ -479,59 +547,94 @@ pub(super) fn assemble_discovered_plugin(
         seen_paths: seen_describe_paths,
         dirty: cache_dirty,
     };
-    assemble_discovered_plugin_with_mode(
-        source,
-        executable,
+    finalize_seeded_candidate(
+        seed_plugin_candidate(
+            ScannedPluginCandidate::new(source, executable),
+            manifest_state,
+        ),
         manifest_state,
         &mut describe_cache_state,
         process_timeout,
-        DiscoveryMode::Passive,
+        DiscoveryPolicy::Passive,
     )
 }
 
-fn assemble_discovered_plugin_with_mode(
-    source: PluginSource,
-    executable: PathBuf,
+fn scan_root_candidates(
+    root: &SearchRoot,
+    seen_paths: &mut HashSet<PathBuf>,
+) -> Vec<ScannedPluginCandidate> {
+    discover_root_executables(&root.path)
+        .into_iter()
+        .filter(|path| seen_paths.insert(path.clone()))
+        .map(|executable| ScannedPluginCandidate::new(root.source, executable))
+        .collect()
+}
+
+fn seed_root_candidates(
+    root: &SearchRoot,
+    manifest_state: &ManifestState,
+    seen_paths: &mut HashSet<PathBuf>,
+) -> Vec<SeededPluginCandidate> {
+    scan_root_candidates(root, seen_paths)
+        .into_iter()
+        .map(|candidate| seed_plugin_candidate(candidate, manifest_state))
+        .collect()
+}
+
+fn seed_plugin_candidate(
+    candidate: ScannedPluginCandidate,
+    manifest_state: &ManifestState,
+) -> SeededPluginCandidate {
+    let manifest_entry = manifest_entry_for_executable(manifest_state, &candidate.file_name);
+    let plugin = seeded_discovered_plugin(
+        candidate.source,
+        candidate.executable.clone(),
+        &candidate.file_name,
+        &manifest_entry,
+    );
+
+    SeededPluginCandidate {
+        source: candidate.source,
+        executable: candidate.executable,
+        plugin,
+        manifest_entry,
+    }
+}
+
+fn finalize_seeded_candidate(
+    mut candidate: SeededPluginCandidate,
     manifest_state: &ManifestState,
     describe_cache: &mut DescribeCacheState<'_>,
     process_timeout: Duration,
-    mode: DiscoveryMode,
+    policy: DiscoveryPolicy,
 ) -> DiscoveredPlugin {
-    let file_name = executable
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_string();
-    let manifest_entry = manifest_entry_for_executable(manifest_state, &file_name);
-    let mut plugin =
-        seeded_discovered_plugin(source, executable.clone(), &file_name, &manifest_entry);
-
-    apply_manifest_discovery_issue(&mut plugin.issue, manifest_state, manifest_entry.as_ref());
-
-    match describe_eligibility(source, manifest_state, manifest_entry.as_ref(), &executable) {
-        Ok(DescribeEligibility::Allowed) => {
-            match describe_with_cache(&executable, source, mode, describe_cache, process_timeout) {
-                Ok(describe) => {
-                    apply_describe_metadata(&mut plugin, &describe, manifest_entry.as_ref())
-                }
-                Err(err) => super::state::merge_issue(&mut plugin.issue, err.to_string()),
-            }
-        }
-        Ok(DescribeEligibility::Skip) => {}
-        Err(err) => super::state::merge_issue(&mut plugin.issue, err.to_string()),
-    }
+    apply_manifest_discovery_issue(
+        &mut candidate.plugin.issue,
+        manifest_state,
+        candidate.manifest_entry.as_ref(),
+    );
+    apply_describe_phase(
+        &mut candidate.plugin,
+        candidate.source,
+        manifest_state,
+        candidate.manifest_entry.as_ref(),
+        &candidate.executable,
+        policy,
+        describe_cache,
+        process_timeout,
+    );
 
     tracing::debug!(
-        plugin_id = %plugin.plugin_id,
-        source = %plugin.source,
-        executable = %plugin.executable.display(),
-        healthy = plugin.issue.is_none(),
-        issue = ?plugin.issue,
-        command_count = plugin.commands.len(),
+        plugin_id = %candidate.plugin.plugin_id,
+        source = %candidate.plugin.source,
+        executable = %candidate.plugin.executable.display(),
+        healthy = candidate.plugin.issue.is_none(),
+        issue = ?candidate.plugin.issue,
+        command_count = candidate.plugin.commands.len(),
         "assembled discovered plugin"
     );
 
-    plugin
+    candidate.plugin
 }
 
 fn manifest_entry_for_executable(
@@ -588,6 +691,49 @@ fn apply_manifest_discovery_issue(
 ) {
     if let Some(message) = manifest_discovery_issue(manifest_state, manifest_entry) {
         super::state::merge_issue(issue, message);
+    }
+}
+
+fn apply_describe_phase(
+    plugin: &mut DiscoveredPlugin,
+    source: PluginSource,
+    manifest_state: &ManifestState,
+    manifest_entry: Option<&ManifestPlugin>,
+    executable: &Path,
+    policy: DiscoveryPolicy,
+    describe_cache: &mut DescribeCacheState<'_>,
+    process_timeout: Duration,
+) {
+    match resolve_describe_phase(
+        source,
+        manifest_state,
+        manifest_entry,
+        executable,
+        policy,
+        describe_cache,
+        process_timeout,
+    ) {
+        Ok(Some(describe)) => apply_describe_metadata(plugin, &describe, manifest_entry),
+        Ok(None) => {}
+        Err(err) => super::state::merge_issue(&mut plugin.issue, err.to_string()),
+    }
+}
+
+fn resolve_describe_phase(
+    source: PluginSource,
+    manifest_state: &ManifestState,
+    manifest_entry: Option<&ManifestPlugin>,
+    executable: &Path,
+    policy: DiscoveryPolicy,
+    describe_cache: &mut DescribeCacheState<'_>,
+    process_timeout: Duration,
+) -> Result<Option<DescribeV1>> {
+    match describe_eligibility(source, manifest_state, manifest_entry, executable)? {
+        DescribeEligibility::Allowed => {
+            describe_with_cache(executable, source, policy, describe_cache, process_timeout)
+                .map(Some)
+        }
+        DescribeEligibility::Skip => Ok(None),
     }
 }
 
@@ -830,7 +976,7 @@ fn validate_manifest_checksum(entry: &ManifestPlugin, path: &Path) -> Result<()>
 fn describe_with_cache(
     path: &Path,
     source: PluginSource,
-    mode: DiscoveryMode,
+    policy: DiscoveryPolicy,
     cache: &mut DescribeCacheState<'_>,
     process_timeout: Duration,
 ) -> Result<DescribeV1> {
@@ -843,11 +989,8 @@ fn describe_with_cache(
         return Ok(entry.describe.clone());
     }
 
-    if source == PluginSource::Path && mode == DiscoveryMode::Passive {
-        return Err(anyhow!(
-            "path-discovered plugin metadata unavailable until first command execution for {}; passive discovery does not execute PATH plugins",
-            path.display()
-        ));
+    if !policy.allows_uncached_describe(source) {
+        return Err(policy.describe_blocked_reason(path));
     }
 
     tracing::trace!(path = %path.display(), "describe cache miss");

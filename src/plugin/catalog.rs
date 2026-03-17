@@ -6,7 +6,7 @@
 //! picture. This module is the pure lowering step from that shared view into
 //! host-facing summaries.
 
-use super::active::ActivePluginView;
+use super::active::{ActivePluginView, ResolvedActiveCommand};
 use super::conversion::{collect_completion_words, direct_subcommand_names};
 use super::manager::{CommandCatalogEntry, CommandConflict, DoctorReport, PluginSummary};
 use super::selection::{ProviderResolution, ProviderSelectionMode, plugin_enabled, plugin_label};
@@ -25,7 +25,11 @@ pub(crate) fn list_plugins(view: &ActivePluginView<'_>) -> Vec<PluginSummary> {
             plugin_version: plugin.plugin_version.clone(),
             executable: plugin.executable.clone(),
             source: plugin.source,
-            commands: plugin.commands.clone(),
+            commands: plugin
+                .canonical_command_names()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
         })
         .collect()
 }
@@ -33,36 +37,27 @@ pub(crate) fn list_plugins(view: &ActivePluginView<'_>) -> Vec<PluginSummary> {
 pub(crate) fn build_command_catalog(view: &ActivePluginView<'_>) -> Vec<CommandCatalogEntry> {
     let mut out = Vec::new();
 
-    for command_name in view.active_command_names() {
-        let providers = view.provider_labels(command_name);
-        let resolution = match view.resolve_provider(command_name, None) {
-            Ok(resolution) => resolution,
-            Err(err) => {
-                tracing::debug!(
-                    command = %command_name,
-                    error = ?err,
-                    "skipping inconsistent active command during catalog build"
-                );
-                continue;
-            }
-        };
-        match resolution {
+    for resolved in view.resolved_active_commands() {
+        match resolved.resolution() {
             ProviderResolution::Selected(selection) => {
-                let spec = selected_command_spec(selection.plugin, command_name);
+                let Some(command) = selection.plugin.canonical_command(resolved.command()) else {
+                    tracing::debug!(
+                        command = %resolved.command(),
+                        provider = %selection.plugin.plugin_id,
+                        "skipping catalog entry for inconsistent canonical plugin command"
+                    );
+                    continue;
+                };
+                let completion = command.completion();
                 out.push(CommandCatalogEntry {
-                    name: command_name.to_string(),
-                    about: spec.tooltip.clone().unwrap_or_default(),
-                    auth: selection
-                        .plugin
-                        .describe_commands
-                        .iter()
-                        .find(|candidate| candidate.name == spec.name)
-                        .and_then(|candidate| candidate.auth.clone()),
-                    subcommands: direct_subcommand_names(&spec),
-                    completion: spec.clone(),
+                    name: command.name().to_string(),
+                    about: completion.tooltip.clone().unwrap_or_default(),
+                    auth: command.auth(),
+                    subcommands: direct_subcommand_names(&completion),
+                    completion,
                     provider: Some(selection.plugin.plugin_id.clone()),
-                    providers: providers.clone(),
-                    conflicted: providers.len() > 1,
+                    providers: resolved.providers().to_vec(),
+                    conflicted: resolved.providers().len() > 1,
                     requires_selection: false,
                     selected_explicitly: matches!(
                         selection.mode,
@@ -73,16 +68,17 @@ pub(crate) fn build_command_catalog(view: &ActivePluginView<'_>) -> Vec<CommandC
             }
             ProviderResolution::Ambiguous(_) => {
                 let about = format!(
-                    "provider selection required; use --plugin-provider <plugin-id> or `osp plugins select-provider {command_name} <plugin-id>`"
+                    "provider selection required; use --plugin-provider <plugin-id> or `osp plugins select-provider {} <plugin-id>`",
+                    resolved.command()
                 );
                 out.push(CommandCatalogEntry {
-                    name: command_name.to_string(),
+                    name: resolved.command().to_string(),
                     about,
                     auth: None,
                     subcommands: Vec::new(),
-                    completion: CommandSpec::new(command_name),
+                    completion: CommandSpec::new(resolved.command()),
                     provider: None,
-                    providers: providers.clone(),
+                    providers: resolved.providers().to_vec(),
                     conflicted: true,
                     requires_selection: true,
                     selected_explicitly: false,
@@ -99,27 +95,15 @@ pub(crate) fn build_command_catalog(view: &ActivePluginView<'_>) -> Vec<CommandC
 pub(crate) fn build_command_policy_registry(view: &ActivePluginView<'_>) -> CommandPolicyRegistry {
     let mut registry = CommandPolicyRegistry::new();
 
-    for command_name in view.active_command_names() {
-        let resolution = match view.resolve_provider(command_name, None) {
-            Ok(resolution) => resolution,
-            Err(err) => {
-                tracing::debug!(
-                    command = %command_name,
-                    error = ?err,
-                    "skipping inconsistent active command during policy build"
-                );
-                continue;
-            }
-        };
-        let ProviderResolution::Selected(selection) = resolution else {
+    for resolved in view.resolved_active_commands() {
+        let ProviderResolution::Selected(selection) = resolved.resolution() else {
             continue;
         };
 
         if let Some(command) = selection
             .plugin
-            .describe_commands
-            .iter()
-            .find(|candidate| candidate.name == command_name)
+            .canonical_command(resolved.command())
+            .and_then(|command| command.describe())
         {
             register_describe_command_policies(&mut registry, command, &[]);
         }
@@ -213,35 +197,19 @@ pub(crate) fn selected_provider_label(
     command: &str,
     view: &ActivePluginView<'_>,
 ) -> Option<String> {
-    match view.resolve_provider(command, None).ok() {
-        Some(ProviderResolution::Selected(selection)) => Some(plugin_label(selection.plugin)),
-        Some(ProviderResolution::Ambiguous(_)) | None => None,
-    }
+    resolved_command(view, command).and_then(|resolved| match resolved.resolution() {
+        ProviderResolution::Selected(selection) => Some(plugin_label(selection.plugin)),
+        ProviderResolution::Ambiguous(_) => None,
+    })
 }
 
-fn selected_command_spec(
-    plugin: &crate::plugin::DiscoveredPlugin,
-    command_name: &str,
-) -> CommandSpec {
-    if let Some(spec) = plugin
-        .command_specs
-        .iter()
-        .find(|spec| spec.name == command_name)
-    {
-        return spec.clone();
-    }
-
-    let mut spec = CommandSpec::new(command_name);
-    if let Some(about) = plugin
-        .describe_commands
-        .iter()
-        .find(|candidate| candidate.name == command_name)
-        .map(|candidate| candidate.about.trim())
-        .filter(|about| !about.is_empty())
-    {
-        spec = spec.tooltip(about);
-    }
-    spec
+fn resolved_command<'a>(
+    view: &'a ActivePluginView<'a>,
+    command: &str,
+) -> Option<ResolvedActiveCommand<'a>> {
+    view.resolved_active_commands()
+        .into_iter()
+        .find(|resolved| resolved.command() == command)
 }
 
 pub(crate) fn build_doctor_report(view: &ActivePluginView<'_>) -> DoctorReport {
@@ -285,6 +253,7 @@ fn register_describe_command_policies(
 mod tests {
     use super::*;
     use crate::completion::CommandSpec;
+    use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1};
     use crate::plugin::active::ActivePluginView;
     use crate::plugin::state::PluginCommandPreferences;
     use crate::plugin::{DiscoveredPlugin, PluginSource};
@@ -338,5 +307,43 @@ mod tests {
         assert!(help.contains("Plugin commands:"));
         assert!(help.contains("ldap"));
         assert!(help.contains("alpha/explicit"));
+    }
+
+    #[test]
+    fn catalog_uses_canonical_command_metadata_when_raw_names_drift_unit() {
+        let plugin = DiscoveredPlugin {
+            plugin_id: "alpha".to_string(),
+            plugin_version: Some("0.1.0".to_string()),
+            executable: PathBuf::from("/tmp/osp-alpha"),
+            source: PluginSource::Explicit,
+            commands: Vec::new(),
+            describe_commands: vec![DescribeCommandV1 {
+                name: "ldap".to_string(),
+                about: "lookup users".to_string(),
+                args: Vec::new(),
+                flags: Default::default(),
+                subcommands: Vec::new(),
+                auth: Some(DescribeCommandAuthV1 {
+                    visibility: Some(DescribeVisibilityModeV1::Authenticated),
+                    required_capabilities: Vec::new(),
+                    feature_flags: Vec::new(),
+                }),
+            }],
+            command_specs: Vec::new(),
+            issue: None,
+            default_enabled: true,
+        };
+        let preferences = PluginCommandPreferences::default();
+        let discovered = [plugin];
+        let view = ActivePluginView::new(&discovered, &preferences);
+        let catalog = build_command_catalog(&view);
+        let entry = catalog
+            .iter()
+            .find(|entry| entry.name == "ldap")
+            .expect("canonical command should be cataloged");
+
+        assert_eq!(entry.about, "lookup users");
+        assert_eq!(entry.auth_hint().as_deref(), Some("auth"));
+        assert_eq!(entry.provider.as_deref(), Some("alpha"));
     }
 }

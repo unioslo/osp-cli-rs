@@ -173,20 +173,16 @@ pub fn render_streaming_badge(streaming: VerbStreaming) -> Option<&'static str> 
 
 #[cfg(test)]
 pub(crate) fn stage_can_stream_rows(stage: &ParsedStage) -> bool {
-    if matches!(stage.kind, ParsedStageKind::Quick) {
-        return true;
-    }
-    if !matches!(stage.kind, ParsedStageKind::Explicit) {
+    if !matches!(
+        stage.kind,
+        ParsedStageKind::Quick | ParsedStageKind::Explicit
+    ) {
         return false;
     }
 
-    match stage.verb.as_str() {
-        "F" | "P" | "VAL" | "VALUE" | "Y" | "U" | "V" | "K" | "?" => true,
-        "L" => crate::dsl::verbs::limit::parse_limit_spec(&stage.spec)
-            .map(|spec| spec.is_head_only())
-            .unwrap_or(false),
-        _ => false,
-    }
+    crate::dsl::compiled::CompiledStage::from_parsed(stage)
+        .map(|stage| stage.behavior().can_stream)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
