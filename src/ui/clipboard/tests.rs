@@ -113,7 +113,7 @@ fn command_backend_reports_success_and_failure() {
     let err = copy_via_command(
         ClipboardCommand {
             command: "/bin/sh",
-            args: &["-c", "echo nope >&2; exit 7"],
+            args: &["-c", "cat >/dev/null; echo nope >&2; exit 7"],
         },
         "hello",
     )
@@ -291,7 +291,7 @@ fn clipboard_command_loop_reports_success_and_real_failures_unit() {
             vec!["osc52".to_string()],
             vec![ClipboardCommand {
                 command: "/bin/sh",
-                args: &["-c", "echo nope >&2; exit 7"],
+                args: &["-c", "cat >/dev/null; echo nope >&2; exit 7"],
             }],
         )
         .expect_err("non-zero clipboard command should fail");
