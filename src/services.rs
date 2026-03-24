@@ -311,7 +311,7 @@ pub fn execute_command<L: LdapDirectory>(
             let resolved_uid = uid
                 .clone()
                 .or_else(|| ctx.user.clone())
-                .ok_or_else(|| anyhow!("ldap user requires <uid> or -u/--user"))?;
+                .ok_or_else(|| anyhow!("ldap user requires <uid> or context user"))?;
             let attrs = parse_attributes(attributes.as_deref())?;
             ctx.ldap
                 .user(&resolved_uid, filter.as_deref(), attrs.as_deref())
@@ -470,7 +470,7 @@ mod tests {
         .expect_err("ldap user should require uid when global user is missing");
         assert!(
             err.to_string()
-                .contains("ldap user requires <uid> or -u/--user")
+                .contains("ldap user requires <uid> or context user")
         );
 
         let err = execute_command(
