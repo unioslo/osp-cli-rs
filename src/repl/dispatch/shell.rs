@@ -1,21 +1,26 @@
 use crate::repl::ReplLineResult;
 use miette::{Result, miette};
 
-use crate::app;
-use crate::app::{AppClients, AppRuntime, AppSession, CliCommandResult};
-use crate::app::{CMD_HELP, ResolvedInvocation};
-use crate::cli::invocation::scan_command_tokens;
-
 use super::command::{
     ParsedReplDispatch, execute_repl_command_dispatch, run_repl_external_command,
 };
+use crate::app;
+use crate::app::dispatch::resolve_external_command_source;
 use crate::app::sink::UiSink;
+use crate::app::{AppClients, AppRuntime, AppSession, CliCommandResult};
+use crate::app::{CMD_HELP, ResolvedInvocation};
+use crate::cli::invocation::scan_command_tokens;
 use crate::repl::{input, lifecycle, presentation};
 
 #[derive(Debug)]
 pub(super) enum ReplShortcutPlan {
     Help {
         invocation: ResolvedInvocation,
+    },
+    CurrentShellHelp {
+        command: String,
+        invocation: ResolvedInvocation,
+        warn_on_repeat: bool,
     },
     ShellEntry {
         command: String,
@@ -29,6 +34,18 @@ pub(super) fn classify_repl_shortcut(
     parsed: &input::ReplParsedLine,
     base_invocation: &ResolvedInvocation,
 ) -> Result<Option<ReplShortcutPlan>> {
+    // This ordering is deliberate. In an active shell, repeating the current
+    // root name is a help affordance and must win before bare-root shell entry
+    // is considered, otherwise `ldap` inside `(ldap)` would fall back toward
+    // nested shell entry instead of answering "what does this subcommand do?".
+    if let Some(current_help) = parsed.current_shell_help_command(&session.scope) {
+        return Ok(Some(ReplShortcutPlan::CurrentShellHelp {
+            command: current_help.command.to_string(),
+            invocation: base_invocation.clone(),
+            warn_on_repeat: current_help.warn_on_repeat,
+        }));
+    }
+
     if let Some(help_invocation) = repl_shortcut_help_invocation(runtime, session, parsed)? {
         return Ok(Some(ReplShortcutPlan::Help {
             invocation: help_invocation,
@@ -57,6 +74,25 @@ pub(super) fn execute_repl_shortcut(
     match shortcut {
         ReplShortcutPlan::Help { invocation } => {
             repl_help_result(runtime, session, clients, parsed, &invocation, line, sink)
+        }
+        ReplShortcutPlan::CurrentShellHelp {
+            command,
+            invocation,
+            warn_on_repeat,
+        } => {
+            let mut rendered = render_repl_help_for_scope(
+                runtime,
+                session,
+                clients,
+                &invocation,
+                line,
+                &parsed.stages,
+                sink,
+            )?;
+            if warn_on_repeat {
+                rendered = format!("{}{}", repeated_shell_root_help_warning(&command), rendered);
+            }
+            Ok(ReplLineResult::Continue(rendered))
         }
         ReplShortcutPlan::ShellEntry {
             command,
@@ -114,6 +150,15 @@ fn repl_shortcut_help_invocation(
     }
 
     Ok(None)
+}
+
+fn repeated_shell_root_help_warning(command: &str) -> String {
+    format!(
+        "`{command}` inside the `{command}` shell was interpreted as `{command} --help`.\n\
+This shell treats repeating the current root as a help shortcut.\n\
+If you meant a same-named nested shell, use hidden `cd {command}`.\n\
+If you meant help explicitly, use `help {command}` or `{command} --help`.\n\n"
+    )
 }
 
 fn repl_help_result(
@@ -181,9 +226,13 @@ pub(super) fn enter_repl_shell(
 ) -> Result<String> {
     app::ensure_plugin_visible_for(&runtime.auth, command)?;
     let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
-    if !catalog.iter().any(|entry| entry.name == command) {
-        return Err(miette!("no plugin provides command: {command}"));
-    }
+    resolve_external_command_source(
+        &runtime.auth,
+        clients,
+        command,
+        invocation.plugin_provider.as_deref(),
+    )?;
+    ensure_shell_entry_dispatchable(&catalog, command)?;
 
     session.enter_repl_scope(command.to_string());
     let mut out = format!("Entering {command} shell. Type `exit` to leave.\n");
@@ -193,6 +242,28 @@ pub(super) fn enter_repl_shell(
         out.push_str(&help);
     }
     Ok(out)
+}
+
+fn ensure_shell_entry_dispatchable(
+    catalog: &[crate::plugin::CommandCatalogEntry],
+    command: &str,
+) -> Result<()> {
+    let matching = catalog
+        .iter()
+        .filter(|entry| entry.name == command)
+        .collect::<Vec<_>>();
+    let Some(entry) = matching.first().copied() else {
+        return Err(miette!("no command provides `{command}`"));
+    };
+
+    if entry.requires_selection {
+        return Err(miette!(
+            "command `{command}` requires provider selection; available: {}; use --plugin-provider <plugin-id> or `plugins select-provider {command} <plugin-id>`",
+            entry.providers.join(", ")
+        ));
+    }
+
+    Ok(())
 }
 
 pub(super) fn render_repl_help_for_scope(
@@ -274,6 +345,14 @@ mod tests {
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
     use clap::Command;
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::path::Path;
+    #[cfg(unix)]
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct NativeLdapHelpCommand;
 
@@ -310,10 +389,23 @@ mod tests {
     }
 
     fn app_state() -> AppState {
-        app_state_with_native(NativeCommandRegistry::default())
+        app_state_with_parts(
+            crate::plugin::PluginManager::new(Vec::new()),
+            NativeCommandRegistry::default(),
+        )
     }
 
     fn app_state_with_native(native_commands: NativeCommandRegistry) -> AppState {
+        app_state_with_parts(
+            crate::plugin::PluginManager::new(Vec::new()),
+            native_commands,
+        )
+    }
+
+    fn app_state_with_parts(
+        plugins: crate::plugin::PluginManager,
+        native_commands: NativeCommandRegistry,
+    ) -> AppState {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         let mut resolver = ConfigResolver::default();
@@ -328,11 +420,51 @@ mod tests {
             render_settings: RenderSettings::test_plain(OutputFormat::Json),
             message_verbosity: MessageLevel::Success,
             debug_verbosity: 0,
-            plugins: crate::plugin::PluginManager::new(Vec::new()),
+            plugins,
             native_commands,
             themes: crate::ui::theme_catalog::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         })
+    }
+
+    #[cfg(unix)]
+    fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let unique = format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        dir
+    }
+
+    #[cfg(unix)]
+    fn write_provider_test_plugin(dir: &Path, plugin_id: &str, command: &str) {
+        let plugin_path = dir.join(format!("osp-{plugin_id}"));
+        let script = format!(
+            r#"#!/bin/sh
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"{plugin_id}","plugin_version":"0.1.0","min_osp_version":null,"commands":[{{"name":"{command}","about":"{plugin_id} provider","args":[],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"provider":"{plugin_id}"}},"error":null,"messages":[],"meta":{{"format_hint":"table","columns":["provider"]}}}}
+JSON
+"#
+        );
+        fs::write(&plugin_path, script).expect("plugin script should be written");
+        let mut perms = fs::metadata(&plugin_path)
+            .expect("plugin metadata should be readable")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
     }
 
     fn render_root_help_line(state: &mut AppState, line: &str) -> String {
@@ -429,8 +561,8 @@ mod tests {
                 .is_none()
         );
 
-        let shell_entry =
-            ReplParsedLine::parse("ldap", state.runtime.config.resolved()).expect("ldap parses");
+        let shell_entry = ReplParsedLine::parse("ldap", state.runtime.config.resolved())
+            .expect("shell entry parses");
         let shell_shortcut =
             classify_repl_shortcut(&state.runtime, &state.session, &shell_entry, &invocation)
                 .expect("shell entry should classify")
@@ -449,7 +581,7 @@ mod tests {
             &mut sink,
         )
         .expect_err("missing plugin should reject shell entry");
-        assert!(err.to_string().contains("no plugin provides command: ldap"));
+        assert!(err.to_string().contains("no command provides `ldap`"));
 
         let mut sink = BufferedUiSink::default();
         let err = enter_repl_shell(
@@ -461,7 +593,7 @@ mod tests {
             &mut sink,
         )
         .expect_err("direct shell entry should also fail");
-        assert!(err.to_string().contains("no plugin provides command: ldap"));
+        assert!(err.to_string().contains("no command provides `ldap`"));
     }
 
     #[test]
@@ -491,6 +623,159 @@ mod tests {
         )
         .expect("scoped help should render");
         assert!(scoped_help.contains("LDAP HELP"));
+    }
+
+    #[test]
+    fn bare_shellable_command_dispatches_zero_arg_behavior_unit() {
+        let native = NativeCommandRegistry::new().with_command(NativeLdapHelpCommand);
+        let mut state = app_state_with_native(native);
+        let invocation = base_repl_invocation(&state.runtime);
+
+        let parsed =
+            ReplParsedLine::parse("ldap", state.runtime.config.resolved()).expect("ldap parses");
+        let shortcut = classify_repl_shortcut(&state.runtime, &state.session, &parsed, &invocation)
+            .expect("bare command should classify cleanly")
+            .expect("bare shellable root should enter shell");
+        let mut sink = BufferedUiSink::default();
+        let rendered = execute_repl_shortcut(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &parsed,
+            shortcut,
+            "ldap",
+            &mut sink,
+        )
+        .expect("bare shellable root should enter shell");
+
+        match rendered {
+            ReplLineResult::Continue(text) => assert!(text.contains("Entering ldap shell")),
+            other => panic!("unexpected repl result: {other:?}"),
+        }
+        assert!(!state.session.scope.is_root());
+    }
+
+    #[test]
+    fn repeating_current_shell_root_renders_help_with_warning_unit() {
+        let native = NativeCommandRegistry::new().with_command(NativeLdapHelpCommand);
+        let mut state = app_state_with_native(native);
+        state.session.scope.enter("ldap");
+        let invocation = base_repl_invocation(&state.runtime);
+        let parsed =
+            ReplParsedLine::parse("ldap", state.runtime.config.resolved()).expect("ldap parses");
+        let shortcut = classify_repl_shortcut(&state.runtime, &state.session, &parsed, &invocation)
+            .expect("repeated shell root should classify")
+            .expect("repeated shell root should become help");
+        let mut sink = BufferedUiSink::default();
+        let rendered = execute_repl_shortcut(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &parsed,
+            shortcut,
+            "ldap",
+            &mut sink,
+        )
+        .expect("repeated shell root should render help");
+
+        match rendered {
+            ReplLineResult::Continue(text) => {
+                assert!(text.contains("was interpreted as `ldap --help`"));
+                assert!(text.contains("hidden `cd ldap`"));
+                assert!(text.contains("LDAP HELP"));
+            }
+            other => panic!("unexpected repl result: {other:?}"),
+        }
+        assert_eq!(state.session.scope.commands(), &["ldap".to_string()]);
+    }
+
+    #[test]
+    fn hidden_cd_still_forces_same_named_nested_shell_entry_unit() {
+        let native = NativeCommandRegistry::new().with_command(NativeLdapHelpCommand);
+        let mut state = app_state_with_native(native);
+        state.session.scope.enter("ldap");
+        let invocation = base_repl_invocation(&state.runtime);
+        let parsed = ReplParsedLine::parse("cd ldap", state.runtime.config.resolved())
+            .expect("hidden cd should parse");
+        let shortcut = classify_repl_shortcut(&state.runtime, &state.session, &parsed, &invocation)
+            .expect("hidden cd should classify")
+            .expect("hidden cd should remain available");
+        let mut sink = BufferedUiSink::default();
+        let rendered = execute_repl_shortcut(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &parsed,
+            shortcut,
+            "cd ldap",
+            &mut sink,
+        )
+        .expect("hidden cd should enter a nested shell");
+
+        match rendered {
+            ReplLineResult::Continue(text) => assert!(text.contains("Entering ldap shell")),
+            other => panic!("unexpected repl result: {other:?}"),
+        }
+        assert_eq!(
+            state.session.scope.commands(),
+            &["ldap".to_string(), "ldap".to_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ambiguous_plugin_shell_entry_fails_before_scope_mutation_unit() {
+        let root = make_temp_dir("osp-cli-repl-shell-ambiguous-plugin");
+        let plugins_dir = root.join("plugins");
+        fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+        write_provider_test_plugin(&plugins_dir, "alpha", "hello");
+        write_provider_test_plugin(&plugins_dir, "beta", "hello");
+        let plugin_manager = crate::plugin::PluginManager::new(vec![plugins_dir]);
+        let mut state = app_state_with_parts(plugin_manager, NativeCommandRegistry::default());
+        let invocation = base_repl_invocation(&state.runtime);
+        let mut sink = BufferedUiSink::default();
+
+        let err = enter_repl_shell(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            "hello",
+            &invocation,
+            &mut sink,
+        )
+        .expect_err("ambiguous plugin shell entry should fail");
+        assert!(err.to_string().contains("requires provider selection"));
+        assert!(state.session.scope.is_root());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_and_plugin_shell_collision_fails_before_scope_mutation_unit() {
+        let root = make_temp_dir("osp-cli-repl-shell-native-collision");
+        let plugins_dir = root.join("plugins");
+        fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+        write_provider_test_plugin(&plugins_dir, "alpha", "ldap");
+        let plugin_manager = crate::plugin::PluginManager::new(vec![plugins_dir]);
+        let native = NativeCommandRegistry::new().with_command(NativeLdapHelpCommand);
+        let mut state = app_state_with_parts(plugin_manager, native);
+        let invocation = base_repl_invocation(&state.runtime);
+        let mut sink = BufferedUiSink::default();
+
+        let err = enter_repl_shell(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            "ldap",
+            &invocation,
+            &mut sink,
+        )
+        .expect_err("native/plugin collision should fail");
+        assert!(err.to_string().contains("ambiguous across command sources"));
+        assert!(state.session.scope.is_root());
+
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -579,7 +864,7 @@ mod tests {
         let markdown = render_root_help_line(&mut markdown_state, "--md help | L 1");
         assert!(markdown.contains("## Usage"));
         assert!(markdown.contains("## Commands"));
-        assert!(markdown.contains("- `exit` Exit application."));
+        assert!(!markdown.contains("- `cd` Enter a shellable command scope."));
         assert!(!markdown.contains("| name"));
 
         let mut table_state = app_state();

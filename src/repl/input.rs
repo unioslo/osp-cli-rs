@@ -34,19 +34,46 @@ impl ReplParsedLine {
     }
 
     pub(crate) fn shell_entry_command<'a>(&'a self, scope: &ReplScopeStack) -> Option<&'a str> {
-        if !self.stages.is_empty() || self.dispatch_tokens.len() != 1 {
-            return None;
-        }
+        self.explicit_shell_entry_command()
+            .or_else(|| self.implicit_shell_entry_command(scope))
+    }
 
-        let command = self.dispatch_tokens[0].trim();
-        if command.is_empty()
-            || !is_repl_shellable_command(command)
-            || scope.contains_command(command)
-        {
-            return None;
+    pub(crate) fn current_shell_help_command<'a>(
+        &'a self,
+        scope: &'a ReplScopeStack,
+    ) -> Option<CurrentShellHelp<'a>> {
+        let commands = scope.commands();
+        let current = commands.last()?;
+        // Shell-first UX: once the operator is already inside `ldap`, typing
+        // `ldap` again should explain the current subcommand shell, not try to
+        // descend into a synthetic `ldap ldap` path by default. That keeps the
+        // common "what can I do here?" flow cheap and leaves hidden `cd ldap`
+        // as the explicit escape hatch for the rare same-name nesting case.
+        match self.dispatch_tokens.as_slice() {
+            [command] if command.eq_ignore_ascii_case(current) => Some(CurrentShellHelp {
+                command,
+                warn_on_repeat: true,
+            }),
+            [command, flag]
+                if command.eq_ignore_ascii_case(current)
+                    && matches!(flag.as_str(), "--help" | "-h") =>
+            {
+                Some(CurrentShellHelp {
+                    command,
+                    warn_on_repeat: false,
+                })
+            }
+            [action, command]
+                if action.eq_ignore_ascii_case(CMD_HELP)
+                    && command.eq_ignore_ascii_case(current) =>
+            {
+                Some(CurrentShellHelp {
+                    command,
+                    warn_on_repeat: false,
+                })
+            }
+            _ => None,
         }
-
-        Some(command)
     }
 
     pub(crate) fn prefixed_tokens(&self, scope: &ReplScopeStack) -> Vec<String> {
@@ -64,6 +91,53 @@ impl ReplParsedLine {
             stages: parsed.stages,
         }
     }
+
+    fn explicit_shell_entry_command(&self) -> Option<&str> {
+        if !self.stages.is_empty() || self.dispatch_tokens.len() != 2 {
+            return None;
+        }
+
+        let action = self.dispatch_tokens[0].trim();
+        let command = self.dispatch_tokens[1].trim();
+        if !action.eq_ignore_ascii_case("cd") || command.is_empty() {
+            return None;
+        }
+
+        // `cd` is a hidden escape hatch, not the primary UX. It stays around
+        // so operators can force shell entry in rare same-name nesting cases
+        // after the user-facing model switched back to "bare root enters the
+        // shell" and "repeating the current root means help". Keeping it
+        // hidden is intentional: visible `cd` teaches a filesystem metaphor,
+        // while the public model here is "subcommand enters subcommand shell".
+        is_repl_shellable_command(command).then_some(command)
+    }
+
+    fn implicit_shell_entry_command<'a>(&'a self, scope: &ReplScopeStack) -> Option<&'a str> {
+        if !self.stages.is_empty() || self.dispatch_tokens.len() != 1 {
+            return None;
+        }
+
+        let command = self.dispatch_tokens[0].trim();
+        if command.is_empty()
+            || !is_repl_shellable_command(command)
+            || scope.contains_command(command)
+        {
+            return None;
+        }
+
+        // Bare shellable roots stay as the primary entry path because they
+        // match the operator mental model: type the subcommand to enter that
+        // subcommand shell. Requiring visible `cd <root>` fixed ambiguity, but
+        // at the cost of making users speak an implementation detail instead
+        // of the command vocabulary they are already exploring.
+        Some(command)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CurrentShellHelp<'a> {
+    pub(crate) command: &'a str,
+    pub(crate) warn_on_repeat: bool,
 }
 
 pub(crate) fn rewrite_help_alias_tokens(tokens: &[String]) -> Option<Vec<String>> {
@@ -227,15 +301,48 @@ mod tests {
         }
 
         let mut scope = ReplScopeStack::default();
-        let ldap = ReplParsedLine::parse("ldap", &config).expect("shell should parse");
-        assert_eq!(ldap.shell_entry_command(&scope), Some("ldap"));
+        let hidden = ReplParsedLine::parse("cd ldap", &config).expect("hidden shell should parse");
+        assert_eq!(hidden.shell_entry_command(&scope), Some("ldap"));
+
+        let bare = ReplParsedLine::parse("ldap", &config).expect("command should parse");
+        assert_eq!(bare.shell_entry_command(&scope), Some("ldap"));
+        assert_eq!(
+            bare.current_shell_help_command(&scope),
+            None,
+            "root bare shellable commands should enter shell, not self-help",
+        );
 
         scope.enter("ldap");
-        assert_eq!(ldap.shell_entry_command(&scope), None);
+        assert_eq!(hidden.shell_entry_command(&scope), Some("ldap"));
+        assert_eq!(bare.shell_entry_command(&scope), None);
+        assert_eq!(
+            bare.current_shell_help_command(&scope),
+            Some(super::CurrentShellHelp {
+                command: "ldap",
+                warn_on_repeat: true,
+            })
+        );
+
+        let explicit = ReplParsedLine::parse("ldap --help", &config)
+            .expect("explicit shell help should parse");
+        assert_eq!(
+            explicit.current_shell_help_command(&scope),
+            Some(super::CurrentShellHelp {
+                command: "ldap",
+                warn_on_repeat: false,
+            })
+        );
 
         let help_alias =
             ReplParsedLine::parse("help ldap", &config).expect("help alias should parse");
         assert_eq!(help_alias.shell_entry_command(&scope), None);
+        assert_eq!(
+            help_alias.current_shell_help_command(&scope),
+            Some(super::CurrentShellHelp {
+                command: "ldap",
+                warn_on_repeat: false,
+            })
+        );
     }
 
     #[test]

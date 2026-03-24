@@ -144,13 +144,17 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
     assert!(state.session.scope.is_root());
 
     let ldap = repl::ReplParsedLine::parse("ldap", state.runtime.config.resolved())
-        .expect("ldap should parse");
+        .expect("ldap shell entry should parse");
     assert_eq!(ldap.shell_entry_command(&state.session.scope), Some("ldap"));
     state.session.scope.enter("ldap");
     let mreg = repl::ReplParsedLine::parse("mreg", state.runtime.config.resolved())
-        .expect("mreg should parse");
+        .expect("mreg shell entry should parse");
     assert_eq!(mreg.shell_entry_command(&state.session.scope), Some("mreg"));
     assert_eq!(ldap.shell_entry_command(&state.session.scope), None);
+    assert!(
+        ldap.current_shell_help_command(&state.session.scope)
+            .is_some()
+    );
 
     let mut state = make_completion_state(None);
     let catalog = sample_catalog();
@@ -390,6 +394,7 @@ fn repl_surface_drives_overview_and_completion_visibility_unit() {
     assert!(names.contains(&"orch"));
     assert!(!names.contains(&"plugins"));
     assert!(!names.contains(&"history"));
+    assert!(!surface.root_words.contains(&"cd".to_string()));
     assert!(surface.root_words.contains(&"theme".to_string()));
     assert!(surface.root_words.contains(&"config".to_string()));
     assert!(surface.root_words.contains(&"orch".to_string()));

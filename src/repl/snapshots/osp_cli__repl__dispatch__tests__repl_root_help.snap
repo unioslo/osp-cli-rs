@@ -1,6 +1,6 @@
 ---
 source: src/repl/dispatch/tests.rs
-assertion_line: 440
+assertion_line: 419
 expression: help
 ---
 - Usage ----------------
