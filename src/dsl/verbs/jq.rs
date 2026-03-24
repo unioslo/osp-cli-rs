@@ -71,7 +71,7 @@ pub(crate) fn apply_with_expr(items: OutputItems, expr: &str) -> Result<OutputIt
 
 pub(crate) fn apply_value_with_expr(value: Value, expr: &str) -> Result<Value> {
     let program = compile_program(expr)?;
-    Ok(run_jaq(&program, &value)?.unwrap_or(Value::Null))
+    Ok(run_jaq(&program, &value)?.unwrap_or(Value::Array(Vec::new())))
 }
 
 fn apply_rows(rows: Vec<Row>, program: &JaqProgram) -> Result<Vec<Row>> {

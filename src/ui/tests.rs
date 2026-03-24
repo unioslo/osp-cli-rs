@@ -1,6 +1,7 @@
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::output_model::{
-    Group, OutputDocument, OutputDocumentKind, OutputItems, OutputMeta, OutputResult,
+    ColumnAlignment, Group, OutputDocument, OutputDocumentKind, OutputItems, OutputMeta,
+    OutputResult,
 };
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::row;
@@ -122,6 +123,66 @@ fn ui2_rich_table_output_styles_headers_and_numeric_values_unit() {
     assert!(rendered.contains("\x1b[38;2;189;147;249mcount\x1b[0m"));
     assert!(rendered.contains("\x1b[38;2;189;147;249mname\x1b[0m"));
     assert!(rendered.contains("\x1b[38;2;255;121;198m42\x1b[0m"));
+}
+
+#[test]
+fn ui2_terminal_table_honors_column_alignment_metadata_unit() {
+    let output = OutputResult {
+        items: OutputItems::Rows(vec![row! {
+            "name" => "alice",
+            "count" => "42",
+            "state" => "ok",
+        }]),
+        document: None,
+        meta: OutputMeta {
+            key_index: vec!["name".to_string(), "count".to_string(), "state".to_string()],
+            column_align: vec![
+                ColumnAlignment::Left,
+                ColumnAlignment::Right,
+                ColumnAlignment::Center,
+            ],
+            wants_copy: false,
+            grouped: false,
+            render_recommendation: None,
+        },
+    };
+    let mut settings = RenderSettings::test_plain(OutputFormat::Table);
+    settings.format_explicit = true;
+
+    let rendered = render_output(&output, &settings);
+
+    assert!(rendered.contains("| name  | count | state |"));
+    assert!(rendered.contains("| alice |    42 |  ok   |"));
+}
+
+#[test]
+fn ui2_markdown_table_honors_column_alignment_metadata_unit() {
+    let output = OutputResult {
+        items: OutputItems::Rows(vec![row! {
+            "name" => "alice",
+            "count" => "42",
+            "state" => "ok",
+        }]),
+        document: None,
+        meta: OutputMeta {
+            key_index: vec!["name".to_string(), "count".to_string(), "state".to_string()],
+            column_align: vec![
+                ColumnAlignment::Left,
+                ColumnAlignment::Right,
+                ColumnAlignment::Center,
+            ],
+            wants_copy: false,
+            grouped: false,
+            render_recommendation: None,
+        },
+    };
+    let mut settings = RenderSettings::test_plain(OutputFormat::Markdown);
+    settings.format_explicit = true;
+
+    let rendered = render_output(&output, &settings);
+
+    assert!(rendered.contains("| :----- | -----: | :-----: |"));
+    assert!(rendered.contains("| alice |    42 |  ok   |"));
 }
 
 #[test]

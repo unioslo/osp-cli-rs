@@ -387,17 +387,17 @@ pub fn output_items_to_value(items: &OutputItems) -> Value {
 pub fn output_items_from_value(value: Value) -> OutputItems {
     match value {
         Value::Array(items) => {
-            if let Some(groups) = groups_from_values(&items) {
+            if items.is_empty() {
+                OutputItems::Rows(Vec::new())
+            } else if let Some(groups) = groups_from_values(&items) {
                 OutputItems::Groups(groups)
-            } else if items.iter().all(|item| matches!(item, Value::Object(_))) {
+            } else {
                 OutputItems::Rows(
                     items
                         .into_iter()
-                        .filter_map(|item| item.as_object().cloned())
+                        .flat_map(row_items_from_value)
                         .collect::<Vec<_>>(),
                 )
-            } else {
-                OutputItems::Rows(vec![row_with_value(Value::Array(items))])
             }
         }
         Value::Object(map) => OutputItems::Rows(vec![map]),
@@ -540,6 +540,27 @@ mod tests {
         let groups_value = output_items_to_value(&groups);
         assert!(matches!(groups_value, Value::Array(_)));
         assert_eq!(output_items_from_value(groups_value), groups);
+    }
+
+    #[test]
+    fn output_items_from_value_fans_out_scalar_arrays_and_empty_arrays_unit() {
+        assert_eq!(
+            output_items_from_value(json!(["alice", "bob"])),
+            OutputItems::Rows(vec![
+                json!({"value": "alice"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+                json!({"value": "bob"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ])
+        );
+        assert_eq!(
+            output_items_from_value(json!([])),
+            OutputItems::Rows(Vec::new())
+        );
     }
 
     #[test]

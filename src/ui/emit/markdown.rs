@@ -1,3 +1,4 @@
+use crate::core::output_model::ColumnAlignment;
 use crate::ui::doc::{
     Block, Doc, GuideEntriesBlock, JsonBlock, KeyValueBlock, KeyValueRow, KeyValueStyle, ListBlock,
     ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
@@ -132,41 +133,80 @@ fn emit_table(block: &TableBlock) -> String {
         lines.push(String::new());
     }
     lines.push(markdown_row(&table.headers, &table.widths));
-    lines.push(markdown_separator(&table.widths));
+    lines.push(markdown_separator(&table.widths, &table.column_align));
     for row in &table.rows {
-        lines.push(markdown_row(row, &table.widths));
+        lines.push(markdown_row_aligned(
+            row,
+            &table.widths,
+            &table.column_align,
+        ));
     }
     lines.join("\n")
 }
 
 fn markdown_row(cells: &[PreparedCell], widths: &[usize]) -> String {
+    markdown_row_aligned(cells, widths, &[])
+}
+
+fn markdown_row_aligned(
+    cells: &[PreparedCell],
+    widths: &[usize],
+    column_align: &[ColumnAlignment],
+) -> String {
     let mut out = String::from("|");
     for (index, width) in widths.iter().enumerate() {
         let cell = cells.get(index);
+        let raw_width = cell.map(|cell| cell.width).unwrap_or(0);
+        let (left_pad, right_pad) = aligned_padding(
+            width.saturating_sub(raw_width),
+            column_align.get(index).copied(),
+        );
         out.push(' ');
+        out.push_str(&" ".repeat(left_pad));
         out.push_str(cell.map(|cell| cell.markdown.as_str()).unwrap_or(""));
-        let pad = width.saturating_sub(cell.map(|cell| cell.width).unwrap_or(0));
-        out.push_str(&" ".repeat(pad));
+        out.push_str(&" ".repeat(right_pad));
         out.push(' ');
         out.push('|');
     }
     out
 }
 
-fn markdown_separator(widths: &[usize]) -> String {
+fn markdown_separator(widths: &[usize], column_align: &[ColumnAlignment]) -> String {
     let mut out = String::from("|");
-    for width in widths {
+    for (index, width) in widths.iter().enumerate() {
         out.push(' ');
-        out.push_str(&"-".repeat((*width).max(3)));
+        out.push_str(&markdown_alignment_rule(
+            (*width).max(3),
+            column_align.get(index).copied(),
+        ));
         out.push(' ');
         out.push('|');
     }
     out
+}
+
+fn markdown_alignment_rule(width: usize, alignment: Option<ColumnAlignment>) -> String {
+    let width = width.max(3);
+    match alignment.unwrap_or(ColumnAlignment::Default) {
+        ColumnAlignment::Default => "-".repeat(width),
+        ColumnAlignment::Left => format!(":{}", "-".repeat(width)),
+        ColumnAlignment::Right => format!("{}:", "-".repeat(width)),
+        ColumnAlignment::Center => format!(":{}:", "-".repeat(width)),
+    }
+}
+
+fn aligned_padding(pad: usize, alignment: Option<ColumnAlignment>) -> (usize, usize) {
+    match alignment.unwrap_or(ColumnAlignment::Default) {
+        ColumnAlignment::Default | ColumnAlignment::Left => (0, pad),
+        ColumnAlignment::Right => (pad, 0),
+        ColumnAlignment::Center => (pad / 2, pad - (pad / 2)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{emit_doc, emit_table};
+    use crate::core::output_model::ColumnAlignment;
     use crate::ui::doc::{
         Block, Doc, GuideEntriesBlock, GuideEntryRow, KeyValueRow, ParagraphBlock, SectionBlock,
         SectionTitleChrome, TableBlock,
@@ -222,6 +262,7 @@ mod tests {
             summary: Vec::new(),
             headers: Vec::new(),
             rows: Vec::new(),
+            column_align: Vec::new(),
         };
         assert_eq!(emit_table(&empty), "");
 
@@ -237,13 +278,15 @@ mod tests {
                 vec!["alice".to_string(), "a@example.com".to_string()],
                 vec!["bob".to_string(), "".to_string()],
             ],
+            column_align: vec![ColumnAlignment::Left, ColumnAlignment::Right],
         };
 
         let rendered = emit_table(&table);
 
         assert!(rendered.contains("- team: prod"));
         assert!(rendered.contains("| uid"));
-        assert!(rendered.contains("| ---"));
+        assert!(rendered.contains("| :----- |"));
+        assert!(rendered.contains(" -------------: |"));
         assert!(rendered.contains("| bob   |"));
     }
 }

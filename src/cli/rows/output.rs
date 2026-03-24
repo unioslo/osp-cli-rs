@@ -1,6 +1,6 @@
 use crate::core::output_model::{
-    ColumnAlignment, OutputItems, OutputMeta, OutputResult,
-    compute_key_index as core_compute_key_index, output_items_to_rows,
+    ColumnAlignment, OutputMeta, OutputResult, compute_key_index as core_compute_key_index,
+    output_items_from_value, output_items_to_rows,
 };
 use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
 use crate::core::row::Row;
@@ -17,13 +17,14 @@ pub(crate) fn plugin_data_to_output_result(
     data: serde_json::Value,
     meta: Option<&ResponseMetaV1>,
 ) -> OutputResult {
-    let rows = response_to_rows(data);
+    let items = output_items_from_value(data);
+    let rows = output_items_to_rows(&items);
     let key_index = meta
         .and_then(|value| value.columns.clone())
         .filter(|columns| !columns.is_empty())
         .unwrap_or_else(|| compute_key_index(&rows));
     OutputResult {
-        items: OutputItems::Rows(rows),
+        items,
         document: None,
         meta: OutputMeta {
             key_index,
@@ -50,23 +51,6 @@ fn column_alignment_from_plugin(value: ColumnAlignmentV1) -> ColumnAlignment {
         ColumnAlignmentV1::Left => ColumnAlignment::Left,
         ColumnAlignmentV1::Center => ColumnAlignment::Center,
         ColumnAlignmentV1::Right => ColumnAlignment::Right,
-    }
-}
-
-fn response_to_rows(data: serde_json::Value) -> Vec<Row> {
-    match data {
-        serde_json::Value::Array(items)
-            if items
-                .iter()
-                .all(|item| matches!(item, serde_json::Value::Object(_))) =>
-        {
-            items
-                .into_iter()
-                .filter_map(|item| item.as_object().cloned())
-                .collect::<Vec<Row>>()
-        }
-        serde_json::Value::Object(map) => vec![map],
-        scalar => vec![crate::row! { "value" => scalar }],
     }
 }
 
@@ -135,15 +119,27 @@ mod tests {
 
         let scalar = plugin_data_to_output_result(json!("hello"), None);
         let object = plugin_data_to_output_result(json!({ "uid": "alice", "count": 2 }), None);
+        let scalar_array = plugin_data_to_output_result(json!(["alice", "bob"]), None);
+        let empty_array = plugin_data_to_output_result(json!([]), None);
 
         let scalar_rows = output_to_rows(&scalar);
         let object_rows = output_to_rows(&object);
+        let scalar_array_rows = output_to_rows(&scalar_array);
+        let empty_array_rows = output_to_rows(&empty_array);
 
         assert_eq!(scalar_rows, vec![crate::row! { "value" => "hello" }]);
         assert_eq!(
             object_rows,
             vec![crate::row! { "uid" => "alice", "count" => 2 }]
         );
+        assert_eq!(
+            scalar_array_rows,
+            vec![
+                crate::row! { "value" => "alice" },
+                crate::row! { "value" => "bob" }
+            ]
+        );
+        assert!(empty_array_rows.is_empty());
     }
 
     #[test]

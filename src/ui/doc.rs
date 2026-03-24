@@ -1,3 +1,5 @@
+use crate::core::output_model::ColumnAlignment;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Doc {
     pub blocks: Vec<Block>,
@@ -45,6 +47,7 @@ pub struct TableBlock {
     pub summary: Vec<KeyValueRow>,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
+    pub column_align: Vec<ColumnAlignment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

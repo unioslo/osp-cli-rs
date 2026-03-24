@@ -1,5 +1,6 @@
 use unicode_width::UnicodeWidthStr;
 
+use crate::core::output_model::ColumnAlignment;
 use crate::ui::chrome::{
     FULL_HELP_LAYOUT_CHROME, GUIDE_SECTION_CHROME, PLAIN_SECTION_CHROME, RenderedTitle,
 };
@@ -292,6 +293,7 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
         &table_row(
             &table.headers,
             &table.widths,
+            &table.column_align,
             border.vertical,
             &styler,
             true,
@@ -313,7 +315,14 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
     ));
     for row in &table.rows {
         lines.push(indent_lines(
-            &table_row(row, &table.widths, border.vertical, &styler, false),
+            &table_row(
+                row,
+                &table.widths,
+                &table.column_align,
+                border.vertical,
+                &styler,
+                false,
+            ),
             settings.margin,
         ));
     }
@@ -355,6 +364,7 @@ fn format_summary(
 fn table_row(
     cells: &[PreparedCell],
     widths: &[usize],
+    column_align: &[ColumnAlignment],
     vertical: char,
     styler: &ThemeStyler<'_>,
     header: bool,
@@ -366,18 +376,31 @@ fn table_row(
         out.push(' ');
         let cell = cells.get(index);
         let raw_cell = cell.map(|cell| cell.raw.as_str()).unwrap_or("");
+        let raw_width = cell.map(|cell| cell.width).unwrap_or(0);
+        let (left_pad, right_pad) = aligned_padding(
+            width.saturating_sub(raw_width),
+            column_align.get(index).copied(),
+        );
         let styled_cell = if header {
             styler.paint(raw_cell, StyleToken::TableHeader)
         } else {
             styler.paint_value(raw_cell)
         };
+        out.push_str(&" ".repeat(left_pad));
         out.push_str(&styled_cell);
-        let pad = width.saturating_sub(cell.map(|cell| cell.width).unwrap_or(0));
-        out.push_str(&" ".repeat(pad));
+        out.push_str(&" ".repeat(right_pad));
         out.push(' ');
         out.push_str(&vertical);
     }
     out
+}
+
+fn aligned_padding(pad: usize, alignment: Option<ColumnAlignment>) -> (usize, usize) {
+    match alignment.unwrap_or(ColumnAlignment::Default) {
+        ColumnAlignment::Default | ColumnAlignment::Left => (0, pad),
+        ColumnAlignment::Right => (pad, 0),
+        ColumnAlignment::Center => (pad / 2, pad - (pad / 2)),
+    }
 }
 
 fn style_title_line(title: &RenderedTitle, styler: &ThemeStyler<'_>) -> String {

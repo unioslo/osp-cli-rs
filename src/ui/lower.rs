@@ -4,7 +4,8 @@ use serde_json::{Map, Value};
 
 use crate::core::output::OutputFormat;
 use crate::core::output_model::{
-    Group, OutputItems, OutputResult, group_rows, output_items_to_rows, output_items_to_value,
+    ColumnAlignment, Group, OutputItems, OutputResult, group_rows, output_items_to_rows,
+    output_items_to_value,
 };
 use crate::core::row::Row;
 use crate::guide::{GuideEntry, GuideSection, GuideSectionKind, GuideView};
@@ -163,7 +164,11 @@ pub(crate) fn json_value(output: &OutputResult) -> Value {
 fn lower_table_doc(output: &OutputResult) -> Doc {
     match &output.items {
         OutputItems::Rows(rows) => Doc {
-            blocks: vec![Block::Table(table_from_rows(rows, &output.meta.key_index))],
+            blocks: vec![Block::Table(table_from_rows(
+                rows,
+                &output.meta.key_index,
+                &output.meta.column_align,
+            ))],
         },
         OutputItems::Groups(groups) => {
             let mut blocks = Vec::new();
@@ -174,6 +179,7 @@ fn lower_table_doc(output: &OutputResult) -> Doc {
                 blocks.push(Block::Table(table_from_group(
                     group,
                     &output.meta.key_index,
+                    &output.meta.column_align,
                 )));
             }
             Doc { blocks }
@@ -752,8 +758,13 @@ fn key_value_from_map(
     }
 }
 
-fn table_from_rows(rows: &[Row], key_index: &[String]) -> TableBlock {
+fn table_from_rows(
+    rows: &[Row],
+    key_index: &[String],
+    column_align: &[ColumnAlignment],
+) -> TableBlock {
     let headers = headers_for_rows(rows, key_index);
+    let normalized_align = normalize_table_alignment(headers.len(), column_align);
     TableBlock {
         summary: Vec::new(),
         rows: rows
@@ -766,10 +777,15 @@ fn table_from_rows(rows: &[Row], key_index: &[String]) -> TableBlock {
             })
             .collect(),
         headers,
+        column_align: normalized_align,
     }
 }
 
-fn table_from_group(group: &Group, preferred_keys: &[String]) -> TableBlock {
+fn table_from_group(
+    group: &Group,
+    preferred_keys: &[String],
+    column_align: &[ColumnAlignment],
+) -> TableBlock {
     let merged_rows = group_rows(group);
     let mut summary = Vec::new();
     let mut seen = BTreeSet::new();
@@ -805,7 +821,7 @@ fn table_from_group(group: &Group, preferred_keys: &[String]) -> TableBlock {
             });
         }
     }
-    let mut table = table_from_rows(&merged_rows, preferred_keys);
+    let mut table = table_from_rows(&merged_rows, preferred_keys, column_align);
     table.summary = summary;
     table
 }
@@ -836,7 +852,18 @@ fn table_from_value_array(items: &[Value]) -> Option<TableBlock> {
         };
         rows.push(map.clone());
     }
-    Some(table_from_rows(&rows, &[]))
+    Some(table_from_rows(&rows, &[], &[]))
+}
+
+fn normalize_table_alignment(
+    header_count: usize,
+    column_align: &[ColumnAlignment],
+) -> Vec<ColumnAlignment> {
+    let mut normalized = vec![ColumnAlignment::Default; header_count];
+    for (index, alignment) in column_align.iter().copied().enumerate().take(header_count) {
+        normalized[index] = alignment;
+    }
+    normalized
 }
 
 fn display_value(value: &Value) -> String {

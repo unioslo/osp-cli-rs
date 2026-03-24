@@ -73,6 +73,39 @@ fn help_like_payload_does_not_restore_after_value_extraction_pipeline() {
     );
 }
 
+// Protects semantic JQ fanout on guide-shaped payloads: jq multi-result output
+// should materialize as one value row per result instead of a single wrapped
+// array row.
+#[test]
+fn help_like_payload_jq_fans_out_scalar_results() {
+    let output = run_guide_pipeline(help_like_guide(), "JQ '.commands[].name'");
+
+    assert!(GuideView::try_from_output_result(&output).is_none());
+    let OutputItems::Rows(rows) = output.items else {
+        panic!("expected flat value rows");
+    };
+    assert_eq!(
+        rows,
+        vec![
+            row(json!({"value": "apply"})),
+            row(json!({"value": "doctor"})),
+            row(json!({"value": "status"})),
+        ]
+    );
+}
+
+// Protects semantic JQ emptiness: jq `empty` should yield no rows, not a
+// synthetic `null` row.
+#[test]
+fn help_like_payload_jq_empty_yields_no_rows() {
+    let output = run_guide_pipeline(help_like_guide(), "JQ 'empty'");
+
+    let OutputItems::Rows(rows) = output.items else {
+        panic!("expected flat row output");
+    };
+    assert!(rows.is_empty());
+}
+
 // Protects the new semantic unroll path: nested entry arrays should duplicate
 // their parent section shell per entry instead of flattening into anonymous
 // row-like fragments.

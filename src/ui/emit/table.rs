@@ -1,3 +1,4 @@
+use crate::core::output_model::ColumnAlignment;
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::doc::TableBlock;
@@ -7,6 +8,7 @@ pub(super) struct PreparedTable {
     pub headers: Vec<PreparedCell>,
     pub rows: Vec<Vec<PreparedCell>>,
     pub widths: Vec<usize>,
+    pub column_align: Vec<ColumnAlignment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +51,7 @@ impl PreparedTable {
             headers,
             rows,
             widths,
+            column_align: block.column_align.clone(),
         }
     }
 }
@@ -70,6 +73,7 @@ impl PreparedCell {
 #[cfg(test)]
 mod tests {
     use super::PreparedTable;
+    use crate::core::output_model::ColumnAlignment;
     use crate::ui::doc::{KeyValueRow, TableBlock};
 
     #[test]
@@ -83,6 +87,7 @@ mod tests {
             }],
             headers: vec!["na|me".to_string(), "id".to_string()],
             rows: vec![vec!["ali|ce".to_string(), "42".to_string()]],
+            column_align: vec![ColumnAlignment::Left, ColumnAlignment::Right],
         };
 
         let prepared = PreparedTable::for_markdown(&table);
@@ -92,5 +97,9 @@ mod tests {
         assert_eq!(prepared.headers[0].markdown, "na\\|me");
         assert_eq!(prepared.rows[0][0].raw, "ali|ce");
         assert_eq!(prepared.rows[0][0].markdown, "ali\\|ce");
+        assert_eq!(
+            prepared.column_align,
+            vec![ColumnAlignment::Left, ColumnAlignment::Right]
+        );
     }
 }
