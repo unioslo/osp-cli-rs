@@ -2,13 +2,14 @@ use std::collections::BTreeSet;
 
 use miette::{Result, WrapErr, miette};
 
-use crate::app::{AuthState, TerminalKind};
+use crate::app::{AppClients, AuthState, TerminalKind};
 use crate::cli::{
     Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, IntroArgs, PluginsArgs, ReplArgs,
     ThemeArgs, parse_inline_command_tokens,
 };
-use crate::core::command_policy::{AccessReason, CommandAccess};
+use crate::core::command_policy::{AccessReason, CommandAccess, CommandPath};
 use crate::normalize::{normalize_identifier, normalize_optional_identifier};
+use crate::plugin::CommandCatalogEntry;
 
 use super::{CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS, CMD_THEME};
 
@@ -23,6 +24,12 @@ pub(crate) enum RunAction {
     History(HistoryArgs),
     Intro(IntroArgs),
     External(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExternalCommandSource {
+    Native,
+    Plugin,
 }
 
 impl RunAction {
@@ -152,12 +159,10 @@ pub(crate) fn ensure_dispatch_visibility(auth: &AuthState, action: &RunAction) -
         RunAction::Config(_) => ensure_builtin_visible_for(auth, CMD_CONFIG),
         RunAction::History(_) => ensure_builtin_visible_for(auth, CMD_HISTORY),
         RunAction::ReplCommand(_) | RunAction::Repl | RunAction::Intro(_) => Ok(()),
-        RunAction::External(tokens) => {
-            if let Some(command) = tokens.first() {
-                ensure_plugin_visible_for(auth, command)?;
-            }
-            Ok(())
-        }
+        // External command auth needs provider/native metadata to resolve the
+        // real command path. Do that in the runtime dispatch layer instead of
+        // guessing from raw tokens here.
+        RunAction::External(_) => Ok(()),
     }
 }
 
@@ -171,6 +176,76 @@ pub(crate) fn ensure_plugin_visible_for(auth: &AuthState, command: &str) -> Resu
         "plugin command",
         auth.external_command_access(command),
     )
+}
+
+pub(crate) fn ensure_plugin_path_visible_for(auth: &AuthState, path: &CommandPath) -> Result<()> {
+    ensure_command_access(
+        &path.as_slice().join(" "),
+        "plugin command",
+        auth.external_command_path_access(path),
+    )
+}
+
+pub(crate) fn resolve_external_command_source(
+    auth: &AuthState,
+    clients: &AppClients,
+    command: &str,
+    provider_override: Option<&str>,
+) -> Result<ExternalCommandSource> {
+    if provider_override.is_some() {
+        return Ok(ExternalCommandSource::Plugin);
+    }
+
+    let catalog = super::authorized_command_catalog_for(auth, clients)?;
+    let matching = catalog
+        .iter()
+        .filter(|entry| entry.name == command)
+        .collect::<Vec<_>>();
+    let has_native = matching.iter().any(|entry| is_native_command_entry(entry));
+    let has_plugin = matching.iter().any(|entry| !is_native_command_entry(entry));
+
+    if has_native && has_plugin {
+        let labels = matching
+            .iter()
+            .map(|entry| external_command_source_label(entry))
+            .collect::<Vec<_>>();
+        return Err(miette!(
+            "command `{command}` is ambiguous across command sources: {}",
+            labels.join(", ")
+        ));
+    }
+
+    if has_plugin && !has_native && matching.iter().any(|entry| entry.requires_selection) {
+        let providers = matching
+            .iter()
+            .find(|entry| entry.requires_selection)
+            .map(|entry| entry.providers.join(", "))
+            .unwrap_or_default();
+        return Err(miette!(
+            "command `{command}` requires provider selection; available: {providers}; use --plugin-provider <plugin-id> or `plugins select-provider {command} <plugin-id>`"
+        ));
+    }
+
+    if has_native {
+        Ok(ExternalCommandSource::Native)
+    } else {
+        Ok(ExternalCommandSource::Plugin)
+    }
+}
+
+pub(crate) fn external_command_source_label(entry: &CommandCatalogEntry) -> String {
+    if entry.requires_selection {
+        return format!("plugin providers: {}", entry.providers.join(", "));
+    }
+
+    match (&entry.provider, entry.source) {
+        (Some(provider), Some(source)) => format!("{provider} ({source})"),
+        _ => "native integration".to_string(),
+    }
+}
+
+fn is_native_command_entry(entry: &CommandCatalogEntry) -> bool {
+    entry.provider.is_none() && entry.source.is_none() && entry.providers.is_empty()
 }
 
 pub(crate) fn normalize_profile_override(value: Option<String>) -> Option<String> {

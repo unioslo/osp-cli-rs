@@ -257,6 +257,23 @@ pub(super) fn run_provider(
     context: &PluginDispatchContext,
     timeout: Duration,
 ) -> std::result::Result<RawPluginOutput, PluginDispatchError> {
+    let env_issues = context
+        .env_issues_for(&provider.plugin_id)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !env_issues.is_empty() {
+        tracing::warn!(
+            plugin_id = %provider.plugin_id,
+            command = %selected_command,
+            issue_count = env_issues.len(),
+            "plugin command blocked by invalid injected environment config"
+        );
+        return Err(PluginDispatchError::InvalidEnvironment {
+            plugin_id: provider.plugin_id.clone(),
+            issues: env_issues,
+        });
+    }
+
     let mut command = Command::new(&provider.executable);
     let started_at = Instant::now();
     tracing::debug!(

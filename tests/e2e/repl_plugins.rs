@@ -64,10 +64,10 @@ fn repl_requires_explicit_provider_selection_for_conflicted_commands() {
     assert!(
         session.wait_for_output_since(
             start,
-            "command `hello` is provided by multiple plugins",
+            "command `hello` requires provider selection",
             Duration::from_secs(3)
         ),
-        "expected ambiguity error in repl output; output:\n{}",
+        "expected provider-selection error in repl output; output:\n{}",
         session.output_snapshot(4000),
     );
     assert!(

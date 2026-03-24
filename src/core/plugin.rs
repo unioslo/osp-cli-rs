@@ -491,7 +491,44 @@ impl DescribeV1 {
     }
 }
 
+pub(crate) fn canonical_plugin_command_name(command: &str) -> Result<String, String> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Err("command name must not be empty".to_string());
+    }
+    if !command
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
+    {
+        return Err(format!(
+            "command name `{command}` must use lowercase ASCII letters, digits, `-`, or `_`"
+        ));
+    }
+    Ok(command.to_string())
+}
+
 impl DescribeCommandV1 {
+    pub(crate) fn resolved_subcommand_path(&self, args: &[String]) -> CommandPath {
+        let mut segments = vec![self.name.clone()];
+        let mut current = self;
+        let mut remaining = args;
+
+        while let Some(token) = remaining.first() {
+            let Some(subcommand) = current
+                .subcommands
+                .iter()
+                .find(|subcommand| subcommand.name.eq_ignore_ascii_case(token))
+            else {
+                break;
+            };
+            segments.push(subcommand.name.clone());
+            current = subcommand;
+            remaining = &remaining[1..];
+        }
+
+        CommandPath::new(segments)
+    }
+
     /// Converts command auth metadata into an internal command policy for
     /// `path`.
     ///
@@ -786,9 +823,7 @@ impl From<&DescribeSuggestionV1> for ValueChoice {
 }
 
 fn validate_command(command: &DescribeCommandV1) -> Result<(), String> {
-    if command.name.trim().is_empty() {
-        return Err("command name must not be empty".to_string());
-    }
+    canonical_plugin_command_name(&command.name)?;
     if let Some(auth) = &command.auth {
         validate_command_auth(auth)?;
     }
@@ -940,7 +975,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        DescribeCommandAuthV1, DescribeCommandV1, DescribeVisibilityModeV1, validate_command_auth,
+        DescribeCommandAuthV1, DescribeCommandV1, DescribeV1, DescribeVisibilityModeV1,
+        PLUGIN_PROTOCOL_V1, canonical_plugin_command_name, validate_command_auth,
     };
     use crate::core::command_policy::{CommandPath, VisibilityMode};
 
@@ -996,6 +1032,96 @@ mod tests {
         assert_eq!(
             DescribeVisibilityModeV1::Authenticated.as_label(),
             "authenticated"
+        );
+    }
+
+    #[test]
+    fn canonical_plugin_command_name_rejects_mixed_case_unit() {
+        assert_eq!(
+            canonical_plugin_command_name("ldap-user").as_deref(),
+            Ok("ldap-user")
+        );
+        assert!(
+            canonical_plugin_command_name("Ldap")
+                .expect_err("mixed-case command names should be rejected")
+                .contains("must use lowercase ASCII letters")
+        );
+        assert!(
+            canonical_plugin_command_name("ldap user")
+                .expect_err("whitespace should be rejected")
+                .contains("must use lowercase ASCII letters")
+        );
+    }
+
+    #[test]
+    fn describe_validation_rejects_mixed_case_command_names_unit() {
+        let describe = DescribeV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            plugin_id: "demo".to_string(),
+            plugin_version: "0.1.0".to_string(),
+            min_osp_version: None,
+            commands: vec![DescribeCommandV1 {
+                name: "Ldap".to_string(),
+                about: String::new(),
+                auth: None,
+                args: Vec::new(),
+                flags: BTreeMap::new(),
+                subcommands: Vec::new(),
+            }],
+        };
+
+        assert!(
+            describe
+                .validate_v1()
+                .expect_err("mixed-case command names should be rejected")
+                .contains("must use lowercase ASCII letters")
+        );
+    }
+
+    #[test]
+    fn resolved_subcommand_path_stops_at_non_subcommand_tokens_unit() {
+        let command = DescribeCommandV1 {
+            name: "orch".to_string(),
+            about: String::new(),
+            auth: None,
+            args: Vec::new(),
+            flags: BTreeMap::new(),
+            subcommands: vec![DescribeCommandV1 {
+                name: "approval".to_string(),
+                about: String::new(),
+                auth: None,
+                args: Vec::new(),
+                flags: BTreeMap::new(),
+                subcommands: vec![DescribeCommandV1 {
+                    name: "decide".to_string(),
+                    about: String::new(),
+                    auth: None,
+                    args: Vec::new(),
+                    flags: BTreeMap::new(),
+                    subcommands: Vec::new(),
+                }],
+            }],
+        };
+
+        assert_eq!(
+            command
+                .resolved_subcommand_path(&[
+                    "approval".to_string(),
+                    "decide".to_string(),
+                    "ticket-123".to_string(),
+                ])
+                .as_slice(),
+            &[
+                "orch".to_string(),
+                "approval".to_string(),
+                "decide".to_string(),
+            ]
+        );
+        assert_eq!(
+            command
+                .resolved_subcommand_path(&["APPROVAL".to_string(), "--help".to_string()])
+                .as_slice(),
+            &["orch".to_string(), "approval".to_string()]
         );
     }
 }

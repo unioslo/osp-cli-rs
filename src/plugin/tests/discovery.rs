@@ -411,7 +411,7 @@ fn bundled_plugins_skip_describe_until_manifest_requirements_pass_unit() {
 
 #[cfg(unix)]
 #[test]
-fn path_discovery_is_opt_in_and_uses_passive_cache_until_dispatch_unit() {
+fn path_discovery_refreshes_passive_view_after_first_dispatch_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-path-discovery");
     let _lock = env_lock()
         .lock()
@@ -468,7 +468,6 @@ fn path_discovery_is_opt_in_and_uses_passive_cache_until_dispatch_unit() {
         "--describe should run when resolving an invoked path plugin"
     );
 
-    manager.refresh();
     let refreshed = manager.list_plugins();
     let pathdemo = refreshed
         .iter()

@@ -1,4 +1,5 @@
 use crate::config::{ConfigValue, ResolvedConfig};
+use crate::core::plugin::canonical_plugin_command_name;
 use anyhow::Result;
 use std::collections::BTreeMap;
 
@@ -90,18 +91,15 @@ enum PluginCommandConfigField {
 }
 
 fn plugin_command_config_field(key: &str) -> Option<(String, PluginCommandConfigField)> {
-    let normalized = key.trim().to_ascii_lowercase();
-    let remainder = normalized.strip_prefix("plugins.")?;
+    let remainder = key.trim().strip_prefix("plugins.")?;
     let (command, field) = remainder.rsplit_once('.')?;
-    if command.trim().is_empty() {
-        return None;
-    }
+    let command = canonical_plugin_command_name(command).ok()?;
     let field = match field {
         "state" => PluginCommandConfigField::State,
         "provider" => PluginCommandConfigField::Provider,
         _ => return None,
     };
-    Some((command.to_string(), field))
+    Some((command, field))
 }
 
 pub(super) fn write_text_atomic(path: &std::path::Path, payload: &str) -> Result<()> {

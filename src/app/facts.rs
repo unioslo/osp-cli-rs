@@ -126,6 +126,11 @@ fn build_plugin_dispatch_context(
     let config_env = clients.plugin_config_env(config);
     let ui = invocation.map(|value| &value.ui).unwrap_or(runtime_ui);
     let provider_override = invocation.and_then(|value| value.plugin_provider.clone());
+    let shared_env_issues = config_env
+        .shared
+        .iter()
+        .filter_map(plugin_env_issue_text)
+        .collect::<Vec<_>>();
 
     PluginDispatchContext::new(runtime_hints(
         context,
@@ -136,25 +141,49 @@ fn build_plugin_dispatch_context(
         config_env
             .shared
             .iter()
+            .filter(|entry| entry.issue.is_none())
             .map(|entry| (entry.env_key.clone(), entry.value.clone()))
             .collect::<Vec<_>>(),
     )
+    .with_shared_env_issues(shared_env_issues)
     .with_plugin_env(
         config_env
             .by_plugin_id
+            .clone()
             .into_iter()
             .map(|(plugin_id, entries)| {
                 (
                     plugin_id,
                     entries
                         .into_iter()
+                        .filter(|entry| entry.issue.is_none())
                         .map(|entry| (entry.env_key, entry.value))
                         .collect(),
                 )
             })
             .collect(),
     )
+    .with_plugin_env_issues(
+        config_env
+            .by_plugin_id
+            .into_iter()
+            .filter_map(|(plugin_id, entries)| {
+                let issues = entries
+                    .iter()
+                    .filter_map(plugin_env_issue_text)
+                    .collect::<Vec<_>>();
+                (!issues.is_empty()).then_some((plugin_id, issues))
+            })
+            .collect(),
+    )
     .with_provider_override(provider_override)
+}
+
+fn plugin_env_issue_text(entry: &crate::plugin::config::PluginConfigEntry) -> Option<String> {
+    entry
+        .issue
+        .as_ref()
+        .map(|issue| format!("{} from {}: {}", entry.env_key, entry.config_key, issue))
 }
 
 fn runtime_hints(context: &RuntimeContext, active_profile: &str, ui: &UiState) -> RuntimeHints {

@@ -144,11 +144,12 @@ impl DescribeCacheSession {
         }
     }
 
-    fn finish(mut self, manager: &PluginManager) {
+    fn finish(mut self, manager: &PluginManager) -> bool {
         self.dirty |= prune_stale_describe_cache_entries(&mut self.file, &self.seen_paths);
         if self.dirty {
             manager.save_describe_cache_or_warn(&self.file);
         }
+        self.dirty
     }
 }
 
@@ -216,13 +217,20 @@ impl PluginManager {
         if let Some(cached) = guard.clone() {
             return cached;
         }
-        let discovered = self.discover_uncached(policy);
+        let (discovered, cache_changed) = self.discover_uncached(policy);
         let shared = Arc::<[DiscoveredPlugin]>::from(discovered);
         *guard = Some(shared.clone());
+        if policy == DiscoveryPolicy::Dispatch && cache_changed {
+            let mut passive = self
+                .discovered_cache
+                .write()
+                .unwrap_or_else(|err| err.into_inner());
+            *passive = None;
+        }
         shared
     }
 
-    fn discover_uncached(&self, policy: DiscoveryPolicy) -> Vec<DiscoveredPlugin> {
+    fn discover_uncached(&self, policy: DiscoveryPolicy) -> (Vec<DiscoveredPlugin>, bool) {
         let roots = self.search_roots();
         let mut plugins: Vec<DiscoveredPlugin> = Vec::new();
         let mut seen_paths: HashSet<PathBuf> = HashSet::new();
@@ -240,7 +248,7 @@ impl PluginManager {
         }
 
         mark_duplicate_plugin_ids(&mut plugins);
-        describe_cache.finish(self);
+        let cache_changed = describe_cache.finish(self);
 
         tracing::debug!(
             discovered_plugins = plugins.len(),
@@ -252,7 +260,7 @@ impl PluginManager {
             "completed plugin discovery"
         );
 
-        plugins
+        (plugins, cache_changed)
     }
 
     fn search_roots(&self) -> Vec<SearchRoot> {

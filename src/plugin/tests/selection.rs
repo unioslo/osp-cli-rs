@@ -24,6 +24,23 @@ fn command_preferences_load_state_and_provider_from_resolved_config_unit() {
     );
 }
 
+#[test]
+fn command_preferences_ignore_noncanonical_command_keys_unit() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    defaults.set("plugins.Shared.state", "disabled");
+    defaults.set("plugins.Shared.provider", "uio-ldap");
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    let resolved = resolver
+        .resolve(ResolveOptions::default().with_terminal("cli"))
+        .expect("config should resolve");
+
+    let preferences = PluginCommandPreferences::from_resolved(&resolved);
+    assert_eq!(preferences.command_states.get("shared"), None);
+    assert_eq!(preferences.preferred_providers.get("shared"), None);
+}
+
 #[cfg(unix)]
 #[test]
 fn provider_selection_validation_rejects_empty_unknown_and_mismatched_inputs_unit() {
@@ -37,6 +54,11 @@ fn provider_selection_validation_rejects_empty_unknown_and_mismatched_inputs_uni
         .select_provider("shared", "   ")
         .expect_err("empty plugin id should fail");
     assert!(err.to_string().contains("plugin id must not be empty"));
+
+    let err = empty_manager
+        .select_provider("Shared", "alpha")
+        .expect_err("mixed-case command should fail");
+    assert!(err.to_string().contains("must use lowercase ASCII letters"));
 
     let root = make_temp_dir("osp-cli-plugin-manager-invalid-provider");
     let plugins_dir = root.join("plugins");

@@ -98,12 +98,14 @@ fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
                 value: "shared".to_string(),
                 config_key: "extensions.plugins.env.endpoint".to_string(),
                 scope: PluginConfigScope::Shared,
+                issue: None,
             },
             PluginConfigEntry {
                 env_key: "OSP_PLUGIN_CFG_SHARED_URL".to_string(),
                 value: "https://common.example".to_string(),
                 config_key: "extensions.plugins.env.shared.url".to_string(),
                 scope: PluginConfigScope::Shared,
+                issue: None,
             },
         ]
     );
@@ -115,12 +117,14 @@ fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
                 value: "token-123".to_string(),
                 config_key: "extensions.plugins.cfg.env.api.token".to_string(),
                 scope: PluginConfigScope::Plugin,
+                issue: None,
             },
             PluginConfigEntry {
                 env_key: "OSP_PLUGIN_CFG_ENDPOINT".to_string(),
                 value: "plugin".to_string(),
                 config_key: "extensions.plugins.cfg.env.endpoint".to_string(),
                 scope: PluginConfigScope::Plugin,
+                issue: None,
             },
         ])
     );
@@ -131,6 +135,7 @@ fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
             value: "other".to_string(),
             config_key: "extensions.plugins.other.env.endpoint".to_string(),
             scope: PluginConfigScope::Plugin,
+            issue: None,
         }])
     );
 }
@@ -198,6 +203,74 @@ fn app_clients_plugin_config_entries_match_shared_projection_helper_unit() {
         crate::plugin::config::plugin_config_entries(state.runtime.config.resolved(), "cfg");
 
     assert_eq!(from_clients, from_helper);
+}
+
+#[test]
+fn plugin_dispatch_context_filters_colliding_projected_env_entries_unit() {
+    let state = make_completion_state_with_entries(
+        None,
+        &[
+            ("extensions.plugins.cfg.env.api.token", "dot"),
+            ("extensions.plugins.cfg.env.api-token", "dash"),
+        ],
+    );
+
+    let context = super::plugin_dispatch_context_for_runtime(&state.runtime, &state.clients, None);
+    assert_eq!(
+        context.plugin_env.get("cfg").cloned().unwrap_or_default(),
+        Vec::<(String, String)>::new()
+    );
+    assert_eq!(context.env_issues_for("cfg").count(), 2);
+
+    let projected = state
+        .clients
+        .plugin_config_entries(&state.runtime.config, "cfg");
+    assert_eq!(projected.len(), 2);
+    assert!(
+        projected
+            .iter()
+            .all(|entry| { entry.env_key == "OSP_PLUGIN_CFG_API_TOKEN" && entry.issue.is_some() })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn external_plugin_dispatch_fails_when_config_env_collides_unit() {
+    let root = make_temp_dir("osp-cli-plugin-config-collision-dispatch");
+    let plugins_dir = root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    write_provider_test_plugin(&plugins_dir, "cfg", "cfg", "cfg-from-plugin");
+
+    let mut state = make_test_state(vec![plugins_dir]);
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "default");
+    defaults.set("extensions.plugins.cfg.env.api.token", "dot");
+    defaults.set("extensions.plugins.cfg.env.api-token", "dash");
+    let mut resolver = ConfigResolver::default();
+    resolver.set_defaults(defaults);
+    let updated = resolver
+        .resolve(ResolveOptions::default().with_terminal("repl"))
+        .expect("test config should resolve");
+    assert!(state.runtime.config.replace_resolved(updated));
+
+    let invocation = crate::app::resolve_invocation_ui(
+        state.runtime.config.resolved(),
+        &state.runtime.ui,
+        &crate::cli::invocation::InvocationOptions::default(),
+    );
+    let err = crate::app::run_external_command_with_help_renderer(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &["cfg".to_string()],
+        &invocation,
+        crate::guide::GuideView::from_text,
+    )
+    .expect_err("colliding injected env config should block dispatch");
+
+    let message = format!("{err:#}");
+    assert!(message.contains("invalid injected environment config"));
+    assert!(message.contains("OSP_PLUGIN_CFG_API_TOKEN"));
 }
 
 #[cfg(unix)]

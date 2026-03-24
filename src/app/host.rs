@@ -495,6 +495,9 @@ fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
             PluginDispatchError::ProviderNotFound { .. } => {
                 "pick one of the available providers from `osp plugins commands` or `osp plugins doctor`"
             }
+            PluginDispatchError::InvalidEnvironment { .. } => {
+                "inspect the colliding extensions.plugins.*.env keys and remove the normalization conflict"
+            }
             PluginDispatchError::ExecuteFailed { .. } => {
                 "verify the plugin executable exists and is executable"
             }

@@ -238,7 +238,12 @@ fn repl_plugin_provider_override_dispatches_selected_provider_unit() {
         "hello",
     )
     .expect_err("ambiguous plugin command should fail");
-    assert!(format!("{err:#}").contains("provided by multiple plugins"));
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("provided by multiple plugins")
+            || message.contains("requires provider selection"),
+        "unexpected ambiguity message: {message}",
+    );
 
     let repl_rendered = repl_dispatch::execute_repl_plugin_line(
         &mut state.runtime,

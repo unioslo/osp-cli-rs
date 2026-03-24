@@ -70,6 +70,37 @@ fn dispatch_drains_large_plugin_output_without_false_timeout_unit() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn dispatch_fails_fast_when_injected_env_config_has_collisions_unit() {
+    let root = make_temp_dir("osp-cli-plugin-manager-invalid-env");
+    let plugins_dir = root.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+    write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+
+    let manager = PluginManager::new(vec![plugins_dir]);
+    let context = PluginDispatchContext::new(crate::core::runtime::RuntimeHints::default())
+        .with_plugin_env_issues(std::collections::HashMap::from([(
+            "alpha".to_string(),
+            vec![
+                "OSP_PLUGIN_CFG_API_TOKEN from extensions.plugins.alpha.env.api.token: collides after env normalization with extensions.plugins.alpha.env.api-token".to_string(),
+            ],
+        )]));
+
+    let err = manager
+        .dispatch("shared", &[], &context)
+        .expect_err("invalid injected env config should block dispatch");
+
+    match err {
+        PluginDispatchError::InvalidEnvironment { plugin_id, issues } => {
+            assert_eq!(plugin_id, "alpha");
+            assert_eq!(issues.len(), 1);
+            assert!(issues[0].contains("OSP_PLUGIN_CFG_API_TOKEN"));
+        }
+        other => panic!("expected invalid environment error, got {other}"),
+    }
+}
+
 #[test]
 fn plugin_dispatch_context_and_error_formats_cover_local_helper_paths_unit() {
     let context = PluginDispatchContext::new(crate::core::runtime::RuntimeHints::default())
@@ -77,6 +108,11 @@ fn plugin_dispatch_context_and_error_formats_cover_local_helper_paths_unit() {
         .with_plugin_env(std::collections::HashMap::from([(
             "alpha".to_string(),
             vec![("OSP_PLUGIN_FLAG".to_string(), "1".to_string())],
+        )]))
+        .with_shared_env_issues(["shared env issue"])
+        .with_plugin_env_issues(std::collections::HashMap::from([(
+            "alpha".to_string(),
+            vec!["plugin env issue".to_string()],
         )]));
 
     let pairs = context.env_pairs_for("alpha").collect::<Vec<_>>();
@@ -87,6 +123,14 @@ fn plugin_dispatch_context_and_error_formats_cover_local_helper_paths_unit() {
     assert_eq!(
         context.env_pairs_for("missing").collect::<Vec<_>>(),
         vec![("OSP_FORMAT", "json")]
+    );
+    assert_eq!(
+        context.env_issues_for("alpha").collect::<Vec<_>>(),
+        vec!["shared env issue", "plugin env issue"]
+    );
+    assert_eq!(
+        context.env_issues_for("missing").collect::<Vec<_>>(),
+        vec!["shared env issue"]
     );
 
     let timeout_plain = PluginDispatchError::TimedOut {
@@ -136,6 +180,13 @@ fn plugin_dispatch_context_and_error_formats_cover_local_helper_paths_unit() {
         providers: vec!["alpha".to_string(), "beta".to_string()],
     };
     assert!(provider_missing.to_string().contains("available providers"));
+
+    let invalid_env = PluginDispatchError::InvalidEnvironment {
+        plugin_id: "alpha".to_string(),
+        issues: vec!["collision".to_string()],
+    };
+    assert!(invalid_env.to_string().contains("invalid injected environment config"));
+    assert!(invalid_env.to_string().contains("collision"));
 
     let execute_failed = PluginDispatchError::ExecuteFailed {
         plugin_id: "alpha".to_string(),

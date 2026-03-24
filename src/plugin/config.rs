@@ -19,15 +19,31 @@ pub(crate) struct PluginConfigEnv {
 impl PluginConfigEnv {
     pub(crate) fn effective_entries(&self, plugin_id: &str) -> Vec<PluginConfigEntry> {
         let mut effective = BTreeMap::new();
+        let mut issues = Vec::new();
         for entry in &self.shared {
-            effective.insert(entry.env_key.clone(), entry.clone());
-        }
-        if let Some(entries) = self.by_plugin_id.get(plugin_id) {
-            for entry in entries {
+            if entry.issue.is_some() {
+                issues.push(entry.clone());
+            } else {
                 effective.insert(entry.env_key.clone(), entry.clone());
             }
         }
-        effective.into_values().collect()
+        if let Some(entries) = self.by_plugin_id.get(plugin_id) {
+            for entry in entries {
+                if entry.issue.is_some() {
+                    issues.push(entry.clone());
+                } else {
+                    effective.insert(entry.env_key.clone(), entry.clone());
+                }
+            }
+        }
+        issues.sort_by(|left, right| {
+            left.env_key
+                .cmp(&right.env_key)
+                .then(left.config_key.cmp(&right.config_key))
+        });
+        let mut out = effective.into_values().collect::<Vec<_>>();
+        out.extend(issues);
+        out
     }
 }
 
@@ -43,6 +59,7 @@ pub(crate) struct PluginConfigEntry {
     pub(crate) value: String,
     pub(crate) config_key: String,
     pub(crate) scope: PluginConfigScope,
+    pub(crate) issue: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -101,15 +118,15 @@ fn write_cached_env(
 }
 
 pub(crate) fn collect_plugin_config_env(config: &ResolvedConfig) -> PluginConfigEnv {
-    let mut shared: BTreeMap<String, PluginConfigEntry> = BTreeMap::new();
-    let mut by_plugin_id: HashMap<String, BTreeMap<String, PluginConfigEntry>> = HashMap::new();
+    let mut shared = Vec::new();
+    let mut by_plugin_id: HashMap<String, Vec<PluginConfigEntry>> = HashMap::new();
 
     for (key, entry) in config.values() {
         if let Some(name) = key.strip_prefix(SHARED_PLUGIN_ENV_PREFIX) {
             if let Some(env_entry) =
                 plugin_env_mapping(key, name, &entry.value, PluginConfigScope::Shared)
             {
-                shared.insert(env_entry.env_key.clone(), env_entry);
+                shared.push(env_entry);
             }
             continue;
         }
@@ -129,16 +146,28 @@ pub(crate) fn collect_plugin_config_env(config: &ResolvedConfig) -> PluginConfig
             by_plugin_id
                 .entry(plugin_id.to_string())
                 .or_default()
-                .insert(env_entry.env_key.clone(), env_entry);
+                .push(env_entry);
         }
     }
 
+    annotate_env_collisions(&mut shared);
+    shared.sort_by(|left, right| {
+        left.env_key
+            .cmp(&right.env_key)
+            .then(left.config_key.cmp(&right.config_key))
+    });
+    for entries in by_plugin_id.values_mut() {
+        annotate_env_collisions(entries);
+        entries.sort_by(|left, right| {
+            left.env_key
+                .cmp(&right.env_key)
+                .then(left.config_key.cmp(&right.config_key))
+        });
+    }
+
     PluginConfigEnv {
-        shared: shared.into_values().collect(),
-        by_plugin_id: by_plugin_id
-            .into_iter()
-            .map(|(plugin_id, env)| (plugin_id, env.into_values().collect()))
-            .collect(),
+        shared,
+        by_plugin_id,
     }
 }
 
@@ -160,7 +189,36 @@ fn plugin_env_mapping(
         value: config_value_to_plugin_env(value),
         config_key: config_key.to_string(),
         scope,
+        issue: None,
     })
+}
+
+fn annotate_env_collisions(entries: &mut [PluginConfigEntry]) {
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        groups.entry(entry.env_key.clone()).or_default().push(idx);
+    }
+
+    for indices in groups.into_values() {
+        if indices.len() < 2 {
+            continue;
+        }
+        let config_keys = indices
+            .iter()
+            .map(|idx| entries[*idx].config_key.clone())
+            .collect::<Vec<_>>();
+        for (position, idx) in indices.into_iter().enumerate() {
+            let others = config_keys
+                .iter()
+                .enumerate()
+                .filter_map(|(other_idx, key)| (other_idx != position).then_some(key.as_str()))
+                .collect::<Vec<_>>();
+            entries[idx].issue = Some(format!(
+                "collides after env normalization with {}",
+                others.join(", ")
+            ));
+        }
+    }
 }
 
 pub(crate) fn plugin_config_env_name(name: &str) -> Option<String> {
@@ -263,6 +321,7 @@ mod tests {
             .find(|entry| entry.env_key == "OSP_PLUGIN_CFG_API_TOKEN")
             .expect("plugin token should exist");
         assert_eq!(token.value, "token-123");
+        assert!(token.issue.is_none());
     }
 
     #[test]
@@ -308,6 +367,32 @@ mod tests {
             Some("OSP_PLUGIN_CFG_API_TOKEN_URL".to_string())
         );
         assert_eq!(plugin_config_env_name("..."), None);
+    }
+
+    #[test]
+    fn plugin_config_entries_surface_and_filter_colliding_env_keys() {
+        let config = resolved_config(&[
+            ("extensions.plugins.demo.env.api.token", "dot"),
+            ("extensions.plugins.demo.env.api-token", "dash"),
+        ]);
+
+        let env = collect_plugin_config_env(&config);
+        let entries = plugin_config_entries(&config, "demo");
+
+        assert_eq!(env.by_plugin_id["demo"].len(), 2);
+        assert!(
+            env.by_plugin_id["demo"]
+                .iter()
+                .all(|entry| entry.issue.as_deref().is_some())
+        );
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|entry| {
+            entry.env_key == "OSP_PLUGIN_CFG_API_TOKEN"
+                && entry
+                    .issue
+                    .as_deref()
+                    .is_some_and(|issue| issue.contains("collides after env normalization"))
+        }));
     }
 
     #[test]

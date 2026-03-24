@@ -8,6 +8,7 @@ use crate::config::{
     ConfigLayer, ConfigValue, ResolvedConfig, RuntimeConfigPaths, Scope, TomlStoreEditOptions,
     set_scoped_value_in_toml, unset_scoped_value_in_toml,
 };
+use crate::core::plugin::canonical_plugin_command_name;
 use crate::core::row::Row;
 use crate::plugin::{
     CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary, state::PluginCommandState,
@@ -313,11 +314,10 @@ fn resolve_terminal_selector(
 }
 
 fn normalize_command_name(command: &str) -> Result<String> {
-    let normalized = command.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
+    if command.trim().is_empty() {
         return Err(miette::miette!("command must not be empty"));
     }
-    Ok(normalized)
+    canonical_plugin_command_name(command).map_err(|err| miette::miette!("{err}"))
 }
 
 fn sync_current_command_preferences(context: PluginsCommandContext<'_>) -> Result<()> {
@@ -337,11 +337,11 @@ fn sync_current_command_preferences(context: PluginsCommandContext<'_>) -> Resul
 }
 
 fn plugin_state_key(command: &str) -> String {
-    format!("plugins.{}.state", command.trim().to_ascii_lowercase())
+    format!("plugins.{}.state", command.trim())
 }
 
 fn plugin_provider_key(command: &str) -> String {
-    format!("plugins.{}.provider", command.trim().to_ascii_lowercase())
+    format!("plugins.{}.provider", command.trim())
 }
 
 fn projected_plugin_config_entries(
@@ -497,6 +497,10 @@ fn plugin_config_rows(plugin_id: &str, entries: &[crate::app::PluginConfigEntry]
                 "value" => entry.value.clone(),
                 "config_key" => entry.config_key.clone(),
                 "scope" => scope,
+                "issue" => entry
+                    .issue
+                    .clone()
+                    .map_or(serde_json::Value::Null, Into::into),
             }
         })
         .collect()
@@ -537,7 +541,10 @@ pub(crate) fn doctor_rows(report: &DoctorReport) -> Vec<Row> {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_catalog_rows, doctor_rows, plugin_config_rows, plugin_list_rows};
+    use super::{
+        command_catalog_rows, doctor_rows, normalize_command_name, plugin_config_rows,
+        plugin_list_rows,
+    };
     use crate::app::PluginConfigEntry;
     use crate::core::plugin::{DescribeCommandAuthV1, DescribeVisibilityModeV1};
     use crate::core::row::Row;
@@ -634,12 +641,14 @@ mod tests {
                     value: "1".to_string(),
                     config_key: "extensions.demo.token".to_string(),
                     scope: crate::app::PluginConfigScope::Shared,
+                    issue: None,
                 },
                 PluginConfigEntry {
                     env_key: "OSP_PLUGIN_FLAG".to_string(),
                     value: "2".to_string(),
                     config_key: "extensions.plugins.demo.flag".to_string(),
                     scope: crate::app::PluginConfigScope::Plugin,
+                    issue: None,
                 },
             ],
         );
@@ -670,5 +679,19 @@ mod tests {
         assert_eq!(rows[0].get("broken_enabled"), Some(&serde_json::json!(1)));
         assert_eq!(row_str(&rows[1], "kind"), Some("conflict"));
         assert_eq!(row_str(&rows[1], "command"), Some("shared"));
+    }
+
+    #[test]
+    fn plugin_admin_command_names_require_canonical_lowercase_unit() {
+        assert_eq!(
+            normalize_command_name(" shared ").expect("trimmed lowercase command should pass"),
+            "shared"
+        );
+        assert!(
+            normalize_command_name("Shared")
+                .expect_err("mixed-case command names should be rejected")
+                .to_string()
+                .contains("must use lowercase ASCII letters")
+        );
     }
 }

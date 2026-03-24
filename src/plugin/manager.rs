@@ -36,7 +36,10 @@ use super::state::PluginCommandPreferences;
 #[cfg(test)]
 use super::state::PluginCommandState;
 use crate::completion::CommandSpec;
-use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1};
+use crate::core::command_policy::CommandPath;
+use crate::core::plugin::{
+    DescribeCommandAuthV1, DescribeCommandV1, canonical_plugin_command_name,
+};
 use crate::core::runtime::RuntimeHints;
 use anyhow::{Result, anyhow};
 use std::collections::{BTreeSet, HashMap};
@@ -338,8 +341,13 @@ pub struct PluginDispatchContext {
     pub runtime_hints: RuntimeHints,
     /// Environment pairs injected into every plugin process.
     pub shared_env: Vec<(String, String)>,
+    /// Shared environment issues that should block dispatch instead of
+    /// silently dropping configuration.
+    pub(crate) shared_env_issues: Vec<String>,
     /// Additional environment pairs injected for specific plugins.
     pub plugin_env: HashMap<String, Vec<(String, String)>>,
+    /// Plugin-specific environment issues keyed by provider id.
+    pub(crate) plugin_env_issues: HashMap<String, Vec<String>>,
     /// Provider identifier forced by the caller, if any.
     pub provider_override: Option<String>,
 }
@@ -372,7 +380,9 @@ impl PluginDispatchContext {
         Self {
             runtime_hints,
             shared_env: Vec::new(),
+            shared_env_issues: Vec::new(),
             plugin_env: HashMap::new(),
+            plugin_env_issues: HashMap::new(),
             provider_override: None,
         }
     }
@@ -403,6 +413,23 @@ impl PluginDispatchContext {
         self
     }
 
+    pub(crate) fn with_shared_env_issues<I, S>(mut self, issues: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.shared_env_issues = issues.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub(crate) fn with_plugin_env_issues(
+        mut self,
+        plugin_env_issues: HashMap<String, Vec<String>>,
+    ) -> Self {
+        self.plugin_env_issues = plugin_env_issues;
+        self
+    }
+
     /// Replaces the optional forced provider identifier.
     ///
     /// Defaults to the manager's normal provider-resolution rules when omitted.
@@ -427,6 +454,19 @@ impl PluginDispatchContext {
                     .flat_map(|entries| entries.iter())
                     .map(|(key, value)| (key.as_str(), value.as_str())),
             )
+    }
+
+    pub(crate) fn env_issues_for<'a>(
+        &'a self,
+        plugin_id: &'a str,
+    ) -> impl Iterator<Item = &'a str> {
+        self.shared_env_issues.iter().map(String::as_str).chain(
+            self.plugin_env_issues
+                .get(plugin_id)
+                .into_iter()
+                .flat_map(|issues| issues.iter())
+                .map(String::as_str),
+        )
     }
 }
 
@@ -456,6 +496,13 @@ pub enum PluginDispatchError {
         requested_provider: String,
         /// Provider labels that provide `command`.
         providers: Vec<String>,
+    },
+    /// Plugin environment configuration is internally inconsistent.
+    InvalidEnvironment {
+        /// Plugin identifier being invoked.
+        plugin_id: String,
+        /// Human-readable configuration issues that block dispatch.
+        issues: Vec<String>,
     },
     /// Spawning or waiting for the plugin process failed.
     ExecuteFailed {
@@ -522,6 +569,13 @@ impl Display for PluginDispatchError {
                     providers.join(", ")
                 )
             }
+            PluginDispatchError::InvalidEnvironment { plugin_id, issues } => {
+                write!(
+                    f,
+                    "plugin {plugin_id} has invalid injected environment config: {}",
+                    issues.join("; ")
+                )
+            }
             PluginDispatchError::ExecuteFailed { plugin_id, source } => {
                 write!(f, "failed to execute plugin {plugin_id}: {source}")
             }
@@ -578,6 +632,7 @@ impl StdError for PluginDispatchError {
             PluginDispatchError::CommandNotFound { .. }
             | PluginDispatchError::CommandAmbiguous { .. }
             | PluginDispatchError::ProviderNotFound { .. }
+            | PluginDispatchError::InvalidEnvironment { .. }
             | PluginDispatchError::TimedOut { .. }
             | PluginDispatchError::NonZeroExit { .. }
             | PluginDispatchError::InvalidResponsePayload { .. } => None,
@@ -804,7 +859,8 @@ impl PluginManager {
     /// catalog building, so command metadata is unavailable there until the
     /// first command dispatch to that plugin. Dispatching a command triggers
     /// `--describe` as a cache miss and writes the result to the on-disk
-    /// describe cache; subsequent browse and catalog calls will then see the
+    /// describe cache. That write also invalidates the passive discovery
+    /// snapshot so later browse and catalog calls in the same process see the
     /// full command metadata.
     ///
     /// # Examples
@@ -892,6 +948,30 @@ impl PluginManager {
     /// ```
     pub fn command_policy_registry(&self) -> crate::core::command_policy::CommandPolicyRegistry {
         self.with_passive_view(build_command_policy_registry)
+    }
+
+    pub(crate) fn resolved_command_path(
+        &self,
+        command: &str,
+        args: &[String],
+        provider_override: Option<&str>,
+    ) -> CommandPath {
+        self.with_dispatch_view(|view| {
+            let Ok(ProviderResolution::Selected(selection)) =
+                view.resolve_provider(command, provider_override)
+            else {
+                return CommandPath::new([command]);
+            };
+            let Some(describe) = selection
+                .plugin
+                .canonical_command(command)
+                .and_then(|command| command.describe())
+            else {
+                return CommandPath::new([command]);
+            };
+
+            describe.resolved_subcommand_path(args)
+        })
     }
 
     /// Returns completion words derived from the current plugin command catalog.
@@ -984,13 +1064,13 @@ impl PluginManager {
     }
 
     pub(crate) fn validate_command(&self, command: &str) -> Result<()> {
-        let command = command.trim();
-        if command.is_empty() {
+        if command.trim().is_empty() {
             return Err(anyhow!("command must not be empty"));
         }
+        let command = canonical_plugin_command_name(command).map_err(anyhow::Error::msg)?;
 
         self.with_dispatch_view(|view| {
-            KnownCommandProviders::collect(view, command).validate_command()
+            KnownCommandProviders::collect(view, &command).validate_command()
         })
     }
 
@@ -1074,17 +1154,19 @@ impl PluginManager {
     /// currently available provider exports `command`, or when `plugin_id` is
     /// not one of the currently available providers for `command`.
     pub fn select_provider(&self, command: &str, plugin_id: &str) -> Result<()> {
-        let command = command.trim();
-        let plugin_id = plugin_id.trim();
-        if command.is_empty() {
+        if command.trim().is_empty() {
             return Err(anyhow!("command must not be empty"));
         }
+        let command = canonical_plugin_command_name(command).map_err(anyhow::Error::msg)?;
+        let plugin_id = plugin_id.trim();
         if plugin_id.is_empty() {
             return Err(anyhow!("plugin id must not be empty"));
         }
 
-        self.validate_provider_selection(command, plugin_id)?;
-        self.update_command_preferences(|preferences| preferences.set_provider(command, plugin_id));
+        self.validate_provider_selection(&command, plugin_id)?;
+        self.update_command_preferences(|preferences| {
+            preferences.set_provider(&command, plugin_id)
+        });
         Ok(())
     }
 
@@ -1106,14 +1188,14 @@ impl PluginManager {
     ///
     /// Returns an error when `command` is blank.
     pub fn clear_provider_selection(&self, command: &str) -> Result<bool> {
-        let command = command.trim();
-        if command.is_empty() {
+        if command.trim().is_empty() {
             return Err(anyhow!("command must not be empty"));
         }
+        let command = canonical_plugin_command_name(command).map_err(anyhow::Error::msg)?;
 
         let mut removed = false;
         self.update_command_preferences(|preferences| {
-            removed = preferences.clear_provider(command);
+            removed = preferences.clear_provider(&command);
         });
         Ok(removed)
     }
@@ -1142,8 +1224,12 @@ impl PluginManager {
     /// `command`, or when `plugin_id` is not one of the currently available
     /// providers for `command`.
     pub fn validate_provider_selection(&self, command: &str, plugin_id: &str) -> Result<()> {
+        if command.trim().is_empty() {
+            return Err(anyhow!("command must not be empty"));
+        }
+        let command = canonical_plugin_command_name(command).map_err(anyhow::Error::msg)?;
         self.with_dispatch_view(|view| {
-            AvailableCommandProviders::collect(view, command).validate_provider(plugin_id)
+            AvailableCommandProviders::collect(view, &command).validate_provider(plugin_id)
         })
     }
 

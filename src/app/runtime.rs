@@ -29,8 +29,8 @@ use std::time::Instant;
 
 use crate::config::{ConfigLayer, ResolvedConfig, RuntimeLoadOptions};
 use crate::core::command_policy::{
-    AccessReason, CommandAccess, CommandPolicy, CommandPolicyContext, CommandPolicyRegistry,
-    VisibilityMode,
+    AccessReason, CommandAccess, CommandPath, CommandPolicy, CommandPolicyContext,
+    CommandPolicyRegistry, VisibilityMode,
 };
 use crate::native::NativeCommandRegistry;
 use crate::plugin::PluginManager;
@@ -636,6 +636,16 @@ impl AuthState {
         )
     }
 
+    /// Evaluates access for an external command path.
+    pub fn external_command_path_access(&self, path: &CommandPath) -> CommandAccess {
+        command_access_for_path(
+            path,
+            &self.external_allowlist,
+            &self.external_policy,
+            &self.policy_context,
+        )
+    }
+
     /// Returns whether a built-in command should be shown to the user.
     pub fn is_builtin_visible(&self, command: &str) -> bool {
         self.builtin_access(command).is_visible()
@@ -681,15 +691,28 @@ fn command_access_for(
     context: &CommandPolicyContext,
 ) -> CommandAccess {
     let normalized = command.trim().to_ascii_lowercase();
-    let default_policy = CommandPolicy::new(crate::core::command_policy::CommandPath::new([
-        normalized.clone(),
-    ]))
-    .visibility(VisibilityMode::Public);
+    command_access_for_path(
+        &CommandPath::new([normalized]),
+        allowlist,
+        registry,
+        context,
+    )
+}
+
+fn command_access_for_path(
+    path: &CommandPath,
+    allowlist: &Option<HashSet<String>>,
+    registry: &CommandPolicyRegistry,
+    context: &CommandPolicyContext,
+) -> CommandAccess {
+    let default_policy = CommandPolicy::new(path.clone()).visibility(VisibilityMode::Public);
     let mut access = registry
-        .evaluate(&default_policy.path, context)
+        .evaluate(path, context)
         .unwrap_or_else(|| crate::core::command_policy::evaluate_policy(&default_policy, context));
 
-    if !is_visible_in_allowlist(allowlist, &normalized) {
+    if let Some(root) = path.as_slice().first()
+        && !is_visible_in_allowlist(allowlist, root)
+    {
         access = CommandAccess::hidden(AccessReason::HiddenByPolicy);
     }
 
