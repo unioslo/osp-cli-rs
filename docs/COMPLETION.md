@@ -115,7 +115,15 @@ keeps durable history focused on commands you are likely to rerun.
 
 History is shell-aware. That makes repeated work inside a supported shellable
 root more predictable because the shell prefix stays part of the command
-context.
+context after shell entry.
+
+The public REPL model is shell-first:
+
+- bare `ldap` enters the `ldap` shell from root
+- repeating the current shell root such as `(ldap) ldap` shows help for that
+  shell
+- hidden `cd <root>` still exists only as an escape hatch for rare same-name
+  nesting cases
 
 If your install never exposes shellable roots, you can ignore this section.
 

@@ -63,6 +63,12 @@ not execute PATH plugins just to ask for `--describe`. That means:
 - `plugins list` can show a PATH plugin with no discovered commands yet
 - `plugins commands` can stay empty until the first real dispatch or a cached
   describe payload exists
+- after a successful first dispatch, the same process updates browse surfaces
+  from that describe data without requiring a manual `plugins refresh`
+
+Plugin command names are canonical lowercase command roots. A plugin `DescribeV1`
+payload should use lowercase ASCII letters, digits, `-`, or `_` for each
+top-level command name.
 
 ## Provider Conflicts
 
@@ -87,6 +93,10 @@ active config scope.
 
 `osp plugins commands` and REPL help/completion show unresolved conflicts
 instead of inventing a merged command grammar.
+
+If a native integration and a plugin claim the same command root, `osp` also
+reports that as an ambiguity instead of silently preferring one source. Use
+`--plugin-provider` when you want the plugin side for that invocation.
 
 ## REPL Usage
 

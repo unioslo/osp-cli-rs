@@ -93,6 +93,10 @@ The host uses the same access result for:
 - completion
 - REPL overview and completion surfaces
 
+For external commands, dispatch resolves the real command path first and then
+evaluates access on that resolved path. Nested command policy is not supposed
+to stop at the first token.
+
 Command-policy evaluation governs product visibility and general runnability,
 but backend and resource-level authorization remains authoritative.
 

@@ -78,7 +78,8 @@ Plugins are separate binaries discovered at runtime (Option B).
 Rules:
 - `protocol_version` must be exactly `1`.
 - `plugin_id` must be unique within discovery scope.
-- `commands[].name` is top-level command claimed by the plugin.
+- `commands[].name` is the top-level command claimed by the plugin.
+- `commands[].name` must use lowercase ASCII letters, digits, `-`, or `_`.
 
 ## ResponseV1
 
@@ -108,6 +109,8 @@ Rules:
 - `meta.columns` controls column order when the payload is rendered as a table.
 - `meta.column_align` is optional and follows `meta.columns` positionally.
   Allowed values: `default | left | center | right`.
+- Current `osp` table renderers honor these alignment hints in terminal and
+  markdown table output.
 
 Message levels:
 - `error`
@@ -163,7 +166,7 @@ Backbone injects runtime hints into each plugin subprocess. Plugins can use
 Required hints:
 - `OSP_UI_VERBOSITY=error|warning|success|info|trace`
 - `OSP_DEBUG_LEVEL=0|1|2|3`
-- `OSP_FORMAT=auto|json|table|md|mreg|value`
+- `OSP_FORMAT=auto|guide|json|table|md|mreg|value`
 - `OSP_COLOR=auto|always|never`
 - `OSP_UNICODE=auto|always|never`
 - `OSP_TERMINAL_KIND=cli|repl|unknown`
@@ -200,6 +203,9 @@ Env mapping rules:
 - app-owned plugin config is injected after runtime hints, so later
   `OSP_PLUGIN_CFG_*` values intentionally win if a plugin reuses the same env
   name across shared and plugin-specific config.
+- collisions within the same scope after env-name normalization are surfaced as
+  config issues and the colliding values are not injected into the plugin
+  subprocess env.
 - scalar config values are stringified directly.
 - list values are encoded as JSON arrays.
 

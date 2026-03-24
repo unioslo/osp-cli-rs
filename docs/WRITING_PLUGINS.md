@@ -64,11 +64,20 @@ cat <<EOF
 EOF
 ```
 
-Save as `osp-my-echo`, make it executable, and place it in your PATH.
-Then:
+Save as `osp-my-echo` and make it executable. Then either:
+
+- place it in an explicit plugin directory and run `osp --plugin-dir <dir> ...`
+- place it under the standard config plugin directory
+  (`~/.config/osp/plugins/` on Linux by default)
+- or put it on `PATH` after enabling
+  `extensions.plugins.discovery.path = true`
+
+For a quick local check, the explicit directory route is the least surprising:
 
 ```bash
-osp echo hello world
+mkdir -p ./tmp-plugins
+cp ./osp-my-echo ./tmp-plugins/
+osp --plugin-dir ./tmp-plugins echo hello world
 ```
 
 ## Best-effort helper scripts
@@ -145,7 +154,7 @@ payload.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `name` | string | required | Top-level command name |
+| `name` | string | required | Top-level command name using lowercase ASCII letters, digits, `-`, or `_` |
 | `about` | string | `""` | Short help text |
 | `args` | array | `[]` | Positional arguments |
 | `flags` | object | `{}` | Named flags (keys start with `--`) |
@@ -281,22 +290,20 @@ verbosity rules as built-in commands. Keep table/JSON/value data in
 |-------|------|-------|
 | `format_hint` | string | Suggest output format (`"table"`, `"mreg"`, etc.) |
 | `columns` | array | Column order for table display |
-| `column_align` | array | Per-column alignment: `"default"`, `"left"`, `"center"`, `"right"` |
+| `column_align` | array | Optional per-column alignment hints: `"default"`, `"left"`, `"center"`, `"right"`. `osp` honors them in terminal and markdown table rendering. |
 
 ### Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 2 | Usage/argument error |
-| 10 | Resource not found |
-| 20 | Auth/config error |
-| 30 | Upstream API failure |
-| 40 | Internal error |
+Keep the rule boring:
 
-Any non-zero exit is treated as a plugin failure. `osp` does not try to
-recover protocol JSON from stdout in that case. The stderr output is
-shown to the user.
+- use exit code `0` for protocol responses, including `ok=false`
+- use non-zero exits only for process-level failures such as crashes, missing
+  prerequisites, or setup/transport failures
+- if a plugin is invoked through `osp`, non-zero plugin exits are treated as
+  generic plugin failures rather than a stable plugin-specific exit taxonomy
+
+If callers need structured failure semantics, put them in `error.code`, not in
+the process exit code.
 
 ## Environment variables
 
@@ -308,7 +315,7 @@ osp injects environment variables into the plugin process:
 |----------|--------|-------|
 | `OSP_UI_VERBOSITY` | `error`, `warning`, `success`, `info`, `trace` | User's verbosity level |
 | `OSP_DEBUG_LEVEL` | `0`-`3` | Debug verbosity from `-d` flags |
-| `OSP_FORMAT` | `auto`, `json`, `table`, `md`, `mreg`, `value` | Requested output format |
+| `OSP_FORMAT` | `auto`, `guide`, `json`, `table`, `md`, `mreg`, `value` | Requested output format |
 | `OSP_COLOR` | `auto`, `always`, `never` | Color preference |
 | `OSP_UNICODE` | `auto`, `always`, `never` | Unicode preference |
 | `OSP_TERMINAL_KIND` | `cli`, `repl`, `unknown` | Whether running in CLI or REPL |
@@ -326,10 +333,8 @@ osp injects environment variables into the plugin process:
 Users can pass config values to plugins via the config file:
 
 ```toml
-[default]
+[profile.default]
 extensions.plugins.env.api_url = "https://api.example.com"
-
-[default]
 extensions.plugins.my-plugin.env.token = "secret"
 ```
 
@@ -340,6 +345,10 @@ These become environment variables:
   `OSP_PLUGIN_CFG_TOKEN` (only for `my-plugin`)
 
 Plugin-specific values override shared values for the same key.
+
+If two raw config keys in the same scope normalize to the same env name, `osp`
+surfaces that as a config issue and skips the colliding env vars rather than
+silently picking one.
 
 ## Discovery
 
@@ -367,7 +376,9 @@ Plugin `--describe` results are cached in
 file size, and modification time. On Linux this is typically
 `~/.cache/osp/describe-v1.json`, and `XDG_CACHE_HOME` overrides the base
 cache dir when set. The cache is invalidated automatically when the
-binary changes.
+binary changes. When a PATH-discovered plugin gets described during a real
+dispatch, the current process also refreshes its passive browse view from that
+metadata.
 
 Force a cache refresh:
 
@@ -456,6 +467,10 @@ state = "enabled"
 provider = "inventory-a"
 ```
 
+If a native integration and a plugin share the same command root, `osp`
+reports that as a source ambiguity rather than silently preferring native
+dispatch.
+
 ## Writing a plugin in Rust
 
 For Rust plugins, you can use clap for argument parsing and serde for
@@ -511,7 +526,14 @@ if __name__ == "__main__":
         json.dump(result, sys.stdout)
 ```
 
-Save as `osp-py-example`, `chmod +x`, add to PATH.
+Save as `osp-py-example`, `chmod +x`, and expose it through one of the
+supported discovery paths above. For example:
+
+```bash
+mkdir -p ./tmp-plugins
+cp ./osp-py-example ./tmp-plugins/
+osp --plugin-dir ./tmp-plugins greet alice
+```
 
 ## Debugging
 

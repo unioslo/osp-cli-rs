@@ -85,8 +85,28 @@ become shells.
 
 Most plain upstream installs will not expose those domain roots, so you can
 ignore shell scope until your downstream distribution provides one. When it
-does, entering that bare root makes later lines inherit the root until you
-leave the shell.
+does, shell entry is shell-first:
+
+```text
+ldap
+user oistes
+exit
+```
+
+Typing the bare root enters that shell and makes later lines inherit the root
+until you leave it.
+
+Inside an active shell, repeating the current root shows help for that shell:
+
+```text
+ldap
+ldap
+```
+
+The second `ldap` is interpreted as `ldap --help`.
+
+Hidden `cd <root>` still exists only as an escape hatch for rare same-name
+nested-shell cases. It is not the primary user-facing model.
 
 Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned. They
 manage the shell rather than dispatching a normal command.

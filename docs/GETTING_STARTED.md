@@ -73,7 +73,8 @@ That covers the core upstream promise:
 - help and formatting behave the same way interactively
 
 Use full commands first. REPL shell scope exists only for a small set of
-shellable domain roots and is not part of the generic upstream quick start.
+shellable domain roots. When those roots are available, typing the bare root
+enters that shell. It is not part of the generic upstream quick start.
 
 ## 4. Learn The First Three Troubleshooting Commands
 
