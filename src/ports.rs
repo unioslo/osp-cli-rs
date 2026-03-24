@@ -164,7 +164,9 @@ fn project_attributes(row: &Row, attrs: &[String]) -> Row {
 
 fn wildcard_match(pattern: &str, value: &str) -> bool {
     let escaped = regex::escape(pattern).replace("\\*", ".*");
-    let re = regex::Regex::new(&format!("^{escaped}$"));
+    let re = regex::RegexBuilder::new(&format!("^{escaped}$"))
+        .case_insensitive(true)
+        .build();
     match re {
         Ok(re) => re.is_match(value),
         Err(_) => false,
@@ -233,6 +235,9 @@ mod tests {
 
         let wildcard = apply_filter_and_projection(rows, Some("uid=*tes"), None);
         assert_eq!(wildcard.len(), 1);
+
+        let wildcard_upper = apply_filter_and_projection(vec![user_row()], Some("uid=*TES"), None);
+        assert_eq!(wildcard_upper.len(), 1);
     }
 
     #[test]

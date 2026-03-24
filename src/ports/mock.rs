@@ -129,7 +129,10 @@ impl LdapDirectory for MockLdapClient {
 
 fn wildcard_match(pattern: &str, value: &str) -> bool {
     let escaped = regex::escape(pattern).replace("\\*", ".*");
-    match regex::Regex::new(&format!("^{escaped}$")) {
+    match regex::RegexBuilder::new(&format!("^{escaped}$"))
+        .case_insensitive(true)
+        .build()
+    {
         Ok(re) => re.is_match(value),
         Err(_) => false,
     }
@@ -159,6 +162,9 @@ mod tests {
             users[0].get("uid").and_then(|value| value.as_str()),
             Some("oistes")
         );
+
+        let upper_users = ldap.user("OI*", None, None).expect("query should succeed");
+        assert_eq!(upper_users.len(), 1);
 
         let netgroups = ldap
             .netgroup("u*", None, Some(&["cn".to_string()]))
