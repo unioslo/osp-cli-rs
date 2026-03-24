@@ -20,7 +20,8 @@ use crate::repl::completion;
 use crate::repl::is_repl_shellable_command;
 
 use super::dispatch::{
-    ExternalCommandSource, ensure_plugin_path_visible_for, resolve_external_command_source,
+    ExternalCommandSource, canonical_external_command_name, ensure_plugin_path_visible_for,
+    resolve_external_command_source,
 };
 use super::{
     CMD_HELP, CliCommandResult, ResolvedInvocation, cli_result_from_plugin_response,
@@ -122,17 +123,18 @@ pub(crate) fn run_external_command_with_help_renderer(
         .tokens
         .split_first()
         .ok_or_else(|| miette!("missing external command"))?;
+    let command = canonical_external_command_name(&runtime.auth, clients, command)?;
     let external_runtime = ExternalCommandRuntime::from_parts(runtime, clients);
     match resolve_external_command_source(
         &runtime.auth,
         clients,
-        command,
+        &command,
         invocation.plugin_provider.as_deref(),
     )? {
         ExternalCommandSource::Native => {
             let native_command = clients
                 .native_commands()
-                .command(command)
+                .command(&command)
                 .ok_or_else(|| miette!("no native command provides `{command}`"))?;
             let path = native_command.describe().resolved_subcommand_path(args);
             ensure_plugin_path_visible_for(&runtime.auth, &path)?;
@@ -146,7 +148,7 @@ pub(crate) fn run_external_command_with_help_renderer(
         }
         ExternalCommandSource::Plugin => run_external_plugin_command(
             &external_runtime,
-            command,
+            &command,
             args,
             &parsed.stages,
             invocation,
@@ -666,6 +668,38 @@ JSON
     }
 
     #[test]
+    fn external_dispatch_matches_native_commands_case_insensitively_unit() {
+        let (mut runtime, mut session, clients) =
+            make_test_state_with_native(Some(NativeOutcomeKind::Help));
+        let invocation = resolve_invocation_ui(
+            runtime.config.resolved(),
+            &runtime.ui,
+            &InvocationOptions::default(),
+        );
+        let result = run_external_command_with_help_renderer(
+            &mut runtime,
+            &mut session,
+            &clients,
+            &["LDAP".to_string()],
+            &invocation,
+            |text| GuideView::from_text(&format!("HELP::{text}")),
+        )
+        .expect("mixed-case native command should dispatch");
+
+        assert!(matches!(
+            result.output,
+            Some(ReplCommandOutput::Output(guide))
+                if guide
+                    .source_guide
+                    .as_ref()
+                    .expect("expected semantic guide payload")
+                    .preamble
+                    .iter()
+                    .any(|line| line.contains("HELP::Usage: osp ldap"))
+        ));
+    }
+
+    #[test]
     fn external_dispatch_enforces_nested_native_command_auth_unit() {
         let (mut runtime, mut session, clients) = make_test_state_with_registry(
             NativeCommandRegistry::new().with_command(NestedAuthNativeCommand),
@@ -792,6 +826,46 @@ JSON
             GuideView::from_text,
         )
         .expect("provider override should route to plugin");
+
+        let rows = match result.output {
+            Some(ReplCommandOutput::Output(output)) => output
+                .output
+                .as_rows()
+                .expect("expected row output")
+                .to_vec(),
+            other => panic!("expected structured output, got {other:?}"),
+        };
+        assert_eq!(rows, vec![crate::row! { "provider" => "alpha" }]);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_dispatch_matches_plugin_commands_case_insensitively_unit() {
+        let root = make_temp_dir("osp-cli-external-plugin-case-insensitive");
+        let plugins_dir = root.join("plugins");
+        fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
+        write_provider_test_plugin(&plugins_dir, "alpha", "shared");
+
+        let (mut runtime, mut session, clients) = make_test_state_with_parts(
+            PluginManager::new(vec![plugins_dir]),
+            NativeCommandRegistry::default(),
+        );
+        let invocation = resolve_invocation_ui(
+            runtime.config.resolved(),
+            &runtime.ui,
+            &InvocationOptions::default(),
+        );
+
+        let result = run_external_command_with_help_renderer(
+            &mut runtime,
+            &mut session,
+            &clients,
+            &["SHARED".to_string()],
+            &invocation,
+            GuideView::from_text,
+        )
+        .expect("mixed-case plugin command should dispatch");
 
         let rows = match result.output {
             Some(ReplCommandOutput::Output(output)) => output

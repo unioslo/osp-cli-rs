@@ -204,10 +204,7 @@ pub(crate) fn resolve_external_command_source(
     }
 
     let catalog = super::authorized_command_catalog_for(auth, clients)?;
-    let matching = catalog
-        .iter()
-        .filter(|entry| entry.name == command)
-        .collect::<Vec<_>>();
+    let matching = matching_external_command_entries(&catalog, command);
     let has_native = matching.iter().any(|entry| is_native_command_entry(entry));
     let has_plugin = matching.iter().any(|entry| !is_native_command_entry(entry));
 
@@ -240,6 +237,18 @@ pub(crate) fn resolve_external_command_source(
     }
 }
 
+pub(crate) fn canonical_external_command_name(
+    auth: &AuthState,
+    clients: &AppClients,
+    command: &str,
+) -> Result<String> {
+    let catalog = super::authorized_command_catalog_for(auth, clients)?;
+    Ok(matching_external_command_entries(&catalog, command)
+        .first()
+        .map(|entry| entry.name.clone())
+        .unwrap_or_else(|| command.to_string()))
+}
+
 pub(crate) fn external_command_source_label(entry: &CommandCatalogEntry) -> String {
     if entry.requires_selection {
         return format!("plugin providers: {}", entry.providers.join(", "));
@@ -253,6 +262,16 @@ pub(crate) fn external_command_source_label(entry: &CommandCatalogEntry) -> Stri
 
 fn is_native_command_entry(entry: &CommandCatalogEntry) -> bool {
     entry.provider.is_none() && entry.source.is_none() && entry.providers.is_empty()
+}
+
+fn matching_external_command_entries<'a>(
+    catalog: &'a [CommandCatalogEntry],
+    command: &str,
+) -> Vec<&'a CommandCatalogEntry> {
+    catalog
+        .iter()
+        .filter(|entry| entry.name.eq_ignore_ascii_case(command))
+        .collect()
 }
 
 pub(crate) fn normalize_profile_override(value: Option<String>) -> Option<String> {
