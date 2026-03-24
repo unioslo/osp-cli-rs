@@ -1,3 +1,9 @@
+//! Rendered timing badges for debug-oriented output.
+//!
+//! Timing capture happens elsewhere. This module only owns the small
+//! formatting/styling policy that turns parse/execute/render durations into a
+//! compact badge for prompts, debug output, and other operator-facing surfaces.
+
 use std::time::Duration;
 
 use crate::ui::ResolvedRenderSettings;

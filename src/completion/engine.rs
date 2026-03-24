@@ -1,3 +1,10 @@
+//! High-level completion orchestration.
+//!
+//! This module is the main coordinator for the pure completion pipeline:
+//! parse the line, resolve completion context, then rank suggestions. It owns
+//! the cross-step glue so outer layers can ask one object for completion
+//! without knowing about the parser/context/suggester split.
+
 use crate::completion::{
     context::TreeResolver,
     model::{

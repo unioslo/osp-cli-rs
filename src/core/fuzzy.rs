@@ -1,3 +1,9 @@
+//! Shared fuzzy-matching policies.
+//!
+//! Different product surfaces want different typo tolerance. This module keeps
+//! those matcher choices in one place so completion, config recovery, and
+//! search do not each invent their own fuzzy behavior.
+
 use skim::CaseMatching;
 use skim::fuzzy_matcher::arinae::ArinaeMatcher;
 use std::sync::OnceLock;

@@ -1,3 +1,10 @@
+//! Compiled DSL plans and execution-oriented stage metadata.
+//!
+//! Parsing answers "what did the user type?". This module answers "what is the
+//! evaluator supposed to do with it?" by turning parsed stages into concrete
+//! per-verb plans and by attaching the execution traits that the engine cares
+//! about, such as streaming ability and semantic degradation.
+
 use anyhow::{Result, anyhow};
 
 use crate::dsl::{

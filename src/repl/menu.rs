@@ -1,3 +1,9 @@
+//! Reedline menu adapter for OSP completion.
+//!
+//! This module is the runtime/editor-facing shell around [`menu_core`]. It
+//! translates reedline events and painter state into the menu-core layout and
+//! selection model used by OSP-specific completion rendering.
+
 use reedline::{
     Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
     menu_functions::{can_partially_complete, replace_in_buffer},

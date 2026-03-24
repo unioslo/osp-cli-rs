@@ -1,3 +1,9 @@
+//! `plugins` builtin command implementation.
+//!
+//! This module is the operator-facing management surface for plugin discovery,
+//! catalog browsing, provider preference state, and plugin-scoped config
+//! projection.
+
 use crate::app::{AppClients, AppRuntime, AuthState, ConfigState, RuntimeContext};
 use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, PluginConfigScope, plugin_config_entries,

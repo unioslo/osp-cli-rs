@@ -1,3 +1,9 @@
+//! `doctor` builtin command implementation.
+//!
+//! `doctor` is a thin aggregation surface over other diagnostics providers.
+//! This module pulls together config, plugin, theme, and recent-failure views
+//! into one operator-facing troubleshooting entrypoint.
+
 use miette::Result;
 
 use crate::app::{AppClients, AppRuntime, AppSession, AuthState, LastFailure, UiState};

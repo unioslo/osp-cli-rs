@@ -1,3 +1,10 @@
+//! Plugin-specific config projection helpers.
+//!
+//! This module turns resolved config keys into plugin-facing environment
+//! variables and preference state. It exists so dispatch and catalog code can
+//! consume one normalized view instead of re-parsing `ResolvedConfig` in
+//! multiple places.
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::RwLock;
 

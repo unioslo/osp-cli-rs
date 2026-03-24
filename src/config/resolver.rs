@@ -1,3 +1,19 @@
+//! Winner selection and schema-aware config resolution.
+//!
+//! This module owns the part of config processing that turns already-loaded
+//! layers into the runtime view used by the rest of the application. The
+//! important boundary is:
+//!
+//! - loaders materialize source layers
+//! - selectors decide which scoped entry wins inside each layer/source order
+//! - the resolver chooses final winners, interpolates them, and adapts them to
+//!   schema types
+//! - callers consume the result as [`ResolvedConfig`] or explanation output
+//!
+//! Put precedence logic here rather than in host startup, command handlers, or
+//! store-edit code. Letting resolution rules leak into callers is how config
+//! behavior drifts.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::bootstrap::{

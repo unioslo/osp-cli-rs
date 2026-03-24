@@ -1,3 +1,15 @@
+//! Render-setting types and config-derived UI resolution.
+//!
+//! This module exists so callers can keep a stable separation between:
+//!
+//! - user/config-facing render preferences such as format, color, and chrome
+//! - runtime facts such as tty state and terminal width
+//! - the final resolved settings used by planning and emitters
+//!
+//! Public callers usually construct or tweak [`RenderSettings`] and let this
+//! module derive the richer [`ResolvedRenderSettings`] view consumed by the
+//! rest of the UI pipeline.
+
 use crate::config::{ConfigSource, ConfigValue, ResolvedConfig, Scope};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::output_model::{
@@ -8,6 +20,11 @@ use crate::ui::style;
 use crate::ui::theme;
 use crate::ui::theme::{DEFAULT_THEME_NAME, ThemeDefinition};
 
+/// Default format to use when help/guide payloads are rendered in `auto`
+/// mode.
+///
+/// This keeps guide-like output readable without forcing all non-guide output
+/// away from the normal planner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GuideDefaultFormat {
     #[default]
@@ -25,12 +42,17 @@ impl GuideDefaultFormat {
     }
 }
 
+/// Concrete renderer family chosen after settings resolution.
+///
+/// `Plain` keeps output copy-safe and decoration-light. `Rich` enables the
+/// styled terminal renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderBackend {
     Plain,
     Rich,
 }
 
+/// Border style used for table-like layouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TableBorderStyle {
     None,
@@ -39,6 +61,10 @@ pub enum TableBorderStyle {
     Round,
 }
 
+/// Overflow policy for wide table cells.
+///
+/// This is intentionally presentation-only. It should not change the logical
+/// row model, only how wide content is displayed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableOverflow {
     None,
@@ -47,6 +73,7 @@ pub enum TableOverflow {
     Wrap,
 }
 
+/// Layout density for guide/help rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HelpLayout {
     #[default]
@@ -55,6 +82,10 @@ pub enum HelpLayout {
     Minimal,
 }
 
+/// Named presentation preset used to seed several UI defaults at once.
+///
+/// Presets are a convenience layer on top of the regular UI/config keys, not
+/// a second rendering pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiPresentation {
     Expressive,
@@ -62,6 +93,10 @@ pub enum UiPresentation {
     Austere,
 }
 
+/// Provenance for a chosen [`UiPresentation`] preset.
+///
+/// This is used by explain/introspection surfaces so callers can see which
+/// value seeded presentation defaults before later overrides were applied.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PresentationEffect {
     pub preset: UiPresentation,
@@ -90,6 +125,10 @@ impl UiPresentation {
     }
 }
 
+/// Optional chrome overrides for guide/help rendering.
+///
+/// These knobs intentionally stay narrow so operators can tune help density
+/// without having to understand the entire theme system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HelpChromeSettings {
     pub table_chrome: HelpTableChrome,
@@ -98,6 +137,10 @@ pub struct HelpChromeSettings {
     pub section_spacing: Option<usize>,
 }
 
+/// Border style override for help tables.
+///
+/// `Inherit` keeps help tables aligned with the surrounding table style while
+/// the other variants force a specific chrome choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HelpTableChrome {
     Inherit,
@@ -128,23 +171,35 @@ impl HelpTableChrome {
     }
 }
 
+/// Runtime facts that influence auto render decisions.
+///
+/// `RenderSettings` describes caller preference, while `RenderRuntime`
+/// describes the ambient terminal/process conditions those preferences are
+/// resolved against.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RenderRuntime {
+    /// Whether the visible stdout path is a tty.
     pub stdout_is_tty: bool,
+    /// Raw terminal kind such as `xterm-256color`, if known.
     pub terminal: Option<String>,
+    /// Whether the runtime has already forced color off.
     pub no_color: bool,
+    /// Detected or caller-supplied terminal width hint.
     pub width: Option<usize>,
+    /// Whether locale detection suggests UTF-8 output is safe.
     pub locale_utf8: Option<bool>,
 }
 
 impl RenderRuntime {}
 
 impl RenderRuntime {
+    /// Starts a builder for caller-supplied runtime facts.
     pub fn builder() -> RenderRuntimeBuilder {
         RenderRuntimeBuilder::default()
     }
 }
 
+/// Guided construction for [`RenderRuntime`].
 #[derive(Debug, Clone, Default)]
 pub struct RenderRuntimeBuilder {
     runtime: RenderRuntime,
@@ -181,6 +236,21 @@ impl RenderRuntimeBuilder {
     }
 }
 
+/// Caller-facing render preferences for the canonical UI pipeline.
+///
+/// This is the main "what do I want?" settings surface. Auto decisions still
+/// happen later by combining these preferences with [`RenderRuntime`] and a
+/// [`RenderProfile`].
+///
+/// Rule of thumb:
+///
+/// - `format`, `mode`, `color`, and `unicode` describe the top-level output
+///   intent
+/// - `format_explicit` says whether the caller forced the format and therefore
+///   wants recommendation/auto inference to stop
+/// - `guide_default_format` controls how semantic guide/help payloads behave
+///   when format stays `auto`
+/// - `runtime` carries the ambient facts used to resolve the auto knobs
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderSettings {
     pub format: OutputFormat,
@@ -595,12 +665,21 @@ fn config_usize_override(config: &ResolvedConfig, key: &str) -> Option<usize> {
     }
 }
 
+/// Guided construction for [`RenderSettings`].
+///
+/// Use [`RenderSettings::builder`] for ordinary caller-controlled rendering, or
+/// [`RenderSettingsBuilder::plain`] when the desired result is explicitly
+/// plain-safe output for scripts, logs, or copy paths.
 #[derive(Debug, Clone, Default)]
 pub struct RenderSettingsBuilder {
     settings: RenderSettings,
 }
 
 impl RenderSettingsBuilder {
+    /// Starts a builder biased toward plain, copy-safe rendering.
+    ///
+    /// This is the right entrypoint for clipboard, logging, and other paths
+    /// where styling and terminal affordances would be a liability.
     pub fn plain(format: OutputFormat) -> Self {
         Self {
             settings: RenderSettings {

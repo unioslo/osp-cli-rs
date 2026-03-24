@@ -1,10 +1,21 @@
+//! Parsing for `command | stage | stage` DSL lines.
+//!
+//! This module owns lexical splitting and the first-pass stage classification.
+//! It should stay conservative: recognize registered explicit verbs, preserve
+//! raw text for diagnostics, and avoid doing evaluator work that belongs in
+//! compilation or execution.
+
 use crate::dsl::model::{ParsedPipeline, ParsedStage, ParsedStageKind};
 use crate::dsl::verb_info::is_registered_explicit_verb;
 
 use super::lexer::{LexerError, StageSegment, split_pipeline, tokenize_stage};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Parsed command line split into a command segment and trailing DSL stages.
+///
+/// The command segment is preserved exactly as typed so the normal command
+/// dispatcher can own shell parsing, aliases, and command semantics. DSL
+/// parsing only owns the pipe suffix.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pipeline {
     /// Raw command segment before pipe stages.
     pub command: String,
@@ -13,6 +24,9 @@ pub struct Pipeline {
 }
 
 /// Split a full command line into its command portion and raw pipe stages.
+///
+/// This is the right entrypoint when the caller still needs to dispatch the
+/// leading command before applying any DSL transformations.
 pub fn parse_pipeline(line: &str) -> Result<Pipeline, LexerError> {
     let segments = split_pipeline(line)?;
 
@@ -64,6 +78,9 @@ pub fn parse_stage(raw_stage: &str) -> Result<ParsedStage, LexerError> {
 }
 
 /// Parse an already-split list of stage strings.
+///
+/// Use this when a caller already separated the command segment and only needs
+/// structured stage parsing for the DSL suffix.
 pub fn parse_stage_list(stages: &[String]) -> Result<ParsedPipeline, LexerError> {
     Ok(ParsedPipeline {
         raw: stages.join(" | "),

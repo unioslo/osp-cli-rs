@@ -1,3 +1,9 @@
+//! Small shell-quoting helpers for display and reuse.
+//!
+//! These helpers exist for output surfaces such as history, completion, and
+//! debug displays that need shell-safe text without depending on a full shell
+//! parser.
+
 /// Quoting style to use when formatting a shell argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuoteStyle {

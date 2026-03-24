@@ -1,3 +1,17 @@
+//! Lower structured output into the UI document IR.
+//!
+//! This module is the semantic bridge between [`crate::core::output_model`]
+//! and [`crate::ui::doc`]. It owns the answer to "what kind of document should
+//! a given output payload become?" while deliberately staying ignorant of
+//! terminal-specific rendering details.
+//!
+//! Keep the split here:
+//!
+//! - output semantics and guide shape come in from upstream modules
+//! - this module chooses document structure
+//! - emitters later decide spacing, borders, markdown markers, and terminal
+//!   chrome
+
 use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};

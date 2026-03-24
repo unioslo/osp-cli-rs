@@ -1,3 +1,10 @@
+//! Editor-agnostic completion menu layout and navigation.
+//!
+//! The REPL completion menu has more policy than a plain list of suggestions:
+//! adaptive columns, description rows, selection movement, and debug
+//! snapshots. This module keeps those rules separate from reedline-specific
+//! integration so they can be tested and reasoned about directly.
+
 use nu_ansi_term::ansi::RESET;
 use nu_ansi_term::{Color, Style};
 use reedline::{MenuEvent, MenuTextStyle, Suggestion};

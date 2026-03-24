@@ -1,3 +1,10 @@
+//! REPL host loop orchestration.
+//!
+//! This module sits above the editor/runtime adapter and below the outer app
+//! host. It owns the long-lived REPL loop, the debug command entrypoints, and
+//! the assembly of runtime/session state into the smaller view objects the REPL
+//! subsystems consume.
+
 use crate::config::ResolvedConfig;
 use crate::repl::{DebugStep, run_repl};
 use anyhow::anyhow;

@@ -1,3 +1,32 @@
+//! Config-layer loaders and the standard multi-source loading pipeline.
+//!
+//! This module exists to answer one narrower question than the rest of
+//! [`crate::config`]: given some backing sources, what concrete
+//! [`crate::config::ConfigLayer`] values should enter resolution?
+//!
+//! The important split is:
+//!
+//! - loaders here materialize source layers from files, env, and in-memory
+//!   inputs
+//! - precedence, interpolation, schema adaptation, and winner selection still
+//!   belong to [`crate::config::ConfigResolver`]
+//!
+//! Public API shape:
+//!
+//! - [`LoaderPipeline`] is the normal entrypoint for host-style config loading
+//! - [`StaticLayerLoader`] is the cheap in-memory/testing path
+//! - file/env/secrets loaders stay small and boring; they should not grow
+//!   precedence logic or cross-source policy
+//! - [`ChainedLoader`] exists only to merge several loaders into one source
+//!   slot before resolution
+//!
+//! Contract:
+//!
+//! - one loader owns one backing-source read path
+//! - loaders return raw layers plus source provenance, not resolved winners
+//! - callers should prefer [`LoaderPipeline`] over assembling bespoke load
+//!   order by hand
+
 use std::path::PathBuf;
 
 use crate::config::{
@@ -5,7 +34,11 @@ use crate::config::{
     ResolvedConfig, core::parse_env_key, store::validate_secrets_permissions, with_path_context,
 };
 
-/// Loads a single config layer from some backing source.
+/// Loads one config layer from one backing source.
+///
+/// Implementations should only materialize source-local values and provenance.
+/// They should not try to apply cross-source precedence, schema validation, or
+/// winner selection; those jobs belong to [`ConfigResolver`](crate::config::ConfigResolver).
 pub trait ConfigLoader: Send + Sync {
     /// Reads the source and returns it as a config layer.
     fn load(&self) -> Result<ConfigLayer, ConfigError>;
@@ -56,6 +89,9 @@ impl ConfigLoader for StaticLayerLoader {
 }
 
 /// Loader for ordinary TOML config files.
+///
+/// Use this for non-secret config data that should preserve file/path
+/// provenance on each loaded entry.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct TomlFileLoader {
@@ -65,6 +101,9 @@ pub struct TomlFileLoader {
 
 impl TomlFileLoader {
     /// Creates a loader for the given TOML file path.
+    ///
+    /// New loaders default to `optional()` because many host bootstraps treat
+    /// the config file as user-provided rather than mandatory.
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -73,12 +112,17 @@ impl TomlFileLoader {
     }
 
     /// Requires the file to exist.
+    ///
+    /// Use this when the caller is loading a path that was already selected as
+    /// authoritative and missing-file fallback would hide a real setup error.
     pub fn required(mut self) -> Self {
         self.missing_ok = false;
         self
     }
 
     /// Allows the file to be absent.
+    ///
+    /// Missing optional files load as an empty layer.
     pub fn optional(mut self) -> Self {
         self.missing_ok = true;
         self
@@ -124,6 +168,10 @@ impl ConfigLoader for TomlFileLoader {
 }
 
 /// Loader for `OSP__...` environment variables.
+///
+/// This loader only projects matching environment variables into one config
+/// layer. It does not decide where that layer sits in precedence; that is the
+/// caller's job when wiring a [`LoaderPipeline`].
 #[derive(Debug, Clone, Default)]
 pub struct EnvVarLoader {
     vars: Vec<(String, String)>,
@@ -187,6 +235,9 @@ impl ConfigLoader for EnvVarLoader {
 }
 
 /// Loader for TOML secrets files whose values are marked secret.
+///
+/// This mirrors [`TomlFileLoader`], but enforces the stricter file-permission
+/// expectations needed for secrets-backed config.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct SecretsTomlLoader {
@@ -267,6 +318,10 @@ impl ConfigLoader for SecretsTomlLoader {
 }
 
 /// Loader for `OSP_SECRET__...` environment variables.
+///
+/// Like [`EnvVarLoader`], this is only a source-materialization step. The
+/// returned entries are marked secret so later rendering and diagnostics can
+/// redact them appropriately.
 #[derive(Debug, Clone, Default)]
 pub struct EnvSecretsLoader {
     vars: Vec<(String, String)>,
@@ -335,6 +390,9 @@ impl ConfigLoader for EnvSecretsLoader {
 }
 
 /// Loader that merges multiple loaders in the order they are added.
+///
+/// This is useful when several backing sources belong to the same precedence
+/// slot and should be combined before resolution sees them.
 #[derive(Default)]
 #[must_use]
 pub struct ChainedLoader {
@@ -353,6 +411,9 @@ impl ChainedLoader {
     }
 
     /// Appends another loader to the chain.
+    ///
+    /// Later loaders win inside the chained layer because their entries are
+    /// appended after earlier ones.
     pub fn with<L>(mut self, loader: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -382,6 +443,10 @@ impl ConfigLoader for ChainedLoader {
 }
 
 /// Materialized config layers grouped by source priority.
+///
+/// This is the concrete snapshot handed to
+/// [`ConfigResolver::from_loaded_layers_with_schema`](crate::config::ConfigResolver::from_loaded_layers_with_schema)
+/// after the load phase is complete.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedLayers {
     /// Built-in defaults loaded before any user input.
@@ -401,6 +466,10 @@ pub struct LoadedLayers {
 }
 
 /// Builder for the standard multi-source config loading pipeline.
+///
+/// Most callers should use this instead of manually loading sources and
+/// building a resolver by hand. The field order in this type mirrors the
+/// public precedence contract documented in [`crate::config`].
 #[must_use]
 pub struct LoaderPipeline {
     defaults: Box<dyn ConfigLoader>,
@@ -415,6 +484,9 @@ pub struct LoaderPipeline {
 
 impl LoaderPipeline {
     /// Creates a pipeline with the required defaults loader.
+    ///
+    /// Defaults are the only mandatory source because every other source layer
+    /// can be omitted and load as empty.
     pub fn new<L>(defaults: L) -> Self
     where
         L: ConfigLoader + 'static,
@@ -492,6 +564,8 @@ impl LoaderPipeline {
     }
 
     /// Loads every configured source into concrete layers.
+    ///
+    /// This is the boundary between source I/O and config resolution.
     pub fn load_layers(&self) -> Result<LoadedLayers, ConfigError> {
         tracing::debug!("loading config layers");
         let layers = LoadedLayers {
@@ -518,6 +592,9 @@ impl LoaderPipeline {
 
     /// Loads all layers and returns a resolver configured with this pipeline's
     /// schema.
+    ///
+    /// Use this when the caller wants to inspect or reuse the resolver before
+    /// picking specific [`ResolveOptions`].
     pub fn resolver(&self) -> Result<ConfigResolver, ConfigError> {
         let layers = self.load_layers()?;
         Ok(ConfigResolver::from_loaded_layers_with_schema(

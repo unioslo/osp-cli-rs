@@ -1,3 +1,10 @@
+//! Top-level host entrypoint glue.
+//!
+//! This module ties together argv scanning, runtime/config bootstrap, dispatch
+//! planning, sink rendering, and final exit-code classification. It is the
+//! main "run the app like a program" surface above the lower-level runtime and
+//! dispatch helpers.
+
 use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
 use crate::native::{NativeCommandCatalogEntry, NativeCommandRegistry};

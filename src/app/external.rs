@@ -1,3 +1,10 @@
+//! External command parsing and dispatch.
+//!
+//! This module owns the path from already-tokenized user input to either a
+//! native command, plugin command, inline builtin, or help rewrite on the
+//! external command surface. It sits after top-level host setup but before the
+//! final native/plugin execution paths.
+
 use miette::{Result, WrapErr, miette};
 
 use crate::app::{AppClients, AppRuntime, AppSession};

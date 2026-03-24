@@ -1,3 +1,10 @@
+//! In-memory projection of plugin command preference state.
+//!
+//! This module keeps the small runtime view of plugin enablement and preferred
+//! provider selections derived from resolved config. It deliberately strips
+//! away general config machinery so the plugin manager can answer simple
+//! "enabled?" and "which provider?" questions cheaply.
+
 use crate::config::{ConfigValue, ResolvedConfig};
 use crate::core::plugin::canonical_plugin_command_name;
 use anyhow::Result;

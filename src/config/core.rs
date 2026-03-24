@@ -1,3 +1,10 @@
+//! Core config data types: keys, values, layers, scopes, and schema metadata.
+//!
+//! These are the stable building blocks used across config loading,
+//! resolution, explanation, and store editing. This module should own the
+//! meaning of "what a config value is" and "what scope/source metadata means"
+//! so other config submodules do not drift into slightly different models.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::sync::OnceLock;
@@ -1982,6 +1989,12 @@ pub struct BootstrapConfigExplain {
 }
 
 /// Final resolved configuration view used at runtime.
+///
+/// This is the provenance-aware result of [`ConfigResolver`]. It contains the
+/// winning value map the application reads, plus the active profile/terminal
+/// context used to choose those winners. Alias entries are retained
+/// separately so explain and editing surfaces can still reason about them
+/// without letting them masquerade as normal runtime keys.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedConfig {
     pub(crate) active_profile: String,

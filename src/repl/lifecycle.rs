@@ -1,3 +1,10 @@
+//! REPL restart and cycle lifecycle helpers.
+//!
+//! The interactive loop needs a small state machine around "prepare one run,
+//! render intro/pending output, apply restart result". This module keeps that
+//! orchestration separate from the editor engine and from command execution so
+//! the host loop stays readable.
+
 use crate::completion::CompletionTree;
 use crate::repl::{ReplAppearance, ReplReloadKind, ReplRunConfig, ReplRunResult};
 use miette::Result;

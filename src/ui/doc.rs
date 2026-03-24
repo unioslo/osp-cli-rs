@@ -1,3 +1,15 @@
+//! Human-facing document IR used between UI lowering and emitters.
+//!
+//! `ui` does not render directly from rows or guide payloads. Lowering first
+//! converts semantic output into this smaller document model so terminal and
+//! markdown emitters can share one structural contract.
+//!
+//! In practice:
+//!
+//! - lowering owns how rows, guides, and key/value output become blocks
+//! - emitters own how those blocks become final text in a concrete format
+//! - this module should stay dumb data, not a second rendering engine
+
 use crate::core::output_model::ColumnAlignment;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

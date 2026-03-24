@@ -1,3 +1,10 @@
+//! Completion-tree path resolution and command-derived context hints.
+//!
+//! The parser tells completion "what tokens exist near the cursor". This
+//! module answers the next question: which completion-tree node and flag scope
+//! those tokens imply, and which provider/os hints should influence the later
+//! suggestion pass.
+
 use crate::completion::model::{CommandLine, CompletionContext, CompletionNode, CompletionTree};
 
 pub(crate) struct ResolvedNodes<'a> {

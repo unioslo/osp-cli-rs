@@ -1,3 +1,10 @@
+//! REPL line parsing and shell-entry classification.
+//!
+//! This module turns a raw REPL line into the command tokens, dispatch tokens,
+//! and DSL stages the REPL runtime needs. It also owns the shell-first entry
+//! rules and the narrow hidden `cd` escape hatch for rare same-name nesting
+//! cases.
+
 use crate::completion::CommandLineParser;
 use crate::config::ResolvedConfig;
 use crate::dsl::parse::lexer::split_pipeline;

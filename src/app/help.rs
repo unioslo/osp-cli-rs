@@ -1,3 +1,10 @@
+//! Help-specific render bootstrap and verbosity policy.
+//!
+//! Help output has to work before the full host/runtime is fully running. This
+//! module owns the small amount of config/bootstrap logic needed to derive
+//! sane render settings for `--help` and related guide surfaces without
+//! forcing the rest of the app to special-case that path.
+
 use std::ffi::OsString;
 
 use crate::config::{ConfigLayer, RuntimeLoadOptions};

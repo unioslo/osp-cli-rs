@@ -1,3 +1,9 @@
+//! REPL completion and history-menu debug surfaces.
+//!
+//! These helpers build deterministic snapshots of the editor/menu state so
+//! operators and tests can inspect completion behavior without relying on a
+//! live terminal session.
+
 use super::adapter::{ReplCompleter, ReplHistoryCompleter};
 use super::config::{DEFAULT_HISTORY_MENU_ROWS, ReplAppearance};
 use super::overlay::{build_completion_menu, build_history_menu};

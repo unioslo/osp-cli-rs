@@ -1,3 +1,10 @@
+//! REPL prompt, intro, and presentation shaping.
+//!
+//! This module owns the operator-facing text and guide surfaces around the
+//! REPL itself: prompt composition, intro rendering, theme-aware styling, and
+//! a few small presentation-mode policies. It should shape REPL presentation,
+//! not command execution.
+
 use crate::app::DebugTimingState;
 use crate::app::format_timing_badge;
 use crate::app::help::help_level;

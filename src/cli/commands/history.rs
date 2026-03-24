@@ -1,3 +1,10 @@
+//! `history` builtin command wrapper.
+//!
+//! The real history behavior lives in the REPL subsystem. This module keeps
+//! the CLI-facing wrapper narrow: reject history outside the REPL and adapt
+//! REPL history results into ordinary command results when the command is run
+//! inside an interactive session.
+
 use miette::{Result, miette};
 
 use crate::app::AppSession;

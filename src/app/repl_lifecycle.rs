@@ -1,3 +1,10 @@
+//! App-level REPL state rebuild helpers.
+//!
+//! REPL reloads need to reconstruct runtime, session, and client state in a
+//! coordinated way after config/theme changes. This module keeps that rebuild
+//! path in one place so the host loop can request a reload without knowing how
+//! the individual app parts are reassembled.
+
 use miette::Result;
 
 use super::rebuild::ReplStateRebuilder;

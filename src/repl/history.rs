@@ -1,3 +1,9 @@
+//! REPL history policy and builtin commands.
+//!
+//! This module translates resolved config into history behavior, scopes
+//! history entries to the current REPL context, and implements the visible
+//! `history` builtin commands on top of the shared history store.
+
 use crate::config::{
     ConfigValue, DEFAULT_REPL_HISTORY_MAX_ENTRIES, ResolvedConfig, RuntimeDefaults,
 };

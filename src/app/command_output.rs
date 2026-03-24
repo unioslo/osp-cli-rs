@@ -1,3 +1,10 @@
+//! Final command-result shaping and rendering helpers.
+//!
+//! App dispatch paths return a few different semantic result forms: structured
+//! output, plain text, JSON payloads, plugin response envelopes, and message
+//! buffers. This module normalizes those into the smaller result types the CLI
+//! and REPL host paths know how to render.
+
 use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
 use crate::core::output_model::{OutputResult, RenderRecommendation, rows_from_value};

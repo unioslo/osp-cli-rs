@@ -1,3 +1,9 @@
+//! `config` builtin command implementation.
+//!
+//! This module owns the operator-facing config command surface: reading,
+//! explaining, validating, and writing config values through the same schema
+//! and scope rules used at runtime.
+
 use crate::app::{AppRuntime, AppSession, RuntimeContext, TerminalKind, UiState};
 use crate::app::{
     CURRENT_TERMINAL_SENTINEL, CliCommandResult, ConfigExplainContext, ReplCommandOutput,

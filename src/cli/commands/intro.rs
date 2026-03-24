@@ -1,3 +1,8 @@
+//! `intro` builtin command implementation.
+//!
+//! This command reuses the REPL intro/presentation machinery outside the REPL
+//! loop so operators can render the current intro/overview surface on demand.
+
 use miette::Result;
 
 use crate::app::CliCommandResult;

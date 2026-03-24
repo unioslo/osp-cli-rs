@@ -1,3 +1,11 @@
+//! Helpers for building config explanation traces.
+//!
+//! Runtime resolution and explanation must answer the same question with the
+//! same selector and winner-selection rules. This module keeps the small
+//! translation layer that turns internal resolver state into stable
+//! human-facing explain payloads so `config explain` does not drift from actual
+//! runtime behavior.
+
 use crate::config::bootstrap::ResolutionFrame;
 use crate::config::selector::{LayerRef, ScopeSelector, SelectedLayerEntry};
 use crate::config::{ConfigExplain, ExplainInterpolation, ExplainLayer, ResolvedValue};

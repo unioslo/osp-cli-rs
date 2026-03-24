@@ -1,3 +1,11 @@
+//! Filesystem and cache-backed plugin discovery.
+//!
+//! Discovery is intentionally separate from dispatch. This module scans the
+//! configured roots, validates cached metadata, and decides when describing a
+//! plugin is allowed so the rest of the plugin layer can browse a command
+//! catalog without having to know about manifests, cache files, or path-only
+//! policy details.
+
 use super::conversion::to_command_spec;
 use super::manager::{DiscoveredPlugin, PluginManager, PluginSource};
 use crate::completion::CommandSpec;

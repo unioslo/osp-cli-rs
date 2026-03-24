@@ -57,6 +57,10 @@ use crate::core::command_policy::{CommandPath, CommandPolicy, VisibilityMode};
 pub const PLUGIN_PROTOCOL_V1: u32 = 1;
 
 /// `describe` payload emitted by a plugin that speaks protocol v1.
+///
+/// This is the host's browse-time contract with a plugin. The host uses it to
+/// build command catalogs, completion trees, and coarse auth/policy metadata
+/// before any real command execution happens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescribeV1 {
     /// Protocol version declared by the plugin.
@@ -72,6 +76,10 @@ pub struct DescribeV1 {
 }
 
 /// Recursive command description used in plugin metadata.
+///
+/// Each node describes one command segment plus its direct flags, positionals,
+/// auth metadata, and nested subcommands. Together these nodes form the
+/// semantic command tree the host uses for help, completion, and policy lookups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DescribeCommandV1 {
     /// Command name exposed by the plugin.
@@ -278,6 +286,10 @@ pub struct DescribeFlagV1 {
 }
 
 /// Protocol v1 command response envelope.
+///
+/// This is the execute-time contract for normal plugin runs. The host validates
+/// this envelope first and only then adapts `data`, `messages`, and `meta`
+/// into its own output pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseV1 {
     /// Protocol version declared by the response.
@@ -296,6 +308,10 @@ pub struct ResponseV1 {
 }
 
 /// Structured error payload returned when `ok` is `false`.
+///
+/// Keep stable, caller-meaningful failure classification in `code`; process
+/// exit codes are reserved for transport/setup failure rather than
+/// application-level branching.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseErrorV1 {
     /// Stable machine-readable error code.
@@ -308,6 +324,10 @@ pub struct ResponseErrorV1 {
 }
 
 /// Rendering hints attached to a plugin response.
+///
+/// These hints are advisory rather than authoritative. They let a plugin keep
+/// semantic ownership of preferred column order and alignment without taking
+/// over the host's renderer.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ResponseMetaV1 {
     /// Preferred output format for rendering the payload.
@@ -320,6 +340,9 @@ pub struct ResponseMetaV1 {
 }
 
 /// Column alignment hint used in plugin response metadata.
+///
+/// Alignment follows the corresponding `ResponseMetaV1::columns` position. When
+/// omitted, the host falls back to its renderer defaults for that column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ColumnAlignmentV1 {
@@ -351,6 +374,9 @@ pub enum ResponseMessageLevelV1 {
 }
 
 /// User-facing message emitted alongside a plugin response.
+///
+/// These messages are rendered on the host's diagnostic/message path, not
+/// folded into `data`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseMessageV1 {
     /// Severity level for the message.

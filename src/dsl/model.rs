@@ -1,3 +1,10 @@
+//! Stable parsed DSL data structures.
+//!
+//! These types are the boundary between the parser and later compilation or
+//! execution. They intentionally preserve the original raw text alongside the
+//! parser's stage classification so diagnostics and traces can still explain
+//! what the user typed without reparsing.
+
 /// High-level parser classification for a stage token.
 ///
 /// The parser deliberately separates "known explicit verb", "unknown

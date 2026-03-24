@@ -1,3 +1,8 @@
+//! `theme` builtin command implementation.
+//!
+//! Theme behavior is intentionally small: inspect available themes, show one
+//! theme definition, or set an in-process theme override for the current run.
+
 use crate::app::{AppRuntime, UiState};
 use crate::app::{CliCommandResult, resolve_known_theme_name};
 use crate::cli::rows::output::rows_to_output_result;

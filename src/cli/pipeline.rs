@@ -1,3 +1,10 @@
+//! CLI-facing command-line parsing with alias expansion and DSL separation.
+//!
+//! This module sits between raw user input and command dispatch. It owns the
+//! "split command from trailing pipeline stages" step for the full CLI/REPL
+//! surface and applies config-backed alias expansion before the app decides
+//! what command to run.
+
 use crate::config::ResolvedConfig;
 use crate::dsl::{
     model::{ParsedStage, ParsedStageKind},

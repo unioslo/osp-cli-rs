@@ -1,3 +1,10 @@
+//! Derived REPL browse/completion surface.
+//!
+//! The REPL needs a compact view of what the operator can see and type at the
+//! root: completion specs, overview entries, intro command suggestions, and
+//! alias hints. This module builds that derived surface from auth, config,
+//! command definitions, and plugin catalog state.
+
 use crate::completion::tree::command_spec_from_command_def;
 use crate::completion::{ArgNode, CommandSpec, FlagNode, SuggestionEntry};
 use crate::config::{ConfigSchema, SchemaValueType};

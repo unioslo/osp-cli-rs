@@ -1,3 +1,9 @@
+//! Provider-selection policy for colliding plugin commands.
+//!
+//! When multiple healthy plugins provide the same command, this module owns
+//! the small decision tree that chooses between explicit override, stored
+//! preference, unique provider, or ambiguity.
+
 use super::manager::DiscoveredPlugin;
 use super::state::{PluginCommandPreferences, PluginCommandState};
 use std::collections::HashMap;

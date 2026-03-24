@@ -1,3 +1,9 @@
+//! Small adapters between row-oriented helpers and [`OutputResult`].
+//!
+//! These helpers keep command/builtin code from reimplementing the repetitive
+//! "rows in, structured output out" and "plugin response metadata into output
+//! metadata" conversions.
+
 use crate::core::output_model::{
     ColumnAlignment, OutputMeta, OutputResult, compute_key_index as core_compute_key_index,
     output_items_from_value, output_items_to_rows,

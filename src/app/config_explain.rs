@@ -1,3 +1,10 @@
+//! Config explain rendering and suggestion helpers.
+//!
+//! `config explain` is a user-facing introspection surface built on top of the
+//! lower-level config resolver. This module owns the last-mile conversion from
+//! explanation data into human/JSON output, plus the fuzzy key-recovery hints
+//! shown when a requested key does not exist.
+
 use crate::config::{
     BootstrapScopeRule, ConfigExplain, ConfigSchema, ConfigValue, ResolvedConfig,
     bootstrap_key_spec, is_bootstrap_only_key,

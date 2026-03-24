@@ -1,3 +1,10 @@
+//! Conversion helpers between plugin describe DTOs and in-process command
+//! metadata.
+//!
+//! The plugin wire protocol uses [`crate::core::plugin`] DTOs while
+//! completion/catalog code prefers the internal command-spec model. This
+//! module keeps that translation in one place.
+
 #[cfg(test)]
 use crate::completion::{ArgNode, FlagNode, SuggestionEntry, ValueType};
 use crate::completion::{CommandSpec, tree::command_spec_from_command_def};

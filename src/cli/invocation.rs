@@ -1,3 +1,10 @@
+//! Per-invocation flag scanning.
+//!
+//! Some flags affect only the current command invocation and may appear before
+//! the real command path. This module peels those flags off argv/token input
+//! so the rest of the CLI grammar can parse the actual command while the host
+//! still receives the invocation-scoped render/debug/provider options.
+
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 

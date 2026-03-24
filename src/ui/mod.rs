@@ -3,7 +3,34 @@
 //! Canonical UI pipeline.
 //!
 //! This module owns planning, lowering, and emission for human-facing output.
-//! It is intentionally small in the core implementation slice:
+//! The important split is:
+//!
+//! - commands, services, and the DSL produce structured output
+//! - `ui` decides how that output should be rendered for a human
+//! - `ui` does not re-resolve config, re-run commands, or invent new data
+//!   semantics
+//!
+//! Broad-strokes flow:
+//!
+//! ```text
+//! OutputResult / GuideView
+//!        │
+//!        ▼ [ plan ]   choose effective format and render settings
+//!        ▼ [ lower ]  convert semantic output into one document IR
+//!        ▼ [ emit ]   render terminal/markdown/json text
+//! ```
+//!
+//! Public surface:
+//!
+//! - [`render_output`] renders one structured payload through the normal UI
+//!   path
+//! - [`render_rows`] is the lightweight "I already have rows" helper
+//! - [`RenderSettings`] and [`ResolvedRenderSettings`] define the stable
+//!   caller-facing render knobs
+//! - [`theme`], [`style`], and [`messages`] provide the other operator-facing
+//!   presentation surfaces
+//!
+//! Internal ownership stays intentionally boring:
 //!
 //! - one planner decides the effective output format
 //! - one human-facing document IR carries structure
@@ -71,6 +98,11 @@ fn render_output_with_profile(
     )
 }
 
+/// Renders an already-materialized row slice through the canonical UI
+/// pipeline.
+///
+/// Use this when the caller already has rows and does not need the richer
+/// document/meta surface of [`OutputResult`].
 pub fn render_rows(rows: &[crate::core::row::Row], settings: &RenderSettings) -> String {
     render_output(
         &OutputResult {
@@ -105,6 +137,10 @@ pub fn render_output(output: &OutputResult, settings: &RenderSettings) -> String
     render_output_with_profile(output, settings, RenderProfile::Normal)
 }
 
+/// Renders output using the copy-safe profile.
+///
+/// This keeps the same structured payload but resolves settings as if the
+/// result is headed for clipboard, logs, or another plain-text sink.
 pub fn render_output_for_copy(output: &OutputResult, settings: &RenderSettings) -> String {
     render_output_with_profile(output, settings, RenderProfile::CopySafe)
 }

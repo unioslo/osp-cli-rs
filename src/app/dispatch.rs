@@ -1,3 +1,10 @@
+//! Top-level command dispatch planning and source selection.
+//!
+//! This module takes parsed CLI intent and turns it into the coarse action the
+//! host should run: builtin command, REPL, or external command surface. It
+//! also owns the early native-vs-plugin source choice so later execution paths
+//! do not have to repeat visibility and provider-selection logic.
+
 use std::collections::BTreeSet;
 
 use miette::{Result, WrapErr, miette};
