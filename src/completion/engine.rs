@@ -191,7 +191,18 @@ impl CompletionEngine {
     ) {
         let context = self.resolve_completion_context(cursor_cmd, stub);
         let resolver = TreeResolver::new(&self.tree);
-        let mut scoped_flags = resolver.scoped_flag_names(&context.matched_path);
+        let mut scoped_flags = BTreeSet::new();
+        for i in (0..=context.matched_path.len()).rev() {
+            let path = &context.matched_path[..i];
+            let Some(node) = resolver.resolve_exact(path) else {
+                continue;
+            };
+            for (name, flag) in &node.flags {
+                if flag.context_only {
+                    scoped_flags.insert(name.clone());
+                }
+            }
+        }
         scoped_flags.extend(self.global_context_flags.iter().cloned());
 
         for item in full_cmd.tail().iter().skip(cursor_cmd.tail_len()) {
@@ -300,6 +311,7 @@ impl CompletionEngine {
         }
 
         let resolver = TreeResolver::new(&self.tree);
+        let context_node = resolver.resolve_exact_or_root(&context.matched_path);
         let flag_scope_node = resolver.resolve_exact_or_root(&context.flag_scope_path);
         let (needs_flag_value, last_flag) = last_flag_needs_value(flag_scope_node, cmd, stub);
         if needs_flag_value && let Some(flag) = last_flag {
@@ -312,7 +324,7 @@ impl CompletionEngine {
         CompletionRequest::Positionals {
             context_path: context.matched_path.clone(),
             flag_scope_path: context.flag_scope_path.clone(),
-            arg_index: positional_arg_index(cmd, stub, context.matched_path.len()),
+            arg_index: positional_arg_index(cmd, stub, context.matched_path.len(), context_node),
             show_subcommands: context.subcommand_context,
             show_flag_names: stub.is_empty() && !context.subcommand_context,
         }
@@ -353,13 +365,30 @@ fn last_flag_needs_value(
     (flag_node.multi, Some(last_flag.clone()))
 }
 
-fn positional_arg_index(cmd: &CommandLine, stub: &str, matched_head_len: usize) -> usize {
-    cmd.head()
+fn positional_arg_index(
+    cmd: &CommandLine,
+    stub: &str,
+    matched_head_len: usize,
+    context_node: &CompletionNode,
+) -> usize {
+    let consumed = cmd
+        .head()
         .iter()
         .skip(matched_head_len)
         .chain(cmd.positional_args())
         .filter(|token| token.as_str() != stub)
-        .count()
+        .count();
+
+    let mut index = 0usize;
+    for _ in 0..consumed {
+        let Some(arg) = context_node.args.get(index) else {
+            return index;
+        };
+        if !arg.multi {
+            index += 1;
+        }
+    }
+    index
 }
 
 fn collect_global_context_flags(root: &CompletionNode) -> BTreeSet<String> {
@@ -386,7 +415,8 @@ mod tests {
     use crate::completion::{
         CompletionEngine,
         model::{
-            CompletionNode, CompletionTree, FlagNode, QuoteStyle, SuggestionEntry, SuggestionOutput,
+            ArgNode, CompletionNode, CompletionTree, FlagNode, QuoteStyle, SuggestionEntry,
+            SuggestionOutput,
         },
     };
 
@@ -412,6 +442,13 @@ mod tests {
                 ]),
                 suggestions: vec![SuggestionEntry::from("rhel"), SuggestionEntry::from("alma")],
                 context_only: true,
+                ..FlagNode::default()
+            },
+        );
+        provision.flags.insert(
+            "--vmware".to_string(),
+            FlagNode {
+                flag_only: true,
                 ..FlagNode::default()
             },
         );
@@ -525,6 +562,42 @@ mod tests {
             let analysis = engine.analyze(open_quote_line, open_quote_line.len());
             assert_eq!(analysis.cursor.token_stub, "rh");
             assert_eq!(analysis.cursor.quote_style, Some(QuoteStyle::Double));
+        }
+
+        #[test]
+        fn later_non_context_flags_do_not_leak_into_cursor_context() {
+            let engine = CompletionEngine::new(tree());
+            let line = "orch provision --os  --vmware";
+            let cursor = line.find("--vmware").expect("vmware flag should exist") - 1;
+
+            let (_, suggestions) = engine.complete(line, cursor);
+            let values = suggestion_texts(suggestions);
+            assert!(values.contains(&"rhel".to_string()));
+            assert!(values.contains(&"alma".to_string()));
+
+            let analysis = engine.analyze(line, cursor);
+            assert!(
+                !analysis.parsed.cursor_cmd.has_flag("--vmware"),
+                "later non-context flag should not merge into cursor context",
+            );
+        }
+
+        #[test]
+        fn repeatable_positional_completion_reuses_same_slot_after_first_value() {
+            let mut copy = CompletionNode::default();
+            copy.args.push(ArgNode::named("item").multi().suggestions([
+                SuggestionEntry::from("alpha"),
+                SuggestionEntry::from("beta"),
+            ]));
+            let tree = CompletionTree {
+                root: CompletionNode::default().with_child("copy", copy),
+                pipe_verbs: BTreeMap::new(),
+            };
+            let engine = CompletionEngine::new(tree);
+
+            let values = suggestion_texts(engine.complete("copy alpha ", "copy alpha ".len()).1);
+            assert!(values.contains(&"alpha".to_string()));
+            assert!(values.contains(&"beta".to_string()));
         }
     }
 

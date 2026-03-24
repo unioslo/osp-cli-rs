@@ -1,7 +1,7 @@
 use super::{
-    build_repl_appearance, build_repl_intro_payload, build_repl_prompt, render_prompt_template,
-    render_repl_command_overview, render_repl_intro, render_repl_prompt_right_for_test,
-    theme_display_name,
+    ReplIntroStyle, build_repl_appearance, build_repl_intro_payload, build_repl_prompt,
+    build_repl_prompt_right_renderer, render_prompt_template, render_repl_command_overview,
+    render_repl_intro, render_repl_prompt_right_for_test, theme_display_name,
 };
 mod output_support {
     include!(concat!(
@@ -225,6 +225,26 @@ mod shape_contracts {
         let austere_warning = render_style(None, Some("austere"), MessageLevel::Warning);
         assert!(austere_warning.trim().is_empty());
     }
+}
+
+#[test]
+fn intro_payload_override_style_is_not_reinterpreted_by_verbosity_unit() {
+    let mut state = make_intro_state(
+        &[("ui.presentation", "expressive")],
+        RenderMode::Rich,
+        ColorMode::Always,
+        UnicodeMode::Always,
+    );
+    state.runtime.ui.message_verbosity = MessageLevel::Trace;
+
+    let payload = build_repl_intro_payload(
+        repl_view(&state),
+        &intro_surface_with_overview(&["help", "config"]),
+        Some(ReplIntroStyle::Minimal),
+    );
+
+    assert!(payload.preamble.iter().any(|line| line.contains("Welcome")));
+    assert!(payload.sections.is_empty());
 }
 
 #[test]
@@ -505,25 +525,40 @@ fn repl_intro_template_placeholder_rules_unit() {
 
 #[test]
 fn repl_intro_payload_uses_custom_full_section_templates() {
-    let state = make_state(&[
+    let mut state = make_state(&[
         ("ui.presentation", "expressive"),
         (
             "repl.intro_template.full",
             "## OSP\nUser {{user.name}}\n## Keybindings\nKeys {{profile.active}}\n## Pipes\nPipe {{theme_display}}",
         ),
     ]);
+    let base = crate::ui::theme::find_builtin_theme("dracula").expect("builtin theme should exist");
+    let custom = crate::ui::theme::ThemeDefinition::new(
+        "demo-slug",
+        "Authored Theme Name",
+        None,
+        base.palette.clone(),
+        base.overrides.clone(),
+    );
+    state.runtime.ui.render_settings.theme_name = "demo-slug".to_string();
+    state.runtime.themes.entries.insert(
+        "demo-slug".to_string(),
+        crate::ui::theme_catalog::ThemeEntry {
+            theme: custom,
+            source: crate::ui::theme_catalog::ThemeSource::Custom,
+            origin: None,
+        },
+    );
 
     let payload =
         build_repl_intro_payload(repl_view(&state), &intro_surface(&["help", "config"]), None);
-    let expected_theme_display =
-        theme_display_name(&repl_view(&state).ui.render_settings.theme_name);
 
     assert_eq!(payload.sections.len(), 3);
     assert_eq!(payload.sections[0].paragraphs, vec!["  User anonymous"]);
     assert_eq!(payload.sections[1].paragraphs, vec!["  Keys default"]);
     assert_eq!(
         payload.sections[2].paragraphs,
-        vec![format!("  Pipe {expected_theme_display}")]
+        vec!["  Pipe Authored Theme Name".to_string()]
     );
 }
 
@@ -656,6 +691,20 @@ fn repl_prompt_templates_decode_escaped_newlines_and_user_rhs_overrides_unit() {
 }
 
 #[test]
+fn session_history_opt_out_enables_incognito_prompt_indicator_unit() {
+    let mut state = make_state(&[("repl.prompt_right", "{incognito}")]);
+    state.runtime.ui.render_settings.unicode = crate::core::output::UnicodeMode::Always;
+    state.session.history_enabled = false;
+
+    let render = build_repl_prompt_right_renderer(repl_view(&state), DebugTimingState::default());
+    let prompt_right = render();
+
+    let stripped = output_support::strip_ansi(&prompt_right);
+    assert!(!stripped.is_empty());
+    assert!(stripped.contains("(⌐■_■)") || stripped.contains("incognito"));
+}
+
+#[test]
 fn intro_template_parser_expands_all_help_sections_and_merges_repeated_data_blocks() {
     let help = GuideView {
         usage: vec!["osp [OPTIONS] COMMAND".to_string()],
@@ -746,6 +795,27 @@ ready
         vec!["  Be careful.".to_string()]
     );
     assert_eq!(payload.epilogue, vec!["tail"]);
+}
+
+#[test]
+fn intro_template_parser_flattens_repeated_array_data_blocks_unit() {
+    let payload = super::parse_intro_template_payload(
+        r#"
+## Status
+```osp
+["boot","steady"]
+```
+```osp
+["ready"]
+```
+"#,
+        &GuideView::default(),
+    );
+
+    assert_eq!(
+        payload.sections[0].data,
+        Some(json!(["boot", "steady", "ready"]))
+    );
 }
 
 #[test]

@@ -23,6 +23,7 @@ pub(crate) struct ReplViewContext<'a> {
     pub(crate) auth: &'a AuthState,
     pub(crate) themes: &'a ThemeCatalog,
     pub(crate) scope: &'a ReplScopeStack,
+    pub(crate) history_enabled: bool,
 }
 
 impl<'a> ReplViewContext<'a> {
@@ -33,6 +34,7 @@ impl<'a> ReplViewContext<'a> {
             auth: &runtime.auth,
             themes: &runtime.themes,
             scope: &session.scope,
+            history_enabled: session.history_enabled,
         }
     }
 }
@@ -51,7 +53,7 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
         let cycle = loop_state.prepare_cycle(state)?;
 
         // 2. Print any intro/help chrome and pending restart output.
-        loop_state.render_cycle_chrome(&mut sink, &cycle.help_text);
+        loop_state.render_cycle_chrome(&mut sink, &cycle.help_text, cycle.clear_screen_on_intro);
 
         // 3. Run the editor-owned REPL engine for this prepared cycle.
         let result = run_repl_cycle(state, cycle)?;
@@ -254,7 +256,8 @@ mod tests {
 
     #[test]
     fn cycle_chrome_renders_intro_then_help_then_pending_output() {
-        let output = build_cycle_chrome_output("Welcome anonymous.\nHELP\n", true, "PENDING\n");
+        let output =
+            build_cycle_chrome_output("Welcome anonymous.\nHELP\n", true, "PENDING\n", true);
 
         let intro_pos = output.find("Welcome").expect("intro should render");
         let help_pos = output.find("HELP").expect("help should render");
@@ -269,7 +272,7 @@ mod tests {
 
     #[test]
     fn cycle_chrome_without_intro_keeps_pending_output_only() {
-        let output = build_cycle_chrome_output("HELP\n", false, "PENDING\n");
+        let output = build_cycle_chrome_output("HELP\n", false, "PENDING\n", false);
 
         assert_eq!(output, "PENDING\n");
     }

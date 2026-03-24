@@ -25,6 +25,7 @@ impl<'a> IntroCommandContext<'a> {
             auth: &runtime.auth,
             themes: &runtime.themes,
             scope: &session.scope,
+            history_enabled: session.history_enabled,
         };
         let surface = authorized_command_catalog_for(&runtime.auth, clients)
             .ok()

@@ -1,5 +1,4 @@
 use crate::completion::model::{CommandLine, CompletionContext, CompletionNode, CompletionTree};
-use std::collections::BTreeSet;
 
 pub(crate) struct ResolvedNodes<'a> {
     pub(crate) context_node: &'a CompletionNode,
@@ -63,17 +62,6 @@ impl<'a> TreeResolver<'a> {
         } else {
             matched_path.to_vec()
         }
-    }
-
-    pub(crate) fn scoped_flag_names(&self, matched_path: &[String]) -> BTreeSet<String> {
-        let mut scoped_flags = BTreeSet::new();
-        for i in (0..=matched_path.len()).rev() {
-            let path = &matched_path[..i];
-            if let Some(node) = self.resolve_exact(path) {
-                scoped_flags.extend(node.flags.keys().cloned());
-            }
-        }
-        scoped_flags
     }
 
     pub(crate) fn resolve_context(&self, path: &[String]) -> (&'a CompletionNode, Vec<String>) {

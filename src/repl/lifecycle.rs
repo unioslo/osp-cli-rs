@@ -43,8 +43,18 @@ impl ReplLoopState {
         )
     }
 
-    pub(super) fn render_cycle_chrome(&mut self, sink: &mut dyn UiSink, help_text: &str) {
-        let output = build_cycle_chrome_output(help_text, self.show_intro, &self.pending_output);
+    pub(super) fn render_cycle_chrome(
+        &mut self,
+        sink: &mut dyn UiSink,
+        help_text: &str,
+        clear_screen: bool,
+    ) {
+        let output = build_cycle_chrome_output(
+            help_text,
+            self.show_intro,
+            &self.pending_output,
+            clear_screen,
+        );
         if !output.is_empty() {
             sink.write_stdout(&output);
         }
@@ -75,6 +85,7 @@ impl ReplLoopState {
 pub(super) struct ReplCycle {
     pub(super) run_config: ReplRunConfig,
     pub(super) help_text: String,
+    pub(super) clear_screen_on_intro: bool,
 }
 
 pub(super) struct PreparedReplSurfaceState {
@@ -101,6 +112,7 @@ impl ReplCycle {
         Ok(Self {
             run_config: build_repl_cycle_run_config(runtime, session, prepared),
             help_text: intro_text,
+            clear_screen_on_intro: runtime.ui.render_settings.resolve_render_settings().color,
         })
     }
 }
@@ -161,10 +173,13 @@ pub(crate) fn build_cycle_chrome_output(
     help_text: &str,
     show_intro: bool,
     pending_output: &str,
+    clear_screen: bool,
 ) -> String {
     let mut out = String::new();
     if show_intro {
-        out.push_str("\x1b[2J\x1b[H");
+        if clear_screen {
+            out.push_str("\x1b[2J\x1b[H");
+        }
         out.push_str(help_text);
     }
     out.push_str(pending_output);
@@ -229,7 +244,7 @@ mod tests {
 
     #[test]
     fn build_cycle_chrome_output_includes_intro_help_and_pending_output() {
-        let rendered = build_cycle_chrome_output("Commands\n", true, "Queued\n");
+        let rendered = build_cycle_chrome_output("Commands\n", true, "Queued\n", true);
         assert!(rendered.starts_with("\x1b[2J\x1b[H"));
         assert!(rendered.contains("Commands"));
         assert!(rendered.contains("Queued"));
@@ -237,8 +252,15 @@ mod tests {
 
     #[test]
     fn build_cycle_chrome_output_skips_intro_when_not_requested() {
-        let rendered = build_cycle_chrome_output("Commands\n", false, "Queued\n");
+        let rendered = build_cycle_chrome_output("Commands\n", false, "Queued\n", false);
         assert_eq!(rendered, "Queued\n");
+    }
+
+    #[test]
+    fn build_cycle_chrome_output_omits_ansi_clear_when_disabled() {
+        let rendered = build_cycle_chrome_output("Commands\n", true, "Queued\n", false);
+        assert!(!rendered.starts_with("\x1b[2J\x1b[H"));
+        assert!(rendered.starts_with("Commands\n"));
     }
 
     #[test]

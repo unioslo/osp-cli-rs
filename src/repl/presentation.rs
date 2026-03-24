@@ -186,10 +186,9 @@ pub(crate) fn build_repl_intro_payload(
     override_style: Option<ReplIntroStyle>,
 ) -> GuideView {
     let config = view.config;
-    let intro_style = intro_style_with_verbosity(
-        override_style.unwrap_or_else(|| intro_style(config)),
-        view.ui.message_verbosity,
-    );
+    let intro_style = override_style.unwrap_or_else(|| {
+        intro_style_with_verbosity(intro_style(config), view.ui.message_verbosity)
+    });
 
     if matches!(intro_style, ReplIntroStyle::None) {
         return GuideView::default();
@@ -295,7 +294,21 @@ fn attach_intro_data_block(section: &mut GuideSection, data: Value) {
         None => data,
         // Keep repeated data fences inside the authored section instead of
         // inventing sibling sections during parsing.
-        Some(existing) => Value::Array(vec![existing, data]),
+        Some(Value::Array(mut existing)) => {
+            match data {
+                Value::Array(next) => existing.extend(next),
+                other => existing.push(other),
+            }
+            Value::Array(existing)
+        }
+        Some(existing) => match data {
+            Value::Array(mut next) => {
+                let mut merged = vec![existing];
+                merged.append(&mut next);
+                Value::Array(merged)
+            }
+            other => Value::Array(vec![existing, other]),
+        },
     });
 }
 
@@ -457,7 +470,13 @@ fn resolve_intro_placeholder(
                 .to_string();
         }
         "theme" | "theme.name" => return view.ui.render_settings.theme_name.clone(),
-        "theme_display" => return theme_display_name(&view.ui.render_settings.theme_name),
+        "theme_display" => {
+            return view
+                .themes
+                .resolve(&view.ui.render_settings.theme_name)
+                .map(|entry| entry.theme.display_name().to_string())
+                .unwrap_or_else(|| theme_display_name(&view.ui.render_settings.theme_name));
+        }
         "version" => return env!("CARGO_PKG_VERSION").to_string(),
         "intro.commands" => {
             return intro_commands
@@ -723,7 +742,7 @@ pub(crate) fn build_repl_prompt_right_renderer(
         .config
         .get_string("repl.prompt_right")
         .map(str::to_string);
-    let history_enabled = history::repl_history_enabled(view.config);
+    let history_enabled = history::repl_history_enabled(view.config) && view.history_enabled;
     Arc::new(move || {
         render_repl_prompt_right(
             &resolved,

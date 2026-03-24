@@ -63,7 +63,7 @@ impl ReplHistoryPolicy {
         HistoryConfig {
             path: Some(self.path.clone()),
             max_entries: self.max_entries,
-            enabled: self.enabled,
+            enabled: self.enabled && session.history_enabled,
             dedupe: self.dedupe,
             profile_scoped: self.profile_scoped,
             exclude_patterns: self.exclude_patterns.clone(),
@@ -363,6 +363,21 @@ mod tests {
             history_config.shell_context.prefix().as_deref(),
             Some("ldap ")
         );
+    }
+
+    #[test]
+    fn build_history_config_respects_session_history_opt_out_unit() {
+        let config = config_with_entries(&[("profile.default", "default")]);
+        let mut state = AppState::from_resolved_config(
+            RuntimeContext::new(None, TerminalKind::Repl, None),
+            config,
+        )
+        .expect("app state should build");
+        state.session.history_enabled = false;
+
+        let history_config = build_history_config(&state.runtime, &state.session);
+
+        assert!(!history_config.enabled);
     }
 
     #[test]

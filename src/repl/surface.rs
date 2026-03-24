@@ -43,7 +43,7 @@ pub(crate) fn build_repl_surface(
     view: ReplViewContext<'_>,
     catalog: &[CommandCatalogEntry],
 ) -> ReplSurface {
-    let history_enabled = history::repl_history_enabled(view.config);
+    let history_enabled = history::repl_history_enabled(view.config) && view.history_enabled;
     let aliases = collect_alias_entries(view.config);
     let help_layout = help_layout_from_config(view.config);
     let help_level = help_level(view.config, 0, 0);
