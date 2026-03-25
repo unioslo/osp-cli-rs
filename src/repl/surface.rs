@@ -60,6 +60,15 @@ pub(crate) fn build_repl_surface(
         CommandSpec::new("help")
             .tooltip("Show REPL help")
             .sort(command_sort_key("help", help_layout)),
+        CommandSpec::new("last")
+            .tooltip("Replay the last successful result")
+            .sort(command_sort_key("last", help_layout))
+            .flag(
+                "--raw",
+                FlagNode::new()
+                    .flag_only()
+                    .tooltip("Show the pre-pipeline result"),
+            ),
         CommandSpec::new("exit")
             .tooltip("Exit REPL")
             .sort(command_sort_key("exit", help_layout)),
@@ -75,6 +84,11 @@ pub(crate) fn build_repl_surface(
         ReplOverviewEntry {
             name: "help".to_string(),
             summary: "Show this command overview.".to_string(),
+        },
+        ReplOverviewEntry {
+            name: "last".to_string(),
+            summary: "Replay the last successful result; use --raw for the pre-pipeline payload."
+                .to_string(),
         },
     ];
     if shows_invocation_options_overview(help_level) {
@@ -190,8 +204,9 @@ fn order_root_words(root_words: &mut [String], help_layout: HelpLayout) {
 fn root_word_priority(word: &str) -> (u8, u8) {
     match word {
         "help" => (0, 0),
-        "exit" => (0, 1),
-        "quit" => (0, 2),
+        "last" => (0, 1),
+        "exit" => (0, 2),
+        "quit" => (0, 3),
         CMD_CONFIG => (1, 0),
         CMD_THEME => (1, 1),
         CMD_PLUGINS => (1, 2),
@@ -226,8 +241,9 @@ fn command_sort_key(name: &str, help_layout: HelpLayout) -> String {
 fn expressive_command_priority(name: &str) -> (u8, u8) {
     match name {
         "help" => (0, 0),
-        "exit" => (0, 1),
-        "quit" => (0, 2),
+        "last" => (0, 1),
+        "exit" => (0, 2),
+        "quit" => (0, 3),
         _ => (9, 0),
     }
 }
@@ -249,6 +265,7 @@ fn compact_command_priority(name: &str) -> (u8, u8) {
 pub(crate) fn catalog_completion_words(catalog: &[CommandCatalogEntry]) -> Vec<String> {
     let mut words = vec![
         "help".to_string(),
+        "last".to_string(),
         "exit".to_string(),
         "quit".to_string(),
         "P".to_string(),
@@ -287,7 +304,7 @@ pub(crate) fn collect_alias_entries(config: &crate::config::ResolvedConfig) -> V
 fn command_spec_from_catalog(entry: &CommandCatalogEntry) -> Option<CommandSpec> {
     if matches!(
         entry.name.as_str(),
-        "help" | "exit" | "quit" | CMD_PLUGINS | CMD_THEME | CMD_CONFIG | CMD_HISTORY
+        "help" | "last" | "exit" | "quit" | CMD_PLUGINS | CMD_THEME | CMD_CONFIG | CMD_HISTORY
     ) {
         return None;
     }

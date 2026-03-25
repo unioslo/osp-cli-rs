@@ -11,7 +11,8 @@ use super::{
     repl_command_spec, repl_help_for_scope, run_repl_command, strip_history_scope,
 };
 use crate::app::{AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
-use crate::app::{CliCommandResult, ReplCommandOutput};
+use crate::app::{CliCommandResult, ReplCommandOutput, StructuredCommandOutput};
+use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{
     Commands, ConfigArgs, ConfigCommands, ConfigSetArgs, ConfigUnsetArgs, DebugCompleteArgs,
     HistoryArgs, HistoryCommands, IntroArgs, PluginsArgs, PluginsCommands, ReplArgs, ReplCommands,
@@ -236,6 +237,14 @@ fn repl_builtin_and_bang_parsers_cover_shortcuts_unit() {
         Some(super::ReplBuiltin::Exit)
     ));
     assert!(matches!(
+        parse_repl_builtin("last").expect("last parses"),
+        Some(super::ReplBuiltin::Last { raw: false })
+    ));
+    assert!(matches!(
+        parse_repl_builtin("last --raw").expect("last raw parses"),
+        Some(super::ReplBuiltin::Last { raw: true })
+    ));
+    assert!(matches!(
         parse_repl_builtin("!?ops").expect("contains parses"),
         Some(super::ReplBuiltin::Bang(BangCommand::Contains(term))) if term == "ops"
     ));
@@ -273,6 +282,50 @@ fn repl_builtin_and_bang_parsers_cover_shortcuts_unit() {
             .to_string()
             .contains("N >= 1")
     );
+}
+
+#[test]
+fn repl_last_builtin_replays_processed_and_raw_results_unit() {
+    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let history = test_history();
+    state.session.record_success_output(
+        "ldap user alice | P name",
+        &ReplCommandOutput::Output(Box::new(StructuredCommandOutput {
+            source_guide: None,
+            output: rows_to_output_result(vec![crate::row! {
+                "name" => "alice",
+                "role" => "admin"
+            }]),
+            format_hint: None,
+        })),
+        &["P name".to_string()],
+    );
+
+    let processed = execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "last",
+    )
+    .expect("last should replay");
+    assert!(matches!(
+        processed,
+        ReplLineResult::Continue(text) if text.contains("alice") && !text.contains("admin")
+    ));
+
+    let raw = execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "last --raw",
+    )
+    .expect("last raw should replay");
+    assert!(matches!(
+        raw,
+        ReplLineResult::Continue(text) if text.contains("alice") && text.contains("admin")
+    ));
 }
 
 #[test]
@@ -382,6 +435,7 @@ fn make_state_with_plugins(plugins: crate::plugin::PluginManager) -> AppState {
         config,
         render_settings: settings,
         message_verbosity: MessageLevel::Success,
+        error_detail: crate::app::ErrorDetail::Terse,
         debug_verbosity: 0,
         plugins,
         native_commands: crate::native::NativeCommandRegistry::default(),

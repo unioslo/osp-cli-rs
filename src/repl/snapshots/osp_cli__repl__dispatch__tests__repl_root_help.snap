@@ -1,6 +1,6 @@
 ---
 source: src/repl/dispatch/tests.rs
-assertion_line: 419
+assertion_line: 473
 expression: help
 ---
 - Usage ----------------
@@ -9,6 +9,7 @@ expression: help
 - Commands -------------
   exit        Exit application.
   help        Show this command overview.
+  last        Replay the last successful result; use --raw for the pre-pipeline payload.
   plugins     Inspect and manage plugin providers
   doctor      Run diagnostics checks
   theme       Inspect and apply themes

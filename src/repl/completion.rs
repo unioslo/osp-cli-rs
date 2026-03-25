@@ -21,7 +21,7 @@ use crate::ui::section_chrome::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
 };
 use crate::ui::style::StyleToken;
-use miette::Result;
+use miette::{IntoDiagnostic, Result, WrapErr};
 use std::collections::BTreeMap;
 
 use super::ReplViewContext;
@@ -35,11 +35,13 @@ pub(crate) fn build_repl_completion_tree(
 ) -> Result<CompletionTree> {
     let mut tree = CompletionTreeBuilder
         .build_from_specs(&surface.specs, default_pipe_verbs())
-        .map_err(|err| miette::miette!(err.to_string()))?;
+        .into_diagnostic()
+        .wrap_err("failed to build REPL completion tree")?;
     if view.auth.is_builtin_visible(CMD_CONFIG) {
         CompletionTreeBuilder
             .apply_config_set_keys(&mut tree, config_set_key_specs())
-            .map_err(|err| miette::miette!(err.to_string()))?;
+            .into_diagnostic()
+            .wrap_err("failed to attach config completion keys")?;
     }
     inject_invocation_flags(&mut tree.root);
     mark_context_only_flags(&mut tree.root);
@@ -342,7 +344,7 @@ fn inject_invocation_flags(node: &mut CompletionNode) {
 }
 
 fn repl_host_command_without_invocation_flags(name: &str) -> bool {
-    matches!(name, "help" | "exit" | "quit")
+    matches!(name, "help" | "last" | "exit" | "quit")
 }
 
 fn invocation_flag_nodes() -> Vec<(String, FlagNode)> {

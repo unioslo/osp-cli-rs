@@ -412,7 +412,7 @@ fn compact_repl_surface_omits_options_overview_and_prioritizes_builtins_unit() {
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names[..4], ["exit", "help", "theme", "config"]);
+    assert_eq!(names[..5], ["exit", "help", "last", "theme", "config"]);
     assert!(!names.contains(&"options"));
     let orch_index = names
         .iter()

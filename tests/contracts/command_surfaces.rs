@@ -213,7 +213,7 @@ fn intro_command_compact_and_austere_diverge_by_presentation_contract() {
     assert_eq!(
         austere.trim(),
         format!(
-            "Welcome anonymous. v{}. Commands: help, config, theme, plugins. See help for more.",
+            "Welcome anonymous. v{}. Commands: help, last, config, theme. See help for more.",
             env!("CARGO_PKG_VERSION")
         )
     );

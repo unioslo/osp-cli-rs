@@ -53,8 +53,8 @@ pub(crate) fn launch_history_picker(
     let _ = tx.send(payload);
     drop(tx);
 
-    let output =
-        Skim::run_with(options, Some(rx)).map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    let output = Skim::run_with(options, Some(rx))
+        .map_err(|err| anyhow::anyhow!("failed to launch REPL history picker: {err}"))?;
     if output.is_abort {
         return Ok(None);
     }
@@ -137,7 +137,7 @@ pub(crate) fn build_history_picker_options(
 
     builder
         .build()
-        .map_err(|err| anyhow::anyhow!(err.to_string()))
+        .map_err(|err| anyhow::anyhow!("failed to build REPL history picker options: {err}"))
 }
 
 fn build_history_picker_color(appearance: &ReplAppearance) -> Option<String> {

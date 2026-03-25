@@ -60,6 +60,14 @@
 //! this module directly when you already own the execution callback and only
 //! want the interactive editor loop.
 //!
+//! In the full host REPL, a few builtins are intentionally handled before
+//! normal command parsing:
+//!
+//! - `help` renders the REPL overview
+//! - `last` replays the last successful result
+//! - `last --raw` shows the pre-pipeline payload from that result
+//! - `exit` / `quit` leave the current shell or the whole REPL
+//!
 //! When debugging the REPL, first decide whether the issue is editor/runtime
 //! state, dispatch semantics, or rendering. That is usually enough to choose
 //! the right submodule.

@@ -11,6 +11,7 @@ use super::shell::{handle_repl_exit_request, render_repl_help_for_scope};
 pub(super) enum ReplBuiltin {
     Help,
     Exit,
+    Last { raw: bool },
     Bang(BangCommand),
 }
 
@@ -43,6 +44,7 @@ pub(super) fn execute_repl_builtin(
             sink,
         )?)),
         ReplBuiltin::Exit => Ok(handle_repl_exit_request(session)),
+        ReplBuiltin::Last { raw } => execute_last_result_builtin(runtime, session, raw),
         ReplBuiltin::Bang(command) => execute_bang_command(session, history, raw, command),
     }
 }
@@ -58,10 +60,26 @@ pub(super) fn parse_repl_builtin(raw: &str) -> Result<Option<ReplBuiltin>> {
     if raw == "exit" || raw == "quit" {
         return Ok(Some(ReplBuiltin::Exit));
     }
+    if let Some(raw) = parse_last_builtin(raw)? {
+        return Ok(Some(ReplBuiltin::Last { raw }));
+    }
     if let Some(command) = parse_bang_command(raw)? {
         return Ok(Some(ReplBuiltin::Bang(command)));
     }
     Ok(None)
+}
+
+fn parse_last_builtin(raw: &str) -> Result<Option<bool>> {
+    let mut parts = raw.split_whitespace();
+    if parts.next() != Some("last") {
+        return Ok(None);
+    }
+
+    match (parts.next(), parts.next()) {
+        (None, None) => Ok(Some(false)),
+        (Some("--raw"), None) => Ok(Some(true)),
+        _ => Err(miette!("`last` only supports the optional `--raw` flag")),
+    }
 }
 
 pub(super) fn parse_bang_command(raw: &str) -> Result<Option<BangCommand>> {
@@ -170,6 +188,9 @@ pub(super) fn strip_history_scope(command: &str, scope: Option<&str>) -> String 
 
 fn render_bang_help() -> String {
     let mut out = String::new();
+    out.push_str("REPL builtins:\n");
+    out.push_str("  last     replay the last successful result\n");
+    out.push_str("  last --raw  show the pre-pipeline result\n\n");
     out.push_str("Bang history shortcuts:\n");
     out.push_str("  !!       last visible command\n");
     out.push_str("  !-N      Nth previous visible command\n");
@@ -179,6 +200,25 @@ fn render_bang_help() -> String {
     out
 }
 
+fn execute_last_result_builtin(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    raw: bool,
+) -> Result<ReplLineResult> {
+    let Some(last) = session.last_success() else {
+        return Ok(ReplLineResult::Continue(
+            "No recorded successful REPL result in this session.\n".to_string(),
+        ));
+    };
+    let runtime = crate::app::CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui);
+    let rendered = if raw {
+        crate::app::render_repl_output_with_runtime(&runtime, &last.output)
+    } else {
+        crate::app::render_saved_repl_output_with_runtime(&runtime, &last.output, &last.stages)?
+    };
+    Ok(ReplLineResult::Continue(rendered))
+}
+
 pub(super) fn is_repl_bang_request(raw: &str) -> bool {
     raw.trim_start().starts_with('!')
 }
@@ -186,7 +226,11 @@ pub(super) fn is_repl_bang_request(raw: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{BangCommand, execute_repl_builtin, parse_repl_builtin};
-    use crate::app::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
+    use crate::app::{
+        AppState, AppStateInit, LaunchContext, ReplCommandOutput, RuntimeContext,
+        StructuredCommandOutput, TerminalKind,
+    };
+    use crate::cli::rows::output::rows_to_output_result;
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
     use crate::repl::{HistoryConfig, ReplLineResult, SharedHistory};
@@ -207,6 +251,7 @@ mod tests {
             config,
             render_settings: RenderSettings::test_plain(OutputFormat::Json),
             message_verbosity: MessageLevel::Success,
+            error_detail: crate::app::ErrorDetail::Terse,
             debug_verbosity: 0,
             plugins: crate::plugin::PluginManager::new(Vec::new()),
             native_commands: crate::native::NativeCommandRegistry::default(),
@@ -237,6 +282,14 @@ mod tests {
         assert!(matches!(
             parse_repl_builtin("quit").expect("exit"),
             Some(super::ReplBuiltin::Exit)
+        ));
+        assert!(matches!(
+            parse_repl_builtin("last").expect("last"),
+            Some(super::ReplBuiltin::Last { raw: false })
+        ));
+        assert!(matches!(
+            parse_repl_builtin("last --raw").expect("last raw"),
+            Some(super::ReplBuiltin::Last { raw: true })
         ));
         assert!(matches!(
             parse_repl_builtin("!!").expect("bang"),
@@ -287,6 +340,70 @@ mod tests {
             )
             .expect("help should succeed"),
             ReplLineResult::Continue(text) if text.contains("help") || text.contains("config")
+        ));
+
+        state.session.record_success_output(
+            "config show",
+            &ReplCommandOutput::Text("visible\n".to_string()),
+            &[],
+        );
+        assert!(matches!(
+            execute_repl_builtin(
+                &mut state.runtime,
+                &mut state.session,
+                &state.clients,
+                &history,
+                "last",
+                parse_repl_builtin("last")
+                    .expect("last should parse")
+                    .expect("last should classify"),
+                &mut sink,
+            )
+            .expect("last should succeed"),
+            ReplLineResult::Continue(text) if text == "visible\n"
+        ));
+
+        state.session.record_success_output(
+            "ldap user alice | P name",
+            &ReplCommandOutput::Output(Box::new(StructuredCommandOutput {
+                source_guide: None,
+                output: rows_to_output_result(vec![crate::row! {
+                    "name" => "alice",
+                    "role" => "admin"
+                }]),
+                format_hint: None,
+            })),
+            &["P name".to_string()],
+        );
+        assert!(matches!(
+            execute_repl_builtin(
+                &mut state.runtime,
+                &mut state.session,
+                &state.clients,
+                &history,
+                "last",
+                parse_repl_builtin("last")
+                    .expect("last should parse")
+                    .expect("last should classify"),
+                &mut sink,
+            )
+            .expect("last should succeed"),
+            ReplLineResult::Continue(text) if text.contains("alice") && !text.contains("admin")
+        ));
+        assert!(matches!(
+            execute_repl_builtin(
+                &mut state.runtime,
+                &mut state.session,
+                &state.clients,
+                &history,
+                "last --raw",
+                parse_repl_builtin("last --raw")
+                    .expect("last raw should parse")
+                    .expect("last raw should classify"),
+                &mut sink,
+            )
+            .expect("last raw should succeed"),
+            ReplLineResult::Continue(text) if text.contains("alice") && text.contains("admin")
         ));
     }
 }

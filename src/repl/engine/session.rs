@@ -57,6 +57,9 @@ where
         }
         Err(err) => {
             eprintln!("{err}");
+            eprintln!(
+                "Run `doctor last -v`, `doctor last -vv`, or `doctor last -vvv` for more detail."
+            );
             SubmissionResult::Noop
         }
     };
@@ -241,7 +244,13 @@ where
             // can temporarily hand terminal ownership to skim. Once skim
             // returns, restore the chosen command into the live editor buffer.
             let current_line = editor.current_buffer_contents().to_string();
-            let selected = launch_history_picker(history_store, appearance, &current_line)?;
+            let selected = match launch_history_picker(history_store, appearance, &current_line) {
+                Ok(selected) => selected,
+                Err(err) => {
+                    eprintln!("{}", render_history_picker_failure(&err));
+                    return Ok(None);
+                }
+            };
             if let Some(command) = selected {
                 editor.run_edit_commands(&[EditCommand::Clear, EditCommand::InsertString(command)]);
             }
@@ -277,6 +286,13 @@ fn apply_basic_submission(result: SubmissionResult) -> BasicSubmissionAction {
             BasicSubmissionAction::Return(ReplRunResult::Restart { output, reload })
         }
     }
+}
+
+fn render_history_picker_failure(err: &anyhow::Error) -> String {
+    format!(
+        "History picker unavailable: {}. Continue typing normally or rerun the command directly.",
+        err.root_cause()
+    )
 }
 
 fn apply_interactive_submission(
@@ -471,5 +487,15 @@ mod tests {
             .expect("ctrl-c should succeed")
             .is_none()
         );
+    }
+
+    #[test]
+    fn history_picker_failure_message_stays_local_and_actionable_unit() {
+        let err = anyhow::anyhow!("failed to launch REPL history picker: no tty");
+        let rendered = render_history_picker_failure(&err);
+
+        assert!(rendered.contains("History picker unavailable"));
+        assert!(rendered.contains("no tty"));
+        assert!(rendered.contains("Continue typing normally"));
     }
 }
