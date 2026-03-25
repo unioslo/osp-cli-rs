@@ -77,17 +77,43 @@ These change how output is rendered, not the underlying command result.
 
 These are also invocation-local:
 
-- `-v/-vv`
+- `-v/-vv/-vvv`
 - `-q/-qq`
 - `-d/-dd/-ddd`
 
-`-v/-q` control user-facing detail. `-d` controls developer diagnostics on
-`stderr`.
+`-v/-q` control process-facing error detail and message verbosity. `-d`
+controls developer debug logs and timing on `stderr`.
+
+Error ladder:
+
+- default
+  - concise summary
+- `-v`
+  - summary plus cause/context chain
+- `-vv`
+  - rich diagnostic output, including labeled snippets when the error is
+    source-shaped
+- `-vvv`
+  - rich diagnostic output plus stack backtrace
+
+This is separate from `-d`. `-d` does not change the command result and does
+not replace the error-detail ladder.
+
+Normal operator flow:
+
+1. run the command normally
+2. if it fails, rerun with `-v`, `-vv`, or `-vvv`
+3. in the REPL, `doctor last -v/-vv/-vvv` lets you inspect the recorded
+   failure again without retyping the command
+4. in the REPL, `last` replays the last successful result and `last --raw`
+   shows the pre-pipeline payload
 
 Examples:
 
 ```bash
 osp plugins commands -v
+osp config get ui.format -vv
+osp config get ui.format -vvv
 osp plugins commands -dd
 osp plugins commands --json -q
 ```

@@ -17,6 +17,9 @@ The pattern is:
 
 These commands usually tell you the most with the least effort:
 
+- `osp -v ...`
+- `osp -vv ...`
+- `osp -vvv ...`
 - `osp -d ...`
 - `osp config explain <key>`
 - `osp plugins doctor`
@@ -24,6 +27,34 @@ These commands usually tell you the most with the least effort:
 - `osp plugins commands`
 
 Use them before changing config or blaming the terminal.
+
+Error-detail ladder:
+
+- default
+  - short actionable failure
+- `-v`
+  - summary plus cause/context chain
+- `-vv`
+  - rich diagnostic output, including snippets for config/DSL/input failures
+- `-vvv`
+  - the same rich report plus a stack backtrace
+
+Use `-d/-dd/-ddd` when you need host debug logs and timing. Use `-v/-vv/-vvv`
+when you need a better failure report.
+
+In the REPL, the normal loop is:
+
+1. let the command fail normally
+2. read the short error
+3. rerun with `-v/-vv/-vvv` or inspect the recorded failure with
+   `doctor last -v/-vv/-vvv`
+
+For successful REPL output, use:
+
+- `last`
+  - replay the last successful result with its original pipeline
+- `last --raw`
+  - inspect the pre-pipeline payload
 
 ## Symptom: A Plugin Command Is Missing
 
@@ -64,7 +95,8 @@ Plugin discovery and execution are bounded by
 Useful checks:
 
 ```bash
-osp -d plugins doctor
+osp -v plugins doctor
+osp -vv plugins doctor
 osp config get extensions.plugins.timeout_ms
 ```
 
@@ -112,7 +144,7 @@ If a script sees invalid JSON:
 
 1. redirect `stderr`
 2. check whether a plugin is printing data to the wrong stream
-3. retry with `-d`
+3. retry with `-v` or `-vv`
 
 Example:
 

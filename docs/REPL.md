@@ -63,6 +63,39 @@ That includes:
 This is the main promise of the REPL: interactive shell on top, same command
 language underneath.
 
+For failures, the same detail ladder applies inside the REPL:
+
+- default
+  - terse actionable summary
+- `-v`
+  - summary plus cause/context chain
+- `-vv`
+  - rich diagnostic report
+- `-vvv`
+  - rich diagnostic report plus stack backtrace
+
+`-d/-dd/-ddd` are still about debug logs and timing, not the failure render
+itself.
+
+Practical failure workflow:
+
+1. run the command normally
+2. if it fails, read the terse failure
+3. rerun the command with `-v`, `-vv`, or `-vvv`, or inspect the recorded
+   failure with `doctor last -v`, `doctor last -vv`, or `doctor last -vvv`
+
+The REPL should teach that escalation path instead of expecting you to predict
+the failure upfront.
+
+For successful results, the REPL also keeps the last replayable output:
+
+- `last`
+  - replay the last successful result with its original pipe stages
+- `last --raw`
+  - show the pre-pipeline payload from that same successful command
+- `doctor last`
+  - stays failure-only
+
 ## What The REPL Adds
 
 The REPL is useful because it keeps a few things alive across commands:
@@ -209,6 +242,8 @@ Do one external fetch, then keep slicing it locally:
 
 ```text
 inventory host web-01 --cache | P name owner
+last
+last --raw
 inventory host web-01 --cache | P name
 inventory host web-01 --cache --format json
 ```

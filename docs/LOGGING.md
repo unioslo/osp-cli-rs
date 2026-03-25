@@ -8,18 +8,28 @@ Use:
 
 - `-v`
 - `-vv`
+- `-vvv`
 - `-q`
 - `-qq`
 
 Behavior:
 
 - default: errors, warnings, and normal success messages
-- `-v`: more informational detail
-- `-vv`: trace-level user-facing detail
+- `-v`: more detail plus cause/context chain on failures
+- `-vv`: rich diagnostic failure output, with snippets when available
+- `-vvv`: rich diagnostic failure output plus stack backtrace
 - `-q`: fewer non-essential messages
 - `-qq`: quiet except for errors
 
 These flags work in both CLI and REPL and apply to one invocation at a time.
+
+Important split:
+
+- `-v/-vv/-vvv` change how failures are rendered
+- `-d/-dd/-ddd` change developer logs and timing
+
+They are related but not interchangeable. A command can have a terse failure
+and high debug logging, or a forensic failure render without extra debug logs.
 
 ## Developer Debug Output
 
@@ -59,6 +69,7 @@ shell’s behavior unless you change config defaults.
 
 ```text
 plugins commands -v
+plugins commands -vv
 plugins commands -dd
 ```
 
@@ -73,6 +84,10 @@ Useful config keys:
 - `log.file.level`
 
 Use `config explain <key>` to see where an effective value comes from.
+
+If you need the full colored forensic error render, prefer invocation flags
+such as `-vvv`. That is intentionally a per-command decision rather than a
+sticky logging default.
 
 ## Plugin Runtime Hints
 

@@ -29,6 +29,9 @@ Module Docs` until you actually need them.
 - debug a missing command or provider conflict:
   [TROUBLESHOOTING.md](TROUBLESHOOTING.md) and
   [USING_PLUGINS.md](USING_PLUGINS.md)
+- understand `-v/-vv/-vvv` versus `-d/-dd/-ddd`:
+  [FORMATTING.md](FORMATTING.md), [LOGGING.md](LOGGING.md), and
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 - set sane daily defaults for output and presentation:
   [COOKBOOK.md](COOKBOOK.md), [CONFIG.md](CONFIG.md), and [UI.md](UI.md)
 
@@ -55,6 +58,8 @@ the one that owns that stage.
   [GETTING_STARTED.md](GETTING_STARTED.md)
 - REPL workflow:
   [REPL.md](REPL.md)
+  Includes `last` for replaying the last successful result and `doctor last`
+  for the last failure.
 - one-shot output, flags, and rendering:
   [FORMATTING.md](FORMATTING.md)
 - config, profiles, and precedence:

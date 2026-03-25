@@ -22,13 +22,17 @@
 //!
 //! Public surface:
 //!
-//! - [`render_output`] renders one structured payload through the normal UI
+//! - [`crate::ui::render_output`] renders one structured payload through the
+//!   normal
+//!   UI
 //!   path
-//! - [`render_rows`] is the lightweight "I already have rows" helper
-//! - [`RenderSettings`] and [`ResolvedRenderSettings`] define the stable
-//!   caller-facing render knobs
-//! - [`theme`], [`style`], and [`messages`] provide the other operator-facing
-//!   presentation surfaces
+//! - [`crate::ui::render_rows`] is the lightweight "I already have rows"
+//!   helper
+//! - [`crate::ui::RenderSettings`] and
+//!   [`crate::ui::ResolvedRenderSettings`] define the stable caller-facing
+//!   render knobs
+//! - [`crate::ui::theme`], [`crate::ui::style`], and [`crate::ui::messages`]
+//!   provide the other operator-facing presentation surfaces
 //!
 //! Internal ownership stays intentionally boring:
 //!
