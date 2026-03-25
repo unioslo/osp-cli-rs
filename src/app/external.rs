@@ -169,10 +169,9 @@ fn run_native_command(
         runtime_hints_for_runtime(runtime),
     );
 
-    match command
-        .execute(args, &context)
-        .map_err(|err| miette!("{err:#}"))?
-    {
+    match command.execute(args, &context).map_err(|err| {
+        crate::app::report_anyhow_with_context(err, "native command execution failed")
+    })? {
         NativeCommandOutcome::Help(text) => Ok(CliCommandResult::guide(guide_help(&text))),
         NativeCommandOutcome::Exit(code) => Ok(CliCommandResult::exit(code)),
         NativeCommandOutcome::Response(response) => render_native_response(*response, stages),
@@ -217,7 +216,10 @@ fn parse_external_invocation(
                     view.filtered_for_help_level(invocation.help_level),
                 ))));
             }
-            return Err(miette!(err.to_string()));
+            return Err(crate::app::report_std_error_with_context(
+                err,
+                "failed to parse external inline command",
+            ));
         }
     };
 

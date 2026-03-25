@@ -27,7 +27,7 @@ use std::time::Instant;
 
 use crate::app::sink::{StdIoUiSink, UiSink};
 use crate::app::{AppClients, AppRuntime, AppSession};
-use crate::app::{ResolvedInvocation, resolve_invocation_ui};
+use crate::app::{ErrorDetail, ResolvedInvocation, render_report_message, resolve_invocation_ui};
 
 use super::{ReplViewContext, completion, input};
 
@@ -198,8 +198,9 @@ pub(crate) fn execute_repl_plugin_line(
                 );
             }
             if !is_repl_bang_request(line) {
-                let summary = err.to_string();
-                let detail = format!("{err:#}");
+                let plain_settings = runtime.ui.render_settings.plain_copy_settings();
+                let summary = render_report_message(&err, ErrorDetail::Terse, &plain_settings);
+                let detail = render_report_message(&err, ErrorDetail::Debug, &plain_settings);
                 session.record_failure(line, summary, detail);
             }
             Err(err)

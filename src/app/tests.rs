@@ -1,11 +1,12 @@
 use super::command_output::{
-    CommandRenderRuntime, apply_output_stages, parse_output_format_hint, run_cli_command,
+    CommandRenderRuntime, StructuredCommandOutput, apply_output_stages, parse_output_format_hint,
+    run_cli_command,
 };
 use super::help::parse_help_render_overrides;
 use super::{
-    CliCommandResult, authorized_command_catalog_for, bootstrap_message_verbosity, command_output,
-    plugin_dispatch_context_for_runtime, resolve_runtime_config, run_cli_command_with_ui, run_from,
-    run_from_with_sink,
+    CliCommandResult, ErrorDetail, authorized_command_catalog_for, bootstrap_error_detail,
+    bootstrap_message_verbosity, command_output, plugin_dispatch_context_for_runtime,
+    resolve_runtime_config, run_cli_command_with_ui, run_from, run_from_with_sink,
 };
 use super::{
     EXIT_CODE_CONFIG, EXIT_CODE_PLUGIN, EXIT_CODE_USAGE, PluginConfigEntry, PluginConfigScope,
@@ -19,6 +20,7 @@ use crate::app::sink::BufferedUiSink;
 use crate::app::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
 use crate::cli::commands::doctor as doctor_cmd;
 use crate::cli::invocation::{InvocationOptions, scan_cli_argv};
+use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
 use crate::config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions};
 use crate::core::command_policy::{CommandPath, VisibilityMode};
@@ -115,6 +117,7 @@ fn make_completion_state_with_entries_and_native(
         config,
         render_settings: settings,
         message_verbosity: MessageLevel::Success,
+        error_detail: crate::app::ErrorDetail::Terse,
         debug_verbosity: 0,
         plugins: PluginManager::new(Vec::new()),
         native_commands,
@@ -378,6 +381,7 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
         config,
         render_settings: settings,
         message_verbosity: MessageLevel::Success,
+        error_detail: crate::app::ErrorDetail::Terse,
         debug_verbosity: 0,
         plugins: PluginManager::new(plugin_dirs).with_roots(
             Some(config_root.to_path_buf()),

@@ -128,7 +128,10 @@ pub(super) fn parse_repl_invocation(
         Err(err) => {
             if renders_repl_inline_help(err.kind()) {
                 if !parsed.stages.is_empty() {
-                    return Err(miette!(err.to_string()));
+                    return Err(crate::app::report_std_error_with_context(
+                        err,
+                        "failed to parse REPL command",
+                    ));
                 }
                 return Ok(repl_help_dispatch(
                     parsed,
@@ -139,7 +142,10 @@ pub(super) fn parse_repl_invocation(
                     )),
                 ));
             }
-            return Err(miette!(err.to_string()));
+            return Err(crate::app::report_std_error_with_context(
+                err,
+                "failed to parse REPL command",
+            ));
         }
     };
     let spec = repl_command_spec(&command);
@@ -333,7 +339,9 @@ pub(super) fn render_repl_command_output(
         result,
         sink,
     )
-    .map_err(|err| miette!("{err:#}"))
+    .map_err(|err| {
+        crate::app::report_report_with_context(err, "failed to render REPL command output")
+    })
 }
 
 pub(super) fn execute_repl_command_dispatch(
@@ -449,16 +457,13 @@ pub(super) fn run_repl_command(
 
     if let Some(cache_key) = cache_key
         && result.exit_code == 0
-        && matches!(
-            &result.output,
-            Some(crate::app::ReplCommandOutput::Output(_))
-        )
+        && let Some(crate::app::ReplCommandOutput::Output(output)) = result.output.as_ref()
     {
         // Only cache successful structured payloads. Text/help/error output is
         // cheap to recompute and too presentation-dependent to be a good cache
         // contract for `--cache`.
         tracing::trace!(cache_key = %cache_key, "REPL command cached");
-        session.record_cached_command(cache_key, &result);
+        session.record_cached_command(cache_key, output.as_ref());
     }
 
     Ok(result)

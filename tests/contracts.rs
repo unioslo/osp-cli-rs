@@ -27,6 +27,9 @@ mod command_surfaces;
 #[path = "contracts/repl_debug.rs"]
 mod repl_debug;
 
+#[path = "contracts/error_reporting.rs"]
+mod error_reporting;
+
 #[path = "contracts/theme_commands.rs"]
 mod theme_commands;
 

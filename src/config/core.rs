@@ -1656,9 +1656,15 @@ impl ConfigLayer {
     /// assert_eq!(layer.entries().len(), 2);
     /// ```
     pub fn from_toml_str(raw: &str) -> Result<Self, ConfigError> {
-        let parsed = raw
-            .parse::<toml::Value>()
-            .map_err(|err| ConfigError::TomlParse(err.to_string()))?;
+        let parsed = raw.parse::<toml::Value>().map_err(|err| {
+            ConfigError::TomlParse(
+                crate::config::TomlParseDiagnostic::new(err.message()).with_source(
+                    "config layer",
+                    raw.to_string(),
+                    err.span(),
+                ),
+            )
+        })?;
 
         let root = parsed.as_table().ok_or(ConfigError::TomlRootMustBeTable)?;
         let mut layer = ConfigLayer::default();
@@ -1990,7 +1996,7 @@ pub struct BootstrapConfigExplain {
 
 /// Final resolved configuration view used at runtime.
 ///
-/// This is the provenance-aware result of [`ConfigResolver`]. It contains the
+/// This is the provenance-aware result of [`crate::config::ConfigResolver`]. It contains the
 /// winning value map the application reads, plus the active profile/terminal
 /// context used to choose those winners. Alias entries are retained
 /// separately so explain and editing surfaces can still reason about them

@@ -1,6 +1,62 @@
 use std::fmt::{Display, Formatter};
+use std::ops::Range;
 
 use crate::config::SchemaValueType;
+use miette::{LabeledSpan, NamedSource, SourceSpan};
+
+/// Structured TOML parse details preserved for richer CLI diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TomlParseDiagnostic {
+    message: String,
+    source_code: Option<NamedSource<String>>,
+    span: Option<SourceSpan>,
+}
+
+impl TomlParseDiagnostic {
+    /// Creates a TOML parse diagnostic with only the parser message.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            source_code: None,
+            span: None,
+        }
+    }
+
+    /// Attaches source text and an optional parser span for rich rendering.
+    #[must_use]
+    pub fn with_source(
+        mut self,
+        source_name: impl Into<String>,
+        source_text: impl Into<String>,
+        span: Option<Range<usize>>,
+    ) -> Self {
+        self.source_code = Some(NamedSource::new(source_name.into(), source_text.into()));
+        self.span = span.map(|range| (range.start, range.len()).into());
+        self
+    }
+
+    /// Returns the parser message without rendering additional context.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the attached source text when the parser failure came from a known document.
+    #[must_use]
+    pub fn source_code(&self) -> Option<&NamedSource<String>> {
+        self.source_code.as_ref()
+    }
+
+    /// Returns a label for the offending TOML span when location data is available.
+    #[must_use]
+    pub fn labels(&self) -> Option<Vec<LabeledSpan>> {
+        Some(vec![LabeledSpan::at(
+            self.span?,
+            "invalid TOML starts here",
+        )])
+    }
+}
 
 /// Error type returned by config parsing, validation, and resolution code.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +90,7 @@ pub enum ConfigError {
         mode: u32,
     },
     /// TOML parsing failed before semantic validation.
-    TomlParse(String),
+    TomlParse(TomlParseDiagnostic),
     /// The parsed TOML document root was not a table.
     TomlRootMustBeTable,
     /// Encountered an unsupported top-level section name.
@@ -177,7 +233,9 @@ impl Display for ConfigError {
                     mode
                 )
             }
-            ConfigError::TomlParse(message) => write!(f, "failed to parse TOML: {message}"),
+            ConfigError::TomlParse(diagnostic) => {
+                write!(f, "failed to parse TOML: {}", diagnostic.message())
+            }
             ConfigError::TomlRootMustBeTable => {
                 write!(f, "config root must be a TOML table")
             }
@@ -278,6 +336,35 @@ impl Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+impl miette::Diagnostic for ConfigError {
+    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
+        match self {
+            ConfigError::TomlParse(diagnostic) => diagnostic
+                .source_code()
+                .map(|source| source as &dyn miette::SourceCode),
+            ConfigError::LayerLoad { source, .. } => source.source_code(),
+            _ => None,
+        }
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
+        match self {
+            ConfigError::TomlParse(diagnostic) => diagnostic.labels().map(|labels| {
+                Box::new(labels.into_iter()) as Box<dyn Iterator<Item = LabeledSpan>>
+            }),
+            ConfigError::LayerLoad { source, .. } => source.labels(),
+            _ => None,
+        }
+    }
+
+    fn diagnostic_source(&self) -> Option<&dyn miette::Diagnostic> {
+        match self {
+            ConfigError::LayerLoad { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) fn with_path_context(path: String, error: ConfigError) -> ConfigError {
     ConfigError::LayerLoad {
         path,
@@ -287,7 +374,7 @@ pub(crate) fn with_path_context(path: String, error: ConfigError) -> ConfigError
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigError, with_path_context};
+    use super::{ConfigError, TomlParseDiagnostic, with_path_context};
     use crate::config::SchemaValueType;
 
     #[test]
@@ -315,7 +402,7 @@ mod tests {
                 "expected 600",
             ),
             (
-                ConfigError::TomlParse("unexpected token".to_string()),
+                ConfigError::TomlParse(TomlParseDiagnostic::new("unexpected token")),
                 "failed to parse TOML: unexpected token",
             ),
             (
@@ -476,7 +563,7 @@ mod tests {
 
         let wrapped = with_path_context(
             "/tmp/config.toml".to_string(),
-            ConfigError::TomlParse("bad value".to_string()),
+            ConfigError::TomlParse(TomlParseDiagnostic::new("bad value")),
         );
 
         assert_eq!(
@@ -488,5 +575,22 @@ mod tests {
             assert_eq!(path, "/tmp/config.toml");
             assert!(matches!(*source, ConfigError::TomlParse(_)));
         }
+    }
+
+    #[test]
+    fn toml_parse_diagnostic_preserves_optional_source_and_span_unit() {
+        let diagnostic = TomlParseDiagnostic::new("expected `]`").with_source(
+            "config.toml",
+            "not = [valid\n",
+            Some(6..12),
+        );
+        let error = ConfigError::TomlParse(diagnostic.clone());
+
+        assert!(error.to_string().contains("expected `]`"));
+        assert!(diagnostic.source_code().is_some());
+        let rendered = format!("{:?}", miette::Report::new(error));
+        assert!(rendered.contains("config.toml"));
+        assert!(rendered.contains("invalid TOML starts here"));
+        assert!(rendered.contains("not = [valid"));
     }
 }

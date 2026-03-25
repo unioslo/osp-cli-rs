@@ -6,7 +6,9 @@
 
 use miette::Result;
 
-use crate::app::{AppClients, AppRuntime, AppSession, AuthState, LastFailure, UiState};
+use crate::app::{
+    AppClients, AppRuntime, AppSession, AuthState, ErrorDetail, LastFailure, UiState,
+};
 use crate::app::{
     CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, ensure_builtin_visible_for,
 };
@@ -99,7 +101,7 @@ pub(crate) fn doctor_command_def(sort_key: impl Into<String>) -> CommandDef {
                 .about("Show config diagnostics")
                 .sort("11"),
             CommandDef::new("last")
-                .about("Show the last REPL failure")
+                .about("Show the last REPL failure; combine with -v/-vv/-vvv for more detail")
                 .sort("12"),
             CommandDef::new(CMD_PLUGINS)
                 .about("Run plugin diagnostics")
@@ -237,7 +239,10 @@ fn render_last_failure_document(
     out.push_str("Last REPL failure:\n");
     out.push_str(&format!("  Command: {}\n", last.command_line));
     out.push_str(&format!("  Error:   {}\n", last.summary));
-    if ui.debug_verbosity > 0 && last.detail != last.summary {
+    if ui.error_detail == ErrorDetail::Terse {
+        out.push('\n');
+        out.push_str("  More: run `doctor last -v`, `doctor last -vv`, or `doctor last -vvv` for more detail.\n");
+    } else if last.detail != last.summary {
         out.push('\n');
         out.push_str("Detail:\n");
         for line in last.detail.lines() {
@@ -256,7 +261,7 @@ mod tests {
         theme_doctor_rows,
     };
     use crate::app::ReplCommandOutput;
-    use crate::app::{AuthState, LastFailure, RuntimeContext, TerminalKind, UiState};
+    use crate::app::{AuthState, ErrorDetail, LastFailure, RuntimeContext, TerminalKind, UiState};
     use crate::cli::commands::{config as config_cmd, plugins as plugins_cmd};
     use crate::cli::{DoctorArgs, DoctorCommands};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions, RuntimeLoadOptions};
@@ -341,8 +346,10 @@ mod tests {
             detail: "request failed\nbackend said no".to_string(),
         };
 
-        let verbose =
-            render_last_failure_document(&ui_state(OutputFormat::Table, 1), Some(&failure));
+        let verbose = render_last_failure_document(
+            &ui_state(OutputFormat::Table, 1).with_error_detail(ErrorDetail::Normal),
+            Some(&failure),
+        );
         let Some(ReplCommandOutput::Text(verbose_text)) = verbose.output else {
             panic!("expected text output");
         };
@@ -358,6 +365,7 @@ mod tests {
         };
         assert!(compact_text.contains("Error:   request failed"));
         assert!(!compact_text.contains("Detail:"));
+        assert!(compact_text.contains("doctor last -v"));
 
         let json_failure = LastFailure {
             command_line: "plugins refresh".to_string(),

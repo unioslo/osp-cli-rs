@@ -19,7 +19,7 @@ use crate::core::row::Row;
 use crate::plugin::{
     CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary, state::PluginCommandState,
 };
-use miette::Result;
+use miette::{Result, WrapErr};
 
 #[derive(Clone, Copy)]
 pub(crate) struct PluginsCommandContext<'a> {
@@ -97,9 +97,12 @@ pub(crate) fn run_plugins_command(
         }
         PluginsCommands::Enable(args) => {
             let command = normalize_command_name(&args.target.command)?;
-            plugin_manager
-                .validate_command(&command)
-                .map_err(|err| miette::miette!("{err:#}"))?;
+            plugin_manager.validate_command(&command).map_err(|err| {
+                crate::app::report_anyhow_with_context(
+                    err,
+                    "failed to validate plugin command state change",
+                )
+            })?;
             persist_command_state(
                 context,
                 command.as_str(),
@@ -115,9 +118,12 @@ pub(crate) fn run_plugins_command(
         }
         PluginsCommands::Disable(args) => {
             let command = normalize_command_name(&args.target.command)?;
-            plugin_manager
-                .validate_command(&command)
-                .map_err(|err| miette::miette!("{err:#}"))?;
+            plugin_manager.validate_command(&command).map_err(|err| {
+                crate::app::report_anyhow_with_context(
+                    err,
+                    "failed to validate plugin command state change",
+                )
+            })?;
             persist_command_state(
                 context,
                 command.as_str(),
@@ -133,9 +139,12 @@ pub(crate) fn run_plugins_command(
         }
         PluginsCommands::ClearState(args) => {
             let command = normalize_command_name(&args.target.command)?;
-            plugin_manager
-                .validate_command(&command)
-                .map_err(|err| miette::miette!("{err:#}"))?;
+            plugin_manager.validate_command(&command).map_err(|err| {
+                crate::app::report_anyhow_with_context(
+                    err,
+                    "failed to validate plugin command state change",
+                )
+            })?;
             let removed = clear_command_state(
                 context,
                 command.as_str(),
@@ -158,7 +167,12 @@ pub(crate) fn run_plugins_command(
             let command = normalize_command_name(&args.target.command)?;
             plugin_manager
                 .validate_provider_selection(&command, &args.plugin_id)
-                .map_err(|err| miette::miette!("{err:#}"))?;
+                .map_err(|err| {
+                    crate::app::report_anyhow_with_context(
+                        err,
+                        "failed to validate provider selection",
+                    )
+                })?;
             persist_provider_selection(
                 context,
                 &command,
@@ -211,7 +225,7 @@ fn persist_command_state(
         &scope,
         TomlStoreEditOptions::new(),
     )
-    .map_err(|err| miette::miette!("{err}"))?;
+    .wrap_err_with(|| format!("failed to persist command state for `{command}`"))?;
     Ok(())
 }
 
@@ -227,7 +241,7 @@ fn clear_command_state(
         &scope,
         TomlStoreEditOptions::new(),
     )
-    .map_err(|err| miette::miette!("{err}"))?;
+    .wrap_err_with(|| format!("failed to clear command state for `{command}`"))?;
     Ok(edit_result.previous.is_some())
 }
 
@@ -245,7 +259,7 @@ fn persist_provider_selection(
         &scope,
         TomlStoreEditOptions::new(),
     )
-    .map_err(|err| miette::miette!("{err}"))?;
+    .wrap_err_with(|| format!("failed to persist provider selection for `{command}`"))?;
     Ok(())
 }
 
@@ -261,7 +275,7 @@ fn clear_provider_selection(
         &scope,
         TomlStoreEditOptions::new(),
     )
-    .map_err(|err| miette::miette!("{err}"))?;
+    .wrap_err_with(|| format!("failed to clear provider selection for `{command}`"))?;
     Ok(edit_result.previous.is_some())
 }
 
@@ -335,7 +349,7 @@ fn sync_current_command_preferences(context: PluginsCommandContext<'_>) -> Resul
         .with_runtime_load(context.runtime_load)
         .with_product_defaults(context.product_defaults.clone()),
     )
-    .map_err(|err| miette::miette!("{err:#}"))?;
+    .wrap_err("failed to refresh plugin command preferences from runtime config")?;
     context.plugin_manager.replace_command_preferences(
         crate::plugin::state::PluginCommandPreferences::from_resolved(&resolved),
     );

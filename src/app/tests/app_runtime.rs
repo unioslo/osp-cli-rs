@@ -142,28 +142,65 @@ fn bootstrap_message_verbosity_handles_non_utf8_short_flags_and_double_dash_unit
 }
 
 #[test]
+fn bootstrap_error_detail_handles_non_utf8_short_flags_and_double_dash_unit() {
+    let mut args = vec![
+        OsString::from("osp"),
+        OsString::from("--verbose"),
+        OsString::from("-qv"),
+    ];
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        args.push(OsString::from_vec(vec![0xFF]));
+    }
+    args.extend([
+        OsString::from("--"),
+        OsString::from("-vvv"),
+        OsString::from("--quiet"),
+    ]);
+
+    assert_eq!(super::bootstrap_error_detail(&args), ErrorDetail::Normal);
+}
+
+#[test]
 fn error_rendering_prioritizes_actionable_details_across_levels_unit() {
+    let settings = RenderSettings::test_plain(OutputFormat::Guide);
     let report = enrich_dispatch_error(PluginDispatchError::NonZeroExit {
         plugin_id: "ldap".to_string(),
         status_code: 7,
         stderr: "backend exploded".to_string(),
     });
 
-    let rendered = render_report_message(&report, MessageLevel::Success);
+    let rendered = render_report_message(&report, ErrorDetail::Terse, &settings);
     assert!(rendered.contains("plugin ldap exited with status 7: backend exploded"));
     assert!(rendered.contains("Hint:"));
+    assert!(rendered.contains("run again with -v, -vv, or -vvv"));
 
-    let rendered = render_report_message(&report, MessageLevel::Info);
+    let rendered = render_report_message(&report, ErrorDetail::Normal, &settings);
     assert!(rendered.contains("plugin ldap exited with status 7"));
     assert!(rendered.contains("plugin command failed"));
     assert!(rendered.contains("backend exploded"));
+    assert!(!rendered.contains("Hint:"));
+
+    let rendered = render_report_message(&report, ErrorDetail::Debug, &settings);
+    assert!(rendered.contains("plugin ldap exited with status 7"));
+    assert!(rendered.contains("plugin command failed"));
+    assert!(rendered.contains("backend exploded"));
+    assert!(!rendered.contains("Hint:"));
+    assert!(!rendered.contains("Stack backtrace"));
+
+    let rendered = render_report_message(&report, ErrorDetail::Forensic, &settings);
+    assert!(rendered.contains("plugin command failed"));
+    assert!(rendered.contains("backend exploded"));
+    assert!(rendered.contains("Stack backtrace"));
 
     let report = Err::<(), _>(miette::miette!("unknown theme: missing-theme"))
         .wrap_err("failed to derive host runtime inputs for startup")
         .expect_err("wrapped error should stay an error");
-    let rendered = render_report_message(&report, MessageLevel::Success);
+    let rendered = render_report_message(&report, ErrorDetail::Terse, &settings);
     assert!(rendered.contains("unknown theme: missing-theme"));
     assert!(!rendered.starts_with("failed to derive host runtime inputs for startup"));
+    assert!(rendered.contains("run again with -v, -vv, or -vvv"));
 }
 
 #[test]
@@ -405,10 +442,15 @@ fn app_session_builders_and_cache_helpers_cover_public_session_surface_unit() {
         "boom"
     );
 
-    session.record_cached_command("   ", &super::CliCommandResult::text("ignored"));
+    let cached = StructuredCommandOutput {
+        source_guide: None,
+        output: rows_to_output_result(vec![crate::row! { "value" => "cached" }]),
+        format_hint: None,
+    };
+    session.record_cached_command("   ", &cached);
     assert!(session.cached_command("missing").is_none());
-    session.record_cached_command("ldap user alice", &super::CliCommandResult::text("first"));
-    session.record_cached_command("ldap user bob", &super::CliCommandResult::text("second"));
+    session.record_cached_command("ldap user alice", &cached);
+    session.record_cached_command("ldap user bob", &cached);
     assert!(session.cached_command("ldap user alice").is_none());
     assert!(session.cached_command("ldap user bob").is_some());
 
@@ -451,7 +493,7 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
     let rendered = failure.messages.render_grouped(MessageLevel::Trace);
     assert!(rendered.contains("queried fallback backend"));
     assert!(rendered.contains("NOT_FOUND: missing user"));
-    assert_eq!(failure.report, "NOT_FOUND: missing user");
+    assert_eq!(failure.report.to_string(), "NOT_FOUND: missing user");
 
     let response = ResponseV1 {
         protocol_version: 1,
@@ -497,8 +539,8 @@ fn prepared_plugin_response_maps_into_cli_command_result_unit() {
     assert_eq!(result.exit_code, 1);
     assert!(result.output.is_none());
     assert_eq!(
-        result.failure_report.as_deref(),
-        Some("NOT_FOUND: missing user")
+        result.failure_report.as_ref().map(ToString::to_string),
+        Some("NOT_FOUND: missing user".to_string())
     );
     assert!(!result.messages.is_empty());
 }

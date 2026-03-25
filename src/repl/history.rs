@@ -11,7 +11,7 @@ use crate::core::command_def::CommandDef;
 use crate::core::row::Row;
 use crate::repl::{HistoryConfig, HistoryEntry, SharedHistory};
 use crate::ui::theme::DEFAULT_THEME_NAME;
-use miette::{Result, miette};
+use miette::Result;
 use std::path::PathBuf;
 
 use crate::app::{AppRuntime, AppSession};
@@ -151,7 +151,9 @@ pub(crate) fn run_history_repl_command(
         HistoryCommands::Prune(HistoryPruneArgs { keep }) => {
             let removed = history
                 .prune_for(keep, scope.prefix.as_deref())
-                .map_err(|err| miette!(err.to_string()))?;
+                .map_err(|err| {
+                    crate::app::report_anyhow_with_context(err, "failed to prune REPL history")
+                })?;
             Ok(ReplCommandOutput::Text(if removed == 0 {
                 format!("No entries removed from {}.\n", scope.label)
             } else {
@@ -163,9 +165,9 @@ pub(crate) fn run_history_repl_command(
             }))
         }
         HistoryCommands::Clear => {
-            let removed = history
-                .clear_for(scope.prefix.as_deref())
-                .map_err(|err| miette!(err.to_string()))?;
+            let removed = history.clear_for(scope.prefix.as_deref()).map_err(|err| {
+                crate::app::report_anyhow_with_context(err, "failed to clear REPL history")
+            })?;
             Ok(ReplCommandOutput::Text(if removed == 0 {
                 format!("{} is already empty.\n", scope.label)
             } else {

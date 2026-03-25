@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{
-    ConfigError, ConfigValue, Scope, TomlEditResult, normalize_scope, validate_bootstrap_value,
-    validate_key_scope, with_path_context,
+    ConfigError, ConfigValue, Scope, TomlEditResult, TomlParseDiagnostic, normalize_scope,
+    validate_bootstrap_value, validate_key_scope, with_path_context,
 };
 
 /// Options that control how TOML-backed config edits are applied.
@@ -224,7 +224,11 @@ fn load_or_create_toml_root(path: &Path) -> Result<toml::Value, ConfigError> {
     raw.parse::<toml::Value>().map_err(|err| {
         with_path_context(
             path.display().to_string(),
-            ConfigError::TomlParse(err.to_string()),
+            ConfigError::TomlParse(TomlParseDiagnostic::new(err.message()).with_source(
+                path.display().to_string(),
+                raw.clone(),
+                err.span(),
+            )),
         )
     })
 }
@@ -241,8 +245,8 @@ fn write_toml_root(
         })?;
     }
 
-    let payload =
-        toml::to_string_pretty(root).map_err(|err| ConfigError::TomlParse(err.to_string()))?;
+    let payload = toml::to_string_pretty(root)
+        .map_err(|err| ConfigError::TomlParse(TomlParseDiagnostic::new(err.to_string())))?;
     write_text_atomic(path, payload.as_bytes(), strict_secret_permissions).map_err(|err| {
         ConfigError::FileWrite {
             path: path.display().to_string(),

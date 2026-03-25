@@ -1,10 +1,11 @@
 ---
-source: tests/contracts/plugins.rs
-assertion_line: 274
+source: tests/contracts/plugins/dispatch.rs
+assertion_line: 121
 expression: sanitized
 ---
 <TIMESTAMP>Z  WARN osp_cli::plugin::dispatch: plugin command exited with non-zero status plugin_id=boom command=boom status_code=7 stderr=boom-from-stderr
-- Errors ---
+- Errors ---------------------------------------------------------------
   plugin boom exited with status 7: boom-from-stderr
 Hint: inspect the plugin stderr output or rerun with -v/-vv for more context
-------------
+More: run again with -v, -vv, or -vvv for more detail
+------------------------------------------------------------------------

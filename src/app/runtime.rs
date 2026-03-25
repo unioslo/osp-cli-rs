@@ -27,6 +27,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use super::host::ErrorDetail;
 use crate::config::{ConfigLayer, ResolvedConfig, RuntimeLoadOptions};
 use crate::core::command_policy::{
     AccessReason, CommandAccess, CommandPath, CommandPolicy, CommandPolicyContext,
@@ -211,6 +212,8 @@ pub struct UiState {
     pub render_settings: RenderSettings,
     /// Default message verbosity derived from the current runtime config.
     pub message_verbosity: MessageLevel,
+    /// Process-facing error detail used for failure rendering.
+    pub error_detail: ErrorDetail,
     /// Numeric debug verbosity used for trace-style host output.
     pub debug_verbosity: u8,
 }
@@ -272,6 +275,7 @@ impl UiState {
     /// );
     ///
     /// assert_eq!(ui.message_verbosity, MessageLevel::Success);
+    /// assert_eq!(ui.error_detail, osp_cli::app::ErrorDetail::Terse);
     /// assert_eq!(ui.debug_verbosity, 2);
     /// ```
     pub fn new(
@@ -282,6 +286,7 @@ impl UiState {
         Self {
             render_settings,
             message_verbosity,
+            error_detail: ErrorDetail::Terse,
             debug_verbosity,
         }
     }
@@ -295,6 +300,12 @@ impl UiState {
     /// Replaces the message verbosity used for buffered UI messages.
     pub fn with_message_verbosity(mut self, message_verbosity: MessageLevel) -> Self {
         self.message_verbosity = message_verbosity;
+        self
+    }
+
+    /// Replaces the process-facing error detail ladder for this UI state.
+    pub fn with_error_detail(mut self, error_detail: ErrorDetail) -> Self {
+        self.error_detail = error_detail;
         self
     }
 

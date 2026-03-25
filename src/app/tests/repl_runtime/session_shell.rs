@@ -3,6 +3,7 @@ fn repl_builtin_overrides_do_not_mutate_runtime_ui_state_unit() {
     let mut state = make_test_state(Vec::new());
     let history = make_test_history(&mut state);
     let original_message = state.runtime.ui.message_verbosity;
+    let original_error_detail = state.runtime.ui.error_detail;
     let original_debug = state.runtime.ui.debug_verbosity;
 
     repl_dispatch::execute_repl_plugin_line(
@@ -14,6 +15,7 @@ fn repl_builtin_overrides_do_not_mutate_runtime_ui_state_unit() {
     )
     .expect("quiet config get should complete");
     assert_eq!(state.runtime.ui.message_verbosity, original_message);
+    assert_eq!(state.runtime.ui.error_detail, original_error_detail);
     assert_eq!(state.runtime.ui.debug_verbosity, original_debug);
 
     repl_dispatch::execute_repl_plugin_line(
@@ -21,10 +23,11 @@ fn repl_builtin_overrides_do_not_mutate_runtime_ui_state_unit() {
         &mut state.session,
         &state.clients,
         &history,
-        "-d doctor last",
+        "-v doctor last",
     )
-    .expect("doctor last with debug override should complete");
+    .expect("doctor last with verbosity override should complete");
     assert_eq!(state.runtime.ui.message_verbosity, original_message);
+    assert_eq!(state.runtime.ui.error_detail, original_error_detail);
     assert_eq!(state.runtime.ui.debug_verbosity, original_debug);
 }
 
@@ -81,7 +84,8 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
         .last_repl_failure()
         .expect("last failure should be recorded");
     assert_eq!(last.command_line, "missing");
-    assert!(last.summary.contains("plugin command failed"));
+    assert!(!last.summary.trim().is_empty());
+    assert!(last.detail.contains("plugin command failed"));
 
     let rendered = doctor_cmd::run_doctor_command(
         doctor_cmd::DoctorCommandContext {
@@ -196,7 +200,6 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
         other => panic!("unexpected repl result: {other:?}"),
     }
     assert_eq!(state.repl_cache_size(), cache_size_before);
-
 }
 
 #[test]
@@ -266,7 +269,6 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
         other => panic!("unexpected repl result: {other:?}"),
     }
     assert_eq!(state.repl_cache_size(), cache_size_before);
-
 }
 
 #[test]

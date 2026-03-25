@@ -71,7 +71,7 @@
 use crate::config::ConfigLayer;
 use crate::native::NativeCommandRegistry;
 use crate::ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity};
-use crate::ui::{RenderSettings, render_messages_without_config};
+use crate::ui::render_messages_without_config;
 use std::ffi::OsString;
 
 pub(crate) mod assembly;
@@ -104,6 +104,7 @@ pub(crate) use config_explain::{
     render_config_explain_text,
 };
 pub(crate) use facts::*;
+pub use host::ErrorDetail;
 pub use host::run_from;
 pub(crate) use host::*;
 pub(crate) use repl_lifecycle::rebuild_repl_in_place;
@@ -349,15 +350,22 @@ impl App {
         T: Into<OsString> + Clone,
     {
         let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+        let error_detail = bootstrap_error_detail(&args);
         let message_verbosity = bootstrap_message_verbosity(&args);
+        let error_render_settings =
+            help::render_settings_for_help(&args, &self.definition.product_defaults).settings;
 
         match host::run_from_with_sink_and_app(args, sink, &self.definition) {
             Ok(code) => code,
             Err(err) => {
                 let mut messages = MessageBuffer::default();
-                messages.error(render_report_message(&err, message_verbosity));
+                messages.error(render_report_message(
+                    &err,
+                    error_detail,
+                    &error_render_settings,
+                ));
                 sink.write_stderr(&render_messages_without_config(
-                    &RenderSettings::test_plain(crate::core::output::OutputFormat::Auto),
+                    &error_render_settings,
                     &messages,
                     message_verbosity,
                 ));
@@ -578,15 +586,22 @@ where
     T: Into<OsString> + Clone,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    let error_detail = bootstrap_error_detail(&args);
     let message_verbosity = bootstrap_message_verbosity(&args);
+    let error_render_settings =
+        help::render_settings_for_help(&args, &AppDefinition::default().product_defaults).settings;
 
     match host::run_from_with_sink(args, sink) {
         Ok(code) => code,
         Err(err) => {
             let mut messages = MessageBuffer::default();
-            messages.error(render_report_message(&err, message_verbosity));
+            messages.error(render_report_message(
+                &err,
+                error_detail,
+                &error_render_settings,
+            ));
             sink.write_stderr(&render_messages_without_config(
-                &RenderSettings::test_plain(crate::core::output::OutputFormat::Auto),
+                &error_render_settings,
                 &messages,
                 message_verbosity,
             ));
@@ -596,6 +611,16 @@ where
 }
 
 fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {
+    let (verbose, quiet) = bootstrap_verbosity_counts(args);
+    adjust_verbosity(MessageLevel::Success, verbose, quiet)
+}
+
+fn bootstrap_error_detail(args: &[OsString]) -> ErrorDetail {
+    let (verbose, quiet) = bootstrap_verbosity_counts(args);
+    adjust_error_detail(ErrorDetail::Terse, verbose, quiet)
+}
+
+fn bootstrap_verbosity_counts(args: &[OsString]) -> (u8, u8) {
     let mut verbose = 0u8;
     let mut quiet = 0u8;
 
@@ -631,5 +656,5 @@ fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {
         }
     }
 
-    adjust_verbosity(MessageLevel::Success, verbose, quiet)
+    (verbose, quiet)
 }

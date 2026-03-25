@@ -11,12 +11,14 @@ use crate::native::{NativeCommandCatalogEntry, NativeCommandRegistry};
 use crate::repl;
 use clap::Parser;
 use miette::{Result, WrapErr, miette};
+use nu_ansi_term::Style;
 
 use crate::guide::{GuideSection, GuideSectionKind, GuideView, HelpLevel};
-use crate::ui::RenderSettings;
-use crate::ui::messages::MessageLevel;
+use crate::ui::{RenderBackend, RenderSettings};
+use std::backtrace::Backtrace;
 use std::borrow::Cow;
 use std::ffi::OsString;
+use std::fmt::{Debug, Formatter};
 use std::time::Instant;
 
 use super::help;
@@ -88,9 +90,16 @@ struct PreparedHostRun {
 }
 
 #[derive(Debug)]
-struct ContextError<E> {
+struct BoxedContextError {
     context: &'static str,
-    source: E,
+    source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    backtrace: Backtrace,
+}
+
+#[derive(Debug)]
+struct ReportContextError {
+    context: &'static str,
+    source: miette::Report,
 }
 
 #[derive(Clone, Copy)]
@@ -98,6 +107,42 @@ struct KnownErrorChain<'a> {
     clap: Option<&'a clap::Error>,
     config: Option<&'a crate::config::ConfigError>,
     plugin: Option<&'a PluginDispatchError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Process-facing error detail ladder used by the host renderer.
+///
+/// This is separate from UI message severity. The host uses it to decide how
+/// much of a failure to show when rendering a `miette::Report`.
+///
+/// Current contract:
+///
+/// - [`ErrorDetail::Terse`] renders one actionable summary and an optional hint
+/// - [`ErrorDetail::Normal`] renders the summary plus cause-chain context
+/// - [`ErrorDetail::Debug`] renders the rich diagnostic report without a
+///   backtrace
+/// - [`ErrorDetail::Forensic`] renders the rich diagnostic report plus a
+///   stack backtrace
+pub enum ErrorDetail {
+    /// Show one short actionable summary and any directly helpful hint.
+    Terse,
+    /// Show the summary plus the cause/context chain.
+    Normal,
+    /// Show the rich diagnostic report without a backtrace.
+    Debug,
+    /// Show the rich diagnostic report plus a stack backtrace.
+    Forensic,
+}
+
+impl ErrorDetail {
+    fn from_rank(rank: i8) -> Self {
+        match rank {
+            i8::MIN..=0 => ErrorDetail::Terse,
+            1 => ErrorDetail::Normal,
+            2 => ErrorDetail::Debug,
+            _ => ErrorDetail::Forensic,
+        }
+    }
 }
 
 impl<'a> KnownErrorChain<'a> {
@@ -110,25 +155,74 @@ impl<'a> KnownErrorChain<'a> {
     }
 }
 
-impl<E> std::fmt::Display for ContextError<E>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
+impl std::fmt::Display for BoxedContextError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.context)
+        let source = self.source.to_string();
+        if source.is_empty() {
+            write!(f, "{}", self.context)
+        } else {
+            write!(f, "{}: {}", self.context, source)
+        }
     }
 }
 
-impl<E> std::error::Error for ContextError<E>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
+impl std::error::Error for BoxedContextError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
+        Some(self.source.as_ref())
     }
 }
 
-impl<E> miette::Diagnostic for ContextError<E> where E: std::error::Error + Send + Sync + 'static {}
+impl miette::Diagnostic for BoxedContextError {}
+
+impl std::fmt::Display for ReportContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = self.source.to_string();
+        if source.is_empty() {
+            write!(f, "{}", self.context)
+        } else {
+            write!(f, "{}: {}", self.context, source)
+        }
+    }
+}
+
+impl std::error::Error for ReportContextError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+impl miette::Diagnostic for ReportContextError {
+    fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        self.source.code()
+    }
+
+    fn severity(&self) -> Option<miette::Severity> {
+        self.source.severity()
+    }
+
+    fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        self.source.help()
+    }
+
+    fn url<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        self.source.url()
+    }
+
+    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
+        self.source.source_code()
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
+        self.source.labels()
+    }
+
+    fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn miette::Diagnostic> + 'a>> {
+        self.source.related()
+    }
+
+    fn diagnostic_source(&self) -> Option<&dyn miette::Diagnostic> {
+        Some(self.source.as_ref())
+    }
+}
 
 /// Runs the top-level CLI entrypoint from an argv-like iterator.
 ///
@@ -421,7 +515,12 @@ pub(crate) fn resolve_invocation_ui(
             } else {
                 ui.debug_verbosity
             },
-        ),
+        )
+        .with_error_detail(adjust_error_detail(
+            ui.error_detail,
+            invocation.verbose,
+            invocation.quiet,
+        )),
         plugin_provider: invocation.plugin_provider.clone(),
         help_level: help_level(config, invocation.verbose, invocation.quiet),
     }
@@ -456,18 +555,35 @@ pub fn classify_exit_code(err: &miette::Report) -> i32 {
     }
 }
 
-/// Renders a user-facing error message for the requested message verbosity.
+/// Renders a process-facing error message for one step of the host detail
+/// ladder.
 ///
-/// Higher verbosity levels include more source-chain detail and may append a hint.
-pub fn render_report_message(err: &miette::Report, verbosity: MessageLevel) -> String {
-    if verbosity >= MessageLevel::Trace {
-        return format!("{err:?}");
+/// The returned string is the final user-facing text for the chosen level.
+/// The ladder is intentionally qualitative rather than additive:
+///
+/// - `Terse`: concise summary plus hint when helpful
+/// - `Normal`: summary plus source-chain context
+/// - `Debug`: rich diagnostic report with snippets when available
+/// - `Forensic`: debug report plus stack backtrace
+///
+/// `RenderSettings` control whether diagnostic rendering is rich/plain and
+/// whether forensic output is colorized.
+pub fn render_report_message(
+    err: &miette::Report,
+    detail: ErrorDetail,
+    settings: &RenderSettings,
+) -> String {
+    if detail >= ErrorDetail::Forensic {
+        return render_forensic_report_message(err, settings);
+    }
+    if detail >= ErrorDetail::Debug {
+        return render_debug_report_message(err, settings);
     }
 
     let known = KnownErrorChain::inspect(err);
     let mut message = base_error_message(err, &known);
 
-    if verbosity >= MessageLevel::Info {
+    if detail >= ErrorDetail::Normal {
         let mut next: Option<&(dyn std::error::Error + 'static)> = Some(err.as_ref());
         while let Some(source) = next {
             let source_text = source.to_string();
@@ -479,15 +595,112 @@ pub fn render_report_message(err: &miette::Report, verbosity: MessageLevel) -> S
         }
     }
 
-    if verbosity >= MessageLevel::Success
+    if detail == ErrorDetail::Terse
         && let Some(hint) = known_error_hint(&known)
         && !message.contains(hint)
     {
         message.push_str("\nHint: ");
         message.push_str(hint);
     }
+    if detail == ErrorDetail::Terse {
+        message.push_str("\nMore: run again with -v, -vv, or -vvv for more detail");
+    }
 
     message
+}
+
+fn render_forensic_report_message(err: &miette::Report, settings: &RenderSettings) -> String {
+    let mut rendered = render_debug_report_message(err, settings);
+
+    let backtrace = find_error_in_chain::<BoxedContextError>(err)
+        .map(|error| error.backtrace.to_string())
+        .filter(|trace| !trace.trim().is_empty())
+        .unwrap_or_else(|| Backtrace::force_capture().to_string());
+    rendered.push_str("\n\n");
+    rendered.push_str(&format_backtrace(&backtrace, settings));
+
+    rendered
+}
+
+fn render_debug_report_message(err: &miette::Report, settings: &RenderSettings) -> String {
+    let mut rendered = render_diagnostic_with_settings(err.as_ref(), settings);
+
+    if let Some(config_err) = find_error_in_chain::<crate::config::ConfigError>(err)
+        && <crate::config::ConfigError as miette::Diagnostic>::source_code(config_err).is_some()
+    {
+        let diagnostic = render_diagnostic_with_settings(config_err, settings);
+        if !rendered.contains(&diagnostic) {
+            rendered.push_str("\n\n");
+            rendered.push_str(&diagnostic);
+        }
+    }
+
+    rendered
+}
+
+fn render_diagnostic_with_settings(
+    diagnostic: &dyn miette::Diagnostic,
+    settings: &RenderSettings,
+) -> String {
+    let handler = build_miette_handler(settings);
+    format!(
+        "{:?}",
+        HandlerDebug {
+            handler: &handler,
+            diagnostic,
+        }
+    )
+}
+
+fn build_miette_handler(settings: &RenderSettings) -> miette::MietteHandler {
+    let resolved = settings.resolve_render_settings();
+    let mut opts = miette::MietteHandlerOpts::new()
+        .with_cause_chain()
+        .context_lines(2);
+
+    if let Some(width) = resolved.width {
+        opts = opts.width(width);
+    }
+
+    match resolved.backend {
+        RenderBackend::Rich => opts
+            .force_graphical(true)
+            .color(resolved.color)
+            .unicode(resolved.unicode)
+            .build(),
+        RenderBackend::Plain => opts.force_narrated(true).build(),
+    }
+}
+
+fn format_backtrace(backtrace: &str, settings: &RenderSettings) -> String {
+    let resolved = settings.resolve_render_settings();
+    let heading = if resolved.color {
+        Style::new().bold().paint("Stack backtrace").to_string()
+    } else {
+        "Stack backtrace".to_string()
+    };
+    format!("{heading}:\n{backtrace}")
+}
+
+struct HandlerDebug<'a> {
+    handler: &'a dyn miette::ReportHandler,
+    diagnostic: &'a dyn miette::Diagnostic,
+}
+
+impl Debug for HandlerDebug<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.handler.debug(self.diagnostic, f)
+    }
+}
+
+pub(crate) fn adjust_error_detail(base: ErrorDetail, verbose: u8, quiet: u8) -> ErrorDetail {
+    let rank = match base {
+        ErrorDetail::Terse => 0,
+        ErrorDetail::Normal => 1,
+        ErrorDetail::Debug => 2,
+        ErrorDetail::Forensic => 3,
+    };
+    ErrorDetail::from_rank(rank + verbose as i8 - quiet as i8)
 }
 
 fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
@@ -578,7 +791,29 @@ pub(crate) fn report_std_error_with_context<E>(err: E, context: &'static str) ->
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    miette::Report::new(ContextError {
+    miette::Report::new(BoxedContextError {
+        context,
+        source: Box::new(err),
+        backtrace: Backtrace::force_capture(),
+    })
+}
+
+pub(crate) fn report_anyhow_with_context(
+    err: anyhow::Error,
+    context: &'static str,
+) -> miette::Report {
+    miette::Report::new(BoxedContextError {
+        context,
+        source: err.into_boxed_dyn_error(),
+        backtrace: Backtrace::force_capture(),
+    })
+}
+
+pub(crate) fn report_report_with_context(
+    err: miette::Report,
+    context: &'static str,
+) -> miette::Report {
+    miette::Report::new(ReportContextError {
         context,
         source: err,
     })

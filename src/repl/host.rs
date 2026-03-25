@@ -7,8 +7,7 @@
 
 use crate::config::ResolvedConfig;
 use crate::repl::{DebugStep, run_repl};
-use anyhow::anyhow;
-use miette::{Result, miette};
+use miette::{IntoDiagnostic, Result, WrapErr, miette};
 
 use super::{dispatch, input, lifecycle};
 use crate::app::sink::StdIoUiSink;
@@ -89,14 +88,9 @@ fn run_repl_cycle(
             history,
             line,
         )
-        .map_err(|err| {
-            anyhow!(
-                "{}",
-                crate::app::render_report_message(&err, state.runtime.ui.message_verbosity)
-            )
-        })
+        .map_err(|err| anyhow::Error::from_boxed(err.into()))
     })
-    .map_err(|err| miette!("{err:#}"))
+    .map_err(|err| crate::app::report_anyhow_with_context(err, "interactive REPL execution failed"))
 }
 
 fn should_show_repl_intro(config: &ResolvedConfig, verbosity: MessageLevel) -> bool {
@@ -157,7 +151,9 @@ fn run_repl_debug_complete(
                 crate::repl::debug_history_menu(&history, &projected_line.line, cursor, options)
             }
         };
-        serde_json::to_string_pretty(&debug).map_err(|err| miette!("{err:#}"))?
+        serde_json::to_string_pretty(&debug)
+            .into_diagnostic()
+            .wrap_err("failed to serialize REPL debug completion payload")?
     } else {
         let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
         let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
@@ -185,9 +181,13 @@ fn run_repl_debug_complete(
                 )
             }
         };
-        serde_json::to_string_pretty(&frames).map_err(|err| miette!("{err:#}"))?
+        serde_json::to_string_pretty(&frames)
+            .into_diagnostic()
+            .wrap_err("failed to serialize REPL debug frame payload")?
     };
-    let payload = serde_json::from_str(&payload).map_err(|err| miette!("{err:#}"))?;
+    let payload = serde_json::from_str(&payload)
+        .into_diagnostic()
+        .wrap_err("failed to parse serialized REPL debug payload")?;
     Ok(CliCommandResult::json(payload))
 }
 
@@ -252,6 +252,7 @@ mod tests {
             config,
             render_settings: settings,
             message_verbosity: MessageLevel::Success,
+            error_detail: crate::app::ErrorDetail::Terse,
             debug_verbosity: 0,
             plugins: crate::plugin::PluginManager::new(Vec::new()),
             native_commands: crate::native::NativeCommandRegistry::default(),

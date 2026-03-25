@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use miette::{Result, WrapErr, miette};
+use miette::{IntoDiagnostic, Result, WrapErr, miette};
 
 use crate::app::{AppClients, AuthState, TerminalKind};
 use crate::cli::{
@@ -305,7 +305,7 @@ fn profile_prefixed_external_plan(
     }
 
     let parsed = parse_inline_command_tokens(&remaining)
-        .map_err(|err| miette!(err.to_string()))
+        .into_diagnostic()
         .wrap_err_with(|| {
             format!("failed to parse command after profile shorthand `{normalized}`")
         })?;

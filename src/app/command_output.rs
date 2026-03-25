@@ -17,7 +17,7 @@ use crate::ui::{
     copy_output_to_clipboard, render_json_value, render_output, render_structured_output,
     render_structured_output_with_source_guide,
 };
-use miette::Result;
+use miette::{Result, WrapErr, miette};
 
 use crate::app::resolve_render_settings_with_hint;
 use crate::app::sink::UiSink;
@@ -40,13 +40,13 @@ pub(crate) struct StructuredCommandOutput {
     pub(crate) format_hint: Option<OutputFormat>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct CliCommandResult {
     pub(crate) exit_code: i32,
     pub(crate) messages: MessageBuffer,
     pub(crate) output: Option<ReplCommandOutput>,
     pub(crate) stderr_text: Option<String>,
-    pub(crate) failure_report: Option<String>,
+    pub(crate) failure_report: Option<miette::Report>,
 }
 
 pub(crate) struct PreparedPluginOutput {
@@ -57,7 +57,7 @@ pub(crate) struct PreparedPluginOutput {
 
 pub(crate) struct FailedPluginOutput {
     pub(crate) messages: MessageBuffer,
-    pub(crate) report: String,
+    pub(crate) report: miette::Report,
 }
 
 pub(crate) enum PreparedPluginResponse {
@@ -226,8 +226,7 @@ pub(crate) fn cli_result_from_plugin_response(
     response: ResponseV1,
     stages: &[String],
 ) -> Result<CliCommandResult> {
-    let prepared =
-        prepare_plugin_response(response, stages).map_err(|err| miette::miette!("{err:#}"))?;
+    let prepared = prepare_plugin_response(response, stages)?;
     Ok(CliCommandResult::from_prepared_plugin_response(prepared))
 }
 
@@ -272,15 +271,15 @@ pub(crate) fn maybe_copy_output_with_runtime(
 pub(crate) fn prepare_plugin_response(
     response: ResponseV1,
     stages: &[String],
-) -> anyhow::Result<PreparedPluginResponse> {
+) -> Result<PreparedPluginResponse> {
     let mut messages = plugin_response_messages(&response);
     if !response.ok {
         let report = if let Some(error) = response.error {
             messages.error(format!("{}: {}", error.code, error.message));
-            format!("{}: {}", error.code, error.message)
+            miette!("{}: {}", error.code, error.message)
         } else {
             messages.error("plugin command failed");
-            "plugin command failed".to_string()
+            miette!("plugin command failed")
         };
         return Ok(PreparedPluginResponse::Failure(FailedPluginOutput {
             messages,
@@ -292,7 +291,8 @@ pub(crate) fn prepare_plugin_response(
         plugin_data_to_output_result(response.data, Some(&response.meta)),
         stages,
         parse_output_format_hint(response.meta.format_hint.as_deref()),
-    )?;
+    )
+    .wrap_err("failed to prepare plugin response output")?;
 
     Ok(PreparedPluginResponse::Output(PreparedPluginOutput {
         messages,
@@ -305,7 +305,7 @@ pub(crate) fn apply_output_stages(
     mut output: OutputResult,
     stages: &[String],
     format_hint: Option<OutputFormat>,
-) -> anyhow::Result<(OutputResult, Option<OutputFormat>)> {
+) -> Result<(OutputResult, Option<OutputFormat>)> {
     if output.meta.render_recommendation.is_none()
         && let Some(format) = format_hint
     {
@@ -317,7 +317,9 @@ pub(crate) fn apply_output_stages(
         // This is the central fan-in for staged structured output. Keep all
         // callers on the canonical DSL entrypoint so semantic/output policy
         // stays consistent across CLI, REPL, and plugin flows.
-        output = apply_output_pipeline(output, stages)?;
+        output = apply_output_pipeline(output, stages).map_err(|err| {
+            crate::app::report_anyhow_with_context(err, "failed to apply DSL output pipeline")
+        })?;
         // Once a DSL pipeline runs, producer-side format hints stop being an
         // out-of-band override. Any surviving recommendation now lives on the
         // transformed output metadata itself.
@@ -390,6 +392,67 @@ pub(crate) fn render_repl_output_with_runtime(
     }
 }
 
+pub(crate) fn render_saved_repl_output_with_runtime(
+    runtime: &CommandRenderRuntime<'_>,
+    output: &ReplCommandOutput,
+    stages: &[String],
+) -> Result<String> {
+    match output {
+        ReplCommandOutput::Output(structured) => {
+            let StructuredCommandOutput {
+                source_guide,
+                output,
+                format_hint,
+            } = structured.as_ref().clone();
+            let (output, format_hint) = apply_output_stages(output, stages, format_hint)
+                .wrap_err("failed to replay staged structured output")?;
+            let render_settings =
+                resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
+            Ok(if stages.is_empty() {
+                render_structured_repl_output(
+                    runtime.config(),
+                    &render_settings,
+                    &output,
+                    format_hint,
+                    source_guide.as_ref(),
+                )
+            } else {
+                render_structured_output(runtime.config(), &render_settings, &output)
+            })
+        }
+        ReplCommandOutput::Text(text) => {
+            if stages.is_empty() {
+                Ok(text.clone())
+            } else {
+                let (output, format_hint) = apply_output_stages(
+                    text_output_to_rows(text),
+                    stages,
+                    Some(OutputFormat::Value),
+                )
+                .wrap_err("failed to replay staged textual output")?;
+                let render_settings =
+                    resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
+                Ok(render_output(&output, &render_settings))
+            }
+        }
+        ReplCommandOutput::Json(payload) => {
+            if stages.is_empty() {
+                Ok(render_repl_output_with_runtime(runtime, output))
+            } else {
+                let (output, format_hint) = apply_output_stages(
+                    rows_to_output_result(rows_from_value(payload.clone())),
+                    stages,
+                    Some(OutputFormat::Value),
+                )
+                .wrap_err("failed to replay staged JSON output")?;
+                let render_settings =
+                    resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
+                Ok(render_output(&output, &render_settings))
+            }
+        }
+    }
+}
+
 pub(crate) fn render_repl_command_with_runtime(
     runtime: &CommandRenderRuntime<'_>,
     session: &mut AppSession,
@@ -407,10 +470,12 @@ pub(crate) fn render_repl_command_with_runtime(
         ..
     } = result;
 
+    let saved_output = output.clone();
+
     if exit_code != 0
         && let Some(report) = failure_report
     {
-        return Err(miette::miette!("{report}"));
+        return Err(report);
     }
 
     if !messages.is_empty() {
@@ -437,7 +502,7 @@ pub(crate) fn render_repl_command_with_runtime(
                     stages,
                     Some(OutputFormat::Value),
                 )
-                .map_err(|err| miette::miette!("{err:#}"))?;
+                .wrap_err("failed to apply staged JSON output pipeline")?;
                 let render_settings =
                     resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
                 let rendered = render_output(&output, &render_settings);
@@ -453,6 +518,10 @@ pub(crate) fn render_repl_command_with_runtime(
         && !stderr_text.is_empty()
     {
         sink.write_stderr(&stderr_text);
+    }
+
+    if let Some(output) = saved_output.as_ref() {
+        session.record_success_output(line, output, stages);
     }
 
     Ok(rendered)
@@ -488,7 +557,7 @@ fn render_repl_structured_command(
         format_hint,
     } = structured;
     let (output, format_hint) = apply_output_stages(output, stages, format_hint)
-        .map_err(|err| miette::miette!("{err:#}"))?;
+        .wrap_err("failed to apply staged structured output pipeline")?;
     let render_settings =
         resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
     let rendered = if stages.is_empty() {
@@ -520,7 +589,7 @@ fn render_staged_textual_command(
         stages,
         Some(OutputFormat::Value),
     )
-    .map_err(|err| miette::miette!("{err:#}"))?;
+    .wrap_err("failed to apply staged textual output pipeline")?;
     let render_settings =
         resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
     let rendered = render_output(&output, &render_settings);

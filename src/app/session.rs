@@ -6,7 +6,7 @@
 //!
 //! High-level flow:
 //!
-//! - track prompt timing and last-failure details
+//! - track prompt timing plus last-success/last-failure REPL details
 //! - maintain REPL scope stack and small in-memory caches
 //! - bundle session state that host code needs to carry between dispatches
 //!
@@ -35,7 +35,7 @@ use crate::native::NativeCommandRegistry;
 use crate::plugin::PluginManager;
 use crate::repl::HistoryShellContext;
 
-use super::command_output::CliCommandResult;
+use super::command_output::{CliCommandResult, ReplCommandOutput, StructuredCommandOutput};
 use super::runtime::{AppClients, AppRuntime, LaunchContext, RuntimeContext, UiState};
 use super::timing::TimingSummary;
 
@@ -305,13 +305,15 @@ pub struct AppSession {
     pub scope: ReplScopeStack,
     /// Rows returned by the most recent successful REPL command.
     pub last_rows: Vec<Row>,
+    /// Raw output plus pipeline stages from the most recent successful REPL command.
+    pub(crate) last_success: Option<LastSuccess>,
     /// Summary of the most recent failed REPL command.
     pub last_failure: Option<LastFailure>,
     /// Cached row outputs keyed by command line.
     pub result_cache: HashMap<String, Vec<Row>>,
     /// Eviction order for the row-result cache.
     pub cache_order: VecDeque<String>,
-    pub(crate) command_cache: HashMap<String, CliCommandResult>,
+    pub(crate) command_cache: HashMap<String, StructuredCommandOutput>,
     pub(crate) command_cache_order: VecDeque<String>,
     /// Maximum number of cached result sets to retain.
     pub max_cached_results: usize,
@@ -328,6 +330,13 @@ pub struct LastFailure {
     pub summary: String,
     /// Longer failure detail for follow-up inspection.
     pub detail: String,
+}
+
+#[derive(Debug, Clone)]
+/// Stored output contract for replaying the last successful REPL result.
+pub(crate) struct LastSuccess {
+    pub(crate) output: ReplCommandOutput,
+    pub(crate) stages: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,6 +357,7 @@ pub(crate) struct AppSessionRebuildState {
     startup_prompt_timing_pending: bool,
     scope: ReplScopeStack,
     last_rows: Vec<Row>,
+    last_success: Option<LastSuccess>,
     last_failure: Option<LastFailure>,
     result_cache: HashMap<String, Vec<Row>>,
     cache_order: VecDeque<String>,
@@ -372,6 +382,7 @@ impl AppSessionRebuildState {
         next.startup_prompt_timing_pending = self.startup_prompt_timing_pending;
         next.scope = self.scope;
         next.last_rows = self.last_rows;
+        next.last_success = self.last_success;
         next.last_failure = self.last_failure;
         next.result_cache = self.result_cache;
         next.cache_order = self.cache_order;
@@ -433,6 +444,7 @@ impl AppSession {
             startup_prompt_timing_pending: true,
             scope: ReplScopeStack::default(),
             last_rows: Vec::new(),
+            last_success: None,
             last_failure: None,
             result_cache: HashMap::new(),
             cache_order: VecDeque::new(),
@@ -535,6 +547,7 @@ impl AppSession {
             startup_prompt_timing_pending: self.startup_prompt_timing_pending,
             scope: self.scope.clone(),
             last_rows: self.last_rows.clone(),
+            last_success: self.last_success.clone(),
             last_failure: self.last_failure.clone(),
             result_cache: self.result_cache.clone(),
             cache_order: self.cache_order.clone(),
@@ -568,6 +581,23 @@ impl AppSession {
         self.result_cache.insert(key, rows);
     }
 
+    /// Stores the last successful output so the REPL can replay it later.
+    pub(crate) fn record_success_output(
+        &mut self,
+        command_line: &str,
+        output: &ReplCommandOutput,
+        stages: &[String],
+    ) {
+        let command_line = command_line.trim().to_string();
+        if command_line.is_empty() {
+            return;
+        }
+        self.last_success = Some(LastSuccess {
+            output: output.clone(),
+            stages: stages.to_vec(),
+        });
+    }
+
     /// Records details about the latest failed command.
     pub fn record_failure(
         &mut self,
@@ -593,7 +623,16 @@ impl AppSession {
             .map(|rows| rows.as_slice())
     }
 
-    pub(crate) fn record_cached_command(&mut self, cache_key: &str, result: &CliCommandResult) {
+    /// Returns the last successful REPL output contract, if available.
+    pub(crate) fn last_success(&self) -> Option<&LastSuccess> {
+        self.last_success.as_ref()
+    }
+
+    pub(crate) fn record_cached_command(
+        &mut self,
+        cache_key: &str,
+        output: &StructuredCommandOutput,
+    ) {
         let cache_key = cache_key.trim().to_string();
         if cache_key.is_empty() {
             return;
@@ -608,11 +647,20 @@ impl AppSession {
 
         self.command_cache_order.retain(|item| item != &cache_key);
         self.command_cache_order.push_back(cache_key.clone());
-        self.command_cache.insert(cache_key, result.clone());
+        self.command_cache.insert(cache_key, output.clone());
     }
 
     pub(crate) fn cached_command(&self, cache_key: &str) -> Option<CliCommandResult> {
-        self.command_cache.get(cache_key.trim()).cloned()
+        self.command_cache
+            .get(cache_key.trim())
+            .cloned()
+            .map(|output| CliCommandResult {
+                exit_code: 0,
+                messages: Default::default(),
+                output: Some(ReplCommandOutput::Output(Box::new(output))),
+                stderr_text: None,
+                failure_report: None,
+            })
     }
 
     /// Updates the prompt timing badge for the most recent command.
@@ -749,6 +797,7 @@ pub(crate) struct AppStateInit {
     pub config: crate::config::ResolvedConfig,
     pub render_settings: crate::ui::RenderSettings,
     pub message_verbosity: crate::ui::messages::MessageLevel,
+    pub error_detail: crate::app::ErrorDetail,
     pub debug_verbosity: u8,
     pub plugins: crate::plugin::PluginManager,
     pub native_commands: NativeCommandRegistry,
@@ -770,7 +819,8 @@ impl AppStateParts {
             init.render_settings,
             init.message_verbosity,
             init.debug_verbosity,
-        );
+        )
+        .with_error_detail(init.error_detail);
         let auth = crate::app::AuthState::from_resolved_with_external_policies(
             config.resolved(),
             clients.plugins(),
@@ -1111,6 +1161,7 @@ impl AppStateBuilder {
         let crate::app::UiState {
             render_settings,
             message_verbosity,
+            error_detail,
             debug_verbosity,
             ..
         } = ui;
@@ -1121,6 +1172,7 @@ impl AppStateBuilder {
                 config,
                 render_settings,
                 message_verbosity,
+                error_detail,
                 debug_verbosity,
                 plugins,
                 native_commands,
@@ -1190,8 +1242,22 @@ mod tests {
         let mut row = crate::core::row::Row::new();
         row.insert("name".to_string(), Value::from("alice"));
         session.record_result("list users", vec![row.clone()]);
+        session.record_success_output(
+            "list users",
+            &crate::app::ReplCommandOutput::Json(serde_json::json!([{ "name": "alice" }])),
+            &["P name".to_string()],
+        );
         session.record_failure("list users", "Command failed", "detail");
-        session.record_cached_command("config show", &super::CliCommandResult::text("cached"));
+        session.record_cached_command(
+            "config show",
+            &super::StructuredCommandOutput {
+                source_guide: None,
+                output: crate::cli::rows::output::rows_to_output_result(vec![
+                    crate::row! { "value" => "cached" },
+                ]),
+                format_hint: None,
+            },
+        );
 
         let snapshot = session.capture_rebuild_state();
         let mut restored = AppSession::with_cache_limit(1);
@@ -1209,6 +1275,7 @@ mod tests {
             Some("ldap user ".to_string())
         );
         assert_eq!(restored.cached_rows("list users"), Some(&[row][..]));
+        assert!(restored.last_success().is_some());
         assert!(restored.command_cache.is_empty());
         assert!(restored.command_cache_order.is_empty());
         assert_eq!(
