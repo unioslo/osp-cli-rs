@@ -55,7 +55,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 sha2 = "0.10"
 shell-words = "1.1"
-skim = { version = "=3.7.0", default-features = false }
+skim = { version = "5.0.0", default-features = false }
 terminal_size = "0.4"
 thiserror = "2.0"
 toml = "0.8"
