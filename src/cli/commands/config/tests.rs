@@ -19,38 +19,86 @@ use crate::ui::theme_catalog::ThemeCatalog;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-fn build_resolved_config(defaults: ConfigLayer, terminal: TerminalKind) -> &'static ResolvedConfig {
+fn build_resolved_config(defaults: ConfigLayer, terminal: TerminalKind) -> ResolvedConfig {
+    let mut defaults = defaults;
+    defaults.set("theme.path", Vec::<String>::new());
+    if matches!(terminal, TerminalKind::Repl) {
+        defaults.set("repl.history.path", "/tmp/osp-cli-config-history.jsonl");
+    }
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
-    Box::leak(Box::new(
-        resolver
-            .resolve(ResolveOptions::default().with_terminal(terminal.as_config_terminal()))
-            .expect("test config should resolve"),
-    ))
+    resolver
+        .resolve(ResolveOptions::default().with_terminal(terminal.as_config_terminal()))
+        .expect("test config should resolve")
 }
 
 fn test_ui_state(format: OutputFormat) -> UiState {
     UiState::new(RenderSettings::test_plain(format), MessageLevel::Success, 0)
 }
 
-fn read_context(terminal: TerminalKind) -> ConfigReadContext<'static> {
-    let mut defaults = ConfigLayer::default();
-    defaults.set("profile.default", "ops");
-    let resolved = build_resolved_config(defaults, terminal);
-    let context = Box::leak(Box::new(RuntimeContext::new(None, terminal, None)));
-    let ui = Box::leak(Box::new(test_ui_state(OutputFormat::Table)));
-    let themes = Box::leak(Box::new(ThemeCatalog::default()));
-    let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
-    let product_defaults = Box::leak(Box::new(ConfigLayer::default()));
+struct ConfigTestFixture {
+    context: RuntimeContext,
+    config: ResolvedConfig,
+    ui: UiState,
+    themes: ThemeCatalog,
+    config_overrides: ConfigLayer,
+    product_defaults: ConfigLayer,
+    runtime_load: RuntimeLoadOptions,
+}
 
-    ConfigReadContext {
-        context,
-        config: resolved,
-        ui,
-        themes,
-        config_overrides,
-        product_defaults,
-        runtime_load: RuntimeLoadOptions::default(),
+impl ConfigTestFixture {
+    fn new(terminal: TerminalKind) -> Self {
+        Self::with_format(terminal, OutputFormat::Table)
+    }
+
+    fn with_format(terminal: TerminalKind, format: OutputFormat) -> Self {
+        let mut defaults = ConfigLayer::default();
+        defaults.set("profile.default", "ops");
+        Self::with_defaults_and_format(terminal, defaults, format)
+    }
+
+    fn with_defaults(terminal: TerminalKind, defaults: ConfigLayer) -> Self {
+        Self::with_defaults_and_format(terminal, defaults, OutputFormat::Table)
+    }
+
+    fn with_defaults_and_format(
+        terminal: TerminalKind,
+        defaults: ConfigLayer,
+        format: OutputFormat,
+    ) -> Self {
+        Self {
+            context: RuntimeContext::new(None, terminal, None),
+            config: build_resolved_config(defaults, terminal),
+            ui: test_ui_state(format),
+            themes: ThemeCatalog::default(),
+            config_overrides: ConfigLayer::default(),
+            product_defaults: ConfigLayer::default(),
+            runtime_load: RuntimeLoadOptions::defaults_only(),
+        }
+    }
+
+    fn read(&self) -> ConfigReadContext<'_> {
+        ConfigReadContext {
+            context: &self.context,
+            config: &self.config,
+            ui: &self.ui,
+            themes: &self.themes,
+            config_overrides: &self.config_overrides,
+            product_defaults: &self.product_defaults,
+            runtime_load: self.runtime_load,
+        }
+    }
+
+    fn command(&mut self) -> ConfigCommandContext<'_> {
+        ConfigCommandContext {
+            context: &self.context,
+            config: &self.config,
+            ui: &self.ui,
+            themes: &self.themes,
+            config_overrides: &mut self.config_overrides,
+            product_defaults: &self.product_defaults,
+            runtime_load: self.runtime_load,
+        }
     }
 }
 
@@ -59,56 +107,6 @@ fn write_target(scope: ConfigScopeTarget) -> ConfigWriteTarget {
         scope,
         terminal: None,
         store: ConfigStoreTarget::Default,
-    }
-}
-
-fn read_context_with_defaults(
-    terminal: TerminalKind,
-    defaults: ConfigLayer,
-) -> ConfigReadContext<'static> {
-    let resolved = build_resolved_config(defaults, terminal);
-    let context = Box::leak(Box::new(RuntimeContext::new(None, terminal, None)));
-    let ui = Box::leak(Box::new(test_ui_state(OutputFormat::Table)));
-    let themes = Box::leak(Box::new(ThemeCatalog::default()));
-    let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
-    let product_defaults = Box::leak(Box::new(ConfigLayer::default()));
-
-    ConfigReadContext {
-        context,
-        config: resolved,
-        ui,
-        themes,
-        config_overrides,
-        product_defaults,
-        runtime_load: RuntimeLoadOptions::default(),
-    }
-}
-
-fn command_context(terminal: TerminalKind) -> ConfigCommandContext<'static> {
-    command_context_with_format(terminal, OutputFormat::Table)
-}
-
-fn command_context_with_format(
-    terminal: TerminalKind,
-    format: OutputFormat,
-) -> ConfigCommandContext<'static> {
-    let mut defaults = ConfigLayer::default();
-    defaults.set("profile.default", "ops");
-    let resolved = build_resolved_config(defaults, terminal);
-    let context = Box::leak(Box::new(RuntimeContext::new(None, terminal, None)));
-    let ui = Box::leak(Box::new(test_ui_state(format)));
-    let themes = Box::leak(Box::new(ThemeCatalog::default()));
-    let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
-    let product_defaults = Box::leak(Box::new(ConfigLayer::default()));
-
-    ConfigCommandContext {
-        context,
-        config: resolved,
-        ui,
-        themes,
-        config_overrides,
-        product_defaults,
-        runtime_load: RuntimeLoadOptions::default(),
     }
 }
 
@@ -167,15 +165,16 @@ fn resolve_config_store_and_names_cover_defaults_and_explicit_targets_unit() {
     let args = write_target(ConfigScopeTarget::ActiveProfile);
 
     assert!(matches!(
-        resolve_config_store(read_context(TerminalKind::Repl), &args),
+        resolve_config_store(ConfigTestFixture::new(TerminalKind::Repl).read(), &args),
         ConfigStore::Session
     ));
     assert!(matches!(
-        resolve_config_store(read_context(TerminalKind::Cli), &args),
+        resolve_config_store(ConfigTestFixture::new(TerminalKind::Cli).read(), &args),
         ConfigStore::Config
     ));
 
-    let repl = read_context(TerminalKind::Repl);
+    let fixture = ConfigTestFixture::new(TerminalKind::Repl);
+    let repl = fixture.read();
     assert!(matches!(
         resolve_config_store(
             repl,
@@ -216,7 +215,8 @@ fn resolve_config_store_and_names_cover_defaults_and_explicit_targets_unit() {
 
 #[test]
 fn resolve_scope_target_store_target_and_terminal_selector_cover_precedence_helpers_unit() {
-    let repl = read_context(TerminalKind::Repl);
+    let fixture = ConfigTestFixture::new(TerminalKind::Repl);
+    let repl = fixture.read();
     assert_eq!(
         resolve_terminal_selector(repl, Some(crate::app::CURRENT_TERMINAL_SENTINEL)),
         Some("repl".to_string())
@@ -268,7 +268,8 @@ fn resolve_scope_target_store_target_and_terminal_selector_cover_precedence_help
 
 #[test]
 fn resolve_config_scopes_cover_global_profile_known_profiles_and_terminal_variants_unit() {
-    let cli = read_context(TerminalKind::Cli);
+    let cli_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+    let cli = cli_fixture.read();
 
     let global_scopes = resolve_config_scopes(
         cli,
@@ -296,7 +297,7 @@ fn resolve_config_scopes_cover_global_profile_known_profiles_and_terminal_varian
     );
 
     let scopes = resolve_config_scopes(
-        read_context(TerminalKind::Cli),
+        ConfigTestFixture::new(TerminalKind::Cli).read(),
         &ConfigWriteTarget {
             scope: ConfigScopeTarget::Profile("Work".to_string()),
             terminal: None,
@@ -318,7 +319,8 @@ fn resolve_config_scopes_cover_global_profile_known_profiles_and_terminal_varian
         crate::config::ConfigValue::from("table"),
         Scope::profile("dev"),
     );
-    let context = read_context_with_defaults(TerminalKind::Cli, defaults);
+    let fixture = ConfigTestFixture::with_defaults(TerminalKind::Cli, defaults);
+    let context = fixture.read();
 
     let all_profiles = resolve_config_scopes(
         context,
@@ -353,7 +355,7 @@ fn resolve_config_scopes_cover_global_profile_known_profiles_and_terminal_varian
 fn config_get_rows_and_run_config_get_cover_bootstrap_alias_and_missing_paths_unit() {
     let mut messages = MessageBuffer::default();
     let rows = config_get_rows(
-        read_context(TerminalKind::Cli),
+        ConfigTestFixture::new(TerminalKind::Cli).read(),
         &crate::cli::ConfigGetArgs {
             key: "profile.default".to_string(),
             output: crate::cli::ConfigReadOutputArgs {
@@ -380,7 +382,8 @@ fn config_get_rows_and_run_config_get_cover_bootstrap_alias_and_missing_paths_un
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "ops");
     defaults.set("alias.lookup", "ldap user");
-    let context = read_context_with_defaults(TerminalKind::Cli, defaults);
+    let fixture = ConfigTestFixture::with_defaults(TerminalKind::Cli, defaults);
+    let context = fixture.read();
 
     let alias_result = run_config_get(
         context,
@@ -445,11 +448,9 @@ fn validate_write_scopes_and_session_lookup_cover_invalid_and_present_paths_unit
 
 #[test]
 fn run_config_set_and_unset_cover_session_paths_and_explain_output_unit() {
-    let set_result = run_config_set(
-        command_context(TerminalKind::Repl),
-        config_set_args("ui.format", "json"),
-    )
-    .expect("session config set should succeed");
+    let mut set_fixture = ConfigTestFixture::new(TerminalKind::Repl);
+    let set_result = run_config_set(set_fixture.command(), config_set_args("ui.format", "json"))
+        .expect("session config set should succeed");
 
     assert_eq!(set_result.exit_code, 0);
     assert!(matches!(
@@ -463,7 +464,8 @@ fn run_config_set_and_unset_cover_session_paths_and_explain_output_unit() {
             .contains("set value for ui.format")
     );
 
-    let unset_context = command_context(TerminalKind::Repl);
+    let mut unset_fixture = ConfigTestFixture::new(TerminalKind::Repl);
+    let unset_context = unset_fixture.command();
     let active_profile = unset_context.config.active_profile().to_string();
     unset_context.config_overrides.insert(
         "ui.format".to_string(),
@@ -486,11 +488,10 @@ fn run_config_set_and_unset_cover_session_paths_and_explain_output_unit() {
 
     let mut explain_args = config_set_args("ui.format", "json");
     explain_args.explain = true;
-    let result = run_config_set(
-        command_context_with_format(TerminalKind::Repl, OutputFormat::Json),
-        explain_args,
-    )
-    .expect("session config set explain should succeed");
+    let mut explain_fixture =
+        ConfigTestFixture::with_format(TerminalKind::Repl, OutputFormat::Json);
+    let result = run_config_set(explain_fixture.command(), explain_args)
+        .expect("session config set explain should succeed");
     assert!(matches!(result.output, Some(ReplCommandOutput::Json(_))));
 }
 
@@ -498,23 +499,27 @@ fn run_config_set_and_unset_cover_session_paths_and_explain_output_unit() {
 fn run_config_set_and_unset_reject_derived_profile_active_unit() {
     let mut set_args = config_set_args("profile.active", "ops");
     set_args.scope.global = true;
-    let set_err = run_config_set(command_context(TerminalKind::Cli), set_args)
+    let mut set_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+    let set_err = run_config_set(set_fixture.command(), set_args)
         .expect_err("profile.active set should be rejected");
     assert!(set_err.to_string().contains("read-only"));
 
     let mut unset_args = config_unset_args("profile.active");
     unset_args.scope.global = true;
-    let unset_err = run_config_unset(command_context(TerminalKind::Cli), unset_args)
+    let mut unset_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+    let unset_err = run_config_unset(unset_fixture.command(), unset_args)
         .expect_err("profile.active unset should be rejected");
     assert!(unset_err.to_string().contains("read-only"));
 }
 
+#[cfg_attr(miri, ignore = "persistent config filesystem integration test")]
 #[test]
 fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
     with_temp_config_paths(|config_path, secrets_path| {
         let mut config_args = config_set_args("ui.format", "json");
         config_args.store.config_store = true;
-        let config_set = run_config_set(command_context(TerminalKind::Cli), config_args)
+        let mut config_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+        let config_set = run_config_set(config_fixture.command(), config_args)
             .expect("persistent config set should succeed");
         assert!(config_path.exists());
         let config_payload =
@@ -548,7 +553,8 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
 
         let mut secrets_args = config_set_args("ui.format", "table");
         secrets_args.store.secrets = true;
-        let secrets_set = run_config_set(command_context(TerminalKind::Cli), secrets_args)
+        let mut secrets_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+        let secrets_set = run_config_set(secrets_fixture.command(), secrets_args)
             .expect("persistent secrets set should succeed");
         assert!(secrets_path.exists());
         let secrets_payload =
@@ -582,7 +588,8 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
 
         let mut unset_args = config_unset_args("ui.format");
         unset_args.store.secrets = true;
-        let secrets_unset = run_config_unset(command_context(TerminalKind::Cli), unset_args)
+        let mut unset_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+        let secrets_unset = run_config_unset(unset_fixture.command(), unset_args)
             .expect("persistent secrets unset should succeed");
         assert!(
             secrets_unset
@@ -606,7 +613,8 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
 
         let mut missing_args = config_unset_args("ui.margin");
         missing_args.store.config_store = true;
-        let missing_unset = run_config_unset(command_context(TerminalKind::Cli), missing_args)
+        let mut missing_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+        let missing_unset = run_config_unset(missing_fixture.command(), missing_args)
             .expect("missing persistent unset should still succeed");
         assert!(
             missing_unset
@@ -618,6 +626,7 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "config permission filesystem integration test")]
 #[test]
 fn secrets_permissions_diagnostic_covers_missing_ok_warning_and_issue_unit() {
     use std::os::unix::fs::PermissionsExt;
@@ -661,9 +670,10 @@ fn secrets_permissions_diagnostic_covers_missing_ok_warning_and_issue_unit() {
     );
 }
 
+#[cfg_attr(miri, ignore = "config diagnostics inspects host-backed secrets paths")]
 #[test]
 fn config_diagnostics_rows_include_secrets_status_unit() {
-    let rows = config_diagnostics_rows(read_context(TerminalKind::Cli));
+    let rows = config_diagnostics_rows(ConfigTestFixture::new(TerminalKind::Cli).read());
     assert_eq!(rows.len(), 1);
     assert!(rows[0].contains_key("secrets_permissions_status"));
     assert!(rows[0].contains_key("theme_issue_count"));

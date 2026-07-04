@@ -96,14 +96,7 @@ fn single_row_and_key_scoped_quick_modes_cover_positive_negated_existence_and_ke
         "city": "Oslo"
     }))];
     let filtered = apply_with_plan(rows, &compile("ops").unwrap()).expect("quick should work");
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].get("uid"), Some(&json!("alice")));
-    assert_eq!(filtered[0].get("city"), Some(&json!("Oslo")));
-    let roles = filtered[0]
-        .get("roles")
-        .and_then(|value| value.as_array())
-        .expect("roles should remain an array");
-    assert!(roles.iter().any(|value| value == "ops"));
+    assert_eq!(filtered, vec![row(json!({"roles": ["ops"]}))]);
 }
 
 #[test]
@@ -137,6 +130,135 @@ fn grouped_quick_uses_single_row_mode_per_group_unit() {
     let filtered =
         apply_groups_with_plan(groups, &compile("uid").unwrap()).expect("group quick should work");
     assert_eq!(filtered[0].rows, vec![row(json!({"uid": "alice"}))]);
+}
+
+#[test]
+fn single_row_quick_matches_semantic_descendant_narrowing_and_compacts_array_hits_unit() {
+    let row_input = row(json!({
+        "cn": "Oistein Sovik",
+        "netgroups": [
+            "ansatt-373034",
+            "ansatt-tekadm-373034",
+            "vcs-cfengine",
+            "vcs-dhcp",
+            "vcs-it-org",
+            "vcs-it-osprov",
+            "vcs-iti",
+            "vcs-ops",
+            "vcs-radius",
+            "vcs-ssd",
+            "vcs-usit",
+            "vcs-virtprov-admins",
+            "zabbix-iti-ops"
+        ],
+        "filegroups": ["oistes", "ucore", "usit", "vortex-opptak"]
+    }));
+
+    let filtered = apply_with_plan(vec![row_input], &compile("vcs").unwrap())
+        .expect("single-row quick should narrow like the semantic path");
+
+    assert_eq!(
+        filtered,
+        vec![row(json!({
+            "netgroups": [
+                "vcs-cfengine",
+                "vcs-dhcp",
+                "vcs-it-org",
+                "vcs-it-osprov",
+                "vcs-iti",
+                "vcs-ops",
+                "vcs-radius",
+                "vcs-ssd",
+                "vcs-usit",
+                "vcs-virtprov-admins"
+            ]
+        }))]
+    );
+}
+
+#[test]
+fn single_row_row_quick_drops_root_siblings_but_preserves_matching_array_objects_unit() {
+    let input = json!({
+        "commands": [
+            {"name": "doctor", "short_help": "Run diagnostics checks"},
+            {"name": "history", "short_help": "Show command history"}
+        ]
+    });
+
+    let row_filtered = apply_with_plan(vec![row(input)], &compile("doctor").unwrap())
+        .expect("row quick should succeed");
+
+    assert_eq!(
+        row_filtered,
+        vec![row(json!({
+            "commands": [
+                {"name": "doctor", "short_help": "Run diagnostics checks"}
+            ]
+        }))]
+    );
+}
+
+#[test]
+fn single_row_quick_preserves_scalar_envelope_around_nested_collection_matches_unit() {
+    let input = row(json!({
+        "title": "Deploy Reference",
+        "footer": ["Generated from prod metadata"],
+        "commands": [
+            {
+                "name": "deploy",
+                "summary": "Roll out service",
+                "owner": "platform"
+            },
+            {
+                "name": "status",
+                "summary": "Inspect rollout",
+                "owner": "ops"
+            }
+        ]
+    }));
+
+    let filtered = apply_with_plan(vec![input], &compile("deploy").unwrap())
+        .expect("row quick should preserve document envelope");
+
+    assert_eq!(
+        filtered,
+        vec![row(json!({
+            "title": "Deploy Reference",
+            "footer": ["Generated from prod metadata"],
+            "commands": [
+                {
+                    "name": "deploy",
+                    "summary": "Roll out service",
+                    "owner": "platform"
+                }
+            ]
+        }))]
+    );
+}
+
+#[test]
+fn single_row_negated_quick_preserves_original_root_key_order_unit() {
+    let rows = vec![row(json!({
+        "cn": "Oistein Sovik",
+        "uid": "oistes",
+        "netgroups": ["ansatt-373034", "vcs-dhcp", "vcs-ops"],
+        "filegroups": ["oistes"],
+        "dn": "uid=oistes,dc=uio,dc=no"
+    }))];
+
+    let filtered = apply_with_plan(rows, &compile("!vcs").unwrap()).expect("quick should work");
+    let keys = filtered[0].keys().cloned().collect::<Vec<_>>();
+
+    assert_eq!(
+        keys,
+        vec![
+            "cn".to_string(),
+            "uid".to_string(),
+            "netgroups".to_string(),
+            "filegroups".to_string(),
+            "dn".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -259,6 +381,7 @@ fn transform_row_variants_trim_arrays_synthetic_hits_and_squeezed_entries_unit()
         &Row::new(),
         &mut projection,
         &compile("alpha").unwrap().spec,
+        true,
     )
     .unwrap();
     assert_eq!(
@@ -279,7 +402,7 @@ fn transform_row_variants_trim_arrays_synthetic_hits_and_squeezed_entries_unit()
         is_projection: false,
         synthetic: row(json!({"aliases": ["ops", "backup"]})),
     };
-    let negated_rows = transform_row(&flat, &mut negated, &compile("!ops").unwrap().spec)
+    let negated_rows = transform_row(&flat, &mut negated, &compile("!ops").unwrap().spec, true)
         .expect("negated quick should keep surviving siblings");
     assert_eq!(
         negated_rows,
@@ -298,7 +421,7 @@ fn transform_row_variants_trim_arrays_synthetic_hits_and_squeezed_entries_unit()
         is_projection: false,
         synthetic: Row::new(),
     };
-    let positive_rows = transform_row(&flat, &mut positive, &compile("ops").unwrap().spec)
+    let positive_rows = transform_row(&flat, &mut positive, &compile("ops").unwrap().spec, true)
         .expect("positive quick should keep only matching array values");
     assert_eq!(
         positive_rows,

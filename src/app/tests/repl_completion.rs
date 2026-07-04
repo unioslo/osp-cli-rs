@@ -54,6 +54,10 @@ fn projected_visible_values(
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "help completion walks the full command tree under Miri"
+)]
 fn repl_help_alias_parsing_and_completion_cover_root_and_scoped_paths_unit() {
     let state = make_completion_state(None);
     for (line, expected_dispatch) in [
@@ -115,6 +119,7 @@ fn repl_help_alias_parsing_and_completion_cover_root_and_scoped_paths_unit() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "alias completion clones large command subtrees")]
 fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
     assert!(repl::is_repl_shellable_command("ldap"));
     assert!(repl::is_repl_shellable_command("LDAP"));
@@ -235,6 +240,7 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "alias completion clones large command subtrees")]
 fn repl_alias_completion_inherits_prefilled_context_unit() {
     for alias in ["orch", "--json orch"] {
         let state = make_completion_state_with_entries(None, &[("alias.ops", alias)]);
@@ -426,6 +432,7 @@ fn compact_repl_surface_omits_options_overview_and_prioritizes_builtins_unit() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "root completion sorts a large command tree under Miri")]
 fn compact_root_completion_suggestions_prioritize_core_commands_unit() {
     let state = make_completion_state_with_entries(None, &[("ui.presentation", "compact")]);
     let catalog = sample_catalog();
@@ -490,6 +497,7 @@ fn repl_surface_includes_plugin_auth_hints_in_overview_and_tooltip_unit() {
                 visibility: Some(crate::core::plugin::DescribeVisibilityModeV1::CapabilityGated),
                 required_capabilities: vec!["orch.approval.decide".to_string()],
                 feature_flags: vec!["orch".to_string()],
+                ..crate::core::plugin::DescribeCommandAuthV1::default()
             }),
             subcommands: vec!["approval".to_string()],
             completion: crate::completion::CommandSpec::new("orch"),

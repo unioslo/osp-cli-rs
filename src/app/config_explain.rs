@@ -13,7 +13,6 @@ use crate::core::fuzzy::{config_fuzzy_matcher, fold_case};
 use crate::core::output::OutputFormat;
 use crate::ui::messages::MessageBuffer;
 use miette::{IntoDiagnostic, Result, WrapErr};
-use skim::fuzzy_matcher::FuzzyMatcher;
 
 use crate::app::{RuntimeContext, UiState};
 use crate::cli::ConfigExplainArgs;
@@ -647,6 +646,8 @@ mod tests {
 
         let mut defaults_layer = ConfigLayer::default();
         defaults_layer.set("profile.default", "default");
+        defaults_layer.set("repl.history.path", "/tmp/osp-config-explain-history.jsonl");
+        defaults_layer.set("theme.path", Vec::<String>::new());
         for (entry_key, value) in defaults {
             defaults_layer.set(*entry_key, *value);
         }
@@ -765,6 +766,8 @@ mod tests {
     fn explain_runtime_config_matches_resolved_runtime_presentation_defaults_unit() {
         let mut product_defaults = ConfigLayer::default();
         product_defaults.set("profile.default", "default");
+        product_defaults.set("repl.history.path", "/tmp/osp-config-explain-history.jsonl");
+        product_defaults.set("theme.path", Vec::<String>::new());
         product_defaults.set("ui.presentation", "compact");
         let request = RuntimeConfigRequest::new(None, Some("repl"))
             .with_runtime_load(RuntimeLoadOptions::defaults_only())

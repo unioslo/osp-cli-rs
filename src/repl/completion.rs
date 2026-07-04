@@ -58,8 +58,10 @@ pub(crate) fn build_repl_completion_tree(
         ..ArgNode::default()
     }];
 
-    let root_base = tree.root.clone();
-    inject_alias_nodes(&mut tree.root, &root_base, None, &surface.aliases);
+    if !surface.aliases.is_empty() {
+        let root_base = tree.root.clone();
+        inject_alias_nodes(&mut tree.root, &root_base, None, &surface.aliases);
+    }
 
     if view.scope.is_root() {
         return Ok(tree);
@@ -67,15 +69,17 @@ pub(crate) fn build_repl_completion_tree(
 
     let mut rooted = CompletionTree {
         root: scoped_completion_root(&tree.root, &view.scope.commands()),
-        ..tree.clone()
+        pipe_verbs: tree.pipe_verbs.clone(),
     };
-    let scoped_base = rooted.root.clone();
-    inject_alias_nodes(
-        &mut rooted.root,
-        &scoped_base,
-        Some(&tree.root),
-        &surface.aliases,
-    );
+    if !surface.aliases.is_empty() {
+        let scoped_base = rooted.root.clone();
+        inject_alias_nodes(
+            &mut rooted.root,
+            &scoped_base,
+            Some(&tree.root),
+            &surface.aliases,
+        );
+    }
     apply_shell_root_controls(&mut rooted.root);
     Ok(rooted)
 }
@@ -591,6 +595,11 @@ mod tests {
     fn test_app_state() -> AppState {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set(
+            "repl.history.path",
+            "/tmp/osp-repl-completion-history.jsonl",
+        );
+        defaults.set("theme.path", Vec::<String>::new());
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
         let config = resolver
@@ -607,7 +616,11 @@ mod tests {
             ),
         )
         .with_launch(LaunchContext::default())
-        .with_plugins(PluginManager::new(Vec::new()))
+        .with_plugins(
+            PluginManager::new(Vec::new())
+                .with_bundled_roots(false)
+                .with_default_roots(false),
+        )
         .build()
     }
 

@@ -16,7 +16,6 @@ use crate::completion::model::{
     SuggestionEntry, SuggestionOutput, ValueType,
 };
 use crate::core::fuzzy::{completion_fuzzy_matcher, fold_case};
-use skim::fuzzy_matcher::FuzzyMatcher;
 use std::collections::BTreeSet;
 
 const MATCH_SCORE_EXACT: u32 = 0;

@@ -30,3 +30,23 @@ jobs:
 
       - name: Run full confidence lane
         run: python3 ./scripts/confidence.py full
+
+  miri:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install nightly Rust with Miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Miri confidence lane
+        run: python3 ./scripts/confidence.py miri

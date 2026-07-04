@@ -1,6 +1,5 @@
 use crate::core::fuzzy::{fold_case as unicode_fold_case, search_fuzzy_matcher};
 use crate::core::row::Row;
-use skim::fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashSet;
 
 use crate::dsl::parse::key_spec::ExactMode;

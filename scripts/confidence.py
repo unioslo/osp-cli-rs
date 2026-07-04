@@ -107,6 +107,18 @@ def cargo_test_command(*target_args: str) -> list[str]:
     return ["cargo", "test", *target_args, "--locked"]
 
 
+def cargo_miri_test_command(*target_args: str) -> list[str]:
+    """Build a Miri test invocation for interpreter-friendly targets.
+
+    Miri is intentionally kept on nightly and outside the pinned stable
+    toolchain. The lane stays focused on core unit targets; spawned process,
+    PTY, plugin-discovery, and broad filesystem behavior remain owned by the
+    normal confidence lanes.
+    """
+
+    return ["cargo", "+nightly", "miri", "test", *target_args, "--locked"]
+
+
 def clippy_command() -> list[str]:
     """Build the curated lint command used across local and CI workflows.
 
@@ -150,6 +162,29 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
         name="contract-env",
         description="Hermetic contract test environment guardrail.",
         command=[str(root / "scripts" / "check-contract-env.sh")],
+    )
+    miri_setup = ConfidenceCheck(
+        name="miri-setup",
+        description="Prepare the nightly sysroot used by cargo-miri.",
+        command=["cargo", "+nightly", "miri", "setup"],
+    )
+    miri_smoke = ConfidenceCheck(
+        name="miri-smoke",
+        description="Focused interpreter check for Miri-safe fuzzy and render contracts.",
+        command=cargo_miri_test_command("--test", "miri"),
+        env={"MIRIFLAGS": "-Zmiri-disable-isolation"},
+    )
+    miri_config = ConfidenceCheck(
+        name="miri-config",
+        description="Config command unit tests under Miri.",
+        command=cargo_miri_test_command("--lib", "cli::commands::config::tests"),
+        env={"MIRIFLAGS": "-Zmiri-disable-isolation"},
+    )
+    miri_quick = ConfidenceCheck(
+        name="miri-quick",
+        description="DSL quick narrowing and envelope tests under Miri.",
+        command=cargo_miri_test_command("--lib", "dsl::verbs::quick::tests"),
+        env={"MIRIFLAGS": "-Zmiri-disable-isolation"},
     )
     fmt = ConfidenceCheck(
         name="fmt",
@@ -259,6 +294,27 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
                 "coverage gates",
             ),
             checks=behavior_checks,
+        ),
+        "miri": ConfidenceLane(
+            name="miri",
+            description=(
+                "Nightly Miri check for interpreter-friendly core contracts."
+            ),
+            covers=(
+                "fuzzy fallback contracts under Miri",
+                "structured rendering contracts under Miri",
+                "config command context and write-path unit tests under Miri",
+                "DSL quick narrowing and envelope unit tests under Miri",
+                "memory-model checks for core host logic",
+            ),
+            omits=(
+                "spawned CLI behavior",
+                "plugin subprocess behavior",
+                "PTY behavior",
+                "broad filesystem contracts",
+                "coverage gates",
+            ),
+            checks=[miri_setup, miri_smoke, miri_config, miri_quick],
         ),
         "full": ConfidenceLane(
             name="full",

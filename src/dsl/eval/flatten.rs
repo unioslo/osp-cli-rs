@@ -22,6 +22,15 @@ pub fn flatten_rows(rows: &[Row]) -> Vec<Row> {
 ///
 /// Keys that do not parse as supported paths are ignored.
 pub fn coalesce_flat_row(row: &Row) -> Row {
+    coalesce_flat_row_with_fill(row, &Value::Null)
+}
+
+/// Rebuilds a flattened row while using `fill_value` for missing array slots.
+///
+/// This is useful for partial structural projections that need to preserve
+/// original array positions during intermediate envelope restoration without
+/// leaking placeholder gaps into final user-visible output.
+pub fn coalesce_flat_row_with_fill(row: &Row, fill_value: &Value) -> Row {
     let mut root = Value::Object(Map::new());
     for (key, value) in row {
         let Ok(path) = parse_path(key) else {
@@ -47,7 +56,7 @@ pub fn coalesce_flat_row(row: &Row) -> Row {
         if steps.is_empty() {
             continue;
         }
-        insert_value(&mut root, &steps, value.clone());
+        insert_value(&mut root, &steps, value.clone(), fill_value);
     }
 
     match root {
@@ -62,7 +71,7 @@ enum Step {
     Index(usize),
 }
 
-fn insert_value(root: &mut Value, steps: &[Step], value: Value) {
+fn insert_value(root: &mut Value, steps: &[Step], value: Value, fill_value: &Value) {
     if steps.is_empty() {
         *root = value;
         return;
@@ -71,51 +80,51 @@ fn insert_value(root: &mut Value, steps: &[Step], value: Value) {
     let next_step = steps.get(1);
     match &steps[0] {
         Step::Key(key) => {
-            ensure_object(root);
+            ensure_object(root, fill_value);
             if let Value::Object(map) = root {
                 let entry = map.entry(key.clone()).or_insert(Value::Null);
                 if steps.len() == 1 {
                     *entry = value;
                     return;
                 }
-                ensure_container(entry, next_step);
-                insert_value(entry, &steps[1..], value);
+                ensure_container(entry, next_step, fill_value);
+                insert_value(entry, &steps[1..], value, fill_value);
             }
         }
         Step::Index(index) => {
-            ensure_array(root);
+            ensure_array(root, fill_value);
             if let Value::Array(items) = root {
                 if items.len() <= *index {
-                    items.resize(*index + 1, Value::Null);
+                    items.resize(*index + 1, fill_value.clone());
                 }
                 let entry = &mut items[*index];
                 if steps.len() == 1 {
                     *entry = value;
                     return;
                 }
-                ensure_container(entry, next_step);
-                insert_value(entry, &steps[1..], value);
+                ensure_container(entry, next_step, fill_value);
+                insert_value(entry, &steps[1..], value, fill_value);
             }
         }
     }
 }
 
-fn ensure_container(value: &mut Value, next_step: Option<&Step>) {
+fn ensure_container(value: &mut Value, next_step: Option<&Step>, fill_value: &Value) {
     match next_step {
-        Some(Step::Key(_)) => ensure_object(value),
-        Some(Step::Index(_)) => ensure_array(value),
+        Some(Step::Key(_)) => ensure_object(value, fill_value),
+        Some(Step::Index(_)) => ensure_array(value, fill_value),
         None => {}
     }
 }
 
-fn ensure_object(value: &mut Value) {
-    if !value.is_object() {
+fn ensure_object(value: &mut Value, fill_value: &Value) {
+    if *value == *fill_value || !value.is_object() {
         *value = Value::Object(Map::new());
     }
 }
 
-fn ensure_array(value: &mut Value) {
-    if !value.is_array() {
+fn ensure_array(value: &mut Value, fill_value: &Value) {
+    if *value == *fill_value || !value.is_array() {
         *value = Value::Array(Vec::new());
     }
 }

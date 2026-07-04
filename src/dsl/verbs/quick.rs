@@ -6,13 +6,15 @@ use serde_json::Value;
 
 use crate::dsl::{
     eval::{
-        flatten::{coalesce_flat_row, flatten_row},
+        flatten::{coalesce_flat_row, coalesce_flat_row_with_fill, flatten_row},
         matchers::{
             KeyMatches, contains_case_insensitive, eq_case_insensitive,
             fuzzy_contains_case_insensitive, match_row_keys_detailed,
             match_row_keys_detailed_fuzzy, render_value,
         },
-        resolve::{compact_sparse_arrays, is_truthy, resolve_pairs, resolve_values_truthy},
+        resolve::{
+            compact_sparse_arrays, is_truthy, resolve_pairs, resolve_values_truthy, sparse_hole,
+        },
     },
     parse::{
         key_spec::ExactMode,
@@ -249,7 +251,12 @@ fn apply_row_with_mode(row: Row, spec: &CompiledQuickSpec, mode: MatchMode) -> V
         return vec![row];
     }
 
-    transform_row(&flat, &mut result, spec).unwrap_or_default()
+    let preserve_row_envelope = !matches!(mode, MatchMode::Single) || spec.negated();
+    transform_row(&flat, &mut result, spec, preserve_row_envelope)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|transformed| reorder_row_like(&row, transformed))
+        .collect()
 }
 
 fn match_row(
@@ -324,6 +331,7 @@ fn transform_row(
     flat: &Row,
     result: &mut MatchResult,
     spec: &CompiledQuickSpec,
+    preserve_row_envelope: bool,
 ) -> Option<Vec<Row>> {
     let synthetic_keys = result.synthetic.keys().cloned().collect::<Vec<_>>();
 
@@ -368,7 +376,11 @@ fn transform_row(
         if projected.is_empty() {
             return None;
         }
-        let restored = restore_row_envelope(flat, projected, spec.is_structural());
+        let restored = if preserve_row_envelope {
+            restore_row_envelope(flat, projected, spec.is_structural())
+        } else {
+            coalesce_narrowed_row(projected)
+        };
         return Some(vec![restored]);
     }
 
@@ -461,10 +473,38 @@ fn transform_row(
     if filtered.is_empty() {
         None
     } else {
-        let mut coalesced = restore_row_envelope(flat, filtered, spec.is_structural());
-        compact_sparse_arrays_in_row(&mut coalesced);
+        let coalesced = if preserve_row_envelope || flat_row_has_collection_array(&filtered) {
+            let mut restored = restore_row_envelope(flat, filtered, spec.is_structural());
+            compact_sparse_arrays_in_row(&mut restored);
+            restored
+        } else {
+            coalesce_narrowed_row(filtered)
+        };
         Some(vec![coalesced])
     }
+}
+
+fn coalesce_narrowed_row(narrowed: Row) -> Row {
+    let mut coalesced = coalesce_flat_row_with_fill(&narrowed, &sparse_hole());
+    compact_sparse_arrays_in_row(&mut coalesced);
+    coalesced
+}
+
+fn reorder_row_like(original: &Row, row: Row) -> Row {
+    let mut reordered = Row::new();
+    let mut remaining = row;
+
+    for key in original.keys() {
+        if let Some(value) = remaining.remove(key) {
+            reordered.insert(key.clone(), value);
+        }
+    }
+
+    for (key, value) in remaining {
+        reordered.insert(key, value);
+    }
+
+    reordered
 }
 
 fn restore_row_envelope(flat: &Row, narrowed: Row, structural: bool) -> Row {
@@ -479,10 +519,23 @@ fn restore_row_envelope(flat: &Row, narrowed: Row, structural: bool) -> Row {
     // - parent containers may survive so the result still has usable shape
     // - unrelated siblings must not be reintroduced here
     let original = Value::Object(coalesce_flat_row(flat));
-    let narrowed = Value::Object(coalesce_flat_row(&narrowed));
+    let narrowed = Value::Object(coalesce_flat_row_with_fill(&narrowed, &sparse_hole()));
     match json::preserve_envelope_fields(original, narrowed) {
-        Value::Object(map) => map,
+        Value::Object(mut map) => {
+            if row_has_collection_array(&map) {
+                preserve_root_envelope_fields(&coalesce_flat_row(flat), &mut map);
+            }
+            map
+        }
         _ => Row::new(),
+    }
+}
+
+fn preserve_root_envelope_fields(original: &Row, restored: &mut Row) {
+    for (key, value) in original {
+        if !restored.contains_key(key) && json::is_envelope_field(value) {
+            restored.insert(key.clone(), value.clone());
+        }
     }
 }
 
@@ -694,6 +747,24 @@ fn squeeze_single_entry(row: Row) -> Row {
 fn compact_sparse_arrays_in_row(row: &mut Row) {
     for value in row.values_mut() {
         compact_sparse_arrays(value);
+    }
+}
+
+fn row_has_collection_array(row: &Row) -> bool {
+    row.values().any(value_has_collection_array)
+}
+
+fn flat_row_has_collection_array(row: &Row) -> bool {
+    row_has_collection_array(&coalesce_flat_row_with_fill(row, &sparse_hole()))
+}
+
+fn value_has_collection_array(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => {
+            json::is_collection_array(items) || items.iter().any(value_has_collection_array)
+        }
+        Value::Object(map) => map.values().any(value_has_collection_array),
+        _ => false,
     }
 }
 
