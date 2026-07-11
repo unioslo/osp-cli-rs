@@ -9,6 +9,8 @@
 //! - buffering, snapshotting, or process stdio forwarding belong here
 //! - higher-level rendering and message formatting belong elsewhere
 
+use std::io::{self, Write};
+
 /// Terminal-facing output sink for stdout/stderr emission.
 ///
 /// Implementors should forward or buffer the supplied text exactly as received;
@@ -60,14 +62,17 @@ pub struct StdIoUiSink;
 
 impl UiSink for StdIoUiSink {
     fn write_stdout(&mut self, text: &str) {
-        if !text.is_empty() {
-            print!("{text}");
+        if !text.is_empty()
+            && let Err(err) = io::stdout().write_all(text.as_bytes())
+            && err.kind() != io::ErrorKind::BrokenPipe
+        {
+            let _ = writeln!(io::stderr(), "failed to write command output: {err}");
         }
     }
 
     fn write_stderr(&mut self, text: &str) {
         if !text.is_empty() {
-            eprint!("{text}");
+            let _ = io::stderr().write_all(text.as_bytes());
         }
     }
 }

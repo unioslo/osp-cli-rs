@@ -90,3 +90,22 @@ theme.name = "dracula"
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_is_a_normal_process_exit() {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+        .arg("--help")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("OSP binary should start");
+    drop(child.stdout.take());
+
+    let status = child.wait().expect("OSP binary should exit");
+    assert!(
+        status.success(),
+        "broken stdout pipe should not panic: {status}"
+    );
+}
