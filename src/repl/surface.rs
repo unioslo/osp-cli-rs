@@ -113,9 +113,10 @@ pub(crate) fn build_repl_surface(
             summary: "Inspect and manage plugin providers".to_string(),
         });
     }
-    if view.auth.is_builtin_visible(CMD_DOCTOR) {
+    if view.auth.is_builtin_visible(CMD_DOCTOR)
+        && let Some(def) = doctor_cmd::doctor_command_def(command_sort_key(CMD_DOCTOR, help_layout))
+    {
         root_words.push(CMD_DOCTOR.to_string());
-        let def = doctor_cmd::doctor_command_def(command_sort_key(CMD_DOCTOR, help_layout));
         specs.push(command_spec_from_command_def(&def));
         overview_entries.push(overview_entry_from_command_def(&def));
     }

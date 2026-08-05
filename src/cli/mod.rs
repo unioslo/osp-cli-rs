@@ -154,7 +154,7 @@ impl Cli {
 pub enum Commands {
     /// Inspect and manage discovered plugins.
     Plugins(PluginsArgs),
-    /// Run local diagnostics and health checks.
+    /// Run diagnostics checks.
     Doctor(DoctorArgs),
     /// Inspect and change output themes.
     Theme(ThemeArgs),
@@ -273,15 +273,15 @@ pub struct DoctorArgs {
 /// Built-in diagnostic groups exposed through `osp doctor`.
 #[derive(Debug, Subcommand)]
 pub enum DoctorCommands {
-    /// Run every available built-in diagnostic.
+    /// Run all visible diagnostics.
     All,
-    /// Validate resolved configuration state.
+    /// Show config diagnostics.
     Config,
-    /// Show the last run metadata when available.
+    /// Show the last REPL failure; combine with -v/-vv/-vvv for more detail.
     Last,
-    /// Validate plugin discovery and state.
+    /// Run plugin diagnostics.
     Plugins,
-    /// Validate theme resolution and rendering support.
+    /// Show theme diagnostics.
     Theme,
 }
 

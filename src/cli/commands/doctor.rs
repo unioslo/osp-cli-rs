@@ -4,6 +4,7 @@
 //! This module pulls together config, plugin, theme, and recent-failure views
 //! into one operator-facing troubleshooting entrypoint.
 
+use clap::CommandFactory;
 use miette::Result;
 
 use crate::app::{
@@ -13,7 +14,7 @@ use crate::app::{
     CMD_CONFIG, CMD_PLUGINS, CMD_THEME, CliCommandResult, ensure_builtin_visible_for,
 };
 use crate::cli::rows::output::rows_to_output_result;
-use crate::cli::{DoctorArgs, DoctorCommands, PluginsArgs, PluginsCommands};
+use crate::cli::{DoctorArgs, DoctorCommands, InlineCommandCli, PluginsArgs, PluginsCommands};
 use crate::core::command_def::CommandDef;
 use crate::core::output::OutputFormat;
 use crate::core::output_model::OutputResult;
@@ -89,27 +90,17 @@ pub(crate) fn run_doctor_command(
     }
 }
 
-pub(crate) fn doctor_command_def(sort_key: impl Into<String>) -> CommandDef {
-    CommandDef::new("doctor")
-        .about("Run diagnostics checks")
-        .sort(sort_key)
-        .subcommands([
-            CommandDef::new("all")
-                .about("Run all visible diagnostics")
-                .sort("10"),
-            CommandDef::new(CMD_CONFIG)
-                .about("Show config diagnostics")
-                .sort("11"),
-            CommandDef::new("last")
-                .about("Show the last REPL failure; combine with -v/-vv/-vvv for more detail")
-                .sort("12"),
-            CommandDef::new(CMD_PLUGINS)
-                .about("Run plugin diagnostics")
-                .sort("13"),
-            CommandDef::new(CMD_THEME)
-                .about("Show theme diagnostics")
-                .sort("14"),
-        ])
+pub(crate) fn doctor_command_def(sort_key: impl Into<String>) -> Option<CommandDef> {
+    let inline = InlineCommandCli::command();
+    let command = inline
+        .get_subcommands()
+        .find(|command| command.get_name() == "doctor")?
+        .clone();
+    let mut definition = CommandDef::from_clap(command).sort(sort_key);
+    for (offset, subcommand) in definition.subcommands.iter_mut().enumerate() {
+        subcommand.sort_key = Some((offset + 10).to_string());
+    }
+    Some(definition)
 }
 
 fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult> {
@@ -495,7 +486,7 @@ mod tests {
         .expect_err("hidden theme builtin should fail");
         assert!(!theme_err.to_string().trim().is_empty());
 
-        let def = doctor_command_def("30");
+        let def = doctor_command_def("30").expect("doctor clap grammar should project");
         let names = def
             .subcommands
             .iter()

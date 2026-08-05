@@ -53,6 +53,149 @@ fn projected_visible_values(
         .collect()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ProjectedCommandSurface {
+    path: String,
+    summary: Option<String>,
+    flags: Vec<String>,
+}
+
+fn command_def_surface(
+    command: &crate::core::command_def::CommandDef,
+    parent: &str,
+    out: &mut Vec<ProjectedCommandSurface>,
+) {
+    let path = if parent.is_empty() {
+        command.name.clone()
+    } else {
+        format!("{parent} {}", command.name)
+    };
+    let mut flags = command
+        .flags
+        .iter()
+        .flat_map(|flag| {
+            flag.long
+                .iter()
+                .map(|long| format!("--{long}"))
+                .chain(flag.short.iter().map(|short| format!("-{short}")))
+                .chain(flag.aliases.iter().cloned())
+        })
+        .collect::<Vec<_>>();
+    flags.sort();
+    out.push(ProjectedCommandSurface {
+        path: path.clone(),
+        summary: command.about.clone(),
+        flags,
+    });
+    for child in &command.subcommands {
+        command_def_surface(child, &path, out);
+    }
+}
+
+fn command_spec_surface(
+    command: &crate::completion::CommandSpec,
+    parent: &str,
+    out: &mut Vec<ProjectedCommandSurface>,
+) {
+    let path = if parent.is_empty() {
+        command.name.clone()
+    } else {
+        format!("{parent} {}", command.name)
+    };
+    out.push(ProjectedCommandSurface {
+        path: path.clone(),
+        summary: command.tooltip.clone(),
+        flags: command.flags.keys().cloned().collect(),
+    });
+    for child in &command.subcommands {
+        command_spec_surface(child, &path, out);
+    }
+}
+
+#[test]
+fn doctor_clap_projection_and_repl_surface_have_path_flag_and_help_parity_unit() {
+    use clap::CommandFactory;
+
+    let doctor_clap = crate::cli::InlineCommandCli::command()
+        .find_subcommand("doctor")
+        .expect("inline clap grammar should contain doctor")
+        .clone();
+    let doctor_def = crate::core::command_def::CommandDef::from_clap(doctor_clap);
+    let mut clap_surface = Vec::new();
+    command_def_surface(&doctor_def, "", &mut clap_surface);
+
+    let state = make_completion_state(None);
+    let surface =
+        surface::build_repl_surface(repl_view(&state.runtime, &state.session), &sample_catalog());
+    let doctor_spec = surface
+        .specs
+        .iter()
+        .find(|spec| spec.name == "doctor")
+        .expect("visible doctor should be projected into the REPL surface");
+    let mut repl_surface = Vec::new();
+    command_spec_surface(doctor_spec, "", &mut repl_surface);
+
+    let expected = vec![
+        ProjectedCommandSurface {
+            path: "doctor".to_string(),
+            summary: Some("Run diagnostics checks".to_string()),
+            flags: vec![],
+        },
+        ProjectedCommandSurface {
+            path: "doctor all".to_string(),
+            summary: Some("Run all visible diagnostics".to_string()),
+            flags: vec![],
+        },
+        ProjectedCommandSurface {
+            path: "doctor config".to_string(),
+            summary: Some("Show config diagnostics".to_string()),
+            flags: vec![],
+        },
+        ProjectedCommandSurface {
+            path: "doctor last".to_string(),
+            summary: Some(
+                "Show the last REPL failure; combine with -v/-vv/-vvv for more detail".to_string(),
+            ),
+            flags: vec![],
+        },
+        ProjectedCommandSurface {
+            path: "doctor plugins".to_string(),
+            summary: Some("Run plugin diagnostics".to_string()),
+            flags: vec![],
+        },
+        ProjectedCommandSurface {
+            path: "doctor theme".to_string(),
+            summary: Some("Show theme diagnostics".to_string()),
+            flags: vec![],
+        },
+    ];
+
+    assert_eq!(clap_surface, expected);
+    assert_eq!(repl_surface, expected);
+    assert_eq!(
+        projected_visible_values(
+            &completion_engine_for(&state, &sample_catalog()),
+            state.runtime.config.resolved(),
+            "doctor ",
+        ),
+        vec!["all", "config", "last", "plugins", "theme"]
+    );
+    for entry in &expected {
+        let tokens = entry
+            .path
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(
+            crate::cli::parse_inline_command_tokens(&tokens)
+                .expect("characterized doctor path should parse")
+                .is_some(),
+            "parser rejected characterized path: {}",
+            entry.path,
+        );
+    }
+}
+
 #[test]
 #[cfg_attr(
     miri,
