@@ -286,7 +286,7 @@ fn repl_builtin_and_bang_parsers_cover_shortcuts_unit() {
 
 #[test]
 fn repl_last_builtin_replays_processed_and_raw_results_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let mut state = make_state_with_plugins(empty_plugins());
     let history = test_history();
     state.session.record_success_output(
         "ldap user alice | P name",
@@ -423,6 +423,8 @@ fn intro_reload_keys_cover_theme_color_and_palette_mutations_unit() {
 fn make_state_with_plugins(plugins: crate::plugin::PluginManager) -> AppState {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("repl.history.path", "/tmp/osp-repl-dispatch-history.jsonl");
+    defaults.set("theme.path", Vec::<String>::new());
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
     let config = resolver
@@ -444,6 +446,12 @@ fn make_state_with_plugins(plugins: crate::plugin::PluginManager) -> AppState {
     })
 }
 
+fn empty_plugins() -> crate::plugin::PluginManager {
+    crate::plugin::PluginManager::new(Vec::new())
+        .with_bundled_roots(false)
+        .with_default_roots(false)
+}
+
 fn test_history() -> SharedHistory {
     SharedHistory::new(
         HistoryConfig::builder()
@@ -457,8 +465,9 @@ fn test_history() -> SharedHistory {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "insta snapshot test spawns cargo metadata")]
 fn root_help_rendering_and_shell_prefix_helpers_cover_root_paths_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let mut state = make_state_with_plugins(empty_plugins());
     let invocation = super::base_repl_invocation(&state.runtime);
     let help = repl_help_for_scope(
         &mut state.runtime,
@@ -487,7 +496,7 @@ fn root_help_rendering_and_shell_prefix_helpers_cover_root_paths_unit() {
 
 #[test]
 fn intro_pipeline_keeps_filtered_guide_structure_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let mut state = make_state_with_plugins(empty_plugins());
     let invocation = super::base_repl_invocation(&state.runtime);
     let result = run_repl_command(
         &mut state.runtime,
@@ -526,7 +535,7 @@ fn staged_repl_line_validation_rejects_invalid_invocations_before_pipeline_execu
     ];
 
     for (line, needle) in cases {
-        let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+        let mut state = make_state_with_plugins(empty_plugins());
         let err = execute_repl_plugin_line(
             &mut state.runtime,
             &mut state.session,
@@ -541,7 +550,7 @@ fn staged_repl_line_validation_rejects_invalid_invocations_before_pipeline_execu
 
 #[test]
 fn repl_dispatch_and_classification_cover_representative_line_categories_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let mut state = make_state_with_plugins(empty_plugins());
     state.runtime.ui.debug_verbosity = 1;
     let history = test_history();
 
@@ -608,8 +617,7 @@ fn repl_dispatch_and_classification_cover_representative_line_categories_unit() 
     ];
 
     for (line, expected) in dispatch_cases {
-        let mut observed_state =
-            make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+        let mut observed_state = make_state_with_plugins(empty_plugins());
         let observed = observe_dispatch_kind(&mut observed_state, &test_history(), line);
         assert_eq!(observed, expected, "line: {line}");
     }
@@ -625,15 +633,14 @@ fn repl_dispatch_and_classification_cover_representative_line_categories_unit() 
     ];
 
     for (line, expected) in classification_cases {
-        let classified_state =
-            make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+        let classified_state = make_state_with_plugins(empty_plugins());
         let observed =
             classify_repl_line_kind(&classified_state.runtime, &classified_state.session, line)
                 .expect("classification should succeed");
         assert_eq!(observed, expected, "line: {line}");
     }
 
-    let classified_state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let classified_state = make_state_with_plugins(empty_plugins());
     let err = classify_repl_line_kind(
         &classified_state.runtime,
         &classified_state.session,
@@ -645,7 +652,7 @@ fn repl_dispatch_and_classification_cover_representative_line_categories_unit() 
 
 #[test]
 fn execute_repl_plugin_line_records_failures_and_inline_help_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let mut state = make_state_with_plugins(empty_plugins());
     state.runtime.ui.debug_verbosity = 1;
     let history = test_history();
 
@@ -685,7 +692,7 @@ fn execute_repl_plugin_line_records_failures_and_inline_help_unit() {
 
 #[test]
 fn intro_value_pipeline_prefers_matching_entry_content_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let mut state = make_state_with_plugins(empty_plugins());
     let mut invocation = super::base_repl_invocation(&state.runtime);
     invocation.ui.render_settings.format = OutputFormat::Value;
     invocation.ui.render_settings.format_explicit = true;
@@ -717,7 +724,7 @@ fn intro_value_pipeline_prefers_matching_entry_content_unit() {
 
 #[test]
 fn theme_show_value_pipeline_renders_selected_field_rhs_unit() {
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let mut state = make_state_with_plugins(empty_plugins());
     state.runtime.themes =
         crate::ui::theme_catalog::load_theme_catalog(state.runtime.config.resolved());
     let mut invocation = super::base_repl_invocation(&state.runtime);
@@ -785,7 +792,7 @@ fn repl_command_spec_covers_repl_variant_and_builtin_dsl_matrix_unit() {
 fn render_repl_command_output_handles_text_none_and_stderr_unit() {
     use crate::app::sink::BufferedUiSink;
 
-    let mut state = make_state_with_plugins(crate::plugin::PluginManager::new(Vec::new()));
+    let mut state = make_state_with_plugins(empty_plugins());
     let invocation = super::base_repl_invocation(&state.runtime);
     let mut sink = BufferedUiSink::default();
 
@@ -822,6 +829,7 @@ fn render_repl_command_output_handles_text_none_and_stderr_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn shell_entry_help_and_repl_command_cache_paths_cover_external_flow_unit() {
     use std::os::unix::fs::PermissionsExt;

@@ -12,17 +12,19 @@
 //! derived-state rebuild path.
 
 use miette::{Result, WrapErr};
+use std::sync::Arc;
 
 use crate::app::session::AppSessionRebuildState;
 use crate::config::ConfigLayer;
+use crate::core::command_policy::{CommandPolicyContext, CommandPolicyRegistry};
 use crate::core::output::OutputFormat;
 use crate::native::NativeCommandRegistry;
 use crate::plugin::state::PluginCommandPreferences;
 use crate::ui::RenderSettings;
 
 use super::{
-    AppClients, AppRuntime, AppSession, LaunchContext, RuntimeConfigRequest, RuntimeContext,
-    resolve_runtime_config,
+    AppClients, AppRuntime, AppSession, CommandAccessRecovery, LaunchContext, RuntimeConfigRequest,
+    RuntimeContext, resolve_runtime_config,
 };
 
 /// Rebuilds runtime-derived host state while preserving the intended
@@ -31,6 +33,9 @@ pub(crate) struct ReplStateRebuilder {
     context: RuntimeContext,
     launch: LaunchContext,
     product_defaults: ConfigLayer,
+    policy_context: CommandPolicyContext,
+    builtin_policy: CommandPolicyRegistry,
+    access_recovery: Option<Arc<dyn CommandAccessRecovery>>,
     render_settings: RenderSettings,
     native_commands: NativeCommandRegistry,
     plugin_preferences: PluginCommandPreferences,
@@ -48,6 +53,9 @@ impl ReplStateRebuilder {
             context: runtime.context.clone(),
             launch: runtime.launch.clone(),
             product_defaults: runtime.product_defaults().clone(),
+            policy_context: runtime.auth.policy_context().clone(),
+            builtin_policy: runtime.auth.builtin_policy().clone(),
+            access_recovery: runtime.access_recovery(),
             render_settings: runtime.ui.render_settings.clone(),
             native_commands: clients.native_commands().clone(),
             plugin_preferences: clients.plugins().command_preferences_snapshot(),
@@ -92,6 +100,15 @@ impl ReplStateRebuilder {
                 .with_native_commands(self.native_commands)
                 .build();
         next.runtime.set_product_defaults(self.product_defaults);
+        let policy_context = super::runtime::policy_context_for_resolved(
+            self.policy_context,
+            next.runtime.config.resolved(),
+        );
+        next.runtime.auth_mut().set_policy_context(policy_context);
+        next.runtime
+            .auth_mut()
+            .replace_builtin_policy(self.builtin_policy);
+        next.runtime.set_access_recovery(self.access_recovery);
         next.session.restore_rebuild_state(self.preserved_session);
         Ok((next.runtime, next.session, next.clients))
     }

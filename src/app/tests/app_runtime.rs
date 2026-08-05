@@ -1,101 +1,326 @@
 use super::*;
 use miette::WrapErr;
+use std::sync::Mutex;
 
+fn env_lock() -> &'static Mutex<()> {
+    crate::tests::env_lock()
+}
+
+fn with_test_xdg_env<T>(run: impl FnOnce() -> T) -> T {
+    let _guard = env_lock().lock().expect("env lock should not be poisoned");
+    let original_home = std::env::var("HOME").ok();
+    let original_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
+    let original_xdg_cache_home = std::env::var("XDG_CACHE_HOME").ok();
+    let original_xdg_data_home = std::env::var("XDG_DATA_HOME").ok();
+
+    unsafe {
+        std::env::set_var("HOME", "/tmp/osp-app-runtime-home");
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/osp-app-runtime-xdg/config");
+        std::env::set_var("XDG_CACHE_HOME", "/tmp/osp-app-runtime-xdg/cache");
+        std::env::set_var("XDG_DATA_HOME", "/tmp/osp-app-runtime-xdg/data");
+    }
+
+    let output = run();
+
+    match original_home {
+        Some(value) => unsafe { std::env::set_var("HOME", value) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    match original_xdg_config_home {
+        Some(value) => unsafe { std::env::set_var("XDG_CONFIG_HOME", value) },
+        None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+    }
+    match original_xdg_cache_home {
+        Some(value) => unsafe { std::env::set_var("XDG_CACHE_HOME", value) },
+        None => unsafe { std::env::remove_var("XDG_CACHE_HOME") },
+    }
+    match original_xdg_data_home {
+        Some(value) => unsafe { std::env::set_var("XDG_DATA_HOME", value) },
+        None => unsafe { std::env::remove_var("XDG_DATA_HOME") },
+    }
+
+    output
+}
+
+struct SessionGuardedNativeCommand;
+
+struct AuthenticatedBuiltinRecovery;
+
+impl crate::app::CommandAccessRecovery for AuthenticatedBuiltinRecovery {
+    fn try_recover(
+        &self,
+        request: &crate::app::AccessRecoveryRequest,
+        runtime: &mut crate::app::AppRuntime,
+        _session: &mut crate::app::AppSession,
+    ) -> miette::Result<crate::app::AccessRecoveryOutcome> {
+        if request.command_kind != crate::app::CommandAccessKind::Builtin
+            || request.command != "config"
+        {
+            return Ok(crate::app::AccessRecoveryOutcome::NoChange);
+        }
+
+        runtime.auth_mut().set_policy_context(
+            crate::core::command_policy::CommandPolicyContext::default().authenticated(true),
+        );
+        Ok(crate::app::AccessRecoveryOutcome::Recovered)
+    }
+}
+
+impl crate::NativeCommand for SessionGuardedNativeCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("secure").about("Guarded test command")
+    }
+
+    fn auth(&self) -> Option<crate::core::plugin::DescribeCommandAuthV1> {
+        Some(crate::core::plugin::DescribeCommandAuthV1 {
+            visibility: Some(crate::core::plugin::DescribeVisibilityModeV1::Public),
+            run_session: Some(crate::core::plugin::DescribeSessionRequirementsV1 {
+                auth_strength: Some(crate::core::plugin::DescribeAuthStrengthV1::Strong),
+                credentials: vec![
+                    crate::core::plugin::DescribeCredentialRequirementV1::Fresh {
+                        service: "osp".to_string(),
+                        min_ttl_seconds: 900,
+                    },
+                ],
+            }),
+            ..crate::core::plugin::DescribeCommandAuthV1::default()
+        })
+    }
+
+    fn execute(
+        &self,
+        args: &[String],
+        _context: &crate::NativeCommandContext<'_>,
+    ) -> anyhow::Result<crate::NativeCommandOutcome> {
+        if args.iter().any(|arg| arg == "--help") {
+            return Ok(crate::NativeCommandOutcome::Help(
+                "Usage: osp secure".to_string(),
+            ));
+        }
+
+        Ok(crate::NativeCommandOutcome::Exit(0))
+    }
+}
+
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
 #[test]
 fn app_help_entrypoints_share_exit_and_sink_routing_invariants_unit() {
-    let app = crate::app::App::builder().build();
-    let mut help_sink = BufferedUiSink::default();
+    with_test_xdg_env(|| {
+        let app = crate::app::App::builder().build();
+        let mut help_sink = BufferedUiSink::default();
 
-    assert_eq!(
-        app.run_with_sink(["osp", "--help"], &mut help_sink)
-            .expect("app help with sink should render"),
-        0
-    );
-    assert_eq!(
-        app.run_process_with_sink(["osp", "--help"], &mut help_sink),
-        0
-    );
-    assert!(!help_sink.stdout.is_empty());
-    assert!(help_sink.stderr.is_empty());
+        assert_eq!(
+            app.run_with_sink(["osp", "--defaults-only", "--help"], &mut help_sink)
+                .expect("app help with sink should render"),
+            0
+        );
+        assert_eq!(
+            app.run_process_with_sink(["osp", "--defaults-only", "--help"], &mut help_sink),
+            0
+        );
+        assert!(!help_sink.stdout.is_empty());
+        assert!(help_sink.stderr.is_empty());
 
-    let mut sink = BufferedUiSink::default();
-    let exit = super::run_from_with_sink(["osp", "--help"], &mut sink).expect("help should render");
-    assert_eq!(exit, 0);
-    assert!(!sink.stdout.is_empty());
-    assert!(sink.stderr.is_empty());
+        let mut sink = BufferedUiSink::default();
+        let exit = super::run_from_with_sink(["osp", "--defaults-only", "--help"], &mut sink)
+            .expect("help should render");
+        assert_eq!(exit, 0);
+        assert!(!sink.stdout.is_empty());
+        assert!(sink.stderr.is_empty());
 
-    let mut runner_sink = BufferedUiSink::default();
-    let mut runner = crate::app::App::builder().build_with_sink(&mut runner_sink);
-    assert_eq!(
-        runner
-            .run_from(["osp", "--help"])
-            .expect("runner help should render"),
-        0
-    );
+        let mut runner_sink = BufferedUiSink::default();
+        let mut runner = crate::app::App::builder().build_with_sink(&mut runner_sink);
+        assert_eq!(
+            runner
+                .run_from(["osp", "--defaults-only", "--help"])
+                .expect("runner help should render"),
+            0
+        );
+    });
 }
 
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
 #[test]
 fn app_public_entrypoints_cover_owned_runner_and_free_process_wrappers_unit() {
-    let app = crate::app::App::builder().build();
-    assert_eq!(
-        app.run_from(["osp", "--help"])
-            .expect("app run_from help should render"),
-        0
-    );
-    assert_eq!(app.run_process(["osp", "--help"]), 0);
+    with_test_xdg_env(|| {
+        let app = crate::app::App::builder().build();
+        assert_eq!(
+            app.run_from(["osp", "--defaults-only", "--help"])
+                .expect("app run_from help should render"),
+            0
+        );
+        assert_eq!(app.run_process(["osp", "--defaults-only", "--help"]), 0);
 
-    let mut runner_sink = BufferedUiSink::default();
-    let mut runner = crate::app::App::builder().build_with_sink(&mut runner_sink);
-    assert_eq!(runner.run_process(["osp", "--help"]), 0);
-    drop(runner);
-    assert!(!runner_sink.stdout.is_empty());
-    assert!(runner_sink.stderr.is_empty());
+        let mut runner_sink = BufferedUiSink::default();
+        let mut runner = crate::app::App::builder().build_with_sink(&mut runner_sink);
+        assert_eq!(runner.run_process(["osp", "--defaults-only", "--help"]), 0);
+        drop(runner);
+        assert!(!runner_sink.stdout.is_empty());
+        assert!(runner_sink.stderr.is_empty());
 
-    assert_eq!(crate::app::run_process(["osp", "--help"]), 0);
+        assert_eq!(
+            crate::app::run_process(["osp", "--defaults-only", "--help"]),
+            0
+        );
 
-    let mut sink = BufferedUiSink::default();
-    assert_eq!(
-        crate::app::run_process_with_sink(["osp", "--help"], &mut sink),
-        0
-    );
-    assert!(!sink.stdout.is_empty());
-    assert!(sink.stderr.is_empty());
+        let mut sink = BufferedUiSink::default();
+        assert_eq!(
+            crate::app::run_process_with_sink(["osp", "--defaults-only", "--help"], &mut sink),
+            0
+        );
+        assert!(!sink.stdout.is_empty());
+        assert!(sink.stderr.is_empty());
+    });
 }
 
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
 #[test]
 fn app_builder_product_defaults_flow_through_public_builder_surface_unit() {
-    let mut product_defaults = crate::config::ConfigLayer::default();
-    product_defaults.set("extensions.site.enabled", true);
+    with_test_xdg_env(|| {
+        let mut product_defaults = crate::config::ConfigLayer::default();
+        product_defaults.set("extensions.site.enabled", true);
+        product_defaults.set("theme.path", Vec::<String>::new());
 
-    let mut sink = BufferedUiSink::default();
-    let exit = crate::app::App::builder()
-        .with_product_defaults(product_defaults)
-        .build_with_sink(&mut sink)
-        .run_process(["osp", "--json", "config", "get", "extensions.site.enabled"]);
+        let mut sink = BufferedUiSink::default();
+        let exit = crate::app::App::builder()
+            .with_product_defaults(product_defaults)
+            .build_with_sink(&mut sink)
+            .run_process([
+                "osp",
+                "--defaults-only",
+                "--json",
+                "config",
+                "get",
+                "extensions.site.enabled",
+            ]);
 
-    assert_eq!(exit, 0);
-    let payload: serde_json::Value =
-        serde_json::from_str(&sink.stdout).expect("config get should render JSON");
-    let rows = payload
-        .as_array()
-        .expect("config get JSON should be an array");
-    assert!(rows.iter().any(|row| {
-        row["key"] == "extensions.site.enabled" && row["value"] == serde_json::json!(true)
-    }));
-    assert!(sink.stderr.is_empty());
+        assert_eq!(exit, 0);
+        let payload: serde_json::Value =
+            serde_json::from_str(&sink.stdout).expect("config get should render JSON");
+        let rows = payload
+            .as_array()
+            .expect("config get JSON should be an array");
+        assert!(rows.iter().any(|row| {
+            row["key"] == "extensions.site.enabled" && row["value"] == serde_json::json!(true)
+        }));
+        assert!(sink.stderr.is_empty());
+    });
 }
 
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
+#[test]
+fn app_builder_policy_context_flows_through_public_builder_surface_unit() {
+    with_test_xdg_env(|| {
+        let registry =
+            crate::NativeCommandRegistry::new().with_command(SessionGuardedNativeCommand);
+        let mut denied_sink = BufferedUiSink::default();
+        let denied_exit = crate::app::App::builder()
+            .with_native_commands(registry.clone())
+            .build_with_sink(&mut denied_sink)
+            .run_process(["osp", "--defaults-only", "secure"]);
+
+        assert_ne!(denied_exit, 0);
+        assert!(
+            denied_sink
+                .stderr
+                .contains("requires strong authentication")
+        );
+
+        let mut allowed_sink = BufferedUiSink::default();
+        let allowed_exit = crate::app::App::builder()
+            .with_policy_context(
+                crate::core::command_policy::CommandPolicyContext::default()
+                    .authenticated(true)
+                    .with_auth_strength(crate::core::command_policy::AuthStrength::Strong)
+                    .with_credential(
+                        "osp",
+                        crate::core::command_policy::CredentialState::valid_for(900),
+                    ),
+            )
+            .with_native_commands(registry)
+            .build_with_sink(&mut allowed_sink)
+            .run_process(["osp", "--defaults-only", "secure"]);
+
+        assert_eq!(allowed_exit, 0);
+        assert!(allowed_sink.stdout.is_empty());
+        assert!(allowed_sink.stderr.is_empty());
+    });
+}
+
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
+#[test]
+fn app_builder_builtin_policy_flows_through_public_builder_surface_unit() {
+    with_test_xdg_env(|| {
+        let mut builtin_policy = crate::core::command_policy::CommandPolicyRegistry::new();
+        builtin_policy.register(
+            crate::core::command_policy::CommandPolicy::new(
+                crate::core::command_policy::CommandPath::new(["config"]),
+            )
+            .visibility(crate::core::command_policy::VisibilityMode::Authenticated),
+        );
+        let mut denied_sink = BufferedUiSink::default();
+        let denied_exit = crate::app::App::builder()
+            .with_builtin_policy(builtin_policy.clone())
+            .build_with_sink(&mut denied_sink)
+            .run_process(["osp", "--defaults-only", "config", "get", "theme.name"]);
+
+        assert_ne!(denied_exit, 0);
+        assert!(denied_sink.stderr.contains("requires authentication"));
+
+        let mut allowed_sink = BufferedUiSink::default();
+        let allowed_exit = crate::app::App::builder()
+            .with_builtin_policy(builtin_policy)
+            .with_policy_context(
+                crate::core::command_policy::CommandPolicyContext::default().authenticated(true),
+            )
+            .build_with_sink(&mut allowed_sink)
+            .run_process(["osp", "--defaults-only", "config", "get", "theme.name"]);
+
+        assert_eq!(allowed_exit, 0);
+        assert!(allowed_sink.stdout.contains("theme.name"));
+        assert!(allowed_sink.stderr.is_empty());
+    });
+}
+
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
+#[test]
+fn app_builder_access_recovery_retries_denied_builtin_command_unit() {
+    with_test_xdg_env(|| {
+        let mut builtin_policy = crate::core::command_policy::CommandPolicyRegistry::new();
+        builtin_policy.register(
+            crate::core::command_policy::CommandPolicy::new(
+                crate::core::command_policy::CommandPath::new(["config"]),
+            )
+            .visibility(crate::core::command_policy::VisibilityMode::Authenticated),
+        );
+
+        let mut sink = BufferedUiSink::default();
+        let exit = crate::app::App::builder()
+            .with_builtin_policy(builtin_policy)
+            .with_access_recovery(AuthenticatedBuiltinRecovery)
+            .build_with_sink(&mut sink)
+            .run_process(["osp", "--defaults-only", "config", "get", "theme.name"]);
+
+        assert_eq!(exit, 0);
+        assert!(sink.stdout.contains("theme.name"));
+        assert!(sink.stderr.is_empty());
+    });
+}
+
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
 #[test]
 fn free_process_wrapper_renders_usage_errors_to_bound_sink_unit() {
-    let mut sink = BufferedUiSink::default();
-    let exit = crate::app::run_process_with_sink(["osp", "--definitely-not-a-flag"], &mut sink);
+    with_test_xdg_env(|| {
+        let mut sink = BufferedUiSink::default();
+        let exit = crate::app::run_process_with_sink(["osp", "--definitely-not-a-flag"], &mut sink);
 
-    assert_eq!(exit, EXIT_CODE_USAGE);
-    assert!(sink.stdout.is_empty());
-    assert!(
-        sink.stderr.contains("definitely-not-a-flag")
-            || sink.stderr.contains("unexpected argument")
-    );
+        assert_eq!(exit, EXIT_CODE_USAGE);
+        assert!(sink.stdout.is_empty());
+        assert!(
+            sink.stderr.contains("definitely-not-a-flag")
+                || sink.stderr.contains("unexpected argument")
+        );
+    });
 }
 
 #[test]
@@ -162,6 +387,10 @@ fn bootstrap_error_detail_handles_non_utf8_short_flags_and_double_dash_unit() {
     assert_eq!(super::bootstrap_error_detail(&args), ErrorDetail::Normal);
 }
 
+#[cfg_attr(
+    miri,
+    ignore = "forensic backtrace rendering uses std backtrace display"
+)]
 #[test]
 fn error_rendering_prioritizes_actionable_details_across_levels_unit() {
     let settings = RenderSettings::test_plain(OutputFormat::Guide);
@@ -264,6 +493,7 @@ fn run_cli_command_with_ui_builds_runtime_from_config_and_ui_unit() {
     assert!(sink.stderr.is_empty());
 }
 
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
 #[test]
 fn state_and_client_builders_produce_coherent_embedder_state_unit() {
     let config = test_config(&[]);
@@ -277,6 +507,14 @@ fn state_and_client_builders_produce_coherent_embedder_state_unit() {
         .with_config_root(Some(std::path::PathBuf::from("/tmp/osp-config")))
         .with_cache_root(Some(std::path::PathBuf::from("/tmp/osp-cache")));
     let session = crate::app::AppSession::with_cache_limit(5).with_prompt_prefix("osp-dev");
+    let plugins =
+        crate::plugin::PluginManager::new(vec![std::path::PathBuf::from("/tmp/osp-plugin-a")])
+            .with_roots(
+                Some(std::path::PathBuf::from("/tmp/osp-config")),
+                Some(std::path::PathBuf::from("/tmp/osp-cache")),
+            )
+            .with_bundled_roots(false)
+            .with_default_roots(false);
 
     let state = crate::app::AppStateBuilder::new(
         crate::app::RuntimeContext::new(None, crate::app::TerminalKind::Cli, None),
@@ -284,6 +522,7 @@ fn state_and_client_builders_produce_coherent_embedder_state_unit() {
         ui,
     )
     .with_launch(launch)
+    .with_plugins(plugins)
     .with_session(session)
     .with_native_commands(test_native_registry())
     .build();
@@ -340,6 +579,7 @@ fn state_and_client_builders_produce_coherent_embedder_state_unit() {
     assert!(clients.native_commands().command("ldap").is_some());
 }
 
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
 #[test]
 fn state_builder_from_host_inputs_preserves_derived_plugin_and_theme_state_unit() {
     let config = test_config(&[
@@ -471,7 +711,10 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
     let response = ResponseV1 {
         protocol_version: 1,
         ok: false,
-        data: serde_json::json!({}),
+        data: serde_json::json!({
+            "code": "vm_ambiguous",
+            "candidates": [{"name": "db01.uio.no", "provider": "vmware"}]
+        }),
         error: Some(ResponseErrorV1 {
             code: "NOT_FOUND".to_string(),
             message: "missing user".to_string(),
@@ -494,6 +737,21 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
     assert!(rendered.contains("queried fallback backend"));
     assert!(rendered.contains("NOT_FOUND: missing user"));
     assert_eq!(failure.report.to_string(), "NOT_FOUND: missing user");
+    assert_eq!(
+        failure
+            .output
+            .document
+            .as_ref()
+            .map(|document| document.value.clone()),
+        None
+    );
+    assert_eq!(
+        crate::core::output_model::output_items_to_value(&failure.output.items),
+        serde_json::json!({
+            "code": "vm_ambiguous",
+            "candidates": [{"name": "db01.uio.no", "provider": "vmware"}]
+        })
+    );
 
     let response = ResponseV1 {
         protocol_version: 1,
@@ -505,6 +763,9 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
             format_hint: Some("table".to_string()),
             columns: Some(vec!["uid".to_string()]),
             column_align: Vec::new(),
+            column_labels: Vec::new(),
+            row_path: None,
+            preserve_json_document: false,
         },
     };
     let prepared = super::command_output::prepare_plugin_response(response, &["P uid".to_string()])
@@ -537,7 +798,13 @@ fn prepared_plugin_response_maps_into_cli_command_result_unit() {
     let result = CliCommandResult::from_prepared_plugin_response(prepared);
 
     assert_eq!(result.exit_code, 1);
-    assert!(result.output.is_none());
+    let Some(ReplCommandOutput::Output(output)) = result.output.as_ref() else {
+        panic!("structured failure data should remain renderable");
+    };
+    assert_eq!(
+        crate::core::output_model::output_items_to_value(&output.output.items),
+        serde_json::json!({})
+    );
     assert_eq!(
         result.failure_report.as_ref().map(ToString::to_string),
         Some("NOT_FOUND: missing user".to_string())
@@ -547,20 +814,24 @@ fn prepared_plugin_response_maps_into_cli_command_result_unit() {
 
 #[test]
 fn exit_code_classification_distinguishes_usage_config_and_plugin_unit() {
-    let clap_report =
-        super::run_from(["osp", "--definitely-not-a-flag"]).expect_err("parse should fail");
-    assert_eq!(classify_exit_code(&clap_report), EXIT_CODE_USAGE);
+    with_test_xdg_env(|| {
+        let clap_report = super::run_from(["osp", "--defaults-only", "--definitely-not-a-flag"])
+            .expect_err("parse should fail");
+        assert_eq!(classify_exit_code(&clap_report), EXIT_CODE_USAGE);
 
-    let mut invalid_session = ConfigLayer::default();
-    invalid_session.set("ui.message.verbosity", "definitely-invalid");
-    let config_report = super::resolve_runtime_config(
-        RuntimeConfigRequest::new(None, Some("cli")).with_session_layer(Some(invalid_session)),
-    )
-    .expect_err("config resolution should fail");
-    assert_eq!(classify_exit_code(&config_report), EXIT_CODE_CONFIG);
+        let mut invalid_session = ConfigLayer::default();
+        invalid_session.set("ui.message.verbosity", "definitely-invalid");
+        let config_report = super::resolve_runtime_config(
+            RuntimeConfigRequest::new(None, Some("cli"))
+                .with_runtime_load(crate::config::RuntimeLoadOptions::defaults_only())
+                .with_session_layer(Some(invalid_session)),
+        )
+        .expect_err("config resolution should fail");
+        assert_eq!(classify_exit_code(&config_report), EXIT_CODE_CONFIG);
 
-    let plugin_report = enrich_dispatch_error(PluginDispatchError::CommandNotFound {
-        command: "ldap".to_string(),
+        let plugin_report = enrich_dispatch_error(PluginDispatchError::CommandNotFound {
+            command: "ldap".to_string(),
+        });
+        assert_eq!(classify_exit_code(&plugin_report), EXIT_CODE_PLUGIN);
     });
-    assert_eq!(classify_exit_code(&plugin_report), EXIT_CODE_PLUGIN);
 }

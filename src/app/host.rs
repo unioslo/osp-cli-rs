@@ -36,8 +36,7 @@ pub(crate) use super::bootstrap::{
 pub(crate) use super::command_output::run_cli_command_with_ui;
 pub(crate) use super::dispatch::{
     DispatchPlan, RunAction, build_dispatch_plan, ensure_builtin_visible_for,
-    ensure_dispatch_visibility, ensure_plugin_visible_for, normalize_cli_profile,
-    normalize_profile_override,
+    normalize_cli_profile, normalize_profile_override,
 };
 use super::external::run_external_command;
 pub(crate) use super::external::run_external_command_with_help_renderer;
@@ -331,6 +330,7 @@ fn run(
             &state.clients,
             &tokens,
             &invocation_ui,
+            sink,
         )
         .and_then(|result| {
             run_cli_command_with_ui(
@@ -433,7 +433,18 @@ fn prepare_host_run(
     state
         .runtime
         .set_product_defaults(app.product_defaults.clone());
-    ensure_dispatch_visibility(&state.runtime.auth, &dispatch.action)?;
+    let policy_context = super::runtime::policy_context_for_resolved(
+        app.policy_context.clone(),
+        state.runtime.config.resolved(),
+    );
+    state.runtime.auth_mut().set_policy_context(policy_context);
+    state
+        .runtime
+        .auth_mut()
+        .replace_builtin_policy(app.builtin_policy.clone());
+    state
+        .runtime
+        .set_access_recovery(app.access_recovery.clone());
     let invocation_ui = resolve_invocation_ui(
         state.runtime.config.resolved(),
         &state.runtime.ui,

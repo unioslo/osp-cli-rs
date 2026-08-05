@@ -32,8 +32,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 use directories::{BaseDirs, ProjectDirs};
 
 use crate::config::{
-    ChainedLoader, ConfigLayer, DEFAULT_PROFILE_NAME, EnvSecretsLoader, EnvVarLoader,
-    LoaderPipeline, ResolvedConfig, SecretsTomlLoader, StaticLayerLoader, TomlFileLoader,
+    ConfigLayer, DEFAULT_PROFILE_NAME, EnvSecretsLoader, EnvVarLoader, LoaderPipeline,
+    ResolvedConfig, RuntimeSelectedSecretsLoader, StaticLayerLoader, TomlFileLoader,
     build_builtin_defaults,
 };
 
@@ -218,6 +218,7 @@ impl RuntimeConfig {
     ///
     /// let mut defaults = ConfigLayer::default();
     /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.path", Vec::<String>::new());
     ///
     /// let mut resolver = ConfigResolver::default();
     /// resolver.set_defaults(defaults);
@@ -240,6 +241,8 @@ pub struct RuntimeConfigPaths {
     pub config_file: Option<PathBuf>,
     /// Path to the secrets config file, when discovered.
     pub secrets_file: Option<PathBuf>,
+    /// Path to the value-free keyring index, when discovered.
+    pub secrets_index_file: Option<PathBuf>,
 }
 
 impl RuntimeConfigPaths {
@@ -258,6 +261,7 @@ impl RuntimeConfigPaths {
     ///
     /// let _config = paths.config_file.as_deref();
     /// let _secrets = paths.secrets_file.as_deref();
+    /// let _keyring_index = paths.secrets_index_file.as_deref();
     /// ```
     pub fn discover() -> Self {
         Self::discover_with(RuntimeLoadOptions::default())
@@ -273,6 +277,7 @@ impl RuntimeConfigPaths {
         tracing::debug!(
             config_file = ?paths.config_file.as_ref().map(|path| path.display().to_string()),
             secrets_file = ?paths.secrets_file.as_ref().map(|path| path.display().to_string()),
+            secrets_index_file = ?paths.secrets_index_file.as_ref().map(|path| path.display().to_string()),
             bootstrap_mode = ?load.bootstrap_mode,
             "discovered runtime config paths"
         );
@@ -287,6 +292,9 @@ impl RuntimeConfigPaths {
             secrets_file: env
                 .path_override("OSP_SECRETS_FILE")
                 .or_else(|| env.config_path("secrets.toml")),
+            secrets_index_file: env
+                .path_override("OSP_SECRETS_INDEX_FILE")
+                .or_else(|| env.config_path("secrets.index.toml")),
         }
     }
 }
@@ -461,14 +469,11 @@ pub fn build_runtime_pipeline(
         pipeline = pipeline.with_file(TomlFileLoader::new(path.clone()).optional());
     }
 
-    if let Some(path) = &paths.secrets_file {
-        let mut secret_chain = ChainedLoader::new(SecretsTomlLoader::new(path.clone()).optional());
-        if load.include_env {
-            secret_chain = secret_chain.with(EnvSecretsLoader::from_process_env());
-        }
-        pipeline = pipeline.with_secrets(secret_chain);
-    } else if load.include_env {
-        pipeline = pipeline.with_secrets(ChainedLoader::new(EnvSecretsLoader::from_process_env()));
+    if paths.secrets_file.is_some() || paths.secrets_index_file.is_some() || load.include_env {
+        pipeline = pipeline.with_runtime_secrets(RuntimeSelectedSecretsLoader::new(
+            paths.clone(),
+            load.include_env.then(EnvSecretsLoader::from_process_env),
+        ));
     }
 
     if let Some(cli_layer) = cli {
@@ -661,6 +666,7 @@ fn project_dirs() -> Option<ProjectDirs> {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Mutex;
 
     use super::{
         DEFAULT_PROFILE_NAME, RuntimeBootstrapMode, RuntimeConfigPaths, RuntimeDefaults,
@@ -680,10 +686,26 @@ mod tests {
             .map(|entry| &entry.value)
     }
 
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        &LOCK
+    }
+
     #[test]
     fn runtime_defaults_seed_expected_keys_and_history_placeholders_unit() {
-        let defaults =
-            RuntimeDefaults::from_env(&RuntimeEnvironment::default(), "nord", "osp> ").to_layer();
+        let defaults = RuntimeDefaults::from_env(
+            &RuntimeEnvironment::from_pairs([
+                ("HOME", "/home/tester"),
+                ("USER", "tester"),
+                ("HOSTNAME", "host.example"),
+                ("XDG_CONFIG_HOME", "/tmp/runtime-xdg-config"),
+                ("XDG_CACHE_HOME", "/tmp/runtime-xdg-cache"),
+                ("XDG_STATE_HOME", "/tmp/runtime-xdg-state"),
+            ]),
+            "nord",
+            "osp> ",
+        )
+        .to_layer();
 
         assert_eq!(
             find_value(&defaults, "profile.default"),
@@ -764,6 +786,7 @@ mod tests {
         let env = RuntimeEnvironment::from_pairs([
             ("OSP_CONFIG_FILE", "/tmp/custom-config.toml"),
             ("OSP_SECRETS_FILE", "/tmp/custom-secrets.toml"),
+            ("OSP_SECRETS_INDEX_FILE", "/tmp/custom-secrets-index.toml"),
             ("XDG_CONFIG_HOME", "/ignored"),
         ]);
 
@@ -777,6 +800,10 @@ mod tests {
             paths.secrets_file,
             Some(PathBuf::from("/tmp/custom-secrets.toml"))
         );
+        assert_eq!(
+            paths.secrets_index_file,
+            Some(PathBuf::from("/tmp/custom-secrets-index.toml"))
+        );
 
         let env = RuntimeEnvironment::from_pairs([("XDG_CONFIG_HOME", "/var/tmp/xdg-config")]);
 
@@ -789,6 +816,10 @@ mod tests {
         assert_eq!(
             paths.secrets_file,
             Some(PathBuf::from("/var/tmp/xdg-config/osp/secrets.toml"))
+        );
+        assert_eq!(
+            paths.secrets_index_file,
+            Some(PathBuf::from("/var/tmp/xdg-config/osp/secrets.index.toml"))
         );
     }
 
@@ -809,9 +840,12 @@ mod tests {
             Some(PathBuf::from("/home/tester/.local/state/osp"))
         );
 
-        let env = RuntimeEnvironment::default();
-        let mut expected_root = std::env::temp_dir();
-        expected_root.push("osp");
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
+        let previous_tmpdir = std::env::var("TMPDIR").ok();
+        unsafe { std::env::set_var("TMPDIR", "/tmp/osp-runtime-temp") };
+
+        let env = RuntimeEnvironment::from_pairs(std::iter::empty::<(&str, &str)>());
+        let expected_root = PathBuf::from("/tmp/osp-runtime-temp/osp");
 
         assert_eq!(
             env.repl_history_path(),
@@ -825,6 +859,11 @@ mod tests {
             env.log_file_path(),
             expected_root.join("osp.log").display().to_string()
         );
+
+        match previous_tmpdir {
+            Some(value) => unsafe { std::env::set_var("TMPDIR", value) },
+            None => unsafe { std::env::remove_var("TMPDIR") },
+        }
     }
 
     #[test]
@@ -835,6 +874,7 @@ mod tests {
 
         assert_eq!(paths.config_file, None);
         assert_eq!(paths.secrets_file, None);
+        assert_eq!(paths.secrets_index_file, None);
         assert_eq!(defaults.get_string("user.name"), Some("anonymous"));
         assert_eq!(defaults.get_string("domain"), Some("local"));
         assert_eq!(defaults.get_string("theme.name"), Some("nord"));

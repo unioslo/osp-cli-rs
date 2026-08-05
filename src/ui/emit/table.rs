@@ -74,14 +74,14 @@ impl PreparedCell {
 mod tests {
     use super::PreparedTable;
     use crate::core::output_model::ColumnAlignment;
-    use crate::ui::doc::{KeyValueRow, TableBlock};
+    use crate::ui::doc::{KeyValueRow, KeyValueValue, TableBlock};
 
     #[test]
     fn prepared_table_captures_shared_width_and_markdown_shape_unit() {
         let table = TableBlock {
             summary: vec![KeyValueRow {
                 key: "count".to_string(),
-                value: "1".to_string(),
+                value: KeyValueValue::Scalar("1".to_string()),
                 indent: None,
                 gap: None,
             }],

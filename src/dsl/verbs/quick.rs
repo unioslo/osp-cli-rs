@@ -784,6 +784,20 @@ pub(crate) fn apply_value_with_plan(value: Value, plan: &QuickPlan) -> Result<Va
     )
 }
 
+pub(crate) fn apply_value_with_plan_preserving_matching_rows(
+    value: Value,
+    plan: &QuickPlan,
+) -> Result<Value> {
+    if let Some(transformed) = try_apply_path_scoped_value(&value, &plan.spec) {
+        return Ok(transformed);
+    }
+    selector::filter_descendants_preserving_matching_rows_with_options(
+        value,
+        |row| plan.matches_row_filter_mode(row),
+        !plan.spec.fuzzy,
+    )
+}
+
 fn try_apply_path_scoped_row(row: &Row, spec: &CompiledQuickSpec) -> Option<Vec<Row>> {
     if !spec.is_structural() || spec.key_not_equals {
         return None;

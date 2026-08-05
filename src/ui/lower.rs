@@ -18,15 +18,16 @@ use serde_json::{Map, Value};
 
 use crate::core::output::OutputFormat;
 use crate::core::output_model::{
-    ColumnAlignment, Group, OutputItems, OutputResult, group_rows, output_items_to_rows,
-    output_items_to_value,
+    ColumnAlignment, Group, OutputDocumentKind, OutputItems, OutputResult, group_rows,
+    output_items_to_rows, output_items_to_value,
 };
 use crate::core::row::Row;
 use crate::guide::{GuideEntry, GuideSection, GuideSectionKind, GuideView};
 
 use super::doc::{
     Block, Doc, GuideEntriesBlock, GuideEntryRow, JsonBlock, KeyValueBlock, KeyValueRow,
-    KeyValueStyle, ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
+    KeyValueStyle, KeyValueValue, ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome,
+    TableBlock,
 };
 use super::plan::RenderPlan;
 use super::settings::{HelpLayout, ResolvedHelpChromeSettings};
@@ -95,7 +96,7 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
                     None,
                 )
             } else {
-                lower_table_doc(output)
+                lower_markdown_doc(output)
             }
         }
         OutputFormat::Value => {
@@ -165,6 +166,13 @@ pub fn canonical_value(output: &OutputResult) -> Value {
 }
 
 pub(crate) fn json_value(output: &OutputResult) -> Value {
+    if let Some(document) = output
+        .document
+        .as_ref()
+        .filter(|document| document.kind == OutputDocumentKind::Json)
+    {
+        return document.value.clone();
+    }
     match &output.items {
         OutputItems::Rows(rows) => {
             Value::Array(rows.iter().cloned().map(Value::Object).collect::<Vec<_>>())
@@ -201,6 +209,18 @@ fn lower_table_doc(output: &OutputResult) -> Doc {
     }
 }
 
+fn lower_markdown_doc(output: &OutputResult) -> Doc {
+    match &output.items {
+        OutputItems::Rows(rows) if rows.len() == 1 && row_has_nested_values(&rows[0]) => Doc {
+            blocks: vec![Block::KeyValue(key_value_from_map(
+                &rows[0],
+                Some(&output.meta.key_index),
+            ))],
+        },
+        _ => lower_table_doc(output),
+    }
+}
+
 fn json_group_value(group: &Group) -> Value {
     let mut item = Row::new();
     item.insert("groups".to_string(), Value::Object(group.groups.clone()));
@@ -232,13 +252,16 @@ fn lower_mreg_doc(output: &OutputResult) -> Doc {
     }
 
     match &output.items {
+        OutputItems::Rows(rows) if rows.is_empty() => Doc::default(),
+        OutputItems::Rows(rows) if rows.len() == 1 && row_has_table_arrays(&rows[0]) => Doc {
+            blocks: mreg_record_blocks(&rows[0], &output.meta.key_index),
+        },
         OutputItems::Rows(rows) if rows.len() == 1 => Doc {
             blocks: vec![Block::KeyValue(key_value_from_map(
                 &rows[0],
                 Some(&output.meta.key_index),
             ))],
         },
-        OutputItems::Rows(rows) if rows.is_empty() => Doc::default(),
         _ => lower_table_doc(output),
     }
 }
@@ -749,7 +772,7 @@ fn key_value_from_map(
             {
                 rows.push(KeyValueRow {
                     key: key.clone(),
-                    value: display_value(value),
+                    value: lower_key_value_value(value, false),
                     indent: None,
                     gap: None,
                 });
@@ -760,16 +783,142 @@ fn key_value_from_map(
         if seen.insert(key.clone()) {
             rows.push(KeyValueRow {
                 key: key.clone(),
-                value: display_value(value),
+                value: lower_key_value_value(value, false),
                 indent: None,
                 gap: None,
             });
         }
     }
+
     KeyValueBlock {
         style: KeyValueStyle::Plain,
         rows,
     }
+}
+
+#[derive(Debug, Default)]
+struct MregRecordBuilder {
+    blocks: Vec<Block>,
+    pending_rows: Vec<KeyValueRow>,
+}
+
+impl MregRecordBuilder {
+    fn push_row(&mut self, key: &str, value: KeyValueValue, depth: usize) {
+        self.pending_rows.push(KeyValueRow {
+            key: key.to_string(),
+            value,
+            indent: (depth > 0).then(|| " ".repeat(depth * 2)),
+            gap: None,
+        });
+    }
+
+    fn push_table(&mut self, key: &str, item_count: usize, table: TableBlock, depth: usize) {
+        self.flush();
+        self.blocks.push(Block::Paragraph(ParagraphBlock {
+            text: format!("{key} ({item_count}):"),
+            indent: depth * 2,
+            inline_markup: false,
+        }));
+        self.blocks.push(Block::Section(SectionBlock {
+            title: None,
+            title_chrome: SectionTitleChrome::Plain,
+            body_indent: (depth + 1) * 2,
+            inline_title_suffix: None,
+            trailing_newline: false,
+            blocks: vec![Block::Table(table)],
+        }));
+    }
+
+    fn flush(&mut self) {
+        if self.pending_rows.is_empty() {
+            return;
+        }
+        self.blocks.push(Block::KeyValue(KeyValueBlock {
+            style: KeyValueStyle::Plain,
+            rows: std::mem::take(&mut self.pending_rows),
+        }));
+    }
+}
+
+fn mreg_record_blocks(map: &Map<String, Value>, preferred_keys: &[String]) -> Vec<Block> {
+    let mut builder = MregRecordBuilder::default();
+    let mut seen = BTreeSet::new();
+    for key in preferred_keys {
+        if seen.insert(key.clone())
+            && let Some(value) = map.get(key)
+        {
+            visit_mreg_record_field(&mut builder, key, value, 0);
+        }
+    }
+    for (key, value) in map {
+        if seen.insert(key.clone()) {
+            visit_mreg_record_field(&mut builder, key, value, 0);
+        }
+    }
+    builder.flush();
+    builder.blocks
+}
+
+fn visit_mreg_record_field(
+    builder: &mut MregRecordBuilder,
+    key: &str,
+    value: &Value,
+    depth: usize,
+) {
+    match value {
+        Value::Array(items) => {
+            if let Some(table) = table_from_nonempty_object_array(items) {
+                builder.push_table(key, items.len(), table, depth);
+            } else {
+                builder.push_row(key, lower_key_value_value(value, false), depth);
+            }
+        }
+        Value::Object(map) if object_has_table_arrays(map) => {
+            builder.push_row(key, KeyValueValue::Empty, depth);
+            for (nested_key, nested) in map {
+                visit_mreg_record_field(builder, nested_key, nested, depth + 1);
+            }
+        }
+        other => builder.push_row(key, lower_key_value_value(other, false), depth),
+    }
+}
+
+fn row_has_table_arrays(row: &Row) -> bool {
+    row.values().any(value_has_table_arrays)
+}
+
+fn object_has_table_arrays(map: &Map<String, Value>) -> bool {
+    map.values().any(value_has_table_arrays)
+}
+
+fn value_has_table_arrays(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => table_from_nonempty_object_array(items).is_some(),
+        Value::Object(map) => object_has_table_arrays(map),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
+}
+
+fn lower_key_value_value(value: &Value, null_as_empty: bool) -> KeyValueValue {
+    match value {
+        Value::Null if null_as_empty => KeyValueValue::Empty,
+        Value::Null => KeyValueValue::Scalar("null".to_string()),
+        Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+            KeyValueValue::Scalar(display_value(value))
+        }
+        Value::Array(items) => KeyValueValue::Array(
+            items
+                .iter()
+                .map(|item| lower_key_value_value(item, false))
+                .collect(),
+        ),
+        Value::Object(map) => KeyValueValue::Object(key_value_from_map(map, None).rows),
+    }
+}
+
+fn row_has_nested_values(row: &Row) -> bool {
+    row.values()
+        .any(|value| matches!(value, Value::Array(_) | Value::Object(_)))
 }
 
 fn table_from_rows(
@@ -809,7 +958,7 @@ fn table_from_group(
         {
             summary.push(KeyValueRow {
                 key: key.clone(),
-                value: display_value(value),
+                value: lower_key_value_value(value, false),
                 indent: None,
                 gap: None,
             });
@@ -819,7 +968,7 @@ fn table_from_group(
         if seen.insert(key.clone()) {
             summary.push(KeyValueRow {
                 key: key.clone(),
-                value: display_value(value),
+                value: lower_key_value_value(value, false),
                 indent: None,
                 gap: None,
             });
@@ -829,7 +978,7 @@ fn table_from_group(
         if seen.insert(key.clone()) {
             summary.push(KeyValueRow {
                 key: key.clone(),
-                value: display_value(value),
+                value: lower_key_value_value(value, false),
                 indent: None,
                 gap: None,
             });
@@ -867,6 +1016,13 @@ fn table_from_value_array(items: &[Value]) -> Option<TableBlock> {
         rows.push(map.clone());
     }
     Some(table_from_rows(&rows, &[], &[]))
+}
+
+fn table_from_nonempty_object_array(items: &[Value]) -> Option<TableBlock> {
+    if items.is_empty() {
+        return None;
+    }
+    table_from_value_array(items)
 }
 
 fn normalize_table_alignment(
@@ -919,7 +1075,7 @@ fn key_value_from_guide_data_map(map: &Map<String, Value>) -> KeyValueBlock {
             .iter()
             .map(|(key, value)| KeyValueRow {
                 key: key.clone(),
-                value: guide_data_display_value(value),
+                value: lower_key_value_value(value, true),
                 indent: Some("  ".to_string()),
                 gap: None,
             })
@@ -964,7 +1120,7 @@ fn guide_entry_key_value_rows(entries: &[GuideEntry]) -> Vec<KeyValueRow> {
         .iter()
         .map(|entry| KeyValueRow {
             key: entry.name.clone(),
-            value: entry.short_help.clone(),
+            value: KeyValueValue::Scalar(entry.short_help.clone()),
             indent: None,
             gap: None,
         })
@@ -977,14 +1133,6 @@ fn guide_entry_row(entry: &GuideEntry) -> GuideEntryRow {
         value: entry.short_help.clone(),
         indent_hint: entry.display_indent.clone(),
         gap_hint: entry.display_gap.clone(),
-    }
-}
-
-fn guide_data_display_value(value: &Value) -> String {
-    match value {
-        Value::Null => String::new(),
-        Value::Array(items) if items.is_empty() => "[]".to_string(),
-        _ => display_value(value),
     }
 }
 

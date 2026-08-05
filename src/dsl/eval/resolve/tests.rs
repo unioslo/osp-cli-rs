@@ -102,7 +102,7 @@ fn slice_and_truthiness_helpers_cover_edge_cases_unit() {
 }
 
 #[test]
-fn resolve_pair_helpers_cover_deduplication_flat_fallback_and_materialization_unit() {
+fn resolve_pair_helpers_preserve_addressed_duplicates_and_cover_fallbacks_unit() {
     let row = json!({
         "items": [{"id": 7}, {"id": 7}],
         "dup": [1, 1]
@@ -116,7 +116,7 @@ fn resolve_pair_helpers_cover_deduplication_flat_fallback_and_materialization_un
     );
     assert_eq!(
         resolve_values(&row, "dup[]", ExactMode::None),
-        vec![json!(1)]
+        vec![json!(1), json!(1)]
     );
 
     let flat = json!({

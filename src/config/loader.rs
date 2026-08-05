@@ -475,11 +475,16 @@ pub struct LoaderPipeline {
     defaults: Box<dyn ConfigLoader>,
     presentation: Option<Box<dyn ConfigLoader>>,
     file: Option<Box<dyn ConfigLoader>>,
-    secrets: Option<Box<dyn ConfigLoader>>,
+    secrets: Option<SecretsPipelineLoader>,
     env: Option<Box<dyn ConfigLoader>>,
     cli: Option<Box<dyn ConfigLoader>>,
     session: Option<Box<dyn ConfigLoader>>,
     schema: ConfigSchema,
+}
+
+enum SecretsPipelineLoader {
+    Fixed(Box<dyn ConfigLoader>),
+    Runtime(crate::config::RuntimeSelectedSecretsLoader),
 }
 
 impl LoaderPipeline {
@@ -526,7 +531,15 @@ impl LoaderPipeline {
     where
         L: ConfigLoader + 'static,
     {
-        self.secrets = Some(Box::new(loader));
+        self.secrets = Some(SecretsPipelineLoader::Fixed(Box::new(loader)));
+        self
+    }
+
+    pub(crate) fn with_runtime_secrets(
+        mut self,
+        loader: crate::config::RuntimeSelectedSecretsLoader,
+    ) -> Self {
+        self.secrets = Some(SecretsPipelineLoader::Runtime(loader));
         self
     }
 
@@ -568,14 +581,19 @@ impl LoaderPipeline {
     /// This is the boundary between source I/O and config resolution.
     pub fn load_layers(&self) -> Result<LoadedLayers, ConfigError> {
         tracing::debug!("loading config layers");
-        let layers = LoadedLayers {
+        let mut layers = LoadedLayers {
             defaults: self.defaults.load()?,
             presentation: load_optional_loader(self.presentation.as_deref())?,
             file: load_optional_loader(self.file.as_deref())?,
-            secrets: load_optional_loader(self.secrets.as_deref())?,
+            secrets: ConfigLayer::default(),
             env: load_optional_loader(self.env.as_deref())?,
             cli: load_optional_loader(self.cli.as_deref())?,
             session: load_optional_loader(self.session.as_deref())?,
+        };
+        layers.secrets = match self.secrets.as_ref() {
+            Some(SecretsPipelineLoader::Fixed(loader)) => loader.load()?,
+            Some(SecretsPipelineLoader::Runtime(loader)) => loader.load(&layers)?,
+            None => ConfigLayer::default(),
         };
         tracing::debug!(
             defaults = layers.defaults.entries().len(),

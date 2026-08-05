@@ -1,0 +1,38 @@
+---
+source: tests/contracts/ui_rendering.rs
+expression: sanitized
+---
+[38;2;189;147;249mcn[0m[38;2;104;121;173m:[0m                       [38;2;248;248;242mOistein Sovik[0m
+[38;2;189;147;249muid[0m[38;2;104;121;173m:[0m                      [38;2;248;248;242moistes[0m
+[38;2;189;147;249muidNumber[0m[38;2;104;121;173m:[0m                [38;2;255;121;198m361000[0m
+[38;2;189;147;249muioPrimaryAffiliation[0m[38;2;104;121;173m:[0m    [38;2;248;248;242mANSATT@373034[0m
+[38;2;189;147;249mnetgroups (44)[0m[38;2;104;121;173m:[0m
+  [38;2;248;248;242mansatt-373034[0m                       [38;2;248;248;242mmeta-ansatt-360000[0m           [38;2;248;248;242mrt-it-uu-kontakt[0m                 [38;2;248;248;242mvcs-dhcp[0m
+  [38;2;248;248;242mansatt-tekadm-373034[0m                [38;2;248;248;242mmeta-ansatt-370000[0m           [38;2;248;248;242mrt-saksbehandler[0m                 [38;2;248;248;242mvcs-it-org[0m
+  [38;2;248;248;242mdia-drs-vaktsjefer[0m                  [38;2;248;248;242mmeta-ansatt-373000[0m           [38;2;248;248;242mrt-usit-intark-drift[0m             [38;2;248;248;242mvcs-it-osprov[0m
+  [38;2;248;248;242mit-uio-azure-users[0m                  [38;2;248;248;242mmeta-ansatt-373034[0m           [38;2;248;248;242mrt-usit-lifeportal-utv-kunder[0m    [38;2;248;248;242mvcs-iti[0m
+  [38;2;248;248;242mit-uio-ms365-ansatt[0m                 [38;2;248;248;242mmeta-ansatt-900000[0m           [38;2;248;248;242mrt-usit-ops[0m                      [38;2;248;248;242mvcs-ops[0m
+  [38;2;248;248;242mit-uio-ms365-ansatt-publisert[0m       [38;2;248;248;242mmeta-ansatt-tekadm-360000[0m    [38;2;248;248;242mrt-usit-respons[0m                  [38;2;248;248;242mvcs-radius[0m
+  [38;2;248;248;242mit-uio-ms365-eapp-acos-akademiet[0m    [38;2;248;248;242mmeta-ansatt-tekadm-370000[0m    [38;2;248;248;242mucore[0m                            [38;2;248;248;242mvcs-ssd[0m
+  [38;2;248;248;242mlos-alle[0m                            [38;2;248;248;242mmeta-ansatt-tekadm-373000[0m    [38;2;248;248;242muio-ans[0m                          [38;2;248;248;242mvcs-usit[0m
+  [38;2;248;248;242mmattermost-uio[0m                      [38;2;248;248;242mmeta-ansatt-tekadm-373034[0m    [38;2;248;248;242muio-tils[0m                         [38;2;248;248;242mvcs-virtprov-admins[0m
+  [38;2;248;248;242mmattermost-uio-it[0m                   [38;2;248;248;242mmeta-ansatt-tekadm-900000[0m    [38;2;248;248;242musit[0m                             [38;2;248;248;242mvortex-opptak[0m
+  [38;2;248;248;242mmattermost-usit[0m                     [38;2;248;248;242mpostmaster-eo-migrerte[0m       [38;2;248;248;242mvcs-cfengine[0m                     [38;2;248;248;242mzabbix-iti-ops[0m
+[38;2;189;147;249mfilegroups (4)[0m[38;2;104;121;173m:[0m           [38;2;248;248;242moistes[0m
+                          [38;2;248;248;242mucore[0m
+                          [38;2;248;248;242musit[0m
+                          [38;2;248;248;242mvortex-opptak[0m
+[38;2;189;147;249mdn[0m[38;2;104;121;173m:[0m                       [38;2;248;248;242muid=oistes,cn=users,cn=system,dc=uio,dc=no[0m
+[38;2;189;147;249meduPersonAffiliation (3)[0m[38;2;104;121;173m:[0m [38;2;248;248;242memployee[0m
+                          [38;2;248;248;242mmember[0m
+                          [38;2;248;248;242mstaff[0m
+[38;2;189;147;249mgidNumber[0m[38;2;104;121;173m:[0m                [38;2;255;121;198m346297[0m
+[38;2;189;147;249muioAffiliation[0m[38;2;104;121;173m:[0m           [38;2;248;248;242mANSATT@373034[0m
+[38;2;189;147;249mobjectClass (5)[0m[38;2;104;121;173m:[0m          [38;2;248;248;242muioMembership[0m
+                          [38;2;248;248;242mtop[0m
+                          [38;2;248;248;242maccount[0m
+                          [38;2;248;248;242mposixAccount[0m
+                          [38;2;248;248;242muioAccountObject[0m
+[38;2;189;147;249mloginShell[0m[38;2;104;121;173m:[0m               [38;2;248;248;242m/local/gnu/bin/bash[0m
+[38;2;189;147;249mhomeDirectory[0m[38;2;104;121;173m:[0m            [38;2;248;248;242m/uio/kant/usit-gsd-u1/oistes[0m
+[38;2;189;147;249mgecos[0m[38;2;104;121;173m:[0m                    [38;2;248;248;242m\istein S|vik[0m

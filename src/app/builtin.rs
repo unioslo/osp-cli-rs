@@ -10,7 +10,7 @@ use miette::{Result, miette};
 
 use super::{
     AppClients, AppRuntime, AppSession, CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS,
-    CMD_THEME, CliCommandResult, ResolvedInvocation, UiSink, UiState, ensure_builtin_visible_for,
+    CMD_THEME, CliCommandResult, ResolvedInvocation, UiSink, UiState, ensure_builtin_access,
     ensure_command_supports_dsl, run_cli_command_with_ui,
 };
 use crate::cli::commands::{
@@ -100,7 +100,7 @@ impl<'a> BuiltinExecutor<'a> {
     ) -> Result<Option<CliCommandResult>> {
         match command {
             Commands::Plugins(args) => {
-                ensure_builtin_visible_for(&self.runtime.auth, CMD_PLUGINS)?;
+                ensure_builtin_access(self.runtime, self.session, CMD_PLUGINS)?;
                 plugins_cmd::run_plugins_command(
                     plugins_cmd::PluginsCommandContext::from_parts(self.runtime, self.clients),
                     args,
@@ -108,7 +108,7 @@ impl<'a> BuiltinExecutor<'a> {
                 .map(Some)
             }
             Commands::Doctor(args) => {
-                ensure_builtin_visible_for(&self.runtime.auth, CMD_DOCTOR)?;
+                ensure_builtin_access(self.runtime, self.session, CMD_DOCTOR)?;
                 doctor_cmd::run_doctor_command(
                     doctor_cmd::DoctorCommandContext::from_parts(
                         self.runtime,
@@ -121,7 +121,7 @@ impl<'a> BuiltinExecutor<'a> {
                 .map(Some)
             }
             Commands::Theme(args) => {
-                ensure_builtin_visible_for(&self.runtime.auth, CMD_THEME)?;
+                ensure_builtin_access(self.runtime, self.session, CMD_THEME)?;
                 theme_cmd::run_theme_command(
                     &mut self.session.config_overrides,
                     theme_cmd::ThemeCommandContext::from_parts(self.runtime, surface.ui()),
@@ -130,7 +130,7 @@ impl<'a> BuiltinExecutor<'a> {
                 .map(Some)
             }
             Commands::Config(args) => {
-                ensure_builtin_visible_for(&self.runtime.auth, CMD_CONFIG)?;
+                ensure_builtin_access(self.runtime, self.session, CMD_CONFIG)?;
                 config_cmd::run_config_command(
                     config_cmd::ConfigCommandContext::from_parts(
                         self.runtime,
@@ -142,7 +142,7 @@ impl<'a> BuiltinExecutor<'a> {
                 .map(Some)
             }
             Commands::History(args) => {
-                ensure_builtin_visible_for(&self.runtime.auth, CMD_HISTORY)?;
+                ensure_builtin_access(self.runtime, self.session, CMD_HISTORY)?;
                 self.run_history_command(surface, args).map(Some)
             }
             Commands::Intro(args) => self.run_intro_command(surface, args).map(Some),

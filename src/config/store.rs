@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::{
     ConfigError, ConfigValue, Scope, TomlEditResult, TomlParseDiagnostic, normalize_scope,
-    validate_bootstrap_value, validate_key_scope, with_path_context,
+    validate_key_scope, with_path_context,
 };
 
 /// Options that control how TOML-backed config edits are applied.
@@ -178,6 +178,11 @@ enum TomlEditOperation<'a> {
     Unset,
 }
 
+enum ValidatedTomlEditOperation {
+    Set(ConfigValue),
+    Unset,
+}
+
 fn edit_scoped_value_in_toml(
     path: &Path,
     key: &str,
@@ -186,22 +191,29 @@ fn edit_scoped_value_in_toml(
     options: TomlStoreEditOptions,
 ) -> Result<TomlEditResult, ConfigError> {
     let normalized_scope = normalize_scope(scope.clone());
-    crate::config::ConfigSchema::default().validate_writable_key(key)?;
+    validate_dotted_key(key)?;
+    let schema = crate::config::ConfigSchema::default();
+    schema.validate_writable_key(key)?;
     validate_key_scope(key, &normalized_scope)?;
-    if let TomlEditOperation::Set(value) = operation {
-        validate_bootstrap_value(key, value)?;
-    }
+    let operation = match operation {
+        TomlEditOperation::Set(value) => {
+            ValidatedTomlEditOperation::Set(schema.validate_write_value(key, value)?)
+        }
+        TomlEditOperation::Unset => ValidatedTomlEditOperation::Unset,
+    };
     let mut root = load_or_create_toml_root(path)?;
     let root_table = root
         .as_table_mut()
         .ok_or(ConfigError::TomlRootMustBeTable)?;
 
     let previous = match operation {
-        TomlEditOperation::Set(value) => {
+        ValidatedTomlEditOperation::Set(value) => {
             let scoped_table = scoped_table_mut(root_table, &normalized_scope)?;
-            set_dotted_value(scoped_table, key, value)?
+            set_dotted_value(scoped_table, key, &value)?
         }
-        TomlEditOperation::Unset => unset_dotted_value(root_table, &normalized_scope, key)?,
+        ValidatedTomlEditOperation::Unset => {
+            unset_dotted_value(root_table, &normalized_scope, key)?
+        }
     };
 
     if options.should_write() {
@@ -209,6 +221,16 @@ fn edit_scoped_value_in_toml(
     }
 
     Ok(TomlEditResult { previous })
+}
+
+fn validate_dotted_key(key: &str) -> Result<(), ConfigError> {
+    if key.split('.').all(|part| part.trim().is_empty()) {
+        return Err(ConfigError::InvalidConfigKey {
+            key: key.to_string(),
+            reason: "empty key path".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn load_or_create_toml_root(path: &Path) -> Result<toml::Value, ConfigError> {

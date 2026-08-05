@@ -287,6 +287,7 @@ mod tests {
     ) -> DoctorCommandContext<'static> {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("theme.path", Vec::<String>::new());
         if let Some(builtins) = builtins {
             defaults.set("auth.visible.builtins", builtins);
         }
@@ -302,7 +303,11 @@ mod tests {
         let auth = Box::leak(Box::new(AuthState::from_resolved(resolved)));
         let config_overrides = Box::leak(Box::new(ConfigLayer::default()));
         let product_defaults = Box::leak(Box::new(ConfigLayer::default()));
-        let plugin_manager = Box::leak(Box::new(PluginManager::new(Vec::new())));
+        let plugin_manager = Box::leak(Box::new(
+            PluginManager::new(Vec::new())
+                .with_bundled_roots(false)
+                .with_default_roots(false),
+        ));
         let context = Box::leak(Box::new(RuntimeContext::new(None, TerminalKind::Cli, None)));
 
         DoctorCommandContext {
@@ -313,7 +318,7 @@ mod tests {
                 themes,
                 config_overrides,
                 product_defaults,
-                runtime_load: RuntimeLoadOptions::default(),
+                runtime_load: RuntimeLoadOptions::defaults_only(),
             },
             plugins: plugins_cmd::PluginsCommandContext {
                 context,
@@ -323,7 +328,7 @@ mod tests {
                 clients: None,
                 plugin_manager,
                 product_defaults,
-                runtime_load: RuntimeLoadOptions::default(),
+                runtime_load: RuntimeLoadOptions::defaults_only(),
             },
             ui,
             auth,

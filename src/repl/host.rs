@@ -13,6 +13,7 @@ use super::{dispatch, input, lifecycle};
 use crate::app::sink::StdIoUiSink;
 use crate::app::{AppRuntime, AppSession, AppState};
 use crate::app::{AuthState, ReplScopeStack, UiState};
+use crate::native::NativeSessionContext;
 use crate::ui::theme_catalog::ThemeCatalog;
 
 use super::history;
@@ -29,6 +30,7 @@ pub(crate) struct ReplViewContext<'a> {
     pub(crate) auth: &'a AuthState,
     pub(crate) themes: &'a ThemeCatalog,
     pub(crate) scope: &'a ReplScopeStack,
+    pub(crate) native_context: &'a NativeSessionContext,
     pub(crate) history_enabled: bool,
 }
 
@@ -40,6 +42,7 @@ impl<'a> ReplViewContext<'a> {
             auth: &runtime.auth,
             themes: &runtime.themes,
             scope: &session.scope,
+            native_context: &session.native_context,
             history_enabled: session.history_enabled,
         }
     }
@@ -239,6 +242,8 @@ mod tests {
     fn make_state() -> (AppRuntime, AppSession, AppClients) {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("repl.history.path", "/tmp/osp-repl-host-history.jsonl");
+        defaults.set("theme.path", Vec::<String>::new());
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
         let config = resolver
@@ -254,7 +259,9 @@ mod tests {
             message_verbosity: MessageLevel::Success,
             error_detail: crate::app::ErrorDetail::Terse,
             debug_verbosity: 0,
-            plugins: crate::plugin::PluginManager::new(Vec::new()),
+            plugins: crate::plugin::PluginManager::new(Vec::new())
+                .with_bundled_roots(false)
+                .with_default_roots(false),
             native_commands: crate::native::NativeCommandRegistry::default(),
             themes: crate::ui::theme_catalog::ThemeCatalog::default(),
             launch: LaunchContext::default(),
@@ -289,6 +296,8 @@ mod tests {
     fn quiet_verbosity_suppresses_repl_intro_unit() {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("repl.history.path", "/tmp/osp-repl-host-history.jsonl");
+        defaults.set("theme.path", Vec::<String>::new());
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
         let config = resolver

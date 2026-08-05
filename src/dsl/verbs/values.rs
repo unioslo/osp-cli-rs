@@ -1,14 +1,15 @@
 //! `VALUE` / `VAL` extraction logic.
 //!
-//! `VALUE` is intentionally transforming rather than filtering. It keeps the
-//! selector surface but changes matched leaves into `{value: ...}` rows.
+//! `VALUE` is intentionally transforming rather than filtering. It resolves
+//! the shared selector surface, then emits matched leaves as flat
+//! `{value: ...}` rows regardless of the input substrate.
 //!
 //! Examples:
 //! - row input `VALUE uid` becomes `[{"value": "alice"}, ...]`
-//! - semantic input `VALUE sections[0].entries[0].name` becomes a narrowed
-//!   semantic tree whose targeted leaf is wrapped as `{"value": ...}`
-//! - extracting sibling fields from the same object must keep field identity
-//!   instead of collapsing into an unlabeled array
+//! - semantic input `VALUE sections[0].entries[0].name` produces the same flat
+//!   value-row shape and deliberately discards the semantic envelope
+//! - multiple selectors emit in selector order; each selector retains
+//!   depth-first document order and duplicate values at distinct addresses
 
 use crate::core::{output_model::Group, row::Row};
 use anyhow::Result;
@@ -141,91 +142,20 @@ fn try_extract_semantic_values(root: &Value, plan: &ValuesPlan) -> Option<Value>
     }
 
     let matches = selector::collect_compiled_matches(root, plan.selectors.iter());
-
-    if matches.is_empty() {
-        return if matches!(root, Value::Array(_)) {
-            None
-        } else {
-            Some(Value::Null)
-        };
+    let mut rows = Vec::new();
+    for entry in matches {
+        match entry.value {
+            Value::Array(items) => rows.extend(items.iter().map(wrap_value_row)),
+            scalar => rows.push(wrap_value_row(&scalar)),
+        }
     }
-
-    // `VALUE` is an explicitly transforming stage. The semantic payload stays
-    // canonical JSON, but the targeted leaves become `{value: ...}` rows so
-    // downstream stages operate on a real transformed tree instead of relying
-    // on collection-only row projection.
-    let extracted = selector::transform_matches(root, &matches, false, value_to_rows);
-    let extracted = collapse_extracted_field_wrappers(extracted);
-    Some(collapse_root_value_collection(extracted))
-}
-
-fn value_to_rows(value: &Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.iter().map(wrap_value_row).collect()),
-        scalar => wrap_value_row(scalar),
-    }
+    Some(Value::Array(rows))
 }
 
 fn wrap_value_row(value: &Value) -> Value {
     let mut row = Map::new();
     row.insert("value".to_string(), value.clone());
     Value::Object(row)
-}
-
-fn collapse_extracted_field_wrappers(value: Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(
-            items
-                .into_iter()
-                .map(collapse_extracted_field_wrappers)
-                .collect(),
-        ),
-        Value::Object(map) => {
-            let collapsed = map
-                .into_iter()
-                .map(|(key, value)| (key, collapse_extracted_field_wrappers(value)))
-                .collect::<Map<_, _>>();
-
-            if collapsed.len() == 1
-                && let Some(only_value) = collapsed.values().next()
-                && is_value_row(only_value)
-            {
-                return only_value.clone();
-            }
-
-            Value::Object(collapsed)
-        }
-        scalar => scalar,
-    }
-}
-
-fn is_value_row(value: &Value) -> bool {
-    matches!(value, Value::Object(map) if map.len() == 1 && map.contains_key("value"))
-}
-
-fn collapse_root_value_collection(value: Value) -> Value {
-    let Value::Object(map) = value else {
-        return value;
-    };
-    if map.len() != 1 {
-        return Value::Object(map);
-    }
-
-    let mut entries = map.into_iter();
-    let Some((only_key, only_value)) = entries.next() else {
-        return Value::Object(Map::new());
-    };
-    // `VALUE` is fundamentally a row extractor. When the semantic transform
-    // narrows the whole payload down to one extracted collection like
-    // `{"commands": [{"value": ...}]}`, collapse that wrapper so downstream
-    // stages see the value rows directly instead of a synthetic one-key shell.
-    if matches!(&only_value, Value::Array(items) if items.iter().all(is_value_row)) {
-        only_value
-    } else {
-        let mut restored = Map::new();
-        restored.insert(only_key, only_value);
-        Value::Object(restored)
-    }
 }
 
 #[cfg(test)]
@@ -339,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_addressed_nested_values_while_preserving_section_shell() {
+    fn extracts_addressed_nested_values_as_flat_rows() {
         let plan = compile("sections[0].entries[0].name").expect("plan should compile");
         let extracted = apply_value_with_plan(
             json!({
@@ -362,23 +292,14 @@ mod tests {
 
         assert_eq!(
             extracted,
-            json!({
-                "sections": [
-                    {
-                        "title": "Commands",
-                        "kind": "commands",
-                        "paragraphs": ["pick one"],
-                        "entries": [
-                            {"value": "deploy"}
-                        ]
-                    }
-                ]
-            })
+            json!([
+                {"value": "deploy"}
+            ])
         );
     }
 
     #[test]
-    fn missing_semantic_value_path_returns_null() {
+    fn missing_semantic_value_path_returns_no_rows() {
         let plan = compile("missing.path").expect("plan should compile");
         let extracted = apply_value_with_plan(
             json!({
@@ -388,6 +309,6 @@ mod tests {
         )
         .expect("semantic value extraction should succeed");
 
-        assert_eq!(extracted, serde_json::Value::Null);
+        assert_eq!(extracted, json!([]));
     }
 }

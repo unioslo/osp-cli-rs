@@ -1,7 +1,8 @@
 use super::{
     ReplIntroStyle, build_repl_appearance, build_repl_intro_payload, build_repl_prompt,
     build_repl_prompt_right_renderer, render_prompt_template, render_repl_command_overview,
-    render_repl_intro, render_repl_prompt_right_for_test, theme_display_name,
+    render_repl_intro, render_repl_prompt_right_for_test,
+    render_repl_prompt_right_for_test_with_context, theme_display_name,
 };
 mod output_support {
     include!(concat!(
@@ -35,6 +36,11 @@ const FULL_INTRO_TEMPLATE_FIXTURE: &str = include_str!(concat!(
 fn make_state(entries: &[(&str, &str)]) -> AppState {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set(
+        "repl.history.path",
+        "/tmp/osp-repl-presentation-history.jsonl",
+    );
+    defaults.set("theme.path", Vec::<String>::new());
     let mut session = ConfigLayer::default();
     for (key, value) in entries {
         session.set(*key, *value);
@@ -58,7 +64,9 @@ fn make_state(entries: &[(&str, &str)]) -> AppState {
         message_verbosity: MessageLevel::Success,
         error_detail: crate::app::ErrorDetail::Terse,
         debug_verbosity: 0,
-        plugins: PluginManager::new(Vec::new()),
+        plugins: PluginManager::new(Vec::new())
+            .with_bundled_roots(false)
+            .with_default_roots(false),
         native_commands: crate::native::NativeCommandRegistry::default(),
         themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),
@@ -466,6 +474,34 @@ fn repl_prompt_variants_render_scope_indicator_and_prompt_right_unit() {
 }
 
 #[test]
+fn repl_prompt_right_renders_native_session_context_unit() {
+    let resolved = rich_prompt_right_settings();
+    let native_context = crate::native::NativeSessionContext::default();
+    native_context.set_prompt_value("siteadmin.netgroup", "ng", "uio-drift");
+    native_context.set_prompt_value("siteadmin.contact", "contact", "drift-team");
+
+    let rendered = render_repl_prompt_right_for_test_with_context(
+        &resolved,
+        None,
+        true,
+        &DebugTimingState::default(),
+        &native_context,
+    );
+    let plain = output_support::strip_ansi(&rendered);
+    assert!(plain.contains("contact:drift-team"));
+    assert!(plain.contains("ng:uio-drift"));
+
+    let templated = render_repl_prompt_right_for_test_with_context(
+        &resolved,
+        Some("{context}"),
+        true,
+        &DebugTimingState::default(),
+        &native_context,
+    );
+    assert_eq!(output_support::strip_ansi(&templated), plain);
+}
+
+#[test]
 fn theme_display_name_and_prompt_template_formatting_unit() {
     for (slug, expected) in [
         ("rose-pine-moon", "Rose Pine Moon"),
@@ -823,6 +859,11 @@ fn intro_template_parser_flattens_repeated_array_data_blocks_unit() {
 fn intro_template_expansion_handles_scalars_sensitive_keys_and_malformed_placeholders() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set(
+        "repl.history.path",
+        "/tmp/osp-repl-presentation-history.jsonl",
+    );
+    defaults.set("theme.path", Vec::<String>::new());
     let mut session = ConfigLayer::default();
     session.set("extensions.demo.enabled", true);
     session.set("extensions.demo.count", 42_i64);
@@ -849,7 +890,9 @@ fn intro_template_expansion_handles_scalars_sensitive_keys_and_malformed_placeho
         message_verbosity: MessageLevel::Success,
         error_detail: crate::app::ErrorDetail::Terse,
         debug_verbosity: 0,
-        plugins: PluginManager::new(Vec::new()),
+        plugins: PluginManager::new(Vec::new())
+            .with_bundled_roots(false)
+            .with_default_roots(false),
         native_commands: crate::native::NativeCommandRegistry::default(),
         themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),

@@ -129,6 +129,7 @@ pub struct Cli {
     #[arg(long = "presentation", alias = "app-style", global = true)]
     presentation: Option<PresentationArg>,
 
+    /// Disable colors and pleasantries (equivalent to `--presentation austere`).
     #[arg(
         long = "gammel-og-bitter",
         conflicts_with = "presentation",
@@ -696,7 +697,14 @@ mod tests {
         append_appearance_overrides, parse_inline_command_tokens,
     };
     use crate::config::{ConfigLayer, ConfigValue};
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn legacy_austere_alias_has_user_facing_help_unit() {
+        let help = Cli::command().render_long_help().to_string();
+
+        assert!(help.contains("Disable colors and pleasantries"));
+    }
 
     #[test]
     fn parse_inline_command_tokens_accepts_builtin_and_external_commands_unit() {

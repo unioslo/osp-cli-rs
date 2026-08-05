@@ -107,8 +107,22 @@ Rules:
 - `data` is always present (empty object/array is allowed).
 - `messages` is optional and defaults to an empty list.
 - `meta.columns` controls column order when the payload is rendered as a table.
+- With `meta.row_path`, column entries may be dotted paths into each row, such
+  as `provider.name` or `compute.display`.
+- For object-shaped `data`, `meta.preserve_json_document=true` plus
+  `meta.columns` creates a curated unstaged key/value record. Dotted paths and
+  `meta.column_labels` work there too, while JSON and DSL retain the complete
+  object.
+- `meta.column_labels` optionally supplies display headings aligned
+  positionally with `meta.columns`. It does not rename canonical JSON fields.
 - `meta.column_align` is optional and follows `meta.columns` positionally.
   Allowed values: `default | left | center | right`.
+- `meta.row_path` is optional. It names one top-level array field in `data`
+  whose records are used for unstaged human output. JSON output and DSL stages
+  continue to use the complete canonical `data` document.
+- `meta.preserve_json_document` is optional and defaults to `false`. Set it to
+  `true` when `data` is a document-shaped machine contract that JSON output
+  and structural pipes must preserve rather than project into generic rows.
 - Current `osp` table renderers honor these alignment hints in terminal and
   markdown table output.
 

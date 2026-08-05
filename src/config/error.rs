@@ -89,6 +89,13 @@ pub enum ConfigError {
         /// Observed Unix file mode.
         mode: u32,
     },
+    /// A selected persistent secrets backend failed.
+    SecretBackend {
+        /// Stable backend name.
+        backend: String,
+        /// Backend-specific failure without secret contents.
+        reason: String,
+    },
     /// TOML parsing failed before semantic validation.
     TomlParse(TomlParseDiagnostic),
     /// The parsed TOML document root was not a table.
@@ -203,6 +210,13 @@ pub enum ConfigError {
         /// Actual type name observed during adaptation.
         actual: String,
     },
+    /// A typed config value violated a schema-owned value constraint.
+    InvalidConfigValue {
+        /// Key whose value was rejected.
+        key: String,
+        /// Validation failure description.
+        reason: String,
+    },
     /// A string value was outside the schema allow-list.
     InvalidEnumValue {
         /// Key whose value was rejected.
@@ -232,6 +246,9 @@ impl Display for ConfigError {
                     "insecure permissions on secrets file {path}: mode {:o}, expected 600",
                     mode
                 )
+            }
+            ConfigError::SecretBackend { backend, reason } => {
+                write!(f, "{backend} secrets backend failed: {reason}")
             }
             ConfigError::TomlParse(diagnostic) => {
                 write!(f, "failed to parse TOML: {}", diagnostic.message())
@@ -318,6 +335,9 @@ impl Display for ConfigError {
                     f,
                     "invalid type for key {key}: expected {expected}, got {actual}"
                 )
+            }
+            ConfigError::InvalidConfigValue { key, reason } => {
+                write!(f, "invalid value for key {key}: {reason}")
             }
             ConfigError::InvalidEnumValue {
                 key,

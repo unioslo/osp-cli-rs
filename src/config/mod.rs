@@ -21,6 +21,7 @@
 //!
 //! let mut defaults = ConfigLayer::default();
 //! defaults.set("profile.default", "default");
+//! defaults.set("theme.path", Vec::<String>::new());
 //! defaults.set("theme.name", "dracula");
 //!
 //! let resolved = LoaderPipeline::new(StaticLayerLoader::new(defaults))
@@ -118,6 +119,7 @@ mod interpolate;
 mod loader;
 mod resolver;
 mod runtime;
+mod secrets;
 mod selector;
 mod store;
 
@@ -127,4 +129,5 @@ pub use error::*;
 pub use loader::*;
 pub use resolver::*;
 pub use runtime::*;
+pub use secrets::*;
 pub use store::*;

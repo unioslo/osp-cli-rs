@@ -45,6 +45,7 @@ fn cli_scan_and_runtime_load_options_strip_invocation_flags_unit() {
 fn invocation_ui_and_format_hints_overlay_runtime_defaults_unit() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
     let config = resolver

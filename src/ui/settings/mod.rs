@@ -298,7 +298,7 @@ impl Default for RenderSettings {
             grid_padding: 4,
             grid_columns: None,
             column_weight: 3,
-            table_overflow: TableOverflow::Clip,
+            table_overflow: TableOverflow::Wrap,
             table_border: TableBorderStyle::Square,
             style_overrides: style::StyleOverrides::default(),
             help_chrome: HelpChromeSettings::default(),
@@ -1054,6 +1054,7 @@ mod tests {
     ) -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("theme.path", Vec::<String>::new());
         for (key, value) in entries {
             defaults.set(*key, *value);
         }
@@ -1075,6 +1076,7 @@ mod tests {
     ) -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("theme.path", Vec::<String>::new());
         for (key, value) in defaults_entries {
             defaults.set(*key, *value);
         }

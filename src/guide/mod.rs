@@ -443,6 +443,7 @@ impl GuideView {
                 );
                 view.is_semantically_valid().then_some(view)
             }
+            OutputDocumentKind::Json => None,
         }
     }
 

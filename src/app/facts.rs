@@ -108,11 +108,14 @@ pub(in crate::app) fn plugin_dispatch_context_for(
     )
 }
 
-pub(crate) fn runtime_hints_for_runtime(runtime: &AppRuntime) -> RuntimeHints {
+pub(in crate::app) fn runtime_hints_for_invocation(
+    runtime: &AppRuntime,
+    invocation: &ResolvedInvocation,
+) -> RuntimeHints {
     runtime_hints(
         &runtime.context,
         runtime.config.resolved().active_profile(),
-        &runtime.ui,
+        &invocation.ui,
     )
 }
 

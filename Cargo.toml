@@ -41,6 +41,7 @@ comfy-table = { version = "7.1", default-features = false, features = ["custom_s
 dialoguer = "0.11"
 directories = "6.0.0"
 indicatif = "0.17"
+keyring = { version = "=4.1.4", default-features = false, features = ["v1"] }
 jaq-core = "3.0.0-gamma"
 jaq-json = { version = "2.0.0-gamma", features = ["serde"] }
 jaq-std = "3.0.0-gamma"

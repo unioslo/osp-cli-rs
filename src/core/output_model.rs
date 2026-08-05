@@ -75,6 +75,8 @@ pub enum RenderRecommendation {
 pub enum OutputDocumentKind {
     /// Structured guide/help/intro payload.
     Guide,
+    /// Canonical JSON document supplied by a command implementation.
+    Json,
 }
 
 /// Optional semantic document attached to rendered output.

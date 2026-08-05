@@ -7,7 +7,7 @@
 //! This layer should stay about rendering only. Format selection and semantic
 //! lowering happen earlier in the UI pipeline.
 
-mod grid;
+pub(crate) mod grid;
 mod guide_entries;
 mod json;
 mod key_value;

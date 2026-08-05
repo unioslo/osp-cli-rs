@@ -12,11 +12,27 @@ use crate::dsl::verbs::{
 /// Stages may still reuse existing row/group operators for local tabular
 /// collections, but the executor itself no longer treats those projections as
 /// the canonical substrate.
+#[cfg(test)]
 pub(crate) fn apply_stage(value: Value, stage: &CompiledStage) -> Result<Value> {
     if let Some(plan) = stage.quick_plan() {
         return quick::apply_value_with_plan(value, plan);
     }
 
+    apply_non_quick_stage(value, stage)
+}
+
+pub(crate) fn apply_stage_preserving_matching_rows(
+    value: Value,
+    stage: &CompiledStage,
+) -> Result<Value> {
+    if let Some(plan) = stage.quick_plan() {
+        return quick::apply_value_with_plan_preserving_matching_rows(value, plan);
+    }
+
+    apply_non_quick_stage(value, stage)
+}
+
+fn apply_non_quick_stage(value: Value, stage: &CompiledStage) -> Result<Value> {
     match stage {
         CompiledStage::Filter(plan) => filter::apply_value_with_plan(value, plan),
         CompiledStage::Project(plan) => project::apply_value_with_plan(value, plan),

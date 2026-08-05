@@ -857,6 +857,7 @@ fn contract_root_menu_refresh_keeps_the_inserted_command_visible_and_selected_un
     );
 }
 
+#[cfg_attr(miri, ignore = "completion trace filesystem integration test")]
 #[test]
 fn trace_paths_record_complete_cycle_and_accept_events() {
     let _guard = env_lock().lock().expect("env lock should not be poisoned");

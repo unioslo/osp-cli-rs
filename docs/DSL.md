@@ -92,7 +92,8 @@ osp help | VALUE commands[].name
 - Selector-style stages try to preserve structure when they can.
 - Collection-style stages intentionally reshape row/group data.
 - Bare text like `doctor` is quick search over keys and values.
-- Path-shaped selectors like `commands[].name` prefer exact path lookup.
+- Path-shaped selectors like `commands.name` use structural path lookup and
+  implicitly descend arrays.
 - On multi-row data, positive quick search usually acts like keep/drop
   selection.
 - On a single row or document, positive quick search may narrow the result down
@@ -103,8 +104,9 @@ osp help | VALUE commands[].name
 In practice:
 
 - `name` is permissive.
-- `metadata.owner` first tries that exact path.
-- `members[].uid` means fan out the `members` array and read each `uid`.
+- `metadata.owner` selects that structural path.
+- `members.uid` and `members[].uid` both fan out the `members` array and read
+  each `uid`.
 - If a dotted/indexed quick token does not resolve as a path, quick search can
   still fall back to matching visible row text.
 
@@ -346,6 +348,11 @@ Output:
   ]
 }
 ```
+
+The deepest array member addressed by the predicate is the filtering unit. The
+surviving member stays complete; `F commands.name=doctor` keeps both `name` and
+`short_help`. Fields and collections outside that addressed array are left
+unchanged.
 
 Supported comparison operators:
 
@@ -924,6 +931,11 @@ bit-for-bit promise of external `jq`.
 
 `VAL` and `VALUE` are aliases.
 
+`VALUE` is an extractor: row-shaped and document-shaped inputs both produce
+flat `{value: ...}` rows. It does not preserve a document envelope. Multiple
+selectors emit in selector order, while matches within each selector retain
+depth-first document order and duplicates from distinct addresses.
+
 Pipeline:
 
 ```text
@@ -988,7 +1000,8 @@ Quoted term lists behave the same in `P`, `VAL`, and `VALUE`:
 Path syntax supports:
 
 - dotted fields like `metadata.owner`
-- fanout like `members[]`
+- implicit array descent like `members.name`
+- explicit fanout like `members[].name`
 - indexes like `members[0]`
 - negative indexes like `members[-1]`
 - slices like `members[:2]`
@@ -996,9 +1009,23 @@ Path syntax supports:
 Important rule:
 
 - Bare tokens are permissive descendant selectors.
-- Dotted or indexed selectors prefer exact path lookup first.
+- Dotted or indexed selectors use structural path lookup.
+- When a named segment reaches an array, it visits every member in document
+  order. `members.name` and `members[].name` are therefore equivalent.
+- Use indexes or slices when only particular members should participate.
+- Equal values at different addresses remain separate results.
 
 That means `owner` and `metadata.owner` are intentionally different surfaces.
+
+For example, both of these select every interface name:
+
+```text
+| VALUE ifaces.name
+| VALUE ifaces[].name
+```
+
+Use `VALUE ifaces[0].name` for only the first interface on each input row, or
+`VALUE ifaces[1:].name` for every interface after the first.
 
 ## Parsing Rules
 

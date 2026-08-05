@@ -276,6 +276,8 @@ mod tests {
     fn make_config() -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("repl.history.path", "/tmp/osp-repl-input-history.jsonl");
+        defaults.set("theme.path", Vec::<String>::new());
 
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);

@@ -1,3 +1,4 @@
+#![cfg(not(miri))]
 #![allow(missing_docs)]
 
 #[path = "contracts/cli_ldap.rs"]
@@ -32,6 +33,9 @@ mod error_reporting;
 
 #[path = "contracts/theme_commands.rs"]
 mod theme_commands;
+
+#[path = "contracts/ui_rendering.rs"]
+mod ui_rendering;
 
 #[path = "contracts/version_commands.rs"]
 mod version_commands;

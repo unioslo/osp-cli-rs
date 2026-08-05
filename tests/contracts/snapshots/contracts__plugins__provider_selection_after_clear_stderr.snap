@@ -1,9 +1,10 @@
 ---
 source: tests/contracts/plugins/provider_selection.rs
-assertion_line: 136
 expression: sanitized
 ---
 - Errors ---------------------------------------------------------------
-  command shared requires provider selection; available: alpha-provider (env), beta-provider (env); use --plugin-provider <plugin-id> or plugins select-provider shared <plugin-id>
-More: run again with -v, -vv, or -vvv for more detail
+  command shared requires provider selection; available: alpha-provider
+  (env), beta-provider (env); use --plugin-provider <plugin-id> or
+  plugins select-provider shared <plugin-id>
+  More: run again with -v, -vv, or -vvv for more detail
 ------------------------------------------------------------------------

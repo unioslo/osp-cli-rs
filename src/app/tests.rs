@@ -96,6 +96,8 @@ fn make_completion_state_with_entries_and_native(
     if let Some(allowlist) = auth_visible_builtins {
         defaults.set("auth.visible.builtins", allowlist);
     }
+    defaults.set("repl.history.path", "/tmp/osp-test-repl.history");
+    defaults.set("theme.path", Vec::<String>::new());
     for (key, value) in entries {
         defaults.set(*key, *value);
     }
@@ -112,18 +114,25 @@ fn make_completion_state_with_entries_and_native(
 
     let settings = RenderSettings::test_plain(OutputFormat::Json);
 
-    AppState::new(AppStateInit {
+    let mut state = AppState::new(AppStateInit {
         context: RuntimeContext::new(None, TerminalKind::Repl, None),
         config,
         render_settings: settings,
         message_verbosity: MessageLevel::Success,
         error_detail: crate::app::ErrorDetail::Terse,
         debug_verbosity: 0,
-        plugins: PluginManager::new(Vec::new()),
+        plugins: PluginManager::new(Vec::new())
+            .with_bundled_roots(false)
+            .with_default_roots(false),
         native_commands,
         themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),
-    })
+    });
+    state
+        .session
+        .config_overrides
+        .set("theme.path", Vec::<String>::new());
+    state
 }
 
 struct TestNativeCommand;
@@ -140,6 +149,7 @@ impl NativeCommand for TestNativeCommand {
             visibility: Some(DescribeVisibilityModeV1::Public),
             required_capabilities: Vec::new(),
             feature_flags: Vec::new(),
+            ..DescribeCommandAuthV1::default()
         })
     }
 
@@ -150,6 +160,7 @@ impl NativeCommand for TestNativeCommand {
             visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
             required_capabilities: vec!["ldap.user.read".to_string()],
             feature_flags: Vec::new(),
+            ..DescribeCommandAuthV1::default()
         });
         describe
     }
@@ -175,6 +186,9 @@ impl NativeCommand for TestNativeCommand {
                 format_hint: Some("table".to_string()),
                 columns: Some(vec!["command".to_string(), "args".to_string()]),
                 column_align: Vec::new(),
+                column_labels: Vec::new(),
+                row_path: None,
+                preserve_json_document: false,
             },
         })))
     }
@@ -187,6 +201,7 @@ fn test_native_registry() -> NativeCommandRegistry {
 fn test_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
     for (key, value) in entries {
         defaults.set(*key, *value);
     }
@@ -328,13 +343,11 @@ fn layer_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue>
 
 #[cfg(unix)]
 fn make_test_history(state: &mut AppState) -> SharedHistory {
-    let history_dir = make_temp_dir("osp-cli-test-history");
-    let history_path = history_dir.join("history.jsonl");
     let history_shell = state.session.history_shell.clone();
     state.sync_history_shell_context();
 
     let history_config = HistoryConfig {
-        path: Some(history_path),
+        path: miri_history_path(),
         max_entries: 128,
         enabled: true,
         dedupe: true,
@@ -360,6 +373,11 @@ fn make_test_history(state: &mut AppState) -> SharedHistory {
 fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set(
+        "repl.history.path",
+        "/tmp/osp-repl-runtime-tests-history.jsonl",
+    );
+    defaults.set("theme.path", Vec::<String>::new());
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
     let config = resolver
@@ -368,29 +386,56 @@ fn make_test_state(plugin_dirs: Vec<std::path::PathBuf>) -> AppState {
 
     let settings = RenderSettings::test_plain(OutputFormat::Json);
 
-    let config_root = make_temp_dir("osp-cli-test-config");
-    let cache_root = make_temp_dir("osp-cli-test-cache");
+    let config_root = miri_root_dir("osp-cli-test-config");
+    let cache_root = miri_root_dir("osp-cli-test-cache");
     let launch = LaunchContext::default()
         .with_plugin_dirs(plugin_dirs.clone())
-        .with_config_root(Some(config_root.to_path_buf()))
-        .with_cache_root(Some(cache_root.to_path_buf()))
-        .with_runtime_load(RuntimeLoadOptions::default());
+        .with_config_root(config_root.clone())
+        .with_cache_root(cache_root.clone())
+        .with_runtime_load(if cfg!(miri) {
+            RuntimeLoadOptions::defaults_only()
+        } else {
+            RuntimeLoadOptions::default()
+        });
 
-    AppState::new(AppStateInit {
+    let mut state = AppState::new(AppStateInit {
         context: RuntimeContext::new(None, TerminalKind::Repl, None),
         config,
         render_settings: settings,
         message_verbosity: MessageLevel::Success,
         error_detail: crate::app::ErrorDetail::Terse,
         debug_verbosity: 0,
-        plugins: PluginManager::new(plugin_dirs).with_roots(
-            Some(config_root.to_path_buf()),
-            Some(cache_root.to_path_buf()),
-        ),
+        plugins: PluginManager::new(plugin_dirs)
+            .with_roots(config_root, cache_root)
+            .with_bundled_roots(!cfg!(miri))
+            .with_default_roots(!cfg!(miri)),
         native_commands: crate::native::NativeCommandRegistry::default(),
         themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch,
-    })
+    });
+    state
+        .session
+        .config_overrides
+        .set("theme.path", Vec::<String>::new());
+    state
+}
+
+#[cfg(unix)]
+fn miri_history_path() -> Option<std::path::PathBuf> {
+    if cfg!(miri) {
+        None
+    } else {
+        Some(make_temp_dir("osp-cli-test-history").join("history.jsonl"))
+    }
+}
+
+#[cfg(unix)]
+fn miri_root_dir(prefix: &str) -> Option<std::path::PathBuf> {
+    if cfg!(miri) {
+        None
+    } else {
+        Some(make_temp_dir(prefix).to_path_buf())
+    }
 }
 
 #[cfg(unix)]

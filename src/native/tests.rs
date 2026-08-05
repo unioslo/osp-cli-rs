@@ -1,4 +1,7 @@
-use super::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
+use super::{
+    NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
+    NativeProgressEvent, NativeProgressSink,
+};
 use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions, ResolvedConfig};
 use crate::core::command_policy::CommandPath;
 use crate::core::plugin::{
@@ -8,10 +11,12 @@ use crate::core::plugin::{
 use crate::core::runtime::RuntimeHints;
 use clap::Command;
 use serde_json::json;
+use std::sync::Mutex;
 
 fn resolved_config() -> ResolvedConfig {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
     resolver
@@ -21,10 +26,7 @@ fn resolved_config() -> ResolvedConfig {
 
 fn native_context() -> NativeCommandContext<'static> {
     let config = Box::leak(Box::new(resolved_config()));
-    NativeCommandContext {
-        config,
-        runtime_hints: RuntimeHints::default(),
-    }
+    NativeCommandContext::new(config, RuntimeHints::default())
 }
 
 struct TestNativeCommand;
@@ -41,6 +43,7 @@ impl NativeCommand for TestNativeCommand {
             visibility: Some(DescribeVisibilityModeV1::Public),
             required_capabilities: Vec::new(),
             feature_flags: vec!["uio".to_string()],
+            ..DescribeCommandAuthV1::default()
         })
     }
 
@@ -137,6 +140,41 @@ fn registered_command_executes_through_registry_unit() {
     assert_eq!(response.data, json!([{ "args": ["user"] }]));
 }
 
+#[derive(Default)]
+struct CapturingProgressSink {
+    events: Mutex<Vec<serde_json::Value>>,
+}
+
+impl NativeProgressSink for CapturingProgressSink {
+    fn emit(&self, event: NativeProgressEvent) -> anyhow::Result<()> {
+        self.events.lock().expect("progress lock").push(event.data);
+        Ok(())
+    }
+}
+
+#[test]
+fn native_context_emits_structured_progress_to_the_host_boundary_unit() {
+    let config = resolved_config();
+    let sink = CapturingProgressSink::default();
+    let context =
+        NativeCommandContext::new(&config, RuntimeHints::default()).with_progress_sink(&sink);
+
+    context
+        .emit_progress(NativeProgressEvent::new(json!({
+            "status": {"name": "running", "code": 160},
+            "message": "Creating virtual machine"
+        })))
+        .expect("progress emission should succeed");
+
+    assert_eq!(
+        *sink.events.lock().expect("progress lock"),
+        vec![json!({
+            "status": {"name": "running", "code": 160},
+            "message": "Creating virtual machine"
+        })]
+    );
+}
+
 struct TestNativeCommandWithNestedAuth;
 
 impl NativeCommand for TestNativeCommandWithNestedAuth {
@@ -156,11 +194,13 @@ impl NativeCommand for TestNativeCommandWithNestedAuth {
             visibility: Some(DescribeVisibilityModeV1::Public),
             required_capabilities: Vec::new(),
             feature_flags: vec!["uio".to_string()],
+            ..DescribeCommandAuthV1::default()
         });
         root.subcommands[0].auth = Some(DescribeCommandAuthV1 {
             visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
             required_capabilities: vec!["ldap.user.read".to_string()],
             feature_flags: Vec::new(),
+            ..DescribeCommandAuthV1::default()
         });
         root
     }

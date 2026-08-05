@@ -213,6 +213,7 @@ fn search_respects_filters_direction_bounds_and_skip_logic() {
     );
 }
 
+#[cfg_attr(miri, ignore = "history store filesystem integration test")]
 #[test]
 fn persisted_records_skip_invalid_lines_and_trim_to_capacity() {
     let temp_dir = make_temp_dir("osp-repl-history-load");
@@ -243,6 +244,7 @@ fn persisted_records_skip_invalid_lines_and_trim_to_capacity() {
     assert_eq!(entries[0].command, "second");
 }
 
+#[cfg_attr(miri, ignore = "history store filesystem integration test")]
 #[test]
 fn shared_history_supports_save_load_prune_clear_and_sync() {
     let temp_dir = make_temp_dir("osp-repl-shared-history");

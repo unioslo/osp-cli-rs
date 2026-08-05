@@ -9,6 +9,10 @@ fn run_osp(args: &[&str], config_toml: Option<&str>) -> std::process::Output {
     run_osp_with_plugin_path(args, config_toml, None)
 }
 
+fn normalized_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn run_osp_with_plugin_path(
     args: &[&str],
     config_toml: Option<&str>,
@@ -99,9 +103,13 @@ ui.message.verbosity = "definitely-invalid"
 
     assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("failed to resolve initial config for startup"));
-    assert!(stderr.contains("config resolution failed"));
-    assert!(stderr.contains("invalid value for key ui.message.verbosity"));
+    let normalized = normalized_whitespace(&stderr);
+    assert!(normalized.contains("failed to resolve initial config for startup"));
+    assert!(normalized.contains("config resolution failed"));
+    assert!(
+        normalized.contains("invalid value for key ui.message.verbosity"),
+        "{normalized}"
+    );
     assert!(!stderr.contains("Hint:"));
 }
 
@@ -119,9 +127,10 @@ theme.name = "missing-theme"
 
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let normalized = normalized_whitespace(&stderr);
     assert!(stderr.contains("failed to derive host runtime inputs for startup"));
     assert!(stderr.contains("unknown theme: missing-theme"));
-    assert!(stderr.contains("Stack backtrace"));
+    assert!(normalized.contains("Stack backtrace"));
     assert!(stderr.contains("\u{1b}["));
 }
 
@@ -168,9 +177,10 @@ fn debug_toml_parse_failure_shows_snippet_without_stacktrace_contract() {
 
     assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("failed to parse TOML"));
-    assert!(stderr.contains("Begin snippet"));
-    assert!(stderr.contains("invalid TOML starts here"));
+    let normalized = normalized_whitespace(&stderr);
+    assert!(normalized.contains("failed to parse TOML"));
+    assert!(normalized.contains("Begin snippet"));
+    assert!(normalized.contains("invalid TOML starts here"));
     assert!(!stderr.contains("Stack backtrace"));
 }
 
@@ -183,8 +193,9 @@ fn forensic_toml_parse_failure_shows_snippet_and_stacktrace_contract() {
 
     assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("failed to parse TOML"));
-    assert!(stderr.contains("Begin snippet"));
-    assert!(stderr.contains("invalid TOML starts here"));
-    assert!(stderr.contains("Stack backtrace"));
+    let normalized = normalized_whitespace(&stderr);
+    assert!(normalized.contains("failed to parse TOML"));
+    assert!(normalized.contains("Begin snippet"));
+    assert!(normalized.contains("invalid TOML starts here"));
+    assert!(normalized.contains("Stack backtrace"));
 }

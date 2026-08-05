@@ -51,7 +51,10 @@ use serde::{Deserialize, Serialize};
 use crate::core::command_def::{
     ArgDef, CommandDef, CommandPolicyDef, FlagDef, ValueChoice, ValueKind,
 };
-use crate::core::command_policy::{CommandPath, CommandPolicy, VisibilityMode};
+use crate::core::command_policy::{
+    AuthStrength, CommandPath, CommandPolicy, CredentialRequirement, SessionRequirements,
+    VisibilityMode,
+};
 
 /// Current plugin wire protocol version understood by this crate.
 pub const PLUGIN_PROTOCOL_V1: u32 = 1;
@@ -113,6 +116,176 @@ pub struct DescribeCommandAuthV1 {
     /// Feature flags that must be enabled for the command.
     #[serde(default)]
     pub feature_flags: Vec<String>,
+    /// Session-state requirements that gate command visibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_session: Option<DescribeSessionRequirementsV1>,
+    /// Session-state requirements that gate command execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_session: Option<DescribeSessionRequirementsV1>,
+}
+
+/// Wire-format auth strength used by plugin metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DescribeAuthStrengthV1 {
+    /// Standard authenticated session strength.
+    Basic,
+    /// Stronger authentication such as MFA-backed login.
+    Strong,
+}
+
+impl DescribeAuthStrengthV1 {
+    fn as_auth_strength(self) -> AuthStrength {
+        match self {
+            Self::Basic => AuthStrength::Basic,
+            Self::Strong => AuthStrength::Strong,
+        }
+    }
+
+    fn from_auth_strength(value: AuthStrength) -> Self {
+        match value {
+            AuthStrength::Basic => Self::Basic,
+            AuthStrength::Strong => Self::Strong,
+        }
+    }
+
+    fn as_label(self) -> &'static str {
+        match self {
+            Self::Basic => "basic",
+            Self::Strong => "strong",
+        }
+    }
+}
+
+/// Wire-format credential requirement used by plugin metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum DescribeCredentialRequirementV1 {
+    /// Require that the named credential exists.
+    Present {
+        /// Credential or token namespace, such as `osp` or `mreg`.
+        service: String,
+    },
+    /// Require that the named credential exists and is currently valid.
+    Valid {
+        /// Credential or token namespace, such as `osp` or `mreg`.
+        service: String,
+    },
+    /// Require that the named credential exists, is valid, and has at least
+    /// the specified remaining lifetime.
+    Fresh {
+        /// Credential or token namespace, such as `osp` or `mreg`.
+        service: String,
+        /// Minimum remaining lifetime required for the command.
+        min_ttl_seconds: u64,
+    },
+}
+
+impl DescribeCredentialRequirementV1 {
+    fn as_command_requirement(&self) -> CredentialRequirement {
+        match self {
+            Self::Present { service } => CredentialRequirement::present(service.clone()),
+            Self::Valid { service } => CredentialRequirement::valid(service.clone()),
+            Self::Fresh {
+                service,
+                min_ttl_seconds,
+            } => CredentialRequirement::fresh(service.clone(), *min_ttl_seconds),
+        }
+    }
+
+    fn from_command_requirement(requirement: &CredentialRequirement) -> Self {
+        match requirement {
+            CredentialRequirement::Present { service } => Self::Present {
+                service: service.clone(),
+            },
+            CredentialRequirement::Valid { service } => Self::Valid {
+                service: service.clone(),
+            },
+            CredentialRequirement::Fresh {
+                service,
+                min_ttl_seconds,
+            } => Self::Fresh {
+                service: service.clone(),
+                min_ttl_seconds: *min_ttl_seconds,
+            },
+        }
+    }
+
+    fn hint(&self) -> String {
+        match self {
+            Self::Present { service } => format!("token: {service}"),
+            Self::Valid { service } => format!("token: {service} valid"),
+            Self::Fresh {
+                service,
+                min_ttl_seconds,
+            } => format!("token: {service} fresh({min_ttl_seconds}s)"),
+        }
+    }
+
+    fn service(&self) -> &str {
+        match self {
+            Self::Present { service } | Self::Valid { service } | Self::Fresh { service, .. } => {
+                service
+            }
+        }
+    }
+}
+
+/// Wire-format session requirements attached to a command.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DescribeSessionRequirementsV1 {
+    /// Minimum auth strength required, when any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_strength: Option<DescribeAuthStrengthV1>,
+    /// Credential or token requirements that must be satisfied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<DescribeCredentialRequirementV1>,
+}
+
+impl DescribeSessionRequirementsV1 {
+    fn is_empty(&self) -> bool {
+        self.auth_strength.is_none() && self.credentials.is_empty()
+    }
+
+    fn hint(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(auth_strength) = self.auth_strength {
+            parts.push(format!("auth: {}", auth_strength.as_label()));
+        }
+        parts.extend(
+            self.credentials
+                .iter()
+                .map(DescribeCredentialRequirementV1::hint),
+        );
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+
+    fn as_command_requirements(&self) -> SessionRequirements {
+        SessionRequirements {
+            auth_strength: self
+                .auth_strength
+                .map(DescribeAuthStrengthV1::as_auth_strength),
+            credentials: self
+                .credentials
+                .iter()
+                .map(DescribeCredentialRequirementV1::as_command_requirement)
+                .collect(),
+        }
+    }
+
+    fn from_command_requirements(requirements: &SessionRequirements) -> Option<Self> {
+        let session = Self {
+            auth_strength: requirements
+                .auth_strength
+                .map(DescribeAuthStrengthV1::from_auth_strength),
+            credentials: requirements
+                .credentials
+                .iter()
+                .map(DescribeCredentialRequirementV1::from_command_requirement)
+                .collect(),
+        };
+        (!session.is_empty()).then_some(session)
+    }
 }
 
 /// Wire-format visibility mode used by plugin metadata.
@@ -180,17 +353,26 @@ impl DescribeCommandAuthV1 {
     /// # Examples
     ///
     /// ```
-    /// use osp_cli::core::plugin::{DescribeCommandAuthV1, DescribeVisibilityModeV1};
+    /// use osp_cli::core::plugin::{
+    ///     DescribeAuthStrengthV1, DescribeCommandAuthV1,
+    ///     DescribeCredentialRequirementV1, DescribeSessionRequirementsV1,
+    ///     DescribeVisibilityModeV1,
+    /// };
     ///
     /// let auth = DescribeCommandAuthV1 {
     ///     visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
     ///     required_capabilities: vec!["ldap.write".to_string()],
     ///     feature_flags: vec!["write-mode".to_string()],
+    ///     run_session: Some(DescribeSessionRequirementsV1 {
+    ///         auth_strength: Some(DescribeAuthStrengthV1::Strong),
+    ///         credentials: vec![DescribeCredentialRequirementV1::valid("osp")],
+    ///     }),
+    ///     ..DescribeCommandAuthV1::default()
     /// };
     ///
     /// assert_eq!(
     ///     auth.hint().as_deref(),
-    ///     Some("cap: ldap.write; feature: write-mode")
+    ///     Some("cap: ldap.write; feature: write-mode; run: auth: strong, token: osp valid")
     /// );
     /// ```
     pub fn hint(&self) -> Option<String> {
@@ -217,7 +399,43 @@ impl DescribeCommandAuthV1 {
             features => parts.push(format!("features: {}", features.len())),
         }
 
+        if let Some(session) = self
+            .visible_session
+            .as_ref()
+            .and_then(|session| session.hint())
+        {
+            parts.push(format!("show: {session}"));
+        }
+        if let Some(session) = self.run_session.as_ref().and_then(|session| session.hint()) {
+            parts.push(format!("run: {session}"));
+        }
+
         (!parts.is_empty()).then(|| parts.join("; "))
+    }
+}
+
+impl DescribeCredentialRequirementV1 {
+    /// Creates a wire requirement that the named credential exists.
+    pub fn present(service: impl Into<String>) -> Self {
+        Self::Present {
+            service: service.into(),
+        }
+    }
+
+    /// Creates a wire requirement that the named credential exists and is valid.
+    pub fn valid(service: impl Into<String>) -> Self {
+        Self::Valid {
+            service: service.into(),
+        }
+    }
+
+    /// Creates a wire requirement that the named credential exists, is valid,
+    /// and is fresh.
+    pub fn fresh(service: impl Into<String>, min_ttl_seconds: u64) -> Self {
+        Self::Fresh {
+            service: service.into(),
+            min_ttl_seconds,
+        }
     }
 }
 
@@ -332,11 +550,26 @@ pub struct ResponseErrorV1 {
 pub struct ResponseMetaV1 {
     /// Preferred output format for rendering the payload.
     pub format_hint: Option<String>,
-    /// Preferred column order for row-based payloads.
+    /// Preferred field paths for row or curated record projections.
     pub columns: Option<Vec<String>>,
     /// Preferred alignment hints for displayed columns.
     #[serde(default)]
     pub column_align: Vec<ColumnAlignmentV1>,
+    /// Optional display labels aligned with `columns`.
+    #[serde(default)]
+    pub column_labels: Vec<String>,
+    /// Top-level `data` field whose array supplies rows for unstaged human output.
+    ///
+    /// The full `data` document remains authoritative for JSON and DSL stages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_path: Option<String>,
+    /// Preserve `data` as the canonical value for JSON rendering and DSL use.
+    ///
+    /// The default row projection remains appropriate for list-oriented
+    /// commands. Document-oriented commands opt in when an object or scalar is
+    /// itself their stable machine contract.
+    #[serde(default)]
+    pub preserve_json_document: bool,
 }
 
 /// Column alignment hint used in plugin response metadata.
@@ -537,19 +770,39 @@ impl DescribeCommandV1 {
     pub(crate) fn resolved_subcommand_path(&self, args: &[String]) -> CommandPath {
         let mut segments = vec![self.name.clone()];
         let mut current = self;
-        let mut remaining = args;
+        let mut inherited_flags = Vec::new();
+        let mut index = 0;
 
-        while let Some(token) = remaining.first() {
-            let Some(subcommand) = current
+        while let Some(token) = args.get(index) {
+            if token == "--" {
+                break;
+            }
+
+            if let Some(subcommand) = current
                 .subcommands
                 .iter()
                 .find(|subcommand| subcommand.name.eq_ignore_ascii_case(token))
-            else {
-                break;
+            {
+                segments.push(subcommand.name.clone());
+                inherited_flags.push(&current.flags);
+                current = subcommand;
+                index += 1;
+                continue;
+            }
+
+            let flag = current
+                .flags
+                .iter()
+                .chain(inherited_flags.iter().rev().flat_map(|flags| flags.iter()))
+                .find_map(|(name, flag)| flag_token_matches(name, token).then_some(flag));
+            let has_attached_value = token.contains('=')
+                || (token.starts_with('-')
+                    && !token.starts_with("--")
+                    && token.chars().count() > 2);
+            index += match flag {
+                Some(flag) if !flag.flag_only && !has_attached_value => 2,
+                _ => 1,
             };
-            segments.push(subcommand.name.clone());
-            current = subcommand;
-            remaining = &remaining[1..];
         }
 
         CommandPath::new(segments)
@@ -581,6 +834,7 @@ impl DescribeCommandV1 {
     ///         visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
     ///         required_capabilities: vec![" Orch.Approval.Decide ".to_string()],
     ///         feature_flags: vec![" Review ".to_string()],
+    ///         ..DescribeCommandAuthV1::default()
     ///     }),
     ///     args: Vec::new(),
     ///     flags: BTreeMap::new(),
@@ -609,8 +863,35 @@ impl DescribeCommandV1 {
         for feature in &auth.feature_flags {
             policy = policy.feature_flag(feature.clone());
         }
+        if let Some(requirements) = auth.visible_session.as_ref() {
+            if let Some(auth_strength) = requirements.auth_strength {
+                policy = policy.require_visible_auth_strength(auth_strength.as_auth_strength());
+            }
+            for requirement in &requirements.credentials {
+                policy = policy.require_visible_credential(requirement.as_command_requirement());
+            }
+        }
+        if let Some(requirements) = auth.run_session.as_ref() {
+            if let Some(auth_strength) = requirements.auth_strength {
+                policy = policy.require_auth_strength(auth_strength.as_auth_strength());
+            }
+            for requirement in &requirements.credentials {
+                policy = policy.require_credential(requirement.as_command_requirement());
+            }
+        }
         Some(policy)
     }
+}
+
+fn flag_token_matches(flag_name: &str, token: &str) -> bool {
+    token == flag_name
+        || flag_name.starts_with("--")
+            && token
+                .strip_prefix(flag_name)
+                .is_some_and(|suffix| suffix.starts_with('='))
+        || flag_name.starts_with('-')
+            && !flag_name.starts_with("--")
+            && token.starts_with(flag_name)
 }
 
 impl ResponseV1 {
@@ -667,6 +948,42 @@ impl ResponseV1 {
         {
             return Err("response messages must not contain empty text".to_string());
         }
+        if let Some(row_path) = self.meta.row_path.as_deref() {
+            if row_path.trim().is_empty() {
+                return Err("meta.row_path must not be empty".to_string());
+            }
+            let Some(rows) = self
+                .data
+                .as_object()
+                .and_then(|document| document.get(row_path))
+            else {
+                return Err("meta.row_path must name a top-level data field".to_string());
+            };
+            if !rows.is_array() {
+                return Err("meta.row_path must reference an array".to_string());
+            }
+        }
+        if !self.meta.column_labels.is_empty() {
+            let Some(columns) = self
+                .meta
+                .columns
+                .as_ref()
+                .filter(|columns| !columns.is_empty())
+            else {
+                return Err("meta.column_labels requires meta.columns".to_string());
+            };
+            if self.meta.column_labels.len() != columns.len() {
+                return Err("meta.column_labels must align with meta.columns".to_string());
+            }
+            if self
+                .meta
+                .column_labels
+                .iter()
+                .any(|label| label.trim().is_empty())
+            {
+                return Err("meta.column_labels must not contain empty labels".to_string());
+            }
+        }
         Ok(())
     }
 }
@@ -717,6 +1034,12 @@ impl From<&CommandDef> for DescribeCommandV1 {
                 },
                 required_capabilities: command.policy.required_capabilities.clone(),
                 feature_flags: command.policy.feature_flags.clone(),
+                visible_session: DescribeSessionRequirementsV1::from_command_requirements(
+                    &command.policy.visible_session_requirements,
+                ),
+                run_session: DescribeSessionRequirementsV1::from_command_requirements(
+                    &command.policy.run_session_requirements,
+                ),
             }),
             args: command.args.iter().map(DescribeArgV1::from).collect(),
             flags: command
@@ -897,6 +1220,28 @@ fn validate_command_auth(auth: &DescribeCommandAuthV1) -> Result<(), String> {
     {
         return Err("feature_flags must not contain empty values".to_string());
     }
+    if let Some(requirements) = auth.visible_session.as_ref() {
+        validate_session_requirements("visible_session", requirements)?;
+    }
+    if let Some(requirements) = auth.run_session.as_ref() {
+        validate_session_requirements("run_session", requirements)?;
+    }
+    Ok(())
+}
+
+fn validate_session_requirements(
+    owner: &str,
+    requirements: &DescribeSessionRequirementsV1,
+) -> Result<(), String> {
+    if requirements
+        .credentials
+        .iter()
+        .any(|requirement| requirement.service().trim().is_empty())
+    {
+        return Err(format!(
+            "{owner} credentials must not contain empty services"
+        ));
+    }
     Ok(())
 }
 
@@ -982,6 +1327,16 @@ fn command_policy_from_describe(auth: &DescribeCommandAuthV1) -> CommandPolicyDe
         },
         required_capabilities: auth.required_capabilities.clone(),
         feature_flags: auth.feature_flags.clone(),
+        visible_session_requirements: auth
+            .visible_session
+            .as_ref()
+            .map(DescribeSessionRequirementsV1::as_command_requirements)
+            .unwrap_or_default(),
+        run_session_requirements: auth
+            .run_session
+            .as_ref()
+            .map(DescribeSessionRequirementsV1::as_command_requirements)
+            .unwrap_or_default(),
     }
 }
 
@@ -1001,10 +1356,85 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        DescribeCommandAuthV1, DescribeCommandV1, DescribeV1, DescribeVisibilityModeV1,
-        PLUGIN_PROTOCOL_V1, canonical_plugin_command_name, validate_command_auth,
+        DescribeAuthStrengthV1, DescribeCommandAuthV1, DescribeCommandV1,
+        DescribeCredentialRequirementV1, DescribeSessionRequirementsV1, DescribeV1,
+        DescribeVisibilityModeV1, PLUGIN_PROTOCOL_V1, ResponseMetaV1, ResponseV1,
+        canonical_plugin_command_name, validate_command_auth,
     };
-    use crate::core::command_policy::{CommandPath, VisibilityMode};
+    use crate::core::command_policy::{AuthStrength, CommandPath, VisibilityMode};
+    use serde_json::json;
+
+    #[test]
+    fn response_row_path_requires_a_top_level_array_unit() {
+        let response = ResponseV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            ok: true,
+            data: json!({
+                "items": [{"name": "db01.uio.no"}],
+                "page": {"next_cursor": null}
+            }),
+            error: None,
+            messages: Vec::new(),
+            meta: ResponseMetaV1 {
+                row_path: Some("items".to_string()),
+                ..ResponseMetaV1::default()
+            },
+        };
+
+        assert!(response.validate_v1().is_ok());
+        assert_eq!(
+            serde_json::to_value(&response).expect("response should serialize")["meta"]["row_path"],
+            "items"
+        );
+
+        let missing = ResponseV1 {
+            data: json!({"page": {"next_cursor": null}}),
+            ..response.clone()
+        };
+        assert_eq!(
+            missing.validate_v1().unwrap_err(),
+            "meta.row_path must name a top-level data field"
+        );
+
+        let non_array = ResponseV1 {
+            data: json!({"items": {"name": "db01.uio.no"}}),
+            ..response
+        };
+        assert_eq!(
+            non_array.validate_v1().unwrap_err(),
+            "meta.row_path must reference an array"
+        );
+    }
+
+    #[test]
+    fn response_column_labels_align_with_columns_unit() {
+        let response = ResponseV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            ok: true,
+            data: json!({"items": [{"provider": {"name": "vmware"}}]}),
+            error: None,
+            messages: Vec::new(),
+            meta: ResponseMetaV1 {
+                columns: Some(vec!["provider.name".to_string()]),
+                column_labels: vec!["PROVIDER".to_string()],
+                row_path: Some("items".to_string()),
+                ..ResponseMetaV1::default()
+            },
+        };
+        assert!(response.validate_v1().is_ok());
+
+        let mismatched = ResponseV1 {
+            meta: ResponseMetaV1 {
+                column_labels: vec!["PROVIDER".to_string(), "STATE".to_string()],
+                ..response.meta.clone()
+            },
+            ..response
+        };
+        assert_eq!(
+            mismatched.validate_v1().unwrap_err(),
+            "meta.column_labels must align with meta.columns"
+        );
+    }
 
     #[test]
     fn command_auth_converts_to_generic_command_policy_unit() {
@@ -1015,6 +1445,11 @@ mod tests {
                 visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
                 required_capabilities: vec!["orch.approval.decide".to_string()],
                 feature_flags: vec!["orch".to_string()],
+                run_session: Some(DescribeSessionRequirementsV1 {
+                    auth_strength: Some(DescribeAuthStrengthV1::Strong),
+                    credentials: vec![DescribeCredentialRequirementV1::valid("osp")],
+                }),
+                ..DescribeCommandAuthV1::default()
             }),
             args: Vec::new(),
             flags: BTreeMap::new(),
@@ -1031,6 +1466,10 @@ mod tests {
                 .contains("orch.approval.decide")
         );
         assert!(policy.feature_flags.contains("orch"));
+        assert_eq!(
+            policy.run_session_requirements.auth_strength,
+            Some(AuthStrength::Strong)
+        );
     }
 
     #[test]
@@ -1039,6 +1478,7 @@ mod tests {
             visibility: None,
             required_capabilities: vec![" ".to_string()],
             feature_flags: Vec::new(),
+            ..DescribeCommandAuthV1::default()
         })
         .expect_err("blank capabilities should be rejected");
         assert!(err.contains("required_capabilities"));
@@ -1050,10 +1490,17 @@ mod tests {
             visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
             required_capabilities: vec!["orch.approval.decide".to_string()],
             feature_flags: vec!["orch".to_string()],
+            run_session: Some(DescribeSessionRequirementsV1 {
+                auth_strength: Some(DescribeAuthStrengthV1::Strong),
+                credentials: vec![DescribeCredentialRequirementV1::fresh("osp", 600)],
+            }),
+            ..DescribeCommandAuthV1::default()
         };
         assert_eq!(
             auth.hint().as_deref(),
-            Some("cap: orch.approval.decide; feature: orch")
+            Some(
+                "cap: orch.approval.decide; feature: orch; run: auth: strong, token: osp fresh(600s)"
+            )
         );
         assert_eq!(
             DescribeVisibilityModeV1::Authenticated.as_label(),
@@ -1105,19 +1552,35 @@ mod tests {
     }
 
     #[test]
-    fn resolved_subcommand_path_stops_at_non_subcommand_tokens_unit() {
+    fn resolved_subcommand_path_follows_subcommands_around_flags_and_positionals_unit() {
+        let mut root_flags = BTreeMap::new();
+        root_flags.insert(
+            "--format".to_string(),
+            super::DescribeFlagV1 {
+                flag_only: false,
+                ..super::DescribeFlagV1::default()
+            },
+        );
+        let mut approval_flags = BTreeMap::new();
+        approval_flags.insert(
+            "--verbose".to_string(),
+            super::DescribeFlagV1 {
+                flag_only: true,
+                ..super::DescribeFlagV1::default()
+            },
+        );
         let command = DescribeCommandV1 {
             name: "orch".to_string(),
             about: String::new(),
             auth: None,
             args: Vec::new(),
-            flags: BTreeMap::new(),
+            flags: root_flags,
             subcommands: vec![DescribeCommandV1 {
                 name: "approval".to_string(),
                 about: String::new(),
                 auth: None,
                 args: Vec::new(),
-                flags: BTreeMap::new(),
+                flags: approval_flags,
                 subcommands: vec![DescribeCommandV1 {
                     name: "decide".to_string(),
                     about: String::new(),
@@ -1132,9 +1595,13 @@ mod tests {
         assert_eq!(
             command
                 .resolved_subcommand_path(&[
+                    "--format".to_string(),
+                    "json".to_string(),
+                    "tenant-a".to_string(),
                     "approval".to_string(),
-                    "decide".to_string(),
+                    "--verbose".to_string(),
                     "ticket-123".to_string(),
+                    "decide".to_string(),
                 ])
                 .as_slice(),
             &[
@@ -1145,7 +1612,11 @@ mod tests {
         );
         assert_eq!(
             command
-                .resolved_subcommand_path(&["APPROVAL".to_string(), "--help".to_string()])
+                .resolved_subcommand_path(&[
+                    "--format=json".to_string(),
+                    "APPROVAL".to_string(),
+                    "--help".to_string(),
+                ])
                 .as_slice(),
             &["orch".to_string(), "approval".to_string()]
         );

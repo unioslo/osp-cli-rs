@@ -4,15 +4,29 @@ use super::config::ReplAppearance;
 use super::{COMPLETION_MENU_NAME, HISTORY_MENU_NAME, SharedHistory};
 use anyhow::Result;
 use nu_ansi_term::Color;
+#[cfg(not(miri))]
 use skim::options::MatchScheme;
+#[cfg(not(miri))]
 use skim::prelude::{
     Skim, SkimItem, SkimItemReceiver, SkimItemSender, SkimOptionsBuilder,
     unbounded as skim_unbounded,
 };
+#[cfg(not(miri))]
 use std::borrow::Cow;
 use std::collections::BTreeSet;
+#[cfg(not(miri))]
 use std::sync::Arc;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HistoryPickerOptions {
+    pub(crate) height: String,
+    pub(crate) query: Option<String>,
+    pub(crate) prompt: String,
+    pub(crate) no_info: bool,
+    pub(crate) color: Option<String>,
+}
+
+#[cfg_attr(miri, allow(dead_code))]
 #[derive(Debug, Clone)]
 pub(crate) struct HistoryPickerItem {
     pub(crate) label: String,
@@ -20,6 +34,7 @@ pub(crate) struct HistoryPickerItem {
     pub(crate) matching_range: [(usize, usize); 1],
 }
 
+#[cfg(not(miri))]
 impl SkimItem for HistoryPickerItem {
     fn text(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.label)
@@ -45,27 +60,40 @@ pub(crate) fn launch_history_picker(
     }
 
     let options = build_history_picker_options(appearance, current_line.trim())?;
-    let (tx, rx): (SkimItemSender, SkimItemReceiver) = skim_unbounded();
-    let payload = items
-        .into_iter()
-        .map(|item| Arc::new(item) as Arc<dyn SkimItem>)
-        .collect::<Vec<_>>();
-    let _ = tx.send(payload);
-    drop(tx);
 
-    let output = Skim::run_with(options, Some(rx))
-        .map_err(|err| anyhow::anyhow!("failed to launch REPL history picker: {err}"))?;
-    if output.is_abort {
+    #[cfg(miri)]
+    {
+        let _ = appearance;
+        let _ = current_line;
+        let _ = options;
         return Ok(None);
     }
 
-    // Prefer the explicit selection, but fall back to skim's current row so a
-    // plain Enter accepts the active history item even if nothing was toggled.
-    Ok(output
-        .selected_items
-        .first()
-        .map(|item| item.output().into_owned())
-        .or_else(|| output.current.map(|item| item.output().into_owned())))
+    #[cfg(not(miri))]
+    {
+        let (tx, rx): (SkimItemSender, SkimItemReceiver) = skim_unbounded();
+        let payload = items
+            .into_iter()
+            .map(|item| Arc::new(item) as Arc<dyn SkimItem>)
+            .collect::<Vec<_>>();
+        let _ = tx.send(payload);
+        drop(tx);
+
+        let output = Skim::run_with(build_skim_options(options)?, Some(rx))
+            .map_err(|err| anyhow::anyhow!("failed to launch REPL history picker: {err}"))?;
+        if output.is_abort {
+            return Ok(None);
+        }
+
+        // Prefer the explicit selection, but fall back to skim's current row
+        // so a plain Enter accepts the active history item even if nothing was
+        // toggled.
+        Ok(output
+            .selected_items
+            .first()
+            .map(|item| item.output().into_owned())
+            .or_else(|| output.current.map(|item| item.output().into_owned())))
+    }
 }
 
 pub(crate) fn history_picker_items(history: &SharedHistory) -> Vec<HistoryPickerItem> {
@@ -110,28 +138,38 @@ fn single_line_history_label(command: &str) -> String {
 pub(crate) fn build_history_picker_options(
     appearance: &ReplAppearance,
     initial_query: &str,
-) -> Result<skim::SkimOptions> {
-    let height = appearance
-        .history_menu_rows
-        .max(1)
-        .saturating_add(1)
-        .to_string();
+) -> Result<HistoryPickerOptions> {
+    Ok(HistoryPickerOptions {
+        height: appearance
+            .history_menu_rows
+            .max(1)
+            .saturating_add(1)
+            .to_string(),
+        query: Some(initial_query.to_string()),
+        prompt: "(reverse-i-search)> ".to_string(),
+        no_info: true,
+        color: build_history_picker_color(appearance),
+    })
+}
+
+#[cfg(not(miri))]
+fn build_skim_options(options: HistoryPickerOptions) -> Result<skim::SkimOptions> {
     let mut builder = SkimOptionsBuilder::default();
     builder
-        .height(height)
+        .height(options.height)
         .min_height("2")
         .reverse(true)
-        .no_info(true)
+        .no_info(options.no_info)
         .multi(false)
         .no_mouse(true)
-        .prompt("(reverse-i-search)> ")
-        .query(initial_query)
+        .prompt(options.prompt)
+        .query(options.query.unwrap_or_default())
         .scheme(MatchScheme::History)
         // `Ctrl-R` inside the picker should stay within skim's history mode,
         // not recursively re-enter the REPL host command path.
         .bind(vec!["ctrl-r:toggle-sort".to_string()]);
 
-    if let Some(color) = build_history_picker_color(appearance) {
+    if let Some(color) = options.color {
         builder.color(color);
     }
 

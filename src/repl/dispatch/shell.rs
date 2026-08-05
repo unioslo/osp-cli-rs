@@ -5,7 +5,7 @@ use super::command::{
     ParsedReplDispatch, execute_repl_command_dispatch, run_repl_external_command,
 };
 use crate::app;
-use crate::app::dispatch::resolve_external_command_source;
+use crate::app::dispatch::{ensure_external_command_access, resolve_external_command_source};
 use crate::app::sink::UiSink;
 use crate::app::{AppClients, AppRuntime, AppSession, CliCommandResult};
 use crate::app::{CMD_HELP, ResolvedInvocation};
@@ -224,7 +224,7 @@ pub(super) fn enter_repl_shell(
     invocation: &ResolvedInvocation,
     sink: &mut dyn UiSink,
 ) -> Result<String> {
-    app::ensure_plugin_visible_for(&runtime.auth, command)?;
+    ensure_external_command_access(runtime, session, command)?;
     let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
     resolve_external_command_source(
         &runtime.auth,
@@ -351,7 +351,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::path::Path;
-    #[cfg(unix)]
+    #[cfg(all(unix, miri))]
+    use std::sync::atomic::{AtomicU64, Ordering};
+    #[cfg(all(unix, not(miri)))]
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct NativeLdapHelpCommand;
@@ -368,6 +370,7 @@ mod tests {
                 visibility: Some(DescribeVisibilityModeV1::Public),
                 required_capabilities: Vec::new(),
                 feature_flags: Vec::new(),
+                ..DescribeCommandAuthV1::default()
             })
         }
 
@@ -390,14 +393,18 @@ mod tests {
 
     fn app_state() -> AppState {
         app_state_with_parts(
-            crate::plugin::PluginManager::new(Vec::new()),
+            crate::plugin::PluginManager::new(Vec::new())
+                .with_bundled_roots(false)
+                .with_default_roots(false),
             NativeCommandRegistry::default(),
         )
     }
 
     fn app_state_with_native(native_commands: NativeCommandRegistry) -> AppState {
         app_state_with_parts(
-            crate::plugin::PluginManager::new(Vec::new()),
+            crate::plugin::PluginManager::new(Vec::new())
+                .with_bundled_roots(false)
+                .with_default_roots(false),
             native_commands,
         )
     }
@@ -408,6 +415,8 @@ mod tests {
     ) -> AppState {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("repl.history.path", "/tmp/osp-repl-shell-history.jsonl");
+        defaults.set("theme.path", Vec::<String>::new());
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
         let config = resolver
@@ -430,6 +439,7 @@ mod tests {
 
     #[cfg(unix)]
     fn make_temp_dir(prefix: &str) -> std::path::PathBuf {
+        #[cfg(not(miri))]
         let unique = format!(
             "{prefix}-{}-{}",
             std::process::id(),
@@ -438,6 +448,15 @@ mod tests {
                 .expect("clock should be after epoch")
                 .as_nanos()
         );
+        #[cfg(miri)]
+        let unique = {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+            format!(
+                "{prefix}-{}-{}",
+                std::process::id(),
+                NEXT_ID.fetch_add(1, Ordering::Relaxed)
+            )
+        };
         let dir = std::env::temp_dir().join(unique);
         fs::create_dir_all(&dir).expect("temp dir should be created");
         dir
@@ -724,6 +743,7 @@ JSON
     }
 
     #[cfg(unix)]
+    #[cfg_attr(miri, ignore = "plugin filesystem integration test")]
     #[test]
     fn ambiguous_plugin_shell_entry_fails_before_scope_mutation_unit() {
         let root = make_temp_dir("osp-cli-repl-shell-ambiguous-plugin");
@@ -752,6 +772,7 @@ JSON
     }
 
     #[cfg(unix)]
+    #[cfg_attr(miri, ignore = "plugin filesystem integration test")]
     #[test]
     fn native_and_plugin_shell_collision_fails_before_scope_mutation_unit() {
         let root = make_temp_dir("osp-cli-repl-shell-native-collision");

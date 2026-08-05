@@ -9,6 +9,9 @@ use std::collections::BTreeSet;
 
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 
+use crate::app::access_recovery::{
+    AccessRecoveryOutcome, AccessRecoveryRequest, CommandAccessKind,
+};
 use crate::app::{AppClients, AuthState, TerminalKind};
 use crate::cli::{
     Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, IntroArgs, PluginsArgs, ReplArgs,
@@ -18,6 +21,7 @@ use crate::core::command_policy::{AccessReason, CommandAccess, CommandPath};
 use crate::normalize::{normalize_identifier, normalize_optional_identifier};
 use crate::plugin::CommandCatalogEntry;
 
+#[cfg(test)]
 use super::{CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS, CMD_THEME};
 
 #[derive(Debug)]
@@ -37,6 +41,12 @@ pub(crate) enum RunAction {
 pub(crate) enum ExternalCommandSource {
     Native,
     Plugin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExternalPathAccessRequirement {
+    Visible,
+    Runnable,
 }
 
 impl RunAction {
@@ -158,6 +168,7 @@ pub(crate) fn normalize_cli_profile(cli: &mut Cli) -> Option<String> {
     normalized
 }
 
+#[cfg(test)]
 pub(crate) fn ensure_dispatch_visibility(auth: &AuthState, action: &RunAction) -> Result<()> {
     match action {
         RunAction::Plugins(_) => ensure_builtin_visible_for(auth, CMD_PLUGINS),
@@ -177,6 +188,7 @@ pub(crate) fn ensure_builtin_visible_for(auth: &AuthState, command: &str) -> Res
     ensure_command_access(command, "command", auth.builtin_access(command))
 }
 
+#[cfg(test)]
 pub(crate) fn ensure_plugin_visible_for(auth: &AuthState, command: &str) -> Result<()> {
     ensure_command_access(
         command,
@@ -185,12 +197,58 @@ pub(crate) fn ensure_plugin_visible_for(auth: &AuthState, command: &str) -> Resu
     )
 }
 
-pub(crate) fn ensure_plugin_path_visible_for(auth: &AuthState, path: &CommandPath) -> Result<()> {
-    ensure_command_access(
-        &path.as_slice().join(" "),
-        "plugin command",
-        auth.external_command_path_access(path),
+pub(crate) fn ensure_builtin_access(
+    runtime: &mut crate::app::AppRuntime,
+    session: &mut crate::app::AppSession,
+    command: &str,
+) -> Result<()> {
+    ensure_command_access_with_recovery(
+        runtime,
+        session,
+        CommandAccessKind::Builtin,
+        command,
+        "command",
+        |auth| auth.builtin_access(command),
     )
+}
+
+pub(crate) fn ensure_external_command_access(
+    runtime: &mut crate::app::AppRuntime,
+    session: &mut crate::app::AppSession,
+    command: &str,
+) -> Result<()> {
+    ensure_command_access_with_recovery(
+        runtime,
+        session,
+        CommandAccessKind::External,
+        command,
+        "plugin command",
+        |auth| auth.external_command_access(command),
+    )
+}
+
+pub(crate) fn ensure_external_path_access(
+    runtime: &mut crate::app::AppRuntime,
+    session: &mut crate::app::AppSession,
+    path: &CommandPath,
+    requirement: ExternalPathAccessRequirement,
+) -> Result<()> {
+    let command = path.as_slice().join(" ");
+    match requirement {
+        ExternalPathAccessRequirement::Visible => ensure_command_visibility(
+            &command,
+            "plugin command",
+            runtime.auth().external_command_path_access(path),
+        ),
+        ExternalPathAccessRequirement::Runnable => ensure_command_access_with_recovery(
+            runtime,
+            session,
+            CommandAccessKind::External,
+            &command,
+            "plugin command",
+            |auth| auth.external_command_path_access(path),
+        ),
+    }
 }
 
 pub(crate) fn resolve_external_command_source(
@@ -349,12 +407,69 @@ fn ensure_command_access(command: &str, kind: &str, access: CommandAccess) -> Re
     Err(miette!("{kind} `{command}` {detail}"))
 }
 
+fn ensure_command_visibility(command: &str, kind: &str, access: CommandAccess) -> Result<()> {
+    if access.is_visible() {
+        return Ok(());
+    }
+    ensure_command_access(command, kind, access)
+}
+
+fn ensure_command_access_with_recovery(
+    runtime: &mut crate::app::AppRuntime,
+    session: &mut crate::app::AppSession,
+    command_kind: CommandAccessKind,
+    command: &str,
+    kind: &str,
+    access_for: impl Fn(&AuthState) -> CommandAccess,
+) -> Result<()> {
+    let access = access_for(runtime.auth());
+    if access.is_runnable() {
+        return Ok(());
+    }
+
+    if let Some(recovery) = runtime.access_recovery() {
+        let request = AccessRecoveryRequest::new(
+            runtime.context.terminal_kind(),
+            command_kind,
+            command,
+            access.clone(),
+        );
+        if matches!(
+            recovery.try_recover(&request, runtime, session)?,
+            AccessRecoveryOutcome::Recovered
+        ) {
+            let recovered = access_for(runtime.auth());
+            if recovered.is_runnable() {
+                return Ok(());
+            }
+            return ensure_command_access(command, kind, recovered);
+        }
+    }
+
+    ensure_command_access(command, kind, access)
+}
+
 fn render_access_reason(reason: &AccessReason) -> String {
     match reason {
         AccessReason::HiddenByPolicy => "is hidden by current auth policy".to_string(),
         AccessReason::DisabledByProduct => "is disabled by current product policy".to_string(),
         AccessReason::Unauthenticated => "requires authentication".to_string(),
         AccessReason::MissingCapabilities => "requires additional capabilities".to_string(),
+        AccessReason::MissingCredential(service) => {
+            format!("requires credential `{service}`")
+        }
+        AccessReason::InvalidCredential(service) => {
+            format!("requires a valid `{service}` credential")
+        }
+        AccessReason::InsufficientCredentialTtl {
+            service,
+            required_ttl_seconds,
+        } => format!(
+            "requires `{service}` credential with at least {required_ttl_seconds}s remaining"
+        ),
+        AccessReason::InsufficientAuthStrength(required) => {
+            format!("requires {} authentication", required.as_label())
+        }
         AccessReason::FeatureDisabled(flag) => format!("requires feature `{flag}`"),
         AccessReason::ProfileUnavailable(profile) if profile.is_empty() => {
             "requires an eligible profile".to_string()
@@ -564,11 +679,11 @@ mod tests {
         );
 
         let profile_err = ensure_builtin_visible_for(&auth, "config")
-            .expect_err("missing profile should deny builtin");
+            .expect_err("active profile outside the allowlist should deny builtin");
         assert!(
             profile_err
                 .to_string()
-                .contains("requires an eligible profile")
+                .contains("is unavailable in profile `default`")
         );
 
         auth.set_policy_context(

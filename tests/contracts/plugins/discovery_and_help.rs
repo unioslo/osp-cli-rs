@@ -365,3 +365,36 @@ fn plugin_min_osp_version_mismatch_marks_plugin_unhealthy_contract() {
     );
 
 }
+
+#[cfg(unix)]
+#[test]
+fn plugins_commands_surface_session_requirements_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-session-auth");
+    let _plugin_path = write_session_auth_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-session-auth-home");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "plugins", "commands"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let payload = parse_json_stdout(&output.stdout);
+    let row = first_json_row(&payload, "plugins commands session auth view");
+    assert_eq!(row["name"], "secure");
+    assert_eq!(row["auth_visibility"], "authenticated");
+    assert_eq!(
+        row["auth_hint"],
+        "auth; run: token: osp fresh(600s)"
+    );
+    assert_eq!(
+        row["run_session"],
+        serde_json::json!({
+            "credentials": [{"state":"fresh","service":"osp","min_ttl_seconds":600}]
+        })
+    );
+}

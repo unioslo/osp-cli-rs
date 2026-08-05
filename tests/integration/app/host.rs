@@ -4,7 +4,12 @@ use clap::Command;
 use osp_cli::App;
 use osp_cli::app::BufferedUiSink;
 use osp_cli::config::ConfigLayer;
-use osp_cli::core::plugin::{PLUGIN_PROTOCOL_V1, ResponseMetaV1, ResponseV1};
+use osp_cli::core::command_policy::{
+    CommandPath, CommandPolicy, CommandPolicyContext, CommandPolicyRegistry, VisibilityMode,
+};
+use osp_cli::core::plugin::{
+    PLUGIN_PROTOCOL_V1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
+};
 use osp_cli::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
 use serde_json::json;
 
@@ -57,7 +62,10 @@ impl NativeCommand for NativeProbeCommand {
             meta: ResponseMetaV1 {
                 format_hint: Some("json".to_string()),
                 columns: Some(vec!["active_profile".to_string(), "theme".to_string()]),
+                column_labels: Vec::new(),
                 column_align: Vec::new(),
+                row_path: None,
+                preserve_json_document: false,
             },
         })))
     }
@@ -68,6 +76,71 @@ fn native_probe_registry() -> NativeCommandRegistry {
 }
 
 struct SiteStatusCommand;
+
+struct CuratedOrchRowsCommand;
+
+impl NativeCommand for CuratedOrchRowsCommand {
+    fn command(&self) -> Command {
+        Command::new("orch-view").about("Render a canonical orchestrator page")
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        _context: &NativeCommandContext<'_>,
+    ) -> Result<NativeCommandOutcome> {
+        Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            ok: true,
+            data: json!({
+                "items": [{
+                    "name": "db01.uio.no",
+                    "provider": {"name": "vmware"},
+                    "state": {"name": "powered_on"},
+                    "compute": {"display": "4 CPU / 8 GiB"},
+                    "location": {"display": "vcsa-prod"}
+                }],
+                "page": {"next_cursor": "cursor-2"},
+                "targets": [{"target_id": "vmware:prod", "status": "ok"}]
+            }),
+            error: None,
+            messages: vec![
+                ResponseMessageV1 {
+                    level: ResponseMessageLevelV1::Warning,
+                    text: "Results are incomplete".to_string(),
+                },
+                ResponseMessageV1 {
+                    level: ResponseMessageLevelV1::Info,
+                    text: "provider evidence".to_string(),
+                },
+                ResponseMessageV1 {
+                    level: ResponseMessageLevelV1::Trace,
+                    text: "runtime target vmware:prod".to_string(),
+                },
+            ],
+            meta: ResponseMetaV1 {
+                format_hint: Some("table".to_string()),
+                columns: Some(vec![
+                    "name".to_string(),
+                    "provider.name".to_string(),
+                    "state.name".to_string(),
+                    "compute.display".to_string(),
+                    "location.display".to_string(),
+                ]),
+                column_labels: vec![
+                    "NAME".to_string(),
+                    "PROVIDER".to_string(),
+                    "STATE".to_string(),
+                    "COMPUTE".to_string(),
+                    "LOCATION".to_string(),
+                ],
+                column_align: Vec::new(),
+                row_path: Some("items".to_string()),
+                preserve_json_document: true,
+            },
+        })))
+    }
+}
 
 impl NativeCommand for SiteStatusCommand {
     fn command(&self) -> Command {
@@ -91,7 +164,10 @@ impl NativeCommand for SiteStatusCommand {
             meta: ResponseMetaV1 {
                 format_hint: Some("json".to_string()),
                 columns: Some(vec!["enabled".to_string(), "banner".to_string()]),
+                column_labels: Vec::new(),
                 column_align: Vec::new(),
+                row_path: None,
+                preserve_json_document: false,
             },
         })))
     }
@@ -99,6 +175,81 @@ impl NativeCommand for SiteStatusCommand {
 
 fn site_status_registry() -> NativeCommandRegistry {
     NativeCommandRegistry::new().with_command(SiteStatusCommand)
+}
+
+fn curated_orch_rows_registry() -> NativeCommandRegistry {
+    NativeCommandRegistry::new().with_command(CuratedOrchRowsCommand)
+}
+
+#[test]
+fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
+    let app = App::builder()
+        .with_native_commands(curated_orch_rows_registry())
+        .build();
+
+    let mut human = BufferedUiSink::default();
+    let exit = app
+        .run_with_sink(
+            ["osp", "--defaults-only", "--plain", "orch-view"],
+            &mut human,
+        )
+        .expect("curated human output should render");
+    assert_eq!(exit, 0);
+    assert!(human.stdout.contains("NAME"));
+    assert!(human.stdout.contains("PROVIDER"));
+    assert!(human.stdout.contains("4 CPU / 8 GiB"));
+    assert!(!human.stdout.contains("next_cursor"));
+    assert!(human.stderr.contains("Results are incomplete"));
+    assert!(!human.stderr.contains("provider evidence"));
+    assert!(!human.stderr.contains("runtime target vmware:prod"));
+
+    let mut json_sink = BufferedUiSink::default();
+    let json_args = ["osp", "--defaults-only", "--json", "orch-view"];
+    let exit = app
+        .run_with_sink(json_args, &mut json_sink)
+        .expect("canonical JSON should render");
+    assert_eq!(exit, 0);
+    let document = parse_json_output(
+        "app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows/json",
+        &json_args,
+        &json_sink.stdout,
+        &json_sink.stderr,
+    );
+    assert_eq!(document["page"]["next_cursor"], "cursor-2");
+    assert_eq!(document["items"][0]["provider"]["name"], "vmware");
+
+    let mut piped = BufferedUiSink::default();
+    let pipe_args = [
+        "osp",
+        "--defaults-only",
+        "--json",
+        "orch-view",
+        "|",
+        "P",
+        "page.next_cursor",
+    ];
+    let exit = app
+        .run_with_sink(pipe_args, &mut piped)
+        .expect("DSL should receive the canonical document");
+    assert_eq!(exit, 0);
+    let projected = parse_json_output(
+        "app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows/pipeline",
+        &pipe_args,
+        &piped.stdout,
+        &piped.stderr,
+    );
+    assert_eq!(projected, json!({"page": {"next_cursor": "cursor-2"}}));
+
+    let mut verbose = BufferedUiSink::default();
+    app.run_with_sink(["osp", "--defaults-only", "-v", "orch-view"], &mut verbose)
+        .expect("normal operator evidence should render at -v");
+    assert!(verbose.stderr.contains("provider evidence"));
+    assert!(!verbose.stderr.contains("runtime target vmware:prod"));
+
+    let mut trace = BufferedUiSink::default();
+    app.run_with_sink(["osp", "--defaults-only", "-vv", "orch-view"], &mut trace)
+        .expect("diagnostic evidence should render at -vv");
+    assert!(trace.stderr.contains("runtime target vmware:prod"));
 }
 
 #[cfg(unix)]
@@ -157,6 +308,46 @@ fn app_host_surfaces_native_commands_in_help_and_dispatch() {
         .expect("native command output should be row array");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["active_profile"], "default");
+}
+
+#[test]
+fn app_host_merges_active_profile_into_product_policy_context() {
+    with_config_path(
+        r#"
+[default]
+profile.default = "uio"
+
+[profile.uio]
+
+[profile.tsd]
+"#,
+        || {
+            let mut policy = CommandPolicyRegistry::new();
+            policy.register(
+                CommandPolicy::new(CommandPath::new(["config"]))
+                    .visibility(VisibilityMode::Authenticated)
+                    .allow_profiles(["tsd"]),
+            );
+            let app = App::builder()
+                .with_builtin_policy(policy)
+                .with_policy_context(CommandPolicyContext::default().authenticated(true))
+                .build();
+
+            let mut default_sink = BufferedUiSink::default();
+            app.run_with_sink(["osp", "config", "get", "theme.name"], &mut default_sink)
+                .expect_err("default profile should be outside the policy allowlist");
+
+            let mut selected_sink = BufferedUiSink::default();
+            let selected_exit = app
+                .run_with_sink(
+                    ["osp", "--profile", "tsd", "config", "get", "theme.name"],
+                    &mut selected_sink,
+                )
+                .expect("selected-profile access should be evaluated");
+            assert_eq!(selected_exit, 0, "{}", selected_sink.stderr);
+            assert!(selected_sink.stdout.contains("theme.name"));
+        },
+    );
 }
 
 #[test]

@@ -21,7 +21,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+#[cfg(not(miri))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use reedline::{
@@ -1173,10 +1175,21 @@ fn strip_shell_prefix(command: &str, shell_prefix: Option<&str>) -> String {
 }
 
 fn now_ms() -> i64 {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0));
-    now.as_millis() as i64
+    #[cfg(miri)]
+    {
+        // Miri isolation does not support realtime clock queries. History
+        // ordering tests only need a stable timestamp shape, not wall-clock
+        // accuracy.
+        0
+    }
+
+    #[cfg(not(miri))]
+    {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0));
+        now.as_millis() as i64
+    }
 }
 
 /// Expands shell-style history references against the provided command list.

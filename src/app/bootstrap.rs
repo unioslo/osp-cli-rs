@@ -285,6 +285,7 @@ mod tests {
     fn resolved(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("theme.path", Vec::<String>::new());
         for (key, value) in entries {
             defaults.set(*key, *value);
         }

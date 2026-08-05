@@ -30,6 +30,7 @@ impl<'a> IntroCommandContext<'a> {
             auth: &runtime.auth,
             themes: &runtime.themes,
             scope: &session.scope,
+            native_context: &session.native_context,
             history_enabled: session.history_enabled,
         };
         let surface = authorized_command_catalog_for(&runtime.auth, clients)
@@ -61,13 +62,23 @@ pub(crate) fn run_intro_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{AppState, ReplCommandOutput, RuntimeContext, TerminalKind};
+    use crate::app::{
+        AppState, AppStateInit, LaunchContext, ReplCommandOutput, RuntimeContext, TerminalKind,
+    };
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use crate::core::output::OutputFormat;
+    use crate::native::NativeCommandRegistry;
+    use crate::plugin::PluginManager;
+    use crate::ui::RenderSettings;
     use crate::ui::build_presentation_defaults_layer;
+    use crate::ui::messages::MessageLevel;
+    use crate::ui::theme_catalog::ThemeCatalog;
 
     fn resolved_repl_config() -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("repl.history.path", "/tmp/osp-intro-history.jsonl");
+        defaults.set("theme.path", Vec::<String>::new());
 
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
@@ -83,11 +94,20 @@ mod tests {
     }
 
     fn intro_state() -> AppState {
-        AppState::from_resolved_config(
-            RuntimeContext::new(None, TerminalKind::Repl, None),
-            resolved_repl_config(),
-        )
-        .expect("intro test state should build")
+        AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Repl, None),
+            config: resolved_repl_config(),
+            render_settings: RenderSettings::test_plain(OutputFormat::Json),
+            message_verbosity: MessageLevel::Success,
+            error_detail: crate::app::ErrorDetail::Terse,
+            debug_verbosity: 0,
+            plugins: PluginManager::new(Vec::new())
+                .with_bundled_roots(false)
+                .with_default_roots(false),
+            native_commands: NativeCommandRegistry::default(),
+            themes: ThemeCatalog::default(),
+            launch: LaunchContext::default(),
+        })
     }
 
     #[test]

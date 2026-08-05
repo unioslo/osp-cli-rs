@@ -57,6 +57,8 @@ pub(crate) struct PreparedPluginOutput {
 
 pub(crate) struct FailedPluginOutput {
     pub(crate) messages: MessageBuffer,
+    pub(crate) output: OutputResult,
+    pub(crate) format_hint: Option<OutputFormat>,
     pub(crate) report: miette::Report,
 }
 
@@ -148,7 +150,13 @@ impl CliCommandResult {
             PreparedPluginResponse::Failure(failure) => Self {
                 exit_code: 1,
                 messages: failure.messages,
-                output: None,
+                output: Some(ReplCommandOutput::Output(Box::new(
+                    StructuredCommandOutput {
+                        source_guide: None,
+                        output: failure.output,
+                        format_hint: failure.format_hint,
+                    },
+                ))),
                 stderr_text: None,
                 failure_report: Some(failure.report),
             },
@@ -230,6 +238,71 @@ pub(crate) fn cli_result_from_plugin_response(
     Ok(CliCommandResult::from_prepared_plugin_response(prepared))
 }
 
+/// Applies trailing DSL stages to an already-produced builtin command result.
+///
+/// Builtin commands executed inline on the CLI surface (`osp "theme list | C"`)
+/// produce their result before the pipe stages run, unlike plugin/native
+/// responses where stages are applied during response preparation. This is the
+/// missing half of that contract: without it, validated stages were silently
+/// dropped for builtins.
+pub(crate) fn apply_stages_to_cli_result(
+    mut result: CliCommandResult,
+    stages: &[String],
+) -> Result<CliCommandResult> {
+    if stages.is_empty() {
+        return Ok(result);
+    }
+    let Some(output) = result.output.take() else {
+        return Ok(result);
+    };
+    let staged = match output {
+        ReplCommandOutput::Output(structured) => {
+            let StructuredCommandOutput {
+                source_guide: _,
+                output,
+                format_hint,
+            } = *structured;
+            let (output, format_hint) = apply_output_stages(output, stages, format_hint)
+                .wrap_err("failed to apply DSL stages to builtin command output")?;
+            // A guide recommendation describes the pre-pipeline document; the
+            // transformed output must render as ordinary structured data.
+            ReplCommandOutput::Output(Box::new(StructuredCommandOutput {
+                source_guide: None,
+                output,
+                format_hint,
+            }))
+        }
+        ReplCommandOutput::Text(text) => {
+            let (output, format_hint) = apply_output_stages(
+                text_output_to_rows(&text),
+                stages,
+                Some(OutputFormat::Value),
+            )
+            .wrap_err("failed to apply DSL stages to textual command output")?;
+            ReplCommandOutput::Output(Box::new(StructuredCommandOutput {
+                source_guide: None,
+                output,
+                format_hint,
+            }))
+        }
+        ReplCommandOutput::Json(payload) => {
+            let (output, format_hint) = apply_output_stages(
+                rows_to_output_result(rows_from_value(payload)),
+                stages,
+                Some(OutputFormat::Value),
+            )
+            .wrap_err("failed to apply DSL stages to JSON command output")?;
+            ReplCommandOutput::Output(Box::new(StructuredCommandOutput {
+                source_guide: None,
+                output,
+                format_hint,
+            }))
+        }
+    };
+    result.output = Some(staged);
+    Ok(result)
+}
+
 pub(crate) fn emit_messages_for_ui(
     config: &ResolvedConfig,
     ui: &UiState,
@@ -273,6 +346,12 @@ pub(crate) fn prepare_plugin_response(
     stages: &[String],
 ) -> Result<PreparedPluginResponse> {
     let mut messages = plugin_response_messages(&response);
+    let (output, format_hint) = apply_output_stages(
+        plugin_data_to_output_result(response.data, Some(&response.meta)),
+        stages,
+        parse_output_format_hint(response.meta.format_hint.as_deref()),
+    )
+    .wrap_err("failed to prepare plugin response output")?;
     if !response.ok {
         let report = if let Some(error) = response.error {
             messages.error(format!("{}: {}", error.code, error.message));
@@ -283,16 +362,11 @@ pub(crate) fn prepare_plugin_response(
         };
         return Ok(PreparedPluginResponse::Failure(FailedPluginOutput {
             messages,
+            output,
+            format_hint,
             report,
         }));
     }
-
-    let (output, format_hint) = apply_output_stages(
-        plugin_data_to_output_result(response.data, Some(&response.meta)),
-        stages,
-        parse_output_format_hint(response.meta.format_hint.as_deref()),
-    )
-    .wrap_err("failed to prepare plugin response output")?;
 
     Ok(PreparedPluginResponse::Output(PreparedPluginOutput {
         messages,

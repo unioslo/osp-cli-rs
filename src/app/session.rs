@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use crate::config::{ConfigLayer, DEFAULT_SESSION_CACHE_MAX_RESULTS};
 use crate::core::row::Row;
-use crate::native::NativeCommandRegistry;
+use crate::native::{NativeCommandRegistry, NativeSessionContext};
 use crate::plugin::PluginManager;
 use crate::repl::HistoryShellContext;
 
@@ -300,6 +300,8 @@ pub struct AppSession {
     pub history_shell: HistoryShellContext,
     /// Shared prompt timing badge state.
     pub prompt_timing: DebugTimingState,
+    /// Session-scoped context exposed by native commands to the REPL host.
+    pub native_context: NativeSessionContext,
     pub(crate) startup_prompt_timing_pending: bool,
     /// Current nested command scope within the REPL.
     pub scope: ReplScopeStack,
@@ -354,6 +356,7 @@ pub(crate) struct AppSessionRebuildState {
     history_enabled: bool,
     history_shell: HistoryShellContext,
     prompt_timing: DebugTimingState,
+    native_context: NativeSessionContext,
     startup_prompt_timing_pending: bool,
     scope: ReplScopeStack,
     last_rows: Vec<Row>,
@@ -379,6 +382,7 @@ impl AppSessionRebuildState {
         next.history_enabled = self.history_enabled;
         next.history_shell = self.history_shell;
         next.prompt_timing = self.prompt_timing;
+        next.native_context = self.native_context;
         next.startup_prompt_timing_pending = self.startup_prompt_timing_pending;
         next.scope = self.scope;
         next.last_rows = self.last_rows;
@@ -441,6 +445,7 @@ impl AppSession {
             history_enabled: true,
             history_shell: HistoryShellContext::default(),
             prompt_timing: DebugTimingState::default(),
+            native_context: NativeSessionContext::default(),
             startup_prompt_timing_pending: true,
             scope: ReplScopeStack::default(),
             last_rows: Vec::new(),
@@ -544,6 +549,7 @@ impl AppSession {
             history_enabled: self.history_enabled,
             history_shell: self.history_shell.clone(),
             prompt_timing: self.prompt_timing.clone(),
+            native_context: self.native_context.clone(),
             startup_prompt_timing_pending: self.startup_prompt_timing_pending,
             scope: self.scope.clone(),
             last_rows: self.last_rows.clone(),
@@ -862,6 +868,8 @@ impl AppState {
     ///
     /// let mut defaults = ConfigLayer::default();
     /// defaults.set("profile.default", "default");
+    /// defaults.set("repl.history.path", "/tmp/osp-doc-history.jsonl");
+    /// defaults.set("theme.path", Vec::<String>::new());
     /// defaults.set("ui.message.verbosity", "warning");
     ///
     /// let mut resolver = ConfigResolver::default();
@@ -971,6 +979,8 @@ impl AppState {
 ///
 /// let mut defaults = ConfigLayer::default();
 /// defaults.set("profile.default", "default");
+/// defaults.set("repl.history.path", "/tmp/osp-doc-history.jsonl");
+/// defaults.set("theme.path", Vec::<String>::new());
 ///
 /// let mut resolver = ConfigResolver::default();
 /// resolver.set_defaults(defaults);

@@ -93,6 +93,177 @@ pub enum VisibilityMode {
     Hidden,
 }
 
+/// Relative authentication strength available in the current session.
+///
+/// This models session quality rather than product authorization. Use
+/// capabilities for "may the caller do this?" and auth strength for "how
+/// strongly was the caller authenticated for this session?".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthStrength {
+    /// Standard authenticated session strength.
+    Basic,
+    /// Stronger authentication such as MFA-backed login.
+    Strong,
+}
+
+impl AuthStrength {
+    /// Returns the canonical user-facing label for this strength.
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Basic => "basic",
+            Self::Strong => "strong",
+        }
+    }
+}
+
+/// Observed runtime state for one named credential or token.
+///
+/// Presence is modeled by whether the credential exists in the policy context.
+/// When present, `valid` indicates whether the host believes the credential is
+/// currently usable; `ttl_seconds` can carry any remaining freshness window
+/// known by the caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialState {
+    /// Whether the credential is currently valid for use.
+    pub valid: bool,
+    /// Remaining lifetime, when known.
+    pub ttl_seconds: Option<u64>,
+}
+
+impl CredentialState {
+    /// Creates state for a present credential with unknown validity.
+    pub fn present() -> Self {
+        Self {
+            valid: false,
+            ttl_seconds: None,
+        }
+    }
+
+    /// Creates state for a valid credential with unknown remaining TTL.
+    pub fn valid() -> Self {
+        Self {
+            valid: true,
+            ttl_seconds: None,
+        }
+    }
+
+    /// Creates state for a valid credential with a known remaining TTL.
+    pub fn valid_for(ttl_seconds: u64) -> Self {
+        Self {
+            valid: true,
+            ttl_seconds: Some(ttl_seconds),
+        }
+    }
+}
+
+/// Requirement applied to one named credential or token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum CredentialRequirement {
+    /// Require that the named credential exists.
+    Present {
+        /// Credential or token namespace, such as `osp` or `mreg`.
+        service: String,
+    },
+    /// Require that the named credential exists and is currently valid.
+    Valid {
+        /// Credential or token namespace, such as `osp` or `mreg`.
+        service: String,
+    },
+    /// Require that the named credential exists, is valid, and has at least
+    /// the specified remaining lifetime.
+    Fresh {
+        /// Credential or token namespace, such as `osp` or `mreg`.
+        service: String,
+        /// Minimum remaining lifetime required for the command.
+        min_ttl_seconds: u64,
+    },
+}
+
+impl CredentialRequirement {
+    /// Requires that the named credential exists.
+    pub fn present(service: impl Into<String>) -> Self {
+        Self::Present {
+            service: normalize_service_name(service),
+        }
+    }
+
+    /// Requires that the named credential exists and is valid.
+    pub fn valid(service: impl Into<String>) -> Self {
+        Self::Valid {
+            service: normalize_service_name(service),
+        }
+    }
+
+    /// Requires that the named credential exists, is valid, and is fresh.
+    pub fn fresh(service: impl Into<String>, min_ttl_seconds: u64) -> Self {
+        Self::Fresh {
+            service: normalize_service_name(service),
+            min_ttl_seconds,
+        }
+    }
+
+    /// Returns the normalized credential namespace used by this requirement.
+    pub fn service(&self) -> &str {
+        match self {
+            Self::Present { service } | Self::Valid { service } | Self::Fresh { service, .. } => {
+                service
+            }
+        }
+    }
+
+    fn normalized(self) -> Option<Self> {
+        let service = normalize_service_name(self.service());
+        if service.is_empty() {
+            return None;
+        }
+
+        Some(match self {
+            Self::Present { .. } => Self::Present { service },
+            Self::Valid { .. } => Self::Valid { service },
+            Self::Fresh {
+                min_ttl_seconds, ..
+            } => Self::Fresh {
+                service,
+                min_ttl_seconds,
+            },
+        })
+    }
+}
+
+/// Session-state requirements attached to a command policy.
+///
+/// These requirements complement capabilities instead of replacing them:
+/// capabilities answer whether the caller is allowed, while session
+/// requirements answer whether the current session is strong enough right now.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRequirements {
+    /// Minimum auth strength required by the command, when any.
+    pub auth_strength: Option<AuthStrength>,
+    /// Credential or token requirements that must be satisfied.
+    pub credentials: Vec<CredentialRequirement>,
+}
+
+impl SessionRequirements {
+    /// Returns `true` when the requirement set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.auth_strength.is_none() && self.credentials.is_empty()
+    }
+
+    fn require_auth_strength(mut self, auth_strength: AuthStrength) -> Self {
+        self.auth_strength = Some(auth_strength);
+        self
+    }
+
+    fn require_credential(mut self, requirement: CredentialRequirement) -> Self {
+        if let Some(requirement) = requirement.normalized() {
+            self.credentials.push(requirement);
+        }
+        self
+    }
+}
+
 /// Product-level availability state for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandAvailability {
@@ -116,6 +287,10 @@ pub struct CommandPolicy {
     pub required_capabilities: BTreeSet<String>,
     /// Feature flags that must be enabled before the command is exposed.
     pub feature_flags: BTreeSet<String>,
+    /// Session-state requirements that control whether the command is visible.
+    pub visible_session_requirements: SessionRequirements,
+    /// Session-state requirements that control whether the command may run.
+    pub run_session_requirements: SessionRequirements,
     /// Profiles allowed to see the command, when restricted.
     pub allowed_profiles: Option<BTreeSet<String>>,
     /// Optional message shown when the command is visible but denied.
@@ -150,6 +325,8 @@ impl CommandPolicy {
             availability: CommandAvailability::Available,
             required_capabilities: BTreeSet::new(),
             feature_flags: BTreeSet::new(),
+            visible_session_requirements: SessionRequirements::default(),
+            run_session_requirements: SessionRequirements::default(),
             allowed_profiles: None,
             denied_message: None,
             hidden_reason: None,
@@ -177,6 +354,42 @@ impl CommandPolicy {
         if !normalized.is_empty() {
             self.feature_flags.insert(normalized);
         }
+        self
+    }
+
+    /// Requires a minimum auth strength to reveal the command at all.
+    pub fn require_visible_auth_strength(mut self, auth_strength: AuthStrength) -> Self {
+        self.visible_session_requirements = self
+            .visible_session_requirements
+            .clone()
+            .require_auth_strength(auth_strength);
+        self
+    }
+
+    /// Requires a minimum auth strength to execute the command.
+    pub fn require_auth_strength(mut self, auth_strength: AuthStrength) -> Self {
+        self.run_session_requirements = self
+            .run_session_requirements
+            .clone()
+            .require_auth_strength(auth_strength);
+        self
+    }
+
+    /// Requires a credential state before the command is visible.
+    pub fn require_visible_credential(mut self, requirement: CredentialRequirement) -> Self {
+        self.visible_session_requirements = self
+            .visible_session_requirements
+            .clone()
+            .require_credential(requirement);
+        self
+    }
+
+    /// Requires a credential state before the command may run.
+    pub fn require_credential(mut self, requirement: CredentialRequirement) -> Self {
+        self.run_session_requirements = self
+            .run_session_requirements
+            .clone()
+            .require_credential(requirement);
         self
     }
 
@@ -222,6 +435,10 @@ pub struct CommandPolicyOverride {
     pub availability: Option<CommandAvailability>,
     /// Additional required capabilities merged into the base policy.
     pub required_capabilities: BTreeSet<String>,
+    /// Replacement visible-session requirements, when overridden.
+    pub visible_session_requirements: Option<SessionRequirements>,
+    /// Replacement run-session requirements, when overridden.
+    pub run_session_requirements: Option<SessionRequirements>,
     /// Replacement hidden-reason metadata, when overridden.
     pub hidden_reason: Option<String>,
     /// Replacement denial message, when overridden.
@@ -284,6 +501,24 @@ impl CommandPolicyOverride {
         self
     }
 
+    /// Replaces the visible-session requirements.
+    pub fn with_visible_session_requirements(
+        mut self,
+        visible_session_requirements: Option<SessionRequirements>,
+    ) -> Self {
+        self.visible_session_requirements = visible_session_requirements;
+        self
+    }
+
+    /// Replaces the run-session requirements.
+    pub fn with_run_session_requirements(
+        mut self,
+        run_session_requirements: Option<SessionRequirements>,
+    ) -> Self {
+        self.run_session_requirements = run_session_requirements;
+        self
+    }
+
     /// Replaces the optional hidden-reason metadata.
     pub fn with_hidden_reason(mut self, hidden_reason: Option<String>) -> Self {
         self.hidden_reason = hidden_reason
@@ -307,8 +542,12 @@ impl CommandPolicyOverride {
 pub struct CommandPolicyContext {
     /// Whether the current caller is authenticated.
     pub authenticated: bool,
+    /// Relative auth strength of the current session, when known.
+    pub auth_strength: Option<AuthStrength>,
     /// Normalized capabilities available to the caller.
     pub capabilities: BTreeSet<String>,
+    /// Named credentials or tokens currently available in the session.
+    pub credentials: BTreeMap<String, CredentialState>,
     /// Normalized feature flags enabled in the current product build.
     pub enabled_features: BTreeSet<String>,
     /// Active normalized profile name, when one is selected.
@@ -319,6 +558,29 @@ impl CommandPolicyContext {
     /// Sets whether the current user is authenticated.
     pub fn authenticated(mut self, value: bool) -> Self {
         self.authenticated = value;
+        if !value {
+            self.auth_strength = None;
+        }
+        self
+    }
+
+    /// Sets the auth strength and marks the context authenticated.
+    pub fn with_auth_strength(mut self, auth_strength: AuthStrength) -> Self {
+        self.authenticated = true;
+        self.auth_strength = Some(auth_strength);
+        self
+    }
+
+    /// Inserts or replaces the state for one named credential.
+    pub fn with_credential(
+        mut self,
+        service: impl Into<String>,
+        credential: CredentialState,
+    ) -> Self {
+        let normalized = normalize_service_name(service);
+        if !normalized.is_empty() {
+            self.credentials.insert(normalized, credential);
+        }
         self
     }
 
@@ -389,6 +651,19 @@ pub enum AccessReason {
     Unauthenticated,
     /// One or more required capabilities are missing.
     MissingCapabilities,
+    /// A required credential is missing entirely.
+    MissingCredential(String),
+    /// A required credential exists but is not currently valid.
+    InvalidCredential(String),
+    /// A required credential does not have enough remaining lifetime.
+    InsufficientCredentialTtl {
+        /// Credential or token namespace, such as `osp` or `mreg`.
+        service: String,
+        /// Required minimum remaining lifetime.
+        required_ttl_seconds: u64,
+    },
+    /// The current session auth strength is too weak.
+    InsufficientAuthStrength(AuthStrength),
     /// A required feature flag is disabled.
     FeatureDisabled(String),
     /// The command is unavailable in the active profile.
@@ -521,6 +796,12 @@ impl CommandPolicyRegistry {
             policy
                 .required_capabilities
                 .extend(override_policy.required_capabilities.iter().cloned());
+            if let Some(requirements) = &override_policy.visible_session_requirements {
+                policy.visible_session_requirements = requirements.clone();
+            }
+            if let Some(requirements) = &override_policy.run_session_requirements {
+                policy.run_session_requirements = requirements.clone();
+            }
             if let Some(hidden_reason) = &override_policy.hidden_reason {
                 policy.hidden_reason = Some(hidden_reason.clone());
             }
@@ -609,8 +890,13 @@ pub fn evaluate_policy(policy: &CommandPolicy, context: &CommandPolicyContext) -
     {
         return CommandAccess::hidden(AccessReason::FeatureDisabled(feature.clone()));
     }
+    if let Some(reason) =
+        evaluate_session_requirements(&policy.visible_session_requirements, context)
+    {
+        return CommandAccess::hidden(reason);
+    }
 
-    match policy.visibility {
+    let access = match policy.visibility {
         VisibilityMode::Public => CommandAccess::visible_runnable(),
         VisibilityMode::Authenticated => {
             if context.authenticated {
@@ -641,7 +927,66 @@ pub fn evaluate_policy(policy: &CommandPolicy, context: &CommandPolicyContext) -
             }
         }
         VisibilityMode::Hidden => CommandAccess::hidden(AccessReason::HiddenByPolicy),
+    };
+
+    if !access.is_runnable() {
+        return access;
     }
+
+    if let Some(reason) = evaluate_session_requirements(&policy.run_session_requirements, context) {
+        return CommandAccess::visible_denied(reason);
+    }
+
+    access
+}
+
+fn normalize_service_name(value: impl Into<String>) -> String {
+    value.into().trim().to_ascii_lowercase()
+}
+
+fn evaluate_session_requirements(
+    requirements: &SessionRequirements,
+    context: &CommandPolicyContext,
+) -> Option<AccessReason> {
+    if let Some(required_strength) = requirements.auth_strength {
+        match context.auth_strength {
+            Some(actual) if actual >= required_strength => {}
+            _ => return Some(AccessReason::InsufficientAuthStrength(required_strength)),
+        }
+    }
+
+    for requirement in &requirements.credentials {
+        let Some(credential) = context.credentials.get(requirement.service()) else {
+            return Some(AccessReason::MissingCredential(
+                requirement.service().to_string(),
+            ));
+        };
+
+        match requirement {
+            CredentialRequirement::Present { .. } => {}
+            CredentialRequirement::Valid { service } => {
+                if !credential.valid {
+                    return Some(AccessReason::InvalidCredential(service.clone()));
+                }
+            }
+            CredentialRequirement::Fresh {
+                service,
+                min_ttl_seconds,
+            } => {
+                if !credential.valid {
+                    return Some(AccessReason::InvalidCredential(service.clone()));
+                }
+                if credential.ttl_seconds.unwrap_or_default() < *min_ttl_seconds {
+                    return Some(AccessReason::InsufficientCredentialTtl {
+                        service: service.clone(),
+                        required_ttl_seconds: *min_ttl_seconds,
+                    });
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -649,9 +994,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        AccessReason, CommandAccess, CommandAvailability, CommandPath, CommandPolicy,
+        AccessReason, AuthStrength, CommandAccess, CommandAvailability, CommandPath, CommandPolicy,
         CommandPolicyContext, CommandPolicyOverride, CommandPolicyRegistry, CommandRunnable,
-        CommandVisibility, VisibilityMode, evaluate_policy,
+        CommandVisibility, CredentialRequirement, CredentialState, VisibilityMode, evaluate_policy,
     };
 
     #[test]
@@ -699,12 +1044,19 @@ mod tests {
             .authenticated(true)
             .with_capabilities([" Orch.Read ", "", "orch.write"])
             .with_features([" Orch ", " "])
-            .with_profile(" Dev ");
+            .with_profile(" Dev ")
+            .with_auth_strength(AuthStrength::Strong)
+            .with_credential(" OSP ", CredentialState::valid_for(900));
 
         assert!(context.authenticated);
+        assert_eq!(context.auth_strength, Some(AuthStrength::Strong));
         assert_eq!(
             context.capabilities,
             BTreeSet::from(["orch.read".to_string(), "orch.write".to_string()])
+        );
+        assert_eq!(
+            context.credentials.get("osp"),
+            Some(&CredentialState::valid_for(900))
         );
         assert_eq!(
             context.enabled_features,
@@ -857,6 +1209,36 @@ mod tests {
             ),
             CommandAccess::visible_runnable()
         );
+    }
+
+    #[test]
+    fn visible_and_run_session_requirements_produce_hidden_denied_and_runnable_states() {
+        let policy = CommandPolicy::new(CommandPath::new(["orch", "apply"]))
+            .require_visible_auth_strength(AuthStrength::Strong)
+            .require_credential(CredentialRequirement::fresh("osp", 600));
+
+        let hidden = evaluate_policy(&policy, &CommandPolicyContext::default());
+        assert_eq!(
+            hidden,
+            CommandAccess::hidden(AccessReason::InsufficientAuthStrength(AuthStrength::Strong))
+        );
+
+        let denied = evaluate_policy(
+            &policy,
+            &CommandPolicyContext::default().with_auth_strength(AuthStrength::Strong),
+        );
+        assert_eq!(
+            denied,
+            CommandAccess::visible_denied(AccessReason::MissingCredential("osp".to_string()))
+        );
+
+        let allowed = evaluate_policy(
+            &policy,
+            &CommandPolicyContext::default()
+                .with_auth_strength(AuthStrength::Strong)
+                .with_credential("osp", CredentialState::valid_for(900)),
+        );
+        assert!(allowed.is_runnable());
     }
 
     #[test]

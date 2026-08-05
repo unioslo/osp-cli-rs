@@ -1,4 +1,6 @@
-use crate::core::output_model::{OutputItems, OutputResult, RenderRecommendation};
+use crate::core::output_model::{
+    OutputItems, OutputResult, RenderRecommendation, output_items_to_value,
+};
 use crate::guide::GuideView;
 use serde_json::json;
 
@@ -141,6 +143,51 @@ fn question_stage_variants_clean_empty_fields_and_filter_by_existence_unit() {
         let output = apply_pipeline(rows, &["? uid".to_string()]).expect("pipeline should pass");
         assert_eq!(output_rows(&output).len(), 1);
         assert!(output_rows(&output)[0].contains_key("uid"));
+    }
+}
+
+#[test]
+fn output_pipeline_filters_nested_single_record_documents_unit() {
+    let output = OutputResult::from_rows(vec![
+        json!({
+            "name": "it-usit-gsd-drift",
+            "status_counts": {"current": 2, "expired": 1},
+            "siteadmins": {
+                "current": [
+                    {"contact": "iti-ops@usit.uio.no", "role": "primary", "hosts": 242},
+                    {"contact": "unix-drift@usit.uio.no", "role": "related", "hosts": 1}
+                ],
+                "expired": [
+                    {"contact": "iti-ssd@usit.uio.no", "role": "primary", "hosts": 3}
+                ]
+            }
+        })
+        .as_object()
+        .cloned()
+        .expect("object"),
+    ]);
+    let mut output = output;
+    output.meta.render_recommendation = Some(RenderRecommendation::Format(
+        crate::core::output::OutputFormat::Mreg,
+    ));
+
+    for stage in ["primary", "F role=primary"] {
+        let filtered = apply_output_pipeline(output.clone(), &[stage.to_string()])
+            .expect("nested document filter should pass");
+        let value = output_items_to_value(&filtered.items);
+
+        assert_eq!(value["siteadmins"]["current"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            value["siteadmins"]["current"][0]["contact"],
+            json!("iti-ops@usit.uio.no")
+        );
+        assert_eq!(value["siteadmins"]["expired"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            value["siteadmins"]["expired"][0]["contact"],
+            json!("iti-ssd@usit.uio.no")
+        );
+        assert!(!value.to_string().contains("unix-drift@usit.uio.no"));
+        assert!(value.get("status_counts").is_none());
     }
 }
 

@@ -29,6 +29,7 @@
 //!   want streamable stages to avoid eager materialization
 
 use crate::core::{
+    output::OutputFormat,
     output_model::{
         OutputDocument, OutputItems, OutputMeta, OutputResult, RenderRecommendation,
         output_items_from_value,
@@ -47,6 +48,7 @@ use crate::dsl::{
     eval::context::RowContext,
     parse::pipeline::parse_stage_list,
 };
+use serde_json::Value;
 
 /// Apply a pipeline to plain row output.
 ///
@@ -78,7 +80,7 @@ use crate::dsl::{
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
-    apply_output_pipeline(OutputResult::from_rows(rows), stages)
+    execute_pipeline(rows, stages)
 }
 
 /// Apply a pipeline to existing output without flattening grouped data first.
@@ -195,12 +197,15 @@ fn execute_pipeline_items(
 ) -> Result<OutputResult> {
     let parsed = parse_stage_list(stages)?;
     let compiled = CompiledPipeline::from_parsed(parsed)?;
+    let promote_nested_single_row =
+        initial_document.is_none() && recommends_document_like_rows(initial_render_recommendation);
     PipelineExecutor::new(
         items,
         initial_document,
         initial_wants_copy,
         initial_render_recommendation,
         compiled,
+        promote_nested_single_row,
     )
     .run()
 }
@@ -239,6 +244,7 @@ impl PipelineExecutor {
         wants_copy: bool,
         render_recommendation: Option<RenderRecommendation>,
         compiled: CompiledPipeline,
+        promote_nested_single_row: bool,
     ) -> Self {
         let items = if let Some(document) = document.as_ref() {
             // Semantic payloads stay canonical as JSON through the DSL.
@@ -247,6 +253,12 @@ impl PipelineExecutor {
             PipelineItems::Semantic(document.value.clone())
         } else {
             match items {
+                OutputItems::Rows(rows)
+                    if promote_nested_single_row && is_single_nested_row(&rows) =>
+                {
+                    let mut rows = rows;
+                    PipelineItems::Semantic(Value::Object(rows.pop().unwrap_or_default()))
+                }
                 OutputItems::Rows(rows) => {
                     PipelineItems::RowStream(Box::new(rows.into_iter().map(Ok)))
                 }
@@ -326,7 +338,7 @@ impl PipelineExecutor {
             return Err(anyhow!("semantic stage dispatch requires semantic items"));
         };
 
-        let transformed = value_stage::apply_stage(value, stage)?;
+        let transformed = value_stage::apply_stage_preserving_matching_rows(value, stage)?;
         self.items = PipelineItems::Semantic(transformed);
         match semantic_effect {
             // Preserve/transform both keep the semantic payload attached. The
@@ -581,6 +593,19 @@ impl PipelineExecutor {
 
 fn materialize_row_stream(stream: RowStream) -> Result<Vec<Row>> {
     stream.collect()
+}
+
+fn is_single_nested_row(rows: &[Row]) -> bool {
+    matches!(rows, [row] if row.values().any(|value| matches!(value, Value::Array(_) | Value::Object(_))))
+}
+
+fn recommends_document_like_rows(recommendation: Option<RenderRecommendation>) -> bool {
+    matches!(
+        recommendation,
+        Some(RenderRecommendation::Format(
+            OutputFormat::Markdown | OutputFormat::Mreg
+        ))
+    )
 }
 
 fn stream_row_fanout<I, F>(stream: RowStream, fanout: F) -> RowStream

@@ -8,6 +8,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::config::ResolvedConfig;
 use crate::ui::chrome::{FULL_HELP_LAYOUT_CHROME, PLAIN_SECTION_CHROME};
 use crate::ui::style::{StyleToken, ThemeStyler};
+use crate::ui::text::wrap_display_width;
 
 use super::{MessageBuffer, MessageLayout, MessageLevel, message_layout_from_config};
 
@@ -249,17 +250,16 @@ fn render_shared_full_sections(
         let title =
             FULL_HELP_LAYOUT_CHROME.render_title(&section.title, chrome.width, chrome.unicode);
         lines.push(paint(styler, &title, section.level.style_token()));
-        lines.extend(
-            section
-                .lines
-                .iter()
-                .map(|line| paint(styler, &format!("  {line}"), StyleToken::Text)),
-        );
+        lines.extend(message_body_lines(section, chrome.width, styler));
     }
     if matches!(chrome.frame_style, MessageFrameStyle::TopBottom)
         && let Some(rule) = ruled_line(chrome.width, chrome.unicode)
     {
-        lines.push(paint(styler, &rule, StyleToken::Border));
+        let token = sections
+            .last()
+            .map(|section| section.level.style_token())
+            .unwrap_or(StyleToken::Border);
+        lines.push(paint(styler, &rule, token));
     }
     lines.join("\n")
 }
@@ -299,14 +299,9 @@ fn render_framed_section(
         let title = PLAIN_SECTION_CHROME.render_title(&section.title, None, false);
         lines.push(paint(styler, &title, section.level.style_token()));
     }
-    lines.extend(
-        section
-            .lines
-            .iter()
-            .map(|line| paint(styler, &format!("  {line}"), StyleToken::Text)),
-    );
+    lines.extend(message_body_lines(section, chrome.width, styler));
     if bottom_rule && let Some(rule) = ruled_line(chrome.width, chrome.unicode) {
-        lines.push(paint(styler, &rule, StyleToken::Border));
+        lines.push(paint(styler, &rule, section.level.style_token()));
     }
     lines.join("\n")
 }
@@ -321,6 +316,30 @@ fn render_compact_section(section: &RenderedSection, styler: Option<&ThemeStyler
             .map(|line| paint(styler, &format!("  {line}"), StyleToken::Text)),
     );
     lines.join("\n")
+}
+
+fn message_body_lines(
+    section: &RenderedSection,
+    width: Option<usize>,
+    styler: Option<&ThemeStyler<'_>>,
+) -> Vec<String> {
+    // Bootstrap errors can only supply the 12-column chrome fallback, which is
+    // not a trustworthy terminal width. Wrapping at that hint makes paths and
+    // diagnostic identifiers unreadable; wait for a useful width measurement.
+    let content_width = width
+        .filter(|width| *width >= 40)
+        .map(|width| width.saturating_sub(2));
+    section
+        .lines
+        .iter()
+        .flat_map(|line| {
+            line.split('\n').flat_map(|line| match content_width {
+                Some(width) => wrap_display_width(line, width),
+                None => vec![line.to_string()],
+            })
+        })
+        .map(|line| paint(styler, &format!("  {line}"), StyleToken::Text))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -378,11 +397,11 @@ fn render_boxed_section(
     chrome: MessageChrome,
     chars: BoxChars,
 ) -> String {
-    let body_lines = section
-        .lines
-        .iter()
-        .map(|line| format!("  {line}"))
-        .collect::<Vec<_>>();
+    let body_lines = message_body_lines(
+        section,
+        chrome.width.map(|width| width.saturating_sub(2)),
+        None,
+    );
     let content_width = std::iter::once(section.title.as_str())
         .chain(body_lines.iter().map(String::as_str))
         .map(UnicodeWidthStr::width)
@@ -390,8 +409,9 @@ fn render_boxed_section(
         .unwrap_or(0);
     let inner_width = chrome
         .width
+        .map(|width| width.saturating_sub(2))
         .unwrap_or(content_width + 2)
-        .max(content_width + 2);
+        .max(content_width);
 
     let title_width = UnicodeWidthStr::width(section.title.as_str());
     let right_fill = inner_width.saturating_sub(title_width + 2);
@@ -454,6 +474,7 @@ mod tests {
     use crate::ui::ThemeStyler;
     use crate::ui::messages::{MessageBuffer, MessageLevel};
     use crate::ui::theme::resolve_theme;
+    use unicode_width::UnicodeWidthStr;
 
     fn resolved_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
@@ -538,6 +559,67 @@ mod tests {
         assert!(rendered.contains("- Errors "));
         assert!(rendered.contains("- Warnings "));
         assert!(rendered.ends_with("----------------\n"));
+    }
+
+    #[test]
+    fn full_render_wraps_long_messages_within_chrome_width_unit() {
+        let mut buffer = MessageBuffer::default();
+        buffer.error(
+            "capabilities_request_failed: Failed to fetch capabilities for provider 'vmware'.",
+        );
+
+        let rendered = render_messages_internal(
+            &buffer,
+            MessageRenderOptions::full(MessageLevel::Error),
+            None,
+            MessageChrome {
+                frame_style: MessageFrameStyle::TopBottom,
+                ruled_policy: MessageRulePolicy::Shared,
+                unicode: true,
+                width: Some(40),
+            },
+        );
+
+        assert!(
+            rendered.contains("\n  capabilities_request_failed: Failed to\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("\n  fetch capabilities for provider\n  'vmware'.\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .all(|line| UnicodeWidthStr::width(line) <= 40)
+        );
+    }
+
+    #[test]
+    fn styled_top_bottom_message_bottom_rule_uses_message_level_color_unit() {
+        let mut buffer = MessageBuffer::default();
+        buffer.success("done");
+
+        let theme = resolve_theme("dracula");
+        let overrides = crate::ui::StyleOverrides::default();
+        let styler = ThemeStyler::new(true, &theme, &overrides);
+        let rendered = render_messages_internal(
+            &buffer,
+            MessageRenderOptions::full(MessageLevel::Success),
+            Some(&styler),
+            MessageChrome {
+                frame_style: MessageFrameStyle::TopBottom,
+                ruled_policy: MessageRulePolicy::PerSection,
+                unicode: false,
+                width: Some(12),
+            },
+        );
+        let bottom = rendered
+            .lines()
+            .last()
+            .expect("rendered message should have a closing rule");
+
+        assert_eq!(bottom, "\x1b[38;2;80;250;123m------------\x1b[0m");
     }
 
     #[test]

@@ -25,8 +25,10 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
+use super::access_recovery::CommandAccessRecovery;
 use super::host::ErrorDetail;
 use crate::config::{ConfigLayer, ResolvedConfig, RuntimeLoadOptions};
 use crate::core::command_policy::{
@@ -150,6 +152,7 @@ impl ConfigState {
     ///
     /// let mut defaults = ConfigLayer::default();
     /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.path", Vec::<String>::new());
     ///
     /// let mut resolver = ConfigResolver::default();
     /// resolver.set_defaults(defaults);
@@ -229,6 +232,7 @@ impl UiState {
     ///
     /// let mut defaults = ConfigLayer::default();
     /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.path", Vec::<String>::new());
     /// defaults.set("ui.message.verbosity", "info");
     ///
     /// let mut resolver = ConfigResolver::default();
@@ -480,6 +484,7 @@ pub struct AppRuntime {
     /// Launch-time inputs used to assemble caches and external services.
     pub launch: LaunchContext,
     product_defaults: ConfigLayer,
+    access_recovery: Option<Arc<dyn CommandAccessRecovery>>,
 }
 
 impl AppRuntime {
@@ -500,6 +505,7 @@ impl AppRuntime {
             themes,
             launch,
             product_defaults: ConfigLayer::default(),
+            access_recovery: None,
         }
     }
 
@@ -550,6 +556,17 @@ impl AppRuntime {
     pub(crate) fn set_product_defaults(&mut self, product_defaults: ConfigLayer) {
         self.product_defaults = product_defaults;
     }
+
+    pub(crate) fn access_recovery(&self) -> Option<Arc<dyn CommandAccessRecovery>> {
+        self.access_recovery.clone()
+    }
+
+    pub(crate) fn set_access_recovery(
+        &mut self,
+        access_recovery: Option<Arc<dyn CommandAccessRecovery>>,
+    ) {
+        self.access_recovery = access_recovery;
+    }
 }
 
 /// Authorization and command-visibility state derived from configuration.
@@ -571,7 +588,7 @@ impl AuthState {
             // plugins and native registered integrations dispatched via the
             // generic external command path.
             external_allowlist: parse_allowlist(config.get_string("auth.visible.plugins")),
-            policy_context: CommandPolicyContext::default(),
+            policy_context: policy_context_for_resolved(CommandPolicyContext::default(), config),
             builtin_policy: CommandPolicyRegistry::default(),
             external_policy: CommandPolicyRegistry::default(),
         }
@@ -612,6 +629,11 @@ impl AuthState {
         &mut self.builtin_policy
     }
 
+    /// Replaces the policy registry for built-in commands.
+    pub fn replace_builtin_policy(&mut self, registry: CommandPolicyRegistry) {
+        self.builtin_policy = registry;
+    }
+
     /// Returns the policy registry for externally dispatched commands.
     pub fn external_policy(&self) -> &CommandPolicyRegistry {
         &self.external_policy
@@ -625,6 +647,14 @@ impl AuthState {
     /// Replaces the policy registry for externally dispatched commands.
     pub fn replace_external_policy(&mut self, registry: CommandPolicyRegistry) {
         self.external_policy = registry;
+    }
+
+    /// Overlays newly discovered external policies without discarding native
+    /// or product-owned entries already installed in the runtime.
+    pub(crate) fn overlay_external_policy(&mut self, registry: CommandPolicyRegistry) {
+        for policy in registry.entries() {
+            self.external_policy.register(policy.clone());
+        }
     }
 
     /// Evaluates access for a built-in command.
@@ -666,6 +696,13 @@ impl AuthState {
     pub fn is_external_command_visible(&self, command: &str) -> bool {
         self.external_command_access(command).is_visible()
     }
+}
+
+pub(crate) fn policy_context_for_resolved(
+    context: CommandPolicyContext,
+    config: &ResolvedConfig,
+) -> CommandPolicyContext {
+    context.with_profile(config.active_profile())
 }
 
 fn parse_allowlist(raw: Option<&str>) -> Option<HashSet<String>> {

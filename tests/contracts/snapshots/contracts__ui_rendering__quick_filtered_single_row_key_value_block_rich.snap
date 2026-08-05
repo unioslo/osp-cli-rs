@@ -1,0 +1,11 @@
+---
+source: tests/contracts/ui_rendering.rs
+assertion_line: 224
+expression: sanitized
+---
+[38;2;189;147;249mnetgroups (10)[0m[38;2;104;121;173m:[0m
+  [38;2;248;248;242mvcs-cfengine[0m     [38;2;248;248;242mvcs-ops[0m
+  [38;2;248;248;242mvcs-dhcp[0m         [38;2;248;248;242mvcs-radius[0m
+  [38;2;248;248;242mvcs-it-org[0m       [38;2;248;248;242mvcs-ssd[0m
+  [38;2;248;248;242mvcs-it-osprov[0m    [38;2;248;248;242mvcs-usit[0m
+  [38;2;248;248;242mvcs-iti[0m          [38;2;248;248;242mvcs-virtprov-admins[0m

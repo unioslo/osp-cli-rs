@@ -237,10 +237,15 @@ mod tests {
         repl_history_enabled, repl_history_exclude_patterns, run_history_repl_command,
     };
     use crate::app::ReplCommandOutput;
-    use crate::app::{AppSession, AppState, RuntimeContext, TerminalKind};
+    use crate::app::{
+        AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
+    };
     use crate::cli::{HistoryArgs, HistoryCommands, HistoryPruneArgs};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
+    use crate::core::output::OutputFormat;
     use crate::repl::{HistoryConfig, SharedHistory};
+    use crate::ui::RenderSettings;
+    use crate::ui::messages::MessageLevel;
     use serde_json::Value;
     use std::path::PathBuf;
 
@@ -248,6 +253,7 @@ mod tests {
     fn history_exclude_patterns_include_repl_defaults() {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("theme.path", Vec::<String>::new());
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
         let resolved = resolver
@@ -266,6 +272,7 @@ mod tests {
     fn history_exclude_patterns_do_not_duplicate_defaults() {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("theme.path", Vec::<String>::new());
         let mut session = ConfigLayer::default();
         session.set("repl.history.exclude", vec!["help".to_string()]);
         let mut resolver = ConfigResolver::default();
@@ -321,11 +328,13 @@ mod tests {
         ]);
         assert!(!repl_history_enabled(&disabled));
 
-        let zero_capacity_falls_back = config_with_entries(&[
+        let positive_capacity_keeps_history_enabled = config_with_entries(&[
             ("profile.default", "default"),
-            ("repl.history.max_entries", "0"),
+            ("repl.history.max_entries", "1"),
         ]);
-        assert!(repl_history_enabled(&zero_capacity_falls_back));
+        assert!(repl_history_enabled(
+            &positive_capacity_keeps_history_enabled
+        ));
 
         let enabled = config_with_entries(&[("profile.default", "default")]);
         assert!(repl_history_enabled(&enabled));
@@ -357,11 +366,7 @@ mod tests {
     #[test]
     fn build_history_config_tracks_current_shell_scope_without_manual_sync_unit() {
         let config = config_with_entries(&[("profile.default", "default")]);
-        let mut state = AppState::from_resolved_config(
-            RuntimeContext::new(None, TerminalKind::Repl, None),
-            config,
-        )
-        .expect("app state should build");
+        let mut state = app_state(config);
 
         state.session.enter_repl_scope("ldap");
 
@@ -376,11 +381,7 @@ mod tests {
     #[test]
     fn build_history_config_respects_session_history_opt_out_unit() {
         let config = config_with_entries(&[("profile.default", "default")]);
-        let mut state = AppState::from_resolved_config(
-            RuntimeContext::new(None, TerminalKind::Repl, None),
-            config,
-        )
-        .expect("app state should build");
+        let mut state = app_state(config);
         state.session.history_enabled = false;
 
         let history_config = build_history_config(&state.runtime, &state.session);
@@ -489,6 +490,8 @@ mod tests {
 
     fn config_with_entries(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
+        defaults.set("repl.history.path", "/tmp/osp-repl-history-tests.jsonl");
+        defaults.set("theme.path", Vec::<String>::new());
         for (key, value) in entries {
             defaults.set(*key, *value);
         }
@@ -499,11 +502,27 @@ mod tests {
             .expect("config should resolve")
     }
 
+    fn app_state(config: crate::config::ResolvedConfig) -> AppState {
+        AppState::new(AppStateInit {
+            context: RuntimeContext::new(None, TerminalKind::Repl, None),
+            config,
+            render_settings: RenderSettings::test_plain(OutputFormat::Json),
+            message_verbosity: MessageLevel::Success,
+            error_detail: crate::app::ErrorDetail::Terse,
+            debug_verbosity: 0,
+            plugins: crate::plugin::PluginManager::new(Vec::new())
+                .with_bundled_roots(false)
+                .with_default_roots(false),
+            native_commands: crate::native::NativeCommandRegistry::default(),
+            themes: crate::ui::theme_catalog::ThemeCatalog::default(),
+            launch: LaunchContext::default(),
+        })
+    }
+
     fn shared_history(enabled: bool) -> SharedHistory {
-        let temp_dir = make_temp_dir("osp-cli-repl-history");
         SharedHistory::new(
             HistoryConfig {
-                path: Some(temp_dir.join("history.jsonl")),
+                path: None,
                 max_entries: 32,
                 enabled,
                 dedupe: false,
@@ -515,9 +534,5 @@ mod tests {
             }
             .normalized(),
         )
-    }
-
-    fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
-        crate::tests::make_temp_dir(prefix)
     }
 }

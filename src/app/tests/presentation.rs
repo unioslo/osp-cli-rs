@@ -82,6 +82,7 @@ fn repl_help_chrome_variants_render_expected_structure_unit() {
     assert!(!rendered.contains("\n\n\nUse `osp plugins commands`"));
 }
 
+#[cfg_attr(miri, ignore = "insta snapshot test spawns cargo metadata")]
 #[test]
 fn presentation_prompt_profiles_preserve_local_snapshots_unit() {
     assert_snapshot!(

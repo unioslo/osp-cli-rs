@@ -17,6 +17,7 @@ fn secret_edit_options() -> TomlStoreEditOptions {
     TomlStoreEditOptions::new().for_secrets()
 }
 
+#[cfg_attr(miri, ignore = "config store filesystem integration test")]
 #[test]
 fn dry_run_set_does_not_create_file() {
     let dir = make_temp_dir("osp-config-store-dry-run");
@@ -35,6 +36,7 @@ fn dry_run_set_does_not_create_file() {
     assert!(!path.exists());
 }
 
+#[cfg_attr(miri, ignore = "config store filesystem integration test")]
 #[test]
 fn set_round_trips_cover_overwrite_list_and_terminal_profile_scopes_unit() {
     let dir = make_temp_dir("osp-config-store-overwrite");
@@ -70,7 +72,7 @@ format = "json"
     ]);
     set_scoped_value_in_toml(
         &list_path,
-        "ui.formats",
+        "theme.path",
         &value,
         &Scope::global(),
         default_edit_options(),
@@ -80,8 +82,8 @@ format = "json"
     let root: toml::Value = payload.parse().expect("written config should stay valid");
     assert_eq!(
         root.get("default")
-            .and_then(|value| value.get("ui"))
-            .and_then(|value| value.get("formats"))
+            .and_then(|value| value.get("theme"))
+            .and_then(|value| value.get("path"))
             .and_then(toml::Value::as_array)
             .map(|items| {
                 items
@@ -93,7 +95,7 @@ format = "json"
     );
     let result = unset_scoped_value_in_toml(
         &list_path,
-        "ui.formats",
+        "theme.path",
         &Scope::global(),
         default_edit_options(),
     )
@@ -151,6 +153,55 @@ format = "json"
     );
 }
 
+#[cfg_attr(miri, ignore = "config store filesystem integration test")]
+#[test]
+fn store_rejects_values_the_runtime_schema_cannot_load_unit() {
+    let dir = make_temp_dir("osp-config-store-schema-validation");
+    let path = dir.join("config.toml");
+
+    let unknown = set_scoped_value_in_toml(
+        &path,
+        "ui.formats",
+        &ConfigValue::List(vec![ConfigValue::String("json".to_string())]),
+        &Scope::global(),
+        default_edit_options(),
+    )
+    .expect_err("unknown keys must not be persisted");
+    assert!(matches!(
+        unknown,
+        ConfigError::UnknownConfigKeys { keys } if keys == vec!["ui.formats".to_string()]
+    ));
+
+    let wrong_type = set_scoped_value_in_toml(
+        &path,
+        "repl.history.enabled",
+        &ConfigValue::List(Vec::new()),
+        &Scope::global(),
+        default_edit_options(),
+    )
+    .expect_err("values with the wrong schema type must not be persisted");
+    assert!(matches!(
+        wrong_type,
+        ConfigError::InvalidValueType { key, .. } if key == "repl.history.enabled"
+    ));
+
+    let invalid_limit = set_scoped_value_in_toml(
+        &path,
+        "ui.width",
+        &ConfigValue::Integer(0),
+        &Scope::global(),
+        default_edit_options(),
+    )
+    .expect_err("values outside schema constraints must not be persisted");
+    assert!(matches!(
+        invalid_limit,
+        ConfigError::InvalidConfigValue { key, .. } if key == "ui.width"
+    ));
+
+    assert!(!path.exists());
+}
+
+#[cfg_attr(miri, ignore = "config store filesystem integration test")]
 #[test]
 fn unset_behaviors_cover_missing_values_missing_files_and_pruning_unit() {
     let dir = make_temp_dir("osp-config-store-unset-missing");
@@ -223,6 +274,7 @@ format = "json"
     assert!(root.get("terminal").is_none());
 }
 
+#[cfg_attr(miri, ignore = "config store filesystem integration test")]
 #[test]
 fn store_reports_invalid_toml_sections_and_blank_keys_for_set_and_unset_unit() {
     let dir = make_temp_dir("osp-config-store-invalid");
@@ -332,6 +384,7 @@ ui = "json"
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "config store filesystem/permission integration test")]
 #[test]
 fn secret_write_and_permission_validation_cover_strict_non_strict_and_missing_paths_unit() {
     use std::os::unix::fs::PermissionsExt;
@@ -494,6 +547,7 @@ format = "json"
     assert!(empty_root.is_empty());
 }
 
+#[cfg_attr(miri, ignore = "config store filesystem integration test")]
 #[test]
 fn write_and_load_helpers_cover_regular_io_and_error_paths_unit() {
     let dir = make_temp_dir("osp-config-store-write-root");

@@ -15,7 +15,12 @@ The short version is simple:
 The DSL is easiest to reason about when these rules hold:
 
 - Bare token syntax means permissive descendant matching.
-- Path syntax means strict path semantics.
+- Path syntax means structural path semantics.
+- Named path segments implicitly descend arrays: `commands.name` and
+  `commands[].name` resolve the same addresses.
+- Explicit indexes and slices still select specific array members.
+- Matches are distinct by address, so equal values on separate branches are
+  not deduplicated.
 - The same selector should resolve the same addresses across `P`, `F`, quick,
   `?`, and `VALUE`.
 - Selector verbs preserve and rebuild structure whenever possible.
@@ -24,7 +29,8 @@ The DSL is easiest to reason about when these rules hold:
 Concrete examples:
 
 - `name` is permissive.
-- `commands[].name` is exact path traversal.
+- `commands.name` and `commands[].name` both traverse every command in
+  document order.
 - `commands[0].name` is exact indexed traversal.
 - `metadata.owner` must not silently fall back to a descendant flat-key match.
 
@@ -73,8 +79,10 @@ Not every verb returns the same shape, but the differences should be deliberate.
   keeping owning envelopes.
 - `V` and `K` only narrow the quick-search scope. They do not change selector
   resolution rules.
-- `VALUE` is transforming. It keeps canonical JSON on the semantic path, but
-  targeted leaves become `{value: ...}` rows.
+- `VALUE` is transforming and intentionally discards semantic envelopes. Every
+  substrate produces flat `{value: ...}` rows.
+- Addressed `F` retains complete members from the deepest array on the path and
+  leaves sibling branches unchanged. A filter must not also project.
 - `U` duplicates the nearest owning record once per array member. It is not a
   disguised projection.
 - Group-preserving row verbs operate on each group's member rows and leave group
@@ -106,8 +114,8 @@ surface still has to stay coherent.
 - Path selectors must mean the same path in `F`, `P`, `VALUE`, and path quick.
 - Quoted term parsing must stay shared across `P`, `VAL`, and `VALUE`.
 - Row-mode fanout projection must not silently alias colliding labels.
-- `VALUE` should keep sibling field identity when extracting multiple leaves
-  from the same object.
+- Multiple `VALUE` selectors emit flat rows in selector order; matches within
+  each selector retain document order and address-distinct duplicates.
 - Grouped pipelines must preserve group metadata when applying row-oriented
   stages.
 
@@ -118,8 +126,8 @@ Start here when changing semantics:
 - `src/dsl/parse/path.rs`
   Path parsing and the structural-token classification rule.
 - `src/dsl/verbs/selector.rs`
-  Selector-engine split between strict path matching and permissive descendant
-  matching.
+  Selector-engine split between structural path matching and permissive
+  descendant matching.
 - `src/dsl/eval/resolve.rs`
   Addressed resolution, path traversal, descendant matching, flat-key hints,
   negative indexes, and slices.
@@ -140,14 +148,16 @@ Start here when changing semantics:
 
 When changing selector semantics, cover at least these cases:
 
-- The same selector in `P`, `F`, quick, `?`, and `VALUE`.
+- The same selector in `P`, `F`, quick, `?`, and `VALUE`, including implicit
+  and explicit array descent.
 - Bare token versus dotted path versus indexed path.
 - Relative paths on nested semantic documents.
 - Fanout, slices, negative indexes, and overlapping keepers.
 - Literal `null` in arrays and objects.
 - Mixed keepers and droppers on the same path family.
 - Grouped row stages preserving `groups` and `aggregates`.
-- `VALUE` extracting sibling leaves from the same object.
+- `VALUE` flattening sibling leaves and semantic-document selections.
+- Addressed `F` preserving complete owning members and untouched siblings.
 - Row fanout label collisions.
 - Collapse and count behavior after grouped pipelines.
 

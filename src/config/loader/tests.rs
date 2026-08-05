@@ -10,6 +10,7 @@ fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
     crate::tests::make_temp_dir(prefix)
 }
 
+#[cfg_attr(miri, ignore = "config file loader filesystem integration test")]
 #[test]
 fn toml_file_loader_covers_existing_missing_optional_and_directory_paths_unit() {
     let root = make_temp_dir("osp-config-loader");
@@ -58,6 +59,7 @@ fn toml_file_loader_covers_existing_missing_optional_and_directory_paths_unit() 
     ));
 }
 
+#[cfg_attr(miri, ignore = "config loader filesystem integration test")]
 #[test]
 fn secrets_and_env_loaders_mark_secret_entries_and_directory_errors_unit() {
     let root = make_temp_dir("osp-config-secrets");
@@ -185,6 +187,7 @@ fn pipeline_builder_covers_schema_collected_env_and_optional_layer_paths_unit() 
 fn pipeline_resolver_preserves_custom_schema_for_explain_unit() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
     defaults.set("custom.answer", "42");
 
     let mut schema = ConfigSchema::default();

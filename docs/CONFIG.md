@@ -258,6 +258,13 @@ Secret env mapping uses the same scope grammar with `OSP_SECRET__`:
 Secrets are stored in a separate backend:
 
 - Default backend: TOML file with `0600` permissions (`SecretsTomlLoader`).
+- Set `secrets.backend = "keyring"` in ordinary config to use the native
+  platform credential store instead. Backend selection is resolved only from
+  non-secret bootstrap sources, so the secrets store cannot select itself.
+- The keyring backend keeps values in Keychain, Credential Manager, or Secret
+  Service. `${XDG_CONFIG_HOME}/osp/secrets.index.toml` contains only the
+  normalized key/profile/terminal tuples needed to enumerate those values; it
+  is written atomically with `0600` permissions.
 - Optional override backend: `OSP_SECRET__...` environment variables
   (`EnvSecretsLoader`).
 - Sensitive keys belong in the secrets store, but `config set` only writes
@@ -268,6 +275,12 @@ Secrets are stored in a separate backend:
 
 No secret defaults are allowed in code. Missing secrets must surface as
 clear config errors.
+
+`OSP_SECRETS_FILE` overrides the TOML store path and
+`OSP_SECRETS_INDEX_FILE` overrides the keyring index path. Switching backends
+does not read or merge the inactive backend. Migrate values explicitly before
+changing `secrets.backend`; product integrations must only consume resolved
+config values and must not probe legacy token paths themselves.
 
 ## Derived Values
 

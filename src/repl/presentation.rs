@@ -15,6 +15,7 @@ use crate::config::DEFAULT_REPL_HISTORY_MENU_ROWS;
 use crate::config::ResolvedConfig;
 use crate::guide::template::{GuideTemplateBlock, GuideTemplateInclude, parse_markdown_template};
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
+use crate::native::NativeSessionContext;
 use crate::repl::{ReplAppearance, ReplPrompt};
 use crate::ui::messages::MessageLevel;
 use crate::ui::render_structured_output_with_source_guide;
@@ -664,6 +665,7 @@ impl ReplPromptState {
 }
 
 struct ReplPromptRightState {
+    context: String,
     incognito: String,
     timing: String,
 }
@@ -750,12 +752,14 @@ pub(crate) fn build_repl_prompt_right_renderer(
         .get_string("repl.prompt_right")
         .map(str::to_string);
     let history_enabled = history::repl_history_enabled(view.config) && view.history_enabled;
+    let native_context = view.native_context.clone();
     Arc::new(move || {
         render_repl_prompt_right(
             &resolved,
             prompt_right_template.as_deref(),
             history_enabled,
             &timing,
+            &native_context,
         )
     })
 }
@@ -767,7 +771,30 @@ pub(crate) fn render_repl_prompt_right_for_test(
     history_enabled: bool,
     timing: &DebugTimingState,
 ) -> String {
-    render_repl_prompt_right(resolved, prompt_right_template, history_enabled, timing)
+    render_repl_prompt_right_for_test_with_context(
+        resolved,
+        prompt_right_template,
+        history_enabled,
+        timing,
+        &NativeSessionContext::default(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn render_repl_prompt_right_for_test_with_context(
+    resolved: &crate::ui::ResolvedRenderSettings,
+    prompt_right_template: Option<&str>,
+    history_enabled: bool,
+    timing: &DebugTimingState,
+    native_context: &NativeSessionContext,
+) -> String {
+    render_repl_prompt_right(
+        resolved,
+        prompt_right_template,
+        history_enabled,
+        timing,
+        native_context,
+    )
 }
 
 fn render_repl_prompt_right(
@@ -775,8 +802,10 @@ fn render_repl_prompt_right(
     prompt_right_template: Option<&str>,
     history_enabled: bool,
     timing: &DebugTimingState,
+    native_context: &NativeSessionContext,
 ) -> String {
     let state = ReplPromptRightState {
+        context: render_repl_prompt_context(resolved, native_context),
         incognito: render_repl_prompt_incognito(resolved, history_enabled),
         timing: render_repl_prompt_timing(resolved, timing),
     };
@@ -784,12 +813,16 @@ fn render_repl_prompt_right(
     if let Some(template) = prompt_right_template {
         return render_repl_prompt_right_template(
             &decode_repl_prompt_template(template),
+            &state.context,
             &state.incognito,
             &state.timing,
         );
     }
 
     let mut parts = Vec::new();
+    if !state.context.is_empty() {
+        parts.push(state.context);
+    }
     if !state.incognito.is_empty() {
         parts.push(state.incognito);
     }
@@ -797,6 +830,28 @@ fn render_repl_prompt_right(
         parts.push(state.timing);
     }
     parts.join("  ")
+}
+
+fn render_repl_prompt_context(
+    resolved: &crate::ui::ResolvedRenderSettings,
+    native_context: &NativeSessionContext,
+) -> String {
+    let entries = native_context.prompt_entries();
+    if entries.is_empty() {
+        return String::new();
+    }
+    let rendered = entries
+        .iter()
+        .map(|entry| format!("{}:{}", entry.label, entry.value))
+        .collect::<Vec<_>>()
+        .join(" ");
+    apply_style_with_theme_overrides(
+        &rendered,
+        StyleToken::Muted,
+        resolved.color,
+        &resolved.theme,
+        &resolved.style_overrides,
+    )
 }
 
 fn render_repl_prompt_incognito(
@@ -832,8 +887,14 @@ fn render_repl_prompt_timing(
         .unwrap_or_default()
 }
 
-fn render_repl_prompt_right_template(template: &str, incognito: &str, timing: &str) -> String {
-    let mut out = template.replace("{incognito}", incognito);
+fn render_repl_prompt_right_template(
+    template: &str,
+    context: &str,
+    incognito: &str,
+    timing: &str,
+) -> String {
+    let mut out = template.replace("{context}", context);
+    out = out.replace("{incognito}", incognito);
     out = out.replace("{timing}", timing);
     out
 }

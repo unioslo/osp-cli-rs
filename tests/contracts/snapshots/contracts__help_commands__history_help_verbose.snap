@@ -33,6 +33,7 @@ Manage persisted REPL history
       --presentation <PRESENTATION>
           [possible values: expressive, compact, austere]
       --gammel-og-bitter
+          Disable colors and pleasantries (equivalent to `--presentation austere`)
   -h, --help
           Print help (see a summary with '-h')
 

@@ -311,6 +311,10 @@ host.
 Keep the boundary small:
 
 - command implementations should consume a `NativeCommandContext`
+- long-running commands should emit `NativeProgressEvent` values through the
+  context rather than writing directly to stdio
+- use `NativeCommandOutcome::ResponseWithExit` when a stable final document
+  must accompany a meaningful non-zero outcome
 - product-specific state should live in the wrapper crate, not in
   `osp-cli::app`
 - registration should happen in one place, usually a product integrations

@@ -69,11 +69,14 @@
 //!   instead of forking generic host behavior
 
 use crate::config::ConfigLayer;
+use crate::core::command_policy::{CommandPolicyContext, CommandPolicyRegistry};
 use crate::native::NativeCommandRegistry;
 use crate::ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity};
 use crate::ui::render_messages_without_config;
 use std::ffi::OsString;
+use std::sync::Arc;
 
+pub(crate) mod access_recovery;
 pub(crate) mod assembly;
 pub(crate) mod bootstrap;
 pub(crate) mod builtin;
@@ -95,6 +98,9 @@ pub(crate) mod sink;
 mod tests;
 pub(crate) mod timing;
 
+pub use access_recovery::{
+    AccessRecoveryOutcome, AccessRecoveryRequest, CommandAccessKind, CommandAccessRecovery,
+};
 pub(crate) use bootstrap::*;
 pub(crate) use builtin::*;
 pub(crate) use command_output::*;
@@ -103,6 +109,7 @@ pub(crate) use config_explain::{
     explain_runtime_config, format_scope, is_sensitive_key, push_missing_config_key_messages,
     render_config_explain_text,
 };
+pub(crate) use dispatch::ensure_builtin_access;
 pub(crate) use facts::*;
 pub use host::ErrorDetail;
 pub use host::run_from;
@@ -124,6 +131,9 @@ pub use sink::{BufferedUiSink, StdIoUiSink, UiSink};
 pub(crate) struct AppDefinition {
     native_commands: NativeCommandRegistry,
     product_defaults: ConfigLayer,
+    policy_context: CommandPolicyContext,
+    builtin_policy: CommandPolicyRegistry,
+    access_recovery: Option<Arc<dyn CommandAccessRecovery>>,
 }
 
 impl AppDefinition {
@@ -134,6 +144,21 @@ impl AppDefinition {
 
     fn with_product_defaults(mut self, product_defaults: ConfigLayer) -> Self {
         self.product_defaults = product_defaults;
+        self
+    }
+
+    fn with_policy_context(mut self, policy_context: CommandPolicyContext) -> Self {
+        self.policy_context = policy_context;
+        self
+    }
+
+    fn with_builtin_policy(mut self, builtin_policy: CommandPolicyRegistry) -> Self {
+        self.builtin_policy = builtin_policy;
+        self
+    }
+
+    fn with_access_recovery(mut self, access_recovery: Arc<dyn CommandAccessRecovery>) -> Self {
+        self.access_recovery = Some(access_recovery);
         self
     }
 }
@@ -219,6 +244,41 @@ impl App {
     /// When omitted, the application uses only the built-in runtime defaults.
     pub fn with_product_defaults(mut self, product_defaults: ConfigLayer) -> Self {
         self.definition = self.definition.with_product_defaults(product_defaults);
+        self
+    }
+
+    /// Replaces the product-owned command-policy context used at runtime.
+    ///
+    /// Wrapper crates should use this to project their normalized auth/session
+    /// facts into the generic command-policy engine instead of re-checking
+    /// those facts ad hoc inside command handlers.
+    pub fn with_policy_context(mut self, policy_context: CommandPolicyContext) -> Self {
+        self.definition = self.definition.with_policy_context(policy_context);
+        self
+    }
+
+    /// Replaces the product-owned policy registry for built-in commands.
+    ///
+    /// Wrapper crates should use this when they need product policy to gate
+    /// upstream built-ins such as `config` without forking the generic host
+    /// grammar or dispatch code.
+    pub fn with_builtin_policy(mut self, builtin_policy: CommandPolicyRegistry) -> Self {
+        self.definition = self.definition.with_builtin_policy(builtin_policy);
+        self
+    }
+
+    /// Replaces the product-owned denied-access recovery hook.
+    ///
+    /// Wrapper crates should use this when denied command access may be
+    /// recoverable by refreshing a product-owned session, such as prompting
+    /// for login and then retrying the command once.
+    pub fn with_access_recovery<R>(mut self, access_recovery: R) -> Self
+    where
+        R: CommandAccessRecovery + 'static,
+    {
+        self.definition = self
+            .definition
+            .with_access_recovery(Arc::new(access_recovery));
         self
     }
 
@@ -491,6 +551,33 @@ impl AppBuilder {
     /// defaults.
     pub fn with_product_defaults(mut self, product_defaults: ConfigLayer) -> Self {
         self.definition = self.definition.with_product_defaults(product_defaults);
+        self
+    }
+
+    /// Replaces the product-owned command-policy context used at runtime.
+    ///
+    /// Use this when a wrapper crate already has normalized auth/session facts
+    /// and wants those facts applied consistently across startup, dispatch, and
+    /// REPL rebuilds.
+    pub fn with_policy_context(mut self, policy_context: CommandPolicyContext) -> Self {
+        self.definition = self.definition.with_policy_context(policy_context);
+        self
+    }
+
+    /// Replaces the product-owned policy registry for built-in commands.
+    pub fn with_builtin_policy(mut self, builtin_policy: CommandPolicyRegistry) -> Self {
+        self.definition = self.definition.with_builtin_policy(builtin_policy);
+        self
+    }
+
+    /// Replaces the product-owned denied-access recovery hook.
+    pub fn with_access_recovery<R>(mut self, access_recovery: R) -> Self
+    where
+        R: CommandAccessRecovery + 'static,
+    {
+        self.definition = self
+            .definition
+            .with_access_recovery(Arc::new(access_recovery));
         self
     }
 

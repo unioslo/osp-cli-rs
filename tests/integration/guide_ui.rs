@@ -78,6 +78,7 @@ fn command_metadata_builders_flow_into_generated_guide_and_rendering_contracts()
         visibility: VisibilityMode::Authenticated,
         required_capabilities: vec!["deploy.write".to_string()],
         feature_flags: vec!["beta".to_string()],
+        ..CommandPolicyDef::default()
     };
 
     let authored = CommandDef::new("deploy")

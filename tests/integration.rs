@@ -1,3 +1,4 @@
+#![cfg(not(miri))]
 #![allow(missing_docs)]
 
 #[path = "support/temp.rs"]

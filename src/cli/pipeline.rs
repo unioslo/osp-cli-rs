@@ -122,6 +122,17 @@ pub fn parse_command_tokens_with_aliases(
         });
     }
 
+    // A single token containing whitespace or a pipe can never resolve to a
+    // command name; it is a whole command line the shell passed as one quoted
+    // argument (`osp "theme list | C"`). Re-parse it as text so the quoted
+    // form behaves exactly like the same line typed in the REPL.
+    if tokens.len() == 1 {
+        let only = &tokens[0];
+        if only.contains(char::is_whitespace) || only.contains('|') {
+            return parse_command_text_with_aliases(only, config);
+        }
+    }
+
     let split = split_command_tokens(tokens);
     finalize_command_with_aliases(split.command_tokens, split.stages, config)
 }
@@ -421,30 +432,16 @@ fn quote_token(token: &str) -> String {
     if token.is_empty() {
         return "''".to_string();
     }
-    let needs_quotes = token.chars().any(|ch| {
-        ch.is_whitespace()
-            || matches!(
-                ch,
-                '\'' | '"'
-                    | '\\'
-                    | '$'
-                    | '`'
-                    | '|'
-                    | '&'
-                    | ';'
-                    | '<'
-                    | '>'
-                    | '('
-                    | ')'
-                    | '{'
-                    | '}'
-                    | '*'
-                    | '?'
-                    | '['
-                    | ']'
-                    | '!'
-            )
-    });
+    // Only protect characters the DSL lexer itself would re-interpret when
+    // the token is joined back into a stage string: whitespace (token
+    // boundary), quotes and backslash (lexer quoting/escapes), and the pipe
+    // (stage separator). Everything else — `>`, `<`, `!`, `?`, `*`, parens,
+    // brackets — is live DSL operator syntax; quoting it here silently turns
+    // `F vlan>100` into a literal term that matches nothing.
+    let needs_quotes = token.is_empty()
+        || token
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, '\'' | '"' | '\\' | '|'));
     if !needs_quotes {
         return token.to_string();
     }
@@ -477,6 +474,7 @@ mod tests {
     fn test_config(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("theme.path", Vec::<String>::new());
         for (key, value) in entries {
             defaults.set(*key, *value);
         }
@@ -535,6 +533,30 @@ mod tests {
             parse_command_tokens_with_aliases(&[], &config).expect("empty command should parse");
 
         assert!(parsed.tokens.is_empty());
+        assert!(parsed.stages.is_empty());
+    }
+
+    #[test]
+    fn single_quoted_argv_token_reparses_as_full_command_line_unit() {
+        let config = test_config(&[]);
+
+        let parsed = parse_command_tokens_with_aliases(&["theme list | C".to_string()], &config)
+            .expect("quoted line should parse");
+        assert_eq!(parsed.tokens, vec!["theme".to_string(), "list".to_string()]);
+        assert_eq!(parsed.stages, vec!["C".to_string()]);
+
+        let parsed = parse_command_tokens_with_aliases(&["ldap host ulrik*".to_string()], &config)
+            .expect("quoted line without pipe should parse");
+        assert_eq!(
+            parsed.tokens,
+            vec!["ldap".to_string(), "host".to_string(), "ulrik*".to_string()]
+        );
+        assert!(parsed.stages.is_empty());
+
+        // A plain single-word command must stay untouched.
+        let parsed = parse_command_tokens_with_aliases(&["doctor".to_string()], &config)
+            .expect("single word should parse");
+        assert_eq!(parsed.tokens, vec!["doctor".to_string()]);
         assert!(parsed.stages.is_empty());
     }
 

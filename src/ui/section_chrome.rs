@@ -587,6 +587,7 @@ mod tests {
         crate::tests::env_lock()
     }
 
+    #[cfg_attr(miri, ignore = "terminal environment integration test")]
     #[test]
     fn section_divider_ignores_columns_env_without_explicit_width() {
         let _guard = env_lock().lock().expect("lock should not be poisoned");

@@ -233,7 +233,7 @@ pub(crate) fn build_doctor_report(view: &ActivePluginView<'_>) -> DoctorReport {
     DoctorReport { plugins, conflicts }
 }
 
-fn register_describe_command_policies(
+pub(crate) fn register_describe_command_policies(
     registry: &mut CommandPolicyRegistry,
     command: &DescribeCommandV1,
     prefix: &[String],
@@ -327,6 +327,7 @@ mod tests {
                     visibility: Some(DescribeVisibilityModeV1::Authenticated),
                     required_capabilities: Vec::new(),
                     feature_flags: Vec::new(),
+                    ..DescribeCommandAuthV1::default()
                 }),
             }],
             command_specs: Vec::new(),

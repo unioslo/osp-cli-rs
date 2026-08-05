@@ -277,8 +277,8 @@ Messages are shown to the user alongside the output:
 | `error` | Something failed |
 | `warning` | Something unexpected but not fatal |
 | `success` | Positive confirmation |
-| `info` | Neutral information |
-| `trace` | Debug-level detail (shown with `-v`) |
+| `info` | Neutral operator evidence (shown with `-v`) |
+| `trace` | Diagnostic detail (shown with `-vv`) |
 
 `osp` renders plugin `messages` on stderr using the same grouping and
 verbosity rules as built-in commands. Keep table/JSON/value data in
@@ -289,8 +289,11 @@ verbosity rules as built-in commands. Keep table/JSON/value data in
 | Field | Type | Notes |
 |-------|------|-------|
 | `format_hint` | string | Suggest output format (`"table"`, `"mreg"`, etc.) |
-| `columns` | array | Column order for table display |
+| `columns` | array | Column paths for a table or curated object display. With `preserve_json_document=true`, object payloads may use dotted paths without changing canonical JSON. |
+| `column_labels` | array | Optional display headings aligned with `columns`; useful with dotted row paths without changing canonical JSON. |
 | `column_align` | array | Optional per-column alignment hints: `"default"`, `"left"`, `"center"`, `"right"`. `osp` honors them in terminal and markdown table rendering. |
+| `row_path` | string | Top-level array field used as rows for unstaged human output. With it, `columns` may contain dotted paths inside each row. JSON and DSL retain the complete `data` document. |
+| `preserve_json_document` | boolean | Preserve `data` itself for JSON output and structural pipes instead of projecting it into generic rows. Defaults to `false`; use it for document-shaped object or scalar contracts. |
 
 ### Exit codes
 

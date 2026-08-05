@@ -370,6 +370,7 @@ mod tests {
         assert_eq!(mixed.debug_count, 2);
     }
 
+    #[cfg_attr(miri, ignore = "file logging filesystem integration test")]
     #[test]
     fn file_logging_helpers_and_writer_lifecycle_cover_split_open_toggle_and_sink_unit() {
         assert!(split_file_path(Path::new("")).is_err());

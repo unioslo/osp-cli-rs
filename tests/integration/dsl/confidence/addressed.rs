@@ -76,11 +76,10 @@ fn help_like_payload_negative_index_projection_rebuilds_last_entry() {
     );
 }
 
-// Protects the new addressed filter path: an exact indexed predicate should
-// rebuild only the matching semantic branch and still restore the guide shell
-// around it instead of degrading to flat path fragments.
+// An addressed filter narrows its owning array but does not project the
+// surviving member or unrelated branches.
 #[test]
-fn help_like_payload_exact_index_filter_rebuilds_selected_branch() {
+fn help_like_payload_exact_index_filter_keeps_member_and_siblings() {
     let output = run_guide_pipeline(help_like_guide(), "F sections[1].entries[0].name=--verbose");
 
     let rebuilt = GuideView::try_from_output_result(&output).expect("guide should still restore");
@@ -91,99 +90,55 @@ fn help_like_payload_exact_index_filter_rebuilds_selected_branch() {
         vec!["Run `doctor` before applying production changes."]
     );
     assert_eq!(rebuilt.epilogue, vec!["footer text"]);
-    assert_eq!(rebuilt.options.len(), 1);
-    assert_eq!(rebuilt.options[0].name, "--verbose");
-    assert_eq!(rebuilt.sections.len(), 0);
 
     let document = output
         .document
         .expect("semantic document should remain attached");
-    assert_eq!(
-        document.value,
-        json!({
-            "preamble": ["Deploy commands"],
-            "usage": ["osp deploy <COMMAND>"],
-            "notes": ["Run `doctor` before applying production changes."],
-            "epilogue": ["footer text"],
-            "sections": [
-                {
-                    "title": "Options",
-                    "kind": "options",
-                    "paragraphs": ["rendering"],
-                    "entries": [{"name": "--verbose"}]
-                }
-            ]
-        })
-    );
+    let mut expected = help_like_guide().to_json_value();
+    expected["sections"][1]["entries"] = json!([{
+        "name": "--verbose",
+        "short_help": "Show additional context"
+    }]);
+    assert_eq!(document.value, expected);
 }
 
-// Protects negated exact-address filters: when the addressed predicate passes,
-// they should still rebuild the selected branch instead of falling back to a
-// whole-document generic match.
+// Negation changes member selection, not the addressed filter's ownership
+// unit or sibling-preservation contract.
 #[test]
-fn help_like_payload_exact_index_negated_filter_rebuilds_selected_branch() {
+fn help_like_payload_exact_index_negated_filter_keeps_member_and_siblings() {
     let output = run_guide_pipeline(help_like_guide(), "F sections[1].entries[0].name!=--json");
 
-    let rebuilt = GuideView::try_from_output_result(&output).expect("guide should still restore");
-    assert_eq!(rebuilt.options.len(), 1);
-    assert_eq!(rebuilt.options[0].name, "--verbose");
-    assert_eq!(rebuilt.sections.len(), 0);
+    GuideView::try_from_output_result(&output).expect("guide should still restore");
 
     let document = output
         .document
         .expect("semantic document should remain attached");
-    assert_eq!(
-        document.value,
-        json!({
-            "preamble": ["Deploy commands"],
-            "usage": ["osp deploy <COMMAND>"],
-            "notes": ["Run `doctor` before applying production changes."],
-            "epilogue": ["footer text"],
-            "sections": [
-                {
-                    "title": "Options",
-                    "kind": "options",
-                    "paragraphs": ["rendering"],
-                    "entries": [{"name": "--verbose"}]
-                }
-            ]
-        })
-    );
+    let mut expected = help_like_guide().to_json_value();
+    expected["sections"][1]["entries"] = json!([{
+        "name": "--verbose",
+        "short_help": "Show additional context"
+    }]);
+    assert_eq!(document.value, expected);
 }
 
-// Protects broader structural filters: fanout path selectors should rebuild
-// only the surviving addressed descendants instead of falling back to generic
-// descendant traversal over leaf rows.
+// Fanout filters apply independently to each deepest owning array while
+// preserving all outer members and unrelated document branches.
 #[test]
-fn help_like_payload_fanout_filter_rebuilds_selected_branch() {
+fn help_like_payload_fanout_filter_keeps_outer_members_and_siblings() {
     let output = run_guide_pipeline(help_like_guide(), "F sections[].entries[].name=--json");
 
-    let rebuilt = GuideView::try_from_output_result(&output).expect("guide should still restore");
-    assert_eq!(rebuilt.commands.len(), 0);
-    assert_eq!(rebuilt.options.len(), 1);
-    assert_eq!(rebuilt.options[0].name, "--json");
-    assert_eq!(rebuilt.sections.len(), 0);
+    GuideView::try_from_output_result(&output).expect("guide should still restore");
 
     let document = output
         .document
         .expect("semantic document should remain attached");
-    assert_eq!(
-        document.value,
-        json!({
-            "preamble": ["Deploy commands"],
-            "usage": ["osp deploy <COMMAND>"],
-            "notes": ["Run `doctor` before applying production changes."],
-            "epilogue": ["footer text"],
-            "sections": [
-                {
-                    "title": "Options",
-                    "kind": "options",
-                    "paragraphs": ["rendering"],
-                    "entries": [{"name": "--json"}]
-                }
-            ]
-        })
-    );
+    let mut expected = help_like_guide().to_json_value();
+    expected["sections"][0]["entries"] = json!([]);
+    expected["sections"][1]["entries"] = json!([{
+        "name": "--json",
+        "short_help": "Render machine-readable output"
+    }]);
+    assert_eq!(document.value, expected);
 }
 
 // Protects structural slice projection: slice selectors should rebuild the

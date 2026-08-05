@@ -378,14 +378,17 @@ pub(super) fn execute_repl_command_dispatch(
             let history = history.ok_or_else(|| {
                 miette!("REPL command execution requires history when running an invocation")
             })?;
-            let output = run_repl_command(
+            let output = run_repl_command_with_progress(
                 runtime,
                 session,
                 clients,
-                command,
-                &effective,
                 history,
-                cache_key.as_deref(),
+                ReplRunInput {
+                    command,
+                    invocation: &effective,
+                    cache_key: cache_key.as_deref(),
+                    progress_sink: Some(sink),
+                },
             )?;
             let execute_finished = Instant::now();
             let rendered = render_repl_command_output(
@@ -402,6 +405,57 @@ pub(super) fn execute_repl_command_dispatch(
             ))
         }
     }
+}
+
+struct ReplRunInput<'invocation, 'cache, 'sink> {
+    command: Commands,
+    invocation: &'invocation ResolvedInvocation,
+    cache_key: Option<&'cache str>,
+    progress_sink: Option<&'sink mut dyn UiSink>,
+}
+
+fn run_repl_command_with_progress(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    input: ReplRunInput<'_, '_, '_>,
+) -> Result<crate::app::CliCommandResult> {
+    if let Some(cache_key) = input.cache_key
+        && let Some(cached) = session.cached_command(cache_key)
+    {
+        tracing::trace!(cache_key = %cache_key, "REPL command cache hit");
+        return Ok(cached);
+    }
+
+    let result = match input.command {
+        Commands::External(tokens) => run_repl_external_command_with_progress(
+            runtime,
+            clients,
+            session,
+            tokens,
+            input.invocation,
+            input.progress_sink,
+        ),
+        builtin => app::run_repl_builtin_command(
+            runtime,
+            session,
+            clients,
+            history,
+            input.invocation,
+            builtin,
+        ),
+    }?;
+
+    if let Some(cache_key) = input.cache_key
+        && result.exit_code == 0
+        && let Some(crate::app::ReplCommandOutput::Output(output)) = result.output.as_ref()
+    {
+        tracing::trace!(cache_key = %cache_key, "REPL command cached");
+        session.record_cached_command(cache_key, output.as_ref());
+    }
+
+    Ok(result)
 }
 
 pub(super) fn finalize_repl_command(
@@ -430,6 +484,7 @@ pub(super) fn finalize_repl_command(
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 pub(super) fn run_repl_command(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
@@ -439,34 +494,18 @@ pub(super) fn run_repl_command(
     history: &SharedHistory,
     cache_key: Option<&str>,
 ) -> Result<crate::app::CliCommandResult> {
-    if let Some(cache_key) = cache_key
-        && let Some(cached) = session.cached_command(cache_key)
-    {
-        tracing::trace!(cache_key = %cache_key, "REPL command cache hit");
-        return Ok(cached);
-    }
-
-    let result = match command {
-        Commands::External(tokens) => {
-            run_repl_external_command(runtime, clients, session, tokens, invocation)
-        }
-        builtin => {
-            app::run_repl_builtin_command(runtime, session, clients, history, invocation, builtin)
-        }
-    }?;
-
-    if let Some(cache_key) = cache_key
-        && result.exit_code == 0
-        && let Some(crate::app::ReplCommandOutput::Output(output)) = result.output.as_ref()
-    {
-        // Only cache successful structured payloads. Text/help/error output is
-        // cheap to recompute and too presentation-dependent to be a good cache
-        // contract for `--cache`.
-        tracing::trace!(cache_key = %cache_key, "REPL command cached");
-        session.record_cached_command(cache_key, output.as_ref());
-    }
-
-    Ok(result)
+    run_repl_command_with_progress(
+        runtime,
+        session,
+        clients,
+        history,
+        ReplRunInput {
+            command,
+            invocation,
+            cache_key,
+            progress_sink: None,
+        },
+    )
 }
 
 pub(super) fn run_repl_external_command(
@@ -483,6 +522,25 @@ pub(super) fn run_repl_external_command(
         &tokens,
         invocation,
         GuideView::from_text,
+    )
+}
+
+fn run_repl_external_command_with_progress(
+    runtime: &mut AppRuntime,
+    clients: &AppClients,
+    session: &mut AppSession,
+    tokens: Vec<String>,
+    invocation: &ResolvedInvocation,
+    progress_sink: Option<&mut dyn UiSink>,
+) -> Result<crate::app::CliCommandResult> {
+    app::external::run_external_command_with_help_renderer_and_progress(
+        runtime,
+        session,
+        clients,
+        &tokens,
+        invocation,
+        GuideView::from_text,
+        progress_sink,
     )
 }
 

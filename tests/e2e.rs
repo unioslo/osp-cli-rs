@@ -1,3 +1,4 @@
+#![cfg(not(miri))]
 #![allow(missing_docs)]
 
 #[path = "contracts/test_env.rs"]

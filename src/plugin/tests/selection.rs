@@ -2,6 +2,7 @@
 fn command_preferences_load_state_and_provider_from_resolved_config_unit() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
     defaults.set("plugins.ldap.state", "disabled");
     defaults.set("plugins.ldap.provider", "uio-ldap");
     let mut resolver = ConfigResolver::default();
@@ -28,6 +29,7 @@ fn command_preferences_load_state_and_provider_from_resolved_config_unit() {
 fn command_preferences_ignore_noncanonical_command_keys_unit() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
     defaults.set("plugins.Shared.state", "disabled");
     defaults.set("plugins.Shared.provider", "uio-ldap");
     let mut resolver = ConfigResolver::default();
@@ -42,9 +44,12 @@ fn command_preferences_ignore_noncanonical_command_keys_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn provider_selection_validation_rejects_empty_unknown_and_mismatched_inputs_unit() {
-    let empty_manager = PluginManager::new(Vec::new());
+    let empty_manager = PluginManager::new(Vec::new())
+        .with_bundled_roots(false)
+        .with_default_roots(false);
     let err = empty_manager
         .clear_provider_selection("   ")
         .expect_err("empty command should fail");
@@ -85,6 +90,7 @@ fn provider_selection_validation_rejects_empty_unknown_and_mismatched_inputs_uni
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem integration test")]
 #[test]
 fn disabling_a_command_updates_only_that_command_in_memory_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-in-memory-disable");
@@ -109,6 +115,7 @@ fn disabling_a_command_updates_only_that_command_in_memory_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem integration test")]
 #[test]
 fn config_backed_preferences_can_disable_and_route_commands_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-config-preferences");
@@ -119,6 +126,8 @@ fn config_backed_preferences_can_disable_and_route_commands_unit() {
 
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
+    defaults.set("repl.history.path", "/tmp/osp-plugin-selection-history.jsonl");
     defaults.set("plugins.shared.state", "disabled");
     defaults.set("plugins.shared.provider", "beta");
     let mut resolver = ConfigResolver::default();
@@ -145,6 +154,7 @@ fn config_backed_preferences_can_disable_and_route_commands_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem integration test")]
 #[test]
 fn provider_selection_validation_respects_current_command_availability_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-provider-availability");
@@ -154,6 +164,8 @@ fn provider_selection_validation_respects_current_command_availability_unit() {
 
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
+    defaults.set("repl.history.path", "/tmp/osp-plugin-selection-history.jsonl");
     defaults.set("plugins.shared.state", "disabled");
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);

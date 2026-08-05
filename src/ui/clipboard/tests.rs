@@ -98,6 +98,7 @@ fn clipboard_error_display_covers_backend_spawn_and_status_cases() {
     );
 }
 
+#[cfg_attr(miri, ignore = "clipboard subprocess/path integration test")]
 #[test]
 fn command_backend_reports_success_and_failure() {
     let _guard = acquire_env_lock();
@@ -144,6 +145,7 @@ fn platform_backends_prefers_wayland_when_present() {
     }
 }
 
+#[cfg_attr(miri, ignore = "clipboard path integration test")]
 #[test]
 fn copy_without_osc52_reports_no_backend_when_path_is_empty() {
     let _guard = acquire_env_lock();
@@ -169,6 +171,7 @@ fn copy_without_osc52_reports_no_backend_when_path_is_empty() {
     }
 }
 
+#[cfg_attr(miri, ignore = "clipboard subprocess spawn integration test")]
 #[test]
 fn command_backend_reports_spawn_failure_for_missing_binary() {
     let err = copy_via_command(
@@ -271,6 +274,7 @@ fn clipboard_plan_prefers_osc52_only_when_tty_and_payload_fit_unit() {
     set_env_for_test("OSC52_MAX_BYTES", max_original.as_deref());
 }
 
+#[cfg_attr(miri, ignore = "clipboard subprocess integration test")]
 #[test]
 fn clipboard_command_loop_reports_success_and_real_failures_unit() {
     let service = ClipboardService::new();

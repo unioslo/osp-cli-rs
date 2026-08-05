@@ -5,16 +5,17 @@ use crate::ui::chrome::{
     FULL_HELP_LAYOUT_CHROME, GUIDE_SECTION_CHROME, PLAIN_SECTION_CHROME, RenderedTitle,
 };
 use crate::ui::doc::{
-    Block, Doc, GuideEntriesBlock, KeyValueBlock, KeyValueRow, ListBlock, ParagraphBlock,
-    SectionBlock, SectionTitleChrome, TableBlock,
+    Block, Doc, GuideEntriesBlock, KeyValueBlock, KeyValueRow, KeyValueStyle, KeyValueValue,
+    ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
 };
-use crate::ui::settings::{RenderBackend, ResolvedRenderSettings, TableBorderStyle};
+use crate::ui::settings::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 use crate::ui::style::{StyleToken, ThemeStyler};
+use crate::ui::text::{crop_display_width, wrap_display_width};
 use crate::ui::visible_inline_text;
 
 use super::grid::PreparedGridList;
 use super::guide_entries::{PreparedGuideEntriesBlock, PreparedGuideEntryRow};
-use super::key_value::{PreparedBulletedRow, PreparedKeyValueBlock, PreparedPlainRow};
+use super::key_value::{aligned_display_key_width, display_key};
 use super::shared::{format_list_item, indent_lines};
 use super::table::{PreparedCell, PreparedTable};
 
@@ -113,26 +114,11 @@ fn section_chrome(title_chrome: SectionTitleChrome) -> crate::ui::chrome::Sectio
 
 fn emit_key_value(block: &KeyValueBlock, settings: &ResolvedRenderSettings) -> String {
     let styler = ThemeStyler::new(settings.color, &settings.theme, &settings.style_overrides);
-    let mut lines = Vec::new();
-    match PreparedKeyValueBlock::from_block(block) {
-        PreparedKeyValueBlock::Plain(rows) => {
-            for row in rows {
-                lines.push(indent_lines(
-                    &emit_plain_row(&row, &styler),
-                    settings.margin,
-                ));
-            }
-        }
-        PreparedKeyValueBlock::Bulleted(rows) => {
-            for row in rows {
-                lines.push(indent_lines(
-                    &emit_bulleted_row(&row, &styler),
-                    settings.margin,
-                ));
-            }
-        }
-    }
-    lines.join("\n")
+    let rendered = match block.style {
+        KeyValueStyle::Plain => emit_plain_rows(&block.rows, "", settings, &styler),
+        KeyValueStyle::Bulleted => emit_bulleted_rows(&block.rows, "", settings, &styler),
+    };
+    indent_lines(&rendered, settings.margin)
 }
 
 fn emit_guide_entries(block: &GuideEntriesBlock, settings: &ResolvedRenderSettings) -> String {
@@ -153,41 +139,6 @@ fn emit_prepared_guide_entries(
         .map(|row| indent_lines(&emit_guide_entry_row(row, &styler), margin))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn emit_plain_row(row: &PreparedPlainRow, styler: &ThemeStyler<'_>) -> String {
-    let key = styler.paint(&row.key, StyleToken::Key);
-    if row.value.is_empty() {
-        format!(
-            "{}{}{}",
-            row.indent,
-            key,
-            styler.paint(":", StyleToken::Punctuation)
-        )
-    } else {
-        let value = styler.paint_value(&row.value);
-        format!(
-            "{}{}{}{}{}",
-            row.indent,
-            key,
-            styler.paint(":", StyleToken::Punctuation),
-            row.value_spacing,
-            value
-        )
-    }
-}
-
-fn emit_bulleted_row(row: &PreparedBulletedRow, styler: &ThemeStyler<'_>) -> String {
-    let key = styler.paint(&row.key, StyleToken::Key);
-    if row.value.is_empty() {
-        format!("{} {key}", styler.paint("-", StyleToken::Punctuation))
-    } else {
-        let value = styler.paint_value(&row.value);
-        format!(
-            "{} {key}  {value}",
-            styler.paint("-", StyleToken::Punctuation)
-        )
-    }
 }
 
 fn emit_guide_entry_row(row: &PreparedGuideEntryRow, styler: &ThemeStyler<'_>) -> String {
@@ -265,6 +216,13 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
 
     let styler = ThemeStyler::new(settings.color, &settings.theme, &settings.style_overrides);
     let table = PreparedTable::for_terminal(block);
+    let widths = fitted_table_widths(
+        &table.widths,
+        settings
+            .width
+            .map(|width| width.saturating_sub(settings.margin)),
+        settings.table_overflow,
+    );
     let mut lines = Vec::new();
     if !block.summary.is_empty() {
         lines.push(indent_lines(
@@ -279,7 +237,7 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
     lines.push(indent_lines(
         &styler.paint(
             &table_rule(
-                &table.widths,
+                &widths,
                 border.top_left,
                 border.join_top,
                 border.top_right,
@@ -289,21 +247,23 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
         ),
         settings.margin,
     ));
-    lines.push(indent_lines(
-        &table_row(
+    lines.extend(
+        table_row_lines(
             &table.headers,
-            &table.widths,
+            &widths,
             &table.column_align,
             border.vertical,
             &styler,
             true,
-        ),
-        settings.margin,
-    ));
+            settings.table_overflow,
+        )
+        .into_iter()
+        .map(|line| indent_lines(&line, settings.margin)),
+    );
     lines.push(indent_lines(
         &styler.paint(
             &table_rule(
-                &table.widths,
+                &widths,
                 border.join_left,
                 border.join_mid,
                 border.join_right,
@@ -314,22 +274,24 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
         settings.margin,
     ));
     for row in &table.rows {
-        lines.push(indent_lines(
-            &table_row(
+        lines.extend(
+            table_row_lines(
                 row,
-                &table.widths,
+                &widths,
                 &table.column_align,
                 border.vertical,
                 &styler,
                 false,
-            ),
-            settings.margin,
-        ));
+                settings.table_overflow,
+            )
+            .into_iter()
+            .map(|line| indent_lines(&line, settings.margin)),
+        );
     }
     lines.push(indent_lines(
         &styler.paint(
             &table_rule(
-                &table.widths,
+                &widths,
                 border.bottom_left,
                 border.join_bottom,
                 border.bottom_right,
@@ -342,24 +304,436 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
     lines.join("\n")
 }
 
+fn fitted_table_widths(
+    natural: &[usize],
+    available_width: Option<usize>,
+    overflow: TableOverflow,
+) -> Vec<usize> {
+    let Some(available_width) = available_width else {
+        return natural.to_vec();
+    };
+    if matches!(overflow, TableOverflow::None) || natural.is_empty() {
+        return natural.to_vec();
+    }
+
+    // Each column has two spaces and one separator, plus the final separator.
+    let cell_budget = available_width.saturating_sub(natural.len() * 3 + 1);
+    if natural.iter().sum::<usize>() <= cell_budget {
+        return natural.to_vec();
+    }
+
+    let minimum = if cell_budget >= natural.len() * 3 {
+        3
+    } else {
+        1
+    };
+    let mut widths = natural
+        .iter()
+        .map(|width| (*width).min(minimum))
+        .collect::<Vec<_>>();
+    let mut remaining = cell_budget.saturating_sub(widths.iter().sum::<usize>());
+
+    while remaining > 0 {
+        let mut changed = false;
+        for (width, natural_width) in widths.iter_mut().zip(natural) {
+            if *width < *natural_width {
+                *width += 1;
+                remaining -= 1;
+                changed = true;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    widths
+}
+
+fn table_row_lines(
+    cells: &[PreparedCell],
+    widths: &[usize],
+    column_align: &[ColumnAlignment],
+    vertical: char,
+    styler: &ThemeStyler<'_>,
+    header: bool,
+    overflow: TableOverflow,
+) -> Vec<String> {
+    let cell_lines = widths
+        .iter()
+        .enumerate()
+        .map(|(index, width)| {
+            let raw = cells.get(index).map(|cell| cell.raw.as_str()).unwrap_or("");
+            table_cell_lines(raw, *width, overflow)
+        })
+        .collect::<Vec<_>>();
+    let height = cell_lines.iter().map(Vec::len).max().unwrap_or(1);
+
+    (0..height)
+        .map(|line_index| {
+            let line_cells = cell_lines
+                .iter()
+                .map(|lines| PreparedCell {
+                    raw: lines.get(line_index).cloned().unwrap_or_default(),
+                    markdown: String::new(),
+                    width: lines
+                        .get(line_index)
+                        .map(|line| UnicodeWidthStr::width(line.as_str()))
+                        .unwrap_or(0),
+                })
+                .collect::<Vec<_>>();
+            table_row(&line_cells, widths, column_align, vertical, styler, header)
+        })
+        .collect()
+}
+
+fn table_cell_lines(raw: &str, width: usize, overflow: TableOverflow) -> Vec<String> {
+    if width == 0 {
+        return vec![String::new()];
+    }
+    match overflow {
+        TableOverflow::None => vec![raw.to_string()],
+        TableOverflow::Clip => vec![crop_display_width(raw, width)],
+        TableOverflow::Ellipsis => {
+            if UnicodeWidthStr::width(raw) <= width {
+                vec![raw.to_string()]
+            } else if width == 1 {
+                vec!["…".to_string()]
+            } else {
+                vec![format!("{}…", crop_display_width(raw, width - 1))]
+            }
+        }
+        TableOverflow::Wrap => wrap_display_width(raw, width),
+    }
+}
+
 fn format_summary(
     rows: &[KeyValueRow],
     settings: &ResolvedRenderSettings,
     styler: &ThemeStyler<'_>,
 ) -> String {
+    if rows.iter().any(|row| value_requires_block(&row.value)) {
+        return emit_plain_rows(rows, "", settings, styler);
+    }
+
     let sep = if settings.unicode { "  ·  " } else { "  |  " };
     let sep = styler.paint(sep, StyleToken::Punctuation);
     rows.iter()
         .map(|row| {
             format!(
                 "{}{} {}",
-                styler.paint(&row.key, StyleToken::Key),
+                styler.paint(&display_key(row), StyleToken::Key),
                 styler.paint(":", StyleToken::Punctuation),
-                styler.paint_value(&row.value)
+                styler.paint_value(value_scalar_text(&row.value).unwrap_or_default())
             )
         })
         .collect::<Vec<_>>()
         .join(&sep)
+}
+
+fn emit_plain_rows(
+    rows: &[KeyValueRow],
+    base_indent: &str,
+    settings: &ResolvedRenderSettings,
+    styler: &ThemeStyler<'_>,
+) -> String {
+    let key_width = aligned_display_key_width(rows);
+    rows.iter()
+        .flat_map(|row| emit_plain_row_lines(row, base_indent, key_width, settings, styler))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn emit_plain_row_lines(
+    row: &KeyValueRow,
+    base_indent: &str,
+    key_width: usize,
+    settings: &ResolvedRenderSettings,
+    styler: &ThemeStyler<'_>,
+) -> Vec<String> {
+    let effective_indent = format!("{base_indent}{}", row.indent.as_deref().unwrap_or_default());
+    let display_key = display_key(row);
+    let display_key_width = UnicodeWidthStr::width(display_key.as_str());
+    let value_spacing = " ".repeat(
+        key_width
+            .saturating_sub(display_key_width)
+            .saturating_add(1),
+    );
+    let key = styler.paint(&display_key, StyleToken::Key);
+    let label = format!(
+        "{}{}{}",
+        effective_indent,
+        key,
+        styler.paint(":", StyleToken::Punctuation)
+    );
+    let continuation_indent = format!(
+        "{}{}",
+        effective_indent,
+        " ".repeat(display_key_width.saturating_add(1 + value_spacing.len()))
+    );
+    let child_indent = format!("{effective_indent}{}", " ".repeat(settings.indent_size));
+
+    match &row.value {
+        KeyValueValue::Empty => vec![label],
+        KeyValueValue::Scalar(text) if text.is_empty() => vec![label],
+        KeyValueValue::Scalar(text) => {
+            vec![format!(
+                "{label}{value_spacing}{}",
+                styler.paint_value(text)
+            )]
+        }
+        KeyValueValue::Object(rows) => {
+            let mut lines = vec![label];
+            if !rows.is_empty() {
+                lines.push(emit_plain_rows(rows, &child_indent, settings, styler));
+            }
+            lines
+        }
+        KeyValueValue::Array(items) => emit_plain_array_lines(
+            items,
+            &label,
+            &format!("{label}{value_spacing}"),
+            &continuation_indent,
+            &child_indent,
+            settings,
+            styler,
+        ),
+    }
+}
+
+fn emit_plain_array_lines(
+    items: &[KeyValueValue],
+    label: &str,
+    inline_prefix: &str,
+    continuation_indent: &str,
+    child_indent: &str,
+    settings: &ResolvedRenderSettings,
+    styler: &ThemeStyler<'_>,
+) -> Vec<String> {
+    let Some(scalar_items) = items
+        .iter()
+        .map(value_scalar_text)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return emit_plain_complex_array_lines(items, label, child_indent, settings, styler);
+    };
+
+    match scalar_items.as_slice() {
+        [] => vec![label.to_string()],
+        [only] if items.len() == 1 && !array_uses_count(items) => {
+            vec![format!("{inline_prefix}{}", styler.paint_value(only))]
+        }
+        values if values.len() > settings.medium_list_max => {
+            let mut lines = vec![label.to_string()];
+            lines.extend(render_terminal_scalar_grid(
+                values,
+                child_indent,
+                settings,
+                styler,
+            ));
+            lines
+        }
+        [first, rest @ ..] => {
+            let mut lines = vec![format!("{inline_prefix}{}", styler.paint_value(first))];
+            lines.extend(
+                rest.iter()
+                    .map(|value| format!("{continuation_indent}{}", styler.paint_value(value))),
+            );
+            lines
+        }
+    }
+}
+
+fn emit_plain_complex_array_lines(
+    items: &[KeyValueValue],
+    label: &str,
+    child_indent: &str,
+    settings: &ResolvedRenderSettings,
+    styler: &ThemeStyler<'_>,
+) -> Vec<String> {
+    let mut lines = vec![label.to_string()];
+    for (index, item) in items.iter().enumerate() {
+        lines.extend(emit_plain_array_item_lines(
+            item,
+            index,
+            child_indent,
+            settings,
+            styler,
+        ));
+    }
+    lines
+}
+
+fn emit_plain_array_item_lines(
+    item: &KeyValueValue,
+    index: usize,
+    child_indent: &str,
+    settings: &ResolvedRenderSettings,
+    styler: &ThemeStyler<'_>,
+) -> Vec<String> {
+    let marker = styler.paint(&format!("[{}]", index + 1), StyleToken::Punctuation);
+    let colon = styler.paint(":", StyleToken::Punctuation);
+    match item {
+        KeyValueValue::Empty => vec![format!("{child_indent}{marker}")],
+        KeyValueValue::Scalar(text) => {
+            vec![format!(
+                "{child_indent}{marker} {colon} {}",
+                styler.paint_value(text)
+            )]
+        }
+        KeyValueValue::Object(rows) => {
+            let nested_indent = format!("{child_indent}{}", " ".repeat(settings.indent_size));
+            let mut lines = vec![format!("{child_indent}{marker}{colon}")];
+            if !rows.is_empty() {
+                lines.push(emit_plain_rows(rows, &nested_indent, settings, styler));
+            }
+            lines
+        }
+        KeyValueValue::Array(items) => {
+            let nested_indent = format!("{child_indent}{}", " ".repeat(settings.indent_size));
+            let mut lines = vec![format!("{child_indent}{marker}{colon}")];
+            lines.extend(emit_plain_array_lines(
+                items,
+                &format!("{nested_indent}{}", styler.paint("items", StyleToken::Key)),
+                &format!("{nested_indent}{}", styler.paint("items", StyleToken::Key)),
+                &nested_indent,
+                &format!("{nested_indent}{}", " ".repeat(settings.indent_size)),
+                settings,
+                styler,
+            ));
+            lines
+        }
+    }
+}
+
+fn emit_bulleted_rows(
+    rows: &[KeyValueRow],
+    base_indent: &str,
+    settings: &ResolvedRenderSettings,
+    styler: &ThemeStyler<'_>,
+) -> String {
+    rows.iter()
+        .flat_map(|row| emit_bulleted_row_lines(row, base_indent, settings, styler))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn emit_bulleted_row_lines(
+    row: &KeyValueRow,
+    base_indent: &str,
+    settings: &ResolvedRenderSettings,
+    styler: &ThemeStyler<'_>,
+) -> Vec<String> {
+    let effective_indent = format!("{base_indent}{}", row.indent.as_deref().unwrap_or_default());
+    let bullet = styler.paint("-", StyleToken::Punctuation);
+    let key = styler.paint(&display_key(row), StyleToken::Key);
+    let child_indent = format!("{effective_indent}{}", " ".repeat(settings.indent_size));
+
+    match &row.value {
+        KeyValueValue::Empty => vec![format!("{effective_indent}{bullet} {key}")],
+        KeyValueValue::Scalar(text) if text.is_empty() => {
+            vec![format!("{effective_indent}{bullet} {key}")]
+        }
+        KeyValueValue::Scalar(text) => vec![format!(
+            "{effective_indent}{bullet} {key}  {}",
+            styler.paint_value(text)
+        )],
+        KeyValueValue::Object(rows) => {
+            let mut lines = vec![format!(
+                "{effective_indent}{bullet} {key}{}",
+                styler.paint(":", StyleToken::Punctuation)
+            )];
+            if !rows.is_empty() {
+                lines.push(emit_plain_rows(rows, &child_indent, settings, styler));
+            }
+            lines
+        }
+        KeyValueValue::Array(items) => {
+            let mut lines = vec![format!(
+                "{effective_indent}{bullet} {key}{}",
+                styler.paint(":", StyleToken::Punctuation)
+            )];
+            lines.extend(items.iter().enumerate().flat_map(|(index, item)| {
+                emit_plain_array_item_lines(item, index, &child_indent, settings, styler)
+            }));
+            lines
+        }
+    }
+}
+
+fn render_terminal_scalar_grid(
+    values: &[&str],
+    indent: &str,
+    settings: &ResolvedRenderSettings,
+    styler: &ThemeStyler<'_>,
+) -> Vec<String> {
+    let visible = values
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    let available_width = settings
+        .width
+        .unwrap_or(100)
+        .saturating_sub(settings.margin + UnicodeWidthStr::width(indent))
+        .max(1);
+    let grid = PreparedGridList::from_items(&visible, available_width);
+    let mut lines = Vec::new();
+
+    for row in &grid.rows {
+        let mut line = indent.to_string();
+        let mut first = true;
+        for (column_index, cell) in row.iter().enumerate() {
+            if cell.is_empty() {
+                continue;
+            }
+            if !first {
+                line.push_str(&" ".repeat(grid.gap));
+            }
+            first = false;
+            line.push_str(&styler.paint_value(cell));
+            if column_index + 1 != grid.column_widths.len() {
+                let pad = grid.column_widths[column_index]
+                    .saturating_sub(UnicodeWidthStr::width(cell.as_str()));
+                line.push_str(&" ".repeat(pad));
+            }
+        }
+        lines.push(line);
+    }
+
+    lines
+}
+
+fn value_scalar_text(value: &KeyValueValue) -> Option<&str> {
+    match value {
+        KeyValueValue::Empty => Some(""),
+        KeyValueValue::Scalar(text) => Some(text),
+        KeyValueValue::Array(_) | KeyValueValue::Object(_) => None,
+    }
+}
+
+fn value_requires_block(value: &KeyValueValue) -> bool {
+    match value {
+        KeyValueValue::Empty | KeyValueValue::Scalar(_) => false,
+        KeyValueValue::Array(items) => {
+            items.is_empty()
+                || items.len() > 1
+                || items
+                    .iter()
+                    .any(|item| !matches!(item, KeyValueValue::Empty | KeyValueValue::Scalar(_)))
+        }
+        KeyValueValue::Object(_) => true,
+    }
+}
+
+fn array_uses_count(items: &[KeyValueValue]) -> bool {
+    items.is_empty()
+        || items.len() > 1
+        || items
+            .first()
+            .is_some_and(|value| !matches!(value, KeyValueValue::Empty | KeyValueValue::Scalar(_)))
 }
 fn table_row(
     cells: &[PreparedCell],

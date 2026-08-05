@@ -2,11 +2,12 @@ use crate::core::{output_model::Group, row::Row};
 use anyhow::{Result, anyhow};
 use regex::Regex;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 use crate::dsl::{
     eval::{
         matchers::{contains_case_insensitive, eq_case_insensitive, render_value},
-        resolve::{is_truthy, resolve_values, resolve_values_truthy},
+        resolve::{AddressStep, AddressedValue, is_truthy, resolve_values, resolve_values_truthy},
     },
     parse::key_spec::{ExactMode, KeySpec},
     verbs::common::parse_stage_words,
@@ -82,7 +83,7 @@ pub(crate) fn apply_value_with_plan(value: Value, plan: &FilterPlan) -> Result<V
     if let Some(filtered) = try_apply_addressed_filter(&value, &plan.parsed) {
         return Ok(filtered);
     }
-    selector::filter_descendants(value, |row| plan.matches(row))
+    selector::filter_descendants_preserving_matching_rows(value, |row| plan.matches(row))
 }
 
 #[derive(Debug, Clone)]
@@ -203,7 +204,7 @@ fn try_apply_addressed_filter(root: &Value, spec: &ParsedFilterSpec) -> Option<V
 
     let value_spec = spec.value.as_ref();
     let survivors = matches
-        .into_iter()
+        .iter()
         .filter(|entry| {
             let positive = if spec.existence_check {
                 is_truthy(&entry.value)
@@ -215,13 +216,81 @@ fn try_apply_addressed_filter(root: &Value, spec: &ParsedFilterSpec) -> Option<V
             };
             if spec.negated { !positive } else { positive }
         })
+        .cloned()
         .collect::<Vec<_>>();
 
-    if survivors.is_empty() {
-        return Some(Value::Null);
+    Some(retain_owning_array_members(root, &matches, &survivors))
+}
+
+fn retain_owning_array_members(
+    root: &Value,
+    candidates: &[AddressedValue],
+    survivors: &[AddressedValue],
+) -> Value {
+    // Candidate groups are recorded even when no leaf survives, so the owning
+    // array becomes empty rather than collapsing the entire semantic document.
+    // Only those arrays are edited; every sibling branch remains byte-for-byte
+    // equivalent JSON from the cloned root.
+    let mut selected_by_array: HashMap<Vec<AddressStep>, HashSet<usize>> = HashMap::new();
+
+    for candidate in candidates {
+        if let Some((array_address, _)) = deepest_array_member(&candidate.address) {
+            selected_by_array.entry(array_address).or_default();
+        }
+    }
+    for survivor in survivors {
+        if let Some((array_address, index)) = deepest_array_member(&survivor.address) {
+            selected_by_array
+                .entry(array_address)
+                .or_default()
+                .insert(index);
+        }
     }
 
-    Some(selector::project_matches(root, &survivors))
+    if selected_by_array.is_empty() {
+        return if survivors.is_empty() {
+            Value::Null
+        } else {
+            root.clone()
+        };
+    }
+
+    let mut filtered = root.clone();
+    for (array_address, selected) in selected_by_array {
+        let Some(Value::Array(items)) = value_at_address_mut(&mut filtered, &array_address) else {
+            continue;
+        };
+        let mut index = 0;
+        items.retain(|_| {
+            let keep = selected.contains(&index);
+            index += 1;
+            keep
+        });
+    }
+    filtered
+}
+
+fn deepest_array_member(address: &[AddressStep]) -> Option<(Vec<AddressStep>, usize)> {
+    let position = address
+        .iter()
+        .rposition(|step| matches!(step, AddressStep::Index(_)))?;
+    let AddressStep::Index(index) = address[position] else {
+        return None;
+    };
+    Some((address[..position].to_vec(), index))
+}
+
+fn value_at_address_mut<'a>(
+    mut value: &'a mut Value,
+    address: &[AddressStep],
+) -> Option<&'a mut Value> {
+    for step in address {
+        value = match step {
+            AddressStep::Field(name) => value.as_object_mut()?.get_mut(name)?,
+            AddressStep::Index(index) => value.as_array_mut()?.get_mut(*index)?,
+        };
+    }
+    Some(value)
 }
 
 fn parse_operator_token(token: &str) -> Option<Operator> {

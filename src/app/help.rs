@@ -353,83 +353,114 @@ mod tests {
     use crate::guide::HelpLevel;
     use crate::ui::HelpLayout;
     use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_test_xdg_env<T>(run: impl FnOnce() -> T) -> T {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
+        let original_home = std::env::var("HOME").ok();
+        let original_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
+        let original_xdg_cache_home = std::env::var("XDG_CACHE_HOME").ok();
+
+        unsafe {
+            std::env::set_var("HOME", "/tmp/osp-help-home");
+            std::env::set_var("XDG_CONFIG_HOME", "/tmp/osp-help-xdg/config");
+            std::env::set_var("XDG_CACHE_HOME", "/tmp/osp-help-xdg/cache");
+        }
+
+        let output = run();
+
+        match original_home {
+            Some(value) => unsafe { std::env::set_var("HOME", value) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        match original_xdg_config_home {
+            Some(value) => unsafe { std::env::set_var("XDG_CONFIG_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        match original_xdg_cache_home {
+            Some(value) => unsafe { std::env::set_var("XDG_CACHE_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_CACHE_HOME") },
+        }
+
+        output
+    }
 
     fn help_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
     }
 
+    #[cfg_attr(miri, ignore = "help bootstrap config/theme integration test")]
     #[test]
     fn render_settings_for_help_combines_presentation_format_and_level_overrides_unit() {
-        let context = render_settings_for_help(
-            &help_args(&["osp", "--gammel-og-bitter", "--no-env", "--no-config-file"]),
-            &ConfigLayer::default(),
-        );
+        with_test_xdg_env(|| {
+            let mut product_defaults = ConfigLayer::default();
+            product_defaults.set("theme.path", Vec::<String>::new());
+            let context = render_settings_for_help(
+                &help_args(&["osp", "--gammel-og-bitter", "--defaults-only"]),
+                &product_defaults,
+            );
 
-        assert_eq!(context.layout, HelpLayout::Minimal);
-        assert_eq!(context.help_level, HelpLevel::Normal);
-        assert_eq!(context.settings.mode, RenderMode::Plain);
-        assert_eq!(context.settings.color, ColorMode::Never);
-        assert_eq!(context.settings.unicode, UnicodeMode::Never);
-        assert_eq!(context.settings.format, OutputFormat::Auto);
-        assert!(!context.settings.format_explicit);
+            assert_eq!(context.layout, HelpLayout::Minimal);
+            assert_eq!(context.help_level, HelpLevel::Normal);
+            assert_eq!(context.settings.mode, RenderMode::Plain);
+            assert_eq!(context.settings.color, ColorMode::Never);
+            assert_eq!(context.settings.unicode, UnicodeMode::Never);
+            assert_eq!(context.settings.format, OutputFormat::Auto);
+            assert!(!context.settings.format_explicit);
 
-        let context = render_settings_for_help(
-            &help_args(&[
-                "osp",
-                "--presentation",
-                "compact",
-                "--mode",
-                "rich",
-                "--color",
-                "always",
-                "--unicode",
-                "always",
-                "--no-env",
-                "--no-config-file",
-            ]),
-            &ConfigLayer::default(),
-        );
+            let context = render_settings_for_help(
+                &help_args(&[
+                    "osp",
+                    "--presentation",
+                    "compact",
+                    "--mode",
+                    "rich",
+                    "--color",
+                    "always",
+                    "--unicode",
+                    "always",
+                    "--defaults-only",
+                ]),
+                &product_defaults,
+            );
 
-        assert_eq!(context.layout, HelpLayout::Compact);
-        assert_eq!(context.help_level, HelpLevel::Normal);
-        assert_eq!(context.settings.mode, RenderMode::Rich);
-        assert_eq!(context.settings.color, ColorMode::Always);
-        assert_eq!(context.settings.unicode, UnicodeMode::Always);
-        assert_eq!(context.settings.format, OutputFormat::Auto);
-        assert!(!context.settings.format_explicit);
+            assert_eq!(context.layout, HelpLayout::Compact);
+            assert_eq!(context.help_level, HelpLevel::Normal);
+            assert_eq!(context.settings.mode, RenderMode::Rich);
+            assert_eq!(context.settings.color, ColorMode::Always);
+            assert_eq!(context.settings.unicode, UnicodeMode::Always);
+            assert_eq!(context.settings.format, OutputFormat::Auto);
+            assert!(!context.settings.format_explicit);
 
-        let context = render_settings_for_help(
-            &help_args(&["osp", "--json", "--no-env", "--no-config-file"]),
-            &ConfigLayer::default(),
-        );
+            let context = render_settings_for_help(
+                &help_args(&["osp", "--json", "--defaults-only"]),
+                &product_defaults,
+            );
 
-        assert_eq!(context.settings.format, OutputFormat::Json);
-        assert!(context.settings.format_explicit);
-        let context = render_settings_for_help(
-            &help_args(&["osp", "--guide", "--no-env", "--no-config-file"]),
-            &ConfigLayer::default(),
-        );
+            assert_eq!(context.settings.format, OutputFormat::Json);
+            assert!(context.settings.format_explicit);
+            let context = render_settings_for_help(
+                &help_args(&["osp", "--guide", "--defaults-only"]),
+                &product_defaults,
+            );
 
-        assert_eq!(context.settings.format, OutputFormat::Guide);
-        assert!(context.settings.format_explicit);
+            assert_eq!(context.settings.format, OutputFormat::Guide);
+            assert!(context.settings.format_explicit);
 
-        for (args, expected_level) in [
-            (
-                &["osp", "-v", "--no-env", "--no-config-file"][..],
-                HelpLevel::Verbose,
-            ),
-            (
-                &["osp", "-q", "--no-env", "--no-config-file"][..],
-                HelpLevel::Tiny,
-            ),
-            (
-                &["osp", "-qq", "--no-env", "--no-config-file"][..],
-                HelpLevel::None,
-            ),
-        ] {
-            let context = render_settings_for_help(&help_args(args), &ConfigLayer::default());
-            assert_eq!(context.help_level, expected_level);
-        }
+            for (args, expected_level) in [
+                (&["osp", "-v", "--defaults-only"][..], HelpLevel::Verbose),
+                (&["osp", "-q", "--defaults-only"][..], HelpLevel::Tiny),
+                (&["osp", "-qq", "--defaults-only"][..], HelpLevel::None),
+            ] {
+                let context = render_settings_for_help(&help_args(args), &product_defaults);
+                assert_eq!(context.help_level, expected_level);
+            }
+        });
     }
 
     #[test]

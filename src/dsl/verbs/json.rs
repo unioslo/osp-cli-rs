@@ -172,36 +172,6 @@ pub(crate) fn preserve_envelope_fields(original: Value, narrowed: Value) -> Valu
     }
 }
 
-/// Materializes addressed matches after transforming each matched leaf.
-///
-/// This is the semantic counterpart to row projection. Callers supply the
-/// canonical root plus addressed matches, and this helper rebuilds only the
-/// matched branches while preserving envelope metadata on the intermediate
-/// containers that still survive.
-pub(crate) fn materialize_addressed_transform<F>(
-    original: &Value,
-    matches: &[AddressedValue],
-    preserve_terminal_parent_envelope: bool,
-    transform: F,
-) -> Value
-where
-    F: Fn(&Value) -> Value + Copy,
-{
-    let mut projected = Value::Null;
-
-    for entry in matches {
-        insert_transformed_match(&mut projected, &entry.address, transform(&entry.value));
-        preserve_intermediate_envelope(
-            original,
-            &mut projected,
-            &entry.address,
-            preserve_terminal_parent_envelope,
-        );
-    }
-
-    projected
-}
-
 /// Finalizes a structurally rebuilt subtree so selector verbs preserve useful
 /// outer metadata while stripping internal sparse-array holes before returning.
 ///
@@ -229,27 +199,6 @@ pub(crate) fn project_addressed_matches_unfinalized(
 /// Rebuilds exactly the addressed matches and restores the surviving envelope.
 pub(crate) fn project_addressed_matches(original: &Value, matches: &[AddressedValue]) -> Value {
     finalize_structural_projection(original, materialize_path_matches(matches))
-}
-
-/// Materializes transformed addressed leaves and finalizes the rebuilt tree.
-pub(crate) fn transform_addressed_matches<F>(
-    original: &Value,
-    matches: &[AddressedValue],
-    preserve_terminal_parent_envelope: bool,
-    transform: F,
-) -> Value
-where
-    F: Fn(&Value) -> Value + Copy,
-{
-    let projected = materialize_addressed_transform(
-        original,
-        matches,
-        preserve_terminal_parent_envelope,
-        transform,
-    );
-    let mut projected = projected;
-    compact_sparse_arrays(&mut projected);
-    projected
 }
 
 /// Removes addressed descendants while preserving real selected `null` values
@@ -375,109 +324,6 @@ fn preserve_array_envelope(original_items: Vec<Value>, narrowed_items: Vec<Value
     }
 
     Value::Array(out)
-}
-
-fn insert_transformed_match(target: &mut Value, address: &[AddressStep], value: Value) {
-    let Some((step, rest)) = address.split_first() else {
-        *target = value;
-        return;
-    };
-
-    match step {
-        AddressStep::Field(name) => {
-            if is_sparse_hole(target) || !matches!(target, Value::Object(_)) {
-                *target = Value::Object(Map::new());
-            }
-            let Value::Object(map) = target else {
-                return;
-            };
-            insert_transformed_match(map.entry(name.clone()).or_insert(Value::Null), rest, value);
-        }
-        AddressStep::Index(index) => {
-            if is_sparse_hole(target) || !matches!(target, Value::Array(_)) {
-                *target = Value::Array(Vec::new());
-            }
-            let Value::Array(items) = target else {
-                return;
-            };
-            if items.len() <= *index {
-                items.resize(index + 1, sparse_hole());
-            }
-            insert_transformed_match(&mut items[*index], rest, value);
-        }
-    }
-}
-
-fn preserve_intermediate_envelope(
-    original: &Value,
-    projected: &mut Value,
-    address: &[AddressStep],
-    preserve_terminal_parent_envelope: bool,
-) {
-    let Some((step, rest)) = address.split_first() else {
-        return;
-    };
-
-    let (next_original, next_projected) = match step {
-        AddressStep::Field(name) => {
-            let (Value::Object(original_map), Value::Object(projected_map)) = (original, projected)
-            else {
-                return;
-            };
-            let Some(next_original) = original_map.get(name) else {
-                return;
-            };
-            let Some(next_projected) = projected_map.get_mut(name) else {
-                return;
-            };
-            (next_original, next_projected)
-        }
-        AddressStep::Index(index) => {
-            let (Value::Array(original_items), Value::Array(projected_items)) =
-                (original, projected)
-            else {
-                return;
-            };
-            let Some(next_original) = original_items.get(*index) else {
-                return;
-            };
-            let Some(next_projected) = projected_items.get_mut(*index) else {
-                return;
-            };
-            (next_original, next_projected)
-        }
-    };
-
-    if rest.is_empty() {
-        return;
-    }
-
-    if rest.len() == 1 && !preserve_terminal_parent_envelope {
-        preserve_intermediate_envelope(
-            next_original,
-            next_projected,
-            rest,
-            preserve_terminal_parent_envelope,
-        );
-        return;
-    }
-
-    if let Value::Object(original_map) = next_original
-        && let Value::Object(projected_map) = next_projected
-    {
-        for (key, value) in original_map {
-            if !projected_map.contains_key(key) && is_envelope_field(value) {
-                projected_map.insert(key.clone(), value.clone());
-            }
-        }
-    }
-
-    preserve_intermediate_envelope(
-        next_original,
-        next_projected,
-        rest,
-        preserve_terminal_parent_envelope,
-    );
 }
 
 fn object_has_nested_descendants(map: &Map<String, Value>) -> bool {

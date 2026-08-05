@@ -15,39 +15,23 @@ fn help_like_payload_value_extracts_top_level_usage_array() {
     assert_eq!(document.value, json!([{"value": "osp deploy <COMMAND>"}]));
 }
 
-// Protects addressed VALUE extraction on semantic payloads: extracting one
-// nested entry field should keep the surviving section shell while degrading
-// the targeted leaf into `{value: ...}` rows.
+// Addressed VALUE extraction is an extractor, so semantic input must produce
+// the same flat `{value: ...}` rows as row-shaped input.
 #[test]
-fn help_like_payload_value_extracts_nested_entry_field_with_section_envelope() {
+fn help_like_payload_value_extracts_nested_entry_field_as_flat_rows() {
     let output = run_guide_pipeline(help_like_guide(), "VALUE sections[1].entries[0].name");
 
     assert!(GuideView::try_from_output_result(&output).is_none());
     let document = output
         .document
         .expect("semantic document should remain attached");
-    assert_eq!(
-        document.value,
-        json!({
-            "sections": [
-                {
-                    "title": "Options",
-                    "kind": "options",
-                    "paragraphs": ["rendering"],
-                    "entries": [
-                        {"value": "--verbose"}
-                    ]
-                }
-            ]
-        })
-    );
+    assert_eq!(document.value, json!([{"value": "--verbose"}]));
 }
 
-// Protects mixed-depth VALUE extraction: combining a top-level scalar-array
-// selector with a nested structural selector should preserve each selected
-// branch in-place instead of collapsing them into one synthetic wrapper.
+// Multiple VALUE selectors emit flat rows in selector order and retain each
+// selector's document order.
 #[test]
-fn help_like_payload_value_mixed_depth_selectors_keep_structural_branches() {
+fn help_like_payload_value_mixed_depth_selectors_keep_stable_order() {
     let output = run_guide_pipeline(help_like_guide(), "VALUE usage sections[0].entries[].name");
 
     assert!(GuideView::try_from_output_result(&output).is_none());
@@ -56,31 +40,19 @@ fn help_like_payload_value_mixed_depth_selectors_keep_structural_branches() {
         .expect("semantic document should remain attached");
     assert_eq!(
         document.value,
-        json!({
-            "usage": [
-                {"value": "osp deploy <COMMAND>"}
-            ],
-            "sections": [
-                {
-                    "title": "Commands",
-                    "kind": "commands",
-                    "paragraphs": ["pick one"],
-                    "entries": [
-                        {"value": "apply"},
-                        {"value": "doctor"},
-                        {"value": "status"}
-                    ]
-                }
-            ]
-        })
+        json!([
+            {"value": "osp deploy <COMMAND>"},
+            {"value": "apply"},
+            {"value": "doctor"},
+            {"value": "status"}
+        ])
     );
 }
 
-// Protects VALUE extraction for sibling fields on the same addressed object:
-// once one entry survives, both selected leaves should stay attached to the
-// same structural entry instead of being split into unrelated wrappers.
+// Sibling selectors remain independent extractions rather than rebuilding the
+// owning semantic object.
 #[test]
-fn help_like_payload_value_keeps_sibling_field_identity_for_same_object() {
+fn help_like_payload_value_extracts_sibling_fields_as_rows() {
     let output = run_guide_pipeline(
         help_like_guide(),
         "VALUE sections[0].entries[0].name sections[0].entries[0].short_help",
@@ -92,20 +64,9 @@ fn help_like_payload_value_keeps_sibling_field_identity_for_same_object() {
         .expect("semantic document should remain attached");
     assert_eq!(
         document.value,
-        json!({
-            "sections": [
-                {
-                    "title": "Commands",
-                    "kind": "commands",
-                    "paragraphs": ["pick one"],
-                    "entries": [
-                        {
-                            "name": {"value": "apply"},
-                            "short_help": {"value": "Apply pending changes"}
-                        }
-                    ]
-                }
-            ]
-        })
+        json!([
+            {"value": "apply"},
+            {"value": "Apply pending changes"}
+        ])
     );
 }

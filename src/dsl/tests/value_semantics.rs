@@ -181,20 +181,23 @@ fn filter_preserves_section_metadata_when_descendants_match_unit() {
 }
 
 #[test]
-fn filter_addressed_path_failures_collapse_to_null_unit() {
-    for spec in [
-        "sections[0].entries[1].name!=exit",
-        "sections[5].entries[0].name=help",
-    ] {
-        let raw = format!("F {spec}");
-        let filtered = apply_stage(
-            guide_like_value(),
-            &stage(ParsedStageKind::Explicit, "F", spec, &raw),
-        )
-        .expect("filter stage should succeed");
+fn addressed_filter_distinguishes_empty_owners_from_missing_paths_unit() {
+    let spec = "sections[0].entries[1].name!=exit";
+    let filtered = apply_stage(
+        guide_like_value(),
+        &stage(ParsedStageKind::Explicit, "F", spec, &format!("F {spec}")),
+    )
+    .expect("filter stage should succeed");
+    assert_eq!(filtered["sections"][0]["entries"], json!([]));
+    assert_eq!(filtered["commands"].as_array().map(Vec::len), Some(2));
 
-        assert_eq!(filtered, json!(null), "spec={spec}");
-    }
+    let spec = "sections[5].entries[0].name=help";
+    let filtered = apply_stage(
+        guide_like_value(),
+        &stage(ParsedStageKind::Explicit, "F", spec, &format!("F {spec}")),
+    )
+    .expect("filter stage should succeed");
+    assert_eq!(filtered, json!(null));
 }
 
 #[test]

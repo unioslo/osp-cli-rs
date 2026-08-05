@@ -1,4 +1,5 @@
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin subprocess integration test")]
 #[test]
 fn timeout_dispatch_covers_timeout_fields_and_process_cleanup_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-dispatch-timeout");
@@ -45,6 +46,7 @@ fn timeout_dispatch_covers_timeout_fields_and_process_cleanup_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin subprocess integration test")]
 #[test]
 fn dispatch_drains_large_plugin_output_without_false_timeout_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-large-output");
@@ -71,6 +73,7 @@ fn dispatch_drains_large_plugin_output_without_false_timeout_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin subprocess integration test")]
 #[test]
 fn dispatch_fails_fast_when_injected_env_config_has_collisions_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-invalid-env");
@@ -213,6 +216,7 @@ fn plugin_dispatch_context_and_error_formats_cover_local_helper_paths_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin subprocess integration test")]
 #[test]
 fn describe_plugin_and_provider_error_paths_cover_missing_nonzero_invalid_and_execute_failed_unit() {
     let _lock = env_lock()

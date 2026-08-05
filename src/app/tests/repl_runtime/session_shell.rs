@@ -131,19 +131,22 @@ fn repl_failure_is_cached_for_doctor_last_unit() {
 
 #[test]
 fn rebuild_repl_state_preserves_last_failure_unit() {
-    let mut state = make_test_state(Vec::new());
-    state.record_repl_failure("ldap user nope", "boom", "boom detail");
+    with_test_xdg_env(|| {
+        let mut state = make_test_state(Vec::new());
+        state.record_repl_failure("ldap user nope", "boom", "boom detail");
 
-    let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    let last = next
-        .last_repl_failure()
-        .expect("last failure should survive rebuild");
+        let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        let last = next
+            .last_repl_failure()
+            .expect("last failure should survive rebuild");
 
-    assert_eq!(last.command_line, "ldap user nope");
-    assert_eq!(last.summary, "boom");
-    assert_eq!(last.detail, "boom detail");
+        assert_eq!(last.command_line, "ldap user nope");
+        assert_eq!(last.summary, "boom");
+        assert_eq!(last.detail, "boom detail");
+    });
 }
 
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn repl_bang_expands_last_visible_command_unit() {
     use std::os::unix::fs::PermissionsExt;
@@ -202,6 +205,7 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
     assert_eq!(state.repl_cache_size(), cache_size_before);
 }
 
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn repl_bang_contains_search_expands_matching_command_unit() {
     use std::os::unix::fs::PermissionsExt;

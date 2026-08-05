@@ -74,6 +74,7 @@ fn plugin_path_discovery_defaults_off_and_respects_config_unit() {
 fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("theme.path", Vec::<String>::new());
     defaults.set(
         "extensions.plugins.env.shared.url",
         "https://common.example",
@@ -152,6 +153,8 @@ fn plugin_dispatch_context_refreshes_cached_plugin_env_after_config_change() {
 
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("repl.history.path", "/tmp/osp-plugin-config-history.jsonl");
+    defaults.set("theme.path", Vec::<String>::new());
     defaults.set("extensions.plugins.env.endpoint", "after");
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
@@ -234,6 +237,7 @@ fn plugin_dispatch_context_filters_colliding_projected_env_entries_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn external_plugin_dispatch_fails_when_config_env_collides_unit() {
     let root = make_temp_dir("osp-cli-plugin-config-collision-dispatch");
@@ -244,6 +248,8 @@ fn external_plugin_dispatch_fails_when_config_env_collides_unit() {
     let mut state = make_test_state(vec![plugins_dir]);
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("repl.history.path", "/tmp/osp-plugin-config-history.jsonl");
+    defaults.set("theme.path", Vec::<String>::new());
     defaults.set("extensions.plugins.cfg.env.api.token", "dot");
     defaults.set("extensions.plugins.cfg.env.api-token", "dash");
     let mut resolver = ConfigResolver::default();
@@ -274,6 +280,7 @@ fn external_plugin_dispatch_fails_when_config_env_collides_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn app_state_seeds_plugin_command_policy_registry_unit() {
     let root = make_temp_dir("osp-cli-test-plugin-policy-seed");

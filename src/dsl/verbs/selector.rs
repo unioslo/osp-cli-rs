@@ -31,11 +31,11 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 use crate::dsl::{
+    eval::matchers::match_row_keys,
     eval::resolve::{
         AddressStep, AddressedValue, compact_sparse_arrays, materialize_path_matches,
         resolve_descendant_matches, resolve_path_matches,
     },
-    eval::{matchers::match_row_keys, resolve::evaluate_path},
     parse::{
         key_spec::{ExactMode, KeySpec},
         path::{PathExpression, expression_to_flat_key, is_structural_path_token, parse_path},
@@ -138,17 +138,24 @@ impl CompiledSelector {
         &self,
         nested_row: &Value,
     ) -> Option<(String, Vec<Value>)> {
-        let path = self.path()?;
-        if !self.is_structural() || !path_has_selectors(path) {
+        if !self.is_structural() {
             return None;
         }
 
-        let values = evaluate_path(nested_row, path);
-        if values.is_empty() {
+        let matches = self.resolve_matches(nested_row);
+        if !matches.iter().any(|entry| {
+            entry
+                .address
+                .iter()
+                .any(|step| matches!(step, AddressStep::Index(_)))
+        }) {
             return None;
         }
 
-        Some((self.label(), values))
+        Some((
+            self.label(),
+            matches.into_iter().map(|entry| entry.value).collect(),
+        ))
     }
 
     pub(crate) fn matched_flat_keys(&self, flat_row: &Row) -> Vec<String> {
@@ -254,19 +261,6 @@ pub(crate) fn remove_matches(root: Value, matches: &[AddressedValue]) -> Value {
     json::remove_addressed_matches(root, matches)
 }
 
-/// Applies a leaf transform over addressed matches and rebuilds the result.
-pub(crate) fn transform_matches<F>(
-    root: &Value,
-    matches: &[AddressedValue],
-    preserve_terminal_parent_envelope: bool,
-    transform: F,
-) -> Value
-where
-    F: Fn(&Value) -> Value + Copy,
-{
-    json::transform_addressed_matches(root, matches, preserve_terminal_parent_envelope, transform)
-}
-
 /// Rebuilds several structural selectors without compacting array holes yet.
 pub(crate) fn project_compiled_unfinalized<'a, I>(root: &Value, selectors: I) -> Value
 where
@@ -337,11 +331,25 @@ pub(crate) fn project_row_matches(matches: &[AddressedValue]) -> Vec<Row> {
 ///
 /// Structural path selectors should use the addressed rewrite helpers above
 /// instead.
-pub(crate) fn filter_descendants<F>(value: Value, predicate: F) -> Result<Value>
+pub(crate) fn filter_descendants_preserving_matching_rows<F>(
+    value: Value,
+    predicate: F,
+) -> Result<Value>
 where
     F: Fn(&Row) -> bool + Copy,
 {
-    filter_descendants_with_options(value, predicate, true)
+    filter_descendants_preserving_matching_rows_with_options(value, predicate, true)
+}
+
+pub(crate) fn filter_descendants_preserving_matching_rows_with_options<F>(
+    value: Value,
+    predicate: F,
+    allow_container_key_match: bool,
+) -> Result<Value>
+where
+    F: Fn(&Row) -> bool + Copy,
+{
+    filter_descendants_in_context(value, predicate, false, allow_container_key_match, true)
 }
 
 pub(crate) fn filter_descendants_with_options<F>(
@@ -352,7 +360,7 @@ pub(crate) fn filter_descendants_with_options<F>(
 where
     F: Fn(&Row) -> bool + Copy,
 {
-    filter_descendants_in_context(value, predicate, false, allow_container_key_match)
+    filter_descendants_in_context(value, predicate, false, allow_container_key_match, false)
 }
 
 fn filter_descendants_in_context<F>(
@@ -360,6 +368,7 @@ fn filter_descendants_in_context<F>(
     predicate: F,
     preserve_item_siblings: bool,
     allow_container_key_match: bool,
+    preserve_matching_leaf_rows: bool,
 ) -> Result<Value>
 where
     F: Fn(&Row) -> bool + Copy,
@@ -370,10 +379,14 @@ where
             predicate,
             preserve_item_siblings,
             allow_container_key_match,
+            preserve_matching_leaf_rows,
         ),
-        Value::Array(items) => {
-            filter_array_descendants(items, predicate, allow_container_key_match)
-        }
+        Value::Array(items) => filter_array_descendants(
+            items,
+            predicate,
+            allow_container_key_match,
+            preserve_matching_leaf_rows,
+        ),
         scalar => {
             if predicate(&single_value_row(&scalar)) {
                 Ok(scalar)
@@ -388,6 +401,7 @@ fn filter_array_descendants<F>(
     items: Vec<Value>,
     predicate: F,
     allow_container_key_match: bool,
+    preserve_matching_leaf_rows: bool,
 ) -> Result<Value>
 where
     F: Fn(&Row) -> bool + Copy,
@@ -397,6 +411,16 @@ where
     let original = items.clone();
 
     for item in items {
+        if preserve_matching_leaf_rows
+            && let Value::Object(map) = &item
+            && json::is_leaf_record_map(map)
+            && predicate(map)
+        {
+            narrow.push(item.clone());
+            blunt.push(item);
+            continue;
+        }
+
         // Arrays keep matching elements as the main retention unit. Leaf rows
         // still get a narrower fallback so a singleton match does not degrade
         // into a fake no-op like `[{"name":"doctor"}] | doctor`.
@@ -406,18 +430,21 @@ where
                 predicate,
                 false,
                 allow_container_key_match,
+                preserve_matching_leaf_rows,
             )?,
             Value::Object(_) => filter_descendants_in_context(
                 item.clone(),
                 predicate,
                 true,
                 allow_container_key_match,
+                preserve_matching_leaf_rows,
             )?,
             _ => filter_descendants_in_context(
                 item.clone(),
                 predicate,
                 false,
                 allow_container_key_match,
+                preserve_matching_leaf_rows,
             )?,
         };
 
@@ -446,6 +473,7 @@ fn filter_object_descendants<F>(
     predicate: F,
     preserve_item_siblings: bool,
     allow_container_key_match: bool,
+    preserve_matching_leaf_rows: bool,
 ) -> Result<Value>
 where
     F: Fn(&Row) -> bool + Copy,
@@ -471,6 +499,7 @@ where
                 predicate,
                 false,
                 allow_container_key_match,
+                preserve_matching_leaf_rows,
             )?,
             _ if should_match_field_as_whole(&child)
                 && predicate(&single_field_row(&key, &child)) =>
@@ -482,6 +511,7 @@ where
                             predicate,
                             false,
                             allow_container_key_match,
+                            preserve_matching_leaf_rows,
                         )?;
                         if json::is_structurally_empty(&narrowed) {
                             child.clone()
@@ -589,12 +619,6 @@ fn single_field_row(key: &str, value: &Value) -> Row {
     let mut row = Row::new();
     row.insert(key.to_string(), value.clone());
     row
-}
-
-fn path_has_selectors(path: &PathExpression) -> bool {
-    path.segments
-        .iter()
-        .any(|segment| !segment.selectors.is_empty())
 }
 
 fn addressed_leaf_row(entry: &AddressedValue) -> Row {

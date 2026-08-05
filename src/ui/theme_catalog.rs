@@ -559,6 +559,7 @@ mod tests {
             .expect("theme test config should resolve")
     }
 
+    #[cfg_attr(miri, ignore = "theme file parsing integration test")]
     #[test]
     fn theme_file_defaults_id_and_name_from_file_stem() {
         let dir = unique_temp_dir("osp-theme-loader-test");
@@ -587,6 +588,7 @@ title = "#586e75"
         assert_eq!(theme.name, "Solarized Dark");
     }
 
+    #[cfg_attr(miri, ignore = "theme file parsing integration test")]
     #[test]
     fn theme_file_inherits_from_base() {
         let dir = unique_temp_dir("osp-theme-loader-test-base");
@@ -680,6 +682,7 @@ accent = "#123456"
         assert_eq!(catalog.ids(), vec!["rose-pine".to_string()]);
     }
 
+    #[cfg_attr(miri, ignore = "theme path environment integration test")]
     #[test]
     fn theme_path_helpers_expand_home_and_drop_blank_entries_unit() {
         let _guard = env_lock().lock().expect("env lock should not be poisoned");
@@ -710,6 +713,7 @@ accent = "#123456"
         }
     }
 
+    #[cfg_attr(miri, ignore = "theme catalog filesystem integration test")]
     #[test]
     fn theme_catalog_load_reports_invalid_specs_and_preserves_custom_origins_unit() {
         let root = unique_temp_dir("osp-theme-loader-catalog");
@@ -842,6 +846,7 @@ text = "#ffffff"
         log_theme_issues(&catalog.issues);
     }
 
+    #[cfg_attr(miri, ignore = "theme path environment integration test")]
     #[test]
     fn default_theme_paths_tracks_home_config_root_unit() {
         let _guard = env_lock().lock().expect("env lock should not be poisoned");

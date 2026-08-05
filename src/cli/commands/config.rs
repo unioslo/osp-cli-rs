@@ -20,9 +20,9 @@ use crate::cli::{
 use crate::config::secret_file_mode;
 use crate::config::{
     ConfigLayer, ConfigSchema, ResolvedConfig, ResolvedValue, RuntimeConfigPaths,
-    RuntimeLoadOptions, Scope, TomlStoreEditOptions, is_bootstrap_only_key,
-    set_scoped_value_in_toml, unset_scoped_value_in_toml, validate_bootstrap_value,
-    validate_key_scope,
+    RuntimeLoadOptions, RuntimeSecretStore, Scope, SecretBackendKind, TomlStoreEditOptions,
+    is_bootstrap_only_key, set_scoped_value_in_toml, unset_scoped_value_in_toml,
+    validate_bootstrap_value, validate_key_scope,
 };
 use crate::core::output::OutputFormat;
 use crate::core::row::Row;
@@ -214,7 +214,17 @@ fn config_get_rows(
 }
 
 pub(crate) fn config_diagnostics_rows(context: ConfigReadContext<'_>) -> Vec<Row> {
-    let secrets = secrets_permissions_diagnostic(RuntimeConfigPaths::discover().secrets_file);
+    let paths = RuntimeConfigPaths::discover_with(context.runtime_load);
+    let backend = context
+        .config
+        .get_string("secrets.backend")
+        .unwrap_or("toml");
+    let selected_path = if backend.eq_ignore_ascii_case("keyring") {
+        paths.secrets_index_file.clone()
+    } else {
+        paths.secrets_file.clone()
+    };
+    let secrets = secrets_permissions_diagnostic(selected_path);
     let known_profiles = serde_json::Value::Array(
         context
             .config
@@ -244,7 +254,12 @@ pub(crate) fn config_diagnostics_rows(context: ConfigReadContext<'_>) -> Vec<Row
             + context.config.aliases().len()) as i64,
         "theme_issue_count" => context.themes.issues.len() as i64,
         "theme_issues" => theme_issues,
-        "secrets_file" => secrets.path,
+        "secrets_backend" => backend,
+        "secrets_file" => paths.secrets_file
+            .map_or(serde_json::Value::Null, |path| path.display().to_string().into()),
+        "secrets_index_file" => paths.secrets_index_file
+            .map_or(serde_json::Value::Null, |path| path.display().to_string().into()),
+        "secrets_store_path" => secrets.path,
         "secrets_permissions_status" => secrets.status,
         "secrets_permissions_mode" => secrets.mode,
         "secrets_permissions_message" => secrets.message,
@@ -393,6 +408,7 @@ fn run_config_set(
     let target = ConfigWriteTarget::from_set_args(&args);
     let read = context.read();
     let store = resolve_config_store(read, &target);
+    validate_store_key(store, &key)?;
     let scopes = resolve_config_scopes(read, &target)
         .wrap_err_with(|| format!("failed to resolve config scopes for key `{key}`"))?;
     validate_write_scopes(&key, &scopes).into_diagnostic()?;
@@ -412,7 +428,7 @@ fn run_config_set(
         messages.warning("writing a sensitive key to config store; prefer --secrets");
     }
 
-    let paths = RuntimeConfigPaths::discover();
+    let paths = config_write_paths(context.runtime_load, store)?;
     for scope in &scopes {
         let display_value = if matches!(store, ConfigStore::Secrets) {
             value.clone().into_secret()
@@ -436,22 +452,15 @@ fn run_config_set(
                 row.insert("path", serde_json::Value::Null);
                 row.insert("changed", true);
             }
-            ConfigStore::Config | ConfigStore::Secrets => {
-                let target_path = match store {
-                    ConfigStore::Config => paths.config_file.as_deref(),
-                    ConfigStore::Secrets => paths.secrets_file.as_deref(),
-                    ConfigStore::Session => None,
-                }
-                .ok_or_else(|| {
-                    miette!(
-                        "unable to resolve config path for {}",
-                        config_store_name(store)
-                    )
-                })?;
+            ConfigStore::Config => {
+                let target_path = paths
+                    .as_ref()
+                    .and_then(|paths| paths.config_file.as_deref())
+                    .ok_or_else(|| miette!("unable to resolve config path for config"))?;
                 tracing::trace!(
                     key = %key,
                     scope = %format_scope(scope),
-                    store = %config_store_name(store),
+                    store = "config",
                     path = %target_path.display(),
                     dry_run = args.dry_run,
                     "persisting config set"
@@ -462,7 +471,7 @@ fn run_config_set(
                     &key,
                     &value,
                     scope,
-                    store_edit_options(store, args.dry_run),
+                    store_edit_options(ConfigStore::Config, args.dry_run),
                 )
                 .into_diagnostic()
                 .wrap_err_with(|| {
@@ -479,14 +488,33 @@ fn run_config_set(
                     set_result
                         .previous
                         .as_ref()
-                        .map(|previous| {
-                            let previous = if matches!(store, ConfigStore::Secrets) {
-                                previous.clone().into_secret()
-                            } else {
-                                previous.clone()
-                            };
-                            config_value_to_json(&previous)
-                        })
+                        .map(config_value_to_json)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+            ConfigStore::Secrets => {
+                let paths = paths
+                    .as_ref()
+                    .ok_or_else(|| miette!("unable to resolve secrets store paths"))?;
+                let secret_store = selected_secret_store(context.config, paths)
+                    .into_diagnostic()
+                    .wrap_err("failed to select secrets backend")?;
+                let edit = secret_store
+                    .set_scoped(
+                        &key,
+                        &value,
+                        scope,
+                        store_edit_options(ConfigStore::Secrets, args.dry_run),
+                    )
+                    .into_diagnostic()
+                    .wrap_err_with(|| format!("failed to persist secret `{key}`"))?;
+                row.insert("path", edit.location);
+                row.insert("backend", edit.backend.as_str());
+                row.insert("changed", edit.previous.as_ref() != Some(&value));
+                row.insert(
+                    "previous",
+                    edit.previous
+                        .map(|previous| config_value_to_json(&previous.into_secret()))
                         .unwrap_or(serde_json::Value::Null),
                 );
             }
@@ -550,6 +578,7 @@ fn run_config_unset(
     let target = ConfigWriteTarget::from_unset_args(&args);
     let read = context.read();
     let store = resolve_config_store(read, &target);
+    validate_store_key(store, &key)?;
     let scopes = resolve_config_scopes(read, &target)
         .wrap_err_with(|| format!("failed to resolve config scopes for key `{key}`"))?;
     validate_write_scopes(&key, &scopes).into_diagnostic()?;
@@ -564,7 +593,7 @@ fn run_config_unset(
 
     let mut rows = Vec::new();
     let mut messages = MessageBuffer::default();
-    let paths = RuntimeConfigPaths::discover();
+    let paths = config_write_paths(context.runtime_load, store)?;
 
     for scope in &scopes {
         let mut row = RowBuilder::new();
@@ -589,18 +618,11 @@ fn run_config_unset(
                         .unwrap_or(serde_json::Value::Null),
                 );
             }
-            ConfigStore::Config | ConfigStore::Secrets => {
-                let target_path = match store {
-                    ConfigStore::Config => paths.config_file.as_deref(),
-                    ConfigStore::Secrets => paths.secrets_file.as_deref(),
-                    ConfigStore::Session => None,
-                }
-                .ok_or_else(|| {
-                    miette!(
-                        "unable to resolve config path for {}",
-                        config_store_name(store)
-                    )
-                })?;
+            ConfigStore::Config => {
+                let target_path = paths
+                    .as_ref()
+                    .and_then(|paths| paths.config_file.as_deref())
+                    .ok_or_else(|| miette!("unable to resolve config path for config"))?;
                 tracing::trace!(
                     key = %key,
                     scope = %format_scope(scope),
@@ -614,7 +636,7 @@ fn run_config_unset(
                     target_path,
                     &key,
                     scope,
-                    store_edit_options(store, args.dry_run),
+                    store_edit_options(ConfigStore::Config, args.dry_run),
                 )
                 .into_diagnostic()
                 .wrap_err_with(|| {
@@ -631,14 +653,32 @@ fn run_config_unset(
                     edit_result
                         .previous
                         .as_ref()
-                        .map(|previous| {
-                            let previous = if matches!(store, ConfigStore::Secrets) {
-                                previous.clone().into_secret()
-                            } else {
-                                previous.clone()
-                            };
-                            config_value_to_json(&previous)
-                        })
+                        .map(config_value_to_json)
+                        .unwrap_or(serde_json::Value::Null),
+                );
+            }
+            ConfigStore::Secrets => {
+                let paths = paths
+                    .as_ref()
+                    .ok_or_else(|| miette!("unable to resolve secrets store paths"))?;
+                let secret_store = selected_secret_store(context.config, paths)
+                    .into_diagnostic()
+                    .wrap_err("failed to select secrets backend")?;
+                let edit = secret_store
+                    .unset_scoped(
+                        &key,
+                        scope,
+                        store_edit_options(ConfigStore::Secrets, args.dry_run),
+                    )
+                    .into_diagnostic()
+                    .wrap_err_with(|| format!("failed to remove secret `{key}`"))?;
+                row.insert("path", edit.location);
+                row.insert("backend", edit.backend.as_str());
+                row.insert("changed", edit.previous.is_some());
+                row.insert(
+                    "previous",
+                    edit.previous
+                        .map(|previous| config_value_to_json(&previous.into_secret()))
                         .unwrap_or(serde_json::Value::Null),
                 );
             }
@@ -703,6 +743,40 @@ enum ConfigStore {
     Session,
     Config,
     Secrets,
+}
+
+fn config_write_paths(
+    runtime_load: RuntimeLoadOptions,
+    store: ConfigStore,
+) -> Result<Option<RuntimeConfigPaths>> {
+    if matches!(store, ConfigStore::Session) {
+        return Ok(None);
+    }
+    if !runtime_load.include_config_file {
+        return Err(miette!("config file writes are disabled for this session"));
+    }
+    Ok(Some(RuntimeConfigPaths::discover_with(runtime_load)))
+}
+
+fn selected_secret_store(
+    config: &ResolvedConfig,
+    paths: &RuntimeConfigPaths,
+) -> Result<RuntimeSecretStore, crate::config::ConfigError> {
+    let backend = config
+        .get_string("secrets.backend")
+        .map(SecretBackendKind::parse)
+        .transpose()?
+        .unwrap_or(SecretBackendKind::Toml);
+    RuntimeSecretStore::from_paths(backend, paths)
+}
+
+fn validate_store_key(store: ConfigStore, key: &str) -> Result<()> {
+    if matches!(store, ConfigStore::Secrets) && key.eq_ignore_ascii_case("secrets.backend") {
+        return Err(miette!(
+            "secrets.backend must be written to the regular config store because the secrets store cannot select itself"
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

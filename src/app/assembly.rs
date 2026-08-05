@@ -228,6 +228,7 @@ pub(crate) fn build_plugin_manager(
     let manager = PluginManager::new(launch.plugin_dirs.clone())
         .with_roots(launch.config_root.clone(), launch.cache_root.clone())
         .with_default_roots(!launch.runtime_load.is_defaults_only())
+        .with_bundled_roots(!launch.runtime_load.is_defaults_only())
         .with_process_timeout(plugin_process_timeout(config))
         .with_path_discovery(plugin_path_discovery_enabled(config))
         .with_command_preferences(
@@ -261,6 +262,7 @@ mod tests {
     fn resolved(entries: &[(&str, &str)]) -> crate::config::ResolvedConfig {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
+        defaults.set("theme.path", Vec::<String>::new());
         for (key, value) in entries {
             defaults.set(*key, *value);
         }

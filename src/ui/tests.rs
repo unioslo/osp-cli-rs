@@ -6,6 +6,7 @@ use crate::core::output_model::{
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::row;
 use serde_json::json;
+use unicode_width::UnicodeWidthStr;
 
 use super::doc::{Block, SectionTitleChrome};
 use super::settings::HelpTableChrome;
@@ -49,6 +50,36 @@ fn ui2_renders_generic_rows_as_markdown_table_unit() {
 }
 
 #[test]
+fn ui2_terminal_tables_honor_width_for_clip_ellipsis_and_wrap_unit() {
+    let output = OutputResult::from_rows(vec![row! {
+        "provider" => "vmware",
+        "message" => "Not authorized for vcenter vcsa-test03.uio.no",
+        "next" => "Request access or choose another value",
+    }]);
+
+    for (overflow, expected) in [
+        (super::TableOverflow::Clip, "Not authorized"),
+        (super::TableOverflow::Ellipsis, "…"),
+        (super::TableOverflow::Wrap, "another value"),
+    ] {
+        let mut settings = RenderSettings::test_plain(OutputFormat::Table);
+        settings.format_explicit = true;
+        settings.width = Some(48);
+        settings.table_overflow = overflow;
+
+        let rendered = render_output(&output, &settings);
+
+        assert!(rendered.contains(expected), "{overflow:?}: {rendered}");
+        assert!(
+            rendered
+                .lines()
+                .all(|line| UnicodeWidthStr::width(line) <= 48),
+            "{overflow:?} exceeded width:\n{rendered}"
+        );
+    }
+}
+
+#[test]
 fn ui2_structured_guide_options_are_owned_by_one_entrypoint_unit() {
     let guide = GuideView::from_text("Usage: osp history <COMMAND>\n");
     let output = guide.to_output_result();
@@ -85,6 +116,205 @@ fn ui2_renders_single_row_output_as_aligned_key_value_unit() {
         rendered,
         "uid:          alice\ndisplay_name: Alice Example\n"
     );
+}
+
+#[test]
+fn ui2_mreg_renders_scalar_array_fields_as_multiline_lists_unit() {
+    let mut output = OutputResult::from_rows(vec![row! {
+        "uid" => "oistes",
+        "eduPersonAffiliation" => json!(["employee", "member", "staff"]),
+        "filegroups" => json!(["oistes", "ucore", "usit", "vortex-opptak"]),
+        "netgroups" => json!([
+            "ansatt-373034",
+            "ansatt-tekadm-373034",
+            "dia-drs-vaktsjefer",
+            "it-uio-azure-users",
+            "it-uio-ms365-ansatt",
+            "it-uio-ms365-ansatt-publisert",
+        ]),
+    }]);
+    output.meta.key_index = vec![
+        "uid".to_string(),
+        "eduPersonAffiliation".to_string(),
+        "filegroups".to_string(),
+        "netgroups".to_string(),
+    ];
+    let mut settings = RenderSettings::test_plain(OutputFormat::Mreg);
+    settings.format_explicit = true;
+    settings.width = Some(70);
+
+    let rendered = render_output(&output, &settings);
+
+    assert!(rendered.contains("uid:"));
+    assert!(rendered.contains("oistes\n"));
+    assert!(rendered.contains("eduPersonAffiliation (3):"));
+    assert!(rendered.contains("employee\n"));
+    assert!(rendered.contains("member\n"));
+    assert!(rendered.contains("staff\n"));
+    assert!(rendered.contains("filegroups (4):"));
+    assert!(rendered.contains("oistes\n"));
+    assert!(rendered.contains("vortex-opptak\n"));
+    assert!(rendered.contains("netgroups (6):"));
+    assert!(rendered.contains("ansatt-373034"));
+    assert!(rendered.contains("it-uio-ms365-ansatt-publisert"));
+    assert!(!rendered.contains("[\"employee\",\"member\",\"staff\"]"));
+}
+
+#[test]
+fn ui2_mreg_multiline_scalar_arrays_keep_continuation_alignment_unit() {
+    let mut output = OutputResult::from_rows(vec![row! {
+        "uid" => "alice",
+        "groups" => json!(["red", "blue", "green"]),
+    }]);
+    output.meta.key_index = vec!["uid".to_string(), "groups".to_string()];
+    let mut settings = RenderSettings::test_plain(OutputFormat::Mreg);
+    settings.format_explicit = true;
+
+    let rendered = render_output(&output, &settings);
+
+    assert_eq!(
+        rendered,
+        "uid:        alice\ngroups (3): red\n            blue\n            green\n"
+    );
+}
+
+#[test]
+fn ui2_markdown_renders_single_row_scalar_arrays_as_multiline_key_values_unit() {
+    let mut output = OutputResult::from_rows(vec![row! {
+        "uid" => "oistes",
+        "filegroups" => json!(["oistes", "ucore", "usit", "vortex-opptak"]),
+    }]);
+    output.meta.key_index = vec!["uid".to_string(), "filegroups".to_string()];
+    let mut settings = RenderSettings::test_plain(OutputFormat::Markdown);
+    settings.format_explicit = true;
+
+    let rendered = render_output(&output, &settings);
+
+    assert!(rendered.contains("- uid: oistes"));
+    assert!(rendered.contains("- filegroups (4):"));
+    assert!(rendered.contains("  - oistes"));
+    assert!(rendered.contains("  - ucore"));
+    assert!(rendered.contains("  - vortex-opptak"));
+    assert!(!rendered.contains("[\"oistes\",\"ucore\",\"usit\",\"vortex-opptak\"]"));
+}
+
+#[test]
+fn ui2_rich_mreg_multiline_lists_keep_key_and_value_styling_unit() {
+    let output = OutputResult::from_rows(vec![row! {
+        "eduPersonAffiliation" => json!(["employee", "member", "staff"]),
+    }]);
+    let mut settings = RenderSettings::test_plain(OutputFormat::Mreg);
+    settings.format_explicit = true;
+    settings.mode = RenderMode::Rich;
+    settings.color = ColorMode::Always;
+    settings.unicode = UnicodeMode::Always;
+    settings.runtime.stdout_is_tty = true;
+    settings.theme_name = "dracula".to_string();
+
+    let rendered = render_output(&output, &settings);
+
+    assert!(rendered.contains("\x1b[38;2;189;147;249meduPersonAffiliation (3)\x1b[0m"));
+    assert!(rendered.contains("\x1b[38;2;248;248;242memployee\x1b[0m"));
+    assert!(rendered.contains("\x1b[38;2;248;248;242mmember\x1b[0m"));
+    assert!(rendered.contains("\x1b[38;2;248;248;242mstaff\x1b[0m"));
+}
+
+#[test]
+fn ui2_mreg_renders_nested_object_fields_recursively_unit() {
+    let mut output = OutputResult::from_rows(vec![row! {
+        "uid" => "alice",
+        "profile" => json!({
+            "owner": "alice",
+            "groups": ["dev", "ops"],
+        }),
+    }]);
+    output.meta.key_index = vec!["uid".to_string(), "profile".to_string()];
+    let mut settings = RenderSettings::test_plain(OutputFormat::Mreg);
+    settings.format_explicit = true;
+
+    let rendered = render_output(&output, &settings);
+
+    assert!(rendered.contains("uid:"));
+    assert!(rendered.contains("profile:"));
+    assert!(rendered.contains("owner:"));
+    assert!(rendered.contains("groups (2): dev"));
+    assert!(rendered.contains("ops"));
+    assert!(!rendered.contains("{\"owner\":\"alice\""));
+}
+
+#[test]
+fn ui2_mreg_renders_nested_object_arrays_as_tables_unit() {
+    let mut output = OutputResult::from_rows(vec![row! {
+        "name" => "it-usit-gsd-drift",
+        "siteadmins" => json!({
+            "current": [
+                {
+                    "name": "iti-ops@usit.uio.no",
+                    "role": "primary",
+                    "hosts": 242,
+                },
+            ],
+            "expired": [
+                {
+                    "name": "iti-ssd@usit.uio.no",
+                    "role": "primary",
+                    "status": "expired",
+                    "valid_from": "2023-01-01T00:00:00Z",
+                    "valid_to": "2026-05-31T00:00:00Z",
+                    "replaces": "it-drift-gd-gsd@usit.uio.no",
+                    "replaced_by": "iti-ops@usit.uio.no",
+                    "hosts": 3,
+                },
+                {
+                    "name": "it-drift-gd-gsd@usit.uio.no",
+                    "role": "primary",
+                    "status": "expired",
+                    "valid_from": "2022-06-01T00:00:00Z",
+                    "valid_to": "2023-01-01T00:00:00Z",
+                    "replaced_by": "iti-ssd@usit.uio.no",
+                    "hosts": 0,
+                },
+            ],
+        }),
+    }]);
+    output.meta.key_index = vec!["name".to_string(), "siteadmins".to_string()];
+    let mut settings = RenderSettings::test_plain(OutputFormat::Mreg);
+    settings.format_explicit = true;
+
+    let rendered = render_output(&output, &settings);
+
+    assert!(rendered.contains("name:       it-usit-gsd-drift"));
+    assert!(rendered.contains("siteadmins:"));
+    assert!(rendered.contains("current (1):"));
+    assert!(rendered.contains("expired (2):"));
+    assert!(rendered.contains("iti-ssd@usit.uio.no"));
+    assert!(rendered.contains("it-drift-gd-gsd@usit.uio.no"));
+    assert!(rendered.contains("replaced_by"));
+    assert!(!rendered.contains("[1]:"));
+}
+
+#[test]
+fn ui2_markdown_renders_nested_object_fields_recursively_unit() {
+    let mut output = OutputResult::from_rows(vec![row! {
+        "uid" => "alice",
+        "profile" => json!({
+            "owner": "alice",
+            "groups": ["dev", "ops"],
+        }),
+    }]);
+    output.meta.key_index = vec!["uid".to_string(), "profile".to_string()];
+    let mut settings = RenderSettings::test_plain(OutputFormat::Markdown);
+    settings.format_explicit = true;
+
+    let rendered = render_output(&output, &settings);
+
+    assert!(rendered.contains("- uid: alice"));
+    assert!(rendered.contains("- profile:"));
+    assert!(rendered.contains("  - owner: alice"));
+    assert!(rendered.contains("  - groups (2):"));
+    assert!(rendered.contains("    - dev"));
+    assert!(rendered.contains("    - ops"));
+    assert!(!rendered.contains("{\"owner\":\"alice\""));
 }
 
 #[test]
@@ -212,6 +442,28 @@ fn ui2_json_block_uses_row_payload_shape_even_with_semantic_document_unit() {
     };
     assert!(json.text.contains("\"uid\": \"alice\""));
     assert!(!json.text.contains("\"usage\""));
+}
+
+#[test]
+fn ui2_json_block_preserves_an_explicit_json_document_unit() {
+    let value = json!({
+        "mreg": {"name": "db01.uio.no"},
+        "ldap": {"host": "db01.uio.no"}
+    });
+    let output = OutputResult::from_rows(vec![row! {
+        "mreg" => json!({"name": "db01.uio.no"}),
+        "ldap" => json!({"host": "db01.uio.no"}),
+    }])
+    .with_document(OutputDocument::new(OutputDocumentKind::Json, value.clone()));
+    let mut settings = RenderSettings::test_plain(OutputFormat::Json);
+    settings.format_explicit = true;
+
+    let rendered = render_output(&output, &settings);
+
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&rendered).expect("valid JSON"),
+        value
+    );
 }
 
 #[test]

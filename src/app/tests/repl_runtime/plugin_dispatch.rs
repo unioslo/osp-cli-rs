@@ -1,3 +1,4 @@
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn repl_plugin_error_payload_is_handled_as_error_unit() {
     use std::os::unix::fs::PermissionsExt;
@@ -41,6 +42,7 @@ JSON
 
 }
 
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn repl_records_last_rows_and_bounded_cache_unit() {
     use std::os::unix::fs::PermissionsExt;
@@ -106,6 +108,7 @@ JSON
 
 }
 
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn repl_cache_reuses_external_result_across_pipelines_unit() {
     use std::os::unix::fs::PermissionsExt;
@@ -173,6 +176,7 @@ JSON
 
 }
 
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
     let dir = make_temp_dir("osp-cli-plugin-pipeline-parity");
@@ -222,6 +226,7 @@ fn plugin_pipeline_rendering_matches_between_cli_and_repl_unit() {
 
 }
 
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn repl_plugin_provider_override_dispatches_selected_provider_unit() {
     let dir = make_temp_dir("osp-cli-repl-provider-override");

@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::{
     core::{
-        output_model::{Group, OutputItems, OutputResult},
+        output_model::{Group, OutputDocument, OutputDocumentKind, OutputItems, OutputResult},
         row::Row,
     },
     dsl::{apply_output_pipeline, apply_pipeline},
@@ -13,6 +13,27 @@ fn row(value: serde_json::Value) -> Row {
         .as_object()
         .cloned()
         .expect("fixture should be object")
+}
+
+fn deep_array_document() -> serde_json::Value {
+    json!({
+        "clusters": [
+            {
+                "name": "alpha",
+                "nodes": [
+                    {
+                        "host": "a1",
+                        "disks": [
+                            {"dev": "sda", "ssd": true},
+                            {"dev": "sdb", "ssd": false}
+                        ]
+                    },
+                    {"host": "a2", "disks": [{"dev": "sda", "ssd": true}]}
+                ]
+            },
+            {"name": "beta", "nodes": [{"host": "b1", "disks": []}]}
+        ]
+    })
 }
 
 fn grouped_output() -> OutputResult {
@@ -90,6 +111,196 @@ fn nested_path_contract_is_shared_by_filter_project_and_value_stages() {
     assert_eq!(
         member_rows,
         vec![row(json!({"value": "alice"})), row(json!({"value": "bob"}))]
+    );
+}
+
+#[test]
+fn nested_array_value_selection_preserves_every_branch_in_document_order() {
+    let rows = vec![row(deep_array_document())];
+
+    for selector in [
+        "clusters[].nodes[].disks[].dev",
+        "clusters.nodes.disks.dev",
+        "dev",
+    ] {
+        let values = apply_pipeline(rows.clone(), &[format!("VALUE {selector}")])
+            .expect("nested array value selection should work");
+        let OutputItems::Rows(value_rows) = values.items else {
+            panic!("expected row output");
+        };
+
+        assert_eq!(
+            value_rows,
+            vec![
+                row(json!({"value": "sda"})),
+                row(json!({"value": "sdb"})),
+                row(json!({"value": "sda"})),
+            ],
+            "selector={selector}"
+        );
+    }
+}
+
+#[test]
+fn nested_array_filter_preserves_every_matching_semantic_branch() {
+    let document = deep_array_document();
+
+    let mut filtered_documents = Vec::new();
+    for selector in ["clusters[].nodes[].disks[].ssd", "clusters.nodes.disks.ssd"] {
+        let output = OutputResult::from_rows(Vec::new()).with_document(OutputDocument::new(
+            OutputDocumentKind::Guide,
+            document.clone(),
+        ));
+        let filtered = apply_output_pipeline(output, &[format!("F {selector}=true")])
+            .expect("nested semantic filter should work");
+        filtered_documents.push(
+            filtered
+                .document
+                .expect("semantic document should remain attached")
+                .value,
+        );
+    }
+
+    assert_eq!(filtered_documents[0], filtered_documents[1]);
+    for filtered in &filtered_documents {
+        let clusters = filtered["clusters"]
+            .as_array()
+            .expect("clusters should remain an array");
+        assert_eq!(clusters.len(), 2);
+        let nodes = clusters[0]["nodes"]
+            .as_array()
+            .expect("matching nodes should remain an array");
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes.iter().all(|node| {
+            node["disks"]
+                .as_array()
+                .is_some_and(|disks| disks.len() == 1)
+        }));
+        assert_eq!(clusters[1], deep_array_document()["clusters"][1]);
+    }
+}
+
+#[test]
+fn semantic_value_selection_flattens_leaves_into_value_rows() {
+    let document = json!({
+        "siteadmins": {
+            "current": [
+                {"name": "drift-team", "hosts": 42},
+                {"name": "web-team", "hosts": 7}
+            ]
+        },
+        "counts": {"current": 2}
+    });
+    let output = OutputResult::from_rows(Vec::new())
+        .with_document(OutputDocument::new(OutputDocumentKind::Guide, document));
+
+    let extracted = apply_output_pipeline(output, &["VALUE siteadmins.current.name".to_string()])
+        .expect("semantic value selection should work");
+    let expected = vec![
+        row(json!({"value": "drift-team"})),
+        row(json!({"value": "web-team"})),
+    ];
+
+    assert_eq!(extracted.items, OutputItems::Rows(expected));
+    assert_eq!(
+        extracted
+            .document
+            .expect("transformed semantic value should remain attached")
+            .value,
+        json!([
+            {"value": "drift-team"},
+            {"value": "web-team"}
+        ])
+    );
+}
+
+#[test]
+fn addressed_filter_keeps_complete_owning_members_and_sibling_branches() {
+    let document = json!({
+        "siteadmins": {
+            "current": [
+                {"name": "drift-team", "role": "primary", "hosts": 42},
+                {"name": "web-team", "role": "secondary", "hosts": 7}
+            ],
+            "pending": [
+                {"name": "new-team", "role": "primary", "hosts": 0}
+            ]
+        },
+        "netgroup": "uio-drift",
+        "counts": {"current": 2, "pending": 1}
+    });
+    let output = OutputResult::from_rows(Vec::new())
+        .with_document(OutputDocument::new(OutputDocumentKind::Guide, document));
+
+    let filtered = apply_output_pipeline(output, &["F siteadmins.current[].hosts>10".to_string()])
+        .expect("addressed semantic filter should work");
+
+    assert_eq!(
+        filtered
+            .document
+            .expect("filtered semantic document should remain attached")
+            .value,
+        json!({
+            "siteadmins": {
+                "current": [
+                    {"name": "drift-team", "role": "primary", "hosts": 42}
+                ],
+                "pending": [
+                    {"name": "new-team", "role": "primary", "hosts": 0}
+                ]
+            },
+            "netgroup": "uio-drift",
+            "counts": {"current": 2, "pending": 1}
+        })
+    );
+}
+
+#[test]
+fn implicit_and_explicit_array_descent_share_the_selector_contract() {
+    let rows = vec![
+        row(json!({
+            "host": "web-01",
+            "ifaces": [
+                {"name": "eth0", "ip": "10.0.0.1", "vlan": 100},
+                {"name": "eth1", "ip": "10.0.1.1", "vlan": 200}
+            ]
+        })),
+        row(json!({
+            "host": "db-01",
+            "ifaces": [{"name": "eth0", "ip": "10.0.0.2", "vlan": 100}]
+        })),
+        row(json!({"host": "web-02", "ifaces": []})),
+    ];
+
+    for (implicit, explicit) in [
+        ("F ifaces.vlan=200", "F ifaces[].vlan=200"),
+        ("P ifaces.name", "P ifaces[].name"),
+        ("VALUE ifaces.ip", "VALUE ifaces[].ip"),
+        ("? ifaces.ip", "? ifaces[].ip"),
+    ] {
+        let implicit_output = apply_pipeline(rows.clone(), &[implicit.to_string()])
+            .unwrap_or_else(|error| panic!("{implicit} should work: {error}"));
+        let explicit_output = apply_pipeline(rows.clone(), &[explicit.to_string()])
+            .unwrap_or_else(|error| panic!("{explicit} should work: {error}"));
+
+        assert_eq!(implicit_output.items, explicit_output.items, "{implicit}");
+    }
+
+    let indexed = apply_pipeline(rows.clone(), &["VALUE ifaces[0].name".to_string()])
+        .expect("explicit index selection should work");
+    assert_eq!(
+        indexed.items,
+        OutputItems::Rows(vec![
+            row(json!({"value": "eth0"})),
+            row(json!({"value": "eth0"})),
+        ])
+    );
+
+    let sliced = apply_pipeline(rows, &["VALUE ifaces[1:].name".to_string()])
+        .expect("explicit slice selection should work");
+    assert_eq!(
+        sliced.items,
+        OutputItems::Rows(vec![row(json!({"value": "eth1"}))])
     );
 }
 

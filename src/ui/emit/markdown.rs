@@ -1,9 +1,10 @@
 use crate::core::output_model::ColumnAlignment;
 use crate::ui::doc::{
-    Block, Doc, GuideEntriesBlock, JsonBlock, KeyValueBlock, KeyValueRow, KeyValueStyle, ListBlock,
-    ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
+    Block, Doc, GuideEntriesBlock, JsonBlock, KeyValueBlock, KeyValueRow, KeyValueStyle,
+    KeyValueValue, ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
 };
 
+use super::key_value::display_key;
 use super::shared::format_list_item;
 use super::shared::indent_lines;
 use super::table::{PreparedCell, PreparedTable};
@@ -63,7 +64,10 @@ fn emit_section(block: &SectionBlock) -> String {
 }
 
 fn emit_key_value(block: &KeyValueBlock) -> String {
-    emit_rows(block.style, &block.rows)
+    match block.style {
+        KeyValueStyle::Plain => emit_plain_rows(&block.rows, 0),
+        KeyValueStyle::Bulleted => emit_bulleted_rows(&block.rows, 0),
+    }
 }
 
 fn emit_guide_entries(block: &GuideEntriesBlock) -> String {
@@ -79,30 +83,6 @@ fn emit_guide_entries(block: &GuideEntriesBlock) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn emit_rows(style: KeyValueStyle, rows: &[KeyValueRow]) -> String {
-    let mut lines = Vec::new();
-    for row in rows {
-        let line = match style {
-            KeyValueStyle::Bulleted => {
-                if row.value.is_empty() {
-                    format!("- `{}`", row.key)
-                } else {
-                    format!("- `{}` {}", row.key, row.value)
-                }
-            }
-            KeyValueStyle::Plain => {
-                if row.value.is_empty() {
-                    format!("- {}:", row.key)
-                } else {
-                    format!("- {}: {}", row.key, row.value)
-                }
-            }
-        };
-        lines.push(line);
-    }
-    lines.join("\n")
 }
 
 fn emit_list(block: &ListBlock) -> String {
@@ -122,14 +102,7 @@ fn emit_table(block: &TableBlock) -> String {
 
     let mut lines = Vec::new();
     if !block.summary.is_empty() {
-        lines.push(
-            block
-                .summary
-                .iter()
-                .map(|row| format!("- {}: {}", row.key, row.value))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
+        lines.push(emit_plain_rows(&block.summary, 0));
         lines.push(String::new());
     }
     lines.push(markdown_row(&table.headers, &table.widths));
@@ -203,13 +176,141 @@ fn aligned_padding(pad: usize, alignment: Option<ColumnAlignment>) -> (usize, us
     }
 }
 
+fn emit_plain_rows(rows: &[KeyValueRow], indent: usize) -> String {
+    rows.iter()
+        .flat_map(|row| emit_plain_row_lines(row, indent))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn emit_bulleted_rows(rows: &[KeyValueRow], indent: usize) -> String {
+    rows.iter()
+        .flat_map(|row| emit_bulleted_row_lines(row, indent))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn emit_plain_row_lines(row: &KeyValueRow, indent: usize) -> Vec<String> {
+    let prefix = format!("{}- ", " ".repeat(indent));
+    let child_indent = indent + 2;
+    let label = display_key(row);
+    match &row.value {
+        KeyValueValue::Empty => vec![format!("{prefix}{label}:")],
+        KeyValueValue::Scalar(text) if text.is_empty() => vec![format!("{prefix}{label}:")],
+        KeyValueValue::Scalar(text) => vec![format!("{prefix}{label}: {text}")],
+        KeyValueValue::Object(rows) => {
+            let mut lines = vec![format!("{prefix}{label}:")];
+            if !rows.is_empty() {
+                lines.push(emit_plain_rows(rows, child_indent));
+            }
+            lines
+        }
+        KeyValueValue::Array(items) => {
+            emit_markdown_array_lines(items, &prefix, &label, child_indent)
+        }
+    }
+}
+
+fn emit_bulleted_row_lines(row: &KeyValueRow, indent: usize) -> Vec<String> {
+    let prefix = format!("{}- ", " ".repeat(indent));
+    let child_indent = indent + 2;
+    match &row.value {
+        KeyValueValue::Empty => vec![format!("{prefix}`{}`", row.key)],
+        KeyValueValue::Scalar(text) if text.is_empty() => vec![format!("{prefix}`{}`", row.key)],
+        KeyValueValue::Scalar(text) => vec![format!("{prefix}`{}` {text}", row.key)],
+        KeyValueValue::Object(rows) => {
+            let mut lines = vec![format!("{prefix}`{}`:", row.key)];
+            if !rows.is_empty() {
+                lines.push(emit_plain_rows(rows, child_indent));
+            }
+            lines
+        }
+        KeyValueValue::Array(items) => {
+            let mut lines = vec![format!("{prefix}`{}`:", display_key(row))];
+            lines.extend(emit_markdown_nested_items(items, child_indent));
+            lines
+        }
+    }
+}
+
+fn emit_markdown_array_lines(
+    items: &[KeyValueValue],
+    prefix: &str,
+    label: &str,
+    child_indent: usize,
+) -> Vec<String> {
+    let Some(scalar_items) = items
+        .iter()
+        .map(markdown_scalar_text)
+        .collect::<Option<Vec<_>>>()
+    else {
+        let mut lines = vec![format!("{prefix}{label}:")];
+        lines.extend(emit_markdown_nested_items(items, child_indent));
+        return lines;
+    };
+
+    match scalar_items.as_slice() {
+        [] => vec![format!("{prefix}{label}:")],
+        [only] if items.len() == 1 && !markdown_array_uses_count(items) => {
+            vec![format!("{prefix}{label}: {only}")]
+        }
+        values => {
+            let mut lines = vec![format!("{prefix}{label}:")];
+            lines.extend(
+                values
+                    .iter()
+                    .map(|value| format!("{}- {value}", " ".repeat(child_indent))),
+            );
+            lines
+        }
+    }
+}
+
+fn emit_markdown_nested_items(items: &[KeyValueValue], indent: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let prefix = format!("{}- ", " ".repeat(indent));
+        match item {
+            KeyValueValue::Empty => lines.push(format!("{prefix}[{}]", index + 1)),
+            KeyValueValue::Scalar(text) => lines.push(format!("{prefix}{text}")),
+            KeyValueValue::Object(rows) => {
+                lines.push(format!("{prefix}[{}]:", index + 1));
+                if !rows.is_empty() {
+                    lines.push(emit_plain_rows(rows, indent + 2));
+                }
+            }
+            KeyValueValue::Array(items) => {
+                lines.push(format!("{prefix}[{}]:", index + 1));
+                lines.extend(emit_markdown_nested_items(items, indent + 2));
+            }
+        }
+    }
+    lines
+}
+
+fn markdown_scalar_text(value: &KeyValueValue) -> Option<&str> {
+    match value {
+        KeyValueValue::Empty => Some(""),
+        KeyValueValue::Scalar(text) => Some(text),
+        KeyValueValue::Array(_) | KeyValueValue::Object(_) => None,
+    }
+}
+
+fn markdown_array_uses_count(items: &[KeyValueValue]) -> bool {
+    items.is_empty()
+        || items.len() > 1
+        || items
+            .first()
+            .is_some_and(|value| !matches!(value, KeyValueValue::Empty | KeyValueValue::Scalar(_)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{emit_doc, emit_table};
     use crate::core::output_model::ColumnAlignment;
     use crate::ui::doc::{
-        Block, Doc, GuideEntriesBlock, GuideEntryRow, KeyValueRow, ParagraphBlock, SectionBlock,
-        SectionTitleChrome, TableBlock,
+        Block, Doc, GuideEntriesBlock, GuideEntryRow, KeyValueRow, KeyValueValue, ParagraphBlock,
+        SectionBlock, SectionTitleChrome, TableBlock,
     };
 
     #[test]
@@ -269,7 +370,7 @@ mod tests {
         let table = TableBlock {
             summary: vec![KeyValueRow {
                 key: "team".to_string(),
-                value: "prod".to_string(),
+                value: KeyValueValue::Scalar("prod".to_string()),
                 indent: None,
                 gap: None,
             }],

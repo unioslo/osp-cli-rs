@@ -481,6 +481,9 @@ mod tests {
     fn resolver_layer_mutators_and_setters_are_callable_unit() {
         let mut resolver = ConfigResolver::default();
         resolver.defaults_mut().set("profile.default", "default");
+        resolver
+            .defaults_mut()
+            .set("theme.path", Vec::<String>::new());
         resolver.file_mut().set("theme.name", "file");
         resolver.secrets_mut().set("profile.default", "default");
         resolver.env_mut().set("theme.name", "env");
@@ -495,6 +498,7 @@ mod tests {
 
         let mut replacement = ConfigLayer::default();
         replacement.set("profile.default", "default");
+        replacement.set("theme.path", Vec::<String>::new());
         replacement.set("theme.name", "replaced");
         resolver.set_defaults(replacement);
         resolver.set_file(ConfigLayer::default());
@@ -510,6 +514,9 @@ mod tests {
 
         let mut resolver = ConfigResolver::default();
         resolver.defaults_mut().set("profile.default", "default");
+        resolver
+            .defaults_mut()
+            .set("theme.path", Vec::<String>::new());
         resolver.secrets_mut().insert_with_origin(
             "extensions.demo.token",
             ConfigValue::String("secret-token".to_string()).into_secret(),
@@ -547,6 +554,9 @@ mod tests {
 
         let mut resolver = ConfigResolver::default();
         resolver.defaults_mut().set("profile.default", "ops");
+        resolver
+            .defaults_mut()
+            .set("theme.path", Vec::<String>::new());
         let resolved = resolver
             .resolve(ResolveOptions::default())
             .expect("selected profile without scoped entries should resolve");

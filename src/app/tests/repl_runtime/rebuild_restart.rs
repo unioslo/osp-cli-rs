@@ -1,77 +1,84 @@
 #[test]
 fn rebuild_repl_state_preserves_session_defaults_and_shell_context_unit() {
-    let mut state = make_test_state(Vec::new());
-    state.session.prompt_prefix = "osp-dev".to_string();
-    state.session.history_enabled = false;
-    state.session.max_cached_results = 7;
-    state
-        .session
-        .config_overrides
-        .set("user.name", "launch-user");
-    state
-        .session
-        .config_overrides
-        .set("ui.message.verbosity", "trace");
-    state.session.config_overrides.set("debug.level", 2i64);
-    state.session.config_overrides.set("ui.format", "json");
-    state.session.config_overrides.set("theme.name", "dracula");
-    state.session.scope.enter("orch");
+    with_test_xdg_env(|| {
+        let mut state = make_test_state(Vec::new());
+        state.session.prompt_prefix = "osp-dev".to_string();
+        state.session.history_enabled = false;
+        state.session.max_cached_results = 7;
+        state
+            .session
+            .config_overrides
+            .set("user.name", "launch-user");
+        state
+            .session
+            .config_overrides
+            .set("ui.message.verbosity", "trace");
+        state.session.config_overrides.set("debug.level", 2i64);
+        state.session.config_overrides.set("ui.format", "json");
+        state.session.config_overrides.set("theme.name", "dracula");
+        state.session.scope.enter("orch");
 
-    state.session.history_shell = HistoryShellContext::default();
-    state.sync_history_shell_context();
+        state.session.history_shell = HistoryShellContext::default();
+        state.sync_history_shell_context();
 
-    let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
 
-    assert_eq!(
-        next.runtime.config.resolved().get_string("user.name"),
-        Some("launch-user")
-    );
-    assert_eq!(next.runtime.ui.message_verbosity, MessageLevel::Trace);
-    assert_eq!(next.runtime.ui.debug_verbosity, 2);
-    assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Json);
-    assert_eq!(next.runtime.ui.render_settings.theme_name, "dracula");
-    assert_eq!(next.session.prompt_prefix, "osp-dev");
-    assert!(!next.session.history_enabled);
-    assert_eq!(next.session.max_cached_results, 7);
-    assert_eq!(next.session.scope.commands(), vec!["orch".to_string()]);
-    assert_eq!(
-        next.session.history_shell.prefix(),
-        Some("orch ".to_string())
-    );
+        assert_eq!(
+            next.runtime.config.resolved().get_string("user.name"),
+            Some("launch-user")
+        );
+        assert_eq!(next.runtime.ui.message_verbosity, MessageLevel::Trace);
+        assert_eq!(next.runtime.ui.debug_verbosity, 2);
+        assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Json);
+        assert_eq!(next.runtime.ui.render_settings.theme_name, "dracula");
+        assert_eq!(next.session.prompt_prefix, "osp-dev");
+        assert!(!next.session.history_enabled);
+        assert_eq!(next.session.max_cached_results, 7);
+        assert_eq!(next.session.scope.commands(), vec!["orch".to_string()]);
+        assert_eq!(
+            next.session.history_shell.prefix(),
+            Some("orch ".to_string())
+        );
+    });
 }
 
 #[test]
 fn rebuild_repl_state_preserves_rich_terminal_render_runtime_unit() {
-    let mut state = make_test_state(Vec::new());
-    state.session.config_overrides.set("theme.name", "dracula");
-    state.runtime.ui.render_settings.mode = crate::core::output::RenderMode::Auto;
-    state.runtime.ui.render_settings.color = crate::core::output::ColorMode::Auto;
-    state.runtime.ui.render_settings.unicode = crate::core::output::UnicodeMode::Auto;
-    state.runtime.ui.render_settings.runtime.stdout_is_tty = true;
-    state.runtime.ui.render_settings.runtime.locale_utf8 = Some(true);
-    state.runtime.ui.render_settings.runtime.terminal = Some("xterm-256color".to_string());
+    with_test_xdg_env(|| {
+        let mut state = make_test_state(Vec::new());
+        state.session.config_overrides.set("theme.name", "dracula");
+        state.runtime.ui.render_settings.mode = crate::core::output::RenderMode::Auto;
+        state.runtime.ui.render_settings.color = crate::core::output::ColorMode::Auto;
+        state.runtime.ui.render_settings.unicode = crate::core::output::UnicodeMode::Auto;
+        state.runtime.ui.render_settings.runtime.stdout_is_tty = true;
+        state.runtime.ui.render_settings.runtime.locale_utf8 = Some(true);
+        state.runtime.ui.render_settings.runtime.terminal = Some("xterm-256color".to_string());
 
-    let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    let resolved = next.runtime.ui.render_settings.resolve_render_settings();
+        let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        let resolved = next.runtime.ui.render_settings.resolve_render_settings();
 
-    assert_eq!(next.runtime.ui.render_settings.theme_name, "dracula");
-    assert!(resolved.color);
-    assert!(resolved.unicode);
-    assert_eq!(resolved.backend, crate::ui::RenderBackend::Rich);
-    assert_eq!(resolved.theme.id, "dracula");
-    assert_eq!(resolved.theme.repl_completion_text_spec(), "#000000");
+        assert_eq!(next.runtime.ui.render_settings.theme_name, "dracula");
+        assert!(resolved.color);
+        assert!(resolved.unicode);
+        assert_eq!(resolved.backend, crate::ui::RenderBackend::Rich);
+        assert_eq!(resolved.theme.id, "dracula");
+        assert_eq!(resolved.theme.repl_completion_text_spec(), "#000000");
+    });
 }
 
 #[test]
 fn rebuild_repl_state_preserves_session_render_defaults_unit() {
-    let mut state = make_test_state(Vec::new());
-    state.session.config_overrides.set("ui.format", "table");
+    with_test_xdg_env(|| {
+        let mut state = make_test_state(Vec::new());
+        state.session.config_overrides.set("ui.format", "table");
 
-    let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
 
-    assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Table);
+        assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Table);
+    });
 }
 
+#[cfg_attr(miri, ignore = "path/plugin filesystem integration test")]
 #[test]
 fn rebuild_repl_state_preserves_path_discovery_enabled_by_config_unit() {
     let _guard = env_lock().lock().expect("env lock should not be poisoned");
@@ -104,6 +111,7 @@ fn rebuild_repl_state_preserves_path_discovery_enabled_by_config_unit() {
     }
 }
 
+#[cfg_attr(miri, ignore = "plugin restart filesystem/process integration test")]
 #[test]
 fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
     with_temp_config_paths(|| {
@@ -153,6 +161,7 @@ fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
     });
 }
 
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn repl_provider_selection_restart_invalidates_command_cache_unit() {
     with_temp_config_paths(|| {
@@ -321,137 +330,143 @@ fn repl_reload_intent_matches_command_scope_unit() {
 
 #[test]
 fn repl_config_unset_rebuilds_runtime_state_unit() {
-    let mut state = make_test_state(Vec::new());
-    state
-        .session
-        .config_overrides
-        .set_for_profile("default", "ui.format", "table");
-    state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
+    with_test_xdg_env(|| {
+        let mut state = make_test_state(Vec::new());
+        state
+            .session
+            .config_overrides
+            .set_for_profile("default", "ui.format", "table");
+        state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
 
-    let history = make_test_history(&mut state);
-    let result = repl_dispatch::execute_repl_plugin_line(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &history,
-        "config unset ui.format",
-    )
-    .expect("config unset should succeed");
-    assert!(matches!(
-        result,
-        crate::repl::ReplLineResult::Restart {
-            reload: crate::repl::ReplReloadKind::Default,
-            ..
-        }
-    ));
-    assert_eq!(
-        layer_value(&state.session.config_overrides, "ui.format"),
-        None
-    );
+        let history = make_test_history(&mut state);
+        let result = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "config unset ui.format",
+        )
+        .expect("config unset should succeed");
+        assert!(matches!(
+            result,
+            crate::repl::ReplLineResult::Restart {
+                reload: crate::repl::ReplReloadKind::Default,
+                ..
+            }
+        ));
+        assert_eq!(
+            layer_value(&state.session.config_overrides, "ui.format"),
+            None
+        );
 
-    let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    assert_eq!(next.runtime.config.resolved().get_string("ui.format"), None);
-    assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Auto);
+        let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        assert_eq!(next.runtime.config.resolved().get_string("ui.format"), None);
+        assert_eq!(next.runtime.ui.render_settings.format, OutputFormat::Auto);
+    });
 }
 
 #[test]
 fn repl_config_unset_dry_run_preserves_session_state_unit() {
-    let mut state = make_test_state(Vec::new());
-    state
-        .session
-        .config_overrides
-        .set_for_profile("default", "ui.format", "table");
-    state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
+    with_test_xdg_env(|| {
+        let mut state = make_test_state(Vec::new());
+        state
+            .session
+            .config_overrides
+            .set_for_profile("default", "ui.format", "table");
+        state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
 
-    let history = make_test_history(&mut state);
-    let result = repl_dispatch::execute_repl_plugin_line(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &history,
-        "config unset ui.format --dry-run",
-    )
-    .expect("dry-run config unset should succeed");
-    assert!(matches!(result, crate::repl::ReplLineResult::Continue(_)));
-    assert_eq!(
-        layer_value(&state.session.config_overrides, "ui.format"),
-        Some(&ConfigValue::from("table"))
-    );
-    assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
+        let history = make_test_history(&mut state);
+        let result = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "config unset ui.format --dry-run",
+        )
+        .expect("dry-run config unset should succeed");
+        assert!(matches!(result, crate::repl::ReplLineResult::Continue(_)));
+        assert_eq!(
+            layer_value(&state.session.config_overrides, "ui.format"),
+            Some(&ConfigValue::from("table"))
+        );
+        assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
+    });
 }
 
 #[test]
 fn repl_config_prompt_color_change_rebuilds_deterministically_unit() {
-    let mut state = make_test_state(Vec::new());
-    state
-        .session
-        .config_overrides
-        .set("ui.color.mode", "always");
-    state.session.config_overrides.set("ui.mode", "rich");
-    state
-        .session
-        .config_overrides
-        .set("repl.simple_prompt", true);
-    state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    assert!(
+    with_test_xdg_env(|| {
+        let mut state = make_test_state(Vec::new());
         state
-            .runtime
-            .ui
-            .render_settings
-            .resolve_render_settings()
-            .color
-    );
+            .session
+            .config_overrides
+            .set("ui.color.mode", "always");
+        state.session.config_overrides.set("ui.mode", "rich");
+        state
+            .session
+            .config_overrides
+            .set("repl.simple_prompt", true);
+        state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        assert!(
+            state
+                .runtime
+                .ui
+                .render_settings
+                .resolve_render_settings()
+                .color
+        );
 
-    let default_prompt =
-        crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
-            .left;
-    assert!(default_prompt.contains("\x1b["));
+        let default_prompt =
+            crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
+                .left;
+        assert!(default_prompt.contains("\x1b["));
 
-    let history = make_test_history(&mut state);
-    let result = repl_dispatch::execute_repl_plugin_line(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &history,
-        "config set color.prompt.text white",
-    )
-    .expect("prompt color config set should succeed");
-    assert!(matches!(
-        result,
-        crate::repl::ReplLineResult::Restart {
-            reload: crate::repl::ReplReloadKind::WithIntro,
-            ..
-        }
-    ));
+        let history = make_test_history(&mut state);
+        let result = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "config set color.prompt.text white",
+        )
+        .expect("prompt color config set should succeed");
+        assert!(matches!(
+            result,
+            crate::repl::ReplLineResult::Restart {
+                reload: crate::repl::ReplReloadKind::WithIntro,
+                ..
+            }
+        ));
 
-    state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    let white_prompt =
-        crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
-            .left;
-    assert!(white_prompt.contains("\x1b[37mdefault"));
+        state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        let white_prompt =
+            crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
+                .left;
+        assert!(white_prompt.contains("\x1b[37mdefault"));
 
-    let history = make_test_history(&mut state);
-    let result = repl_dispatch::execute_repl_plugin_line(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &history,
-        "config unset color.prompt.text",
-    )
-    .expect("prompt color config unset should succeed");
-    assert!(matches!(
-        result,
-        crate::repl::ReplLineResult::Restart {
-            reload: crate::repl::ReplReloadKind::WithIntro,
-            ..
-        }
-    ));
+        let history = make_test_history(&mut state);
+        let result = repl_dispatch::execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "config unset color.prompt.text",
+        )
+        .expect("prompt color config unset should succeed");
+        assert!(matches!(
+            result,
+            crate::repl::ReplLineResult::Restart {
+                reload: crate::repl::ReplReloadKind::WithIntro,
+                ..
+            }
+        ));
 
-    state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-    let restored_prompt =
-        crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
-            .left;
-    assert_eq!(restored_prompt, default_prompt);
+        state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
+        let restored_prompt =
+            crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
+                .left;
+        assert_eq!(restored_prompt, default_prompt);
+    });
 }

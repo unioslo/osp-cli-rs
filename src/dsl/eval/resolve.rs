@@ -3,7 +3,9 @@
 //! Keep this split stable:
 //! - bare `name` means permissive descendant matching
 //! - dotted/indexed syntax like `metadata.owner` or `items[0].name` means
-//!   strict path traversal
+//!   structural path traversal
+//! - a named segment implicitly descends arrays, so `items.name` addresses
+//!   the same leaves as `items[].name`
 //!
 //! Example: on `{"a.b": 1, "a": {"b": 2}}`, selector `a.b` means the nested
 //! path `{"a": {"b": 2}}`. It must not silently fall back to the literal
@@ -47,9 +49,10 @@ pub struct AddressedValue {
 
 /// Resolves all values addressed by `token` from `row`.
 ///
-/// Structural path tokens use direct path traversal only. Bare tokens still
-/// fall back to flattened-key matching so permissive descendant semantics
-/// remain available for simple names.
+/// Structural path tokens use structural traversal only. Named segments map
+/// over arrays implicitly; explicit indexes and slices still control which
+/// members participate. Bare tokens fall back to flattened-key matching so
+/// permissive descendant semantics remain available for simple names.
 pub fn resolve_values(row: &Row, token: &str, exact: ExactMode) -> Vec<Value> {
     let trimmed = token.trim();
     if trimmed.is_empty() {
@@ -60,18 +63,19 @@ pub fn resolve_values(row: &Row, token: &str, exact: ExactMode) -> Vec<Value> {
         let nested = Value::Object(row.clone());
         let direct = evaluate_path(&nested, &path);
         if is_structural_path_token(trimmed, &path) || !direct.is_empty() {
-            return dedup_values(direct);
+            // Structural matches are identified by their address, not their
+            // JSON value. Equal leaves on separate array branches are separate
+            // results and must retain depth-first document order.
+            return direct;
         }
     }
 
     let flattened = flatten_row(row);
     let matched = match_row_keys(&flattened, trimmed, exact);
-    let values = matched
+    matched
         .iter()
         .filter_map(|key| flattened.get(*key).cloned())
-        .collect::<Vec<_>>();
-
-    dedup_values(values)
+        .collect()
 }
 
 /// Returns whether any resolved value for `token` is truthy.
@@ -98,11 +102,7 @@ pub fn evaluate_path(root: &Value, path: &PathExpression) -> Vec<Value> {
         for node in current {
             let mut values = Vec::new();
             if let Some(name) = &segment.name {
-                if let Value::Object(map) = node
-                    && let Some(value) = map.get(name)
-                {
-                    values.push(value.clone());
-                }
+                descend_to_named_values(node, name, &mut values);
             } else {
                 values.push(node);
             }
@@ -333,22 +333,6 @@ fn apply_selector(values: Vec<Value>, selector: &Selector) -> Vec<Value> {
     }
 }
 
-fn dedup_values(values: Vec<Value>) -> Vec<Value> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-
-    for value in values {
-        let Ok(key) = serde_json::to_string(&value) else {
-            continue;
-        };
-        if seen.insert(key) {
-            out.push(value);
-        }
-    }
-
-    out
-}
-
 fn dedup_addressed_values(values: Vec<AddressedValue>) -> Vec<AddressedValue> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -390,13 +374,7 @@ fn traverse_path(
     if let Some(name) = &segment.name {
         let mut next = Vec::new();
         for (value, key, address) in current {
-            if let Value::Object(map) = value
-                && let Some(child) = map.get(name)
-            {
-                let mut next_address = address;
-                next_address.push(AddressStep::Field(name.clone()));
-                next.push((child.clone(), append_name(&key, name), next_address));
-            }
+            descend_to_named_pairs(value, key, address, name, &mut next);
         }
         current = next;
     }
@@ -410,6 +388,48 @@ fn traverse_path(
 
     for (value, key, address) in current {
         traverse_path(&value, path, segment_index + 1, key, address, out);
+    }
+}
+
+fn descend_to_named_values(value: Value, name: &str, out: &mut Vec<Value>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(child) = map.get(name) {
+                out.push(child.clone());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                descend_to_named_values(item, name, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn descend_to_named_pairs(
+    value: Value,
+    key: String,
+    address: Vec<AddressStep>,
+    name: &str,
+    out: &mut Vec<(Value, String, Vec<AddressStep>)>,
+) {
+    match value {
+        Value::Object(map) => {
+            if let Some(child) = map.get(name) {
+                let mut next_address = address;
+                next_address.push(AddressStep::Field(name.to_string()));
+                out.push((child.clone(), append_name(&key, name), next_address));
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.into_iter().enumerate() {
+                let mut next_address = address.clone();
+                next_address.push(AddressStep::Index(index));
+                descend_to_named_pairs(item, append_index(&key, index), next_address, name, out);
+            }
+        }
+        _ => {}
     }
 }
 

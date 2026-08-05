@@ -92,9 +92,17 @@ pub enum KeyValueStyle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyValueRow {
     pub key: String,
-    pub value: String,
+    pub value: KeyValueValue,
     pub indent: Option<String>,
     pub gap: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyValueValue {
+    Empty,
+    Scalar(String),
+    Array(Vec<KeyValueValue>),
+    Object(Vec<KeyValueRow>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

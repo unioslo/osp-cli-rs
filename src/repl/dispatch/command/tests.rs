@@ -25,6 +25,8 @@ fn base_invocation(state: &AppState) -> crate::app::ResolvedInvocation {
 fn make_state() -> AppState {
     let mut defaults = ConfigLayer::default();
     defaults.set("profile.default", "default");
+    defaults.set("repl.history.path", "/tmp/osp-repl-command-history.jsonl");
+    defaults.set("theme.path", Vec::<String>::new());
     let mut resolver = ConfigResolver::default();
     resolver.set_defaults(defaults);
     let config = resolver
@@ -38,7 +40,9 @@ fn make_state() -> AppState {
         message_verbosity: MessageLevel::Success,
         error_detail: crate::app::ErrorDetail::Terse,
         debug_verbosity: 0,
-        plugins: crate::plugin::PluginManager::new(Vec::new()),
+        plugins: crate::plugin::PluginManager::new(Vec::new())
+            .with_bundled_roots(false)
+            .with_default_roots(false),
         native_commands: crate::native::NativeCommandRegistry::default(),
         themes: crate::ui::theme_catalog::ThemeCatalog::default(),
         launch: LaunchContext::default(),

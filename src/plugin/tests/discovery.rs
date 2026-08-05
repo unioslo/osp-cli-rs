@@ -24,6 +24,7 @@ fn min_osp_version_helper_covers_compatible_and_invalid_inputs_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
 fn refresh_picks_up_filesystem_changes_and_prunes_stale_cache() {
     let root = make_temp_dir("osp-cli-plugin-manager-refresh");
@@ -60,6 +61,7 @@ fn refresh_picks_up_filesystem_changes_and_prunes_stale_cache() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin subprocess integration test")]
 #[test]
 fn hung_describe_marks_plugin_unhealthy_unit() {
     let timeout_root = make_temp_dir("osp-cli-plugin-manager-describe-timeout");
@@ -207,6 +209,7 @@ fn cache_and_issue_helpers_cover_update_lookup_and_prune_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "plugin filesystem integration test")]
 #[test]
 fn search_root_and_checksum_helpers_cover_real_filesystem_paths_unit() {
     use std::os::unix::fs::PermissionsExt;
@@ -265,6 +268,7 @@ fn search_root_and_checksum_helpers_cover_real_filesystem_paths_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "bundled manifest filesystem integration test")]
 #[test]
 fn manifest_helpers_cover_not_bundled_missing_invalid_and_valid_paths_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-manifest-state");
@@ -340,6 +344,7 @@ commands = ["demo", "demo show"]
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "bundled plugin filesystem/process integration test")]
 #[test]
 fn bundled_plugins_skip_describe_until_manifest_requirements_pass_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-bundled-missing-manifest");
@@ -410,6 +415,7 @@ fn bundled_plugins_skip_describe_until_manifest_requirements_pass_unit() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(miri, ignore = "path discovery filesystem/process integration test")]
 #[test]
 fn path_discovery_refreshes_passive_view_after_first_dispatch_unit() {
     let root = make_temp_dir("osp-cli-plugin-manager-path-discovery");
@@ -435,11 +441,16 @@ fn path_discovery_refreshes_passive_view_after_first_dispatch_unit() {
         );
     }
 
-    let hidden = PluginManager::new(Vec::new()).list_plugins();
+    let hidden = PluginManager::new(Vec::new())
+        .with_bundled_roots(false)
+        .with_default_roots(false)
+        .list_plugins();
     assert!(!hidden.iter().any(|plugin| plugin.plugin_id == "pathdemo"));
 
     let visible = PluginManager::new(Vec::new())
         .with_roots(Some(config_root), Some(cache_root))
+        .with_bundled_roots(false)
+        .with_default_roots(false)
         .with_path_discovery(true)
         .list_plugins();
     let pathdemo = visible
@@ -459,6 +470,8 @@ fn path_discovery_refreshes_passive_view_after_first_dispatch_unit() {
 
     let manager = PluginManager::new(Vec::new())
         .with_roots(Some(root.join("config-2")), Some(root.join("cache-2")))
+        .with_bundled_roots(false)
+        .with_default_roots(false)
         .with_path_discovery(true);
     manager
         .dispatch("pathdemo", &[], &PluginDispatchContext::default())

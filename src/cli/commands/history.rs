@@ -62,10 +62,9 @@ mod tests {
 
     #[test]
     fn history_output_helpers_wrap_rows_and_ignore_text_results_unit() {
-        let temp_dir = make_temp_dir("osp-cli-history-wrapper");
         let history = crate::repl::SharedHistory::new(
             HistoryConfig {
-                path: Some(temp_dir.join("history.jsonl")),
+                path: None,
                 max_entries: 32,
                 enabled: true,
                 dedupe: true,
@@ -99,9 +98,5 @@ mod tests {
             serde_json::Value::String("config show".into())
         );
         assert!(extract_output_rows(CliCommandResult::text("hello")).is_none());
-    }
-
-    fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
-        crate::tests::make_temp_dir(prefix)
     }
 }

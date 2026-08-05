@@ -40,6 +40,17 @@ mod bootstrap_registry_contracts {
     }
 
     #[test]
+    fn secrets_backend_is_a_global_path_bootstrap_key() {
+        let spec = bootstrap_key_spec("secrets.backend").expect("spec should exist");
+
+        assert_eq!(spec.phase, BootstrapPhase::Path);
+        assert!(spec.runtime_visible);
+        assert!(ConfigSchema::default().is_known_key("secrets.backend"));
+        assert!(validate_key_scope("secrets.backend", &Scope::global()).is_ok());
+        assert!(validate_key_scope("secrets.backend", &Scope::profile("uio")).is_err());
+    }
+
+    #[test]
     fn bootstrap_and_alias_helpers_match_runtime_rules() {
         assert_eq!(ConfigSource::Environment.to_string(), "env");
         assert!(is_alias_key("alias.lookup"));
@@ -66,6 +77,7 @@ mod bootstrap_registry_contracts {
 
 mod schema_value_contracts {
     use super::*;
+    use crate::config::{ConfigResolver, ResolveOptions};
 
     #[test]
     fn schema_parsing_handles_scalars_lists_enums_and_derived_keys() {
@@ -131,6 +143,50 @@ mod schema_value_contracts {
             crate::config::ConfigError::ReadOnlyConfigKey { key, .. } if key == "profile.active"
         ));
         assert_eq!(schema.doc_for_key("ui.format"), Some("Default output format"));
+    }
+
+    #[test]
+    fn schema_rejects_non_positive_operational_integer_input() {
+        for key in [
+            "ui.width",
+            "ui.indent",
+            "ui.short_list_max",
+            "ui.medium_list_max",
+            "ui.grid_padding",
+            "ui.column_weight",
+            "ui.mreg.stack_min_col_width",
+            "extensions.plugins.timeout_ms",
+            "repl.history.max_entries",
+            "repl.history.menu_rows",
+            "session.cache.max_results",
+        ] {
+            let error = ConfigSchema::default()
+                .parse_input_value(key, "0")
+                .expect_err("operational integer must be positive");
+
+            assert!(matches!(
+                error,
+                crate::config::ConfigError::InvalidConfigValue { key: rejected, .. }
+                    if rejected == key
+            ));
+        }
+    }
+
+    #[test]
+    fn runtime_resolution_rejects_non_positive_render_width() {
+        let mut resolver = ConfigResolver::default();
+        resolver.defaults_mut().set("profile.default", "default");
+        resolver.file_mut().set("ui.width", -1_i64);
+
+        let error = resolver
+            .resolve(ResolveOptions::default())
+            .expect_err("persisted render width must be positive");
+
+        assert!(matches!(
+            error,
+            crate::config::ConfigError::InvalidConfigValue { key, .. }
+                if key == "ui.width"
+        ));
     }
 
     #[test]

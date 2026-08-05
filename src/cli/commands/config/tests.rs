@@ -3,7 +3,8 @@ use super::{
     ConfigWriteTarget, config_diagnostics_rows, config_get_rows, config_store_name,
     resolve_config_scopes, resolve_config_store, resolve_scope_target, resolve_store_target,
     resolve_terminal_selector, run_config_get, run_config_set, run_config_unset,
-    secrets_permissions_diagnostic, session_scoped_value, validate_write_scopes,
+    secrets_permissions_diagnostic, session_scoped_value, validate_store_key,
+    validate_write_scopes,
 };
 use crate::app::ReplCommandOutput;
 use crate::app::{RuntimeContext, TerminalKind, UiState};
@@ -512,6 +513,45 @@ fn run_config_set_and_unset_reject_derived_profile_active_unit() {
     assert!(unset_err.to_string().contains("read-only"));
 }
 
+#[test]
+fn run_config_set_rejects_non_positive_operational_limit_unit() {
+    let mut fixture = ConfigTestFixture::new(TerminalKind::Repl);
+
+    let error = run_config_set(fixture.command(), config_set_args("ui.width", "0"))
+        .expect_err("config set must reject a non-positive render width");
+
+    assert!(
+        error.to_string().contains("invalid value for key"),
+        "unexpected config set error: {error:?}"
+    );
+    assert!(fixture.config_overrides.entries().is_empty());
+}
+
+#[test]
+fn persistent_config_writes_are_rejected_when_file_loading_is_disabled_unit() {
+    let mut set_args = config_set_args("ui.format", "json");
+    set_args.store.config_store = true;
+    let mut set_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+    let set_err = run_config_set(set_fixture.command(), set_args)
+        .expect_err("a sealed session must not discover an ambient write path");
+    assert!(
+        set_err
+            .to_string()
+            .contains("config file writes are disabled for this session")
+    );
+
+    let mut unset_args = config_unset_args("ui.format");
+    unset_args.store.secrets = true;
+    let mut unset_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+    let unset_err = run_config_unset(unset_fixture.command(), unset_args)
+        .expect_err("a sealed session must not discover an ambient secrets path");
+    assert!(
+        unset_err
+            .to_string()
+            .contains("config file writes are disabled for this session")
+    );
+}
+
 #[cfg_attr(miri, ignore = "persistent config filesystem integration test")]
 #[test]
 fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
@@ -519,6 +559,7 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
         let mut config_args = config_set_args("ui.format", "json");
         config_args.store.config_store = true;
         let mut config_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+        config_fixture.runtime_load = RuntimeLoadOptions::default();
         let config_set = run_config_set(config_fixture.command(), config_args)
             .expect("persistent config set should succeed");
         assert!(config_path.exists());
@@ -554,6 +595,7 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
         let mut secrets_args = config_set_args("ui.format", "table");
         secrets_args.store.secrets = true;
         let mut secrets_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+        secrets_fixture.runtime_load = RuntimeLoadOptions::default();
         let secrets_set = run_config_set(secrets_fixture.command(), secrets_args)
             .expect("persistent secrets set should succeed");
         assert!(secrets_path.exists());
@@ -589,6 +631,7 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
         let mut unset_args = config_unset_args("ui.format");
         unset_args.store.secrets = true;
         let mut unset_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+        unset_fixture.runtime_load = RuntimeLoadOptions::default();
         let secrets_unset = run_config_unset(unset_fixture.command(), unset_args)
             .expect("persistent secrets unset should succeed");
         assert!(
@@ -614,6 +657,7 @@ fn run_config_set_and_unset_cover_persistent_paths_and_warning_unit() {
         let mut missing_args = config_unset_args("ui.margin");
         missing_args.store.config_store = true;
         let mut missing_fixture = ConfigTestFixture::new(TerminalKind::Cli);
+        missing_fixture.runtime_load = RuntimeLoadOptions::default();
         let missing_unset = run_config_unset(missing_fixture.command(), missing_args)
             .expect("missing persistent unset should still succeed");
         assert!(
@@ -675,6 +719,15 @@ fn secrets_permissions_diagnostic_covers_missing_ok_warning_and_issue_unit() {
 fn config_diagnostics_rows_include_secrets_status_unit() {
     let rows = config_diagnostics_rows(ConfigTestFixture::new(TerminalKind::Cli).read());
     assert_eq!(rows.len(), 1);
+    assert!(rows[0].contains_key("secrets_backend"));
+    assert!(rows[0].contains_key("secrets_index_file"));
     assert!(rows[0].contains_key("secrets_permissions_status"));
     assert!(rows[0].contains_key("theme_issue_count"));
+}
+
+#[test]
+fn secrets_backend_selector_cannot_be_written_to_the_store_it_selects_unit() {
+    assert!(validate_store_key(ConfigStore::Config, "secrets.backend").is_ok());
+    assert!(validate_store_key(ConfigStore::Secrets, "extensions.demo.token").is_ok());
+    assert!(validate_store_key(ConfigStore::Secrets, "secrets.backend").is_err());
 }

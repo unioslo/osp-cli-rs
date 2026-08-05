@@ -344,6 +344,7 @@ fn debug_completion_and_steps_surface_menu_state_unit() {
     assert_eq!(frames[1].state.line, "config show ");
 }
 
+#[cfg_attr(miri, ignore = "filesystem-backed path completion integration test")]
 #[test]
 fn autocomplete_policy_and_path_helpers_cover_editing_and_lookup_edges_unit() {
     assert!(AutoCompleteEmacs::should_reopen_menu(&[
@@ -506,6 +507,7 @@ fn highlighter_builder_requires_command_color_unit() {
     assert!(some.is_some());
 }
 
+#[cfg_attr(miri, ignore = "filesystem-backed path completion integration test")]
 #[test]
 fn path_suggestions_cover_files_directories_and_quote_variants_unit() {
     let root = make_temp_dir("osp-repl-paths");
@@ -574,6 +576,7 @@ fn path_suggestions_cover_files_directories_and_quote_variants_unit() {
     );
 }
 
+#[cfg_attr(miri, ignore = "trace file filesystem integration test")]
 #[test]
 fn trace_completion_env_controls_and_jsonl_output_unit() {
     let _guard = env_lock().lock().expect("env lock should not be poisoned");

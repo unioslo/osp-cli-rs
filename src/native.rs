@@ -29,7 +29,7 @@
 //!   or builder layer
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use clap::Command;
@@ -37,7 +37,9 @@ use clap::Command;
 use crate::completion::CommandSpec;
 use crate::config::ResolvedConfig;
 use crate::core::command_policy::CommandPolicyRegistry;
-use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1, ResponseV1};
+use crate::core::plugin::{
+    DescribeCommandAuthV1, DescribeCommandV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
+};
 use crate::core::runtime::RuntimeHints;
 
 /// Public metadata snapshot for one registered native command.
@@ -69,6 +71,9 @@ pub struct NativeCommandContext<'a> {
     pub config: &'a ResolvedConfig,
     /// Runtime hints that should be propagated to child processes and adapters.
     pub runtime_hints: RuntimeHints,
+    /// Session-scoped native context that may be surfaced by the host REPL.
+    pub session_context: NativeSessionContext,
+    progress: Option<&'a dyn NativeProgressSink>,
 }
 
 impl<'a> NativeCommandContext<'a> {
@@ -77,7 +82,126 @@ impl<'a> NativeCommandContext<'a> {
         Self {
             config,
             runtime_hints,
+            session_context: NativeSessionContext::default(),
+            progress: None,
         }
+    }
+
+    /// Attaches session-scoped native context to this execution.
+    pub fn with_session_context(mut self, session_context: NativeSessionContext) -> Self {
+        self.session_context = session_context;
+        self
+    }
+
+    /// Attaches the host-owned structured progress boundary for this run.
+    pub fn with_progress_sink(mut self, progress: &'a dyn NativeProgressSink) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    /// Emits one structured transient progress document immediately.
+    ///
+    /// A context created outside the host has no sink, in which case emission
+    /// is a no-op. Native commands should still return the stable final
+    /// document through [`NativeCommandOutcome`].
+    pub fn emit_progress(&self, event: NativeProgressEvent) -> Result<()> {
+        match self.progress {
+            Some(progress) => progress.emit(event),
+            None => Ok(()),
+        }
+    }
+}
+
+/// One transient structured document emitted while a native command runs.
+#[derive(Debug, Clone)]
+pub struct NativeProgressEvent {
+    /// Canonical progress data to render immediately.
+    pub data: serde_json::Value,
+    /// Structured messages attached to this progress document.
+    pub messages: Vec<ResponseMessageV1>,
+    /// Rendering hints interpreted by the same host pipeline as final output.
+    pub meta: ResponseMetaV1,
+}
+
+impl NativeProgressEvent {
+    /// Creates a progress event with default rendering metadata.
+    pub fn new(data: impl Into<serde_json::Value>) -> Self {
+        Self {
+            data: data.into(),
+            messages: Vec::new(),
+            meta: ResponseMetaV1::default(),
+        }
+    }
+
+    /// Attaches rendering metadata to the progress document.
+    pub fn with_meta(mut self, meta: ResponseMetaV1) -> Self {
+        self.meta = meta;
+        self
+    }
+
+    /// Attaches structured messages to the progress document.
+    pub fn with_messages(mut self, messages: Vec<ResponseMessageV1>) -> Self {
+        self.messages = messages;
+        self
+    }
+}
+
+/// Host boundary that renders transient native-command progress.
+pub trait NativeProgressSink {
+    /// Renders or records one progress document before command execution resumes.
+    fn emit(&self, event: NativeProgressEvent) -> Result<()>;
+}
+
+/// One prompt-visible session context value owned by a native command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativePromptContextEntry {
+    /// Short label rendered in compact prompt surfaces.
+    pub label: String,
+    /// Current value for the context entry.
+    pub value: String,
+}
+
+/// Session-scoped context shared between native commands and the REPL host.
+///
+/// This is deliberately in-memory only. Native commands can expose small,
+/// prompt-safe values to the host without writing hidden target state to disk.
+#[derive(Clone, Default, Debug)]
+pub struct NativeSessionContext {
+    prompt_entries: Arc<RwLock<BTreeMap<String, NativePromptContextEntry>>>,
+}
+
+impl NativeSessionContext {
+    /// Sets one prompt-visible context entry.
+    pub fn set_prompt_value(
+        &self,
+        key: impl Into<String>,
+        label: impl Into<String>,
+        value: impl Into<String>,
+    ) {
+        if let Ok(mut entries) = self.prompt_entries.write() {
+            entries.insert(
+                key.into(),
+                NativePromptContextEntry {
+                    label: label.into(),
+                    value: value.into(),
+                },
+            );
+        }
+    }
+
+    /// Removes one prompt-visible context entry.
+    pub fn remove_prompt_value(&self, key: &str) {
+        if let Ok(mut entries) = self.prompt_entries.write() {
+            entries.remove(key);
+        }
+    }
+
+    /// Returns all prompt-visible context entries in stable key order.
+    pub fn prompt_entries(&self) -> Vec<NativePromptContextEntry> {
+        self.prompt_entries
+            .read()
+            .map(|entries| entries.values().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -87,6 +211,13 @@ pub enum NativeCommandOutcome {
     Help(String),
     /// Return a protocol response payload.
     Response(Box<ResponseV1>),
+    /// Return structured output and then terminate with an explicit status.
+    ResponseWithExit {
+        /// Final response that still flows through JSON/DSL rendering.
+        response: Box<ResponseV1>,
+        /// Process status returned after rendering the response.
+        exit_code: i32,
+    },
     /// Exit immediately with the given status code.
     Exit(i32),
 }
@@ -121,6 +252,12 @@ pub trait NativeCommand: Send + Sync {
     ///   that exit code
     /// - [`NativeCommandOutcome::Response`] is treated like plugin protocol
     ///   output and may still flow through trailing DSL stages
+    /// - [`NativeCommandOutcome::ResponseWithExit`] follows the same output
+    ///   path, then returns the supplied process status
+    ///
+    /// Long-running commands may call [`NativeCommandContext::emit_progress`].
+    /// The host renders each transient document immediately on stderr so the
+    /// final stdout document remains safe for JSON and DSL consumers.
     ///
     /// Return `Err` when command execution itself fails. The host formats that
     /// failure like other command errors.

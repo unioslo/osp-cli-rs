@@ -65,7 +65,7 @@ pub const DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH: i64 = 10;
 /// Default threshold for stacked MREG overflow behavior.
 pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
 /// Default table overflow strategy.
-pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "clip";
+pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "wrap";
 
 const DEFAULT_EXTENSIONS_PLUGINS_TIMEOUT_MS: i64 =
     crate::plugin::DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as i64;
@@ -93,6 +93,7 @@ const EMPTY_STYLE_OVERRIDE_KEYS: &[&str] = &[
 ];
 
 const LITERAL_DEFAULTS: &[LiteralDefault] = &[
+    LiteralDefault::string("secrets.backend", "toml"),
     LiteralDefault::string("profile.default", DEFAULT_PROFILE_NAME),
     LiteralDefault::string("repl.input_mode", "auto"),
     LiteralDefault::bool("repl.simple_prompt", false),

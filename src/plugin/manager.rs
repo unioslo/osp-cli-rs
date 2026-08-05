@@ -27,8 +27,8 @@
 use super::active::ActivePluginView;
 use super::catalog::{
     build_command_catalog, build_command_policy_registry, build_doctor_report,
-    command_provider_labels, completion_words_from_catalog, list_plugins, render_repl_help,
-    selected_provider_label,
+    command_provider_labels, completion_words_from_catalog, list_plugins,
+    register_describe_command_policies, render_repl_help, selected_provider_label,
 };
 use super::conversion::to_command_spec;
 use super::selection::{ProviderResolution, ProviderResolutionError, provider_labels};
@@ -298,6 +298,7 @@ impl CommandCatalogEntry {
     ///         visibility: Some(DescribeVisibilityModeV1::Authenticated),
     ///         required_capabilities: Vec::new(),
     ///         feature_flags: Vec::new(),
+    ///         ..DescribeCommandAuthV1::default()
     ///     }),
     ///     subcommands: Vec::new(),
     ///     completion: CommandSpec::new("ldap"),
@@ -664,6 +665,7 @@ pub struct PluginManager {
     pub(crate) process_timeout: Duration,
     pub(crate) allow_path_discovery: bool,
     pub(crate) allow_default_roots: bool,
+    pub(crate) allow_bundled_roots: bool,
 }
 
 struct KnownCommandProviders<'a> {
@@ -763,6 +765,7 @@ impl PluginManager {
             process_timeout: Duration::from_millis(DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as u64),
             allow_path_discovery: false,
             allow_default_roots: true,
+            allow_bundled_roots: true,
         }
     }
 
@@ -824,6 +827,21 @@ impl PluginManager {
     /// Returns whether platform config/cache root fallback is enabled.
     pub fn default_roots_enabled(&self) -> bool {
         self.allow_default_roots
+    }
+
+    /// Enables or disables discovery through the CLI's bundled plugin roots.
+    ///
+    /// The default is `true`. Disable this when the caller wants discovery to
+    /// stay inside explicit roots, config roots, or PATH without probing the
+    /// current executable location.
+    pub fn with_bundled_roots(mut self, allow_bundled_roots: bool) -> Self {
+        self.allow_bundled_roots = allow_bundled_roots;
+        self
+    }
+
+    /// Returns whether bundled plugin-root discovery is enabled.
+    pub fn bundled_roots_enabled(&self) -> bool {
+        self.allow_bundled_roots
     }
 
     /// Sets the subprocess timeout used for plugin describe and dispatch calls.
@@ -950,27 +968,34 @@ impl PluginManager {
         self.with_passive_view(build_command_policy_registry)
     }
 
-    pub(crate) fn resolved_command_path(
+    pub(crate) fn resolved_command_path_and_policy(
         &self,
         command: &str,
         args: &[String],
         provider_override: Option<&str>,
-    ) -> CommandPath {
+    ) -> (
+        CommandPath,
+        crate::core::command_policy::CommandPolicyRegistry,
+    ) {
         self.with_dispatch_view(|view| {
+            let mut policy = build_command_policy_registry(view);
             let Ok(ProviderResolution::Selected(selection)) =
                 view.resolve_provider(command, provider_override)
             else {
-                return CommandPath::new([command]);
+                return (CommandPath::new([command]), policy);
             };
             let Some(describe) = selection
                 .plugin
                 .canonical_command(command)
                 .and_then(|command| command.describe())
             else {
-                return CommandPath::new([command]);
+                return (CommandPath::new([command]), policy);
             };
 
-            describe.resolved_subcommand_path(args)
+            // Explicit provider selection can resolve an otherwise ambiguous
+            // command that the general active registry intentionally omits.
+            register_describe_command_policies(&mut policy, describe, &[]);
+            (describe.resolved_subcommand_path(args), policy)
         })
     }
 
@@ -1281,7 +1306,10 @@ impl PluginManager {
                     })
                 }
                 Err(ProviderResolutionError::CommandNotFound) => {
-                    tracing::warn!(
+                    // The dispatch error below is already rendered for the
+                    // user; a WARN here duplicates it as a raw log line on
+                    // stderr for every mistyped command.
+                    tracing::debug!(
                         command = %command,
                         active_plugins = view.healthy_plugins().len(),
                         "no plugin provider found for command"

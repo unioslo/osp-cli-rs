@@ -98,6 +98,8 @@ Table-oriented tuning lives here:
   - `none | square | round`
 - `ui.table.overflow`
   - `clip | ellipsis | wrap | none`
+  - defaults to `wrap`, preserving complete values when a table is wider than
+    the configured or detected terminal width
 
 `table` is the dense grid view for many rows.
 

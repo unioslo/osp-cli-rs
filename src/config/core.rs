@@ -293,6 +293,7 @@ pub struct SchemaEntry {
     required: bool,
     writable: bool,
     allowed_values: Option<Vec<String>>,
+    positive_integer: bool,
     runtime_visible: bool,
     bootstrap_phase: Option<BootstrapPhase>,
     bootstrap_scope_rule: Option<BootstrapScopeRule>,
@@ -319,6 +320,7 @@ impl SchemaEntry {
             required: false,
             writable: true,
             allowed_values: None,
+            positive_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -335,6 +337,7 @@ impl SchemaEntry {
             required: false,
             writable: true,
             allowed_values: None,
+            positive_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -351,6 +354,7 @@ impl SchemaEntry {
             required: false,
             writable: true,
             allowed_values: None,
+            positive_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -367,6 +371,7 @@ impl SchemaEntry {
             required: false,
             writable: true,
             allowed_values: None,
+            positive_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -383,6 +388,7 @@ impl SchemaEntry {
             required: false,
             writable: true,
             allowed_values: None,
+            positive_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -416,6 +422,13 @@ impl SchemaEntry {
         self
     }
 
+    /// Marks a runtime-visible key as an input needed during bootstrap.
+    pub fn bootstrap(mut self, phase: BootstrapPhase, scope_rule: BootstrapScopeRule) -> Self {
+        self.bootstrap_phase = Some(phase);
+        self.bootstrap_scope_rule = Some(scope_rule);
+        self
+    }
+
     /// Adds a bootstrap-only value validation rule.
     pub fn with_bootstrap_value_rule(mut self, rule: BootstrapValueRule) -> Self {
         self.bootstrap_value_rule = Some(rule);
@@ -435,6 +448,13 @@ impl SchemaEntry {
                 .collect(),
         );
         self
+    }
+
+    /// Starts a schema entry for integer values greater than zero.
+    pub fn positive_integer() -> Self {
+        let mut entry = Self::integer();
+        entry.positive_integer = true;
+        entry
     }
 
     /// Returns the declared schema type for the key.
@@ -541,6 +561,14 @@ fn insert_builtin_schema_key(
 fn insert_identity_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
+        "secrets.backend",
+        SchemaEntry::string()
+            .with_allowed_values(["toml", "keyring"])
+            .bootstrap(BootstrapPhase::Path, BootstrapScopeRule::GlobalOnly),
+        "Persistent secrets backend selected before secret values are loaded",
+    );
+    insert_builtin_schema_key(
+        schema,
         "profile.default",
         SchemaEntry::string()
             .bootstrap_only(
@@ -634,7 +662,7 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "ui.width",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Default render width hint",
     );
     insert_builtin_schema_key(
@@ -646,7 +674,7 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "ui.indent",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Indent width for nested output",
     );
     insert_builtin_schema_key(
@@ -736,19 +764,19 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "ui.short_list_max",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Maximum items rendered as a short list",
     );
     insert_builtin_schema_key(
         schema,
         "ui.medium_list_max",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Maximum items rendered as a medium list",
     );
     insert_builtin_schema_key(
         schema,
         "ui.grid_padding",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Padding between rendered grid columns",
     );
     insert_builtin_schema_key(
@@ -760,13 +788,13 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "ui.column_weight",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Relative weight used for adaptive columns",
     );
     insert_builtin_schema_key(
         schema,
         "ui.mreg.stack_min_col_width",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Minimum column width before MREG stacks columns",
     );
     insert_builtin_schema_key(
@@ -796,7 +824,7 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "extensions.plugins.timeout_ms",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Plugin process timeout in milliseconds",
     );
     insert_builtin_schema_key(
@@ -871,7 +899,7 @@ fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "repl.history.max_entries",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Maximum number of persisted REPL history entries",
     );
     insert_builtin_schema_key(
@@ -895,7 +923,7 @@ fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "repl.history.menu_rows",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Maximum rows shown in the history menu",
     );
     insert_builtin_schema_key(
@@ -907,7 +935,7 @@ fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "session.cache.max_results",
-        SchemaEntry::integer(),
+        SchemaEntry::positive_integer(),
         "Maximum cached session results",
     );
 }
@@ -1165,6 +1193,38 @@ impl ConfigSchema {
         Ok(())
     }
 
+    /// Validates and adapts one typed value before it enters a persisted store.
+    ///
+    /// Store callers use typed [`ConfigValue`] values rather than the raw text
+    /// accepted by [`Self::parse_input_value`]. This method applies the same
+    /// schema, dynamic-key, enum, and bootstrap rules used during runtime
+    /// resolution so a successful write cannot create an unloadable config.
+    pub fn validate_write_value(
+        &self,
+        key: &str,
+        value: &ConfigValue,
+    ) -> Result<ConfigValue, ConfigError> {
+        let normalized = key.trim().to_ascii_lowercase();
+        if !self.is_known_key(&normalized) {
+            return Err(ConfigError::UnknownConfigKeys {
+                keys: vec![normalized],
+            });
+        }
+        self.validate_writable_key(&normalized)?;
+
+        let adapted = if let Some(kind) = dynamic_schema_key_kind(&normalized) {
+            adapt_dynamic_value_for_schema(&normalized, value, kind)?
+        } else if let Some(entry) = self.entries.get(&normalized) {
+            adapt_value_for_schema(&normalized, value, entry)?
+        } else {
+            // Extension and alias namespaces intentionally accept product-owned
+            // values that are not described by the host schema.
+            value.clone()
+        };
+        self.validate_bootstrap_value(&normalized, &adapted)?;
+        Ok(adapted)
+    }
+
     /// Returns bootstrap metadata for the key, if it has bootstrap semantics.
     pub fn bootstrap_key_spec(&self, key: &str) -> Option<BootstrapKeySpec> {
         let normalized = key.trim().to_ascii_lowercase();
@@ -1267,6 +1327,7 @@ impl ConfigSchema {
                     .map(|values| values.iter().map(String::as_str).collect::<Vec<_>>())
                     .as_deref(),
             )?;
+            validate_value_constraints(key, &value, entry)?;
         } else if let Some(DynamicSchemaKeyKind::PluginCommandState) = dynamic_schema_key_kind(key)
         {
             validate_allowed_values(key, &value, Some(&["enabled", "disabled"]))?;
@@ -2050,6 +2111,7 @@ impl ResolvedConfig {
     ///
     /// let mut defaults = ConfigLayer::default();
     /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.path", Vec::<String>::new());
     /// defaults.set("theme.name", "dracula");
     ///
     /// let mut resolver = ConfigResolver::default();
@@ -2074,6 +2136,7 @@ impl ResolvedConfig {
     ///
     /// let mut defaults = ConfigLayer::default();
     /// defaults.set("profile.default", "default");
+    /// defaults.set("theme.path", Vec::<String>::new());
     /// defaults.set("repl.history.enabled", true);
     ///
     /// let mut resolver = ConfigResolver::default();
@@ -2399,7 +2462,25 @@ fn adapt_value_for_schema(
         }
     }
 
+    validate_value_constraints(key, &adapted, schema)?;
+
     Ok(adapted)
+}
+
+fn validate_value_constraints(
+    key: &str,
+    value: &ConfigValue,
+    schema: &SchemaEntry,
+) -> Result<(), ConfigError> {
+    if schema.positive_integer
+        && !matches!(value.reveal(), ConfigValue::Integer(current) if *current > 0)
+    {
+        return Err(ConfigError::InvalidConfigValue {
+            key: key.to_string(),
+            reason: "expected a positive integer".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn adapt_dynamic_value_for_schema(

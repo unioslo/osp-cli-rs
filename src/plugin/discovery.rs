@@ -293,10 +293,12 @@ impl PluginManager {
             }));
         }
 
-        ordered.extend(bundled_plugin_dirs().into_iter().map(|path| SearchRoot {
-            path,
-            source: PluginSource::Bundled,
-        }));
+        if self.allow_bundled_roots {
+            ordered.extend(bundled_plugin_dirs().into_iter().map(|path| SearchRoot {
+                path,
+                source: PluginSource::Bundled,
+            }));
+        }
 
         if let Some(user_dir) = self.user_plugin_dir() {
             ordered.push(SearchRoot {

@@ -23,7 +23,7 @@
 //! - richer runtime policy evaluation lives in
 //!   [`crate::core::command_policy`], not here
 
-use crate::core::command_policy::VisibilityMode;
+use crate::core::command_policy::{SessionRequirements, VisibilityMode};
 
 /// Declarative command description used for help, completion, and plugin metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -66,6 +66,10 @@ pub struct CommandPolicyDef {
     pub required_capabilities: Vec<String>,
     /// Feature flags that must be enabled for the command to exist.
     pub feature_flags: Vec<String>,
+    /// Session-state requirements that gate visibility.
+    pub visible_session_requirements: SessionRequirements,
+    /// Session-state requirements that gate execution.
+    pub run_session_requirements: SessionRequirements,
 }
 
 impl Default for CommandPolicyDef {
@@ -74,6 +78,8 @@ impl Default for CommandPolicyDef {
             visibility: VisibilityMode::Public,
             required_capabilities: Vec::new(),
             feature_flags: Vec::new(),
+            visible_session_requirements: SessionRequirements::default(),
+            run_session_requirements: SessionRequirements::default(),
         }
     }
 }
@@ -93,6 +99,7 @@ impl CommandPolicyDef {
     ///     visibility: VisibilityMode::Authenticated,
     ///     required_capabilities: Vec::new(),
     ///     feature_flags: Vec::new(),
+    ///     ..CommandPolicyDef::default()
     /// }
     /// .is_empty());
     /// ```
@@ -100,6 +107,8 @@ impl CommandPolicyDef {
         self.visibility == VisibilityMode::Public
             && self.required_capabilities.is_empty()
             && self.feature_flags.is_empty()
+            && self.visible_session_requirements.is_empty()
+            && self.run_session_requirements.is_empty()
     }
 }
 
@@ -201,6 +210,7 @@ impl CommandDef {
     ///     visibility: VisibilityMode::Authenticated,
     ///     required_capabilities: vec!["plugins.write".to_string()],
     ///     feature_flags: vec!["beta".to_string()],
+    ///     ..CommandPolicyDef::default()
     /// };
     ///
     /// let command = CommandDef::new("theme")

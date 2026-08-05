@@ -21,6 +21,7 @@ pub enum Op {
     Le,
     Gt,
     Ge,
+    Regex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,6 +433,7 @@ fn parse_full_operator(text: &str) -> Option<Op> {
         "<=" => Some(Op::Le),
         ">" => Some(Op::Gt),
         ">=" => Some(Op::Ge),
+        "~" => Some(Op::Regex),
         _ => None,
     }
 }
@@ -470,6 +472,11 @@ fn parse_operator_at(text: &str, offset: usize) -> Option<(Op, usize)> {
     }
     if tail.starts_with('=') {
         return Some((Op::Eq, 1));
+    }
+    // `~` splits like `=`/`>` so `F host~^login` parses as a regex
+    // comparison instead of silently becoming a selector token.
+    if tail.starts_with('~') {
+        return Some((Op::Regex, 1));
     }
     None
 }
@@ -561,6 +568,22 @@ mod tests {
         assert_eq!(tokens[1].text, "uid");
         assert_eq!(tokens[2].kind, TokenKind::Op(Op::Ge));
         assert_eq!(tokens[3].text, "5");
+    }
+
+    #[test]
+    fn tokenize_stage_splits_inline_regex_operator() {
+        let stage = StageSegment {
+            raw: "F host~^login2".to_string(),
+            span: Span { start: 0, end: 14 },
+        };
+
+        let tokens = tokenize_stage(&stage).expect("tokenization should work");
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[0].text, "F");
+        assert_eq!(tokens[1].text, "host");
+        assert_eq!(tokens[2].kind, TokenKind::Op(Op::Regex));
+        assert_eq!(tokens[2].text, "~");
+        assert_eq!(tokens[3].text, "^login2");
     }
 
     #[test]
