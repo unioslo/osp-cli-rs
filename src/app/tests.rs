@@ -273,25 +273,25 @@ fn sample_catalog_with_provision_context() -> Vec<CommandCatalogEntry> {
                     .flag(
                         "--provider",
                         crate::completion::FlagNode::new().suggestions([
-                            crate::completion::SuggestionEntry::from("vmware"),
-                            crate::completion::SuggestionEntry::from("nrec"),
+                            crate::completion::SuggestionEntry::from("alpha"),
+                            crate::completion::SuggestionEntry::from("beta"),
                         ]),
                     )
                     .flag(
-                        "--os",
+                        "--image",
                         crate::completion::FlagNode {
                             suggestions: vec![
-                                crate::completion::SuggestionEntry::from("rhel"),
-                                crate::completion::SuggestionEntry::from("alma"),
+                                crate::completion::SuggestionEntry::from("red"),
+                                crate::completion::SuggestionEntry::from("blue"),
                             ],
                             suggestions_by_provider: BTreeMap::from([
                                 (
-                                    "vmware".to_string(),
-                                    vec![crate::completion::SuggestionEntry::from("rhel")],
+                                    "alpha".to_string(),
+                                    vec![crate::completion::SuggestionEntry::from("red")],
                                 ),
                                 (
-                                    "nrec".to_string(),
-                                    vec![crate::completion::SuggestionEntry::from("alma")],
+                                    "beta".to_string(),
+                                    vec![crate::completion::SuggestionEntry::from("blue")],
                                 ),
                             ]),
                             ..crate::completion::FlagNode::default()

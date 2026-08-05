@@ -198,39 +198,7 @@ fn finalize_command_with_aliases(
 
 fn finalize_parsed_command(tokens: Vec<String>, stages: Vec<String>) -> Result<ParsedCommandLine> {
     validate_cli_dsl_stages(&stages)?;
-    Ok(ParsedCommandLine {
-        tokens: merge_orch_os_tokens(tokens),
-        stages,
-    })
-}
-
-fn merge_orch_os_tokens(tokens: Vec<String>) -> Vec<String> {
-    if tokens.len() < 4 || tokens.first().map(String::as_str) != Some("orch") {
-        return tokens;
-    }
-    if tokens.get(1).map(String::as_str) != Some("provision") {
-        return tokens;
-    }
-
-    let mut merged = Vec::with_capacity(tokens.len());
-    let mut index = 0usize;
-    while index < tokens.len() {
-        if tokens[index] == "--os" && index + 2 < tokens.len() {
-            let family = &tokens[index + 1];
-            let version = &tokens[index + 2];
-            if !version.is_empty() && !version.starts_with('-') {
-                merged.push("--os".to_string());
-                merged.push(format!("{family}{version}"));
-                index += 3;
-                continue;
-            }
-        }
-
-        merged.push(tokens[index].clone());
-        index += 1;
-    }
-
-    merged
+    Ok(ParsedCommandLine { tokens, stages })
 }
 
 /// Validates that every CLI pipe stage is known to the DSL surface.
@@ -494,7 +462,7 @@ mod tests {
             .expect("alias should expand");
         assert_eq!(parsed.tokens, vec!["echo".to_string(), "json".to_string()]);
 
-        let config = test_config(&[("alias.demo", "orch provision --os alma 9 | P uid")]);
+        let config = test_config(&[("alias.demo", "echo alma 9 | P uid")]);
 
         let parsed = parse_command_tokens_with_aliases(
             &["demo".to_string(), "|".to_string(), "alice".to_string()],
@@ -504,12 +472,7 @@ mod tests {
 
         assert_eq!(
             parsed.tokens,
-            vec![
-                "orch".to_string(),
-                "provision".to_string(),
-                "--os".to_string(),
-                "alma9".to_string()
-            ]
+            vec!["echo".to_string(), "alma".to_string(), "9".to_string()]
         );
         assert_eq!(
             parsed.stages,

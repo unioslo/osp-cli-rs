@@ -428,43 +428,42 @@ mod tests {
     };
 
     fn tree() -> CompletionTree {
-        let mut provision = CompletionNode::default();
-        provision.flags.insert(
+        let mut deploy = CompletionNode::default();
+        deploy.flags.insert(
             "--provider".to_string(),
             FlagNode {
                 suggestions: vec![
-                    SuggestionEntry::from("vmware"),
-                    SuggestionEntry::from("nrec"),
+                    SuggestionEntry::from("alpha"),
+                    SuggestionEntry::from("beta"),
                 ],
                 context_only: true,
                 ..FlagNode::default()
             },
         );
-        provision.flags.insert(
-            "--os".to_string(),
+        deploy.flags.insert(
+            "--image".to_string(),
             FlagNode {
                 suggestions_by_provider: BTreeMap::from([
-                    ("vmware".to_string(), vec![SuggestionEntry::from("rhel")]),
-                    ("nrec".to_string(), vec![SuggestionEntry::from("alma")]),
+                    ("alpha".to_string(), vec![SuggestionEntry::from("red")]),
+                    ("beta".to_string(), vec![SuggestionEntry::from("blue")]),
                 ]),
-                suggestions: vec![SuggestionEntry::from("rhel"), SuggestionEntry::from("alma")],
-                context_only: true,
+                suggestions: vec![SuggestionEntry::from("red"), SuggestionEntry::from("blue")],
                 ..FlagNode::default()
             },
         );
-        provision.flags.insert(
-            "--vmware".to_string(),
+        deploy.flags.insert(
+            "--region".to_string(),
             FlagNode {
                 flag_only: true,
                 ..FlagNode::default()
             },
         );
 
-        let mut orch = CompletionNode::default();
-        orch.children.insert("provision".to_string(), provision);
+        let mut service = CompletionNode::default();
+        service.children.insert("deploy".to_string(), deploy);
 
         CompletionTree {
-            root: CompletionNode::default().with_child("orch", orch),
+            root: CompletionNode::default().with_child("service", service),
             pipe_verbs: BTreeMap::from([("F".to_string(), "Filter".to_string())]),
         }
     }
@@ -490,23 +489,23 @@ mod tests {
         fn completion_request_characterization_covers_representative_kinds_and_suggestions() {
             let engine = CompletionEngine::new(tree());
             let cases = [
-                ("or", 2usize, "subcommands", "orch"),
-                ("orch pr", "orch pr".len(), "subcommands", "provision"),
+                ("se", 2usize, "subcommands", "service"),
+                ("service de", "service de".len(), "subcommands", "deploy"),
                 (
-                    "orch provision --",
-                    "orch provision --".len(),
+                    "service deploy --",
+                    "service deploy --".len(),
                     "flag-names",
                     "--provider",
                 ),
                 (
-                    "orch provision --provider ",
-                    "orch provision --provider ".len(),
+                    "service deploy --provider ",
+                    "service deploy --provider ".len(),
                     "flag-values",
-                    "vmware",
+                    "alpha",
                 ),
                 (
-                    "orch provision | F",
-                    "orch provision | F".len(),
+                    "service deploy | F",
+                    "service deploy | F".len(),
                     "pipe",
                     "F",
                 ),
@@ -534,17 +533,17 @@ mod tests {
         #[test]
         fn provider_context_merges_across_completion_and_analysis() {
             let engine = CompletionEngine::new(tree());
-            let line = "orch provision --os  --provider vmware";
+            let line = "service deploy --image  --provider alpha";
             let cursor = provider_cursor(line);
 
             let (_, suggestions) = engine.complete(line, cursor);
             let values = suggestion_texts(suggestions);
-            assert!(values.contains(&"rhel".to_string()));
+            assert!(values.contains(&"red".to_string()));
 
             let analysis = engine.analyze(line, cursor);
             assert_eq!(analysis.cursor.token_stub, "");
-            assert_eq!(analysis.context.matched_path, vec!["orch", "provision"]);
-            assert_eq!(analysis.context.flag_scope_path, vec!["orch", "provision"]);
+            assert_eq!(analysis.context.matched_path, vec!["service", "deploy"]);
+            assert_eq!(analysis.context.flag_scope_path, vec!["service", "deploy"]);
             assert!(!analysis.context.subcommand_context);
             assert_eq!(
                 analysis
@@ -552,7 +551,7 @@ mod tests {
                     .cursor_cmd
                     .flag_values("--provider")
                     .expect("provider should merge into cursor context"),
-                &vec!["vmware".to_string()][..]
+                &vec!["alpha".to_string()][..]
             );
         }
 
@@ -560,31 +559,31 @@ mod tests {
         fn value_completion_handles_equals_flags_and_open_quotes() {
             let engine = CompletionEngine::new(tree());
 
-            let equals_line = "orch provision --os=";
+            let equals_line = "service deploy --image=";
             let values = suggestion_texts(engine.complete(equals_line, equals_line.len()).1);
-            assert!(values.contains(&"rhel".to_string()));
-            assert!(values.contains(&"alma".to_string()));
+            assert!(values.contains(&"red".to_string()));
+            assert!(values.contains(&"blue".to_string()));
 
-            let open_quote_line = "orch provision --os \"rh";
+            let open_quote_line = "service deploy --image \"re";
             let analysis = engine.analyze(open_quote_line, open_quote_line.len());
-            assert_eq!(analysis.cursor.token_stub, "rh");
+            assert_eq!(analysis.cursor.token_stub, "re");
             assert_eq!(analysis.cursor.quote_style, Some(QuoteStyle::Double));
         }
 
         #[test]
         fn later_non_context_flags_do_not_leak_into_cursor_context() {
             let engine = CompletionEngine::new(tree());
-            let line = "orch provision --os  --vmware";
-            let cursor = line.find("--vmware").expect("vmware flag should exist") - 1;
+            let line = "service deploy --image  --region";
+            let cursor = line.find("--region").expect("region flag should exist") - 1;
 
             let (_, suggestions) = engine.complete(line, cursor);
             let values = suggestion_texts(suggestions);
-            assert!(values.contains(&"rhel".to_string()));
-            assert!(values.contains(&"alma".to_string()));
+            assert!(values.contains(&"red".to_string()));
+            assert!(values.contains(&"blue".to_string()));
 
             let analysis = engine.analyze(line, cursor);
             assert!(
-                !analysis.parsed.cursor_cmd.has_flag("--vmware"),
+                !analysis.parsed.cursor_cmd.has_flag("--region"),
                 "later non-context flag should not merge into cursor context",
             );
         }
@@ -614,7 +613,7 @@ mod tests {
         #[test]
         fn completion_hides_later_flags_and_does_not_inherit_root_flags() {
             let engine = CompletionEngine::new(tree());
-            let line = "orch provision  --provider vmware";
+            let line = "service deploy  --provider alpha";
             let cursor = line.find("--provider").expect("provider in test line") - 2;
 
             let values = suggestion_texts(engine.complete(line, cursor).1);

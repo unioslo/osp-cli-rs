@@ -38,52 +38,6 @@ fn parse_preserves_quoted_pipe_inside_command_segment() {
 }
 
 #[test]
-fn parse_merges_orch_os_tokens_from_text() {
-    let config = make_config(&[]);
-    let parsed = parse_command_text_with_aliases("orch provision --os alma 9", &config)
-        .expect("orch provision command should parse");
-
-    assert_eq!(parsed.tokens, vec!["orch", "provision", "--os", "alma9"]);
-}
-
-#[test]
-fn parse_merges_orch_os_tokens_from_cli_tokens() {
-    let config = make_config(&[]);
-    let tokens = ["orch", "provision", "--os", "alma", "9"]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    let parsed = parse_command_tokens_with_aliases(&tokens, &config)
-        .expect("orch provision token list should parse");
-
-    assert_eq!(parsed.tokens, vec!["orch", "provision", "--os", "alma9"]);
-}
-
-#[test]
-fn parse_does_not_merge_outside_orch_provision() {
-    let config = make_config(&[]);
-    let parsed = parse_command_text_with_aliases("orch task create --os alma 9", &config)
-        .expect("non-provision orch command should parse");
-
-    assert_eq!(
-        parsed.tokens,
-        vec!["orch", "task", "create", "--os", "alma", "9"]
-    );
-}
-
-#[test]
-fn parse_does_not_merge_when_version_is_dash() {
-    let config = make_config(&[]);
-    let parsed = parse_command_text_with_aliases("orch provision --os alma -", &config)
-        .expect("skip-marker orch provision command should parse");
-
-    assert_eq!(
-        parsed.tokens,
-        vec!["orch", "provision", "--os", "alma", "-"]
-    );
-}
-
-#[test]
 fn parse_rejects_unknown_explicit_stage_from_text() {
     let config = make_config(&[]);
     let result = parse_command_text_with_aliases("status | X foo", &config);

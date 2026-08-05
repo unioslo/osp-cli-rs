@@ -22,16 +22,16 @@ fn completion_tree(context_scope: ContextScope) -> osp_cli::completion::Completi
     CompletionTreeBuilder
         .build_from_specs(
             &[
-                CommandSpec::new("orch").subcommand(CommandSpec::new("provision").flag(
-                    "--os",
+                CommandSpec::new("service").subcommand(CommandSpec::new("deploy").flag(
+                    "--image",
                     FlagNode {
                         suggestions_by_provider: BTreeMap::from([
-                            ("vmware".to_string(), vec![SuggestionEntry::from("rhel")]),
-                            ("nrec".to_string(), vec![SuggestionEntry::from("alma")]),
+                            ("alpha".to_string(), vec![SuggestionEntry::from("red")]),
+                            ("beta".to_string(), vec![SuggestionEntry::from("blue")]),
                         ]),
                         suggestions: vec![
-                            SuggestionEntry::from("rhel"),
-                            SuggestionEntry::from("alma"),
+                            SuggestionEntry::from("red"),
+                            SuggestionEntry::from("blue"),
                         ],
                         ..FlagNode::default()
                     },
@@ -40,8 +40,8 @@ fn completion_tree(context_scope: ContextScope) -> osp_cli::completion::Completi
                     "--provider",
                     FlagNode {
                         suggestions: vec![
-                            SuggestionEntry::from("vmware"),
-                            SuggestionEntry::from("nrec"),
+                            SuggestionEntry::from("alpha"),
+                            SuggestionEntry::from("beta"),
                         ],
                         context_only: true,
                         context_scope,
@@ -57,34 +57,34 @@ fn completion_tree(context_scope: ContextScope) -> osp_cli::completion::Completi
 #[test]
 fn completion_engine_merges_global_context_flags_from_later_tokens() {
     let engine = CompletionEngine::new(completion_tree(ContextScope::Global));
-    let line = "orch provision --os  --provider vmware";
+    let line = "service deploy --image  --provider alpha";
     let cursor = provider_cursor(line);
 
     let (_, suggestions) = engine.complete(line, cursor);
     let values = suggestion_values(suggestions);
-    assert!(values.contains(&"rhel".to_string()));
-    assert!(!values.contains(&"alma".to_string()));
+    assert!(values.contains(&"red".to_string()));
+    assert!(!values.contains(&"blue".to_string()));
 
     let analysis = engine.analyze(line, cursor);
-    assert_eq!(analysis.context.matched_path, vec!["orch", "provision"]);
-    assert_eq!(analysis.context.flag_scope_path, vec!["orch", "provision"]);
+    assert_eq!(analysis.context.matched_path, vec!["service", "deploy"]);
+    assert_eq!(analysis.context.flag_scope_path, vec!["service", "deploy"]);
     assert_eq!(
         analysis
             .parsed
             .cursor_cmd
             .flag_values("--provider")
             .expect("provider should merge into cursor context"),
-        &vec!["vmware".to_string()][..]
+        &vec!["alpha".to_string()][..]
     );
 }
 
 #[test]
 fn completion_engine_keeps_subtree_context_flags_outside_matched_scope() {
     let engine = CompletionEngine::new(completion_tree(ContextScope::Subtree));
-    let line = "orch provision --os  --provider vmware";
+    let line = "service deploy --image  --provider alpha";
 
     let (_, suggestions) = engine.complete(line, provider_cursor(line));
     let values = suggestion_values(suggestions);
-    assert!(values.contains(&"rhel".to_string()));
-    assert!(values.contains(&"alma".to_string()));
+    assert!(values.contains(&"red".to_string()));
+    assert!(values.contains(&"blue".to_string()));
 }

@@ -2,7 +2,7 @@
 //!
 //! The parser tells completion "what tokens exist near the cursor". This
 //! module answers the next question: which completion-tree node and flag scope
-//! those tokens imply, and which provider/os hints should influence the later
+//! those tokens imply, and which provider hints should influence the later
 //! suggestion pass.
 
 use crate::completion::model::{CommandLine, CompletionContext, CompletionNode, CompletionTree};
@@ -97,7 +97,6 @@ impl<'a> TreeResolver<'a> {
 
 pub(crate) struct ProviderSelection<'a> {
     provider: Option<&'a str>,
-    normalized_os: Option<String>,
 }
 
 impl<'a> ProviderSelection<'a> {
@@ -106,34 +105,12 @@ impl<'a> ProviderSelection<'a> {
             .flag_values("--provider")
             .and_then(|values| values.first())
             .map(String::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| cmd.has_flag("--nrec").then_some("nrec"))
-            .or_else(|| cmd.has_flag("--vmware").then_some("vmware"));
-        let normalized_os = cmd
-            .flag_values("--os")
-            .and_then(|values| values.first())
-            .map(|value| normalize_token(value));
+            .filter(|value| !value.trim().is_empty());
 
-        Self {
-            provider,
-            normalized_os,
-        }
+        Self { provider }
     }
 
     pub(crate) fn name(&self) -> Option<&'a str> {
         self.provider
     }
-
-    pub(crate) fn normalized_os(&self) -> Option<&str> {
-        self.normalized_os.as_deref()
-    }
-}
-
-fn normalize_token(value: &str) -> String {
-    value
-        .trim()
-        .chars()
-        .flat_map(char::to_lowercase)
-        .collect::<String>()
-        .replace([' ', '-', '_'], "")
 }

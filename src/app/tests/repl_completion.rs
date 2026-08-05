@@ -177,20 +177,20 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
     assert!(values.contains(&"provision".to_string()));
 
     let parsed =
-        repl::ReplParsedLine::parse("provision --os alma", state.runtime.config.resolved())
+        repl::ReplParsedLine::parse("provision --image red", state.runtime.config.resolved())
             .expect("scoped command should parse");
     assert_eq!(
         parsed.prefixed_tokens(&state.session.scope),
         vec![
             "orch".to_string(),
             "provision".to_string(),
-            "--os".to_string(),
-            "alma".to_string()
+            "--image".to_string(),
+            "red".to_string()
         ]
     );
     let state = make_completion_state_with_entries(
         None,
-        &[("alias.ops", "orch provision --provider vmware")],
+        &[("alias.ops", "orch provision --provider alpha")],
     );
     let catalog = sample_catalog();
     let engine = completion_engine_for(&state, &catalog);
@@ -221,14 +221,14 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
 
     let mut state = make_completion_state_with_entries(
         None,
-        &[("alias.vm", "provision guest --provider vmware")],
+        &[("alias.vm", "provision guest --provider alpha")],
     );
     state.session.scope.enter("orch");
     let catalog = sample_catalog_with_provision_context();
     let engine = completion_engine_for(&state, &catalog);
-    let values = complete_values(&engine, "vm --os ");
-    assert!(values.contains(&"rhel".to_string()));
-    assert!(!values.contains(&"alma".to_string()));
+    let values = complete_values(&engine, "vm --image ");
+    assert!(values.contains(&"red".to_string()));
+    assert!(!values.contains(&"blue".to_string()));
 
     let mut state = make_completion_state_with_entries(None, &[("alias.ops", "orch provision")]);
     state.session.scope.enter("orch");
@@ -275,19 +275,19 @@ fn repl_alias_completion_inherits_prefilled_context_unit() {
         let engine = crate::completion::CompletionEngine::new(tree);
         let values = complete_values(&engine, "me --");
         assert!(values.contains(&"--provider".to_string()));
-        assert!(values.contains(&"--os".to_string()));
+        assert!(values.contains(&"--image".to_string()));
     }
 
     for alias in [
-        "orch provision guest --provider vmware",
-        "--json orch provision guest --provider vmware",
+        "orch provision guest --provider alpha",
+        "--json orch provision guest --provider alpha",
     ] {
         let state = make_completion_state_with_entries(None, &[("alias.me", alias)]);
         let catalog = sample_catalog_with_provision_context();
         let engine = completion_engine_for(&state, &catalog);
-        let values = complete_values(&engine, "me --os ");
-        assert!(values.contains(&"rhel".to_string()));
-        assert!(!values.contains(&"alma".to_string()));
+        let values = complete_values(&engine, "me --image ");
+        assert!(values.contains(&"red".to_string()));
+        assert!(!values.contains(&"blue".to_string()));
     }
 
     let state =

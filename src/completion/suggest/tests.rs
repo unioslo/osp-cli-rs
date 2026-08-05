@@ -7,34 +7,33 @@ use crate::completion::model::{
 };
 
 fn tree() -> CompletionTree {
-    let mut provision = CompletionNode::default();
-    provision.flags.insert(
+    let mut deploy = CompletionNode::default();
+    deploy.flags.insert(
         "--provider".to_string(),
         FlagNode {
             suggestions: vec![
-                SuggestionEntry::from("nrec"),
-                SuggestionEntry::from("vmware"),
+                SuggestionEntry::from("alpha"),
+                SuggestionEntry::from("beta"),
             ],
-            os_provider_map: BTreeMap::from([
-                ("alma".to_string(), vec!["nrec".to_string()]),
-                ("rhel".to_string(), vec!["vmware".to_string()]),
-            ]),
             ..FlagNode::default()
         },
     );
-    provision.flags.insert(
-        "--os".to_string(),
+    deploy.flags.insert(
+        "--image".to_string(),
         FlagNode {
-            suggestions: vec![SuggestionEntry::from("alma"), SuggestionEntry::from("rhel")],
+            suggestions: vec![
+                SuggestionEntry::from("small"),
+                SuggestionEntry::from("large"),
+            ],
             ..FlagNode::default()
         },
     );
 
-    let mut orch = CompletionNode::default();
-    orch.children.insert("provision".to_string(), provision);
+    let mut service = CompletionNode::default();
+    service.children.insert("deploy".to_string(), deploy);
 
     CompletionTree {
-        root: CompletionNode::default().with_child("orch", orch),
+        root: CompletionNode::default().with_child("service", service),
         pipe_verbs: BTreeMap::from([("F".to_string(), "Filter".to_string())]),
     }
 }
@@ -109,11 +108,11 @@ fn tags_and_mode_tree() -> CompletionTree {
 #[test]
 fn command_and_pipe_suggestions_cover_scope_fuzzy_values_and_filters_unit() {
     let engine = CompletionEngine::new(tree());
-    let cmd = command(&["orch", "provision"]);
+    let cmd = command(&["service", "deploy"]);
 
     let option_values = values(generate(&engine, cmd.clone(), "--"));
     assert!(option_values.contains(&"--provider".to_string()));
-    assert!(option_values.contains(&"--os".to_string()));
+    assert!(option_values.contains(&"--image".to_string()));
 
     let fuzzy_values = values(generate(&engine, cmd.clone(), "--prv"));
     assert!(fuzzy_values.contains(&"--provider".to_string()));
@@ -123,13 +122,13 @@ fn command_and_pipe_suggestions_cover_scope_fuzzy_values_and_filters_unit() {
         with_flag(cmd.clone(), "--provider", &[]),
         "",
     ));
-    assert!(provider_values.contains(&"nrec".to_string()));
-    assert!(provider_values.contains(&"vmware".to_string()));
+    assert!(provider_values.contains(&"alpha".to_string()));
+    assert!(provider_values.contains(&"beta".to_string()));
 
-    let cmd = with_flag(with_flag(cmd, "--os", &["alma"]), "--provider", &[]);
-    let filtered_values = values(generate(&engine, cmd, ""));
-    assert!(filtered_values.contains(&"nrec".to_string()));
-    assert!(!filtered_values.contains(&"vmware".to_string()));
+    let cmd = with_flag(with_flag(cmd, "--image", &["small"]), "--provider", &[]);
+    let provider_values = values(generate(&engine, cmd, ""));
+    assert!(provider_values.contains(&"alpha".to_string()));
+    assert!(provider_values.contains(&"beta".to_string()));
 
     let mut cmd = CommandLine::default();
     cmd.set_pipe(Vec::new());
@@ -283,39 +282,18 @@ fn flag_hints_filter_provider_specific_flags_and_alias_allowlists_unit() {
     let mut node = CompletionNode::default();
     node.flags
         .insert("--provider".to_string(), FlagNode::default());
-    node.flags.insert(
-        "--nrec".to_string(),
-        FlagNode {
-            flag_only: true,
-            ..FlagNode::default()
-        },
-    );
-    node.flags.insert(
-        "--vmware".to_string(),
-        FlagNode {
-            flag_only: true,
-            ..FlagNode::default()
-        },
-    );
     node.flags
         .insert("--comment".to_string(), FlagNode::default());
-    node.flags
-        .insert("--flavor".to_string(), FlagNode::default());
-    node.flags
-        .insert("--vcenter".to_string(), FlagNode::default());
+    node.flags.insert("--size".to_string(), FlagNode::default());
+    node.flags.insert("--zone".to_string(), FlagNode::default());
     node.flag_hints = Some(FlagHints {
-        common: vec![
-            "--provider".to_string(),
-            "--nrec".to_string(),
-            "--vmware".to_string(),
-            "--comment".to_string(),
-        ],
+        common: vec!["--provider".to_string(), "--comment".to_string()],
         by_provider: BTreeMap::from([
-            ("nrec".to_string(), vec!["--flavor".to_string()]),
-            ("vmware".to_string(), vec!["--vcenter".to_string()]),
+            ("alpha".to_string(), vec!["--size".to_string()]),
+            ("beta".to_string(), vec!["--zone".to_string()]),
         ]),
         required_common: vec!["--comment".to_string()],
-        required_by_provider: BTreeMap::from([("nrec".to_string(), vec!["--flavor".to_string()])]),
+        required_by_provider: BTreeMap::from([("alpha".to_string(), vec!["--size".to_string()])]),
     });
 
     let tree = CompletionTree {
@@ -324,15 +302,13 @@ fn flag_hints_filter_provider_specific_flags_and_alias_allowlists_unit() {
     };
     let engine = CompletionEngine::new(tree);
 
-    let cmd = with_flag(command(&["provision"]), "--provider", &["nrec"]);
+    let cmd = with_flag(command(&["provision"]), "--provider", &["alpha"]);
     let output = generate(&engine, cmd, "--");
     let rendered_values = values(output.clone());
     assert!(rendered_values.contains(&"--comment".to_string()));
-    assert!(rendered_values.contains(&"--flavor".to_string()));
+    assert!(rendered_values.contains(&"--size".to_string()));
     assert!(!rendered_values.contains(&"--provider".to_string()));
-    assert!(!rendered_values.contains(&"--nrec".to_string()));
-    assert!(!rendered_values.contains(&"--vmware".to_string()));
-    assert!(!rendered_values.contains(&"--vcenter".to_string()));
+    assert!(!rendered_values.contains(&"--zone".to_string()));
 
     let items = output
         .into_iter()
@@ -353,40 +329,10 @@ fn flag_hints_filter_provider_specific_flags_and_alias_allowlists_unit() {
     );
     assert_eq!(
         by_text
-            .get("--flavor")
+            .get("--size")
             .and_then(|item| item.display.as_deref()),
-        Some("--flavor*")
+        Some("--size*")
     );
-
-    let mut alias_node = CompletionNode::default();
-    alias_node
-        .flags
-        .insert("--provider".to_string(), FlagNode::default());
-    alias_node.flags.insert(
-        "--nrec".to_string(),
-        FlagNode {
-            flag_only: true,
-            ..FlagNode::default()
-        },
-    );
-    alias_node
-        .flags
-        .insert("--flavor".to_string(), FlagNode::default());
-    alias_node.flag_hints = Some(FlagHints {
-        common: vec!["--provider".to_string(), "--nrec".to_string()],
-        by_provider: BTreeMap::from([("nrec".to_string(), vec!["--flavor".to_string()])]),
-        ..FlagHints::default()
-    });
-
-    let alias_tree = CompletionTree {
-        root: CompletionNode::default().with_child("provision", alias_node),
-        ..CompletionTree::default()
-    };
-    let alias_engine = CompletionEngine::new(alias_tree);
-    let alias_cmd = with_flag(command(&["provision"]), "--nrec", &[]);
-    let alias_values = values(generate(&alias_engine, alias_cmd, "--"));
-    assert!(alias_values.contains(&"--flavor".to_string()));
-    assert!(!alias_values.contains(&"--provider".to_string()));
 }
 
 #[test]

@@ -451,7 +451,7 @@ impl CompletionNode {
     ///     .multi()
     ///     .context_only(ContextScope::Global)
     ///     .value_type(ValueType::Path)
-    ///     .suggestions([SuggestionEntry::from("vmware")]);
+    ///     .suggestions([SuggestionEntry::from("alpha")]);
     ///
     /// let node = CompletionNode::default()
     ///     .sort("01")

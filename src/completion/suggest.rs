@@ -211,7 +211,7 @@ impl SuggestionEngine {
         cmd: &CommandLine,
         provider: &ProviderSelection<'_>,
     ) -> Vec<Suggestion> {
-        let allowlist = self.resolved_flag_allowlist(node, cmd, provider);
+        let allowlist = self.resolved_flag_allowlist(node, provider);
         let required = self.required_flags(node, provider);
         let flag_stub = if node.flags.contains_key(stub) {
             ""
@@ -262,7 +262,7 @@ impl SuggestionEngine {
         }
 
         if let Some(output) =
-            self.provider_specific_flag_value_suggestions(flag_node, flag, stub, provider)
+            self.provider_specific_flag_value_suggestions(flag_node, stub, provider)
         {
             return output;
         }
@@ -306,38 +306,9 @@ impl SuggestionEngine {
     fn provider_specific_flag_value_suggestions(
         &self,
         flag_node: &crate::completion::model::FlagNode,
-        flag: &str,
         stub: &str,
         provider: &ProviderSelection<'_>,
     ) -> Option<Vec<SuggestionOutput>> {
-        // Provider completion has two special cases:
-        // - selecting `--provider` may be constrained by the current `--os`
-        // - many flags expose provider-specific value sets once a provider is chosen
-        //
-        // `osp-cli` marks these selector flags as context-only in
-        // `repl/completion.rs`; the suggestion engine still needs a small
-        // amount of flag-name-specific logic until that relationship is fully
-        // expressed in completion metadata.
-        if flag == "--provider" {
-            let os_token = provider.normalized_os();
-            if let Some(os_token) = os_token {
-                let filtered = flag_node
-                    .suggestions
-                    .iter()
-                    .filter(|entry| {
-                        flag_node
-                            .os_provider_map
-                            .get(os_token)
-                            .is_none_or(|providers| providers.iter().any(|p| p == &entry.value))
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if !filtered.is_empty() {
-                    return Some(self.entry_suggestions(&filtered, stub));
-                }
-            }
-        }
-
         let provider_values = flag_node.suggestions_by_provider.get(provider.name()?)?;
         Some(self.entry_suggestions(provider_values, stub))
     }
@@ -398,7 +369,6 @@ impl SuggestionEngine {
     fn resolved_flag_allowlist(
         &self,
         node: &CompletionNode,
-        cmd: &CommandLine,
         provider: &ProviderSelection<'_>,
     ) -> Option<BTreeSet<String>> {
         let hints = node.flag_hints.as_ref()?;
@@ -408,17 +378,8 @@ impl SuggestionEngine {
             if let Some(provider_specific) = hints.by_provider.get(provider) {
                 allowed.extend(provider_specific.iter().cloned());
             }
-            // Once provider is selected, hide selector flags.
+            // Once a provider is selected, hide the generic selector flag.
             allowed.remove("--provider");
-            allowed.remove("--nrec");
-            allowed.remove("--vmware");
-        }
-
-        if cmd.has_flag("--linux") {
-            allowed.remove("--windows");
-        }
-        if cmd.has_flag("--windows") {
-            allowed.remove("--linux");
         }
 
         Some(allowed)

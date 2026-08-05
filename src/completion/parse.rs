@@ -847,10 +847,10 @@ mod tests {
             let parser = parser();
 
             assert_eq!(
-                parser.tokenize("orch provision --request 'name=a|b' | F name"),
+                parser.tokenize("service deploy --request 'name=a|b' | F name"),
                 vec![
-                    "orch",
-                    "provision",
+                    "service",
+                    "deploy",
                     "--request",
                     "name=a|b",
                     "|",
@@ -858,7 +858,7 @@ mod tests {
                     "name",
                 ]
             );
-            assert_eq!(parser.tokenize("--os 'alma"), vec!["--os", "alma"]);
+            assert_eq!(parser.tokenize("--image 'small"), vec!["--image", "small"]);
 
             let spans = parser.tokenize_with_spans("cmd --name 'alice");
             assert_eq!(spans.len(), 3);
@@ -883,14 +883,14 @@ mod tests {
         fn parse_tracks_flag_values_pipes_and_repeated_occurrence_boundaries() {
             let parser = parser();
 
-            let tokens = parser.tokenize("orch provision --provider vmware --os rhel | F name");
+            let tokens = parser.tokenize("service deploy --provider alpha --image red | F name");
             let cmd = parser.parse(&tokens);
-            assert_eq!(cmd.head(), ["orch".to_string(), "provision".to_string()]);
+            assert_eq!(cmd.head(), ["service".to_string(), "deploy".to_string()]);
             assert_eq!(
                 cmd.flag_values("--provider"),
-                Some(&["vmware".to_string()][..])
+                Some(&["alpha".to_string()][..])
             );
-            assert_eq!(cmd.flag_values("--os"), Some(&["rhel".to_string()][..]));
+            assert_eq!(cmd.flag_values("--image"), Some(&["red".to_string()][..]));
             assert!(cmd.has_pipe());
             assert_eq!(cmd.pipes(), ["F".to_string(), "name".to_string()]);
 
@@ -934,8 +934,9 @@ mod tests {
                 Some(&["-5".to_string()][..])
             );
 
-            let inline = parser.parse(&parser.tokenize("cmd --format=json --os= --format=table"));
-            assert_eq!(inline.flag_values("--os"), Some(&[][..]));
+            let inline =
+                parser.parse(&parser.tokenize("cmd --format=json --image= --format=table"));
+            assert_eq!(inline.flag_values("--image"), Some(&[][..]));
             assert_eq!(
                 inline.flag_occurrences().cloned().collect::<Vec<_>>(),
                 vec![
@@ -944,7 +945,7 @@ mod tests {
                         values: vec!["json".to_string()],
                     },
                     FlagOccurrence {
-                        name: "--os".to_string(),
+                        name: "--image".to_string(),
                         values: vec![],
                     },
                     FlagOccurrence {
@@ -960,15 +961,15 @@ mod tests {
             let parser = parser();
 
             let tail =
-                parser.parse(&parser.tokenize("ldap user --provider vmware region eu-central"));
-            assert_eq!(tail.head(), ["ldap".to_string(), "user".to_string()]);
+                parser.parse(&parser.tokenize("directory user --provider alpha region north"));
+            assert_eq!(tail.head(), ["directory".to_string(), "user".to_string()]);
             assert_eq!(
                 tail.flag_values("--provider"),
                 Some(
                     &[
-                        "vmware".to_string(),
+                        "alpha".to_string(),
                         "region".to_string(),
-                        "eu-central".to_string(),
+                        "north".to_string(),
                     ][..]
                 )
             );
@@ -1016,18 +1017,18 @@ mod tests {
         fn analyze_reuses_safe_cursor_snapshots_for_prefix_and_balanced_quotes() {
             let parser = parser();
 
-            let line = "orch provision --provider vmware --os rhel | F name";
-            let cursor = "orch provision --provider vmware".len();
+            let line = "service deploy --provider alpha --image red | F name";
+            let cursor = "service deploy --provider alpha".len();
             let analyzed = parser.analyze(line, cursor);
             assert_eq!(
                 analyzed.parsed.full_tokens,
                 vec![
-                    "orch",
-                    "provision",
+                    "service",
+                    "deploy",
                     "--provider",
-                    "vmware",
-                    "--os",
-                    "rhel",
+                    "alpha",
+                    "--image",
+                    "red",
                     "|",
                     "F",
                     "name",
@@ -1035,11 +1036,11 @@ mod tests {
             );
             assert_eq!(
                 analyzed.parsed.cursor_tokens,
-                vec!["orch", "provision", "--provider", "vmware"]
+                vec!["service", "deploy", "--provider", "alpha"]
             );
             assert_eq!(
                 analyzed.parsed.cursor_cmd.flag_values("--provider"),
-                Some(&["vmware".to_string()][..])
+                Some(&["alpha".to_string()][..])
             );
 
             let balanced = parser.analyze(

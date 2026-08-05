@@ -476,20 +476,8 @@ fn invocation_flag_nodes() -> Vec<(String, FlagNode)> {
 }
 
 fn mark_context_only_flags(node: &mut CompletionNode) {
-    // These flags influence suggestion context even when they appear later in
-    // the line than the cursor. The suggestion engine still has a small amount
-    // of matching logic keyed on these same names in `osp-completion`.
-    const CONTEXT_ONLY_FLAGS: [&str; 6] = [
-        "--provider",
-        "--vmware",
-        "--nrec",
-        "--linux",
-        "--windows",
-        "--os",
-    ];
-
     for (name, flag) in &mut node.flags {
-        if CONTEXT_ONLY_FLAGS.contains(&name.as_str()) {
+        if name == "--provider" {
             flag.context_only = true;
             flag.context_scope = ContextScope::Subtree;
         }
@@ -635,7 +623,7 @@ mod tests {
         let mut child = CompletionNode::default();
         child
             .flags
-            .insert("--windows".to_string(), FlagNode::default());
+            .insert("--region".to_string(), FlagNode::default());
         root.children.insert("orch".to_string(), child);
 
         mark_context_only_flags(&mut root);
@@ -646,11 +634,7 @@ mod tests {
             ContextScope::Subtree
         );
         assert!(!root.flags["--other"].context_only);
-        assert!(root.children["orch"].flags["--windows"].context_only);
-        assert_eq!(
-            root.children["orch"].flags["--windows"].context_scope,
-            ContextScope::Subtree
-        );
+        assert!(!root.children["orch"].flags["--region"].context_only);
     }
 
     #[test]
