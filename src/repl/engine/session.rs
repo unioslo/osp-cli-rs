@@ -1,6 +1,9 @@
-use super::adapter::{ReplCompleter, build_repl_highlighter, build_repl_tree};
+use super::adapter::{ReplCompleter, build_repl_highlighter};
 use super::config::{LineProjector, ReplAppearance, ReplLineResult, ReplReloadKind, ReplRunResult};
-use super::editor::{AutoCompleteEmacs, OspPrompt, is_cursor_position_error};
+use super::editor::{
+    AutoCompleteEmacs, BasicInputReason, OspPrompt, is_cursor_position_error,
+    mark_cursor_position_unsupported,
+};
 use super::overlay::{build_completion_menu, launch_history_picker};
 use super::{COMPLETION_MENU_NAME, HOST_COMMAND_HISTORY_PICKER, SharedHistory};
 use crate::completion::CompletionTree;
@@ -13,8 +16,7 @@ use std::io::{self, Write};
 
 pub(crate) struct InteractiveLoopConfig<'a> {
     pub(crate) prompt: &'a OspPrompt,
-    pub(crate) completion_words: Vec<String>,
-    pub(crate) completion_tree: Option<CompletionTree>,
+    pub(crate) completion_tree: CompletionTree,
     pub(crate) appearance: ReplAppearance,
     pub(crate) line_projector: Option<LineProjector>,
 }
@@ -34,8 +36,6 @@ pub(crate) struct SubmissionContext<'a, F> {
     pub(crate) history_store: &'a SharedHistory,
     pub(crate) execute: &'a mut F,
 }
-
-impl<'a, F> SubmissionContext<'a, F> where F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult> {}
 
 pub(crate) fn evaluate_repl_submission<F>(
     raw: &str,
@@ -57,9 +57,6 @@ where
         }
         Err(err) => {
             eprintln!("{err}");
-            eprintln!(
-                "Run `doctor last -v`, `doctor last -vv`, or `doctor last -vvv` for more detail."
-            );
             SubmissionResult::Noop
         }
     };
@@ -76,14 +73,12 @@ where
 {
     let InteractiveLoopConfig {
         prompt,
-        completion_words,
         completion_tree,
         appearance,
         line_projector,
     } = config;
 
     let mut editor = build_interactive_editor(
-        completion_words,
         completion_tree,
         &appearance,
         line_projector,
@@ -101,18 +96,13 @@ where
 }
 
 pub(super) fn build_interactive_editor(
-    completion_words: Vec<String>,
-    completion_tree: Option<CompletionTree>,
+    completion_tree: CompletionTree,
     appearance: &ReplAppearance,
     line_projector: Option<LineProjector>,
     history_store: SharedHistory,
 ) -> Reedline {
-    let tree = completion_tree.unwrap_or_else(|| build_repl_tree(&completion_words));
-    let completer = Box::new(ReplCompleter::new(
-        completion_words,
-        Some(tree.clone()),
-        line_projector.clone(),
-    ));
+    let tree = completion_tree;
+    let completer = Box::new(ReplCompleter::new(tree.clone(), line_projector.clone()));
     let completion_menu = Box::new(build_completion_menu(appearance));
     let highlighter = build_repl_highlighter(&tree, appearance, line_projector);
     let edit_mode = Box::new(AutoCompleteEmacs::new(
@@ -149,10 +139,8 @@ where
             Ok(signal) => signal,
             Err(err) => {
                 if is_cursor_position_error(&err) {
-                    eprintln!(
-                        "WARNING: terminal does not support cursor position requests; \
-falling back to basic input mode."
-                    );
+                    mark_cursor_position_unsupported();
+                    super::warn_basic_input_once(BasicInputReason::CursorProbeUnsupported);
                     return run_basic_fn(prompt, submission);
                 }
                 return Err(err.into());
@@ -282,7 +270,6 @@ fn apply_basic_submission(result: SubmissionResult) -> BasicSubmissionAction {
         }
         SubmissionResult::Exit(code) => BasicSubmissionAction::Return(ReplRunResult::Exit(code)),
         SubmissionResult::Restart { output, reload } => {
-            print!("{output}");
             BasicSubmissionAction::Return(ReplRunResult::Restart { output, reload })
         }
     }

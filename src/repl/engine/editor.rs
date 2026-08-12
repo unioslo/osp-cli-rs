@@ -6,6 +6,8 @@
 
 use std::borrow::Cow;
 use std::io::{self, IsTerminal, Write};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
@@ -112,20 +114,30 @@ pub(crate) fn basic_input_reason(input_mode: ReplInputMode) -> Option<BasicInput
         return Some(BasicInputReason::NotATerminal);
     }
 
-    if matches!(input_mode, ReplInputMode::Auto) && !cursor_position_reports_supported() {
+    if matches!(input_mode, ReplInputMode::Auto)
+        && (CURSOR_POSITION_FAILED.load(Ordering::Relaxed)
+            || !*CURSOR_POSITION_SUPPORTED.get_or_init(probe_cursor_position_reports))
+    {
         return Some(BasicInputReason::CursorProbeUnsupported);
     }
 
     None
 }
 
+static CURSOR_POSITION_SUPPORTED: OnceLock<bool> = OnceLock::new();
+static CURSOR_POSITION_FAILED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn mark_cursor_position_unsupported() {
+    CURSOR_POSITION_FAILED.store(true, Ordering::Relaxed);
+}
+
 #[cfg(not(unix))]
-fn cursor_position_reports_supported() -> bool {
+fn probe_cursor_position_reports() -> bool {
     true
 }
 
 #[cfg(unix)]
-fn cursor_position_reports_supported() -> bool {
+fn probe_cursor_position_reports() -> bool {
     use std::mem::MaybeUninit;
     use std::os::fd::AsRawFd;
 

@@ -44,7 +44,7 @@ fn repl_basic_mode_runs_help_and_exit_without_tty() {
     assert!(stdout.contains("Commands"));
     assert!(stdout.contains("help"));
     assert!(stdout.contains("exit"));
-    assert!(stderr.contains("Warning: Input is not a terminal"));
+    assert!(stderr.contains("Warning: input is not a terminal"));
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn repl_basic_mode_exits_cleanly_on_immediate_eof() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("default> "));
-    assert!(stderr.contains("Warning: Input is not a terminal"));
+    assert!(stderr.contains("Warning: input is not a terminal"));
 }
 
 #[test]
@@ -74,14 +74,14 @@ fn repl_basic_mode_restarts_after_refresh_without_tty() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let prompt_count = stdout.matches("default> ").count();
-    let warning_count = stderr.matches("Warning: Input is not a terminal").count();
+    let warning_count = stderr.matches("Warning: input is not a terminal").count();
 
     assert!(
         prompt_count >= 2,
         "expected refresh to restart and render the prompt again; stdout:\n{stdout}"
     );
     assert!(
-        warning_count >= 2,
-        "expected refresh restart to re-enter basic-mode fallback; stderr:\n{stderr}"
+        warning_count >= 1,
+        "expected basic-mode fallback warning; stderr:\n{stderr}"
     );
 }

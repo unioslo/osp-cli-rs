@@ -72,9 +72,17 @@ impl ReplLoopState {
         &mut self,
         sink: &mut dyn UiSink,
         result: ReplRunResult,
+        exit_message: &str,
     ) -> Option<i32> {
         match result {
-            ReplRunResult::Exit(code) => Some(code),
+            ReplRunResult::Exit(code) => {
+                let message = exit_message.trim_end();
+                if !message.is_empty() {
+                    sink.write_stdout(message);
+                    sink.write_stdout("\n");
+                }
+                Some(code)
+            }
             ReplRunResult::Restart { output, reload } => {
                 self.pending_reload = true;
                 self.show_intro = matches!(reload, ReplReloadKind::WithIntro);
@@ -135,8 +143,7 @@ fn build_repl_cycle_run_config(
         build_repl_prompt(view),
         history::build_history_config(runtime, session),
     )
-    .with_completion_words(prepared.surface.root_words.clone())
-    .with_completion_tree(Some(prepared.completion_tree))
+    .with_completion_tree(prepared.completion_tree)
     .with_appearance(prepared.appearance)
     .with_input_mode(map_repl_input_mode(repl_input_mode(
         runtime.config.resolved(),
@@ -156,7 +163,7 @@ pub(super) fn prepare_repl_surface_state(
     session: &AppSession,
     clients: &AppClients,
 ) -> Result<PreparedReplSurfaceState> {
-    let catalog = app::authorized_command_catalog_for(&runtime.auth, clients)?;
+    let catalog = app::authorized_completion_command_catalog_for(&runtime.auth, clients)?;
     let view = ReplViewContext::from_parts(runtime, session);
     let surface = surface::build_repl_surface(view, &catalog);
     let completion_tree = completion::build_repl_completion_tree(view, &surface)?;
@@ -210,9 +217,18 @@ mod tests {
         let mut loop_state = ReplLoopState::new(true);
         let mut sink = BufferedUiSink::default();
         assert_eq!(
-            loop_state.apply_run_result(&mut sink, ReplRunResult::Exit(7)),
+            loop_state.apply_run_result(&mut sink, ReplRunResult::Exit(7), "Goodbye.\n"),
             Some(7)
         );
+        assert_eq!(sink.stdout, "Goodbye.\n");
+
+        let mut silent = ReplLoopState::new(false);
+        let mut silent_sink = BufferedUiSink::default();
+        assert_eq!(
+            silent.apply_run_result(&mut silent_sink, ReplRunResult::Exit(0), ""),
+            Some(0)
+        );
+        assert!(silent_sink.stdout.is_empty());
 
         let mut loop_state = ReplLoopState::new(false);
         let mut sink = BufferedUiSink::default();
@@ -222,7 +238,8 @@ mod tests {
                 ReplRunResult::Restart {
                     output: "hello".to_string(),
                     reload: ReplReloadKind::WithIntro,
-                }
+                },
+                "unused\n",
             ),
             None
         );
@@ -239,7 +256,8 @@ mod tests {
                 ReplRunResult::Restart {
                     output: "ignored".to_string(),
                     reload: ReplReloadKind::Default,
-                }
+                },
+                "unused\n",
             ),
             None
         );
@@ -301,8 +319,7 @@ mod tests {
         let first = loop_state
             .prepare_cycle(&mut state)
             .expect("initial cycle should build");
-        assert!(!first.run_config.completion_words.is_empty());
-        assert!(first.run_config.completion_tree.is_some());
+        assert!(!first.run_config.completion_tree.root.children.is_empty());
         assert!(first.help_text.contains("help") || first.help_text.contains("config"));
 
         loop_state.apply_run_result(
@@ -311,12 +328,12 @@ mod tests {
                 output: String::new(),
                 reload: ReplReloadKind::Default,
             },
+            "",
         );
 
         let second = loop_state
             .prepare_cycle(&mut state)
             .expect("reloaded cycle should build");
-        assert!(!second.run_config.completion_words.is_empty());
-        assert!(second.run_config.completion_tree.is_some());
+        assert!(!second.run_config.completion_tree.root.children.is_empty());
     }
 }

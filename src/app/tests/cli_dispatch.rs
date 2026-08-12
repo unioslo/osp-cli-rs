@@ -222,7 +222,7 @@ fn repl_dsl_capability_is_declared_per_command_unit() {
         }),
     });
     let history_list = Commands::History(crate::cli::HistoryArgs {
-        command: crate::cli::HistoryCommands::List,
+        command: crate::cli::HistoryCommands::List(crate::cli::HistoryListArgs::default()),
     });
     let history_prune = Commands::History(crate::cli::HistoryArgs {
         command: crate::cli::HistoryCommands::Prune(crate::cli::HistoryPruneArgs { keep: 5 }),

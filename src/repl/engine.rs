@@ -29,6 +29,8 @@
 //!   constructors such as [`ReplRunConfig::builder`],
 //!   [`ReplAppearance::builder`], and [`CompletionDebugOptions::new`]
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 pub use super::highlight::{HighlightDebugSpan, debug_highlight};
 pub(crate) use super::history_store::expand_history;
 pub use super::history_store::{
@@ -45,12 +47,12 @@ mod overlay;
 mod session;
 
 pub(crate) use adapter::{
-    CompletionTraceEvent, CompletionTraceMenuState, trace_completion, trace_completion_enabled,
+    CompletionTraceEvent, CompletionTraceMenuState, expand_home, trace_completion,
+    trace_completion_enabled,
 };
 #[cfg(test)]
 pub(crate) use adapter::{
-    ReplCompleter, ReplHistoryCompleter, build_repl_highlighter, expand_home, path_suggestions,
-    split_path_stub,
+    ReplCompleter, ReplHistoryCompleter, build_repl_highlighter, path_suggestions, split_path_stub,
 };
 pub use adapter::{color_from_style_spec, default_pipe_verbs};
 pub use config::{
@@ -80,8 +82,7 @@ const HOST_COMMAND_HISTORY_PICKER: &str = "\u{0}osp-repl-history-picker";
 
 struct ReplRunContext {
     prompt: OspPrompt,
-    completion_words: Vec<String>,
-    completion_tree: Option<CompletionTree>,
+    completion_tree: CompletionTree,
     appearance: ReplAppearance,
     line_projector: Option<LineProjector>,
     history_store: SharedHistory,
@@ -109,7 +110,6 @@ where
 {
     let ReplRunConfig {
         prompt,
-        completion_words,
         completion_tree,
         appearance,
         history_config,
@@ -128,7 +128,6 @@ where
     run_repl_with_reason(
         ReplRunContext {
             prompt,
-            completion_words,
             completion_tree,
             appearance,
             line_projector,
@@ -159,7 +158,6 @@ where
 {
     let ReplRunContext {
         prompt,
-        completion_words,
         completion_tree,
         appearance,
         line_projector,
@@ -167,24 +165,13 @@ where
     } = context;
 
     if let Some(reason) = basic_reason {
-        match reason {
-            BasicInputReason::NotATerminal => {
-                eprintln!("Warning: Input is not a terminal (fd=0).");
-            }
-            BasicInputReason::CursorProbeUnsupported => {
-                eprintln!(
-                    "Warning: terminal does not support cursor position requests; using basic input mode."
-                );
-            }
-            BasicInputReason::Explicit => {}
-        }
+        warn_basic_input_once(reason);
         return run_basic_fn(&prompt, submission);
     }
 
     run_interactive_fn(
         InteractiveLoopConfig {
             prompt: &prompt,
-            completion_words,
             completion_tree,
             appearance,
             line_projector,
@@ -192,6 +179,27 @@ where
         history_store,
         submission,
     )
+}
+
+static BASIC_INPUT_WARNING_SHOWN: AtomicBool = AtomicBool::new(false);
+
+fn warn_basic_input_once(reason: BasicInputReason) {
+    if reason == BasicInputReason::Explicit
+        || BASIC_INPUT_WARNING_SHOWN.swap(true, Ordering::Relaxed)
+    {
+        return;
+    }
+    match reason {
+        BasicInputReason::NotATerminal => {
+            eprintln!("Warning: input is not a terminal; using basic input mode.");
+        }
+        BasicInputReason::CursorProbeUnsupported => {
+            eprintln!(
+                "Warning: terminal does not support cursor position requests; using basic input mode."
+            );
+        }
+        BasicInputReason::Explicit => {}
+    }
 }
 
 #[cfg(test)]

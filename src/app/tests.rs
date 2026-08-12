@@ -9,9 +9,9 @@ use super::{
     resolve_runtime_config, run_cli_command_with_ui, run_from, run_from_with_sink,
 };
 use super::{
-    EXIT_CODE_CONFIG, EXIT_CODE_PLUGIN, EXIT_CODE_USAGE, PluginConfigEntry, PluginConfigScope,
-    ReplCommandOutput, RunAction, RuntimeConfigRequest, build_cli_session_layer,
-    build_dispatch_plan, classify_exit_code, collect_plugin_config_env, config_value_to_plugin_env,
+    EXIT_CODE_ERROR, EXIT_CODE_USAGE, PluginConfigEntry, PluginConfigScope, ReplCommandOutput,
+    RunAction, RuntimeConfigRequest, build_cli_session_layer, build_dispatch_plan,
+    classify_exit_code, collect_plugin_config_env, config_value_to_plugin_env,
     enrich_dispatch_error, is_sensitive_key, plugin_config_env_name, plugin_path_discovery_enabled,
     plugin_process_timeout, render_report_message, resolve_invocation_ui,
     resolve_render_settings_with_hint, run_inline_builtin_command,
@@ -97,6 +97,12 @@ fn make_completion_state_with_entries_and_native(
         defaults.set("auth.visible.builtins", allowlist);
     }
     defaults.set("repl.history.path", "/tmp/osp-test-repl.history");
+    defaults.set(
+        "repl.shellable_commands",
+        ["ldap", "mreg", "nh", "orch", "vm"]
+            .map(str::to_string)
+            .to_vec(),
+    );
     defaults.set("theme.path", Vec::<String>::new());
     for (key, value) in entries {
         defaults.set(*key, *value);

@@ -147,15 +147,16 @@ fn submission_delegates_help_and_exit_to_host() {
 
 #[test]
 fn completer_covers_prefix_fuzzy_and_pipe_scenarios_unit() {
-    let mut word_completer = ReplCompleter::new(
-        vec![
-            "ldap".to_string(),
-            "plugins".to_string(),
-            "theme".to_string(),
-        ],
-        None,
-        None,
-    );
+    let mut root = CompletionNode::default();
+    for command in ["ldap", "plugins", "theme"] {
+        root.children
+            .insert(command.to_string(), CompletionNode::default());
+    }
+    let tree = CompletionTree {
+        root,
+        pipe_verbs: default_pipe_verbs(),
+    };
+    let mut word_completer = ReplCompleter::new(tree.clone(), None);
 
     let prefix_values = word_completer
         .complete("ld", 2)
@@ -171,7 +172,7 @@ fn completer_covers_prefix_fuzzy_and_pipe_scenarios_unit() {
         .collect::<Vec<_>>();
     assert!(fuzzy_values.contains(&"ldap".to_string()));
 
-    let mut pipe_completer = ReplCompleter::new(vec!["ldap".to_string()], None, None);
+    let mut pipe_completer = ReplCompleter::new(tree, None);
     let pipe_values = pipe_completer
         .complete("ldap user | F", "ldap user | F".len())
         .into_iter()
@@ -193,26 +194,11 @@ fn default_pipe_verbs_include_extended_dsl_surface() {
 }
 
 #[test]
-fn completer_with_tree_does_not_fallback_to_word_list() {
-    let mut root = CompletionNode::default();
-    root.children
-        .insert("config".to_string(), CompletionNode::default());
-    let tree = CompletionTree {
-        root,
-        ..CompletionTree::default()
-    };
-
-    let mut completer = ReplCompleter::new(vec!["ldap".to_string()], Some(tree), None);
-    let completions = completer.complete("zzz", 3);
-    assert!(completions.is_empty());
-}
-
-#[test]
 fn completer_can_use_projected_line_for_host_flags_unit() {
     let tree = completion_tree_with_config_show();
     let projector =
         Arc::new(|line: &str| LineProjection::passthrough(line.replacen("--json", "      ", 1)));
-    let mut completer = ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
+    let mut completer = ReplCompleter::new(tree, Some(projector));
 
     let completions = completer.complete("--json config sh", "--json config sh".len());
     let values = completions
@@ -242,7 +228,7 @@ fn completer_hides_suggestions_requested_by_projection_unit() {
             hidden_suggestions: hidden,
         }
     });
-    let mut completer = ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
+    let mut completer = ReplCompleter::new(tree, Some(projector));
 
     let values = completer
         .complete("-", 1)
@@ -270,7 +256,7 @@ fn completer_uses_engine_metadata_for_subcommands() {
         ..CompletionTree::default()
     };
 
-    let mut completer = ReplCompleter::new(Vec::new(), Some(tree), None);
+    let mut completer = ReplCompleter::new(tree, None);
     let completion = completer
         .complete("ld", 2)
         .into_iter()
@@ -652,11 +638,6 @@ fn run_repl_with_reason_and_basic_input_detection_cover_basic_and_interactive_mo
     ] {
         let history = SharedHistory::new(history_config().build());
         let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), None);
-        let completion_words = if reason.is_some() {
-            vec!["help".to_string()]
-        } else {
-            vec!["help".to_string(), "exit".to_string()]
-        };
         let mut execute =
             |_line: &str, _history: &SharedHistory| Ok(ReplLineResult::Continue(String::new()));
         let mut submission = SubmissionContext {
@@ -669,8 +650,7 @@ fn run_repl_with_reason_and_basic_input_detection_cover_basic_and_interactive_mo
         let result = super::run_repl_with_reason(
             super::ReplRunContext {
                 prompt,
-                completion_words: completion_words.clone(),
-                completion_tree: Some(completion_tree_with_config_show()),
+                completion_tree: completion_tree_with_config_show(),
                 appearance: test_appearance(),
                 line_projector: None,
                 history_store: history.clone(),
@@ -685,8 +665,7 @@ fn run_repl_with_reason_and_basic_input_detection_cover_basic_and_interactive_mo
             |config, interactive_history, _submission| {
                 interactive_calls += 1;
                 assert_eq!(config.prompt.left(), "left");
-                assert_eq!(config.completion_words, completion_words);
-                assert!(config.completion_tree.is_some());
+                assert!(config.completion_tree.root.children.contains_key("config"));
                 assert_eq!(config.appearance.history_menu_rows, 5);
                 assert_eq!(interactive_history.enabled(), history.enabled());
                 assert_eq!(
@@ -749,8 +728,7 @@ fn interactive_editor_builder_and_driver_cover_fallback_and_signal_paths_unit() 
     let appearance = test_appearance();
     let prompt = OspPrompt::new("left".to_string(), "> ".to_string(), None);
     let mut built_editor = super::session::build_interactive_editor(
-        vec!["help".to_string(), "exit".to_string()],
-        Some(completion_tree_with_root_commands()),
+        completion_tree_with_root_commands(),
         &appearance,
         None,
         history.clone(),

@@ -1,4 +1,3 @@
-use clap::error::ErrorKind;
 use insta::assert_snapshot;
 use std::path::PathBuf;
 
@@ -7,8 +6,8 @@ use super::{
     config_key_change_requires_intro, current_history_scope, enter_repl_shell,
     execute_bang_command, execute_repl_plugin_line, finalize_repl_command,
     handle_repl_exit_request, is_repl_bang_request, leave_repl_shell, parse_bang_command,
-    parse_clap_help, parse_repl_builtin, render_repl_command_output, renders_repl_inline_help,
-    repl_command_spec, repl_help_for_scope, run_repl_command, strip_history_scope,
+    parse_clap_help, parse_repl_builtin, render_repl_command_output, repl_command_spec,
+    repl_help_for_scope, run_repl_command, strip_history_scope,
 };
 use crate::app::{AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
 use crate::app::{CliCommandResult, ReplCommandOutput, StructuredCommandOutput};
@@ -101,6 +100,11 @@ For more information, try '--help'.\n",
             None,
             "Usage: osp ldap user",
         ),
+        (
+            "Inspect and change output themes\n\nUsage: theme <COMMAND>\n",
+            Some("Inspect and change output themes"),
+            "Usage: theme <COMMAND>",
+        ),
     ];
 
     for (error, expected_summary, expected_body) in cases {
@@ -122,8 +126,10 @@ fn repl_exit_behaves_differently_for_root_and_nested_shells_unit() {
     nested.scope.enter("ldap");
     assert!(matches!(
         handle_repl_exit_request(&mut nested),
-        ReplLineResult::Continue(message)
-            if message == "Leaving ldap shell. Back at root.\n"
+        ReplLineResult::Restart {
+            output: message,
+            reload: ReplReloadKind::Default,
+        } if message == "Leaving ldap shell. Back at root.\n"
     ));
     assert!(nested.scope.is_root());
 
@@ -195,14 +201,6 @@ fn repl_restart_detection_covers_mutating_commands_unit() {
 }
 
 #[test]
-fn repl_inline_help_kinds_match_supported_clap_errors_unit() {
-    assert!(renders_repl_inline_help(ErrorKind::DisplayHelp));
-    assert!(renders_repl_inline_help(ErrorKind::UnknownArgument));
-    assert!(renders_repl_inline_help(ErrorKind::InvalidSubcommand));
-    assert!(!renders_repl_inline_help(ErrorKind::ValueValidation));
-}
-
-#[test]
 fn leave_repl_shell_returns_none_at_root_unit() {
     let mut session = AppSession::with_cache_limit(4);
     assert!(leave_repl_shell(&mut session).is_none());
@@ -258,7 +256,10 @@ fn repl_builtin_and_bang_parsers_cover_shortcuts_unit() {
     ));
     assert!(matches!(
         parse_bang_command("!7").expect("absolute parses"),
-        Some(BangCommand::Absolute(7))
+        Some(BangCommand::Absolute {
+            id: 7,
+            suffix: None
+        })
     ));
     assert!(matches!(
         parse_bang_command("!pref").expect("prefix parses"),
@@ -401,15 +402,77 @@ fn bang_execution_and_scope_helpers_cover_help_matches_and_replace_unit() {
 }
 
 #[test]
-fn intro_reload_keys_cover_theme_color_and_palette_mutations_unit() {
+fn absolute_history_recall_appends_quoted_suffix_without_executing_unit() {
+    let mut state = make_state_with_plugins(empty_plugins());
+    let history = test_history();
+    history
+        .save_command_line("config show")
+        .expect("history command saves");
+
+    let bare = execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "!1",
+    )
+    .expect("bare absolute history recall should succeed");
+    assert_eq!(
+        bare,
+        ReplLineResult::ReplaceInput("config show".to_string())
+    );
+
+    let recalled = execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "!1 --label \"two words\"",
+    )
+    .expect("absolute history recall should succeed");
+
+    assert_eq!(
+        recalled,
+        ReplLineResult::ReplaceInput("config show --label \"two words\"".to_string())
+    );
+}
+
+#[test]
+fn absolute_history_recall_appends_suffix_inside_scoped_repl_unit() {
+    let mut state = make_state_with_plugins(empty_plugins());
+    let history = test_history();
+    history
+        .save_command_line("config show")
+        .expect("root history command saves");
+    history
+        .save_command_line("ldap user alice")
+        .expect("scoped history command saves");
+    state.session.scope.enter("ldap");
+
+    let recalled = execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "!1 --json",
+    )
+    .expect("scoped absolute history recall should succeed");
+
+    assert_eq!(
+        recalled,
+        ReplLineResult::ReplaceInput("user alice --json".to_string())
+    );
+}
+
+#[test]
+fn intro_reload_keys_cover_theme_and_palette_mutations_unit() {
     assert!(config_key_change_requires_intro("theme.name"));
-    assert!(config_key_change_requires_intro(" color.message.info "));
     assert!(config_key_change_requires_intro("palette.custom"));
     assert!(!config_key_change_requires_intro("ui.format"));
 
     let config_unset = Commands::Config(ConfigArgs {
         command: ConfigCommands::Unset(ConfigUnsetArgs {
-            key: "color.message.info".to_string(),
+            key: "theme.name".to_string(),
             scope: crate::cli::ConfigScopeArgs::default(),
             store: crate::cli::ConfigStoreArgs::default(),
             dry_run: false,
@@ -612,7 +675,7 @@ fn repl_dispatch_and_classification_cover_representative_line_categories_unit() 
         ("intro | H", ObservedDispatchKind::DslHelp),
         ("help", ObservedDispatchKind::ShortcutHelp),
         ("intro", ObservedDispatchKind::Command),
-        ("config sho", ObservedDispatchKind::InlineHelp),
+        ("config sho", ObservedDispatchKind::Error),
         ("intro --wat | config", ObservedDispatchKind::Error),
     ];
 
@@ -627,8 +690,7 @@ fn repl_dispatch_and_classification_cover_representative_line_categories_unit() 
         ("quit", ReplLinePlanKind::Builtin),
         ("help", ReplLinePlanKind::Builtin),
         ("intro | H", ReplLinePlanKind::DslHelp),
-        ("nh", ReplLinePlanKind::Shortcut),
-        ("config sho", ReplLinePlanKind::Help),
+        ("nh", ReplLinePlanKind::Invocation),
         ("intro", ReplLinePlanKind::Invocation),
     ];
 
@@ -675,19 +737,16 @@ fn execute_repl_plugin_line_records_failures_and_inline_help_unit() {
     assert!(last_failure.summary.contains("--wat"));
     assert!(state.session.prompt_timing.badge().is_some());
 
-    assert!(matches!(
-        execute_repl_plugin_line(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &history,
-            "config sho"
-        )
-        .expect("invalid subcommands should render inline help instead of erroring"),
-        ReplLineResult::Continue(output)
-            if output.contains("unrecognized subcommand")
-                && output.contains("config <COMMAND>")
-    ));
+    let err = execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "config sho",
+    )
+    .expect_err("invalid subcommands should be reported as syntax errors");
+    assert!(err.to_string().contains("unrecognized subcommand 'sho'"));
+    assert!(err.to_string().contains("Try: use `config show`"));
 }
 
 #[test]
@@ -749,8 +808,8 @@ fn theme_show_value_pipeline_renders_selected_field_rhs_unit() {
     let rendered = render_repl_command_output(
         &state.runtime,
         &mut state.session,
-        "theme show catppuccin --value | muted",
-        &["muted".to_string()],
+        "theme show catppuccin --value | VALUE muted",
+        &["VALUE muted".to_string()],
         result,
         &invocation,
         &mut sink,

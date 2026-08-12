@@ -24,16 +24,22 @@ fn run_repl_command(command: &str, colored: bool) -> (String, String) {
 
     let start = session.output_len();
     session.write_bytes(format!("{command}\r").as_bytes());
+    let expected = if command == "config sho" {
+        "unrecognized subcommand"
+    } else if matches!(command, "help help" | "help --help") {
+        "invalid help target"
+    } else {
+        "Usage"
+    };
     assert!(
-        session.wait_for_plain_output_since(start, "default>", Duration::from_secs(3)),
-        "expected prompt after `{command}`; output:\n{}",
+        session.wait_for_plain_output_since(start, expected, Duration::from_secs(3)),
+        "expected output from `{command}`; output:\n{}",
         session.output_snapshot(4000),
     );
-
     let raw = session.output_since(start);
     let plain = crate::support::strip_terminal_noise(&raw);
 
-    session.write_bytes(b"exit\r");
+    session.write_bytes(b"exit\r\r");
     assert!(
         session.wait_for_exit(Duration::from_secs(3)),
         "expected REPL to exit after `{command}`; output:\n{}",
@@ -83,13 +89,13 @@ fn repl_help_alias_rejects_invalid_targets_end_to_end() {
 
 #[cfg(unix)]
 #[test]
-fn repl_invalid_subcommand_renders_inline_help_end_to_end() {
+fn repl_invalid_subcommand_suggests_the_valid_command_end_to_end() {
     let (_, plain) = run_repl_command("config sho", false);
     assert!(
         plain.contains("unrecognized subcommand"),
         "output={plain:?}"
     );
-    assert!(plain.contains("config <COMMAND>"), "output={plain:?}");
+    assert!(plain.contains("Try: use `config show`"), "output={plain:?}");
     assert!(
         !plain.contains("For more information, try '--help'."),
         "output={plain:?}"

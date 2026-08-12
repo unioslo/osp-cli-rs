@@ -6,7 +6,7 @@
 //! command definitions, and plugin catalog state.
 
 use crate::completion::tree::command_spec_from_command_def;
-use crate::completion::{ArgNode, CommandSpec, FlagNode, SuggestionEntry};
+use crate::completion::{ArgNode, CommandSpec, FlagNode, SuggestionEntry, ValueType};
 use crate::config::{ConfigSchema, SchemaValueType};
 use crate::core::command_def::CommandDef;
 use crate::guide::HelpLevel;
@@ -56,6 +56,7 @@ pub(crate) fn build_repl_surface(
     let help_level = help_level(view.config, 0, 0);
 
     let mut root_words = catalog_completion_words(catalog);
+    root_words.push("source".to_string());
     let mut specs = vec![
         CommandSpec::new("help")
             .tooltip("Show REPL help")
@@ -68,6 +69,21 @@ pub(crate) fn build_repl_surface(
                 FlagNode::new()
                     .flag_only()
                     .tooltip("Show the pre-pipeline result"),
+            ),
+        CommandSpec::new("source")
+            .tooltip("Run commands from files")
+            .sort(command_sort_key("source", help_layout))
+            .arg(
+                ArgNode::named("FILE")
+                    .tooltip("Command file")
+                    .multi()
+                    .value_type(ValueType::Path),
+            )
+            .flag(
+                "--ignore-errors",
+                FlagNode::new()
+                    .flag_only()
+                    .tooltip("Continue after a command fails"),
             ),
         CommandSpec::new("exit")
             .tooltip("Exit REPL")
@@ -89,6 +105,10 @@ pub(crate) fn build_repl_surface(
             name: "last".to_string(),
             summary: "Replay the last successful result; use --raw for the pre-pipeline payload."
                 .to_string(),
+        },
+        ReplOverviewEntry {
+            name: "source".to_string(),
+            summary: "Run commands from files.".to_string(),
         },
     ];
     if shows_invocation_options_overview(help_level) {
@@ -135,16 +155,24 @@ pub(crate) fn build_repl_surface(
     if view.auth.is_builtin_visible(CMD_CONFIG) {
         root_words.extend([
             CMD_CONFIG.to_string(),
+            "alias".to_string(),
+            "add".to_string(),
             "get".to_string(),
             "show".to_string(),
             "explain".to_string(),
             "set".to_string(),
+            "remove".to_string(),
             "doctor".to_string(),
         ]);
         specs.push(config_command_spec(view));
+        specs.push(alias_command_spec(view, &aliases));
         overview_entries.push(ReplOverviewEntry {
             name: CMD_CONFIG.to_string(),
             summary: "Inspect and edit runtime config".to_string(),
+        });
+        overview_entries.push(ReplOverviewEntry {
+            name: "alias".to_string(),
+            summary: "Create and manage command aliases".to_string(),
         });
     }
     if history_enabled && view.auth.is_builtin_visible(CMD_HISTORY) {
@@ -213,6 +241,7 @@ fn root_word_priority(word: &str) -> (u8, u8) {
         CMD_PLUGINS => (1, 2),
         CMD_DOCTOR => (1, 3),
         CMD_HISTORY => (1, 4),
+        "alias" => (1, 5),
         "|" | "F" | "P" | "V" => (4, 0),
         _ => {
             if word.starts_with('-') {
@@ -426,6 +455,7 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry], help_layout: HelpLayout
         .collect::<Vec<_>>();
     let command_names = catalog
         .iter()
+        .filter(|entry| entry.source.is_some() || !entry.providers.is_empty())
         .map(|entry| SuggestionEntry::value(entry.name.clone()))
         .collect::<Vec<_>>();
 
@@ -457,14 +487,18 @@ fn plugins_command_spec(catalog: &[CommandCatalogEntry], help_layout: HelpLayout
                 .tooltip("Disable plugin by id")
                 .sort("16")
                 .arg(ArgNode::named("plugin_id").suggestions(plugin_ids.clone())),
+            CommandSpec::new("clear-state")
+                .tooltip("Clear persisted state for one command")
+                .sort("17")
+                .arg(ArgNode::named("command").suggestions(command_names.clone())),
             CommandSpec::new("select-provider")
                 .tooltip("Select provider for one command")
-                .sort("17")
+                .sort("18")
                 .arg(ArgNode::named("command").suggestions(command_names.clone()))
                 .arg(ArgNode::named("plugin_id").suggestions(plugin_ids)),
             CommandSpec::new("clear-provider")
                 .tooltip("Clear selected provider for one command")
-                .sort("18")
+                .sort("19")
                 .arg(ArgNode::named("command").suggestions(command_names)),
         ])
 }
@@ -494,33 +528,20 @@ fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
         FlagNode::new().flag_only().tooltip("Reveal secret values"),
     )]);
 
-    let mut set_flags = BTreeMap::from([
-        ("--global".to_string(), FlagNode::new().flag_only()),
-        (
-            "--profile".to_string(),
-            FlagNode::new().suggestions(profile_suggestions),
-        ),
-        ("--profile-all".to_string(), FlagNode::new().flag_only()),
-        (
-            "--terminal".to_string(),
-            FlagNode::new().suggestions([
-                SuggestionEntry::value(CURRENT_TERMINAL_SENTINEL),
-                SuggestionEntry::value("cli"),
-                SuggestionEntry::value("repl"),
-            ]),
-        ),
-    ]);
-    for flag in [
-        "--session",
-        "--config",
-        "--secrets",
-        "--save",
-        "--dry-run",
-        "--yes",
-        "--explain",
-    ] {
-        set_flags.insert(flag.to_string(), FlagNode::new().flag_only());
-    }
+    let write_flags = config_write_flags(profile_suggestions);
+    let mut set_flags = write_flags.clone();
+    set_flags.insert(
+        "--yes".to_string(),
+        FlagNode::new()
+            .flag_only()
+            .tooltip("Skip interactive confirmation"),
+    );
+    set_flags.insert(
+        "--explain".to_string(),
+        FlagNode::new()
+            .flag_only()
+            .tooltip("Explain the resolved write targets"),
+    );
 
     CommandSpec::new(CMD_CONFIG)
         .tooltip("Inspect and edit runtime config")
@@ -547,10 +568,119 @@ fn config_command_spec(view: ReplViewContext<'_>) -> CommandSpec {
                 .tooltip("Set config value")
                 .sort("13")
                 .flags(set_flags),
+            CommandSpec::new("unset")
+                .tooltip("Remove one config key")
+                .sort("14")
+                .arg(ArgNode::named("key").suggestions(config_key_suggestions()))
+                .flags(write_flags),
             CommandSpec::new("doctor")
                 .tooltip("Show config diagnostics")
-                .sort("14"),
+                .sort("15"),
         ])
+}
+
+fn alias_command_spec(view: ReplViewContext<'_>, aliases: &[ReplAliasEntry]) -> CommandSpec {
+    let profile_suggestions = view
+        .config
+        .known_profiles()
+        .iter()
+        .map(SuggestionEntry::value)
+        .collect::<Vec<_>>();
+    let alias_suggestions = aliases
+        .iter()
+        .map(|alias| SuggestionEntry::value(alias.name.clone()).meta(alias.tooltip.clone()))
+        .collect::<Vec<_>>();
+    let write_flags = config_write_flags(profile_suggestions);
+
+    CommandSpec::new("alias")
+        .tooltip("Create and manage command aliases")
+        .sort(command_sort_key(
+            "alias",
+            help_layout_from_config(view.config),
+        ))
+        .subcommands([
+            CommandSpec::new(CMD_LIST)
+                .tooltip("List aliases in the active scope")
+                .sort("10")
+                .flag(
+                    "--sources",
+                    FlagNode::new()
+                        .flag_only()
+                        .tooltip("Include config source and scope"),
+                ),
+            CommandSpec::new("add")
+                .tooltip("Add or replace an alias")
+                .sort("11")
+                .arg(ArgNode::named("name"))
+                .arg(ArgNode::named("template"))
+                .flags(write_flags.clone()),
+            CommandSpec::new("remove")
+                .tooltip("Remove an alias")
+                .sort("12")
+                .arg(ArgNode::named("name").suggestions(alias_suggestions))
+                .flags(write_flags),
+        ])
+}
+
+fn config_write_flags(profile_suggestions: Vec<SuggestionEntry>) -> BTreeMap<String, FlagNode> {
+    BTreeMap::from([
+        (
+            "--global".to_string(),
+            FlagNode::new()
+                .flag_only()
+                .tooltip("Write to the global config store"),
+        ),
+        (
+            "--profile".to_string(),
+            FlagNode::new()
+                .suggestions(profile_suggestions)
+                .tooltip("Write to one named profile"),
+        ),
+        (
+            "--profile-all".to_string(),
+            FlagNode::new()
+                .flag_only()
+                .tooltip("Write to every known profile"),
+        ),
+        (
+            "--terminal".to_string(),
+            FlagNode::new()
+                .suggestions([
+                    SuggestionEntry::value(CURRENT_TERMINAL_SENTINEL),
+                    SuggestionEntry::value("cli"),
+                    SuggestionEntry::value("repl"),
+                ])
+                .tooltip("Write to one terminal context"),
+        ),
+        (
+            "--session".to_string(),
+            FlagNode::new()
+                .flag_only()
+                .tooltip("Change only this in-memory session"),
+        ),
+        (
+            "--config".to_string(),
+            FlagNode::new()
+                .flag_only()
+                .tooltip("Use the regular config store"),
+        ),
+        (
+            "--secrets".to_string(),
+            FlagNode::new().flag_only().tooltip("Use the secrets store"),
+        ),
+        (
+            "--save".to_string(),
+            FlagNode::new()
+                .flag_only()
+                .tooltip("Persist immediately after validation"),
+        ),
+        (
+            "--dry-run".to_string(),
+            FlagNode::new()
+                .flag_only()
+                .tooltip("Show the write plan without changing config"),
+        ),
+    ])
 }
 
 fn config_key_suggestions() -> Vec<SuggestionEntry> {
@@ -561,12 +691,20 @@ fn config_key_suggestions() -> Vec<SuggestionEntry> {
         .collect()
 }
 
-pub(crate) fn config_set_key_specs() -> Vec<crate::completion::ConfigKeySpec> {
+pub(crate) fn config_set_key_specs(
+    view: ReplViewContext<'_>,
+) -> Vec<crate::completion::ConfigKeySpec> {
     let schema = ConfigSchema::default();
     schema
         .entries()
         .map(|(key, entry)| {
-            let value_suggestions = if let Some(allowed) = entry.allowed_values() {
+            let value_suggestions = if key == "theme.name" {
+                view.themes
+                    .ids()
+                    .into_iter()
+                    .map(SuggestionEntry::value)
+                    .collect::<Vec<_>>()
+            } else if let Some(allowed) = entry.allowed_values() {
                 allowed
                     .iter()
                     .map(|value| SuggestionEntry::value(value.clone()))
@@ -580,7 +718,12 @@ pub(crate) fn config_set_key_specs() -> Vec<crate::completion::ConfigKeySpec> {
                 Vec::new()
             };
 
-            crate::completion::ConfigKeySpec::new(key).value_suggestions(value_suggestions)
+            let mut spec =
+                crate::completion::ConfigKeySpec::new(key).value_suggestions(value_suggestions);
+            if let Some(doc) = entry.doc() {
+                spec = spec.tooltip(doc);
+            }
+            spec
         })
         .collect()
 }

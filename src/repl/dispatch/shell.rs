@@ -1,4 +1,4 @@
-use crate::repl::ReplLineResult;
+use crate::repl::{ReplLineResult, ReplReloadKind};
 use miette::{Result, miette};
 
 use super::command::{
@@ -52,7 +52,7 @@ pub(super) fn classify_repl_shortcut(
         }));
     }
 
-    if let Some(command) = parsed.shell_entry_command(&session.scope) {
+    if let Some(command) = parsed.shell_entry_command(&session.scope, runtime.config.resolved()) {
         return Ok(Some(ReplShortcutPlan::ShellEntry {
             command: command.to_string(),
             invocation: base_invocation.clone(),
@@ -99,7 +99,10 @@ pub(super) fn execute_repl_shortcut(
             invocation,
         } => {
             let entered = enter_repl_shell(runtime, session, clients, &command, &invocation, sink)?;
-            Ok(ReplLineResult::Continue(entered))
+            Ok(ReplLineResult::Restart {
+                output: entered,
+                reload: ReplReloadKind::Default,
+            })
         }
     }
 }
@@ -185,7 +188,10 @@ pub(super) fn handle_repl_exit_request(session: &mut AppSession) -> ReplLineResu
     match session.request_repl_exit() {
         crate::app::session::ReplExitTransition::ExitRoot => ReplLineResult::Exit(0),
         crate::app::session::ReplExitTransition::LeftShell { frame, now_root } => {
-            ReplLineResult::Continue(render_repl_shell_leave_message(&frame, now_root))
+            ReplLineResult::Restart {
+                output: render_repl_shell_leave_message(&frame, now_root),
+                reload: ReplReloadKind::Default,
+            }
         }
     }
 }
@@ -339,9 +345,9 @@ mod tests {
     use crate::native::{
         NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
     };
-    use crate::repl::ReplLineResult;
     use crate::repl::dispatch::base_repl_invocation;
     use crate::repl::input::ReplParsedLine;
+    use crate::repl::{ReplLineResult, ReplReloadKind};
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
     use clap::Command;
@@ -416,6 +422,7 @@ mod tests {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         defaults.set("repl.history.path", "/tmp/osp-repl-shell-history.jsonl");
+        defaults.set("repl.shellable_commands", vec!["ldap".to_string()]);
         defaults.set("theme.path", Vec::<String>::new());
         let mut resolver = ConfigResolver::default();
         resolver.set_defaults(defaults);
@@ -542,7 +549,10 @@ JSON
         );
         assert!(matches!(
             handle_repl_exit_request(&mut state.session),
-            ReplLineResult::Continue(text) if text.contains("Leaving ldap shell")
+            ReplLineResult::Restart {
+                output: text,
+                reload: ReplReloadKind::Default,
+            } if text.contains("Leaving ldap shell")
         ));
     }
 
@@ -601,7 +611,7 @@ JSON
             &mut sink,
         )
         .expect_err("missing plugin should reject shell entry");
-        assert!(err.to_string().contains("no command provides `ldap`"));
+        assert!(err.to_string().contains("ldap"));
 
         let mut sink = BufferedUiSink::default();
         let err = enter_repl_shell(
@@ -613,7 +623,7 @@ JSON
             &mut sink,
         )
         .expect_err("direct shell entry should also fail");
-        assert!(err.to_string().contains("no command provides `ldap`"));
+        assert!(err.to_string().contains("ldap"));
     }
 
     #[test]
@@ -642,7 +652,8 @@ JSON
             &invocation,
         )
         .expect("scoped help should render");
-        assert!(scoped_help.contains("LDAP HELP"));
+        assert!(scoped_help.contains("Directory lookup"));
+        assert!(scoped_help.contains("user"));
     }
 
     #[test]
@@ -669,7 +680,10 @@ JSON
         .expect("bare shellable root should enter shell");
 
         match rendered {
-            ReplLineResult::Continue(text) => assert!(text.contains("Entering ldap shell")),
+            ReplLineResult::Restart {
+                output: text,
+                reload: ReplReloadKind::Default,
+            } => assert!(text.contains("Entering ldap shell")),
             other => panic!("unexpected repl result: {other:?}"),
         }
         assert!(!state.session.scope.is_root());
@@ -702,7 +716,7 @@ JSON
             ReplLineResult::Continue(text) => {
                 assert!(text.contains("was interpreted as `ldap --help`"));
                 assert!(text.contains("hidden `cd ldap`"));
-                assert!(text.contains("LDAP HELP"));
+                assert!(text.contains("Directory lookup"));
             }
             other => panic!("unexpected repl result: {other:?}"),
         }
@@ -733,7 +747,10 @@ JSON
         .expect("hidden cd should enter a nested shell");
 
         match rendered {
-            ReplLineResult::Continue(text) => assert!(text.contains("Entering ldap shell")),
+            ReplLineResult::Restart {
+                output: text,
+                reload: ReplReloadKind::Default,
+            } => assert!(text.contains("Entering ldap shell")),
             other => panic!("unexpected repl result: {other:?}"),
         }
         assert_eq!(

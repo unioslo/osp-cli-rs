@@ -51,6 +51,7 @@ impl<'a> ReplViewContext<'a> {
 // Keep the host loop as orchestration only so editor/runtime details stay in
 // `repl::engine` and command semantics stay in `repl::dispatch`.
 pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
+    start_native_completion_refreshes(&state.runtime, &state.clients);
     let mut loop_state = lifecycle::ReplLoopState::new(should_show_repl_intro(
         state.runtime.config.resolved(),
         state.runtime.ui.message_verbosity,
@@ -68,10 +69,24 @@ pub(crate) fn run_plugin_repl(state: &mut AppState) -> Result<i32> {
         let result = run_repl_cycle(state, cycle)?;
 
         // 4. Apply restart/exit effects back to lifecycle state.
-        if let Some(code) = loop_state.apply_run_result(&mut sink, result) {
+        let exit_message = state
+            .runtime
+            .config
+            .resolved()
+            .get_string("repl.exit_message")
+            .unwrap_or_default();
+        if let Some(code) = loop_state.apply_run_result(&mut sink, result, exit_message) {
             return Ok(code);
         }
     }
+}
+
+fn start_native_completion_refreshes(runtime: &AppRuntime, clients: &crate::app::AppClients) {
+    clients
+        .native_commands()
+        .refresh_completion_in_background(|name| {
+            runtime.auth.external_command_access(name).is_runnable()
+        });
 }
 
 fn run_repl_cycle(
@@ -135,19 +150,22 @@ fn run_repl_debug_complete(
         .collect::<Result<Vec<_>>>()?;
 
     let payload = if steps.is_empty() {
-        let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
+        let line_projector = input::build_repl_ui_line_projector(runtime.config.resolved());
         let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
             .with_ansi(args.menu_ansi)
             .with_unicode(args.menu_unicode)
-            .with_appearance(Some(&prepared.appearance));
+            .with_appearance(Some(&prepared.appearance))
+            .with_line_projector(Some(&line_projector));
         let debug = match args.menu {
             DebugMenuArg::Completion => crate::repl::debug_completion(
                 &prepared.completion_tree,
-                &projected_line.line,
+                &args.line,
                 cursor,
                 options,
             ),
             DebugMenuArg::History => {
+                let projected_line =
+                    input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
                 let history = crate::repl::SharedHistory::new(history::build_history_config(
                     runtime, session,
                 ));
@@ -158,20 +176,23 @@ fn run_repl_debug_complete(
             .into_diagnostic()
             .wrap_err("failed to serialize REPL debug completion payload")?
     } else {
-        let projected_line = input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
+        let line_projector = input::build_repl_ui_line_projector(runtime.config.resolved());
         let options = crate::repl::CompletionDebugOptions::new(args.width, args.height)
             .with_ansi(args.menu_ansi)
             .with_unicode(args.menu_unicode)
-            .with_appearance(Some(&prepared.appearance));
+            .with_appearance(Some(&prepared.appearance))
+            .with_line_projector(Some(&line_projector));
         let frames = match args.menu {
             DebugMenuArg::Completion => crate::repl::debug_completion_steps(
                 &prepared.completion_tree,
-                &projected_line.line,
+                &args.line,
                 cursor,
                 options,
                 &steps,
             ),
             DebugMenuArg::History => {
+                let projected_line =
+                    input::project_repl_ui_line(&args.line, runtime.config.resolved())?;
                 let history = crate::repl::SharedHistory::new(history::build_history_config(
                     runtime, session,
                 ));
@@ -227,7 +248,9 @@ fn run_repl_debug_highlight(
 
 #[cfg(test)]
 mod tests {
-    use super::{run_repl_debug_command_for, should_show_repl_intro};
+    use super::{
+        run_repl_debug_command_for, should_show_repl_intro, start_native_completion_refreshes,
+    };
     use crate::app::{
         AppClients, AppRuntime, AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext,
         TerminalKind,
@@ -235,11 +258,24 @@ mod tests {
     use crate::cli::{DebugCompleteArgs, DebugHighlightArgs, DebugMenuArg, ReplArgs, ReplCommands};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
+    use crate::core::plugin::{DescribeCommandAuthV1, DescribeVisibilityModeV1};
+    use crate::native::{
+        NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
+    };
     use crate::repl::lifecycle::build_cycle_chrome_output;
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
+    use clap::Command;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     fn make_state() -> (AppRuntime, AppSession, AppClients) {
+        make_state_with_native(NativeCommandRegistry::default())
+    }
+
+    fn make_state_with_native(
+        native_commands: NativeCommandRegistry,
+    ) -> (AppRuntime, AppSession, AppClients) {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         defaults.set("repl.history.path", "/tmp/osp-repl-host-history.jsonl");
@@ -262,11 +298,68 @@ mod tests {
             plugins: crate::plugin::PluginManager::new(Vec::new())
                 .with_bundled_roots(false)
                 .with_default_roots(false),
-            native_commands: crate::native::NativeCommandRegistry::default(),
+            native_commands,
             themes: crate::ui::theme_catalog::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         });
         (state.runtime, state.session, state.clients)
+    }
+
+    struct RefreshProbe {
+        name: &'static str,
+        auth: Option<DescribeCommandAuthV1>,
+        refreshed: mpsc::Sender<&'static str>,
+    }
+
+    impl NativeCommand for RefreshProbe {
+        fn command(&self) -> Command {
+            Command::new(self.name)
+        }
+
+        fn auth(&self) -> Option<DescribeCommandAuthV1> {
+            self.auth.clone()
+        }
+
+        fn refresh_completion(&self) -> anyhow::Result<()> {
+            self.refreshed.send(self.name)?;
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _args: &[String],
+            _context: &NativeCommandContext<'_>,
+        ) -> anyhow::Result<NativeCommandOutcome> {
+            unreachable!("not used in refresh authorization test")
+        }
+    }
+
+    #[test]
+    fn repl_background_refresh_skips_visible_but_unauthorized_commands_unit() {
+        let (refreshed, observed) = mpsc::channel();
+        let registry = NativeCommandRegistry::new()
+            .with_command(RefreshProbe {
+                name: "allowed",
+                auth: None,
+                refreshed: refreshed.clone(),
+            })
+            .with_command(RefreshProbe {
+                name: "denied",
+                auth: Some(DescribeCommandAuthV1 {
+                    visibility: Some(DescribeVisibilityModeV1::Authenticated),
+                    ..DescribeCommandAuthV1::default()
+                }),
+                refreshed,
+            });
+        let (runtime, _session, clients) = make_state_with_native(registry);
+        let denied = runtime.auth.external_command_access("denied");
+        assert!(denied.is_visible());
+        assert!(!denied.is_runnable());
+
+        start_native_completion_refreshes(&runtime, &clients);
+
+        assert_eq!(observed.recv_timeout(Duration::from_secs(1)), Ok("allowed"));
+        assert!(observed.recv_timeout(Duration::from_millis(100)).is_err());
     }
 
     #[test]

@@ -151,6 +151,7 @@ pub(crate) enum ReplPtyColorMode {
 #[derive(Clone, Debug)]
 pub(crate) struct ReplPtyConfig<'a> {
     color_mode: ReplPtyColorMode,
+    cursor_position_reports: bool,
     simple_prompt: bool,
     config: Option<&'a str>,
     plugins_dir: Option<&'a Path>,
@@ -162,6 +163,7 @@ impl Default for ReplPtyConfig<'_> {
     fn default() -> Self {
         Self {
             color_mode: ReplPtyColorMode::Plain,
+            cursor_position_reports: true,
             simple_prompt: true,
             config: None,
             plugins_dir: None,
@@ -174,6 +176,11 @@ impl Default for ReplPtyConfig<'_> {
 impl<'a> ReplPtyConfig<'a> {
     pub(crate) fn with_color_mode(mut self, color_mode: ReplPtyColorMode) -> Self {
         self.color_mode = color_mode;
+        self
+    }
+
+    pub(crate) fn without_cursor_position_reports(mut self) -> Self {
+        self.cursor_position_reports = false;
         self
     }
 
@@ -321,9 +328,11 @@ impl ReplPtySession {
             },
         );
         cmd.env("OSP__REPL__HISTORY__ENABLED", "false");
-        // PTY tests exercise interactive rendering paths directly and should
-        // not depend on cursor-probe timing.
-        cmd.env("OSP__REPL__INPUT_MODE", "interactive");
+        if config.cursor_position_reports {
+            // Most PTY tests exercise interactive rendering paths directly and
+            // should not depend on cursor-probe timing.
+            cmd.env("OSP__REPL__INPUT_MODE", "interactive");
+        }
         let child = pair.slave.spawn_command(cmd).expect("spawn osp repl");
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("take writer")));
@@ -331,6 +340,7 @@ impl ReplPtySession {
         let output = Arc::new(Mutex::new(String::new()));
         let output_clone = Arc::clone(&output);
         let writer_clone = Arc::clone(&writer);
+        let cursor_position_reports = config.cursor_position_reports;
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let cpr_request = [0x1b, 0x5b, 0x36, 0x6e];
@@ -338,9 +348,10 @@ impl ReplPtySession {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if buf[..n]
-                            .windows(cpr_request.len())
-                            .any(|window| window == cpr_request)
+                        if cursor_position_reports
+                            && buf[..n]
+                                .windows(cpr_request.len())
+                                .any(|window| window == cpr_request)
                             && let Ok(mut writer) = writer_clone.lock()
                         {
                             let _ = writer.write_all(b"\x1b[1;1R");

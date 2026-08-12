@@ -44,6 +44,69 @@ fn with_test_xdg_env<T>(run: impl FnOnce() -> T) -> T {
 
 struct SessionGuardedNativeCommand;
 
+struct CompletionRefreshingNativeCommand;
+
+struct CapabilityGatedNativeCommand;
+
+struct TypoNativeCommand;
+
+impl crate::NativeCommand for TypoNativeCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("ldap")
+            .subcommand(clap::Command::new("user").arg(clap::Arg::new("USERNAME").required(true)))
+    }
+
+    fn execute(
+        &self,
+        args: &[String],
+        _context: &crate::NativeCommandContext<'_>,
+    ) -> anyhow::Result<crate::NativeCommandOutcome> {
+        self.command()
+            .try_get_matches_from(std::iter::once("ldap").chain(args.iter().map(String::as_str)))
+            .map_err(anyhow::Error::new)?;
+        Ok(crate::NativeCommandOutcome::Exit(0))
+    }
+}
+
+impl crate::NativeCommand for CapabilityGatedNativeCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("ldap").subcommand(clap::Command::new("user"))
+    }
+
+    fn describe(&self) -> DescribeCommandV1 {
+        let mut command = DescribeCommandV1::from_clap(self.command());
+        command.subcommands[0].auth = Some(DescribeCommandAuthV1 {
+            visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+            required_capabilities: vec!["ldap.user.read".to_string()],
+            ..DescribeCommandAuthV1::default()
+        });
+        command
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        _context: &crate::NativeCommandContext<'_>,
+    ) -> anyhow::Result<crate::NativeCommandOutcome> {
+        unreachable!("capability gate should deny execution")
+    }
+}
+
+impl crate::NativeCommand for CompletionRefreshingNativeCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("refreshable").subcommand(clap::Command::new("refresh"))
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        context: &crate::NativeCommandContext<'_>,
+    ) -> anyhow::Result<crate::NativeCommandOutcome> {
+        context.session_context.request_completion_refresh();
+        Ok(crate::NativeCommandOutcome::Help("refreshed".to_string()))
+    }
+}
+
 struct AuthenticatedBuiltinRecovery;
 
 impl crate::app::CommandAccessRecovery for AuthenticatedBuiltinRecovery {
@@ -342,6 +405,180 @@ fn native_commands_project_into_auth_catalog_unit() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn native_command_can_restart_repl_after_refreshing_completion_unit() {
+    let mut state = make_completion_state_with_entries_and_native(
+        None,
+        &[],
+        NativeCommandRegistry::new().with_command(CompletionRefreshingNativeCommand),
+    );
+    let history = make_test_history(&mut state);
+
+    let result = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "refreshable refresh",
+    )
+    .expect("native refresh command should run");
+
+    assert!(matches!(
+        result,
+        crate::repl::ReplLineResult::Restart {
+            output,
+            reload: crate::repl::ReplReloadKind::Default,
+        } if output.contains("refreshed")
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn capability_denial_and_doctor_last_add_progressive_detail_unit() {
+    let mut state = make_completion_state_with_entries_and_native(
+        None,
+        &[],
+        NativeCommandRegistry::new().with_command(CapabilityGatedNativeCommand),
+    );
+    state.runtime.auth_mut().set_policy_context(
+        crate::core::command_policy::CommandPolicyContext::default().authenticated(true),
+    );
+    let history = make_test_history(&mut state);
+
+    let error = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "ldap user",
+    )
+    .expect_err("missing capability should deny the command");
+    let immediate = error.to_string();
+    assert!(immediate.contains("command `ldap user`"));
+    assert!(immediate.contains("capability `ldap.user.read`"));
+    assert!(immediate.contains("Try: authenticate"));
+    state.runtime.ui.render_settings.format = OutputFormat::Table;
+
+    let mut doctor = |line: &str| match repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        line,
+    )
+    .expect("doctor last should render")
+    {
+        crate::repl::ReplLineResult::Continue(output) => output,
+        other => panic!("unexpected doctor result: {other:?}"),
+    };
+
+    let recap = doctor("doctor last");
+    assert!(recap.contains("capability `ldap.user.read`"));
+    assert!(
+        recap.contains("Action:  authenticate"),
+        "unexpected recap: {recap}"
+    );
+    assert!(!recap.contains("Detail:"));
+    assert!(!recap.contains("doctor last"));
+
+    let verbose = doctor("-v doctor last");
+    assert!(verbose.contains("ldap.user.read"));
+    assert!(!verbose.contains("osp::auth::missing_capabilities"));
+
+    let debug = doctor("-vv doctor last");
+    assert!(debug.contains("ldap.user.read"));
+    assert!(!debug.contains("Stack backtrace"));
+
+    let forensic = doctor("-vvv doctor last");
+    assert!(forensic.contains("ldap.user.read"));
+    assert!(!forensic.contains("run `doctor last"));
+}
+
+#[cfg(unix)]
+#[test]
+fn native_subcommand_typo_and_doctor_last_add_progressive_detail_unit() {
+    let mut state = make_completion_state_with_entries_and_native(
+        None,
+        &[],
+        NativeCommandRegistry::new().with_command(TypoNativeCommand),
+    );
+    let history = make_test_history(&mut state);
+
+    let error = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "ldap usr",
+    )
+    .expect_err("subcommand typo should fail");
+    let immediate = error.to_string();
+    assert!(immediate.contains("subcommand 'usr'"));
+    assert!(
+        immediate.contains("Try: use `ldap user`"),
+        "unexpected immediate error: {immediate}"
+    );
+    assert!(!immediate.contains("Usage:"));
+    assert!(!immediate.contains("native command execution failed"));
+
+    state.runtime.ui.render_settings.format = OutputFormat::Table;
+    let mut doctor = |line: &str| match repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        line,
+    )
+    .expect("doctor last should render")
+    {
+        crate::repl::ReplLineResult::Continue(output) => output,
+        other => panic!("unexpected doctor result: {other:?}"),
+    };
+
+    let recap = doctor("doctor last");
+    assert!(recap.contains("Action:  use `ldap user`"));
+    assert!(!recap.contains("Usage:"));
+
+    let verbose = doctor("-v doctor last");
+    assert!(verbose.contains("Usage: ldap"));
+    assert!(!verbose.contains("native command execution failed"));
+
+    let debug = doctor("-vv doctor last");
+    assert!(debug.contains("subcommand 'usr'"));
+    assert!(!debug.contains("Stack backtrace"));
+
+    let forensic = doctor("-vvv doctor last");
+    assert!(forensic.contains("Stack backtrace"));
+}
+
+#[cfg(unix)]
+#[test]
+fn native_missing_argument_names_input_and_scoped_help_unit() {
+    let mut state = make_completion_state_with_entries_and_native(
+        None,
+        &[],
+        NativeCommandRegistry::new().with_command(TypoNativeCommand),
+    );
+    let history = make_test_history(&mut state);
+
+    let error = repl_dispatch::execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "ldap user",
+    )
+    .expect_err("missing username should fail");
+    let immediate = error.to_string();
+    assert!(immediate.contains("<USERNAME>"), "{immediate}");
+    assert!(
+        immediate.contains("Try: use `ldap user --help`"),
+        "{immediate}"
+    );
+    assert!(!immediate.contains("Usage:"));
+}
+
 #[test]
 fn bootstrap_message_verbosity_handles_non_utf8_short_flags_and_double_dash_unit() {
     let mut args = vec![
@@ -402,20 +639,20 @@ fn error_rendering_prioritizes_actionable_details_across_levels_unit() {
 
     let rendered = render_report_message(&report, ErrorDetail::Terse, &settings);
     assert!(rendered.contains("plugin ldap exited with status 7: backend exploded"));
-    assert!(rendered.contains("Hint:"));
-    assert!(rendered.contains("run again with -v, -vv, or -vvv"));
+    assert!(rendered.contains("Try: inspect the plugin stderr"));
+    assert!(!rendered.contains("run again with -v"));
 
     let rendered = render_report_message(&report, ErrorDetail::Normal, &settings);
     assert!(rendered.contains("plugin ldap exited with status 7"));
     assert!(rendered.contains("plugin command failed"));
     assert!(rendered.contains("backend exploded"));
-    assert!(!rendered.contains("Hint:"));
+    assert!(!rendered.contains("Try:"));
 
     let rendered = render_report_message(&report, ErrorDetail::Debug, &settings);
     assert!(rendered.contains("plugin ldap exited with status 7"));
     assert!(rendered.contains("plugin command failed"));
     assert!(rendered.contains("backend exploded"));
-    assert!(!rendered.contains("Hint:"));
+    assert!(!rendered.contains("Try:"));
     assert!(!rendered.contains("Stack backtrace"));
 
     let rendered = render_report_message(&report, ErrorDetail::Forensic, &settings);
@@ -429,7 +666,6 @@ fn error_rendering_prioritizes_actionable_details_across_levels_unit() {
     let rendered = render_report_message(&report, ErrorDetail::Terse, &settings);
     assert!(rendered.contains("unknown theme: missing-theme"));
     assert!(!rendered.starts_with("failed to derive host runtime inputs for startup"));
-    assert!(rendered.contains("run again with -v, -vv, or -vvv"));
 }
 
 #[test]
@@ -775,6 +1011,47 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
 }
 
 #[test]
+fn plugin_failure_diagnostics_keep_backend_evidence_out_of_the_terse_message() {
+    let response = ResponseV1 {
+        protocol_version: 1,
+        ok: false,
+        data: serde_json::json!({}),
+        error: Some(ResponseErrorV1 {
+            code: "resource_not_found".to_string(),
+            message: "No visible resource matched".to_string(),
+            details: serde_json::json!({
+                "http_status": 404,
+                "problem": {"ref": "missing.uio.no", "targets": []}
+            }),
+        }),
+        messages: vec![],
+        meta: ResponseMetaV1::default(),
+    };
+    let prepared = super::command_output::prepare_plugin_response(response, &[])
+        .expect("protocol failure should parse");
+    let result = CliCommandResult::from_prepared_plugin_response(prepared);
+    let report = result
+        .failure_report
+        .expect("failure should carry diagnostics");
+    let settings = RenderSettings::test_plain(OutputFormat::Guide);
+
+    let terse = render_report_message(&report, ErrorDetail::Terse, &settings);
+    assert!(
+        terse.contains("resource_not_found: No visible resource matched"),
+        "{terse}"
+    );
+    assert!(!terse.contains("http_status"));
+
+    let normal = render_report_message(&report, ErrorDetail::Normal, &settings);
+    assert!(normal.contains("http_status"));
+    assert!(normal.contains("missing.uio.no"));
+
+    let debug = render_report_message(&report, ErrorDetail::Debug, &settings);
+    assert!(debug.contains("Backend details"));
+    assert!(debug.contains("missing.uio.no"));
+}
+
+#[test]
 fn prepared_plugin_response_maps_into_cli_command_result_unit() {
     let response = ResponseV1 {
         protocol_version: 1,
@@ -811,7 +1088,7 @@ fn prepared_plugin_response_maps_into_cli_command_result_unit() {
 }
 
 #[test]
-fn exit_code_classification_distinguishes_usage_config_and_plugin_unit() {
+fn exit_code_classification_reserves_specific_codes_for_usage_unit() {
     with_test_xdg_env(|| {
         let clap_report = super::run_from(["osp", "--defaults-only", "--definitely-not-a-flag"])
             .expect_err("parse should fail");
@@ -825,11 +1102,11 @@ fn exit_code_classification_distinguishes_usage_config_and_plugin_unit() {
                 .with_session_layer(Some(invalid_session)),
         )
         .expect_err("config resolution should fail");
-        assert_eq!(classify_exit_code(&config_report), EXIT_CODE_CONFIG);
+        assert_eq!(classify_exit_code(&config_report), EXIT_CODE_ERROR);
 
         let plugin_report = enrich_dispatch_error(PluginDispatchError::CommandNotFound {
             command: "ldap".to_string(),
         });
-        assert_eq!(classify_exit_code(&plugin_report), EXIT_CODE_PLUGIN);
+        assert_eq!(classify_exit_code(&plugin_report), EXIT_CODE_ERROR);
     });
 }

@@ -56,7 +56,10 @@ fn repl_exit_is_host_owned_at_root_but_leaves_shell_in_scope_unit() {
     )
     .expect("shell exit should leave the current shell");
     match shell_exit {
-        crate::repl::ReplLineResult::Continue(text) => {
+        crate::repl::ReplLineResult::Restart {
+            output: text,
+            reload: crate::repl::ReplReloadKind::Default,
+        } => {
             assert!(text.contains("Leaving orch shell"));
         }
         other => panic!("unexpected repl result: {other:?}"),

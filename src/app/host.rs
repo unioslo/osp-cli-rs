@@ -66,7 +66,6 @@ pub const EXIT_CODE_USAGE: i32 = 2;
 pub const EXIT_CODE_WAITING_APPROVAL: i32 = 3;
 pub(crate) const DEFAULT_REPL_PROMPT: &str = "╭─{user}@{domain} {indicator}\n╰─{profile}> ";
 pub(crate) const CURRENT_TERMINAL_SENTINEL: &str = "__current__";
-pub(crate) const REPL_SHELLABLE_COMMANDS: [&str; 5] = ["nh", "mreg", "ldap", "vm", "orch"];
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReplCommandSpec {
@@ -503,6 +502,25 @@ pub(crate) fn authorized_command_catalog_for(
         clients
             .native_commands()
             .catalog()
+            .into_iter()
+            .map(native_catalog_entry_to_command_catalog_entry),
+    );
+    all.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(all
+        .into_iter()
+        .filter(|entry| auth.is_external_command_visible(&entry.name))
+        .collect())
+}
+
+pub(crate) fn authorized_completion_command_catalog_for(
+    auth: &AuthState,
+    clients: &AppClients,
+) -> Result<Vec<CommandCatalogEntry>> {
+    let mut all = clients.plugins().command_catalog();
+    all.extend(
+        clients
+            .native_commands()
+            .completion_catalog()
             .into_iter()
             .map(native_catalog_entry_to_command_catalog_entry),
     );

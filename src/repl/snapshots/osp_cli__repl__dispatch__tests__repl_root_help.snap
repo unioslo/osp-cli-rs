@@ -1,6 +1,6 @@
 ---
 source: src/repl/dispatch/tests.rs
-assertion_line: 473
+assertion_line: 550
 expression: help
 ---
 - Usage ----------------
@@ -10,8 +10,12 @@ expression: help
   exit        Exit application.
   help        Show this command overview.
   last        Replay the last successful result; use --raw for the pre-pipeline payload.
+  source      Run commands from files.
   plugins     Inspect and manage plugin providers
   doctor      Run diagnostics checks
   theme       Inspect and apply themes
   config      Inspect and edit runtime config
+  alias       Create and manage command aliases
   history     Inspect or prune REPL history
+
+Pipe command output with |; use | H for in-band DSL help.

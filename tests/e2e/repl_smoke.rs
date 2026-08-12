@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 #[cfg(unix)]
 #[test]
@@ -44,6 +46,86 @@ fn repl_starts_runs_help_and_exits_end_to_end() {
         "expected REPL to exit after `exit`; output:\n{}",
         session.output_snapshot(2000),
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_builtin_commands_and_bare_help_return_without_a_refresh_wait() {
+    let mut session = ReplPtySession::spawn(ReplPtyConfig::default());
+    assert!(
+        session.wait_for_plain_output("default>", Duration::from_secs(10)),
+        "expected prompt after startup; output:\n{}",
+        session.output_snapshot(2000),
+    );
+
+    let started = Instant::now();
+    let output_start = session.output_len();
+    session.write_bytes(b"theme list\r");
+    assert!(
+        session.wait_for_output_since(output_start, "Catppuccin", Duration::from_secs(1)),
+        "theme list stalled; output:\n{}",
+        session.output_snapshot(4000),
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+
+    let started = Instant::now();
+    let output_start = session.output_len();
+    session.write_bytes(b"theme\r");
+    assert!(
+        session.wait_for_output_since(
+            output_start,
+            "Inspect and change output themes",
+            Duration::from_secs(1),
+        ),
+        "bare theme help stalled; output:\n{}",
+        session.output_snapshot(4000),
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let output = session.output_since(output_start);
+    assert!(
+        output.contains("Usage"),
+        "expected styled theme help: {output}"
+    );
+    assert!(!output.contains("Try: use `theme --help`"));
+
+    session.write_bytes(b"exit\r");
+    if !session.wait_for_exit(Duration::from_secs(1)) {
+        session.kill();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_without_cursor_position_reports_falls_back_without_blocking() {
+    let started = Instant::now();
+    let mut session =
+        ReplPtySession::spawn(ReplPtyConfig::default().without_cursor_position_reports());
+    assert!(
+        session.wait_for_plain_output("default>", Duration::from_secs(1)),
+        "expected prompt after cursor-probe fallback; output:\n{}",
+        session.output_snapshot(2000),
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(
+        session
+            .output_snapshot(2000)
+            .contains("using basic input mode")
+    );
+
+    let output_start = session.output_len();
+    let started = Instant::now();
+    session.write_bytes(b"theme list\r");
+    assert!(
+        session.wait_for_output_since(output_start, "Catppuccin", Duration::from_secs(1)),
+        "theme list stalled after cursor-probe fallback; output:\n{}",
+        session.output_snapshot(4000),
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+
+    session.write_bytes(b"exit\r");
+    if !session.wait_for_exit(Duration::from_secs(1)) {
+        session.kill();
+    }
 }
 
 #[cfg(unix)]

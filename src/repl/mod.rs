@@ -66,6 +66,7 @@
 //! - `help` renders the REPL overview
 //! - `last` replays the last successful result
 //! - `last --raw` shows the pre-pipeline payload from that result
+//! - `source <FILE>...` runs command files in the current session
 //! - `exit` / `quit` leave the current shell or the whole REPL
 //!
 //! When debugging the REPL, first decide whether the issue is editor/runtime

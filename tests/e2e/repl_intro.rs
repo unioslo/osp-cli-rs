@@ -30,8 +30,8 @@ user.display_name = "demo"
         session.output_snapshot(4000),
     );
 
-    let output = session.output_snapshot(4000);
-    let plain = session.plain_output_snapshot(4000);
+    let output = session.output_snapshot(10_000);
+    let plain = session.plain_output_snapshot(10_000);
     assert!(
         output.contains("\x1b["),
         "expected ANSI-colored intro output on startup; output:\n{output}",

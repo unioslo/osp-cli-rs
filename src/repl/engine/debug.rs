@@ -7,7 +7,7 @@
 use super::adapter::{ReplCompleter, ReplHistoryCompleter};
 use super::config::{DEFAULT_HISTORY_MENU_ROWS, ReplAppearance};
 use super::overlay::{build_completion_menu, build_history_menu};
-use super::{HISTORY_MENU_NAME, SharedHistory};
+use super::{HISTORY_MENU_NAME, LineProjector, SharedHistory};
 use crate::completion::{CompletionEngine, CompletionTree};
 use crate::repl::menu::{
     MenuDebug, MenuStyleDebug, OspCompletionMenu, debug_snapshot, display_text,
@@ -137,7 +137,7 @@ pub struct CompletionDebugFrame {
 }
 
 /// Rendering and capture options for completion-debug helpers.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone)]
 #[non_exhaustive]
 #[must_use]
 pub struct CompletionDebugOptions<'a> {
@@ -151,6 +151,8 @@ pub struct CompletionDebugOptions<'a> {
     pub unicode: bool,
     /// Optional appearance override used for the debug session.
     pub appearance: Option<&'a ReplAppearance>,
+    /// Optional projection used by the live REPL completion surface.
+    pub line_projector: Option<&'a LineProjector>,
 }
 
 impl<'a> CompletionDebugOptions<'a> {
@@ -177,6 +179,7 @@ impl<'a> CompletionDebugOptions<'a> {
             ansi: false,
             unicode: false,
             appearance: None,
+            line_projector: None,
         }
     }
 
@@ -197,6 +200,12 @@ impl<'a> CompletionDebugOptions<'a> {
         self.appearance = appearance;
         self
     }
+
+    /// Applies the same line projection used by the live REPL menu.
+    pub fn with_line_projector(mut self, line_projector: Option<&'a LineProjector>) -> Self {
+        self.line_projector = line_projector;
+        self
+    }
 }
 
 /// Builds a single completion-debug snapshot for `line` at `cursor`.
@@ -206,8 +215,13 @@ pub fn debug_completion(
     cursor: usize,
     options: CompletionDebugOptions<'_>,
 ) -> CompletionDebug {
-    let (editor, mut completer, mut menu) =
-        build_debug_completion_session(tree, line, cursor, options.appearance);
+    let (editor, mut completer, mut menu) = build_debug_completion_session(
+        tree,
+        line,
+        cursor,
+        options.appearance,
+        options.line_projector.cloned(),
+    );
     let mut editor = editor;
 
     menu.menu_event(MenuEvent::Activate(false));
@@ -257,8 +271,13 @@ pub fn debug_completion_steps(
     options: CompletionDebugOptions<'_>,
     steps: &[DebugStep],
 ) -> Vec<CompletionDebugFrame> {
-    let (mut editor, mut completer, mut menu) =
-        build_debug_completion_session(tree, line, cursor, options.appearance);
+    let (mut editor, mut completer, mut menu) = build_debug_completion_session(
+        tree,
+        line,
+        cursor,
+        options.appearance,
+        options.line_projector.cloned(),
+    );
 
     let steps = steps.to_vec();
     if steps.is_empty() {
@@ -328,6 +347,7 @@ fn build_debug_completion_session(
     line: &str,
     cursor: usize,
     appearance: Option<&ReplAppearance>,
+    line_projector: Option<LineProjector>,
 ) -> (Editor, Box<dyn Completer>, OspCompletionMenu) {
     let mut editor = Editor::default();
     editor.edit_buffer(
@@ -338,7 +358,7 @@ fn build_debug_completion_session(
         UndoBehavior::CreateUndoPoint,
     );
 
-    let completer = Box::new(ReplCompleter::new(Vec::new(), Some(tree.clone()), None));
+    let completer = Box::new(ReplCompleter::new(tree.clone(), line_projector));
     let menu = if let Some(appearance) = appearance {
         build_completion_menu(appearance)
     } else {
