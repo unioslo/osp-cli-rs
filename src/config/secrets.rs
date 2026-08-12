@@ -52,7 +52,7 @@ impl SecretBackendKind {
 }
 
 /// Backend-neutral result from changing a persisted secret.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct SecretStoreEditResult {
     /// Previously stored value, when present.
     pub previous: Option<ConfigValue>,
@@ -277,14 +277,14 @@ impl KeyringIndex {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredSecretEnvelope {
     version: u32,
     value: StoredConfigValue,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 enum StoredConfigValue {
     String(String),
@@ -766,7 +766,8 @@ key = "extensions.test.token"
                 &Scope::global(),
                 false,
             )
-            .expect_err("index write should fail");
+            .err()
+            .expect("index write should fail");
 
         assert!(error.to_string().contains("failed to"));
         assert!(credentials.values.lock().unwrap().is_empty());

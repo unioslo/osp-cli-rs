@@ -305,12 +305,15 @@ pub(crate) fn write_text_atomic(
         let temp_path = parent.join(temp_name);
         match create_temp_file(&temp_path, strict_secret_permissions) {
             Ok(mut file) => {
-                file.write_all(payload)?;
-                file.sync_all()?;
+                let write_result = file.write_all(payload).and_then(|()| file.sync_all());
                 drop(file);
-                replace_file_atomic(&temp_path, path)?;
-                sync_parent_dir(parent)?;
-                return Ok(());
+                let result = write_result
+                    .and_then(|()| replace_file_atomic(&temp_path, path))
+                    .and_then(|()| sync_parent_dir(parent));
+                if result.is_err() {
+                    let _ = std::fs::remove_file(&temp_path);
+                }
+                return result;
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),

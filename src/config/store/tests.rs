@@ -166,7 +166,8 @@ fn store_rejects_values_the_runtime_schema_cannot_load_unit() {
         &Scope::global(),
         default_edit_options(),
     )
-    .expect_err("unknown keys must not be persisted");
+    .err()
+    .expect("unknown keys must not be persisted");
     assert!(matches!(
         unknown,
         ConfigError::UnknownConfigKeys { keys } if keys == vec!["ui.formats".to_string()]
@@ -179,7 +180,8 @@ fn store_rejects_values_the_runtime_schema_cannot_load_unit() {
         &Scope::global(),
         default_edit_options(),
     )
-    .expect_err("values with the wrong schema type must not be persisted");
+    .err()
+    .expect("values with the wrong schema type must not be persisted");
     assert!(matches!(
         wrong_type,
         ConfigError::InvalidValueType { key, .. } if key == "repl.history.enabled"
@@ -192,7 +194,8 @@ fn store_rejects_values_the_runtime_schema_cannot_load_unit() {
         &Scope::global(),
         default_edit_options(),
     )
-    .expect_err("values outside schema constraints must not be persisted");
+    .err()
+    .expect("values outside schema constraints must not be persisted");
     assert!(matches!(
         invalid_limit,
         ConfigError::InvalidConfigValue { key, .. } if key == "ui.width"
@@ -288,7 +291,8 @@ fn store_reports_invalid_toml_sections_and_blank_keys_for_set_and_unset_unit() {
         &Scope::global(),
         default_edit_options(),
     )
-    .expect_err("invalid toml should fail");
+    .err()
+    .expect("invalid toml should fail");
     match err {
         ConfigError::LayerLoad {
             path: err_path,
@@ -316,7 +320,8 @@ ui = "json"
         &Scope::global(),
         default_edit_options(),
     )
-    .expect_err("non-table section should fail");
+    .err()
+    .expect("non-table section should fail");
     match err {
         ConfigError::InvalidSection { section, expected } => {
             assert_eq!(section, "ui");
@@ -340,7 +345,8 @@ ui = "json"
         &Scope::global(),
         default_edit_options(),
     )
-    .expect_err("non-table intermediate section should fail");
+    .err()
+    .expect("non-table intermediate section should fail");
     match err {
         ConfigError::InvalidSection { section, expected } => {
             assert_eq!(section, "ui");
@@ -363,7 +369,8 @@ ui = "json"
                 default_edit_options()
             },
         )
-        .expect_err("empty set key should fail");
+        .err()
+        .expect("empty set key should fail");
         assert!(matches!(err, ConfigError::InvalidConfigKey { .. }));
     }
 
@@ -378,7 +385,8 @@ ui = "json"
                 default_edit_options()
             },
         )
-        .expect_err("empty unset key should fail");
+        .err()
+        .expect("empty unset key should fail");
         assert!(matches!(err, ConfigError::InvalidConfigKey { .. }));
     }
 }
