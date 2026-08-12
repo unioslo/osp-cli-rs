@@ -1,22 +1,15 @@
 //! `history` builtin command wrapper.
 //!
-//! The real history behavior lives in the REPL subsystem. This module keeps
-//! the CLI-facing wrapper narrow: reject history outside the REPL and adapt
-//! REPL history results into ordinary command results when the command is run
-//! inside an interactive session.
+//! The real history behavior lives in the REPL subsystem. This module adapts
+//! its results into ordinary command results for both interactive and one-shot
+//! callers.
 
-use miette::{Result, miette};
+use miette::Result;
 
 use crate::app::AppSession;
 use crate::app::CliCommandResult;
 use crate::cli::HistoryArgs;
 use crate::repl::history as repl_history;
-
-pub(crate) fn run_history_command(_args: HistoryArgs) -> Result<CliCommandResult> {
-    Err(miette!(
-        "history commands are REPL-only (start the REPL with `osp`)"
-    ))
-}
 
 pub(crate) fn run_history_repl_command(
     session: &mut AppSession,
@@ -35,10 +28,10 @@ pub(crate) fn run_history_repl_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{run_history_command, run_history_repl_command};
+    use super::run_history_repl_command;
     use crate::app::AppSession;
     use crate::app::{CliCommandResult, ReplCommandOutput};
-    use crate::cli::{HistoryArgs, HistoryCommands};
+    use crate::cli::{HistoryArgs, HistoryCommands, HistoryListArgs};
     use crate::core::row::Row;
     use crate::repl::HistoryConfig;
 
@@ -48,16 +41,6 @@ mod tests {
             ReplCommandOutput::Json(_) | ReplCommandOutput::Text(_) => return None,
         };
         output.into_rows()
-    }
-
-    #[test]
-    fn history_command_is_repl_only_unit() {
-        let err = run_history_command(HistoryArgs {
-            command: HistoryCommands::List,
-        })
-        .expect_err("history command should be rejected outside the repl");
-
-        assert!(err.to_string().contains("history commands are REPL-only"));
     }
 
     #[test]
@@ -84,7 +67,7 @@ mod tests {
         let result = run_history_repl_command(
             &mut session,
             HistoryArgs {
-                command: HistoryCommands::List,
+                command: HistoryCommands::List(HistoryListArgs::default()),
             },
             &history,
         )

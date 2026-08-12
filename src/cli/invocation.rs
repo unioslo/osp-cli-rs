@@ -77,13 +77,13 @@ pub(crate) struct ScannedCliArgs {
     pub(crate) invocation: InvocationOptions,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ScannedCommandTokens {
     pub(crate) tokens: Vec<String>,
     pub(crate) invocation: InvocationOptions,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ScannedCommandTokenTrace {
     pub(crate) tokens: Vec<String>,
     pub(crate) invocation: InvocationOptions,
@@ -515,7 +515,8 @@ mod tests {
                 .map(|value| (*value).to_string())
                 .collect::<Vec<_>>(),
         )
-        .expect_err("scan should fail")
+        .err()
+        .expect("scan should fail")
         .to_string()
     }
 

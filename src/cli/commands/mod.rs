@@ -21,3 +21,12 @@ pub(crate) mod history;
 pub(crate) mod intro;
 pub(crate) mod plugins;
 pub(crate) mod theme;
+
+fn resolve_terminal_selector(current: &str, selector: Option<&str>) -> Option<String> {
+    let value = selector?;
+    if value == crate::app::CURRENT_TERMINAL_SENTINEL {
+        return Some(current.to_string());
+    }
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_ascii_lowercase())
+}

@@ -9,6 +9,7 @@ use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{ThemeArgs, ThemeCommands, ThemeShowArgs, ThemeUseArgs};
 use crate::config::ConfigLayer;
 use crate::core::command_def::{ArgDef, CommandDef, ValueChoice};
+use crate::core::output_model::{OutputDocument, OutputDocumentKind};
 use crate::core::row::Row;
 use crate::ui::theme::{DEFAULT_THEME_NAME, normalize_theme_name};
 use crate::ui::theme_catalog::{ThemeCatalog, ThemeSource};
@@ -36,13 +37,25 @@ pub(crate) fn run_theme_command(
     args: ThemeArgs,
 ) -> Result<CliCommandResult> {
     match args.command {
-        ThemeCommands::List => Ok(CliCommandResult::output(
-            rows_to_output_result(theme_list_rows(
-                context.themes,
-                &context.ui.render_settings.theme_name,
-            )),
-            None,
-        )),
+        ThemeCommands::List => {
+            let rows = theme_list_rows(context.themes, &context.ui.render_settings.theme_name);
+            let display_rows = rows
+                .iter()
+                .map(|row| {
+                    crate::row! {
+                        "name" => row.get("name").cloned().unwrap_or_default(),
+                        "source" => row.get("source").cloned().unwrap_or_default(),
+                        "status" => row.get("status").cloned().unwrap_or_default(),
+                    }
+                })
+                .collect();
+            let document =
+                serde_json::Value::Array(rows.into_iter().map(serde_json::Value::Object).collect());
+            let mut output = rows_to_output_result(display_rows);
+            output.document = Some(OutputDocument::new(OutputDocumentKind::Json, document));
+            output.meta.key_index = ["name", "source", "status"].map(str::to_string).to_vec();
+            Ok(CliCommandResult::output(output, None))
+        }
         ThemeCommands::Show(ThemeShowArgs { name }) => {
             let selected = name.unwrap_or_else(|| context.ui.render_settings.theme_name.clone());
             Ok(CliCommandResult::output(
@@ -108,6 +121,14 @@ fn theme_list_rows(themes: &ThemeCatalog, active_theme: &str) -> Vec<Row> {
         .entries
         .values()
         .map(|entry| {
+            let is_active = entry.theme.id == active.as_str();
+            let is_default = entry.theme.id == DEFAULT_THEME_NAME;
+            let status = match (is_active, is_default) {
+                (true, true) => "active, default",
+                (true, false) => "active",
+                (false, true) => "default",
+                (false, false) => "",
+            };
             let origin = entry
                 .origin
                 .as_ref()
@@ -121,8 +142,9 @@ fn theme_list_rows(themes: &ThemeCatalog, active_theme: &str) -> Vec<Row> {
                     ThemeSource::Custom => "custom",
                 },
                 "origin" => origin,
-                "active" => entry.theme.id == active.as_str(),
-                "default" => entry.theme.id == DEFAULT_THEME_NAME,
+                "active" => is_active,
+                "default" => is_default,
+                "status" => status,
             }
         })
         .collect()

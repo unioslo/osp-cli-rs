@@ -178,6 +178,36 @@ state.
 
 See [COMPLETION.md](COMPLETION.md).
 
+## Command Aliases
+
+Use the `alias` wrapper for ordinary alias work instead of spelling config
+keys by hand:
+
+```text
+alias add lsng 'ldap netgroup ${1} --value | P members'
+alias list --sources
+alias remove lsng
+```
+
+Templates are checked by the same placeholder, command, and DSL parsers used
+when an alias runs. Positional placeholders such as `${1}` and `${@}` remain
+unresolved until invocation.
+
+Aliases follow config scope and storage rules. A one-shot CLI write persists
+by default, while a REPL write lasts for the current session unless you add
+`--save`. `--profile`, `--global`, and `--terminal` select the same scopes as
+`config set` and `config unset`.
+
+The root REPL is silent on exit by default. Set `repl.exit_message` when a
+product or profile wants a sign-off:
+
+```text
+config set repl.exit_message 'So long, and thanks for all the fish!' --save
+```
+
+The message is printed for root `exit`, `quit`, or end-of-input. Leaving a
+nested command shell keeps its existing `Leaving … shell` message instead.
+
 ## Config Writes Inside The REPL
 
 Inside the REPL, `config set` defaults to session scope. That means the change
@@ -222,6 +252,17 @@ If the REPL feels unreliable in a weak terminal, `basic` is the first setting
 to try for `repl.input_mode`.
 
 ## Practical Recipes
+
+Run a batch in the current authenticated session:
+
+```text
+source changes.osp
+source --ignore-errors follow-up.osp
+```
+
+Command files contain one command per line. Blank lines and lines beginning
+with `#` are ignored. By default execution stops at the first failure and
+reports its file and line number; `--ignore-errors` processes the rest.
 
 Do a short built-in investigation:
 

@@ -53,7 +53,7 @@ pub(crate) mod invocation;
 pub(crate) mod pipeline;
 pub(crate) mod rows;
 use crate::config::{ConfigLayer, RuntimeLoadOptions};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use crate::ui::UiPresentation;
@@ -82,12 +82,12 @@ impl From<PresentationArg> for UiPresentation {
 }
 
 /// Top-level CLI parser for the `osp` command.
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(
     name = "osp",
     version = env!("CARGO_PKG_VERSION"),
     about = "OSP CLI",
-    after_help = "Use `osp plugins commands` to list plugin-provided commands."
+    after_help = "Use `osp plugins commands` to list plugin-provided commands. Pipe output through the OSP DSL with `|`; use `| H` for in-band DSL help."
 )]
 pub struct Cli {
     /// Override the effective user name for this invocation.
@@ -95,7 +95,7 @@ pub struct Cli {
     pub user: Option<String>,
 
     /// Disable persistent REPL history and other identity-linked behavior.
-    #[arg(short = 'i', long = "incognito", global = true)]
+    #[arg(long = "incognito", global = true)]
     pub incognito: bool,
 
     /// Select the active config profile for the invocation.
@@ -150,7 +150,7 @@ impl Cli {
 }
 
 /// Top-level commands accepted by `osp`.
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 pub enum Commands {
     /// Inspect and manage discovered plugins.
     Plugins(PluginsArgs),
@@ -160,8 +160,12 @@ pub enum Commands {
     Theme(ThemeArgs),
     /// Inspect and mutate CLI configuration.
     Config(ConfigArgs),
+    /// Create and manage command aliases.
+    Alias(AliasArgs),
     /// Manage persisted REPL history.
     History(HistoryArgs),
+    /// Generate static shell completion for built-in commands and flags.
+    Completions(CompletionsArgs),
     #[command(hide = true)]
     /// Render the legacy intro/help experience.
     Intro(IntroArgs),
@@ -173,8 +177,26 @@ pub enum Commands {
     External(Vec<String>),
 }
 
+/// Arguments for static shell-completion generation.
+#[derive(Debug, Args)]
+#[command(
+    after_help = "Static scripts cover built-in commands and flags. Commands loaded dynamically from native integrations or plugins remain available through the interactive REPL completion engine."
+)]
+pub struct CompletionsArgs {
+    /// Shell whose completion script should be generated.
+    #[arg(value_enum)]
+    pub shell: clap_complete::Shell,
+}
+
+pub(crate) fn render_shell_completions(args: CompletionsArgs) -> String {
+    let mut command = Cli::command();
+    let mut output = Vec::new();
+    clap_complete::generate(args.shell, &mut command, "osp", &mut output);
+    String::from_utf8(output).unwrap_or_default()
+}
+
 /// Parser used for inline command execution without the binary name prefix.
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(name = "osp", no_binary_name = true)]
 pub struct InlineCommandCli {
     /// Parsed command payload, if any.
@@ -473,11 +495,82 @@ pub struct PluginConfigArgs {
 }
 
 /// Top-level config command arguments.
-#[derive(Debug, Args)]
+#[derive(Args)]
 pub struct ConfigArgs {
     /// Config action to perform.
     #[command(subcommand)]
     pub command: ConfigCommands,
+}
+
+/// Top-level alias command arguments.
+#[derive(Debug, Args)]
+#[command(
+    after_help = "Examples:\n  osp alias add lsng 'ldap netgroup ${1} --value | P members'\n  osp alias list\n  osp alias remove lsng --save"
+)]
+pub struct AliasArgs {
+    /// Alias action to perform.
+    #[command(subcommand)]
+    pub command: AliasCommands,
+}
+
+/// Commands for the friendly `alias.*` config wrapper.
+#[derive(Debug, Subcommand)]
+pub enum AliasCommands {
+    /// List aliases available in the active profile and terminal.
+    List(AliasListArgs),
+    /// Add or replace an alias after validating its command template.
+    Add(AliasAddArgs),
+    /// Remove an alias from the selected config scope.
+    Remove(AliasRemoveArgs),
+}
+
+/// Arguments for `alias list`.
+#[derive(Debug, Args, Clone, Default)]
+pub struct AliasListArgs {
+    /// Include the winning config source and scope for each alias.
+    #[arg(long)]
+    pub sources: bool,
+}
+
+/// Arguments for `alias add`.
+#[derive(Debug, Args)]
+pub struct AliasAddArgs {
+    /// Short command name, for example `lsng`.
+    pub name: String,
+
+    /// Command template; quote templates containing spaces or `${1}` placeholders.
+    pub template: String,
+
+    /// Shared global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub scope: ConfigScopeArgs,
+
+    /// Shared config/session store-selection flags.
+    #[command(flatten)]
+    pub store: ConfigStoreArgs,
+
+    /// Validate and show the write without applying it.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+}
+
+/// Arguments for `alias remove`.
+#[derive(Debug, Args)]
+pub struct AliasRemoveArgs {
+    /// Short command name to remove.
+    pub name: String,
+
+    /// Shared global/profile/terminal targeting flags.
+    #[command(flatten)]
+    pub scope: ConfigScopeArgs,
+
+    /// Shared config/session store-selection flags.
+    #[command(flatten)]
+    pub store: ConfigStoreArgs,
+
+    /// Show the removal without applying it.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
 }
 
 /// Top-level history command arguments.
@@ -496,11 +589,35 @@ pub struct IntroArgs {}
 #[derive(Debug, Subcommand)]
 pub enum HistoryCommands {
     /// List persisted history entries.
-    List,
+    List(HistoryListArgs),
     /// Retain only the newest `keep` entries.
     Prune(HistoryPruneArgs),
     /// Remove all persisted history entries.
     Clear,
+}
+
+/// Arguments for `history list`.
+#[derive(Debug, Args, Clone, Default)]
+pub struct HistoryListArgs {
+    /// Maximum number of recent matching entries to show.
+    #[arg(long, value_name = "COUNT", default_value = "20")]
+    pub limit: Option<std::num::NonZeroUsize>,
+
+    /// Inclusive lower bound, for example 2026-08-11 or 2026-08-11T10:00:00Z.
+    #[arg(
+        long,
+        value_name = "TIMESTAMP",
+        help = "Inclusive lower bound. Accepts YYYY-MM-DD, YYYY-MM-DD HH:MM[:SS], or RFC3339-like input such as 2026-08-11T10:00:00Z"
+    )]
+    pub since: Option<String>,
+
+    /// Inclusive upper bound, for example 2026-08-11T11:00:00Z or with +02:00.
+    #[arg(
+        long,
+        value_name = "TIMESTAMP",
+        help = "Inclusive upper bound. Accepts YYYY-MM-DD, YYYY-MM-DD HH:MM[:SS], or RFC3339-like input such as 2026-08-11T12:00:00+02:00"
+    )]
+    pub until: Option<String>,
 }
 
 /// Arguments for `history prune`.
@@ -511,7 +628,7 @@ pub struct HistoryPruneArgs {
 }
 
 /// Configuration inspection and mutation commands.
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 pub enum ConfigCommands {
     /// Show the resolved configuration view.
     Show(ConfigShowArgs),
@@ -559,7 +676,7 @@ pub struct ConfigExplainArgs {
 }
 
 /// Arguments for `config set`.
-#[derive(Debug, Args)]
+#[derive(Args)]
 pub struct ConfigSetArgs {
     /// Config key to write.
     pub key: String,
@@ -693,7 +810,7 @@ pub fn parse_inline_command_tokens(tokens: &[String]) -> Result<Option<Commands>
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, Commands, ConfigCommands, InlineCommandCli, RuntimeLoadOptions,
+        AliasCommands, Cli, Commands, ConfigCommands, InlineCommandCli, RuntimeLoadOptions,
         append_appearance_overrides, parse_inline_command_tokens,
     };
     use crate::config::{ConfigLayer, ConfigValue};
@@ -720,6 +837,48 @@ mod tests {
         assert!(
             matches!(external, Some(Commands::External(tokens)) if tokens == vec!["ldap", "user"])
         );
+    }
+
+    #[test]
+    fn alias_commands_parse_a_small_pedagogical_surface_unit() {
+        let add = Cli::try_parse_from([
+            "osp",
+            "alias",
+            "add",
+            "lsng",
+            "ldap netgroup ${1} --value | P members",
+            "--profile",
+            "ops",
+            "--save",
+        ])
+        .expect("alias add should parse");
+        assert!(matches!(
+            add.command,
+            Some(Commands::Alias(args))
+                if matches!(&args.command, AliasCommands::Add(add)
+                    if add.name == "lsng"
+                        && add.template == "ldap netgroup ${1} --value | P members"
+                        && add.scope.profile.as_deref() == Some("ops")
+                        && add.store.save)
+        ));
+
+        let remove = Cli::try_parse_from(["osp", "alias", "remove", "lsng", "--global"])
+            .expect("alias remove should parse");
+        assert!(matches!(
+            remove.command,
+            Some(Commands::Alias(args))
+                if matches!(&args.command, AliasCommands::Remove(remove)
+                    if remove.name == "lsng" && remove.scope.global)
+        ));
+
+        let help = Cli::command()
+            .find_subcommand("alias")
+            .expect("alias command should exist")
+            .clone()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("alias add lsng"));
+        assert!(help.contains("${1}"));
     }
 
     #[test]

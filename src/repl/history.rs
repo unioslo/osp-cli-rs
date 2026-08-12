@@ -7,11 +7,12 @@
 use crate::config::{
     ConfigValue, DEFAULT_REPL_HISTORY_MAX_ENTRIES, ResolvedConfig, RuntimeDefaults,
 };
-use crate::core::command_def::CommandDef;
+use crate::core::command_def::{CommandDef, FlagDef};
+use crate::core::output_model::{OutputDocument, OutputDocumentKind};
 use crate::core::row::Row;
 use crate::repl::{HistoryConfig, HistoryEntry, SharedHistory};
 use crate::ui::theme::DEFAULT_THEME_NAME;
-use miette::Result;
+use miette::{Result, miette};
 use std::path::PathBuf;
 
 use crate::app::{AppRuntime, AppSession};
@@ -24,6 +25,8 @@ use crate::app::{
 use crate::cli::rows::output::rows_to_output_result;
 
 const DEFAULT_REPL_HISTORY_EXCLUDES: [&str; 4] = ["exit", "quit", "help", "history list"];
+const DEFAULT_HISTORY_LIST_LIMIT: usize = 20;
+const HISTORY_TIMESTAMP_EXAMPLES: &str = "expected YYYY-MM-DD, YYYY-MM-DD HH:MM[:SS], or RFC3339-like input such as 2026-08-11T10:00:00Z or 2026-08-11T12:00:00+02:00";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReplHistoryPolicy {
@@ -109,7 +112,25 @@ pub(crate) fn history_command_def(sort_key: impl Into<String>) -> CommandDef {
         .subcommands([
             CommandDef::new(CMD_LIST)
                 .about("List recent history")
-                .sort("10"),
+                .sort("10")
+                .flags([
+                    FlagDef::new("limit")
+                        .long("limit")
+                        .takes_value("COUNT")
+                        .help("Maximum recent matching entries to show (default: 20)"),
+                    FlagDef::new("since")
+                        .long("since")
+                        .takes_value("TIMESTAMP")
+                        .help(format!(
+                            "Inclusive lower timestamp; {HISTORY_TIMESTAMP_EXAMPLES}"
+                        )),
+                    FlagDef::new("until")
+                        .long("until")
+                        .takes_value("TIMESTAMP")
+                        .help(format!(
+                            "Inclusive upper timestamp; {HISTORY_TIMESTAMP_EXAMPLES}"
+                        )),
+                ]),
             CommandDef::new("prune")
                 .about("Keep last N entries")
                 .sort("11"),
@@ -138,12 +159,46 @@ pub(crate) fn run_history_repl_command(
 
     let scope = HistoryScopeView::from_session(session);
     match args.command {
-        HistoryCommands::List => {
-            let rows = history_entries_rows(history.list_entries_for(scope.prefix.as_deref()));
+        HistoryCommands::List(list) => {
+            let since = parse_history_timestamp("--since", list.since.as_deref())?;
+            let until = parse_history_timestamp("--until", list.until.as_deref())?;
+            if since.zip(until).is_some_and(|(since, until)| since > until) {
+                return Err(miette!("--since must not be later than --until"));
+            }
+            let mut entries = filter_history_entries(
+                history.list_entries_for(scope.prefix.as_deref()),
+                since,
+                until,
+            );
+            entries = entries
+                .into_iter()
+                .rev()
+                .take(
+                    list.limit
+                        .map(std::num::NonZeroUsize::get)
+                        .unwrap_or(DEFAULT_HISTORY_LIST_LIMIT),
+                )
+                .collect::<Vec<_>>();
+            entries.reverse();
+            let rows = history_entries_rows(entries);
+            let display_rows = rows
+                .iter()
+                .map(|row| {
+                    crate::row! {
+                        "id" => row.get("id").cloned().unwrap_or_default(),
+                        "command" => row.get("command").cloned().unwrap_or_default(),
+                    }
+                })
+                .collect();
+            let document =
+                serde_json::Value::Array(rows.into_iter().map(serde_json::Value::Object).collect());
+            let mut output = rows_to_output_result(display_rows);
+            output.document = Some(OutputDocument::new(OutputDocumentKind::Json, document));
+            output.meta.key_index = ["id", "command"].map(str::to_string).to_vec();
             Ok(ReplCommandOutput::Output(Box::new(
                 StructuredCommandOutput {
                     source_guide: None,
-                    output: rows_to_output_result(rows),
+                    output,
                     format_hint: None,
                 },
             )))
@@ -175,6 +230,37 @@ pub(crate) fn run_history_repl_command(
             }))
         }
     }
+}
+
+fn parse_history_timestamp(flag: &str, value: Option<&str>) -> Result<Option<i64>> {
+    value
+        .map(|value| {
+            crate::dsl::parse_timestamp(value)
+                .and_then(|seconds| seconds.checked_mul(1_000))
+                .ok_or_else(|| {
+                    miette!("invalid {flag} timestamp `{value}`; {HISTORY_TIMESTAMP_EXAMPLES}")
+                })
+        })
+        .transpose()
+}
+
+fn filter_history_entries(
+    entries: Vec<HistoryEntry>,
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+) -> Vec<HistoryEntry> {
+    if since_ms.is_none() && until_ms.is_none() {
+        return entries;
+    }
+    entries
+        .into_iter()
+        .filter(|entry| {
+            entry.timestamp_ms.is_some_and(|timestamp| {
+                since_ms.is_none_or(|since| timestamp >= since)
+                    && until_ms.is_none_or(|until| timestamp <= until)
+            })
+        })
+        .collect()
 }
 
 fn history_entries_rows(entries: Vec<HistoryEntry>) -> Vec<Row> {
@@ -240,12 +326,13 @@ mod tests {
     use crate::app::{
         AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind,
     };
-    use crate::cli::{HistoryArgs, HistoryCommands, HistoryPruneArgs};
+    use crate::cli::{HistoryArgs, HistoryCommands, HistoryListArgs, HistoryPruneArgs};
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
     use crate::repl::{HistoryConfig, SharedHistory};
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
+    use clap::Parser;
     use serde_json::Value;
     use std::path::PathBuf;
 
@@ -397,7 +484,7 @@ mod tests {
         let output = run_history_repl_command(
             &mut session,
             HistoryArgs {
-                command: HistoryCommands::List,
+                command: HistoryCommands::List(HistoryListArgs::default()),
             },
             &history,
         )
@@ -420,7 +507,7 @@ mod tests {
         let output = run_history_repl_command(
             &mut session,
             HistoryArgs {
-                command: HistoryCommands::List,
+                command: HistoryCommands::List(HistoryListArgs::default()),
             },
             &history,
         )
@@ -431,10 +518,137 @@ mod tests {
                 let rows = output.output.into_rows().expect("list should produce rows");
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0]["command"], Value::String("config show".to_string()));
-                assert!(rows[0].contains_key("timestamp_ms"));
+                assert!(!rows[0].contains_key("timestamp_ms"));
             }
             other => panic!("unexpected history list output: {other:?}"),
         }
+    }
+
+    #[test]
+    fn history_list_filters_an_inclusive_iso_time_window_unit() {
+        let temp = tempfile::tempdir().expect("history tempdir should exist");
+        let path = temp.path().join("history.jsonl");
+        let timestamp = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .expect("test timestamp should parse")
+                .timestamp_millis()
+        };
+        let records = [
+            serde_json::json!({
+                "id": 0,
+                "command_line": "ldap user before",
+                "timestamp_ms": timestamp("2026-08-11T09:59:59Z")
+            }),
+            serde_json::json!({
+                "id": 1,
+                "command_line": "ldap user lower-bound",
+                "timestamp_ms": timestamp("2026-08-11T10:00:00Z")
+            }),
+            serde_json::json!({
+                "id": 2,
+                "command_line": "ldap user upper-bound",
+                "timestamp_ms": timestamp("2026-08-11T11:00:00Z")
+            }),
+            serde_json::json!({
+                "id": 3,
+                "command_line": "ldap user after",
+                "timestamp_ms": timestamp("2026-08-11T11:00:01Z")
+            }),
+            serde_json::json!({
+                "id": 4,
+                "command_line": "mreg host in-window",
+                "timestamp_ms": timestamp("2026-08-11T10:30:00Z")
+            }),
+        ];
+        std::fs::write(
+            &path,
+            records
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .expect("history fixture should write");
+        let history = SharedHistory::new(
+            HistoryConfig::builder()
+                .with_path(Some(path))
+                .with_max_entries(32)
+                .with_dedupe(false)
+                .with_profile_scoped(false)
+                .build(),
+        );
+        let mut session = AppSession::with_cache_limit(8);
+        session.scope.enter("ldap");
+
+        let output = run_history_repl_command(
+            &mut session,
+            HistoryArgs {
+                command: HistoryCommands::List(HistoryListArgs {
+                    limit: None,
+                    since: Some("2026-08-11T10:00:00Z".to_string()),
+                    until: Some("2026-08-11T11:00:00Z".to_string()),
+                }),
+            },
+            &history,
+        )
+        .expect("bounded history list should succeed");
+
+        let ReplCommandOutput::Output(output) = output else {
+            panic!("history list should return structured rows");
+        };
+        let rows = output.output.into_rows().expect("list should produce rows");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["command"].as_str().expect("command should be text"))
+                .collect::<Vec<_>>(),
+            vec!["user lower-bound", "user upper-bound"]
+        );
+    }
+
+    #[test]
+    fn history_list_help_and_invalid_bounds_show_iso_examples_unit() {
+        let help = crate::cli::Cli::try_parse_from(["osp", "history", "list", "--help"])
+            .err()
+            .expect("help should stop parsing")
+            .to_string();
+        assert!(help.contains("--since <TIMESTAMP>"));
+        assert!(help.contains("--until <TIMESTAMP>"));
+        assert!(help.contains("2026-08-11T10:00:00Z"));
+        assert!(help.contains("+02:00"));
+
+        let history = shared_history(true);
+        let mut session = AppSession::with_cache_limit(8);
+        let error = run_history_repl_command(
+            &mut session,
+            HistoryArgs {
+                command: HistoryCommands::List(HistoryListArgs {
+                    limit: None,
+                    since: Some("today".to_string()),
+                    until: None,
+                }),
+            },
+            &history,
+        )
+        .expect_err("natural-language bounds should be rejected")
+        .to_string();
+        assert!(error.contains("invalid --since timestamp `today`"));
+        assert!(error.contains("YYYY-MM-DD"));
+        assert!(error.contains("2026-08-11T10:00:00Z"));
+
+        let reversed = run_history_repl_command(
+            &mut session,
+            HistoryArgs {
+                command: HistoryCommands::List(HistoryListArgs {
+                    limit: None,
+                    since: Some("2026-08-11T11:00:00Z".to_string()),
+                    until: Some("2026-08-11T10:00:00Z".to_string()),
+                }),
+            },
+            &history,
+        )
+        .expect_err("reversed bounds should be rejected")
+        .to_string();
+        assert_eq!(reversed, "--since must not be later than --until");
     }
 
     #[test]

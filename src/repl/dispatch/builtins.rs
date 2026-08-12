@@ -1,9 +1,12 @@
-use crate::repl::{ReplLineResult, SharedHistory, expand_history};
-use miette::{Result, miette};
+use std::path::PathBuf;
 
-use crate::app::CMD_HELP;
+use crate::repl::{ReplLineResult, SharedHistory, expand_history};
+use miette::{Result, WrapErr, miette};
+
 use crate::app::sink::UiSink;
 use crate::app::{AppClients, AppRuntime, AppSession};
+use crate::app::{CMD_HELP, EXIT_CODE_WAITING_APPROVAL};
+use crate::repl::engine::expand_home;
 
 use super::shell::{handle_repl_exit_request, render_repl_help_for_scope};
 
@@ -12,14 +15,22 @@ pub(super) enum ReplBuiltin {
     Help,
     Exit,
     Last { raw: bool },
+    Source(SourceCommand),
     Bang(BangCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SourceCommand {
+    paths: Vec<PathBuf>,
+    ignore_errors: bool,
+    help: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum BangCommand {
     Last,
     Relative(usize),
-    Absolute(usize),
+    Absolute { id: usize, suffix: Option<String> },
     Prefix(String),
     Contains(String),
 }
@@ -45,6 +56,9 @@ pub(super) fn execute_repl_builtin(
         )?)),
         ReplBuiltin::Exit => Ok(handle_repl_exit_request(session)),
         ReplBuiltin::Last { raw } => execute_last_result_builtin(runtime, session, raw),
+        ReplBuiltin::Source(command) => {
+            execute_source_command(runtime, session, clients, history, command, sink)
+        }
         ReplBuiltin::Bang(command) => execute_bang_command(session, history, raw, command),
     }
 }
@@ -63,10 +77,155 @@ pub(super) fn parse_repl_builtin(raw: &str) -> Result<Option<ReplBuiltin>> {
     if let Some(raw) = parse_last_builtin(raw)? {
         return Ok(Some(ReplBuiltin::Last { raw }));
     }
+    if let Some(command) = parse_source_builtin(raw)? {
+        return Ok(Some(ReplBuiltin::Source(command)));
+    }
     if let Some(command) = parse_bang_command(raw)? {
         return Ok(Some(ReplBuiltin::Bang(command)));
     }
     Ok(None)
+}
+
+fn parse_source_builtin(raw: &str) -> Result<Option<SourceCommand>> {
+    let words = shell_words::split(raw).map_err(|err| miette!("invalid source command: {err}"))?;
+    if words.first().map(String::as_str) != Some("source") {
+        return Ok(None);
+    }
+
+    let mut paths = Vec::new();
+    let mut ignore_errors = false;
+    let mut help = false;
+    let mut options = true;
+    for word in words.into_iter().skip(1) {
+        match word.as_str() {
+            "--" if options => options = false,
+            "--ignore-errors" if options => ignore_errors = true,
+            "-h" | "--help" if options => help = true,
+            _ if options && word.starts_with('-') => {
+                return Err(miette!(
+                    "unknown source option `{word}`\n\n{}",
+                    source_help()
+                ));
+            }
+            _ => paths.push(PathBuf::from(expand_home(&word))),
+        }
+    }
+    if !help && paths.is_empty() {
+        help = true;
+    }
+    Ok(Some(SourceCommand {
+        paths,
+        ignore_errors,
+        help,
+    }))
+}
+
+fn execute_source_command(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    command: SourceCommand,
+    sink: &mut dyn UiSink,
+) -> Result<ReplLineResult> {
+    if command.help {
+        return Ok(ReplLineResult::Continue(source_help()));
+    }
+
+    for path in command.paths {
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(err) if command.ignore_errors => {
+                sink.write_stderr(&format!("{}: {err}\n", path.display()));
+                continue;
+            }
+            Err(err) => {
+                return Err(miette!("failed to read `{}`: {err}", path.display()));
+            }
+        };
+
+        for (index, line) in contents.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if shell_words::split(line)
+                .ok()
+                .and_then(|words| words.into_iter().next())
+                .as_deref()
+                == Some("source")
+            {
+                let err = miette!("nested `source` commands are not supported");
+                if command.ignore_errors {
+                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
+                    continue;
+                }
+                return Err(err).wrap_err_with(|| {
+                    format!("command failed at {}:{}", path.display(), index + 1)
+                });
+            }
+            let executed = match super::execute_repl_plugin_line_with_sink(
+                runtime, session, clients, history, line, sink,
+            ) {
+                Ok(executed) => executed,
+                Err(err) if command.ignore_errors => {
+                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
+                    continue;
+                }
+                Err(err) => {
+                    return Err(err).wrap_err_with(|| {
+                        format!("command failed at {}:{}", path.display(), index + 1)
+                    });
+                }
+            };
+            let failed = !matches!(executed.exit_code, 0 | EXIT_CODE_WAITING_APPROVAL);
+            match executed.result {
+                ReplLineResult::Continue(rendered) => sink.write_stdout(&rendered),
+                ReplLineResult::Restart {
+                    output: restart_output,
+                    reload,
+                } => {
+                    sink.write_stdout(&restart_output);
+                    sink.write_stderr(&format!(
+                        "{}:{}: command requires a REPL restart; remaining source lines were not run\n",
+                        path.display(),
+                        index + 1
+                    ));
+                    return Ok(ReplLineResult::Restart {
+                        output: String::new(),
+                        reload,
+                    });
+                }
+                ReplLineResult::Exit(code) => return Ok(ReplLineResult::Exit(code)),
+                ReplLineResult::ReplaceInput(_) => {
+                    let err = miette!("history expansion is not supported in sourced files");
+                    if command.ignore_errors {
+                        sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
+                    } else {
+                        return Err(err).wrap_err_with(|| {
+                            format!("command failed at {}:{}", path.display(), index + 1)
+                        });
+                    }
+                }
+            }
+            if failed {
+                let err = miette!("command exited with status {}", executed.exit_code);
+                if command.ignore_errors {
+                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
+                } else {
+                    return Err(err).wrap_err_with(|| {
+                        format!("command failed at {}:{}", path.display(), index + 1)
+                    });
+                }
+            }
+        }
+    }
+    Ok(ReplLineResult::Continue(String::new()))
+}
+
+fn source_help() -> String {
+    "Run one REPL command per line from one or more files.\n\nUsage: source [--ignore-errors] <FILE>...\n\nBlank lines and # comments are ignored. Waiting for approval is not an error.\nCommands that reload or exit the REPL stop the batch. Paths may start with ~.\n\nOptions:\n  --ignore-errors  Continue after command and file errors\n  -h, --help       Print help\n"
+        .to_string()
 }
 
 fn parse_last_builtin(raw: &str) -> Result<Option<bool>> {
@@ -114,14 +273,19 @@ pub(super) fn parse_bang_command(raw: &str) -> Result<Option<BangCommand>> {
     if rest.is_empty() {
         return Ok(Some(BangCommand::Prefix(String::new())));
     }
-    if rest.chars().all(|ch| ch.is_ascii_digit()) {
-        let id = rest
+    let digit_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let (id, suffix) = rest.split_at(digit_len);
+    if !id.is_empty() && (suffix.is_empty() || suffix.starts_with(char::is_whitespace)) {
+        let id = id
             .parse::<usize>()
             .map_err(|_| miette!("`!N` expects a positive integer"))?;
         if id == 0 {
             return Err(miette!("`!N` expects N >= 1"));
         }
-        return Ok(Some(BangCommand::Absolute(id)));
+        return Ok(Some(BangCommand::Absolute {
+            id,
+            suffix: (!suffix.trim_start().is_empty()).then(|| suffix.trim_start().to_string()),
+        }));
     }
     Ok(Some(BangCommand::Prefix(rest.to_string())))
 }
@@ -140,8 +304,13 @@ pub(super) fn execute_bang_command(
         BangCommand::Relative(offset) => {
             expand_history(&format!("!-{offset}"), &recent, scope.as_deref(), true)
         }
-        BangCommand::Absolute(id) => {
-            expand_history(&format!("!{id}"), &recent, scope.as_deref(), true)
+        BangCommand::Absolute { id, suffix } => {
+            expand_history(&format!("!{id}"), &recent, scope.as_deref(), true).map(|expanded| {
+                match suffix {
+                    Some(suffix) => format!("{expanded} {suffix}"),
+                    None => expanded,
+                }
+            })
         }
         BangCommand::Prefix(prefix) => {
             if prefix.is_empty() {
@@ -194,7 +363,7 @@ fn render_bang_help() -> String {
     out.push_str("Bang history shortcuts:\n");
     out.push_str("  !!       last visible command\n");
     out.push_str("  !-N      Nth previous visible command\n");
-    out.push_str("  !N       visible history entry by id\n");
+    out.push_str("  !N [args]  visible history entry by id, with optional appended arguments\n");
     out.push_str("  !prefix  latest visible command starting with prefix\n");
     out.push_str("  !?text   latest visible command containing text\n");
     out

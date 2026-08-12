@@ -141,10 +141,25 @@ impl<'a> BuiltinExecutor<'a> {
                 )
                 .map(Some)
             }
+            Commands::Alias(args) => {
+                ensure_builtin_access(self.runtime, self.session, CMD_CONFIG)?;
+                config_cmd::run_alias_command(
+                    config_cmd::ConfigCommandContext::from_parts(
+                        self.runtime,
+                        self.session,
+                        surface.ui(),
+                    ),
+                    args,
+                )
+                .map(Some)
+            }
             Commands::History(args) => {
                 ensure_builtin_access(self.runtime, self.session, CMD_HISTORY)?;
                 self.run_history_command(surface, args).map(Some)
             }
+            Commands::Completions(_) => Err(miette!(
+                "`completions` is available only as a one-shot CLI command"
+            )),
             Commands::Intro(args) => self.run_intro_command(surface, args).map(Some),
             Commands::Repl(args) => self.run_repl_debug_command(surface, args).map(Some),
             Commands::External(_) => Ok(None),
@@ -161,7 +176,10 @@ impl<'a> BuiltinExecutor<'a> {
                 history_cmd::run_history_repl_command(self.session, args, history)
             }
             BuiltinSurface::Cli(_) | BuiltinSurface::Inline(_) => {
-                history_cmd::run_history_command(args)
+                let history = crate::repl::SharedHistory::new(
+                    crate::repl::history::build_history_config(self.runtime, self.session),
+                );
+                history_cmd::run_history_repl_command(self.session, args, &history)
             }
         }
     }

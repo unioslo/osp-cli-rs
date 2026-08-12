@@ -5,7 +5,7 @@ use predicates::prelude::*;
 
 #[cfg(unix)]
 #[test]
-fn history_command_is_rejected_outside_repl_contract() {
+fn history_list_is_available_outside_repl_contract() {
     let home = make_temp_dir("osp-cli-history-contract");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -13,8 +13,7 @@ fn history_command_is_rejected_outside_repl_contract() {
         .args(["history", "list"]);
 
     cmd.assert()
-        .failure()
-        .code(1)
-        .stderr(predicate::str::contains("history commands are REPL-only"))
+        .success()
+        .stderr(predicate::str::is_empty())
         .stdout(predicate::str::is_empty());
 }

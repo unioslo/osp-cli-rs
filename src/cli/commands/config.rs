@@ -4,17 +4,20 @@
 //! explaining, validating, and writing config values through the same schema
 //! and scope rules used at runtime.
 
+use super::resolve_terminal_selector;
 use crate::app::{AppRuntime, AppSession, RuntimeContext, TerminalKind, UiState};
 use crate::app::{
-    CURRENT_TERMINAL_SENTINEL, CliCommandResult, ConfigExplainContext, ReplCommandOutput,
-    RuntimeConfigRequest, config_explain_json, config_explain_result, config_value_to_json,
-    explain_runtime_config, format_scope, is_sensitive_key, push_missing_config_key_messages,
-    render_config_explain_text, resolve_runtime_config,
+    CliCommandResult, ConfigExplainContext, ReplCommandOutput, RuntimeConfigRequest,
+    config_explain_json, config_explain_result, config_value_to_json, explain_runtime_config,
+    format_scope, is_sensitive_key, push_missing_config_key_messages, render_config_explain_text,
+    resolve_runtime_config,
 };
+use crate::cli::pipeline::validate_alias_template;
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::rows::row::RowBuilder;
 use crate::cli::{
-    ConfigArgs, ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs, ConfigUnsetArgs,
+    AliasAddArgs, AliasArgs, AliasCommands, AliasListArgs, AliasRemoveArgs, ConfigArgs,
+    ConfigCommands, ConfigGetArgs, ConfigSetArgs, ConfigShowArgs, ConfigUnsetArgs,
 };
 #[cfg(unix)]
 use crate::config::secret_file_mode;
@@ -128,6 +131,107 @@ pub(crate) fn run_config_command(
             None,
         )),
     }
+}
+
+pub(crate) fn run_alias_command(
+    context: ConfigCommandContext<'_>,
+    args: AliasArgs,
+) -> Result<CliCommandResult> {
+    match args.command {
+        AliasCommands::List(list) => Ok(CliCommandResult::output(
+            rows_to_output_result(alias_list_rows(context.read(), list)),
+            None,
+        )),
+        AliasCommands::Add(add) => run_alias_add(context, add),
+        AliasCommands::Remove(remove) => run_alias_remove(context, remove),
+    }
+}
+
+fn alias_list_rows(context: ConfigReadContext<'_>, args: AliasListArgs) -> Vec<Row> {
+    let rows = context
+        .config
+        .aliases()
+        .iter()
+        .map(|(key, entry)| {
+            let mut row = RowBuilder::new();
+            row.insert(
+                "name",
+                key.strip_prefix("alias.").unwrap_or(key).to_string(),
+            );
+            row.insert("template", config_value_to_json(&entry.raw_value));
+            if args.sources {
+                row.insert("source", entry.source.to_string());
+                row.insert("scope", format_scope(&entry.scope));
+                row.insert(
+                    "origin",
+                    entry
+                        .origin
+                        .clone()
+                        .map_or(serde_json::Value::Null, Into::into),
+                );
+            }
+            row.build()
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return vec![crate::row! {
+            "message" => "No aliases configured. Add one with `alias add NAME TEMPLATE`.",
+        }];
+    }
+    rows
+}
+
+fn run_alias_add(
+    context: ConfigCommandContext<'_>,
+    args: AliasAddArgs,
+) -> Result<CliCommandResult> {
+    let key = alias_key(&args.name)?;
+    validate_alias_template(&args.name, &args.template, context.config)?;
+    run_config_set(
+        context,
+        ConfigSetArgs {
+            key,
+            value: args.template,
+            scope: args.scope,
+            store: args.store,
+            dry_run: args.dry_run,
+            yes: true,
+            explain: false,
+        },
+    )
+}
+
+fn run_alias_remove(
+    context: ConfigCommandContext<'_>,
+    args: AliasRemoveArgs,
+) -> Result<CliCommandResult> {
+    run_config_unset(
+        context,
+        ConfigUnsetArgs {
+            key: alias_key(&args.name)?,
+            scope: args.scope,
+            store: args.store,
+            dry_run: args.dry_run,
+        },
+    )
+}
+
+fn alias_key(name: &str) -> Result<String> {
+    let name = name
+        .trim()
+        .strip_prefix("alias.")
+        .unwrap_or(name.trim())
+        .to_ascii_lowercase();
+    if name.is_empty()
+        || name.starts_with('-')
+        || name.contains('|')
+        || name.chars().any(char::is_whitespace)
+    {
+        return Err(miette!(
+            "invalid alias name `{name}`; use one command word such as `lsng`"
+        ));
+    }
+    Ok(format!("alias.{name}"))
 }
 
 fn config_show_rows(context: ConfigReadContext<'_>, args: ConfigShowArgs) -> Vec<Row> {
@@ -878,7 +982,10 @@ fn resolve_config_scopes(
     context: ConfigReadContext<'_>,
     args: &ConfigWriteTarget,
 ) -> Result<Vec<Scope>> {
-    let terminal = resolve_terminal_selector(context, args.terminal.as_deref());
+    let terminal = resolve_terminal_selector(
+        context.context.terminal_kind().as_config_terminal(),
+        args.terminal.as_deref(),
+    );
 
     match &args.scope {
         ConfigScopeTarget::AllProfiles => {
@@ -954,28 +1061,6 @@ fn resolve_store_target(
         ConfigStoreTarget::Config
     } else {
         ConfigStoreTarget::Default
-    }
-}
-
-fn resolve_terminal_selector(
-    context: ConfigReadContext<'_>,
-    selector: Option<&str>,
-) -> Option<String> {
-    let value = selector?;
-    if value == CURRENT_TERMINAL_SENTINEL {
-        return Some(
-            context
-                .context
-                .terminal_kind()
-                .as_config_terminal()
-                .to_string(),
-        );
-    }
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_ascii_lowercase())
     }
 }
 

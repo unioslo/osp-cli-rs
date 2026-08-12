@@ -4,10 +4,9 @@
 //! catalog browsing, provider preference state, and plugin-scoped config
 //! projection.
 
+use super::resolve_terminal_selector;
 use crate::app::{AppClients, AppRuntime, AuthState, ConfigState, RuntimeContext};
-use crate::app::{
-    CURRENT_TERMINAL_SENTINEL, CliCommandResult, PluginConfigScope, plugin_config_entries,
-};
+use crate::app::{CliCommandResult, PluginConfigScope, plugin_config_entries};
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{PluginConfigArgs, PluginsArgs, PluginsCommands};
 use crate::config::{
@@ -291,7 +290,10 @@ fn plugin_config_path(context: PluginsCommandContext<'_>) -> Result<std::path::P
 }
 
 fn plugin_scope(context: PluginsCommandContext<'_>, args: &crate::cli::PluginScopeArgs) -> Scope {
-    let terminal = resolve_terminal_selector(context, args.terminal.as_deref());
+    let terminal = resolve_terminal_selector(
+        context.context.terminal_kind().as_config_terminal(),
+        args.terminal.as_deref(),
+    );
     if args.global {
         return terminal
             .as_deref()
@@ -309,28 +311,6 @@ fn plugin_scope(context: PluginsCommandContext<'_>, args: &crate::cli::PluginSco
         || Scope::profile(profile),
         |current| Scope::profile_terminal(profile, current),
     )
-}
-
-fn resolve_terminal_selector(
-    context: PluginsCommandContext<'_>,
-    selector: Option<&str>,
-) -> Option<String> {
-    let value = selector?;
-    if value == CURRENT_TERMINAL_SENTINEL {
-        return Some(
-            context
-                .context
-                .terminal_kind()
-                .as_config_terminal()
-                .to_string(),
-        );
-    }
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_ascii_lowercase())
-    }
 }
 
 fn normalize_command_name(command: &str) -> Result<String> {

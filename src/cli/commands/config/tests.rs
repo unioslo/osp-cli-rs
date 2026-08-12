@@ -13,6 +13,7 @@ use crate::config::{
     ConfigLayer, ConfigResolver, ResolveOptions, ResolvedConfig, RuntimeLoadOptions, Scope,
 };
 use crate::core::output::OutputFormat;
+use crate::core::output_model::OutputItems;
 use crate::ui::RenderSettings;
 use crate::ui::messages::MessageBuffer;
 use crate::ui::messages::MessageLevel;
@@ -132,6 +133,91 @@ fn config_unset_args(key: &str) -> ConfigUnsetArgs {
     }
 }
 
+#[test]
+fn alias_commands_reuse_resolved_config_and_session_mutation_unit() {
+    let mut defaults = ConfigLayer::default();
+    defaults.set("profile.default", "ops");
+    defaults.set("alias.hosts", "ldap host ${1:login*}");
+    let mut fixture = ConfigTestFixture::with_defaults(TerminalKind::Repl, defaults);
+
+    let listed = super::run_alias_command(
+        fixture.command(),
+        crate::cli::AliasArgs {
+            command: crate::cli::AliasCommands::List(crate::cli::AliasListArgs { sources: true }),
+        },
+    )
+    .expect("alias list should succeed");
+    let Some(ReplCommandOutput::Output(listed)) = listed.output else {
+        panic!("alias list should return structured output");
+    };
+    let OutputItems::Rows(rows) = listed.output.items else {
+        panic!("alias list should return rows");
+    };
+    assert_eq!(rows[0]["name"], "hosts");
+    assert_eq!(rows[0]["template"], "ldap host ${1:login*}");
+    assert_eq!(rows[0]["source"], "defaults");
+
+    let invalid = super::run_alias_command(
+        fixture.command(),
+        crate::cli::AliasArgs {
+            command: crate::cli::AliasCommands::Add(crate::cli::AliasAddArgs {
+                name: "broken".to_string(),
+                template: "ldap host ${".to_string(),
+                scope: ConfigScopeArgs::default(),
+                store: ConfigStoreArgs::default(),
+                dry_run: false,
+            }),
+        },
+    )
+    .expect_err("invalid alias template should be rejected before storage");
+    assert!(
+        invalid
+            .to_string()
+            .contains("invalid alias placeholder syntax")
+    );
+
+    super::run_alias_command(
+        fixture.command(),
+        crate::cli::AliasArgs {
+            command: crate::cli::AliasCommands::Add(crate::cli::AliasAddArgs {
+                name: "lsng".to_string(),
+                template: "ldap netgroup ${1} --value | P members".to_string(),
+                scope: ConfigScopeArgs::default(),
+                store: ConfigStoreArgs {
+                    session: true,
+                    ..ConfigStoreArgs::default()
+                },
+                dry_run: false,
+            }),
+        },
+    )
+    .expect("valid alias should use config set");
+    assert!(
+        fixture
+            .config_overrides
+            .entries()
+            .iter()
+            .any(|entry| entry.key == "alias.lsng")
+    );
+
+    super::run_alias_command(
+        fixture.command(),
+        crate::cli::AliasArgs {
+            command: crate::cli::AliasCommands::Remove(crate::cli::AliasRemoveArgs {
+                name: "lsng".to_string(),
+                scope: ConfigScopeArgs::default(),
+                store: ConfigStoreArgs {
+                    session: true,
+                    ..ConfigStoreArgs::default()
+                },
+                dry_run: false,
+            }),
+        },
+    )
+    .expect("alias remove should use config unset");
+    assert!(fixture.config_overrides.entries().is_empty());
+}
+
 fn env_lock() -> &'static Mutex<()> {
     crate::tests::env_lock()
 }
@@ -218,13 +304,14 @@ fn resolve_config_store_and_names_cover_defaults_and_explicit_targets_unit() {
 fn resolve_scope_target_store_target_and_terminal_selector_cover_precedence_helpers_unit() {
     let fixture = ConfigTestFixture::new(TerminalKind::Repl);
     let repl = fixture.read();
+    let terminal = repl.context.terminal_kind().as_config_terminal();
     assert_eq!(
-        resolve_terminal_selector(repl, Some(crate::app::CURRENT_TERMINAL_SENTINEL)),
+        resolve_terminal_selector(terminal, Some(crate::app::CURRENT_TERMINAL_SENTINEL)),
         Some("repl".to_string())
     );
-    assert_eq!(resolve_terminal_selector(repl, Some("  ")), None);
+    assert_eq!(resolve_terminal_selector(terminal, Some("  ")), None);
     assert_eq!(
-        resolve_terminal_selector(repl, Some("CLI")),
+        resolve_terminal_selector(terminal, Some("CLI")),
         Some("cli".to_string())
     );
 

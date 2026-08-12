@@ -1269,6 +1269,13 @@ fn is_excluded_command(command: &str, exclude_patterns: &[String]) -> bool {
     if trimmed.contains("--help") {
         return true;
     }
+    if trimmed
+        .split_whitespace()
+        .zip(trimmed.split_whitespace().skip(1))
+        .any(|words| words == ("config", "set"))
+    {
+        return true;
+    }
     exclude_patterns
         .iter()
         .any(|pattern| matches_pattern(pattern, trimmed))
