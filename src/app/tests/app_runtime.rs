@@ -618,8 +618,8 @@ fn state_builder_from_host_inputs_preserves_derived_plugin_and_theme_state_unit(
 }
 
 #[test]
-fn app_session_builders_and_cache_helpers_cover_public_session_surface_unit() {
-    let mut neutral_session = crate::app::AppSession::builder().build();
+fn app_session_cache_helpers_cover_public_session_surface_unit() {
+    let mut neutral_session = crate::app::AppSession::default();
     neutral_session.scope.enter("theme");
     assert_eq!(
         neutral_session.scope.help_tokens(),
@@ -630,13 +630,11 @@ fn app_session_builders_and_cache_helpers_cover_public_session_surface_unit() {
     overrides.set("extensions.site.enabled", true);
     let history_shell = HistoryShellContext::default();
 
-    let built_session = crate::app::AppSessionBuilder::default()
+    let built_session = crate::app::AppSession::with_cache_limit(0)
         .with_prompt_prefix("builder")
         .with_history_enabled(false)
         .with_history_shell(history_shell.clone())
-        .with_cache_limit(0)
-        .with_config_overrides(overrides.clone())
-        .build();
+        .with_config_overrides(overrides.clone());
     assert_eq!(built_session.prompt_prefix, "builder");
     assert!(!built_session.history_enabled);
     assert_eq!(built_session.max_cached_results, 1);

@@ -119,8 +119,8 @@ pub use runtime::{
 #[cfg(test)]
 pub(crate) use session::AppStateInit;
 pub use session::{
-    AppSession, AppSessionBuilder, AppState, AppStateBuilder, DebugTimingBadge, DebugTimingState,
-    LastFailure, ReplScopeFrame, ReplScopeStack,
+    AppSession, AppState, AppStateBuilder, DebugTimingBadge, DebugTimingState, LastFailure,
+    ReplScopeFrame, ReplScopeStack,
 };
 pub use sink::{BufferedUiSink, StdIoUiSink, UiSink};
 

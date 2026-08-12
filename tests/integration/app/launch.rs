@@ -235,10 +235,9 @@ fn app_state_builder_tracks_session_public_helpers_from_resolved_config() {
     )
     .expect("app state builder should derive host inputs")
     .with_session(
-        AppSession::builder()
+        AppSession::default()
             .with_prompt_prefix("demo")
-            .with_history_enabled(false)
-            .build(),
+            .with_history_enabled(false),
     )
     .build();
 

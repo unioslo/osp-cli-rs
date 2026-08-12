@@ -19,7 +19,7 @@
 //!
 //! Public API shape:
 //!
-//! - use [`AppSession::builder`] or [`AppSession::with_cache_limit`] plus the
+//! - use [`AppSession::default`] or [`AppSession::with_cache_limit`] plus the
 //!   `with_*` chainers for session-scoped REPL state
 //! - use [`AppStateBuilder`] when you need a fully assembled runtime/session
 //!   snapshot outside the full CLI bootstrap
@@ -291,6 +291,7 @@ impl ReplScopeStack {
 /// Session-scoped REPL state, caches, and prompt metadata.
 #[non_exhaustive]
 #[must_use]
+#[derive(Clone)]
 pub struct AppSession {
     /// Prompt prefix shown before any scope label.
     pub prompt_prefix: String,
@@ -362,79 +363,25 @@ pub(crate) enum ReplExitTransition {
     },
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct AppSessionRebuildState {
-    prompt_prefix: String,
-    history_enabled: bool,
-    history_shell: HistoryShellContext,
-    prompt_timing: DebugTimingState,
-    native_context: NativeSessionContext,
-    startup_prompt_timing_pending: bool,
-    scope: ReplScopeStack,
-    last_rows: Vec<Row>,
-    last_success: Option<LastSuccess>,
-    last_failure: Option<LastFailure>,
-    result_cache: HashMap<String, Vec<Row>>,
-    cache_order: VecDeque<String>,
-    max_cached_results: usize,
-    config_overrides: ConfigLayer,
-}
+#[derive(Clone)]
+pub(crate) struct AppSessionRebuildState(AppSession);
 
 impl AppSessionRebuildState {
     pub(crate) fn is_scoped(&self) -> bool {
-        !self.scope.is_root()
+        !self.0.scope.is_root()
     }
 
     pub(crate) fn session_layer(&self) -> Option<ConfigLayer> {
-        (!self.config_overrides.entries().is_empty()).then(|| self.config_overrides.clone())
+        (!self.0.config_overrides.entries().is_empty()).then(|| self.0.config_overrides.clone())
     }
 
     fn restore_into(self, next: &mut AppSession) {
-        next.prompt_prefix = self.prompt_prefix;
-        next.history_enabled = self.history_enabled;
-        next.history_shell = self.history_shell;
-        next.prompt_timing = self.prompt_timing;
-        next.native_context = self.native_context;
-        next.startup_prompt_timing_pending = self.startup_prompt_timing_pending;
-        next.scope = self.scope;
-        next.last_rows = self.last_rows;
-        next.last_success = self.last_success;
-        next.last_failure = self.last_failure;
-        next.result_cache = self.result_cache;
-        next.cache_order = self.cache_order;
-        // Command execution results depend on live runtime/plugin/config state,
-        // so a rebuild keeps row history but must drop command-result caches.
-        next.command_cache.clear();
-        next.command_cache_order.clear();
-        next.max_cached_results = self.max_cached_results;
-        next.config_overrides = self.config_overrides;
+        *next = self.0;
         next.sync_history_shell_context();
     }
 }
 
 impl AppSession {
-    /// Starts the builder for session-scoped host state.
-    ///
-    /// Prefer this when you want a neutral starting point and do not want the
-    /// first constructor call to imply that cache sizing is the primary concern.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use osp_cli::app::AppSession;
-    ///
-    /// let session = AppSession::builder()
-    ///     .with_prompt_prefix("demo")
-    ///     .with_history_enabled(false)
-    ///     .build();
-    ///
-    /// assert_eq!(session.prompt_prefix, "demo");
-    /// assert!(!session.history_enabled);
-    /// ```
-    pub fn builder() -> AppSessionBuilder {
-        AppSessionBuilder::new()
-    }
-
     /// Creates a session with bounded caches for row and command results.
     ///
     /// A requested cache limit of `0` is clamped to `1` so the session never
@@ -557,22 +504,11 @@ impl AppSession {
 
     /// Captures the session-scoped state that must survive a runtime rebuild.
     pub(crate) fn capture_rebuild_state(&self) -> AppSessionRebuildState {
-        AppSessionRebuildState {
-            prompt_prefix: self.prompt_prefix.clone(),
-            history_enabled: self.history_enabled,
-            history_shell: self.history_shell.clone(),
-            prompt_timing: self.prompt_timing.clone(),
-            native_context: self.native_context.clone(),
-            startup_prompt_timing_pending: self.startup_prompt_timing_pending,
-            scope: self.scope.clone(),
-            last_rows: self.last_rows.clone(),
-            last_success: self.last_success.clone(),
-            last_failure: self.last_failure.clone(),
-            result_cache: self.result_cache.clone(),
-            cache_order: self.cache_order.clone(),
-            max_cached_results: self.max_cached_results,
-            config_overrides: self.config_overrides.clone(),
-        }
+        let mut state = self.clone();
+        // Command execution results depend on live runtime/plugin/config state,
+        // so a rebuild keeps row history but must drop command-result caches.
+        state.clear_command_cache();
+        AppSessionRebuildState(state)
     }
 
     /// Restores session-scoped state after a runtime rebuild.
@@ -588,16 +524,13 @@ impl AppSession {
         }
 
         self.last_rows = rows.clone();
-        if !self.result_cache.contains_key(&key)
-            && self.result_cache.len() >= self.max_cached_results
-            && let Some(evict_key) = self.cache_order.pop_front()
-        {
-            self.result_cache.remove(&evict_key);
-        }
-
-        self.cache_order.retain(|item| item != &key);
-        self.cache_order.push_back(key.clone());
-        self.result_cache.insert(key, rows);
+        insert_bounded_cache(
+            &mut self.result_cache,
+            &mut self.cache_order,
+            self.max_cached_results,
+            key,
+            rows,
+        );
     }
 
     /// Stores the last successful output so the REPL can replay it later.
@@ -683,16 +616,18 @@ impl AppSession {
             return;
         }
 
-        if !self.command_cache.contains_key(&cache_key)
-            && self.command_cache.len() >= self.max_cached_results
-            && let Some(evict_key) = self.command_cache_order.pop_front()
-        {
-            self.command_cache.remove(&evict_key);
-        }
+        insert_bounded_cache(
+            &mut self.command_cache,
+            &mut self.command_cache_order,
+            self.max_cached_results,
+            cache_key,
+            output.clone(),
+        );
+    }
 
-        self.command_cache_order.retain(|item| item != &cache_key);
-        self.command_cache_order.push_back(cache_key.clone());
-        self.command_cache.insert(cache_key, output.clone());
+    fn clear_command_cache(&mut self) {
+        self.command_cache.clear();
+        self.command_cache_order.clear();
     }
 
     pub(crate) fn cached_command(&self, cache_key: &str) -> Option<CliCommandResult> {
@@ -760,80 +695,28 @@ impl AppSession {
     }
 }
 
+fn insert_bounded_cache<V>(
+    cache: &mut HashMap<String, V>,
+    order: &mut VecDeque<String>,
+    limit: usize,
+    key: String,
+    value: V,
+) {
+    if !cache.contains_key(&key)
+        && cache.len() >= limit
+        && let Some(evict_key) = order.pop_front()
+    {
+        cache.remove(&evict_key);
+    }
+
+    order.retain(|item| item != &key);
+    order.push_back(key.clone());
+    cache.insert(key, value);
+}
+
 impl Default for AppSession {
     fn default() -> Self {
         Self::with_cache_limit(DEFAULT_SESSION_CACHE_MAX_RESULTS as usize)
-    }
-}
-
-/// Builder for [`AppSession`].
-///
-/// Prefer this when callers want a neutral session-construction entrypoint and
-/// plan to configure prompt/history behavior before building the final value.
-#[must_use]
-pub struct AppSessionBuilder {
-    prompt_prefix: String,
-    history_enabled: bool,
-    history_shell: HistoryShellContext,
-    max_cached_results: usize,
-    config_overrides: ConfigLayer,
-}
-
-impl Default for AppSessionBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AppSessionBuilder {
-    /// Starts a session builder with the crate's default prompt and cache size.
-    pub fn new() -> Self {
-        Self {
-            prompt_prefix: "osp".to_string(),
-            history_enabled: true,
-            history_shell: HistoryShellContext::default(),
-            max_cached_results: DEFAULT_SESSION_CACHE_MAX_RESULTS as usize,
-            config_overrides: ConfigLayer::default(),
-        }
-    }
-
-    /// Replaces the prompt prefix shown ahead of any scope label.
-    pub fn with_prompt_prefix(mut self, prompt_prefix: impl Into<String>) -> Self {
-        self.prompt_prefix = prompt_prefix.into();
-        self
-    }
-
-    /// Enables or disables history capture for the built session.
-    pub fn with_history_enabled(mut self, history_enabled: bool) -> Self {
-        self.history_enabled = history_enabled;
-        self
-    }
-
-    /// Replaces the shell-scoped history context shared with the history store.
-    pub fn with_history_shell(mut self, history_shell: HistoryShellContext) -> Self {
-        self.history_shell = history_shell;
-        self
-    }
-
-    /// Replaces the maximum number of cached row/command results.
-    pub fn with_cache_limit(mut self, max_cached_results: usize) -> Self {
-        self.max_cached_results = max_cached_results;
-        self
-    }
-
-    /// Replaces the session-scoped config overrides layered above persisted config.
-    pub fn with_config_overrides(mut self, config_overrides: ConfigLayer) -> Self {
-        self.config_overrides = config_overrides;
-        self
-    }
-
-    /// Builds the configured [`AppSession`].
-    pub fn build(self) -> AppSession {
-        AppSession::with_cache_limit(self.max_cached_results)
-            .with_prompt_prefix(self.prompt_prefix)
-            .with_history_enabled(self.history_enabled)
-            .with_history_shell(self.history_shell)
-            .with_config_overrides(self.config_overrides)
     }
 }
 
@@ -1176,33 +1059,18 @@ impl AppStateBuilder {
             themes,
         } = self;
         let should_log_theme_issues = themes.is_none();
-        let derived_defaults = if themes.is_none() || plugins.is_none() || session.is_none() {
-            Some(crate::app::assembly::derive_host_defaults(
-                &config, &launch, None, None,
-            ))
-        } else {
-            None
+        let (themes, plugins, session) = match (themes, plugins, session) {
+            (Some(themes), Some(plugins), Some(session)) => (themes, plugins, Some(session)),
+            (themes, plugins, session) => {
+                let defaults =
+                    crate::app::assembly::derive_host_defaults(&config, &launch, None, None);
+                (
+                    themes.unwrap_or(defaults.themes),
+                    plugins.unwrap_or(defaults.plugins),
+                    Some(session.unwrap_or(defaults.default_session)),
+                )
+            }
         };
-        let (derived_themes, derived_plugins, derived_session) = match derived_defaults {
-            Some(defaults) => (
-                Some(defaults.themes),
-                Some(defaults.plugins),
-                Some(defaults.default_session),
-            ),
-            None => (None, None, None),
-        };
-        let themes = themes.or(derived_themes).unwrap_or_else(|| {
-            crate::app::assembly::derive_host_defaults(&config, &launch, None, None).themes
-        });
-        let plugins = plugins.or(derived_plugins).unwrap_or_else(|| {
-            crate::app::assembly::derive_host_defaults(&config, &launch, None, None).plugins
-        });
-        let session = session.or(derived_session).or_else(|| {
-            Some(
-                crate::app::assembly::derive_host_defaults(&config, &launch, None, None)
-                    .default_session,
-            )
-        });
         if should_log_theme_issues {
             crate::ui::theme_catalog::log_theme_issues(&themes.issues);
         }
@@ -1309,6 +1177,7 @@ mod tests {
         );
 
         let snapshot = session.capture_rebuild_state();
+        assert!(session.cached_command("config show").is_some());
         let mut restored = AppSession::with_cache_limit(1);
         restored.restore_rebuild_state(snapshot);
 
