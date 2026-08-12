@@ -14,7 +14,10 @@
 //!   internal parser quirks
 
 pub use crate::core::shell_words::QuoteStyle;
-use std::{collections::BTreeMap, ops::Range};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
 
 /// Semantic type for values completed by the engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +231,8 @@ pub struct ArgNode {
     pub name: Option<String>,
     /// Optional description shown alongside the argument.
     pub tooltip: Option<String>,
+    /// Whether this position must be filled before a following subcommand.
+    pub required: bool,
     /// Whether the argument may consume multiple values.
     pub multi: bool,
     /// Semantic type for the argument value.
@@ -329,6 +334,8 @@ pub struct FlagNode {
     pub suggestions: Vec<SuggestionEntry>,
     /// Provider-specific value suggestions.
     pub suggestions_by_provider: BTreeMap<String, Vec<SuggestionEntry>>,
+    /// Providers whose value suggestions form a complete allowed-value catalog.
+    pub exhaustive_suggestions_by_provider: BTreeSet<String>,
     /// Allowed providers by OS name.
     pub os_provider_map: BTreeMap<String, Vec<String>>,
     /// OS version suggestions attached to this flag.

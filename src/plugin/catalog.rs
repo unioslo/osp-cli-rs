@@ -7,7 +7,7 @@
 //! host-facing summaries.
 
 use super::active::{ActivePluginView, ResolvedActiveCommand};
-use super::conversion::{collect_completion_words, direct_subcommand_names};
+use super::conversion::direct_subcommand_names;
 use super::manager::{CommandCatalogEntry, CommandConflict, DoctorReport, PluginSummary};
 use super::selection::{ProviderResolution, ProviderSelectionMode, plugin_enabled, plugin_label};
 use crate::completion::CommandSpec;
@@ -110,27 +110,6 @@ pub(crate) fn build_command_policy_registry(view: &ActivePluginView<'_>) -> Comm
     }
 
     registry
-}
-
-pub(crate) fn completion_words_from_catalog(catalog: &[CommandCatalogEntry]) -> Vec<String> {
-    let mut words = vec![
-        "help".to_string(),
-        "exit".to_string(),
-        "quit".to_string(),
-        "P".to_string(),
-        "F".to_string(),
-        "V".to_string(),
-        "|".to_string(),
-    ];
-
-    for command in catalog {
-        words.push(command.name.clone());
-        words.extend(collect_completion_words(&command.completion));
-    }
-
-    words.sort();
-    words.dedup();
-    words
 }
 
 pub(crate) fn render_repl_help(catalog: &[CommandCatalogEntry]) -> String {
@@ -293,15 +272,12 @@ mod tests {
     }
 
     #[test]
-    fn completion_words_and_help_render_from_catalog_surface_unit() {
+    fn help_renders_from_catalog_surface_unit() {
         let alpha = plugin("alpha", "ldap");
         let preferences = PluginCommandPreferences::default();
         let discovered = [alpha];
         let view = ActivePluginView::new(&discovered, &preferences);
         let catalog = build_command_catalog(&view);
-
-        let words = completion_words_from_catalog(&catalog);
-        assert!(words.iter().any(|word| word == "ldap"));
 
         let help = render_repl_help(&catalog);
         assert!(help.contains("Plugin commands:"));

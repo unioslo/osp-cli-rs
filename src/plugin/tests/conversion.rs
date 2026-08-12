@@ -1,20 +1,4 @@
 #[test]
-fn completion_words_collect_flags_and_backbone_commands_unit() {
-    let spec = crate::completion::CommandSpec::new("ldap")
-        .flag("--json", crate::completion::FlagNode::new())
-        .subcommand(
-            crate::completion::CommandSpec::new("user")
-                .subcommand(crate::completion::CommandSpec::new("show")),
-        );
-
-    let words = collect_completion_words(&spec);
-    assert!(words.contains(&"ldap".to_string()));
-    assert!(words.contains(&"--json".to_string()));
-    assert!(words.contains(&"user".to_string()));
-    assert!(words.contains(&"show".to_string()));
-}
-
-#[test]
 fn describe_command_helpers_preserve_nested_completion_metadata_unit() {
     let suggestion = DescribeSuggestionV1 {
         value: "json".to_string(),
@@ -29,6 +13,7 @@ fn describe_command_helpers_preserve_nested_completion_metadata_unit() {
         args: vec![DescribeArgV1 {
             name: Some("uid".to_string()),
             about: Some("user id".to_string()),
+            required: false,
             multi: true,
             value_type: Some(crate::core::plugin::DescribeValueTypeV1::Path),
             suggestions: vec![suggestion.clone()],
@@ -37,6 +22,7 @@ fn describe_command_helpers_preserve_nested_completion_metadata_unit() {
             "--format".to_string(),
             DescribeFlagV1 {
                 about: Some("output format".to_string()),
+                required: true,
                 flag_only: false,
                 multi: true,
                 value_type: Some(crate::core::plugin::DescribeValueTypeV1::Path),
@@ -57,7 +43,13 @@ fn describe_command_helpers_preserve_nested_completion_metadata_unit() {
     assert_eq!(spec.name, "ldap");
     assert_eq!(spec.tooltip.as_deref(), Some("lookup users"));
     assert_eq!(direct_subcommand_names(&spec), vec!["user".to_string()]);
-    assert!(collect_completion_words(&spec).contains(&"--format".to_string()));
+    assert_eq!(
+        spec.flag_hints
+            .as_ref()
+            .expect("required plugin flags should survive conversion")
+            .required_common,
+        ["--format"]
+    );
 
     let arg = to_arg_node(&command.args[0]);
     assert_eq!(arg.name.as_deref(), Some("uid"));

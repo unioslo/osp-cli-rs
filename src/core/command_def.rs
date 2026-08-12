@@ -537,12 +537,8 @@ impl ValueChoice {
     }
 }
 
-#[cfg(feature = "clap")]
 impl CommandDef {
     /// Converts a `clap` command tree into a [`CommandDef`] tree.
-    ///
-    /// Only available with the `clap` cargo feature, which is enabled by
-    /// default.
     ///
     /// # Examples
     ///
@@ -562,7 +558,6 @@ impl CommandDef {
     }
 }
 
-#[cfg(feature = "clap")]
 fn clap_command_to_def(command: clap::Command) -> CommandDef {
     let mut usage_command = command.clone();
     let usage = normalize_usage_line(usage_command.render_usage().to_string());
@@ -607,7 +602,6 @@ fn clap_command_to_def(command: clap::Command) -> CommandDef {
     }
 }
 
-#[cfg(feature = "clap")]
 fn arg_def_from_clap(arg: &clap::Arg) -> ArgDef {
     ArgDef {
         id: arg.get_id().as_str().to_string(),
@@ -641,7 +635,6 @@ fn arg_def_from_clap(arg: &clap::Arg) -> ArgDef {
     }
 }
 
-#[cfg(feature = "clap")]
 fn flag_def_from_clap(arg: &clap::Arg) -> FlagDef {
     let aliases = arg
         .get_long_and_visible_aliases()
@@ -695,7 +688,6 @@ fn flag_def_from_clap(arg: &clap::Arg) -> FlagDef {
     }
 }
 
-#[cfg(feature = "clap")]
 fn styled_to_plain(value: Option<&clap::builder::StyledStr>) -> Option<String> {
     value
         .map(ToString::to_string)
@@ -703,12 +695,10 @@ fn styled_to_plain(value: Option<&clap::builder::StyledStr>) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-#[cfg(feature = "clap")]
 fn range_is_multiple(range: clap::builder::ValueRange) -> bool {
     range.min_values() > 1 || range.max_values() > 1
 }
 
-#[cfg(feature = "clap")]
 fn value_kind_from_hint(hint: clap::ValueHint) -> Option<ValueKind> {
     match hint {
         clap::ValueHint::AnyPath
@@ -719,7 +709,6 @@ fn value_kind_from_hint(hint: clap::ValueHint) -> Option<ValueKind> {
     }
 }
 
-#[cfg(feature = "clap")]
 fn normalize_usage_line(value: String) -> Option<String> {
     value
         .trim()

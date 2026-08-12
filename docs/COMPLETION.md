@@ -23,6 +23,21 @@ Completion works from already-known local information:
 
 It does not call remote systems while you are pressing tab.
 
+## Shell Completion Scripts
+
+Generate a static script for your shell with:
+
+```bash
+osp completions bash
+osp completions zsh
+osp completions fish
+```
+
+The generated script covers built-in one-shot commands and flags. Native
+integrations and plugins are discovered at runtime, so their dynamic command
+trees remain available through the REPL completion engine rather than the
+static shell script.
+
 ## What Completion Can Suggest
 
 The REPL completes:
@@ -94,6 +109,8 @@ Supported expansions:
   - Nth previous command
 - `!123`
   - absolute history entry
+- `!123 args...`
+  - absolute history entry with arguments appended to the editable recalled line
 - `!prefix`
   - most recent command starting with that prefix
 - `!?text`
@@ -105,11 +122,23 @@ Examples:
 !! 
 !plugins
 !-2
+!123 --json
 ```
 
 Persisted history intentionally skips help-like and bang commands such as
 `help`, `history list`, `--help`, and `!` expansions. That is deliberate; it
 keeps durable history focused on commands you are likely to rerun.
+
+`history list` accepts inclusive ISO-like time bounds when you want a smaller
+window:
+
+```text
+history list --since 2026-08-11 --until 2026-08-11T23:59:59Z
+```
+
+Accepted bounds are a date, a date plus `HH:MM[:SS]`, or an RFC3339-like
+timestamp with `Z` or a numeric offset. Natural-language values such as
+`today` and `now` are not accepted.
 
 ## Scoped History
 

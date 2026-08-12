@@ -110,7 +110,7 @@ impl SuggestionEngine {
         let stub = analysis.cursor.token_stub.as_str();
         let resolver = TreeResolver::new(&self.tree);
         let nodes = resolver.resolved_nodes(&analysis.context);
-        let provider = ProviderSelection::from_command(cmd);
+        let provider = ProviderSelection::from_command(cmd, nodes.flag_scope_node);
 
         let mut out = match request {
             CompletionRequest::Pipe => self.pipe_suggestions(stub),
@@ -171,6 +171,10 @@ impl SuggestionEngine {
         }
 
         if request.show_flag_names {
+            let prefer_positionals = request.stub.is_empty()
+                && out
+                    .iter()
+                    .any(|item| matches!(item, SuggestionOutput::Item(_)));
             out.extend(
                 self.flag_name_suggestions(
                     request.flag_scope_node,
@@ -179,6 +183,12 @@ impl SuggestionEngine {
                     request.provider,
                 )
                 .into_iter()
+                .map(|mut suggestion| {
+                    if prefer_positionals {
+                        suggestion.match_score = suggestion.match_score.saturating_add(1);
+                    }
+                    suggestion
+                })
                 .map(SuggestionOutput::Item),
             );
         }
@@ -218,11 +228,19 @@ impl SuggestionEngine {
         } else {
             stub
         };
+        let provider_flags = provider
+            .name()
+            .and_then(|name| node.flag_hints.as_ref()?.by_provider.get(name));
 
         node.flags
             .iter()
             .filter_map(|(flag, meta)| {
                 let score = self.match_score(flag_stub, flag)?;
+                let score = if flag_stub == "--" {
+                    MATCH_SCORE_EMPTY_STUB
+                } else {
+                    score
+                };
                 Some((flag, meta, score))
             })
             .filter(|(flag, _, _)| {
@@ -236,7 +254,22 @@ impl SuggestionEngine {
                 meta: meta.tooltip.clone(),
                 display: required.contains(flag.as_str()).then(|| format!("{flag}*")),
                 is_exact: score == 0,
-                sort: None,
+                sort: Some(
+                    if required.contains(flag.as_str()) {
+                        0
+                    } else if provider_flags.is_some_and(|flags| flags.contains(flag)) {
+                        1
+                    } else if node
+                        .flag_hints
+                        .as_ref()
+                        .is_some_and(|hints| hints.common.contains(flag))
+                    {
+                        2
+                    } else {
+                        3
+                    }
+                    .to_string(),
+                ),
                 match_score: score,
             })
             .collect()
@@ -309,8 +342,22 @@ impl SuggestionEngine {
         stub: &str,
         provider: &ProviderSelection<'_>,
     ) -> Option<Vec<SuggestionOutput>> {
-        let provider_values = flag_node.suggestions_by_provider.get(provider.name()?)?;
-        Some(self.entry_suggestions(provider_values, stub))
+        if let Some(provider_values) = provider
+            .name()
+            .and_then(|name| flag_node.suggestions_by_provider.get(name))
+        {
+            return Some(self.entry_suggestions(provider_values, stub));
+        }
+
+        let mut seen = BTreeSet::new();
+        let provider_values = provider
+            .candidates()
+            .filter_map(|name| flag_node.suggestions_by_provider.get(name))
+            .flatten()
+            .filter(|entry| seen.insert(entry.value.clone()))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!provider_values.is_empty()).then(|| self.entry_suggestions(&provider_values, stub))
     }
 
     fn entry_suggestions(&self, entries: &[SuggestionEntry], stub: &str) -> Vec<SuggestionOutput> {
@@ -372,13 +419,22 @@ impl SuggestionEngine {
         provider: &ProviderSelection<'_>,
     ) -> Option<BTreeSet<String>> {
         let hints = node.flag_hints.as_ref()?;
-        let mut allowed = hints.common.iter().cloned().collect::<BTreeSet<_>>();
+        let mut allowed = hints
+            .common
+            .iter()
+            .chain(&hints.required_common)
+            .cloned()
+            .collect::<BTreeSet<_>>();
 
-        if let Some(provider) = provider.name() {
+        for provider in provider.candidates() {
             if let Some(provider_specific) = hints.by_provider.get(provider) {
                 allowed.extend(provider_specific.iter().cloned());
             }
-            // Once a provider is selected, hide the generic selector flag.
+            if let Some(provider_required) = hints.required_by_provider.get(provider) {
+                allowed.extend(provider_required.iter().cloned());
+            }
+        }
+        if provider.hides_selector() {
             allowed.remove("--provider");
         }
 
@@ -425,7 +481,12 @@ fn child_subcommand_summary(child: &CompletionNode) -> Option<String> {
         return None;
     }
 
-    let mut summary = format!("subcommands: {}", preview.join(", "));
+    let label = if child.value_key {
+        "values"
+    } else {
+        "subcommands"
+    };
+    let mut summary = format!("{label}: {}", preview.join(", "));
     if child.children.len() > preview.len() {
         summary.push_str(", ...");
     }

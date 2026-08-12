@@ -13,12 +13,12 @@ use miette::{IntoDiagnostic, Result, WrapErr};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::app::CMD_HELP;
 use crate::app::ReplScopeStack;
-use crate::app::{CMD_HELP, REPL_SHELLABLE_COMMANDS};
 use crate::cli::invocation::{hidden_invocation_completion_flags, scan_command_tokens_with_trace};
 use crate::cli::pipeline::{ParsedCommandLine, parse_command_text_with_aliases};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ReplParsedLine {
     pub(crate) command_tokens: Vec<String>,
     pub(crate) dispatch_tokens: Vec<String>,
@@ -40,9 +40,13 @@ impl ReplParsedLine {
         self.command_tokens.len() == 1 && matches!(self.command_tokens[0].as_str(), "--help" | "-h")
     }
 
-    pub(crate) fn shell_entry_command<'a>(&'a self, scope: &ReplScopeStack) -> Option<&'a str> {
-        self.explicit_shell_entry_command()
-            .or_else(|| self.implicit_shell_entry_command(scope))
+    pub(crate) fn shell_entry_command<'a>(
+        &'a self,
+        scope: &ReplScopeStack,
+        config: &ResolvedConfig,
+    ) -> Option<&'a str> {
+        self.explicit_shell_entry_command(config)
+            .or_else(|| self.implicit_shell_entry_command(scope, config))
     }
 
     pub(crate) fn current_shell_help_command<'a>(
@@ -99,7 +103,7 @@ impl ReplParsedLine {
         }
     }
 
-    fn explicit_shell_entry_command(&self) -> Option<&str> {
+    fn explicit_shell_entry_command(&self, config: &ResolvedConfig) -> Option<&str> {
         if !self.stages.is_empty() || self.dispatch_tokens.len() != 2 {
             return None;
         }
@@ -116,17 +120,21 @@ impl ReplParsedLine {
         // shell" and "repeating the current root means help". Keeping it
         // hidden is intentional: visible `cd` teaches a filesystem metaphor,
         // while the public model here is "subcommand enters subcommand shell".
-        is_repl_shellable_command(command).then_some(command)
+        is_repl_shellable_command(config, command).then_some(command)
     }
 
-    fn implicit_shell_entry_command<'a>(&'a self, scope: &ReplScopeStack) -> Option<&'a str> {
+    fn implicit_shell_entry_command<'a>(
+        &'a self,
+        scope: &ReplScopeStack,
+        config: &ResolvedConfig,
+    ) -> Option<&'a str> {
         if !self.stages.is_empty() || self.dispatch_tokens.len() != 1 {
             return None;
         }
 
         let command = self.dispatch_tokens[0].trim();
         if command.is_empty()
-            || !is_repl_shellable_command(command)
+            || !is_repl_shellable_command(config, command)
             || scope.contains_command(command)
         {
             return None;
@@ -258,8 +266,10 @@ fn blank_bytes(buffer: &mut [u8], start: usize, end: usize) {
     }
 }
 
-pub(crate) fn is_repl_shellable_command(command: &str) -> bool {
-    REPL_SHELLABLE_COMMANDS
+pub(crate) fn is_repl_shellable_command(config: &ResolvedConfig, command: &str) -> bool {
+    config
+        .get_string_list("repl.shellable_commands")
+        .unwrap_or_default()
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(command.trim()))
 }
@@ -277,6 +287,10 @@ mod tests {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         defaults.set("repl.history.path", "/tmp/osp-repl-input-history.jsonl");
+        defaults.set(
+            "repl.shellable_commands",
+            ["ldap", "orch"].map(str::to_string).to_vec(),
+        );
         defaults.set("theme.path", Vec::<String>::new());
 
         let mut resolver = ConfigResolver::default();
@@ -311,10 +325,10 @@ mod tests {
 
         let mut scope = ReplScopeStack::default();
         let hidden = ReplParsedLine::parse("cd ldap", &config).expect("hidden shell should parse");
-        assert_eq!(hidden.shell_entry_command(&scope), Some("ldap"));
+        assert_eq!(hidden.shell_entry_command(&scope, &config), Some("ldap"));
 
         let bare = ReplParsedLine::parse("ldap", &config).expect("command should parse");
-        assert_eq!(bare.shell_entry_command(&scope), Some("ldap"));
+        assert_eq!(bare.shell_entry_command(&scope, &config), Some("ldap"));
         assert_eq!(
             bare.current_shell_help_command(&scope),
             None,
@@ -322,8 +336,8 @@ mod tests {
         );
 
         scope.enter("ldap");
-        assert_eq!(hidden.shell_entry_command(&scope), Some("ldap"));
-        assert_eq!(bare.shell_entry_command(&scope), None);
+        assert_eq!(hidden.shell_entry_command(&scope, &config), Some("ldap"));
+        assert_eq!(bare.shell_entry_command(&scope, &config), None);
         assert_eq!(
             bare.current_shell_help_command(&scope),
             Some(super::CurrentShellHelp {
@@ -344,7 +358,7 @@ mod tests {
 
         let help_alias =
             ReplParsedLine::parse("help ldap", &config).expect("help alias should parse");
-        assert_eq!(help_alias.shell_entry_command(&scope), None);
+        assert_eq!(help_alias.shell_entry_command(&scope, &config), None);
         assert_eq!(
             help_alias.current_shell_help_command(&scope),
             Some(super::CurrentShellHelp {

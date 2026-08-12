@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::completion::model::{
-    ArgNode, CompletionNode, CompletionTree, FlagNode, SuggestionEntry,
+    ArgNode, CompletionNode, CompletionTree, FlagHints, FlagNode, SuggestionEntry,
 };
 use crate::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
 use thiserror::Error;
@@ -65,6 +65,8 @@ pub struct CommandSpec {
     pub args: Vec<ArgNode>,
     /// Flags accepted by this command.
     pub flags: BTreeMap<String, FlagNode>,
+    /// Provider-aware flag visibility and requiredness hints.
+    pub flag_hints: Option<FlagHints>,
     /// Nested subcommands below this command.
     pub subcommands: Vec<CommandSpec>,
 }
@@ -123,6 +125,12 @@ impl CommandSpec {
     /// If omitted, the command contributes no flag completion metadata.
     pub fn flags(mut self, flags: impl IntoIterator<Item = (String, FlagNode)>) -> Self {
         self.flags.extend(flags);
+        self
+    }
+
+    /// Attaches provider-aware flag visibility and requiredness hints.
+    pub fn flag_hints(mut self, hints: FlagHints) -> Self {
+        self.flag_hints = Some(hints);
         self
     }
 
@@ -279,6 +287,7 @@ impl CompletionTreeBuilder {
             sort: spec.sort.clone(),
             args: spec.args.clone(),
             flags: spec.flags.clone(),
+            flag_hints: spec.flag_hints.clone(),
             ..CompletionNode::default()
         };
 
@@ -297,12 +306,22 @@ impl CompletionTreeBuilder {
 }
 
 pub(crate) fn command_spec_from_command_def(def: &CommandDef) -> CommandSpec {
+    let required_common = def
+        .flags
+        .iter()
+        .filter(|flag| flag.required && !flag.hidden)
+        .filter_map(preferred_flag_spelling)
+        .collect::<Vec<_>>();
     CommandSpec {
         name: def.name.clone(),
         tooltip: def.about.clone(),
         sort: def.sort_key.clone(),
         args: def.args.iter().map(arg_node_from_def).collect(),
         flags: def.flags.iter().flat_map(flag_entries_from_def).collect(),
+        flag_hints: (!required_common.is_empty()).then_some(FlagHints {
+            required_common,
+            ..FlagHints::default()
+        }),
         subcommands: def
             .subcommands
             .iter()
@@ -311,10 +330,19 @@ pub(crate) fn command_spec_from_command_def(def: &CommandDef) -> CommandSpec {
     }
 }
 
+fn preferred_flag_spelling(flag: &FlagDef) -> Option<String> {
+    flag.long
+        .as_deref()
+        .map(|long| format!("--{long}"))
+        .or_else(|| flag.short.map(|short| format!("-{short}")))
+        .or_else(|| flag.aliases.first().cloned())
+}
+
 fn arg_node_from_def(arg: &ArgDef) -> ArgNode {
     ArgNode {
         name: Some(arg.value_name.as_deref().unwrap_or(&arg.id).to_string()),
         tooltip: arg.help.clone(),
+        required: arg.required,
         multi: arg.multi,
         value_type: to_completion_value_type(arg.value_kind),
         suggestions: arg.choices.iter().map(suggestion_from_choice).collect(),
@@ -499,7 +527,8 @@ mod tests {
                     .short('r')
                     .alias("--plain")
                     .help("Show raw values"),
-            );
+            )
+            .flag(FlagDef::new("yes").long("yes").required());
 
         let spec = command_spec_from_command_def(&def);
 
@@ -508,6 +537,13 @@ mod tests {
         assert!(spec.flags.contains_key("--raw"));
         assert!(spec.flags.contains_key("-r"));
         assert!(spec.flags.contains_key("--plain"));
+        assert_eq!(
+            spec.flag_hints
+                .as_ref()
+                .expect("required flags should produce hints")
+                .required_common,
+            ["--yes"]
+        );
         assert_eq!(spec.args[0].tooltip.as_deref(), Some("Theme name"));
         assert_eq!(spec.args[0].suggestions[0].value, "nord");
         assert_eq!(

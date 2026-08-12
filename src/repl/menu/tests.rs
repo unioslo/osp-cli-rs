@@ -675,8 +675,8 @@ fn second_tab_refreshes_root_and_committed_token_buffers_before_selection_unit()
         menu.update_for_test(&mut editor, &mut completer, 80);
 
         dispatch_tab_like_reedline(&mut menu);
-        assert_eq!(editor.line_buffer().get_buffer(), "help");
         menu.update_for_test(&mut editor, &mut completer, 80);
+        assert_eq!(editor.line_buffer().get_buffer(), "help");
         assert_eq!(menu.core.selected_index(), Some(0));
     }
 
@@ -691,8 +691,8 @@ fn second_tab_refreshes_root_and_committed_token_buffers_before_selection_unit()
         menu.update_for_test(&mut editor, &mut completer, 80);
 
         dispatch_tab_like_reedline(&mut menu);
-        assert_eq!(editor.line_buffer().get_buffer(), "config show");
         menu.update_for_test(&mut editor, &mut completer, 80);
+        assert_eq!(editor.line_buffer().get_buffer(), "config show");
         assert_eq!(menu.core.selected_index(), Some(0));
     }
 }
@@ -714,18 +714,18 @@ fn config_scope_navigation_and_child_scope_commit_keep_expected_menu_state_unit(
     assert_eq!(values, vec!["show", "get", "explain"]);
 
     menu.menu_event(MenuEvent::PreviousElement);
-    assert_eq!(editor.line_buffer().get_buffer(), "config explain");
     menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config explain");
     assert_eq!(menu.core.selected_index(), Some(2));
 
     dispatch_tab_like_reedline(&mut menu);
-    assert_eq!(editor.line_buffer().get_buffer(), "config show");
     menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config show");
     assert_eq!(menu.core.selected_index(), Some(0));
 
     dispatch_tab_like_reedline(&mut menu);
-    assert_eq!(editor.line_buffer().get_buffer(), "config get");
     menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "config get");
     assert_eq!(menu.core.selected_index(), Some(1));
 
     set_buffer(&mut editor, "config show ");
@@ -835,15 +835,15 @@ fn contract_root_menu_refresh_keeps_the_inserted_command_visible_and_selected_un
     });
 
     let mut editor = Editor::default();
-    let mut completer = crate::repl::ReplCompleter::new(Vec::new(), Some(tree), Some(projector));
+    let mut completer = crate::repl::ReplCompleter::new(tree, Some(projector));
     let mut menu = OspCompletionMenu::default();
 
     dispatch_tab_like_reedline(&mut menu);
     menu.update_for_test(&mut editor, &mut completer, 80);
 
     dispatch_tab_like_reedline(&mut menu);
-    assert_eq!(editor.line_buffer().get_buffer(), "help");
     menu.update_for_test(&mut editor, &mut completer, 80);
+    assert_eq!(editor.line_buffer().get_buffer(), "help");
 
     let values = menu
         .get_values()
@@ -899,7 +899,7 @@ fn helper_edges_cover_invalid_spans_and_value_based_indent() {
     menu.core
         .set_values(vec![suggestion("config", Span { start: 2, end: 2 })]);
     menu.set_cursor_pos((6, 0));
-    assert_eq!(super::compute_menu_indent(&menu, &editor), 6);
+    assert_eq!(super::compute_menu_indent(&menu, &editor, 80), 6);
 
     set_buffer(&mut editor, "help");
     menu.replace_span = Some(Span { start: 10, end: 1 });
@@ -907,4 +907,24 @@ fn helper_edges_cover_invalid_spans_and_value_based_indent() {
 
     assert_eq!(editor.line_buffer().get_buffer(), "help config ");
     assert!(!needs_space_prefix("hi", 5, 5));
+}
+
+#[test]
+fn long_completion_prefix_reflows_menu_below_the_prompt() {
+    let mut editor = Editor::default();
+    let line = "orch vm create test01 --provider nrec --";
+    set_buffer(&mut editor, line);
+
+    let mut menu = OspCompletionMenu::default();
+    menu.core.set_values(vec![suggestion(
+        "--network",
+        Span {
+            start: line.len() - 2,
+            end: line.len(),
+        },
+    )]);
+    menu.set_cursor_pos((50, 0));
+
+    let debug = super::debug_snapshot(&mut menu, &editor, 72, 10, false);
+    assert_eq!(debug.indent, 10);
 }

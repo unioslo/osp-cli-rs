@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::completion::CompletionEngine;
 use crate::completion::model::{
@@ -333,6 +333,163 @@ fn flag_hints_filter_provider_specific_flags_and_alias_allowlists_unit() {
             .and_then(|item| item.display.as_deref()),
         Some("--size*")
     );
+}
+
+#[test]
+fn flag_hints_infer_provider_or_keep_the_compatible_union_unit() {
+    let mut node = CompletionNode::default();
+    for flag in [
+        "--provider",
+        "--comment",
+        "--cpu",
+        "--memory",
+        "--instance",
+        "--shared",
+    ] {
+        node.flags.insert(flag.to_string(), FlagNode::default());
+    }
+    let shared = node.flags.get_mut("--shared").unwrap();
+    shared.suggestions_by_provider = BTreeMap::from([
+        ("alpha".to_string(), vec![SuggestionEntry::from("small")]),
+        ("beta".to_string(), vec![SuggestionEntry::from("large")]),
+    ]);
+    node.flag_hints = Some(FlagHints {
+        common: vec!["--provider".to_string(), "--comment".to_string()],
+        by_provider: BTreeMap::from([
+            (
+                "alpha".to_string(),
+                vec![
+                    "--cpu".to_string(),
+                    "--memory".to_string(),
+                    "--shared".to_string(),
+                ],
+            ),
+            (
+                "beta".to_string(),
+                vec!["--instance".to_string(), "--shared".to_string()],
+            ),
+        ]),
+        ..FlagHints::default()
+    });
+    let engine = CompletionEngine::new(tree_with_command("provision", node));
+
+    let all = values(generate(&engine, command(&["provision"]), "--"));
+    assert!(all.contains(&"--cpu".to_string()));
+    assert!(all.contains(&"--instance".to_string()));
+    assert!(all.contains(&"--provider".to_string()));
+
+    let alpha = values(generate(
+        &engine,
+        with_flag(command(&["provision"]), "--cpu", &[]),
+        "--",
+    ));
+    assert!(alpha.contains(&"--memory".to_string()));
+    assert!(!alpha.contains(&"--instance".to_string()));
+    assert!(!alpha.contains(&"--provider".to_string()));
+
+    let shared_values = values(generate(
+        &engine,
+        with_flag(command(&["provision"]), "--shared", &[]),
+        "",
+    ));
+    assert_eq!(shared_values, vec!["large", "small"]);
+
+    let conflicting = values(generate(
+        &engine,
+        with_flag(
+            with_flag(command(&["provision"]), "--cpu", &[]),
+            "--instance",
+            &[],
+        ),
+        "--",
+    ));
+    assert!(conflicting.contains(&"--shared".to_string()));
+    assert!(conflicting.contains(&"--provider".to_string()));
+}
+
+#[test]
+fn shared_flag_values_narrow_provider_suggestions_as_the_user_types_unit() {
+    let mut node = CompletionNode::default();
+    for flag in ["--provider", "--os", "--zone", "--cpu", "--instance"] {
+        node.flags.insert(flag.to_string(), FlagNode::default());
+    }
+    node.flags.get_mut("--os").unwrap().suggestions_by_provider = BTreeMap::from([
+        (
+            "alpha".to_string(),
+            vec![
+                SuggestionEntry::from("ubuntu"),
+                SuggestionEntry::from("linux"),
+            ],
+        ),
+        (
+            "beta".to_string(),
+            vec![
+                SuggestionEntry::from("rhel"),
+                SuggestionEntry::from("linux"),
+            ],
+        ),
+    ]);
+    node.flags
+        .get_mut("--os")
+        .unwrap()
+        .exhaustive_suggestions_by_provider =
+        BTreeSet::from(["alpha".to_string(), "beta".to_string()]);
+    node.flags
+        .get_mut("--zone")
+        .unwrap()
+        .suggestions_by_provider = BTreeMap::from([
+        ("alpha".to_string(), vec![SuggestionEntry::from("oslo")]),
+        ("beta".to_string(), vec![SuggestionEntry::from("bergen")]),
+    ]);
+    node.flags
+        .get_mut("--zone")
+        .unwrap()
+        .exhaustive_suggestions_by_provider =
+        BTreeSet::from(["alpha".to_string(), "beta".to_string()]);
+    node.flag_hints = Some(FlagHints {
+        common: vec![
+            "--provider".to_string(),
+            "--os".to_string(),
+            "--zone".to_string(),
+        ],
+        by_provider: BTreeMap::from([
+            ("alpha".to_string(), vec!["--cpu".to_string()]),
+            ("beta".to_string(), vec!["--instance".to_string()]),
+        ]),
+        ..FlagHints::default()
+    });
+    let engine = CompletionEngine::new(tree_with_command("provision", node));
+
+    assert_eq!(
+        values_for_line(&engine, "provision --os ub"),
+        vec!["ubuntu"]
+    );
+
+    let alpha = values_for_line(&engine, "provision --os ub --");
+    assert!(alpha.contains(&"--cpu".to_string()));
+    assert!(!alpha.contains(&"--instance".to_string()));
+    assert!(!alpha.contains(&"--provider".to_string()));
+
+    for line in [
+        "provision --os linux --",
+        "provision --os unknown --",
+        "provision --os ubuntu --zone bergen --",
+    ] {
+        let permissive = values_for_line(&engine, line);
+        assert!(permissive.contains(&"--cpu".to_string()), "line: {line}");
+        assert!(
+            permissive.contains(&"--instance".to_string()),
+            "line: {line}"
+        );
+        assert!(
+            permissive.contains(&"--provider".to_string()),
+            "line: {line}"
+        );
+    }
+
+    let explicit = values_for_line(&engine, "provision --provider beta --os ubuntu --");
+    assert!(!explicit.contains(&"--cpu".to_string()));
+    assert!(explicit.contains(&"--instance".to_string()));
 }
 
 #[test]

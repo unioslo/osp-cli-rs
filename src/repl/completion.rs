@@ -15,7 +15,7 @@ use crate::completion::{
     ContextScope, FlagNode, SuggestionEntry,
 };
 use crate::dsl::parse::pipeline::parse_stage;
-use crate::dsl::{VerbStreaming, registered_verbs, render_streaming_badge, verb_info};
+use crate::dsl::{registered_verbs, verb_info};
 use crate::repl::default_pipe_verbs;
 use crate::ui::section_chrome::{
     SectionRenderContext, SectionStyleTokens, render_section_block_with_overrides,
@@ -39,7 +39,7 @@ pub(crate) fn build_repl_completion_tree(
         .wrap_err("failed to build REPL completion tree")?;
     if view.auth.is_builtin_visible(CMD_CONFIG) {
         CompletionTreeBuilder
-            .apply_config_set_keys(&mut tree, config_set_key_specs())
+            .apply_config_set_keys(&mut tree, config_set_key_specs(view))
             .into_diagnostic()
             .wrap_err("failed to attach config completion keys")?;
     }
@@ -511,12 +511,7 @@ fn render_dsl_help(view: ReplViewContext<'_>, spec: &str) -> String {
     let target = spec.split_whitespace().next().unwrap_or("").trim();
     if target.is_empty() {
         for info in registered_verbs() {
-            let mut line = format!("  {:<5} {}", info.verb, info.summary);
-            if let Some(badge) = render_streaming_badge(info.streaming) {
-                line.push(' ');
-                line.push_str(badge);
-            }
-            lines.push(line);
+            lines.push(format!("  {:<5} {}", info.verb, info.summary));
         }
         lines.push(String::new());
         lines.push("  Use | H <verb> for details.".to_string());
@@ -524,14 +519,6 @@ fn render_dsl_help(view: ReplViewContext<'_>, spec: &str) -> String {
         let lookup = target.to_ascii_uppercase();
         if let Some(info) = verb_info(&lookup) {
             lines.push(format!("  {}  {}", info.verb, info.summary));
-            let streaming = match info.streaming {
-                VerbStreaming::Streamable => "yes".to_string(),
-                VerbStreaming::Conditional => "conditional".to_string(),
-                VerbStreaming::Materializes => "no".to_string(),
-                VerbStreaming::Meta => "n/a".to_string(),
-            };
-            lines.push(format!("  Streaming: {streaming}"));
-            lines.push(format!("  Note: {}", info.streaming_note));
         } else {
             lines.push(format!("  Unknown DSL verb: {target}"));
             lines.push("  Use | H to list available verbs.".to_string());
@@ -749,26 +736,19 @@ mod tests {
     }
 
     #[test]
-    fn dsl_help_describes_materialization_and_streaming_behaviors_unit() {
+    fn dsl_help_lists_and_describes_registered_verbs_unit() {
         let state = test_app_state();
         let listing = render_dsl_help(
             ReplViewContext::from_parts(&state.runtime, &state.session),
             "",
         );
-        assert!(listing.contains("A") && listing.contains("[materializes]"));
-        assert!(listing.contains("JQ") && listing.contains("[materializes]"));
+        assert!(listing.contains("A") && listing.contains("Aggregate rows/groups"));
+        assert!(listing.contains("JQ") && listing.contains("Run jq-like expression"));
 
         let aggregate = render_dsl_help(
             ReplViewContext::from_parts(&state.runtime, &state.session),
             "A",
         );
-        assert!(aggregate.contains("Streaming: no"));
-        assert!(aggregate.contains("aggregation needs the full input"));
-
-        let filter = render_dsl_help(
-            ReplViewContext::from_parts(&state.runtime, &state.session),
-            "F",
-        );
-        assert!(filter.contains("Streaming: yes"));
+        assert!(aggregate.contains("A  Aggregate rows/groups"));
     }
 }

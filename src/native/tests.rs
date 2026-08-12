@@ -1,6 +1,6 @@
 use super::{
     NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
-    NativeProgressEvent, NativeProgressSink,
+    NativeProgressEvent, NativeProgressSink, NativeSessionContext,
 };
 use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions, ResolvedConfig};
 use crate::core::command_policy::CommandPath;
@@ -11,7 +11,124 @@ use crate::core::plugin::{
 use crate::core::runtime::RuntimeHints;
 use clap::Command;
 use serde_json::json;
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::time::Duration;
+
+struct CompletionAugmentingCommand;
+
+impl NativeCommand for CompletionAugmentingCommand {
+    fn command(&self) -> Command {
+        Command::new("deploy").arg(clap::Arg::new("provider").long("provider"))
+    }
+
+    fn augment_completion(&self, completion: &mut crate::completion::CommandSpec) {
+        completion.flags.insert(
+            "--flavor".to_string(),
+            crate::completion::FlagNode::new()
+                .suggestions([crate::completion::SuggestionEntry::from("m1.small")]),
+        );
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        _context: &NativeCommandContext<'_>,
+    ) -> anyhow::Result<NativeCommandOutcome> {
+        unreachable!("not used in completion test")
+    }
+}
+
+#[test]
+fn native_completion_augmentation_is_repl_only_unit() {
+    let registry = NativeCommandRegistry::new().with_command(CompletionAugmentingCommand);
+
+    assert!(
+        !registry.catalog()[0]
+            .completion
+            .flags
+            .contains_key("--flavor")
+    );
+    assert!(
+        registry.completion_catalog()[0]
+            .completion
+            .flags
+            .contains_key("--flavor")
+    );
+}
+
+struct BackgroundCompletionCommand {
+    name: &'static str,
+    started: mpsc::Sender<&'static str>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl NativeCommand for BackgroundCompletionCommand {
+    fn command(&self) -> Command {
+        Command::new(self.name)
+    }
+
+    fn refresh_completion(&self) -> anyhow::Result<()> {
+        self.started.send(self.name)?;
+        let (lock, ready) = &*self.release;
+        let mut released = lock.lock().expect("release lock");
+        while !*released {
+            released = ready.wait(released).expect("release wait");
+        }
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        _context: &NativeCommandContext<'_>,
+    ) -> anyhow::Result<NativeCommandOutcome> {
+        unreachable!("not used in refresh test")
+    }
+}
+
+#[test]
+fn native_completion_refresh_is_background_and_filtered_unit() {
+    let (started, observed) = mpsc::channel();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let registry = NativeCommandRegistry::new()
+        .with_command(BackgroundCompletionCommand {
+            name: "visible",
+            started: started.clone(),
+            release: Arc::clone(&release),
+        })
+        .with_command(BackgroundCompletionCommand {
+            name: "hidden",
+            started,
+            release: Arc::clone(&release),
+        });
+
+    registry.refresh_completion_in_background(|name| name == "visible");
+
+    assert_eq!(observed.recv_timeout(Duration::from_secs(1)), Ok("visible"));
+    assert!(observed.try_recv().is_err());
+
+    let catalog_started = std::time::Instant::now();
+    assert_eq!(registry.completion_catalog().len(), 2);
+    assert!(
+        catalog_started.elapsed() < Duration::from_millis(100),
+        "completion catalog waited for the background refresh"
+    );
+
+    let (lock, ready) = &*release;
+    *lock.lock().expect("release lock") = true;
+    ready.notify_all();
+}
+
+#[test]
+fn native_session_context_completion_refresh_request_is_one_shot_unit() {
+    let context = NativeSessionContext::default();
+    assert!(!context.take_completion_refresh_request());
+
+    context.request_completion_refresh();
+
+    assert!(context.take_completion_refresh_request());
+    assert!(!context.take_completion_refresh_request());
+}
 
 fn resolved_config() -> ResolvedConfig {
     let mut defaults = ConfigLayer::default();

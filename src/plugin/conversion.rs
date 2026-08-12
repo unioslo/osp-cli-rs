@@ -29,6 +29,7 @@ pub(super) fn to_arg_node(arg: &DescribeArgV1) -> ArgNode {
     if let Some(about) = &arg.about {
         node = node.tooltip(about);
     }
+    node.required = arg.required;
     if arg.multi {
         node = node.multi();
     }
@@ -78,15 +79,4 @@ pub(crate) fn direct_subcommand_names(spec: &CommandSpec) -> Vec<String> {
         .iter()
         .map(|subcommand| subcommand.name.clone())
         .collect()
-}
-
-pub(super) fn collect_completion_words(spec: &CommandSpec) -> Vec<String> {
-    let mut words = vec![spec.name.clone()];
-    for flag in spec.flags.keys() {
-        words.push(flag.clone());
-    }
-    for subcommand in &spec.subcommands {
-        words.extend(collect_completion_words(subcommand));
-    }
-    words
 }

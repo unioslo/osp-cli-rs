@@ -8,17 +8,12 @@ use reedline::{
     Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
     menu_functions::{can_partially_complete, replace_in_buffer},
 };
-use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
 
 use crate::repl::CompletionTraceMenuState;
 use crate::repl::menu_core::{MenuAction, MenuCore};
 
 pub(crate) use crate::repl::menu_core::{MenuDebug, MenuStyleDebug, display_text};
-
-thread_local! {
-    static ACTIVE_MENU_EDITOR: Cell<*mut Editor> = const { Cell::new(std::ptr::null_mut()) };
-}
 
 /// Completion menu with adaptive column layout and an optional meta line.
 ///
@@ -40,12 +35,9 @@ pub struct OspCompletionMenu {
     indent_anchor: Option<u16>,
     cursor_col: u16,
     last_available_lines: u16,
-    // Queue menu events that still need the refresh pass. Navigation is
-    // applied eagerly once the menu has seen a live editor in a previous
-    // repaint so reedline paints the selected completion and the prompt line
-    // from the same state.
+    // Queue menu events until reedline supplies the live editor in its normal
+    // update pass.
     event: Option<MenuEvent>,
-    pending_selection_refresh: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +60,6 @@ impl Default for OspCompletionMenu {
             cursor_col: 0,
             last_available_lines: 0,
             event: None,
-            pending_selection_refresh: None,
         }
     }
 }
@@ -164,13 +155,13 @@ impl OspCompletionMenu {
         }
     }
 
-    fn stable_menu_indent(&mut self, editor: &Editor) -> u16 {
+    fn stable_menu_indent(&mut self, editor: &Editor, screen_width: u16) -> u16 {
         if let Some(indent) = self.indent_anchor {
             return indent;
         }
         // Latch the first live indent so cycling across replacements does not
         // make the menu "walk" horizontally between frames.
-        let indent = compute_menu_indent(self, editor);
+        let indent = compute_menu_indent(self, editor, screen_width);
         if self.core.is_active() && !self.core.values().is_empty() {
             self.indent_anchor = Some(indent);
         }
@@ -296,33 +287,10 @@ impl OspCompletionMenu {
         screen_width: u16,
         available_lines: u16,
     ) {
-        set_active_menu_editor(Some(editor));
-
-        if let Some(selected_value) = self.pending_selection_refresh.take() {
-            let replace_span = self.replace_span;
-            self.update_values(editor, completer);
-            // A same-frame navigation already replaced the active token in the
-            // buffer. Keep replacing that token while the menu stays open
-            // instead of snapping back to the completer's original stub span.
-            self.replace_span = replace_span;
-            self.last_available_lines = available_lines;
-            let indent = self.stable_menu_indent(editor);
-            self.core.update_layout(screen_width, indent);
-            self.core.restore_selection_by_value(&selected_value);
-            if !self.core.is_active() {
-                set_active_menu_editor(None);
-            }
-            trace_menu_state_with_available_lines(self, editor, available_lines);
-            return;
-        }
-
         self.apply_event(editor, completer);
         self.last_available_lines = available_lines;
-        let indent = self.stable_menu_indent(editor);
+        let indent = self.stable_menu_indent(editor, screen_width);
         self.core.update_layout(screen_width, indent);
-        if !self.core.is_active() {
-            set_active_menu_editor(None);
-        }
         trace_menu_state_with_available_lines(self, editor, available_lines);
     }
 }
@@ -371,38 +339,6 @@ impl Menu for OspCompletionMenu {
         if matches!(event, MenuEvent::Activate(_) | MenuEvent::Deactivate) {
             self.replace_span = None;
             self.indent_anchor = None;
-            if matches!(event, MenuEvent::Deactivate) {
-                self.pending_selection_refresh = None;
-                set_active_menu_editor(None);
-            }
-        }
-
-        if matches!(
-            event,
-            MenuEvent::NextElement
-                | MenuEvent::PreviousElement
-                | MenuEvent::MoveUp
-                | MenuEvent::MoveDown
-                | MenuEvent::MoveLeft
-                | MenuEvent::MoveRight
-                | MenuEvent::NextPage
-                | MenuEvent::PreviousPage
-        ) && let Some(selected_value) = with_active_menu_editor(|editor| {
-            let action = self.core.handle_event(event.clone());
-            if matches!(action, MenuAction::ApplySelection) {
-                self.apply_selection_in_buffer(editor, ApplyMode::Cycle);
-                self.core.selected_value().map(|item| item.value.clone())
-            } else {
-                None
-            }
-        })
-        .flatten()
-        {
-            // The selection already changed the live buffer for this frame.
-            // The next refresh only needs to recompute candidates and restore
-            // the same selected value if it still exists.
-            self.pending_selection_refresh = Some(selected_value);
-            return;
         }
         self.event = Some(event);
     }
@@ -470,7 +406,7 @@ pub(crate) fn debug_snapshot(
     screen_height: u16,
     ansi: bool,
 ) -> MenuDebug {
-    let indent = compute_menu_indent(menu, editor);
+    let indent = compute_menu_indent(menu, editor, screen_width);
     menu.core
         .debug_snapshot(&menu.colors, screen_width, screen_height, indent, ansi)
 }
@@ -546,7 +482,7 @@ fn needs_space_prefix(line: &str, start: usize, end: usize) -> bool {
     !prev.is_whitespace() && prev != '='
 }
 
-fn compute_menu_indent(menu: &OspCompletionMenu, editor: &Editor) -> u16 {
+fn compute_menu_indent(menu: &OspCompletionMenu, editor: &Editor, screen_width: u16) -> u16 {
     let line = editor.get_buffer();
     let span_start = menu
         .replace_span
@@ -567,29 +503,12 @@ fn compute_menu_indent(menu: &OspCompletionMenu, editor: &Editor) -> u16 {
         .cursor_col
         .saturating_sub(cursor_prefix_width.min(u16::MAX as usize) as u16);
     let width = prompt_width as usize + prefix_width;
-    width.min(u16::MAX as usize) as u16
-}
-
-fn set_active_menu_editor(editor: Option<&mut Editor>) {
-    ACTIVE_MENU_EDITOR.with(|active| {
-        active.set(editor.map_or(std::ptr::null_mut(), |editor| editor as *mut Editor));
-    });
-}
-
-fn with_active_menu_editor<R>(f: impl FnOnce(&mut Editor) -> R) -> Option<R> {
-    ACTIVE_MENU_EDITOR.with(|active| {
-        let editor = active.get();
-        if editor.is_null() {
-            None
-        } else {
-            // SAFETY: the pointer is registered from reedline's active
-            // `update_working_details` pass and cleared when the menu
-            // deactivates. Navigation events and repaint happen on the same
-            // thread in a single read-line loop, so the editor remains alive
-            // for the duration of this callback.
-            Some(unsafe { f(&mut *editor) })
-        }
-    })
+    let width = width.min(u16::MAX as usize) as u16;
+    if width > screen_width / 2 {
+        prompt_width
+    } else {
+        width
+    }
 }
 
 #[cfg(test)]

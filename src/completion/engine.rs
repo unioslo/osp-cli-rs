@@ -290,8 +290,9 @@ impl CompletionEngine {
 
         let context_node = resolver.resolve_exact_or_root(&matched);
         let has_subcommands = !context_node.children.is_empty();
+        let required_args = context_node.args.iter().filter(|arg| arg.required).count();
         let subcommand_context =
-            context_node.value_key || (has_subcommands && arg_tokens.is_empty());
+            context_node.value_key || (has_subcommands && arg_tokens.len() >= required_args);
 
         CompletionContext {
             matched_path: matched,
@@ -328,11 +329,20 @@ impl CompletionEngine {
             };
         }
 
+        let consumed = cmd
+            .head()
+            .iter()
+            .skip(context.matched_path.len())
+            .chain(cmd.positional_args())
+            .filter(|token| token.as_str() != stub)
+            .count();
+        let required_args = context_node.args.iter().filter(|arg| arg.required).count();
         CompletionRequest::Positionals {
             context_path: context.matched_path.clone(),
             flag_scope_path: context.flag_scope_path.clone(),
             arg_index: positional_arg_index(cmd, stub, context.matched_path.len(), context_node),
-            show_subcommands: context.subcommand_context,
+            show_subcommands: context.subcommand_context
+                && (context_node.value_key || consumed <= required_args),
             show_flag_names: stub.is_empty() && !context.subcommand_context,
         }
     }

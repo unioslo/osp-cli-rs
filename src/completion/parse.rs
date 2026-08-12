@@ -34,6 +34,81 @@ enum LexState {
     EscapeDouble,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LexEventKind {
+    Separator,
+    Pipe,
+    QuoteStart,
+    QuoteEnd,
+    EscapeStart,
+    Text(char),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LexEvent {
+    index: usize,
+    end: usize,
+    state_before: LexState,
+    kind: LexEventKind,
+}
+
+fn scan_shell(input: &str, mut visit: impl FnMut(LexEvent)) -> LexState {
+    let mut state = LexState::Normal;
+    for (index, ch) in input.char_indices() {
+        let state_before = state;
+        let kind = match state {
+            LexState::Normal if ch.is_whitespace() => LexEventKind::Separator,
+            LexState::Normal => match ch {
+                '|' => LexEventKind::Pipe,
+                '\\' => {
+                    state = LexState::EscapeNormal;
+                    LexEventKind::EscapeStart
+                }
+                '\'' => {
+                    state = LexState::SingleQuote;
+                    LexEventKind::QuoteStart
+                }
+                '"' => {
+                    state = LexState::DoubleQuote;
+                    LexEventKind::QuoteStart
+                }
+                _ => LexEventKind::Text(ch),
+            },
+            LexState::SingleQuote if ch == '\'' => {
+                state = LexState::Normal;
+                LexEventKind::QuoteEnd
+            }
+            LexState::SingleQuote => LexEventKind::Text(ch),
+            LexState::DoubleQuote => match ch {
+                '"' => {
+                    state = LexState::Normal;
+                    LexEventKind::QuoteEnd
+                }
+                '\\' => {
+                    state = LexState::EscapeDouble;
+                    LexEventKind::EscapeStart
+                }
+                _ => LexEventKind::Text(ch),
+            },
+            LexState::EscapeNormal => {
+                state = LexState::Normal;
+                LexEventKind::Text(ch)
+            }
+            LexState::EscapeDouble => {
+                state = LexState::DoubleQuote;
+                LexEventKind::Text(ch)
+            }
+        };
+        visit(LexEvent {
+            index,
+            end: index + ch.len_utf8(),
+            state_before,
+            kind,
+        });
+    }
+    state
+}
+
 /// Parsed line assembly after tokenization.
 ///
 /// The parser keeps the command head separate until it sees the first option-like
@@ -256,128 +331,58 @@ impl CommandLineParser {
 
     fn tokenize_inner(&self, line: &str) -> Option<Vec<String>> {
         let mut out = Vec::new();
-        let mut state = LexState::Normal;
         let mut current = String::new();
 
-        for ch in line.chars() {
-            match state {
-                LexState::Normal => {
-                    if ch.is_whitespace() {
-                        push_current(&mut out, &mut current);
-                    } else {
-                        match ch {
-                            '|' => {
-                                push_current(&mut out, &mut current);
-                                out.push("|".to_string());
-                            }
-                            '\\' => state = LexState::EscapeNormal,
-                            '\'' => state = LexState::SingleQuote,
-                            '"' => state = LexState::DoubleQuote,
-                            _ => current.push(ch),
-                        }
-                    }
-                }
-                LexState::SingleQuote => {
-                    if ch == '\'' {
-                        state = LexState::Normal;
-                    } else {
-                        current.push(ch);
-                    }
-                }
-                LexState::DoubleQuote => match ch {
-                    '"' => state = LexState::Normal,
-                    '\\' => state = LexState::EscapeDouble,
-                    _ => current.push(ch),
-                },
-                LexState::EscapeNormal => {
-                    current.push(ch);
-                    state = LexState::Normal;
-                }
-                LexState::EscapeDouble => {
-                    current.push(ch);
-                    state = LexState::DoubleQuote;
-                }
-            }
-        }
-
-        match state {
-            LexState::Normal => {
+        let state = scan_shell(line, |event| match event.kind {
+            LexEventKind::Separator => push_current(&mut out, &mut current),
+            LexEventKind::Pipe => {
                 push_current(&mut out, &mut current);
-                Some(out)
+                out.push("|".to_string());
             }
-            _ => None,
+            LexEventKind::Text(ch) => current.push(ch),
+            LexEventKind::QuoteStart | LexEventKind::QuoteEnd | LexEventKind::EscapeStart => {}
+        });
+
+        if state == LexState::Normal {
+            push_current(&mut out, &mut current);
+            Some(out)
+        } else {
+            None
         }
     }
 
     fn tokenize_with_spans_inner(&self, line: &str) -> Option<Vec<TokenSpan>> {
         let mut out = Vec::new();
-        let mut state = LexState::Normal;
         let mut current = String::new();
         let mut current_start = None;
 
-        for (idx, ch) in line.char_indices() {
-            match state {
-                LexState::Normal => {
-                    if ch.is_whitespace() {
-                        push_current_span(&mut out, &mut current, &mut current_start, idx);
-                    } else {
-                        match ch {
-                            '|' => {
-                                push_current_span(&mut out, &mut current, &mut current_start, idx);
-                                out.push(TokenSpan {
-                                    value: "|".to_string(),
-                                    start: idx,
-                                    end: idx + ch.len_utf8(),
-                                });
-                            }
-                            '\\' => {
-                                current_start.get_or_insert(idx);
-                                state = LexState::EscapeNormal;
-                            }
-                            '\'' => {
-                                current_start.get_or_insert(idx);
-                                state = LexState::SingleQuote;
-                            }
-                            '"' => {
-                                current_start.get_or_insert(idx);
-                                state = LexState::DoubleQuote;
-                            }
-                            _ => {
-                                current_start.get_or_insert(idx);
-                                current.push(ch);
-                            }
-                        }
-                    }
-                }
-                LexState::SingleQuote => {
-                    if ch == '\'' {
-                        state = LexState::Normal;
-                    } else {
-                        current.push(ch);
-                    }
-                }
-                LexState::DoubleQuote => match ch {
-                    '"' => state = LexState::Normal,
-                    '\\' => state = LexState::EscapeDouble,
-                    _ => current.push(ch),
-                },
-                LexState::EscapeNormal => {
-                    current.push(ch);
-                    state = LexState::Normal;
-                }
-                LexState::EscapeDouble => {
-                    current.push(ch);
-                    state = LexState::DoubleQuote;
-                }
+        let state = scan_shell(line, |event| match event.kind {
+            LexEventKind::Separator => {
+                push_current_span(&mut out, &mut current, &mut current_start, event.index)
             }
-        }
+            LexEventKind::Pipe => {
+                push_current_span(&mut out, &mut current, &mut current_start, event.index);
+                out.push(TokenSpan {
+                    value: "|".to_string(),
+                    start: event.index,
+                    end: event.end,
+                });
+            }
+            LexEventKind::Text(ch) => {
+                current_start.get_or_insert(event.index);
+                current.push(ch);
+            }
+            LexEventKind::QuoteStart | LexEventKind::EscapeStart => {
+                current_start.get_or_insert(event.index);
+            }
+            LexEventKind::QuoteEnd => {}
+        });
 
-        match state {
-            LexState::Normal => {
-                push_current_span(&mut out, &mut current, &mut current_start, line.len());
-                Some(out)
-            }
-            _ => None,
+        if state == LexState::Normal {
+            push_current_span(&mut out, &mut current, &mut current_start, line.len());
+            Some(out)
+        } else {
+            None
         }
     }
 
@@ -490,56 +495,26 @@ impl CommandLineParser {
         safe_cursor: usize,
     ) -> Option<CursorTokenization> {
         let mut out = Vec::new();
-        let mut state = LexState::Normal;
         let mut current = String::new();
         let mut cursor_tokens = None;
         let mut cursor_quote_style = None;
 
-        for (idx, ch) in line.char_indices() {
-            if idx == safe_cursor && cursor_tokens.is_none() {
+        let state = scan_shell(line, |event| {
+            if event.index == safe_cursor && cursor_tokens.is_none() {
                 cursor_tokens = Some(snapshot_tokens(&out, &current));
-                cursor_quote_style = Some(quote_style_for_state(state));
+                cursor_quote_style = Some(quote_style_for_state(event.state_before));
             }
 
-            match state {
-                LexState::Normal => {
-                    if ch.is_whitespace() {
-                        push_current(&mut out, &mut current);
-                    } else {
-                        match ch {
-                            '|' => {
-                                push_current(&mut out, &mut current);
-                                out.push("|".to_string());
-                            }
-                            '\\' => state = LexState::EscapeNormal,
-                            '\'' => state = LexState::SingleQuote,
-                            '"' => state = LexState::DoubleQuote,
-                            _ => current.push(ch),
-                        }
-                    }
+            match event.kind {
+                LexEventKind::Separator => push_current(&mut out, &mut current),
+                LexEventKind::Pipe => {
+                    push_current(&mut out, &mut current);
+                    out.push("|".to_string());
                 }
-                LexState::SingleQuote => {
-                    if ch == '\'' {
-                        state = LexState::Normal;
-                    } else {
-                        current.push(ch);
-                    }
-                }
-                LexState::DoubleQuote => match ch {
-                    '"' => state = LexState::Normal,
-                    '\\' => state = LexState::EscapeDouble,
-                    _ => current.push(ch),
-                },
-                LexState::EscapeNormal => {
-                    current.push(ch);
-                    state = LexState::Normal;
-                }
-                LexState::EscapeDouble => {
-                    current.push(ch);
-                    state = LexState::DoubleQuote;
-                }
+                LexEventKind::Text(ch) => current.push(ch),
+                LexEventKind::QuoteStart | LexEventKind::QuoteEnd | LexEventKind::EscapeStart => {}
             }
-        }
+        });
 
         if safe_cursor == line.len() && cursor_tokens.is_none() {
             cursor_tokens = Some(snapshot_tokens(&out, &current));
@@ -734,36 +709,7 @@ fn is_number(text: &str) -> bool {
 }
 
 fn current_quote_state(text: &str) -> Option<QuoteStyle> {
-    let mut state = LexState::Normal;
-
-    for ch in text.chars() {
-        match state {
-            LexState::Normal => match ch {
-                '\\' => state = LexState::EscapeNormal,
-                '\'' => state = LexState::SingleQuote,
-                '"' => state = LexState::DoubleQuote,
-                _ => {}
-            },
-            LexState::SingleQuote => {
-                if ch == '\'' {
-                    state = LexState::Normal;
-                }
-            }
-            LexState::DoubleQuote => match ch {
-                '"' => state = LexState::Normal,
-                '\\' => state = LexState::EscapeDouble,
-                _ => {}
-            },
-            LexState::EscapeNormal => state = LexState::Normal,
-            LexState::EscapeDouble => state = LexState::DoubleQuote,
-        }
-    }
-
-    match state {
-        LexState::SingleQuote => Some(QuoteStyle::Single),
-        LexState::DoubleQuote | LexState::EscapeDouble => Some(QuoteStyle::Double),
-        LexState::Normal | LexState::EscapeNormal => None,
-    }
+    quote_style_for_state(scan_shell(text, |_| {}))
 }
 
 fn token_replace_start(
@@ -775,53 +721,27 @@ fn token_replace_start(
         return safe_cursor;
     }
 
-    let mut state = LexState::Normal;
     let mut token_start = 0usize;
     let mut token_active = false;
     let mut quote_start = None;
 
-    for (idx, ch) in text_before_cursor.char_indices() {
-        match state {
-            LexState::Normal => {
-                if ch.is_whitespace() {
-                    token_active = false;
-                    token_start = idx + ch.len_utf8();
-                    quote_start = None;
-                    continue;
-                }
-
-                if !token_active {
-                    token_active = true;
-                    token_start = idx;
-                }
-
-                match ch {
-                    '\'' => {
-                        quote_start = Some(idx + ch.len_utf8());
-                        state = LexState::SingleQuote;
-                    }
-                    '"' => {
-                        quote_start = Some(idx + ch.len_utf8());
-                        state = LexState::DoubleQuote;
-                    }
-                    '\\' => state = LexState::EscapeNormal,
-                    _ => {}
-                }
-            }
-            LexState::SingleQuote => {
-                if ch == '\'' {
-                    state = LexState::Normal;
-                }
-            }
-            LexState::DoubleQuote => match ch {
-                '"' => state = LexState::Normal,
-                '\\' => state = LexState::EscapeDouble,
-                _ => {}
-            },
-            LexState::EscapeNormal => state = LexState::Normal,
-            LexState::EscapeDouble => state = LexState::DoubleQuote,
+    scan_shell(text_before_cursor, |event| {
+        if event.kind == LexEventKind::Separator {
+            token_active = false;
+            token_start = event.end;
+            quote_start = None;
+            return;
         }
-    }
+
+        if !token_active {
+            token_active = true;
+            token_start = event.index;
+        }
+
+        if event.kind == LexEventKind::QuoteStart {
+            quote_start = Some(event.end);
+        }
+    });
 
     match quote_style {
         Some(_) => quote_start.unwrap_or(token_start),
@@ -873,6 +793,39 @@ mod tests {
             assert_eq!(spans[2].value, "alice smith");
             assert_eq!(&source[spans[2].start..spans[2].end], "\"alice smith\"");
             assert_eq!(spans[3].value, "|");
+        }
+
+        #[test]
+        fn completion_lexical_views_share_quote_escape_pipe_and_unicode_contract() {
+            let parser = parser();
+            for line in [
+                r#"service deploy --request 'name=a|b' | F name"#,
+                r#"cmd --name "alice \"ops\"" --city Oslo"#,
+                "ldap user 'Øistein Søvik' | P uid,cn",
+                r#"cmd escaped\ value --path "a\\b""#,
+            ] {
+                let tokens = parser.tokenize(line);
+                let span_values = parser
+                    .tokenize_with_spans(line)
+                    .into_iter()
+                    .map(|token| token.value)
+                    .collect::<Vec<_>>();
+                let analyzed = parser.analyze(line, line.len());
+
+                assert_eq!(span_values, tokens, "span token drift for {line:?}");
+                assert_eq!(
+                    analyzed.parsed.full_tokens, tokens,
+                    "full token drift for {line:?}"
+                );
+                assert_eq!(
+                    analyzed.parsed.cursor_tokens, tokens,
+                    "cursor token drift for {line:?}"
+                );
+                assert_eq!(
+                    analyzed.cursor.quote_style, None,
+                    "quote drift for {line:?}"
+                );
+            }
         }
     }
 

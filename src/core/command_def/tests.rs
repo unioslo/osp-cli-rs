@@ -1,6 +1,5 @@
 use super::{CommandDef, ValueKind};
 
-#[cfg(feature = "clap")]
 #[test]
 fn clap_command_def_caches_usage_aliases_and_help_unit() {
     use clap::{Arg, Command};

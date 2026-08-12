@@ -29,6 +29,8 @@
 //!   or builder layer
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
@@ -41,6 +43,7 @@ use crate::core::plugin::{
     DescribeCommandAuthV1, DescribeCommandV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
 };
 use crate::core::runtime::RuntimeHints;
+use crate::plugin::catalog::register_describe_command_policies;
 
 /// Public metadata snapshot for one registered native command.
 ///
@@ -163,14 +166,46 @@ pub struct NativePromptContextEntry {
 
 /// Session-scoped context shared between native commands and the REPL host.
 ///
-/// This is deliberately in-memory only. Native commands can expose small,
-/// prompt-safe values to the host without writing hidden target state to disk.
-#[derive(Clone, Default, Debug)]
+/// This is deliberately in-memory only. Native commands can retain small
+/// workflow values between commands and separately expose prompt-safe values
+/// without writing hidden target state to disk.
+#[derive(Clone, Default)]
 pub struct NativeSessionContext {
+    values: Arc<RwLock<BTreeMap<String, String>>>,
     prompt_entries: Arc<RwLock<BTreeMap<String, NativePromptContextEntry>>>,
+    completion_refresh_requested: Arc<AtomicBool>,
+}
+
+impl fmt::Debug for NativeSessionContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NativeSessionContext")
+            .field("values", &"[redacted]")
+            .field("prompt_entries", &self.prompt_entries)
+            .field(
+                "completion_refresh_requested",
+                &self.completion_refresh_requested,
+            )
+            .finish()
+    }
 }
 
 impl NativeSessionContext {
+    /// Stores one in-memory value for later native commands in this session.
+    pub fn set_value(&self, key: impl Into<String>, value: impl Into<String>) {
+        if let Ok(mut values) = self.values.write() {
+            values.insert(key.into(), value.into());
+        }
+    }
+
+    /// Returns one previously stored in-memory session value.
+    pub fn value(&self, key: &str) -> Option<String> {
+        self.values
+            .read()
+            .ok()
+            .and_then(|values| values.get(key).cloned())
+    }
+
     /// Sets one prompt-visible context entry.
     pub fn set_prompt_value(
         &self,
@@ -202,6 +237,21 @@ impl NativeSessionContext {
             .read()
             .map(|entries| entries.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Requests rebuilding the active REPL completion tree after execution.
+    ///
+    /// Native commands should call this after replacing completion data held in
+    /// their own shared snapshot. Outside an interactive REPL the request has
+    /// no observable effect.
+    pub fn request_completion_refresh(&self) {
+        self.completion_refresh_requested
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn take_completion_refresh_request(&self) -> bool {
+        self.completion_refresh_requested
+            .swap(false, Ordering::AcqRel)
     }
 }
 
@@ -237,6 +287,22 @@ pub trait NativeCommand: Send + Sync {
         let mut describe = DescribeCommandV1::from_clap(self.command());
         describe.auth = self.auth();
         describe
+    }
+
+    /// Adds runtime-owned suggestions to the otherwise static completion tree.
+    ///
+    /// The host calls this only while preparing an interactive completion
+    /// surface. Implementations should cache any remote data they use so REPL
+    /// editing never performs network I/O per keystroke.
+    fn augment_completion(&self, _completion: &mut CommandSpec) {}
+
+    /// Refreshes runtime completion data on a host-owned background thread.
+    ///
+    /// The host invokes this once when an authorized interactive REPL starts.
+    /// Implementations may perform remote I/O here, then atomically replace
+    /// the snapshot read by [`NativeCommand::augment_completion`].
+    fn refresh_completion(&self) -> Result<()> {
+        Ok(())
     }
 
     /// Executes the command using already-parsed argument tokens.
@@ -376,11 +442,43 @@ impl NativeCommandRegistry {
 
     /// Returns catalog metadata for all registered native commands.
     pub fn catalog(&self) -> Vec<NativeCommandCatalogEntry> {
+        self.catalog_with_completion(false)
+    }
+
+    /// Returns catalog metadata with native runtime completion additions.
+    pub fn completion_catalog(&self) -> Vec<NativeCommandCatalogEntry> {
+        self.catalog_with_completion(true)
+    }
+
+    pub(crate) fn refresh_completion_in_background(&self, should_refresh: impl Fn(&str) -> bool) {
+        for (name, command) in self.commands.iter() {
+            if !should_refresh(name) {
+                continue;
+            }
+            let name = name.clone();
+            let command = Arc::clone(command);
+            if let Err(error) = std::thread::Builder::new()
+                .name(format!("osp-completion-{name}"))
+                .spawn(move || {
+                    if let Err(error) = command.refresh_completion() {
+                        tracing::debug!(command = %name, %error, "native completion refresh failed");
+                    }
+                })
+            {
+                tracing::warn!(%error, "failed to start native completion refresh");
+            }
+        }
+    }
+
+    fn catalog_with_completion(&self, augment_completion: bool) -> Vec<NativeCommandCatalogEntry> {
         self.commands
             .values()
             .map(|command| {
                 let describe = command.describe();
-                let completion = crate::plugin::conversion::to_command_spec(&describe);
+                let mut completion = crate::plugin::conversion::to_command_spec(&describe);
+                if augment_completion {
+                    command.augment_completion(&mut completion);
+                }
                 NativeCommandCatalogEntry {
                     name: describe.name.clone(),
                     about: describe.about.clone(),
@@ -400,23 +498,6 @@ impl NativeCommandRegistry {
             register_describe_command_policies(&mut registry, &describe, &[]);
         }
         registry
-    }
-}
-
-fn register_describe_command_policies(
-    registry: &mut CommandPolicyRegistry,
-    command: &DescribeCommandV1,
-    parent: &[String],
-) {
-    let mut segments = parent.to_vec();
-    segments.push(command.name.clone());
-    if let Some(policy) = command.command_policy(crate::core::command_policy::CommandPath::new(
-        segments.clone(),
-    )) {
-        registry.register(policy);
-    }
-    for subcommand in &command.subcommands {
-        register_describe_command_policies(registry, subcommand, &segments);
     }
 }
 

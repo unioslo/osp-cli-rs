@@ -264,9 +264,11 @@ fn repl_help_alias_parsing_and_completion_cover_root_and_scoped_paths_unit() {
 #[test]
 #[cfg_attr(miri, ignore = "alias completion clones large command subtrees")]
 fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
-    assert!(repl::is_repl_shellable_command("ldap"));
-    assert!(repl::is_repl_shellable_command("LDAP"));
-    assert!(!repl::is_repl_shellable_command("theme"));
+    let mut state = make_completion_state(None);
+    let config = state.runtime.config.resolved();
+    assert!(repl::is_repl_shellable_command(config, "ldap"));
+    assert!(repl::is_repl_shellable_command(config, "LDAP"));
+    assert!(!repl::is_repl_shellable_command(config, "theme"));
 
     let mut stack = crate::app::ReplScopeStack::default();
     stack.enter("ldap");
@@ -285,7 +287,6 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
         vec!["ldap".to_string(), "user".to_string(), "oistes".to_string()]
     );
 
-    let mut state = make_completion_state(None);
     state.session.scope.enter("ldap");
     let message = repl_dispatch::leave_repl_shell(&mut state.session).expect("shell should leave");
     assert_eq!(message, "Leaving ldap shell. Back at root.\n");
@@ -293,12 +294,21 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
 
     let ldap = repl::ReplParsedLine::parse("ldap", state.runtime.config.resolved())
         .expect("ldap shell entry should parse");
-    assert_eq!(ldap.shell_entry_command(&state.session.scope), Some("ldap"));
+    assert_eq!(
+        ldap.shell_entry_command(&state.session.scope, state.runtime.config.resolved()),
+        Some("ldap")
+    );
     state.session.scope.enter("ldap");
     let mreg = repl::ReplParsedLine::parse("mreg", state.runtime.config.resolved())
         .expect("mreg shell entry should parse");
-    assert_eq!(mreg.shell_entry_command(&state.session.scope), Some("mreg"));
-    assert_eq!(ldap.shell_entry_command(&state.session.scope), None);
+    assert_eq!(
+        mreg.shell_entry_command(&state.session.scope, state.runtime.config.resolved()),
+        Some("mreg")
+    );
+    assert_eq!(
+        ldap.shell_entry_command(&state.session.scope, state.runtime.config.resolved()),
+        None
+    );
     assert!(
         ldap.current_shell_help_command(&state.session.scope)
             .is_some()
@@ -312,7 +322,10 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
 
     let parsed = repl::ReplParsedLine::parse("or", state.runtime.config.resolved())
         .expect("partial command should parse");
-    assert_eq!(parsed.shell_entry_command(&state.session.scope), None);
+    assert_eq!(
+        parsed.shell_entry_command(&state.session.scope, state.runtime.config.resolved()),
+        None
+    );
 
     state.session.scope.enter("orch");
     let engine = completion_engine_for(&state, &catalog);
@@ -342,7 +355,10 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
 
     let parsed = repl::ReplParsedLine::parse("op", state.runtime.config.resolved())
         .expect("partial alias should parse");
-    assert_eq!(parsed.shell_entry_command(&state.session.scope), None);
+    assert_eq!(
+        parsed.shell_entry_command(&state.session.scope, state.runtime.config.resolved()),
+        None
+    );
 
     let mut state = make_completion_state_with_entries(None, &[("alias.st", "status")]);
     state.session.scope.enter("orch");
@@ -457,6 +473,9 @@ fn repl_completion_tree_contains_builtin_and_plugin_commands_unit() {
     assert!(tree.root.children.contains_key("plugins"));
     assert!(tree.root.children.contains_key("theme"));
     assert!(tree.root.children.contains_key("config"));
+    assert!(tree.root.children.contains_key("alias"));
+    assert!(tree.root.children["alias"].children.contains_key("add"));
+    assert!(tree.root.children["alias"].children.contains_key("remove"));
     assert!(tree.root.children.contains_key("history"));
     assert!(tree.root.children.contains_key("orch"));
     assert!(
@@ -469,6 +488,15 @@ fn repl_completion_tree_contains_builtin_and_plugin_commands_unit() {
         Some("Provision orchestrator resources")
     );
     assert!(tree.pipe_verbs.contains_key("F"));
+}
+
+#[test]
+fn repl_alias_remove_completion_suggests_resolved_alias_names_unit() {
+    let state = make_completion_state_with_entries(None, &[("alias.lsng", "ldap netgroup")]);
+    let catalog = sample_catalog();
+    let engine = completion_engine_for(&state, &catalog);
+
+    assert!(complete_values(&engine, "alias remove ").contains(&"lsng".to_string()));
 }
 
 #[test]
@@ -505,6 +533,7 @@ fn repl_completion_tree_respects_builtin_visibility_unit() {
             .expect("repl completion tree should build");
     assert!(tree.root.children.contains_key("theme"));
     assert!(!tree.root.children.contains_key("config"));
+    assert!(!tree.root.children.contains_key("alias"));
     assert!(!tree.root.children.contains_key("plugins"));
     assert!(!tree.root.children.contains_key("history"));
 }
@@ -540,12 +569,14 @@ fn repl_surface_drives_overview_and_completion_visibility_unit() {
     assert_eq!(names[..2], ["exit", "help"]);
     assert!(names.contains(&"theme"));
     assert!(names.contains(&"config"));
+    assert!(names.contains(&"alias"));
     assert!(names.contains(&"orch"));
     assert!(!names.contains(&"plugins"));
     assert!(!names.contains(&"history"));
     assert!(!surface.root_words.contains(&"cd".to_string()));
     assert!(surface.root_words.contains(&"theme".to_string()));
     assert!(surface.root_words.contains(&"config".to_string()));
+    assert!(surface.root_words.contains(&"alias".to_string()));
     assert!(surface.root_words.contains(&"orch".to_string()));
 }
 
@@ -561,7 +592,7 @@ fn compact_repl_surface_omits_options_overview_and_prioritizes_builtins_unit() {
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names[..5], ["exit", "help", "last", "theme", "config"]);
+    assert_eq!(names[..5], ["exit", "help", "last", "source", "theme"]);
     assert!(!names.contains(&"options"));
     let orch_index = names
         .iter()
