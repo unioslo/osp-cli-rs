@@ -4,7 +4,7 @@ use crate::core::output_model::{
 use crate::guide::GuideView;
 use serde_json::json;
 
-use super::{apply_output_pipeline, apply_pipeline, execute_pipeline, execute_pipeline_streaming};
+use super::{apply_output_pipeline, apply_pipeline, execute_pipeline};
 
 fn output_rows(output: &OutputResult) -> &[crate::core::row::Row] {
     output.as_rows().expect("expected row output")
@@ -188,71 +188,6 @@ fn output_pipeline_filters_nested_single_record_documents_unit() {
         );
         assert!(!value.to_string().contains("unix-drift@usit.uio.no"));
         assert!(value.get("status_counts").is_none());
-    }
-}
-
-#[test]
-fn streaming_executor_matches_eager_for_representative_hot_paths_unit() {
-    {
-        let rows = vec![
-            json!({"uid": "alice", "active": true, "members": ["a", "b"]})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"uid": "bob", "active": false, "members": ["c"]})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-        let stages = vec![
-            "F active=true".to_string(),
-            "P uid,members[]".to_string(),
-            "L 2".to_string(),
-        ];
-
-        let eager = apply_pipeline(rows.clone(), &stages).expect("eager pipeline should pass");
-        let streaming =
-            execute_pipeline_streaming(rows, &stages).expect("streaming pipeline should pass");
-        assert_eq!(streaming, eager);
-    }
-
-    {
-        let rows = vec![
-            json!({"uid": "alice", "mail": "alice@example.org"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"uid": "bob", "mail": "bob@example.org"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-            json!({"uid": "carol", "mail": "carol@example.org"})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-        let stages = vec!["alice".to_string()];
-
-        let eager = apply_pipeline(rows.clone(), &stages).expect("eager pipeline should pass");
-        let streaming =
-            execute_pipeline_streaming(rows, &stages).expect("streaming pipeline should pass");
-        assert_eq!(streaming, eager);
-    }
-
-    {
-        let rows = vec![
-            json!({"uid": "alice", "members": ["eng", "ops"]})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-        let stages = vec!["members".to_string()];
-
-        let eager = apply_pipeline(rows.clone(), &stages).expect("eager pipeline should pass");
-        let streaming =
-            execute_pipeline_streaming(rows, &stages).expect("streaming pipeline should pass");
-        assert_eq!(streaming, eager);
-        assert_eq!(output_rows(&streaming).len(), 1);
     }
 }
 
@@ -444,84 +379,6 @@ fn grouped_output_row_transforms_preserve_group_container_unit() {
             .expect("group unroll should succeed");
         assert!(matches!(unrolled.items, OutputItems::Groups(_)));
     }
-}
-
-#[test]
-fn streaming_materializes_cleanly_at_sort_barrier() {
-    let rows = vec![
-        json!({"uid": "bob"}).as_object().cloned().expect("object"),
-        json!({"uid": "alice"})
-            .as_object()
-            .cloned()
-            .expect("object"),
-    ];
-
-    let output = execute_pipeline_streaming(rows, &["S uid".to_string()])
-        .expect("streaming pipeline should pass");
-
-    assert_eq!(
-        output_rows(&output)
-            .iter()
-            .map(|row| row
-                .get("uid")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default())
-            .collect::<Vec<_>>(),
-        vec!["alice", "bob"]
-    );
-}
-
-#[test]
-fn streaming_pipeline_stage_variants_preserve_meta_and_errors_unit() {
-    {
-        let rows = vec![
-            json!({"uid": "alice", "roles": ["eng", "ops"]})
-                .as_object()
-                .cloned()
-                .expect("object"),
-        ];
-
-        let output =
-            execute_pipeline_streaming(rows, &["Y".to_string(), "VALUE roles".to_string()])
-                .expect("streaming pipeline should pass");
-        assert!(output.meta.wants_copy);
-        assert_eq!(output_rows(&output).len(), 2);
-    }
-
-    let rows = vec![
-        json!({"uid": "alice", "active": true, "roles": ["eng", "ops"]})
-            .as_object()
-            .cloned()
-            .expect("object"),
-        json!({"uid": "bob", "active": false, "roles": ["ops"]})
-            .as_object()
-            .cloned()
-            .expect("object"),
-    ];
-
-    let value_output = execute_pipeline_streaming(rows.clone(), &["VALUE uid".to_string()])
-        .expect("streaming values should succeed");
-    assert_eq!(output_rows(&value_output).len(), 2);
-
-    let filtered = execute_pipeline_streaming(rows.clone(), &["? uid".to_string()])
-        .expect("question filter should stream");
-    assert_eq!(output_rows(&filtered).len(), 2);
-
-    let cleaned = execute_pipeline_streaming(rows.clone(), &["?".to_string()])
-        .expect("question clean should stream");
-    assert_eq!(output_rows(&cleaned).len(), 2);
-
-    let limited = execute_pipeline_streaming(rows.clone(), &["L 1".to_string()])
-        .expect("head limit should stream");
-    assert_eq!(output_rows(&limited).len(), 1);
-
-    let unrolled = execute_pipeline_streaming(rows.clone(), &["U roles".to_string()])
-        .expect("unroll should stream");
-    assert_eq!(output_rows(&unrolled).len(), 3);
-
-    let err = execute_pipeline_streaming(rows, &["U".to_string()])
-        .expect_err("missing unroll field should fail");
-    assert!(err.to_string().contains("missing field name"));
 }
 
 #[test]

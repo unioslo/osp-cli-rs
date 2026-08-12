@@ -423,7 +423,7 @@ fn value_to_timestamp(value: &serde_json::Value) -> Option<i64> {
     }
 }
 
-fn parse_timestamp(input: &str) -> Option<i64> {
+pub(crate) fn parse_timestamp(input: &str) -> Option<i64> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;

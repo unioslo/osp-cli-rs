@@ -1,16 +1,37 @@
 use osp_cli::core::output::OutputFormat;
 use osp_cli::dsl::{apply_pipeline, parse_pipeline};
-use osp_cli::ports::LdapDirectory;
-use osp_cli::ports::mock::MockLdapClient;
 use osp_cli::ui::{RenderSettings, render_output};
 use serde_json::json;
 
+fn user_rows() -> Vec<osp_cli::core::row::Row> {
+    vec![
+        json!({
+            "uid": "oistes",
+            "cn": "Øistein Søvik",
+            "homeDirectory": "/uio/oistes"
+        })
+        .as_object()
+        .cloned()
+        .expect("fixture should be a row"),
+    ]
+}
+
+fn netgroup_rows() -> Vec<osp_cli::core::row::Row> {
+    vec![
+        json!({
+            "cn": "ucore",
+            "description": "Core operators",
+            "members": ["oistes", "alice"]
+        })
+        .as_object()
+        .cloned()
+        .expect("fixture should be a row"),
+    ]
+}
+
 #[test]
 fn dsl_pipeline_project_works_on_ldap_user_data() {
-    let ldap = MockLdapClient::default();
-    let rows = ldap
-        .user("oistes", None, None)
-        .expect("query should succeed");
+    let rows = user_rows();
 
     let parsed = parse_pipeline("ldap user oistes | P uid,cn").expect("valid pipeline");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
@@ -25,10 +46,7 @@ fn dsl_pipeline_project_works_on_ldap_user_data() {
 
 #[test]
 fn dsl_pipeline_values_works_on_netgroup_members() {
-    let ldap = MockLdapClient::default();
-    let rows = ldap
-        .netgroup("ucore", None, None)
-        .expect("query should succeed");
+    let rows = netgroup_rows();
 
     let parsed =
         parse_pipeline("ldap netgroup ucore | P members | VAL members").expect("valid pipeline");
@@ -43,10 +61,7 @@ fn dsl_pipeline_values_works_on_netgroup_members() {
 
 #[test]
 fn dsl_pipeline_filter_works() {
-    let ldap = MockLdapClient::default();
-    let rows = ldap
-        .netgroup("ucore", None, None)
-        .expect("query should succeed");
+    let rows = netgroup_rows();
 
     let parsed = parse_pipeline("ldap netgroup ucore | F cn=ucore | P cn").expect("valid pipeline");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");
@@ -59,10 +74,7 @@ fn dsl_pipeline_filter_works() {
 
 #[test]
 fn dsl_pipeline_markdown_table_format_works() {
-    let ldap = MockLdapClient::default();
-    let rows = ldap
-        .user("oistes", None, None)
-        .expect("query should succeed");
+    let rows = user_rows();
 
     let parsed = parse_pipeline("ldap user oistes | P uid,cn").expect("valid pipeline");
     let transformed = apply_pipeline(rows, &parsed.stages).expect("pipeline should succeed");

@@ -20,8 +20,7 @@ use crate::core::output_model::{
 };
 use crate::core::row::Row;
 use crate::dsl::eval::resolve::{
-    AddressStep, AddressedValue, compact_sparse_arrays, is_sparse_hole, materialize_path_matches,
-    sparse_hole,
+    AddressStep, AddressedValue, is_sparse_hole, materialize_path_matches, sparse_hole,
 };
 
 /// Descends into semantic JSON, finds leaf collections, and applies a row/group stage.
@@ -172,18 +171,6 @@ pub(crate) fn preserve_envelope_fields(original: Value, narrowed: Value) -> Valu
     }
 }
 
-/// Finalizes a structurally rebuilt subtree so selector verbs preserve useful
-/// outer metadata while stripping internal sparse-array holes before returning.
-///
-/// The preserve-then-compact ordering is load-bearing: envelope restoration can
-/// reintroduce sparse holes while aligning surviving descendants with their
-/// original array positions, so compaction must happen after preservation.
-pub(crate) fn finalize_structural_projection(original: &Value, projected: Value) -> Value {
-    let mut projected = preserve_envelope_fields(original.clone(), projected);
-    compact_sparse_arrays(&mut projected);
-    projected
-}
-
 /// Rebuilds exactly the addressed matches and restores envelope metadata
 /// without compacting sparse array holes yet.
 ///
@@ -194,11 +181,6 @@ pub(crate) fn project_addressed_matches_unfinalized(
     matches: &[AddressedValue],
 ) -> Value {
     preserve_envelope_fields(original.clone(), materialize_path_matches(matches))
-}
-
-/// Rebuilds exactly the addressed matches and restores the surviving envelope.
-pub(crate) fn project_addressed_matches(original: &Value, matches: &[AddressedValue]) -> Value {
-    finalize_structural_projection(original, materialize_path_matches(matches))
 }
 
 /// Removes addressed descendants while preserving real selected `null` values
@@ -221,15 +203,8 @@ pub(crate) fn remove_addressed_matches(mut root: Value, matches: &[AddressedValu
     root
 }
 
-pub(crate) fn is_envelope_scalar(value: &Value) -> bool {
-    matches!(
-        value,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
-    )
-}
-
 pub(crate) fn is_envelope_field(value: &Value) -> bool {
-    is_envelope_scalar(value)
+    is_scalar_like(value)
         || matches!(value, Value::Object(map) if is_leaf_record_map(map))
         || matches!(value, Value::Array(items) if items.iter().all(is_scalar_like))
 }

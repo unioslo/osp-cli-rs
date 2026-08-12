@@ -25,8 +25,6 @@
 //! - [`apply_pipeline`] is the friendly "I already have rows" entrypoint
 //! - [`apply_output_pipeline`] is the continuation path when output already has
 //!   semantic-document or metadata state attached
-//! - [`execute_pipeline_streaming`] is the iterator-oriented path when callers
-//!   want streamable stages to avoid eager materialization
 
 use crate::core::{
     output::OutputFormat,
@@ -44,7 +42,7 @@ use crate::dsl::verbs::{
     values,
 };
 use crate::dsl::{
-    compiled::{CompiledPipeline, CompiledStage, SemanticEffect, StageBehavior},
+    compiled::{CompiledPipeline, CompiledStage, SemanticEffect},
     eval::context::RowContext,
     parse::pipeline::parse_stage_list,
 };
@@ -127,8 +125,8 @@ pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<
 /// Like `apply_pipeline`, it starts with `wants_copy = false`.
 ///
 /// Prefer [`apply_pipeline`] for the common "rows in, output out" path. This
-/// entrypoint is more useful when you want the execution wording to match the
-/// streaming variant below.
+/// entrypoint is useful when you want the execution wording to distinguish it
+/// from the metadata-preserving [`apply_output_pipeline`] path.
 ///
 /// # Examples
 ///
@@ -148,44 +146,7 @@ pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn execute_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
-    execute_pipeline_streaming(rows, stages)
-}
-
-/// Execute a pipeline from any row iterator.
-///
-/// This keeps flat row stages on an iterator-backed path until a stage
-/// requires full materialization (for example sort/group/aggregate/jq).
-///
-/// Use this when rows come from an iterator and you want streamable stages like
-/// `F`, `P`, `U`, and head-only `L` to stay incremental for as long as
-/// possible.
-///
-/// # Examples
-///
-/// ```
-/// use osp_cli::dsl::execute_pipeline_streaming;
-/// use osp_cli::row;
-///
-/// let output = execute_pipeline_streaming(
-///     vec![
-///         row! { "uid" => "alice" },
-///         row! { "uid" => "bob" },
-///     ],
-///     &["L 1".to_string()],
-/// )?;
-///
-/// assert_eq!(output.as_rows().unwrap()[0]["uid"], "alice");
-/// assert_eq!(output.as_rows().unwrap().len(), 1);
-/// # Ok::<(), anyhow::Error>(())
-/// ```
-pub fn execute_pipeline_streaming<I>(rows: I, stages: &[String]) -> Result<OutputResult>
-where
-    I: IntoIterator<Item = Row>,
-    I::IntoIter: 'static,
-{
-    let parsed = parse_stage_list(stages)?;
-    let compiled = CompiledPipeline::from_parsed(parsed)?;
-    PipelineExecutor::new_stream(rows.into_iter(), false, compiled).run()
+    execute_pipeline_items(OutputItems::Rows(rows), None, false, None, stages)
 }
 
 fn execute_pipeline_items(
@@ -214,19 +175,9 @@ fn execute_pipeline_items(
 ///
 /// Keeping execution state on a struct makes it easier to read the pipeline
 /// flow without carrying `items` / `wants_copy` through every helper.
-type RowStream = Box<dyn Iterator<Item = Result<Row>>>;
-
 enum PipelineItems {
-    RowStream(RowStream),
     Materialized(OutputItems),
     Semantic(serde_json::Value),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StageExecutionRoute {
-    Semantic(SemanticEffect),
-    Stream,
-    Materialized,
 }
 
 struct PipelineExecutor {
@@ -259,9 +210,7 @@ impl PipelineExecutor {
                     let mut rows = rows;
                     PipelineItems::Semantic(Value::Object(rows.pop().unwrap_or_default()))
                 }
-                OutputItems::Rows(rows) => {
-                    PipelineItems::RowStream(Box::new(rows.into_iter().map(Ok)))
-                }
+                OutputItems::Rows(rows) => PipelineItems::Materialized(OutputItems::Rows(rows)),
                 OutputItems::Groups(groups) => {
                     PipelineItems::Materialized(OutputItems::Groups(groups))
                 }
@@ -272,19 +221,6 @@ impl PipelineExecutor {
             document,
             wants_copy,
             render_recommendation,
-            compiled,
-        }
-    }
-
-    fn new_stream<I>(rows: I, wants_copy: bool, compiled: CompiledPipeline) -> Self
-    where
-        I: Iterator<Item = Row> + 'static,
-    {
-        Self {
-            items: PipelineItems::RowStream(Box::new(rows.map(Ok))),
-            document: None,
-            wants_copy,
-            render_recommendation: None,
             compiled,
         }
     }
@@ -304,17 +240,13 @@ impl PipelineExecutor {
             self.render_recommendation = None;
         }
 
-        match resolve_stage_execution_route(&self.items, behavior) {
-            StageExecutionRoute::Semantic(semantic_effect) => {
-                self.apply_semantic_stage(stage, semantic_effect)
-            }
-            StageExecutionRoute::Stream => self.apply_stream_stage(stage),
-            StageExecutionRoute::Materialized => {
-                let items = self.materialize_items()?;
-                self.items = PipelineItems::Materialized(self.apply_flat_stage(items, stage)?);
-                self.sync_document_to_items();
-                Ok(())
-            }
+        if matches!(self.items, PipelineItems::Semantic(_)) {
+            self.apply_semantic_stage(stage, behavior.semantic_effect)
+        } else {
+            let items = self.materialize_items()?;
+            self.items = PipelineItems::Materialized(self.apply_flat_stage(items, stage)?);
+            self.sync_document_to_items();
+            Ok(())
         }
     }
 
@@ -353,80 +285,6 @@ impl PipelineExecutor {
                 self.document = None;
             }
         }
-        Ok(())
-    }
-
-    fn apply_stream_stage(&mut self, stage: &CompiledStage) -> Result<()> {
-        let stream = match std::mem::replace(
-            &mut self.items,
-            PipelineItems::RowStream(Box::new(std::iter::empty())),
-        ) {
-            PipelineItems::RowStream(stream) => stream,
-            PipelineItems::Materialized(items) => {
-                debug_assert!(
-                    false,
-                    "apply_stream_stage called after pipeline had already materialized"
-                );
-                self.items = PipelineItems::Materialized(items);
-                return Ok(());
-            }
-            PipelineItems::Semantic(value) => {
-                debug_assert!(
-                    false,
-                    "apply_stream_stage called for semantic payload execution"
-                );
-                self.items = PipelineItems::Semantic(value);
-                return Ok(());
-            }
-        };
-
-        if let Some(plan) = stage.quick_plan().cloned() {
-            self.items =
-                PipelineItems::RowStream(Box::new(quick::stream_rows_with_plan(stream, plan)));
-            return Ok(());
-        }
-
-        self.items = PipelineItems::RowStream(match stage {
-            CompiledStage::Filter(plan) => {
-                let plan = plan.clone();
-                Box::new(stream.filter_map(move |row| match row {
-                    Ok(row) if plan.matches(&row) => Some(Ok(row)),
-                    Ok(_) => None,
-                    Err(err) => Some(Err(err)),
-                }))
-            }
-            CompiledStage::Project(plan) => {
-                let plan = plan.clone();
-                stream_row_fanout_result(stream, move |row| plan.project_row(&row))
-            }
-            CompiledStage::Unroll(plan) => {
-                let plan = plan.clone();
-                stream_row_fanout_result(stream, move |row| plan.expand_row(&row))
-            }
-            CompiledStage::Values(plan) => {
-                let plan = plan.clone();
-                stream_row_fanout(stream, move |row| plan.extract_row(&row))
-            }
-            CompiledStage::Limit(spec) => {
-                debug_assert!(spec.is_head_only());
-                Box::new(
-                    stream
-                        .skip(spec.offset as usize)
-                        .take(spec.count.max(0) as usize),
-                )
-            }
-            CompiledStage::Copy => stream,
-            CompiledStage::Clean => Box::new(stream.filter_map(|row| match row {
-                Ok(row) => question::clean_row(row).map(Ok),
-                Err(err) => Some(Err(err)),
-            })),
-            other => {
-                return Err(anyhow!(
-                    "stream stage not implemented for compiled stage: {:?}",
-                    other
-                ));
-            }
-        });
         Ok(())
     }
 
@@ -519,10 +377,6 @@ impl PipelineExecutor {
             &mut self.items,
             PipelineItems::Materialized(OutputItems::Rows(Vec::new())),
         ) {
-            PipelineItems::RowStream(stream) => {
-                let rows = materialize_row_stream(stream)?;
-                Ok(OutputItems::Rows(rows))
-            }
             PipelineItems::Materialized(items) => Ok(items),
             PipelineItems::Semantic(value) => Ok(output_items_from_value(value)),
         }
@@ -568,7 +422,6 @@ impl PipelineExecutor {
             PipelineItems::Semantic(value) => {
                 document.value = value.clone();
             }
-            PipelineItems::RowStream(_) => {}
         }
     }
 
@@ -591,10 +444,6 @@ impl PipelineExecutor {
     }
 }
 
-fn materialize_row_stream(stream: RowStream) -> Result<Vec<Row>> {
-    stream.collect()
-}
-
 fn is_single_nested_row(rows: &[Row]) -> bool {
     matches!(rows, [row] if row.values().any(|value| matches!(value, Value::Array(_) | Value::Object(_))))
 }
@@ -608,54 +457,10 @@ fn recommends_document_like_rows(recommendation: Option<RenderRecommendation>) -
     )
 }
 
-fn stream_row_fanout<I, F>(stream: RowStream, fanout: F) -> RowStream
-where
-    I: IntoIterator<Item = Row>,
-    F: Fn(Row) -> I + 'static,
-{
-    Box::new(stream.flat_map(move |row| {
-        match row {
-            Ok(row) => fanout(row)
-                .into_iter()
-                .map(Ok)
-                .collect::<Vec<_>>()
-                .into_iter(),
-            Err(err) => vec![Err(err)].into_iter(),
-        }
-    }))
-}
-
-fn stream_row_fanout_result<I, F>(stream: RowStream, fanout: F) -> RowStream
-where
-    I: IntoIterator<Item = Row>,
-    F: Fn(Row) -> Result<I> + 'static,
-{
-    Box::new(stream.flat_map(move |row| match row {
-        Ok(row) => match fanout(row) {
-            Ok(rows) => rows.into_iter().map(Ok).collect::<Vec<_>>().into_iter(),
-            Err(err) => vec![Err(err)].into_iter(),
-        },
-        Err(err) => vec![Err(err)].into_iter(),
-    }))
-}
-
 fn merged_group_header(group: &crate::core::output_model::Group) -> Row {
     let mut row = group.groups.clone();
     row.extend(group.aggregates.clone());
     row
-}
-
-fn resolve_stage_execution_route(
-    items: &PipelineItems,
-    behavior: StageBehavior,
-) -> StageExecutionRoute {
-    match items {
-        PipelineItems::Semantic(_) => StageExecutionRoute::Semantic(behavior.semantic_effect),
-        PipelineItems::RowStream(_) if behavior.can_stream => StageExecutionRoute::Stream,
-        PipelineItems::RowStream(_) | PipelineItems::Materialized(_) => {
-            StageExecutionRoute::Materialized
-        }
-    }
 }
 
 #[cfg(test)]

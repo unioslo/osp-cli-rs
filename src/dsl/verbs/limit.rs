@@ -9,12 +9,6 @@ pub(crate) struct LimitSpec {
     pub(crate) offset: i64,
 }
 
-impl LimitSpec {
-    pub(crate) fn is_head_only(self) -> bool {
-        self.count >= 0 && self.offset >= 0
-    }
-}
-
 pub(crate) fn parse_limit_spec(spec: &str) -> Result<LimitSpec> {
     let parts: Vec<&str> = spec.split_whitespace().collect();
     if !(1..=2).contains(&parts.len()) {

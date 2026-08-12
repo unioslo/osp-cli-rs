@@ -94,10 +94,9 @@ osp help | VALUE commands[].name
 - Bare text like `doctor` is quick search over keys and values.
 - Path-shaped selectors like `commands.name` use structural path lookup and
   implicitly descend arrays.
-- On multi-row data, positive quick search usually acts like keep/drop
-  selection.
-- On a single row or document, positive quick search may narrow the result down
-  to the matched branch instead of returning the whole input unchanged.
+- Quick search always acts as keep/drop selection and retains complete matching
+  rows or collection members, regardless of how many rows the input has.
+- Use `P` or `VALUE` when you want to reshape the result.
 - The DSL runs before final rendering, so the same pipeline can be shown as a
   table, JSON, markdown, or plain values afterward.
 
@@ -769,6 +768,12 @@ Output:
 
 `V` only searches values, not keys.
 
+Prefix any quick search with `!` to keep rows that do not match:
+
+```text
+| ! ops
+```
+
 ### `K` Key-Only Quick Search
 
 Pipeline:
@@ -790,12 +795,11 @@ Output:
 
 ```json
 [
-  {"uid": "alice"}
+  {"uid": "alice", "dept": "ops"}
 ]
 ```
 
-`K` only searches keys, not values, and returns the matched key projection
-rather than the whole row.
+`K` only searches keys, not values, and retains the complete matching row.
 
 ### `?` Clean Or Truthy Filter
 
@@ -1044,30 +1048,5 @@ Examples:
 | F note="a=b>=c"
 ```
 
-## Streaming Notes
-
-Stages that usually stream on flat rows:
-
-- `F`
-- `P`
-- `VALUE`
-- `VAL`
-- `Y`
-- `U`
-- bare quick search
-- `V`
-- `K`
-- `?`
-- `L` in ordinary head-limit form like `| L 20`
-
-Stages that materialize the current payload:
-
-- `S`
-- `G`
-- `A`
-- `C`
-- `Z`
-- `JQ`
-
 Use `| H` in the REPL to see the current verb list and `| H <verb>` for
-per-verb notes.
+a concise description of one verb.

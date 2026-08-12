@@ -74,9 +74,8 @@ two models inside every verb is how semantic drift comes back.
 
 Not every verb returns the same shape, but the differences should be deliberate.
 
-- Bare quick on a multi-row set behaves like a row filter.
-- Bare quick on a single semantic document narrows to matching branches while
-  keeping owning envelopes.
+- Bare quick always behaves like a row/member filter and retains complete
+  matches regardless of input cardinality.
 - `V` and `K` only narrow the quick-search scope. They do not change selector
   resolution rules.
 - `VALUE` is transforming and intentionally discards semantic envelopes. Every

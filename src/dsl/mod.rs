@@ -43,13 +43,11 @@
 //! - if you already have an [`crate::core::output_model::OutputResult`] and want
 //!   to preserve its semantic document or render metadata, use
 //!   [`crate::dsl::apply_output_pipeline`]
-//! - if your rows come from an iterator and you want streamable stages to stay
-//!   streamable for as long as possible, use [`crate::dsl::execute_pipeline_streaming`]
 //!
 //! Common verbs: `F` (filter), `P` (project), `S` (sort), `G` (group),
 //! `A` (aggregate), `L` (limit), `V`/`K` (quick search), `U` (unroll),
 //! `JQ` (jq expression). See [`crate::dsl::registered_verbs`] for the full list
-//! with streaming notes in [`crate::dsl::VerbStreaming`].
+//! and short summaries.
 
 pub(crate) mod compiled;
 pub(crate) mod eval;
@@ -61,14 +59,10 @@ mod engine;
 mod value;
 mod verbs;
 
-pub use engine::{
-    apply_output_pipeline, apply_pipeline, execute_pipeline, execute_pipeline_streaming,
-};
+pub use engine::{apply_output_pipeline, apply_pipeline, execute_pipeline};
 pub use parse::pipeline::{Pipeline, parse_pipeline, parse_stage};
-pub use verb_info::{
-    VerbInfo, VerbStreaming, is_registered_explicit_verb, registered_verbs, render_streaming_badge,
-    verb_info,
-};
+pub use verb_info::{VerbInfo, is_registered_explicit_verb, registered_verbs, verb_info};
+pub(crate) use verbs::filter::parse_timestamp;
 
 #[cfg(test)]
 mod tests;

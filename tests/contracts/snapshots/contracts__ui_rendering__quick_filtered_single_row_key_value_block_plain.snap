@@ -1,11 +1,71 @@
 ---
 source: tests/contracts/ui_rendering.rs
-assertion_line: 207
 expression: sanitized
 ---
-netgroups (10):
-  vcs-cfengine     vcs-ops
-  vcs-dhcp         vcs-radius
-  vcs-it-org       vcs-ssd
-  vcs-it-osprov    vcs-usit
-  vcs-iti          vcs-virtprov-admins
+cn:                       Oistein Sovik
+uid:                      oistes
+uidNumber:                361000
+uioPrimaryAffiliation:    ANSATT@373034
+netgroups (44):
+  ansatt-373034
+  ansatt-tekadm-373034
+  dia-drs-vaktsjefer
+  it-uio-azure-users
+  it-uio-ms365-ansatt
+  it-uio-ms365-ansatt-publisert
+  it-uio-ms365-eapp-acos-akademiet
+  los-alle
+  mattermost-uio
+  mattermost-uio-it
+  mattermost-usit
+  meta-ansatt-360000
+  meta-ansatt-370000
+  meta-ansatt-373000
+  meta-ansatt-373034
+  meta-ansatt-900000
+  meta-ansatt-tekadm-360000
+  meta-ansatt-tekadm-370000
+  meta-ansatt-tekadm-373000
+  meta-ansatt-tekadm-373034
+  meta-ansatt-tekadm-900000
+  postmaster-eo-migrerte
+  rt-it-uu-kontakt
+  rt-saksbehandler
+  rt-usit-intark-drift
+  rt-usit-lifeportal-utv-kunder
+  rt-usit-ops
+  rt-usit-respons
+  ucore
+  uio-ans
+  uio-tils
+  usit
+  vcs-cfengine
+  vcs-dhcp
+  vcs-it-org
+  vcs-it-osprov
+  vcs-iti
+  vcs-ops
+  vcs-radius
+  vcs-ssd
+  vcs-usit
+  vcs-virtprov-admins
+  vortex-opptak
+  zabbix-iti-ops
+filegroups (4):           oistes
+                          ucore
+                          usit
+                          vortex-opptak
+dn:                       uid=oistes,cn=users,cn=system,dc=uio,dc=no
+eduPersonAffiliation (3): employee
+                          member
+                          staff
+gidNumber:                346297
+uioAffiliation:           ANSATT@373034
+objectClass (5):          uioMembership
+                          top
+                          account
+                          posixAccount
+                          uioAccountObject
+loginShell:               /local/gnu/bin/bash
+homeDirectory:            /uio/kant/usit-gsd-u1/oistes
+gecos:                    \istein S|vik

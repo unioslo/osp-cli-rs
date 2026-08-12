@@ -128,10 +128,8 @@ pub enum ReplRunResult {
 pub struct ReplRunConfig {
     /// Left prompt and indicator strings.
     pub prompt: ReplPrompt,
-    /// Legacy root words used when no structured completion tree is provided.
-    pub completion_words: Vec<String>,
     /// Structured completion tree for commands, flags, and pipe verbs.
-    pub completion_tree: Option<CompletionTree>,
+    pub completion_tree: CompletionTree,
     /// Visual configuration for completion menus and command highlighting.
     pub appearance: ReplAppearance,
     /// History backend configuration for the session.
@@ -147,14 +145,13 @@ pub struct ReplRunConfig {
 impl ReplRunConfig {
     /// Creates the exact REPL runtime baseline for one run.
     ///
-    /// The baseline starts with no completion words, no structured completion
-    /// tree, default appearance overrides, [`ReplInputMode::Auto`], no
-    /// right-hand prompt renderer, and no line projector.
+    /// The baseline starts with an empty completion tree, default appearance
+    /// overrides, [`ReplInputMode::Auto`], no right-hand prompt renderer, and
+    /// no line projector.
     pub fn new(prompt: ReplPrompt, history_config: HistoryConfig) -> Self {
         Self {
             prompt,
-            completion_words: Vec::new(),
-            completion_tree: None,
+            completion_tree: CompletionTree::default(),
             appearance: ReplAppearance::default(),
             history_config,
             input_mode: ReplInputMode::Auto,
@@ -174,16 +171,11 @@ impl ReplRunConfig {
     ///     ReplPrompt::simple("osp> "),
     ///     HistoryConfig::builder().build(),
     /// )
-    /// .with_completion_words(["help", "exit"])
     /// .with_input_mode(ReplInputMode::Basic)
     /// .build();
     ///
     /// assert_eq!(config.prompt.left, "osp> ");
     /// assert_eq!(config.input_mode, ReplInputMode::Basic);
-    /// assert_eq!(
-    ///     config.completion_words,
-    ///     vec!["help".to_string(), "exit".to_string()]
-    /// );
     /// ```
     pub fn builder(prompt: ReplPrompt, history_config: HistoryConfig) -> ReplRunConfigBuilder {
         ReplRunConfigBuilder::new(prompt, history_config)
@@ -204,22 +196,10 @@ impl ReplRunConfigBuilder {
         }
     }
 
-    /// Replaces the legacy fallback completion words.
-    ///
-    /// If omitted, the config keeps an empty fallback word list.
-    pub fn with_completion_words<I, S>(mut self, completion_words: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.config.completion_words = completion_words.into_iter().map(Into::into).collect();
-        self
-    }
-
     /// Replaces the structured completion tree.
     ///
-    /// If omitted, the REPL uses no structured completion tree.
-    pub fn with_completion_tree(mut self, completion_tree: Option<CompletionTree>) -> Self {
+    /// If omitted, the REPL uses an empty structured completion tree.
+    pub fn with_completion_tree(mut self, completion_tree: CompletionTree) -> Self {
         self.config.completion_tree = completion_tree;
         self
     }
@@ -428,17 +408,12 @@ mod tests {
             ReplPrompt::simple("osp> "),
             HistoryConfig::builder().build(),
         )
-        .with_completion_words(["help", "exit"])
         .with_appearance(appearance.clone())
         .with_input_mode(ReplInputMode::Basic)
         .build();
 
         assert_eq!(config.prompt.left, "osp> ");
         assert_eq!(config.input_mode, ReplInputMode::Basic);
-        assert_eq!(
-            config.completion_words,
-            vec!["help".to_string(), "exit".to_string()]
-        );
         assert_eq!(config.appearance.history_menu_rows, 8);
         assert_eq!(
             config.appearance.command_highlight_style.as_deref(),

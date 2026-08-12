@@ -128,9 +128,8 @@ fn grouped_pipeline_can_collapse_back_to_ranked_summary_rows() {
     assert_eq!(rows, vec![row(json!({"dept": "sales", "total": 130.0}))]);
 }
 
-// Protects envelope preservation for nested row data: matching inside an object
-// array must keep the matching parent object intact instead of flattening it to
-// a scalar fragment.
+// A bare quick match keeps the complete matching row. Use `P` when the caller
+// wants to reshape the nested collection.
 #[test]
 fn nested_document_like_rows_keep_parent_envelope_when_descendant_matches() {
     let rows = vec![row(json!({
@@ -159,7 +158,7 @@ fn nested_document_like_rows_keep_parent_envelope_when_descendant_matches() {
     assert_eq!(rows[0]["title"], json!("Deploy Reference"));
     assert_eq!(rows[0]["footer"], json!(["Generated from prod metadata"]));
     let commands = rows[0]["commands"].as_array().expect("commands array");
-    assert_eq!(commands.len(), 1);
+    assert_eq!(commands.len(), 2);
     assert_eq!(commands[0]["name"], json!("deploy"));
     assert_eq!(commands[0]["summary"], json!("Roll out service"));
     assert_eq!(commands[0]["owner"], json!("platform"));
@@ -202,11 +201,9 @@ fn mixed_structures_do_not_create_phantom_groups_after_fanout_pipeline() {
     assert_eq!(groups[1].aggregates["count"], json!(1));
 }
 
-// Protects negated path quick on ordinary rows: deleting one addressed array
-// element must not also delete real sibling `null` values when the collection
-// is compacted afterward.
+// Negated bare quick is a row filter, including for structural paths.
 #[test]
-fn negated_path_quick_preserves_real_null_array_items() {
+fn negated_path_quick_excludes_rows_with_that_path() {
     let rows = vec![row(json!({
         "items": [null, {"name": "keep"}, {"name": "drop"}]
     }))];
@@ -216,13 +213,7 @@ fn negated_path_quick_preserves_real_null_array_items() {
         panic!("expected flat rows");
     };
 
-    assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0],
-        row(json!({
-            "items": [null, {"name": "keep"}]
-        }))
-    );
+    assert!(rows.is_empty());
 }
 
 // Protects fuzzy quick as a filter rather than a ranking language: matched rows

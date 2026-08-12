@@ -3,7 +3,7 @@
 //! Parsing answers "what did the user type?". This module answers "what is the
 //! evaluator supposed to do with it?" by turning parsed stages into concrete
 //! per-verb plans and by attaching the execution traits that the engine cares
-//! about, such as streaming ability and semantic degradation.
+//! about, such as render preservation and semantic degradation.
 
 use anyhow::{Result, anyhow};
 
@@ -47,7 +47,6 @@ pub(crate) enum SemanticEffect {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StageBehavior {
-    pub(crate) can_stream: bool,
     pub(crate) preserves_render_recommendation: bool,
     pub(crate) semantic_effect: SemanticEffect,
 }
@@ -125,32 +124,26 @@ impl CompiledStage {
             | Self::Question(_)
             | Self::ValueQuick(_)
             | Self::KeyQuick(_) => StageBehavior {
-                can_stream: true,
                 preserves_render_recommendation: true,
                 semantic_effect: SemanticEffect::Preserve,
             },
             Self::Project(_) | Self::Unroll(_) | Self::Values(_) => StageBehavior {
-                can_stream: true,
                 preserves_render_recommendation: false,
                 semantic_effect: SemanticEffect::Transform,
             },
-            Self::Limit(spec) => StageBehavior {
-                can_stream: spec.is_head_only(),
+            Self::Limit(_) => StageBehavior {
                 preserves_render_recommendation: true,
                 semantic_effect: SemanticEffect::Preserve,
             },
             Self::Sort(_) => StageBehavior {
-                can_stream: false,
                 preserves_render_recommendation: true,
                 semantic_effect: SemanticEffect::Preserve,
             },
             Self::Group(_) | Self::Aggregate(_) => StageBehavior {
-                can_stream: false,
                 preserves_render_recommendation: false,
                 semantic_effect: SemanticEffect::Transform,
             },
             Self::Collapse | Self::CountMacro | Self::Jq(_) => StageBehavior {
-                can_stream: false,
                 preserves_render_recommendation: false,
                 semantic_effect: SemanticEffect::Degrade,
             },
@@ -174,28 +167,24 @@ mod tests {
     use crate::dsl::verbs::{filter, limit, project};
 
     #[test]
-    fn stage_behavior_centralizes_stream_render_and_semantic_rules_unit() {
+    fn stage_behavior_centralizes_render_and_semantic_rules_unit() {
         let filter = CompiledStage::Filter(filter::compile("uid=alice").expect("filter plan"));
         let behavior = filter.behavior();
-        assert!(behavior.can_stream);
         assert!(behavior.preserves_render_recommendation);
         assert_eq!(behavior.semantic_effect, SemanticEffect::Preserve);
 
         let project = CompiledStage::Project(project::compile("uid").expect("project plan"));
         let behavior = project.behavior();
-        assert!(behavior.can_stream);
         assert!(!behavior.preserves_render_recommendation);
         assert_eq!(behavior.semantic_effect, SemanticEffect::Transform);
 
         let head = CompiledStage::Limit(limit::parse_limit_spec("2").expect("head limit"));
         let behavior = head.behavior();
-        assert!(behavior.can_stream);
         assert!(behavior.preserves_render_recommendation);
         assert_eq!(behavior.semantic_effect, SemanticEffect::Preserve);
 
         let tail = CompiledStage::Limit(limit::parse_limit_spec("-2").expect("tail limit"));
         let behavior = tail.behavior();
-        assert!(!behavior.can_stream);
         assert!(behavior.preserves_render_recommendation);
         assert_eq!(behavior.semantic_effect, SemanticEffect::Preserve);
     }

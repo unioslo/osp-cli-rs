@@ -30,7 +30,15 @@ fn assert_subcommands(cmd: &clap::Command, name: &str, allowed: BTreeSet<String>
 fn builtin_command_verbs_are_consistent() {
     let cmd = Cli::command();
     let top_level = subcommand_names(&cmd);
-    let allowed_top = set(&["plugins", "doctor", "theme", "config", "history"]);
+    let allowed_top = set(&[
+        "plugins",
+        "doctor",
+        "theme",
+        "config",
+        "history",
+        "alias",
+        "completions",
+    ]);
     assert_eq!(
         top_level, allowed_top,
         "top-level commands should be nouns only"
@@ -59,6 +67,7 @@ fn builtin_command_verbs_are_consistent() {
         set(&["show", "get", "explain", "set", "unset", "doctor"]),
     );
     assert_subcommands(&cmd, "history", set(&["list", "prune", "clear"]));
+    assert_subcommands(&cmd, "alias", set(&["list", "add", "remove"]));
     // doctor uses selectors rather than verbs.
     assert_subcommands(
         &cmd,

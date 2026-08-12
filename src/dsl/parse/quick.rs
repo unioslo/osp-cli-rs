@@ -77,8 +77,11 @@ pub fn parse_quick_spec(input: &str) -> QuickSpec {
                 _ => None,
             };
             if let Some(scope_value) = scope_candidate {
-                scope = Some(scope_value);
                 let rest = &remaining[first.len_utf8()..];
+                if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+                    break;
+                }
+                scope = Some(scope_value);
                 remaining = rest.trim_start();
                 continue;
             }
@@ -148,5 +151,19 @@ mod tests {
         assert!(parsed.fuzzy);
         assert_eq!(parsed.scope, QuickScope::ValueOnly);
         assert_eq!(parsed.key_spec.token, "verrbose");
+    }
+
+    #[test]
+    fn ordinary_words_starting_with_scope_letters_remain_whole_tokens() {
+        for (input, expected) in [
+            ("vmware", "vmware"),
+            ("=vmware", "vmware"),
+            ("kind", "kind"),
+            ("kernel", "kernel"),
+        ] {
+            let parsed = parse_quick_spec(input);
+            assert_eq!(parsed.scope, QuickScope::KeyOrValue, "{input}");
+            assert_eq!(parsed.key_spec.token, expected, "{input}");
+        }
     }
 }

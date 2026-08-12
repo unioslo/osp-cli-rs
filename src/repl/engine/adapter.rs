@@ -9,9 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::completion::{
-    ArgNode, CompletionEngine, CompletionNode, CompletionTree, SuggestionEntry, SuggestionOutput,
-};
+use crate::completion::{CompletionEngine, CompletionTree, SuggestionOutput};
 use crate::core::fuzzy::fold_case;
 use crate::core::shell_words::{QuoteStyle, escape_for_shell, quote_for_shell};
 use crate::dsl::registered_verbs;
@@ -29,14 +27,7 @@ pub(crate) struct ReplCompleter {
 }
 
 impl ReplCompleter {
-    pub(crate) fn new(
-        mut words: Vec<String>,
-        completion_tree: Option<CompletionTree>,
-        line_projector: Option<LineProjector>,
-    ) -> Self {
-        words.sort();
-        words.dedup();
-        let tree = completion_tree.unwrap_or_else(|| build_repl_tree(&words));
+    pub(crate) fn new(tree: CompletionTree, line_projector: Option<LineProjector>) -> Self {
         Self {
             engine: CompletionEngine::new(tree),
             line_projector,
@@ -193,27 +184,6 @@ pub fn default_pipe_verbs() -> BTreeMap<String, String> {
         .iter()
         .map(|info| (info.verb.to_string(), info.summary.to_string()))
         .collect()
-}
-
-pub(crate) fn build_repl_tree(words: &[String]) -> CompletionTree {
-    let suggestions = words
-        .iter()
-        .map(|word| SuggestionEntry::value(word.clone()))
-        .collect::<Vec<_>>();
-    let args = (0..12)
-        .map(|_| ArgNode {
-            suggestions: suggestions.clone(),
-            ..ArgNode::default()
-        })
-        .collect::<Vec<_>>();
-
-    CompletionTree {
-        root: CompletionNode {
-            args,
-            ..CompletionNode::default()
-        },
-        pipe_verbs: default_pipe_verbs(),
-    }
 }
 
 pub(crate) fn build_repl_highlighter(

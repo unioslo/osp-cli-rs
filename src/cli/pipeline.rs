@@ -33,7 +33,7 @@ pub(crate) fn truncate_display(s: &str, max_len: usize) -> String {
 }
 
 /// Parsed command tokens plus trailing DSL stages.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ParsedCommandLine {
     /// Final command tokens after alias expansion and command normalization.
     pub tokens: Vec<String>,
@@ -245,7 +245,7 @@ pub fn is_cli_help_stage(parsed: &ParsedStage) -> bool {
     matches!(parsed.kind, ParsedStageKind::UnknownExplicit) && parsed.verb.eq_ignore_ascii_case("H")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct SplitCommandTokens {
     command_tokens: Vec<String>,
     stages: Vec<String>,
@@ -293,6 +293,40 @@ fn expand_alias_template(
     positional_args: &[String],
     config: &ResolvedConfig,
 ) -> Result<String> {
+    expand_alias_template_inner(alias_name, template, positional_args, config, false)
+}
+
+/// Validates a stored alias with the same expansion and pipeline parsers used at runtime.
+pub(crate) fn validate_alias_template(
+    alias_name: &str,
+    template: &str,
+    config: &ResolvedConfig,
+) -> Result<()> {
+    if template.trim().is_empty() {
+        return Err(miette!(
+            "alias `{alias_name}` cannot have an empty template"
+        ));
+    }
+    let expanded = expand_alias_template_inner(alias_name, template, &[], config, true)?;
+    let parsed = parse_pipeline(&expanded)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to parse alias `{alias_name}` template"))?;
+    let command_tokens = shell_words::split(&parsed.command)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("failed to parse alias `{alias_name}` command tokens"))?;
+    if command_tokens.is_empty() {
+        return Err(miette!("alias `{alias_name}` cannot have an empty command"));
+    }
+    validate_cli_dsl_stages(&parsed.stages)
+}
+
+fn expand_alias_template_inner(
+    alias_name: &str,
+    template: &str,
+    positional_args: &[String],
+    config: &ResolvedConfig,
+    validating: bool,
+) -> Result<String> {
     let mut current = template.to_string();
 
     for _ in 0..MAX_ALIAS_EXPANSION_DEPTH {
@@ -322,8 +356,14 @@ fn expand_alias_template(
             }
 
             let (key_part, default) = split_placeholder(placeholder);
-            let replacement =
-                resolve_alias_placeholder(alias_name, key_part, default, positional_args, config)?;
+            let replacement = resolve_alias_placeholder(
+                alias_name,
+                key_part,
+                default,
+                positional_args,
+                config,
+                validating,
+            )?;
             out.push_str(&replacement);
             cursor = end + 1;
         }
@@ -354,6 +394,7 @@ fn resolve_alias_placeholder(
     default: Option<&str>,
     positional_args: &[String],
     config: &ResolvedConfig,
+    validating: bool,
 ) -> Result<String> {
     if key_part.is_empty() {
         return Err(miette!(
@@ -363,12 +404,19 @@ fn resolve_alias_placeholder(
 
     if let Ok(index) = key_part.parse::<usize>()
         && index > 0
-        && index <= positional_args.len()
     {
-        return Ok(positional_args[index - 1].clone());
+        if validating {
+            return Ok("__osp_alias_arg__".to_string());
+        }
+        if index <= positional_args.len() {
+            return Ok(positional_args[index - 1].clone());
+        }
     }
 
     if key_part == "*" || key_part == "@" {
+        if validating {
+            return Ok("__osp_alias_args__".to_string());
+        }
         let joined = positional_args
             .iter()
             .map(|arg| quote_token(arg))
@@ -574,7 +622,8 @@ mod tests {
         assert!(err.to_string().contains("invalid alias placeholder syntax"));
 
         let pipeline_err = parse_command_text_with_aliases("ldap user 'oops | P uid", &config)
-            .expect_err("invalid pipeline should fail");
+            .err()
+            .expect("invalid pipeline should fail");
         assert!(
             pipeline_err
                 .to_string()
@@ -583,7 +632,8 @@ mod tests {
 
         let config = test_config(&[("alias.demo", "ldap user 'oops | P uid")]);
         let err = parse_command_tokens_with_aliases(&["demo".to_string()], &config)
-            .expect_err("broken alias command should fail");
+            .err()
+            .expect("broken alias command should fail");
         assert!(
             err.to_string()
                 .contains("failed to parse alias `demo` expansion")

@@ -229,7 +229,6 @@ fn command_metadata_builders_flow_into_generated_guide_and_rendering_contracts()
     assert!(rendered_values.contains("After line 2"));
 }
 
-#[cfg(feature = "clap")]
 #[test]
 fn clap_command_metadata_projects_into_command_defs_and_guides() {
     use clap::{Arg, ArgAction, Command, ValueHint, builder::PossibleValue};

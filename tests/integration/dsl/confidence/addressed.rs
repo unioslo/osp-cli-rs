@@ -280,11 +280,10 @@ fn help_like_payload_fanout_negated_path_quick_removes_only_matched_names() {
     assert_eq!(commands[2]["name"], json!("status"));
 }
 
-// Protects structural path quick selection on semantic payloads: path-scoped
-// quick should keep the same useful guide envelope as exact structural `P/F`
-// instead of dropping the payload shell around the selected branch.
+// Bare quick filters by a structural path without reshaping the matching
+// document. `P` remains the explicit projection operation.
 #[test]
-fn help_like_payload_path_quick_projects_selected_branch_and_restores() {
+fn help_like_payload_path_quick_keeps_the_matching_document() {
     let output = run_guide_pipeline(help_like_guide(), "sections[1].entries[0].name");
 
     let rebuilt = GuideView::try_from_output_result(&output).expect("guide should restore");
@@ -295,30 +294,14 @@ fn help_like_payload_path_quick_projects_selected_branch_and_restores() {
         vec!["Run `doctor` before applying production changes."]
     );
     assert_eq!(rebuilt.epilogue, vec!["footer text"]);
-    assert_eq!(rebuilt.options.len(), 1);
+    assert_eq!(rebuilt.options.len(), 2);
     assert_eq!(rebuilt.options[0].name, "--verbose");
     assert_eq!(rebuilt.sections.len(), 0);
 
     let document = output
         .document
         .expect("semantic document should remain attached");
-    assert_eq!(
-        document.value,
-        json!({
-            "preamble": ["Deploy commands"],
-            "usage": ["osp deploy <COMMAND>"],
-            "notes": ["Run `doctor` before applying production changes."],
-            "epilogue": ["footer text"],
-            "sections": [
-                {
-                    "title": "Options",
-                    "kind": "options",
-                    "paragraphs": ["rendering"],
-                    "entries": [{"name": "--verbose"}]
-                }
-            ]
-        })
-    );
+    assert_eq!(document.value, help_like_guide().to_json_value());
 }
 
 // Protects structural path negation on semantic payloads: removing one nested

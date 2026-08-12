@@ -66,6 +66,9 @@ fn ported_quick_path_scoping_distinguishes_nested_and_explicit_root_matches() {
     assert_eq!(
         asset_rows,
         vec![row(json!({
+            "id": 55753,
+            "txts": {"id": 27994},
+            "ipaddresses": [{"id": 57171}, {"id": 57172}],
             "metadata": {"asset": {"id": 42}}
         }))]
     );
@@ -83,7 +86,10 @@ fn ported_quick_path_scoping_distinguishes_nested_and_explicit_root_matches() {
     assert_eq!(
         id_rows,
         vec![row(json!({
-            "id": 55753
+            "id": 55753,
+            "txts": {"id": 27994},
+            "ipaddresses": [{"id": 57171}, {"id": 57172}],
+            "metadata": {"asset": {"id": 42}}
         }))]
     );
 }
@@ -114,7 +120,7 @@ fn ported_quick_collects_all_exact_matches_across_nested_fields() {
 }
 
 #[test]
-fn ported_quick_list_selector_fanout_preserves_selector_order() {
+fn ported_quick_list_selector_keeps_the_matching_row() {
     let rows = vec![row(json!({
         "networks": [
             {"network": "129.240.130.0/24", "vlan": 200},
@@ -129,10 +135,12 @@ fn ported_quick_list_selector_fanout_preserves_selector_order() {
 
     assert_eq!(
         rows,
-        vec![
-            row(json!({"network": "129.240.130.0/24", "vlan": 200})),
-            row(json!({"network": "2001:700:100:4003::/64", "vlan": 200})),
-        ]
+        vec![row(json!({
+            "networks": [
+                {"network": "129.240.130.0/24", "vlan": 200},
+                {"network": "2001:700:100:4003::/64", "vlan": 200}
+            ]
+        }))]
     );
 }
 

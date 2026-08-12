@@ -6,7 +6,7 @@
 
 use crate::core::output_model::{
     ColumnAlignment, OutputDocument, OutputDocumentKind, OutputMeta, OutputResult,
-    compute_key_index as core_compute_key_index, output_items_from_value, output_items_to_rows,
+    compute_key_index, output_items_from_value, output_items_to_rows,
 };
 use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
 use crate::core::row::Row;
@@ -120,10 +120,6 @@ fn column_alignment_from_plugin(value: ColumnAlignmentV1) -> ColumnAlignment {
         ColumnAlignmentV1::Center => ColumnAlignment::Center,
         ColumnAlignmentV1::Right => ColumnAlignment::Right,
     }
-}
-
-fn compute_key_index(rows: &[Row]) -> Vec<String> {
-    core_compute_key_index(rows)
 }
 
 #[cfg(test)]

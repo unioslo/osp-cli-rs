@@ -26,7 +26,11 @@ pub(crate) fn apply_stage_preserving_matching_rows(
     stage: &CompiledStage,
 ) -> Result<Value> {
     if let Some(plan) = stage.quick_plan() {
-        return quick::apply_value_with_plan_preserving_matching_rows(value, plan);
+        return if matches!(stage, CompiledStage::Quick(_)) {
+            quick::apply_value_with_plan_preserving_matching_rows(value, plan)
+        } else {
+            quick::apply_value_with_plan(value, plan)
+        };
     }
 
     apply_non_quick_stage(value, stage)
