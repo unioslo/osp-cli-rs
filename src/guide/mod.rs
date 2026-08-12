@@ -792,7 +792,7 @@ fn payload_entry_array_as_entries(value: &Value) -> Option<Vec<GuideEntry>> {
     items.iter().map(payload_entry_value_as_entry).collect()
 }
 
-fn payload_entry_value_as_entry(value: &Value) -> Option<GuideEntry> {
+pub(crate) fn payload_entry_value_as_entry(value: &Value) -> Option<GuideEntry> {
     let Value::Object(map) = value else {
         return None;
     };

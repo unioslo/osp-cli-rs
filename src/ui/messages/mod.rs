@@ -1,9 +1,6 @@
 //! Buffered user-facing messages and their canonical rendering helpers.
 
 mod render;
-#[cfg(test)]
-mod sink;
-
 use super::text::visible_inline_text;
 use crate::config::ResolvedConfig;
 use crate::ui::section_chrome::RuledSectionPolicy;
@@ -14,8 +11,7 @@ use crate::ui::theme::ThemeDefinition;
 
 pub(crate) use render::render_messages_with_styler_and_chrome;
 pub(crate) use render::{
-    MessageChrome, MessageFrameStyle, MessageRenderOptions, MessageRulePolicy,
-    render_messages_with_styler_from_config,
+    MessageChrome, MessageRenderOptions, render_messages_with_styler_from_config,
 };
 
 /// Severity level for buffered UI messages.
@@ -246,8 +242,8 @@ impl MessageBuffer {
             },
             &styler,
             render::MessageChrome {
-                frame_style: message_frame_style(options.chrome_frame),
-                ruled_policy: render::MessageRulePolicy::PerSection,
+                frame_style: options.chrome_frame,
+                ruled_policy: RuledSectionPolicy::PerSection,
                 unicode: options.unicode,
                 width: options.width,
             },
@@ -276,18 +272,8 @@ pub(crate) fn render_messages_from_settings(
         verbosity,
         &styler,
         MessageChrome {
-            frame_style: match settings.chrome_frame {
-                SectionFrameStyle::None => MessageFrameStyle::None,
-                SectionFrameStyle::Top => MessageFrameStyle::Top,
-                SectionFrameStyle::Bottom => MessageFrameStyle::Bottom,
-                SectionFrameStyle::TopBottom => MessageFrameStyle::TopBottom,
-                SectionFrameStyle::Square => MessageFrameStyle::Square,
-                SectionFrameStyle::Round => MessageFrameStyle::Round,
-            },
-            ruled_policy: match settings.ruled_section_policy {
-                RuledSectionPolicy::PerSection => MessageRulePolicy::PerSection,
-                RuledSectionPolicy::Shared => MessageRulePolicy::Shared,
-            },
+            frame_style: settings.chrome_frame,
+            ruled_policy: settings.ruled_section_policy,
             unicode: resolved.unicode,
             width: resolved.width,
         },
@@ -306,8 +292,8 @@ pub(crate) fn render_messages_without_config(
         MessageRenderOptions::full(verbosity),
         &styler,
         MessageChrome {
-            frame_style: MessageFrameStyle::TopBottom,
-            ruled_policy: MessageRulePolicy::Shared,
+            frame_style: SectionFrameStyle::TopBottom,
+            ruled_policy: RuledSectionPolicy::Shared,
             unicode: resolved.unicode,
             width: resolved.width.or(Some(12)),
         },
@@ -328,17 +314,6 @@ fn default_message_chrome_frame(layout: MessageLayout) -> SectionFrameStyle {
             SectionFrameStyle::None
         }
         MessageLayout::Grouped => SectionFrameStyle::TopBottom,
-    }
-}
-
-fn message_frame_style(frame: SectionFrameStyle) -> render::MessageFrameStyle {
-    match frame {
-        SectionFrameStyle::None => render::MessageFrameStyle::None,
-        SectionFrameStyle::Top => render::MessageFrameStyle::Top,
-        SectionFrameStyle::Bottom => render::MessageFrameStyle::Bottom,
-        SectionFrameStyle::TopBottom => render::MessageFrameStyle::TopBottom,
-        SectionFrameStyle::Square => render::MessageFrameStyle::Square,
-        SectionFrameStyle::Round => render::MessageFrameStyle::Round,
     }
 }
 

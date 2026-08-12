@@ -22,7 +22,9 @@ use crate::core::output_model::{
     output_items_to_rows, output_items_to_value,
 };
 use crate::core::row::Row;
-use crate::guide::{GuideEntry, GuideSection, GuideSectionKind, GuideView};
+use crate::guide::{
+    GuideEntry, GuideSection, GuideSectionKind, GuideView, payload_entry_value_as_entry,
+};
 
 use super::doc::{
     Block, Doc, GuideEntriesBlock, GuideEntryRow, JsonBlock, KeyValueBlock, KeyValueRow,
@@ -456,7 +458,7 @@ fn lower_guide(
 }
 
 fn guide_sections(view: &GuideView) -> Vec<GuideSectionRef<'_>> {
-    let use_ordered_sections = uses_ordered_section_representation(view);
+    let use_ordered_sections = view.uses_ordered_section_representation();
     let mut sections = Vec::new();
     let builtin_sections = [
         (
@@ -498,7 +500,7 @@ fn guide_sections(view: &GuideView) -> Vec<GuideSectionRef<'_>> {
     ];
     for (kind, title, paragraphs, entries) in builtin_sections {
         if (paragraphs.is_empty() && entries.is_empty())
-            || (use_ordered_sections && has_canonical_builtin_section_kind(view, kind))
+            || (use_ordered_sections && view.has_canonical_builtin_section_kind(kind))
         {
             continue;
         }
@@ -513,7 +515,7 @@ fn guide_sections(view: &GuideView) -> Vec<GuideSectionRef<'_>> {
     }
 
     for section in &view.sections {
-        if !use_ordered_sections && is_canonical_builtin_section(section) {
+        if !use_ordered_sections && section.is_canonical_builtin_section() {
             continue;
         }
         sections.push(GuideSectionRef::from_section(section));
@@ -699,7 +701,7 @@ fn help_layout_blocks_from_value(
         Value::Array(items) => {
             if let Some(entries) = items
                 .iter()
-                .map(guide_entry_from_value)
+                .map(payload_entry_value_as_entry)
                 .collect::<Option<Vec<_>>>()
             {
                 vec![Block::GuideEntries(guide_entries_block_with_defaults(
@@ -1022,7 +1024,8 @@ fn table_from_nonempty_object_array(items: &[Value]) -> Option<TableBlock> {
     if items.is_empty() {
         return None;
     }
-    table_from_value_array(items)
+    let table = table_from_value_array(items)?;
+    (table.headers.len() <= 8).then_some(table)
 }
 
 fn normalize_table_alignment(
@@ -1046,26 +1049,6 @@ fn display_value(value: &Value) -> String {
             serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
         }
     }
-}
-
-fn guide_entry_from_value(value: &Value) -> Option<GuideEntry> {
-    let Value::Object(map) = value else {
-        return None;
-    };
-    if map.keys().any(|key| key != "name" && key != "short_help") {
-        return None;
-    }
-
-    Some(GuideEntry {
-        name: map.get("name")?.as_str()?.to_string(),
-        short_help: map
-            .get("short_help")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        display_indent: Some("  ".to_string()),
-        display_gap: None,
-    })
 }
 
 fn key_value_from_guide_data_map(map: &Map<String, Value>) -> KeyValueBlock {
@@ -1150,48 +1133,4 @@ fn is_scalar_like(value: &Value) -> bool {
         value,
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
     )
-}
-
-fn has_canonical_builtin_section_kind(view: &GuideView, kind: GuideSectionKind) -> bool {
-    view.sections
-        .iter()
-        .any(|section| section.kind == kind && is_canonical_builtin_section(section))
-}
-
-fn uses_ordered_section_representation(view: &GuideView) -> bool {
-    view.sections.iter().any(|section| {
-        !is_canonical_builtin_section(section)
-            || canonical_section_owns_ordered_content(view, section)
-    })
-}
-
-fn canonical_section_owns_ordered_content(view: &GuideView, section: &GuideSection) -> bool {
-    if !matches!(section.data, None | Some(Value::Null)) {
-        return true;
-    }
-
-    match section.kind {
-        GuideSectionKind::Usage => !section.paragraphs.is_empty() && view.usage.is_empty(),
-        GuideSectionKind::Commands => !section.entries.is_empty() && view.commands.is_empty(),
-        GuideSectionKind::Arguments => !section.entries.is_empty() && view.arguments.is_empty(),
-        GuideSectionKind::Options => !section.entries.is_empty() && view.options.is_empty(),
-        GuideSectionKind::CommonInvocationOptions => {
-            !section.entries.is_empty() && view.common_invocation_options.is_empty()
-        }
-        GuideSectionKind::Notes => !section.paragraphs.is_empty() && view.notes.is_empty(),
-        GuideSectionKind::Custom => false,
-    }
-}
-
-fn is_canonical_builtin_section(section: &GuideSection) -> bool {
-    let expected = match section.kind {
-        GuideSectionKind::Usage => "Usage",
-        GuideSectionKind::Commands => "Commands",
-        GuideSectionKind::Arguments => "Arguments",
-        GuideSectionKind::Options => "Options",
-        GuideSectionKind::CommonInvocationOptions => "Common Invocation Options",
-        GuideSectionKind::Notes => "Notes",
-        GuideSectionKind::Custom => return false,
-    };
-    section.title.trim().eq_ignore_ascii_case(expected)
 }

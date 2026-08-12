@@ -1,5 +1,23 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+pub(crate) fn display_width(raw: &str) -> usize {
+    let mut width = 0;
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        width += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+    width
+}
+
 pub(crate) fn visible_inline_text(value: &str) -> String {
     let mut out = String::new();
     let chars: Vec<char> = value.chars().collect();
@@ -151,7 +169,7 @@ fn split_display_width(raw: &str, width: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{crop_display_width, visible_inline_text, wrap_display_width};
+    use super::{crop_display_width, display_width, visible_inline_text, wrap_display_width};
     use unicode_width::UnicodeWidthStr;
 
     #[test]
@@ -171,6 +189,7 @@ mod tests {
 
     #[test]
     fn display_width_helpers_preserve_unicode_and_bound_lines_unit() {
+        assert_eq!(display_width("\x1b[31m界\x1b[0m"), 2);
         assert_eq!(crop_display_width("ab🙂cd", 4), "ab🙂");
         let lines = wrap_display_width("alpha βeta 🙂🙂 omega", 7);
 

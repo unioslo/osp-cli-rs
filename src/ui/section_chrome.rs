@@ -12,6 +12,7 @@
 //!   section frame is rendered
 
 use crate::ui::style::{StyleOverrides, StyleToken, apply_style_with_theme_overrides};
+use crate::ui::text::display_width;
 use crate::ui::theme::ThemeDefinition;
 
 /// Frame style used when rendering section chrome.
@@ -195,7 +196,7 @@ pub fn render_section_divider_with_columns(
                 .to_string()
                 .repeat(title_columns.saturating_sub(1))
         );
-        let prefix_width = prefix.chars().count();
+        let prefix_width = display_width(&prefix);
         if prefix_width >= target_width {
             prefix
         } else {
@@ -222,8 +223,8 @@ pub fn render_section_divider_with_columns(
             .repeat(title_columns.saturating_sub(1))
     );
     let title_text = title;
-    let prefix_width = prefix.chars().count();
-    let title_width = title_text.chars().count();
+    let prefix_width = display_width(&prefix);
+    let title_width = display_width(title_text);
     let base_width = prefix_width + title_width + 1;
     let fill_len = target_width.saturating_sub(base_width);
     let suffix = if fill_len == 0 {
@@ -442,13 +443,13 @@ fn render_boxed_section(
     let title = title.trim();
     let body_width = lines
         .iter()
-        .map(|line| visible_width(line))
+        .map(|line| display_width(line))
         .max()
         .unwrap_or(0);
     let title_width = if title.is_empty() {
         0
     } else {
-        title.chars().count() + 2
+        display_width(title) + 2
     };
     let inner_width = body_width.max(title_width).max(8);
 
@@ -508,7 +509,7 @@ fn render_box_top(
         );
     }
 
-    let title_width = title.chars().count();
+    let title_width = display_width(title);
     let remaining = inner_width.saturating_sub(title_width);
     let left = format!("{} ", chars.top_left);
     let right = format!(
@@ -532,7 +533,7 @@ fn render_box_body_line(
     render: SectionRenderContext<'_>,
     border_token: StyleToken,
 ) -> String {
-    let padding = inner_width.saturating_sub(visible_width(line));
+    let padding = inner_width.saturating_sub(display_width(line));
     let left = format!("{} ", chars.vertical);
     let right = format!("{} {}", " ".repeat(padding), chars.vertical);
     format!(
@@ -554,26 +555,6 @@ fn section_body_lines(body: &str) -> Vec<&str> {
         .collect()
 }
 
-fn visible_width(text: &str) -> usize {
-    let mut width = 0usize;
-    let mut chars = text.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && matches!(chars.peek(), Some('[')) {
-            chars.next();
-            for next in chars.by_ref() {
-                if ('@'..='~').contains(&next) {
-                    break;
-                }
-            }
-            continue;
-        }
-        width += 1;
-    }
-
-    width
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -582,6 +563,7 @@ mod tests {
         render_section_divider_with_overrides,
     };
     use std::sync::Mutex;
+    use unicode_width::UnicodeWidthStr;
 
     fn env_lock() -> &'static Mutex<()> {
         crate::tests::env_lock()
@@ -739,6 +721,36 @@ mod tests {
         assert!(rendered.contains("┌"));
         assert!(rendered.contains("│ osp config show"));
         assert!(rendered.contains("┘"));
+    }
+
+    #[test]
+    fn section_chrome_measures_wide_titles_in_terminal_columns_unit() {
+        let theme = crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME);
+        let render = SectionRenderContext {
+            color: false,
+            theme: &theme,
+            style_overrides: &crate::ui::style::StyleOverrides::default(),
+        };
+        let tokens = SectionStyleTokens::same(crate::ui::style::StyleToken::PanelBorder);
+
+        let divider =
+            render_section_divider_with_overrides("界界界界界", true, Some(16), render, tokens);
+        assert_eq!(UnicodeWidthStr::width(divider.as_str()), 16);
+
+        let boxed = render_section_block_with_overrides(
+            "界界界界界",
+            "x",
+            SectionFrameStyle::Round,
+            true,
+            None,
+            render,
+            tokens,
+        );
+        let widths = boxed
+            .lines()
+            .map(UnicodeWidthStr::width)
+            .collect::<Vec<_>>();
+        assert!(widths.windows(2).all(|pair| pair[0] == pair[1]), "{boxed}");
     }
 
     #[test]
