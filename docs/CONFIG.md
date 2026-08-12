@@ -348,12 +348,12 @@ These keys currently drive user-visible rendering and REPL presentation:
 - `user.name`
 - `domain`
 - `repl.prompt`
+- `repl.exit_message`
+  - printed when leaving the root REPL; empty by default
 - `repl.simple_prompt`
 - `repl.shell_indicator`
 - `repl.intro`
   - `none | minimal | compact | full`
-- `color.prompt.text`
-- `color.prompt.command`
 - `ui.messages.layout`
   - `grouped | plain | minimal`
   - `grouped | minimal`

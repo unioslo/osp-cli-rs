@@ -69,9 +69,9 @@ pub struct StyleOverrides {
 /// Small styling facade used by emitters and message/chrome helpers.
 #[derive(Debug, Clone, Copy)]
 pub struct ThemeStyler<'a> {
-    enabled: bool,
-    theme: &'a ThemeDefinition,
-    overrides: &'a StyleOverrides,
+    pub(crate) enabled: bool,
+    pub(crate) theme: &'a ThemeDefinition,
+    pub(crate) overrides: &'a StyleOverrides,
 }
 
 impl<'a> ThemeStyler<'a> {

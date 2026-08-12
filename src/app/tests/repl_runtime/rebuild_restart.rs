@@ -123,13 +123,7 @@ fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
             .plugins()
             .set_command_state("hello", crate::plugin::state::PluginCommandState::Disabled)
             .expect("command should disable");
-        assert!(
-            state
-                .clients
-                .plugins()
-                .command_catalog()
-                .is_empty()
-        );
+        assert!(state.clients.plugins().command_catalog().is_empty());
 
         let history = make_test_history(&mut state);
         let result = repl_dispatch::execute_repl_plugin_line(
@@ -149,15 +143,11 @@ fn repl_plugin_enable_restart_refreshes_command_catalog_unit() {
         ));
 
         let next = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-        let catalog = next
-            .clients
-            .plugins()
-            .command_catalog();
+        let catalog = next.clients.plugins().command_catalog();
         assert!(
             catalog.iter().any(|entry| entry.name == "hello"),
             "enabled plugin should appear after rebuild"
         );
-
     });
 }
 
@@ -223,7 +213,6 @@ fn repl_provider_selection_restart_invalidates_command_cache_unit() {
             }
             other => panic!("unexpected repl result: {other:?}"),
         }
-
     });
 }
 
@@ -266,22 +255,6 @@ fn repl_reload_intent_matches_command_scope_unit() {
         }
     ));
 
-    let color_result = repl_dispatch::execute_repl_plugin_line(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &history,
-        "config set color.prompt.text '#ffffff'",
-    )
-    .expect("color config set should succeed");
-    assert!(matches!(
-        color_result,
-        crate::repl::ReplLineResult::Restart {
-            reload: crate::repl::ReplReloadKind::WithIntro,
-            ..
-        }
-    ));
-
     let unset_format_result = repl_dispatch::execute_repl_plugin_line(
         &mut state.runtime,
         &mut state.session,
@@ -294,22 +267,6 @@ fn repl_reload_intent_matches_command_scope_unit() {
         unset_format_result,
         crate::repl::ReplLineResult::Restart {
             reload: crate::repl::ReplReloadKind::Default,
-            ..
-        }
-    ));
-
-    let unset_color_result = repl_dispatch::execute_repl_plugin_line(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &history,
-        "config unset color.prompt.text",
-    )
-    .expect("color config unset should succeed");
-    assert!(matches!(
-        unset_color_result,
-        crate::repl::ReplLineResult::Restart {
-            reload: crate::repl::ReplReloadKind::WithIntro,
             ..
         }
     ));
@@ -392,81 +349,5 @@ fn repl_config_unset_dry_run_preserves_session_state_unit() {
             Some(&ConfigValue::from("table"))
         );
         assert_eq!(state.runtime.ui.render_settings.format, OutputFormat::Table);
-    });
-}
-
-#[test]
-fn repl_config_prompt_color_change_rebuilds_deterministically_unit() {
-    with_test_xdg_env(|| {
-        let mut state = make_test_state(Vec::new());
-        state
-            .session
-            .config_overrides
-            .set("ui.color.mode", "always");
-        state.session.config_overrides.set("ui.mode", "rich");
-        state
-            .session
-            .config_overrides
-            .set("repl.simple_prompt", true);
-        state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-        assert!(
-            state
-                .runtime
-                .ui
-                .render_settings
-                .resolve_render_settings()
-                .color
-        );
-
-        let default_prompt =
-            crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
-                .left;
-        assert!(default_prompt.contains("\x1b["));
-
-        let history = make_test_history(&mut state);
-        let result = repl_dispatch::execute_repl_plugin_line(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &history,
-            "config set color.prompt.text white",
-        )
-        .expect("prompt color config set should succeed");
-        assert!(matches!(
-            result,
-            crate::repl::ReplLineResult::Restart {
-                reload: crate::repl::ReplReloadKind::WithIntro,
-                ..
-            }
-        ));
-
-        state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-        let white_prompt =
-            crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
-                .left;
-        assert!(white_prompt.contains("\x1b[37mdefault"));
-
-        let history = make_test_history(&mut state);
-        let result = repl_dispatch::execute_repl_plugin_line(
-            &mut state.runtime,
-            &mut state.session,
-            &state.clients,
-            &history,
-            "config unset color.prompt.text",
-        )
-        .expect("prompt color config unset should succeed");
-        assert!(matches!(
-            result,
-            crate::repl::ReplLineResult::Restart {
-                reload: crate::repl::ReplReloadKind::WithIntro,
-                ..
-            }
-        ));
-
-        state = super::super::rebuild_repl_state(&state).expect("rebuild should succeed");
-        let restored_prompt =
-            crate::repl::presentation::build_repl_prompt(repl_view(&state.runtime, &state.session))
-                .left;
-        assert_eq!(restored_prompt, default_prompt);
     });
 }

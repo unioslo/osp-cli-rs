@@ -85,7 +85,7 @@ ui.format = "json"
         .args(["prod", "plugins", "list"]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("no plugin provides command: prod"));
+        .stderr(predicate::str::contains("unknown command prod"));
 }
 
 #[cfg(unix)]
@@ -112,7 +112,7 @@ ui.format = "json"
         .args(["--profile", "uio", "tsd", "plugins", "list"]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("no plugin provides command: tsd"));
+        .stderr(predicate::str::contains("unknown command tsd"));
 }
 
 #[cfg(unix)]

@@ -150,11 +150,7 @@ mod schema_value_contracts {
         for key in [
             "ui.width",
             "ui.indent",
-            "ui.short_list_max",
             "ui.medium_list_max",
-            "ui.grid_padding",
-            "ui.column_weight",
-            "ui.mreg.stack_min_col_width",
             "extensions.plugins.timeout_ms",
             "repl.history.max_entries",
             "repl.history.menu_rows",

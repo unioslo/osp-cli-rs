@@ -172,7 +172,7 @@ impl ConfigLoader for TomlFileLoader {
 /// This loader only projects matching environment variables into one config
 /// layer. It does not decide where that layer sits in precedence; that is the
 /// caller's job when wiring a [`LoaderPipeline`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct EnvVarLoader {
     vars: Vec<(String, String)>,
 }
@@ -322,7 +322,7 @@ impl ConfigLoader for SecretsTomlLoader {
 /// Like [`EnvVarLoader`], this is only a source-materialization step. The
 /// returned entries are marked secret so later rendering and diagnostics can
 /// redact them appropriately.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct EnvSecretsLoader {
     vars: Vec<(String, String)>,
 }

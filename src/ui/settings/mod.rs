@@ -190,8 +190,6 @@ pub struct RenderRuntime {
     pub locale_utf8: Option<bool>,
 }
 
-impl RenderRuntime {}
-
 impl RenderRuntime {
     /// Starts a builder for caller-supplied runtime facts.
     pub fn builder() -> RenderRuntimeBuilder {
@@ -263,17 +261,11 @@ pub struct RenderSettings {
     pub width: Option<usize>,
     pub margin: usize,
     pub indent_size: usize,
-    pub short_list_max: usize,
     pub medium_list_max: usize,
-    pub grid_padding: usize,
-    pub grid_columns: Option<usize>,
-    pub column_weight: usize,
     pub table_overflow: TableOverflow,
     pub table_border: TableBorderStyle,
     pub style_overrides: style::StyleOverrides,
     pub help_chrome: HelpChromeSettings,
-    pub mreg_stack_min_col_width: usize,
-    pub mreg_stack_overflow_ratio: usize,
     pub chrome_frame: SectionFrameStyle,
     pub ruled_section_policy: RuledSectionPolicy,
     pub guide_default_format: GuideDefaultFormat,
@@ -293,17 +285,11 @@ impl Default for RenderSettings {
             width: None,
             margin: 0,
             indent_size: 2,
-            short_list_max: 1,
             medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
             table_overflow: TableOverflow::Wrap,
             table_border: TableBorderStyle::Square,
             style_overrides: style::StyleOverrides::default(),
             help_chrome: HelpChromeSettings::default(),
-            mreg_stack_min_col_width: 10,
-            mreg_stack_overflow_ratio: 200,
             chrome_frame: SectionFrameStyle::Top,
             ruled_section_policy: RuledSectionPolicy::Shared,
             guide_default_format: GuideDefaultFormat::Guide,
@@ -542,48 +528,10 @@ fn sync_render_config_overrides(settings: &mut RenderSettings, config: &Resolved
         settings.indent_size = value as usize;
     }
 
-    if let Some(value) = config_int(config, "ui.short_list_max")
-        && value > 0
-    {
-        settings.short_list_max = value as usize;
-    }
-
     if let Some(value) = config_int(config, "ui.medium_list_max")
         && value > 0
     {
         settings.medium_list_max = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.grid_padding")
-        && value > 0
-    {
-        settings.grid_padding = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.grid_columns") {
-        settings.grid_columns = if value > 0 {
-            Some(value as usize)
-        } else {
-            None
-        };
-    }
-
-    if let Some(value) = config_int(config, "ui.column_weight")
-        && value > 0
-    {
-        settings.column_weight = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.mreg.stack_min_col_width")
-        && value > 0
-    {
-        settings.mreg_stack_min_col_width = value as usize;
-    }
-
-    if let Some(value) = config_int(config, "ui.mreg.stack_overflow_ratio")
-        && value >= 100
-    {
-        settings.mreg_stack_overflow_ratio = value as usize;
     }
 
     if let Some(value) = config.get_string("ui.table.overflow")
@@ -607,31 +555,6 @@ fn sync_render_config_overrides(settings: &mut RenderSettings, config: &Resolved
     settings.help_chrome.entry_indent = config_usize_override(config, "ui.help.entry_indent");
     settings.help_chrome.entry_gap = config_usize_override(config, "ui.help.entry_gap");
     settings.help_chrome.section_spacing = config_usize_override(config, "ui.help.section_spacing");
-
-    settings.style_overrides = style::StyleOverrides {
-        text: config_non_empty_string(config, "color.text"),
-        key: config_non_empty_string(config, "color.key"),
-        muted: config_non_empty_string(config, "color.text.muted"),
-        table_header: config_non_empty_string(config, "color.table.header"),
-        mreg_key: config_non_empty_string(config, "color.mreg.key"),
-        value: config_non_empty_string(config, "color.value"),
-        number: config_non_empty_string(config, "color.value.number"),
-        bool_true: config_non_empty_string(config, "color.value.bool_true"),
-        bool_false: config_non_empty_string(config, "color.value.bool_false"),
-        null_value: config_non_empty_string(config, "color.value.null"),
-        ipv4: config_non_empty_string(config, "color.value.ipv4"),
-        ipv6: config_non_empty_string(config, "color.value.ipv6"),
-        panel_border: config_non_empty_string(config, "color.panel.border")
-            .or_else(|| config_non_empty_string(config, "color.border")),
-        panel_title: config_non_empty_string(config, "color.panel.title"),
-        code: config_non_empty_string(config, "color.code"),
-        json_key: config_non_empty_string(config, "color.json.key"),
-        message_error: config_non_empty_string(config, "color.message.error"),
-        message_warning: config_non_empty_string(config, "color.message.warning"),
-        message_success: config_non_empty_string(config, "color.message.success"),
-        message_info: config_non_empty_string(config, "color.message.info"),
-        message_trace: config_non_empty_string(config, "color.message.trace"),
-    };
 }
 
 fn config_int(config: &ResolvedConfig, key: &str) -> Option<i64> {
@@ -640,14 +563,6 @@ fn config_int(config: &ResolvedConfig, key: &str) -> Option<i64> {
         Some(ConfigValue::String(raw)) => raw.trim().parse::<i64>().ok(),
         _ => None,
     }
-}
-
-fn config_non_empty_string(config: &ResolvedConfig, key: &str) -> Option<String> {
-    config
-        .get_string(key)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn config_usize_override(config: &ResolvedConfig, key: &str) -> Option<usize> {
@@ -804,11 +719,7 @@ pub struct ResolvedRenderSettings {
     pub width: Option<usize>,
     pub margin: usize,
     pub indent_size: usize,
-    pub short_list_max: usize,
     pub medium_list_max: usize,
-    pub grid_padding: usize,
-    pub grid_columns: Option<usize>,
-    pub column_weight: usize,
     pub table_overflow: TableOverflow,
     pub table_border: TableBorderStyle,
     pub help_table_border: TableBorderStyle,
@@ -894,11 +805,7 @@ impl RenderSettings {
                 width: self.resolve_width(),
                 margin: self.margin,
                 indent_size: self.indent_size.max(1),
-                short_list_max: self.short_list_max.max(1),
-                medium_list_max: self.medium_list_max.max(self.short_list_max.max(1) + 1),
-                grid_padding: self.grid_padding.max(1),
-                grid_columns: self.grid_columns.filter(|value| *value > 0),
-                column_weight: self.column_weight.max(1),
+                medium_list_max: self.medium_list_max.max(1),
                 table_overflow: self.table_overflow,
                 table_border: self.table_border,
                 help_table_border: self.help_chrome.table_chrome.resolve(self.table_border),
@@ -916,11 +823,7 @@ impl RenderSettings {
                 width: self.resolve_width(),
                 margin: self.margin,
                 indent_size: self.indent_size.max(1),
-                short_list_max: self.short_list_max.max(1),
-                medium_list_max: self.medium_list_max.max(self.short_list_max.max(1) + 1),
-                grid_padding: self.grid_padding.max(1),
-                grid_columns: self.grid_columns.filter(|value| *value > 0),
-                column_weight: self.column_weight.max(1),
+                medium_list_max: self.medium_list_max.max(1),
                 table_overflow: self.table_overflow,
                 table_border: self.table_border,
                 help_table_border: self.help_chrome.table_chrome.resolve(self.table_border),
@@ -944,16 +847,10 @@ impl RenderSettings {
             width: self.width,
             margin: self.margin,
             indent_size: self.indent_size,
-            short_list_max: self.short_list_max,
             medium_list_max: self.medium_list_max,
-            grid_padding: self.grid_padding,
-            grid_columns: self.grid_columns,
-            column_weight: self.column_weight,
             table_overflow: self.table_overflow,
             table_border: self.table_border,
             help_chrome: self.help_chrome,
-            mreg_stack_min_col_width: self.mreg_stack_min_col_width,
-            mreg_stack_overflow_ratio: self.mreg_stack_overflow_ratio,
             theme_name: self.theme_name.clone(),
             theme: self.theme.clone(),
             style_overrides: self.style_overrides.clone(),
@@ -1020,8 +917,8 @@ mod tests {
     use super::{
         GuideDefaultFormat, HelpChromeSettings, HelpLayout, HelpTableChrome, RenderBackend,
         RenderProfile, RenderRuntime, RenderSettingsBuilder, TableBorderStyle, TableOverflow,
-        UiPresentation, apply_render_config_overrides, config_int, config_non_empty_string,
-        config_usize_override, explain_presentation_effect, help_layout_from_config,
+        UiPresentation, apply_render_config_overrides, config_int, config_usize_override,
+        explain_presentation_effect, help_layout_from_config,
     };
     use crate::config::{
         ConfigLayer, ConfigResolver, ConfigSource, ConfigValue, LoadedLayers, ResolveOptions,
@@ -1126,15 +1023,10 @@ mod tests {
 
     #[test]
     fn render_config_helpers_normalize_strings_blanks_and_integers_unit() {
-        let config = resolved_config_with_presentation(&[
-            ("ui.width", "120"),
-            ("color.text", "  "),
-            ("ui.margin", "3"),
-        ]);
+        let config = resolved_config_with_presentation(&[("ui.width", "120"), ("ui.margin", "3")]);
 
         assert_eq!(config_int(&config, "ui.width"), Some(120));
         assert_eq!(config_int(&config, "ui.margin"), Some(3));
-        assert_eq!(config_non_empty_string(&config, "color.text"), None);
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::config::ConfigError;
 pub(crate) use crate::normalize::{normalize_identifier, normalize_optional_identifier};
 
 /// Result details for an in-place TOML edit operation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct TomlEditResult {
     /// Previous value removed or replaced by the edit, if one existed.
     pub previous: Option<ConfigValue>,
@@ -542,7 +542,6 @@ impl ConfigSchema {
         insert_identity_schema_keys(&mut schema);
         insert_ui_schema_keys(&mut schema);
         insert_repl_schema_keys(&mut schema);
-        insert_color_schema_keys(&mut schema);
         insert_misc_schema_keys(&mut schema);
 
         schema
@@ -646,6 +645,12 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
             "gammel-og-bitter",
         ]),
         "UI presentation preset",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.pager",
+        SchemaEntry::string().with_allowed_values(["auto", "never"]),
+        "Paging policy for tall one-shot terminal output",
     );
     insert_builtin_schema_key(
         schema,
@@ -763,45 +768,9 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     );
     insert_builtin_schema_key(
         schema,
-        "ui.short_list_max",
-        SchemaEntry::positive_integer(),
-        "Maximum items rendered as a short list",
-    );
-    insert_builtin_schema_key(
-        schema,
         "ui.medium_list_max",
         SchemaEntry::positive_integer(),
         "Maximum items rendered as a medium list",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "ui.grid_padding",
-        SchemaEntry::positive_integer(),
-        "Padding between rendered grid columns",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "ui.grid_columns",
-        SchemaEntry::integer(),
-        "Fixed grid column count when set",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "ui.column_weight",
-        SchemaEntry::positive_integer(),
-        "Relative weight used for adaptive columns",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "ui.mreg.stack_min_col_width",
-        SchemaEntry::positive_integer(),
-        "Minimum column width before MREG stacks columns",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "ui.mreg.stack_overflow_ratio",
-        SchemaEntry::integer(),
-        "Overflow ratio threshold for stacked MREG output",
     );
     insert_builtin_schema_key(
         schema,
@@ -850,6 +819,12 @@ fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
     );
     insert_builtin_schema_key(
         schema,
+        "repl.exit_message",
+        SchemaEntry::string(),
+        "Message printed when leaving the root REPL; empty disables it",
+    );
+    insert_builtin_schema_key(
+        schema,
         "repl.input_mode",
         SchemaEntry::string().with_allowed_values(["auto", "interactive", "basic"]),
         "REPL input mode",
@@ -865,6 +840,12 @@ fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
         "repl.shell_indicator",
         SchemaEntry::string(),
         "Template for the current shell indicator",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.shellable_commands",
+        SchemaEntry::string_list(),
+        "Product-owned commands that support REPL subshell entry",
     );
     insert_builtin_schema_key(
         schema,
@@ -937,171 +918,6 @@ fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
         "session.cache.max_results",
         SchemaEntry::positive_integer(),
         "Maximum cached session results",
-    );
-}
-
-fn insert_color_schema_keys(schema: &mut ConfigSchema) {
-    insert_builtin_schema_key(
-        schema,
-        "color.prompt.text",
-        SchemaEntry::string(),
-        "Prompt text color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.prompt.command",
-        SchemaEntry::string(),
-        "Prompt command color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.prompt.completion.text",
-        SchemaEntry::string(),
-        "Completion text color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.prompt.completion.background",
-        SchemaEntry::string(),
-        "Completion background color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.prompt.completion.highlight",
-        SchemaEntry::string(),
-        "Completion highlight color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.text",
-        SchemaEntry::string(),
-        "Primary text color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.text.muted",
-        SchemaEntry::string(),
-        "Muted text color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.key",
-        SchemaEntry::string(),
-        "Key label color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.border",
-        SchemaEntry::string(),
-        "Border color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.table.header",
-        SchemaEntry::string(),
-        "Table header color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.mreg.key",
-        SchemaEntry::string(),
-        "MREG key color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.value",
-        SchemaEntry::string(),
-        "Value color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.value.number",
-        SchemaEntry::string(),
-        "Numeric value color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.value.bool_true",
-        SchemaEntry::string(),
-        "True boolean color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.value.bool_false",
-        SchemaEntry::string(),
-        "False boolean color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.value.null",
-        SchemaEntry::string(),
-        "Null value color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.value.ipv4",
-        SchemaEntry::string(),
-        "IPv4 value color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.value.ipv6",
-        SchemaEntry::string(),
-        "IPv6 value color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.panel.border",
-        SchemaEntry::string(),
-        "Panel border color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.panel.title",
-        SchemaEntry::string(),
-        "Panel title color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.code",
-        SchemaEntry::string(),
-        "Code block color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.json.key",
-        SchemaEntry::string(),
-        "JSON key color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.message.error",
-        SchemaEntry::string(),
-        "Error message color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.message.warning",
-        SchemaEntry::string(),
-        "Warning message color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.message.success",
-        SchemaEntry::string(),
-        "Success message color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.message.info",
-        SchemaEntry::string(),
-        "Info message color override",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "color.message.trace",
-        SchemaEntry::string(),
-        "Trace message color override",
     );
 }
 

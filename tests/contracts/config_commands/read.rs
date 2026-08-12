@@ -286,7 +286,7 @@ profile.default = "uio"
 
 #[cfg(unix)]
 #[test]
-fn config_get_missing_key_suggests_nearby_keys_contract() {
+fn config_get_missing_key_reports_structured_suggestions_contract() {
     let home = make_temp_dir("osp-cli-config-missing-key-suggestions");
     write_config(
         &home,
@@ -311,9 +311,12 @@ ui.format = "json"
             "get",
             "ui.formt",
         ]);
-    cmd.assert()
-        .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("config key not found: ui.formt"))
-        .stderr(predicate::str::contains("did you mean: ui.format"));
+    let output = cmd.assert().failure().get_output().clone();
+    let payload = parse_json_stdout(&output.stdout);
+    assert_eq!(payload["error"]["code"], "config key not found");
+    assert_eq!(payload["error"]["message"], "ui.formt");
+    assert!(payload["messages"][1]["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("did you mean: ui.format")));
+    assert!(output.stderr.is_empty());
 }

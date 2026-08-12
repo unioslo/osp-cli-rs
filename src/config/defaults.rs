@@ -40,6 +40,8 @@ pub const DEFAULT_UI_MARGIN: i64 = 0;
 pub const DEFAULT_UI_INDENT: i64 = 2;
 /// Default presentation preset name.
 pub const DEFAULT_UI_PRESENTATION: &str = "expressive";
+/// Default paging policy for tall one-shot terminal output.
+pub const DEFAULT_UI_PAGER: &str = "auto";
 /// Default semantic guide-format preference.
 pub const DEFAULT_UI_GUIDE_DEFAULT_FORMAT: &str = "guide";
 /// Default grouped-message layout mode.
@@ -52,50 +54,19 @@ pub const DEFAULT_UI_CHROME_RULE_POLICY: &str = "shared";
 pub const DEFAULT_UI_TABLE_BORDER: &str = "square";
 /// Default REPL intro mode.
 pub const DEFAULT_REPL_INTRO: &str = "full";
-/// Default threshold for rendering short lists compactly.
-pub const DEFAULT_UI_SHORT_LIST_MAX: i64 = 1;
 /// Default threshold for rendering medium lists before expanding further.
 pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
-/// Default grid column padding.
-pub const DEFAULT_UI_GRID_PADDING: i64 = 4;
-/// Default adaptive grid column weight.
-pub const DEFAULT_UI_COLUMN_WEIGHT: i64 = 3;
-/// Default minimum width before MREG output stacks columns.
-pub const DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH: i64 = 10;
-/// Default threshold for stacked MREG overflow behavior.
-pub const DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO: i64 = 200;
 /// Default table overflow strategy.
 pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "wrap";
 
 const DEFAULT_EXTENSIONS_PLUGINS_TIMEOUT_MS: i64 =
     crate::plugin::DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as i64;
 
-const EMPTY_STYLE_OVERRIDE_KEYS: &[&str] = &[
-    "color.text",
-    "color.text.muted",
-    "color.key",
-    "color.border",
-    "color.prompt.text",
-    "color.prompt.command",
-    "color.table.header",
-    "color.mreg.key",
-    "color.value",
-    "color.value.number",
-    "color.value.bool_true",
-    "color.value.bool_false",
-    "color.value.null",
-    "color.value.ipv4",
-    "color.value.ipv6",
-    "color.panel.border",
-    "color.panel.title",
-    "color.code",
-    "color.json.key",
-];
-
 const LITERAL_DEFAULTS: &[LiteralDefault] = &[
     LiteralDefault::string("secrets.backend", "toml"),
     LiteralDefault::string("profile.default", DEFAULT_PROFILE_NAME),
     LiteralDefault::string("repl.input_mode", "auto"),
+    LiteralDefault::string("repl.exit_message", ""),
     LiteralDefault::bool("repl.simple_prompt", false),
     LiteralDefault::string("repl.shell_indicator", "[{shell}]"),
     LiteralDefault::string("repl.intro", DEFAULT_REPL_INTRO),
@@ -118,6 +89,7 @@ const LITERAL_DEFAULTS: &[LiteralDefault] = &[
     LiteralDefault::int("ui.margin", DEFAULT_UI_MARGIN),
     LiteralDefault::int("ui.indent", DEFAULT_UI_INDENT),
     LiteralDefault::string("ui.presentation", DEFAULT_UI_PRESENTATION),
+    LiteralDefault::string("ui.pager", DEFAULT_UI_PAGER),
     LiteralDefault::string("ui.help.level", "inherit"),
     LiteralDefault::string("ui.guide.default_format", DEFAULT_UI_GUIDE_DEFAULT_FORMAT),
     LiteralDefault::string("ui.messages.layout", DEFAULT_UI_MESSAGES_LAYOUT),
@@ -130,18 +102,7 @@ const LITERAL_DEFAULTS: &[LiteralDefault] = &[
     LiteralDefault::string("ui.help.entry_indent", "inherit"),
     LiteralDefault::string("ui.help.entry_gap", "inherit"),
     LiteralDefault::string("ui.help.section_spacing", "inherit"),
-    LiteralDefault::int("ui.short_list_max", DEFAULT_UI_SHORT_LIST_MAX),
     LiteralDefault::int("ui.medium_list_max", DEFAULT_UI_MEDIUM_LIST_MAX),
-    LiteralDefault::int("ui.grid_padding", DEFAULT_UI_GRID_PADDING),
-    LiteralDefault::int("ui.column_weight", DEFAULT_UI_COLUMN_WEIGHT),
-    LiteralDefault::int(
-        "ui.mreg.stack_min_col_width",
-        DEFAULT_UI_MREG_STACK_MIN_COL_WIDTH,
-    ),
-    LiteralDefault::int(
-        "ui.mreg.stack_overflow_ratio",
-        DEFAULT_UI_MREG_STACK_OVERFLOW_RATIO,
-    ),
     LiteralDefault::int(
         "extensions.plugins.timeout_ms",
         DEFAULT_EXTENSIONS_PLUGINS_TIMEOUT_MS,
@@ -207,10 +168,6 @@ pub(super) fn build_builtin_defaults(
 fn seed_literal_defaults(layer: &mut ConfigLayer) {
     for default in LITERAL_DEFAULTS {
         default.seed(layer);
-    }
-
-    for key in EMPTY_STYLE_OVERRIDE_KEYS {
-        layer.set(*key, String::new());
     }
 }
 
@@ -289,7 +246,7 @@ mod tests {
         assert_eq!(resolved.get_string("user.name"), Some("alice"));
         assert_eq!(resolved.get_string("domain"), Some("example.com"));
         assert_eq!(resolved.get_string("repl.prompt"), Some("osp> "));
-        assert_eq!(resolved.get_string("color.text"), Some(""));
+        assert_eq!(resolved.get_string("repl.exit_message"), Some(""));
         assert_eq!(
             resolved.get_string_list("theme.path"),
             Some(vec!["/tmp/osp-config/osp/themes".to_string()])

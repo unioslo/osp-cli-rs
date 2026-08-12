@@ -6,15 +6,7 @@ fn fixture_config(path: &std::path::Path) {
         path,
         r#"
 [default]
-theme.name = "plain"
-"color.panel.border" = "red"
-"color.panel.title" = "green"
-"color.key" = "yellow"
-"color.table.header" = "blue"
-"color.message.success" = "bright-green"
-"color.message.warning" = "yellow"
-"color.message.error" = "red"
-"color.message.info" = "blue"
+theme.name = "rose-pine-moon"
 "#,
     )
     .expect("fixture config should be written");

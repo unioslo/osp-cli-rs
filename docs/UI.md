@@ -162,15 +162,11 @@ The REPL prompt and intro surface are controlled primarily by:
 - `repl.shell_indicator`
 - `repl.intro`
   - `none | minimal | compact | full`
-- `color.prompt.text`
-- `color.prompt.command`
-
 The important distinction is:
 
 - `repl.simple_prompt` changes prompt density
 - `repl.intro` changes how much startup/help material the REPL shows
-- the `color.prompt.*` keys tune prompt styling rather than general table/help
-  styling
+- the selected theme owns prompt, completion, message, and value colors
 
 ## Clipboard and Copy Mode
 

@@ -128,11 +128,7 @@ fn canonical_help_settings(resolved: &ResolvedRenderSettings) -> crate::ui::Rend
         width: resolved.width,
         margin: resolved.margin,
         indent_size: resolved.indent_size,
-        short_list_max: resolved.short_list_max,
         medium_list_max: resolved.medium_list_max,
-        grid_padding: 4,
-        grid_columns: None,
-        column_weight: 3,
         table_overflow: crate::ui::TableOverflow::Clip,
         table_border: match resolved.help_table_border {
             crate::ui::TableBorderStyle::None => crate::ui::TableBorderStyle::None,
@@ -141,8 +137,6 @@ fn canonical_help_settings(resolved: &ResolvedRenderSettings) -> crate::ui::Rend
         },
         style_overrides: crate::ui::style::StyleOverrides::default(),
         help_chrome: crate::ui::HelpChromeSettings::default(),
-        mreg_stack_min_col_width: 10,
-        mreg_stack_overflow_ratio: 200,
         chrome_frame: crate::ui::section_chrome::SectionFrameStyle::Top,
         ruled_section_policy: crate::ui::section_chrome::RuledSectionPolicy::Shared,
         guide_default_format: crate::ui::GuideDefaultFormat::Guide,
@@ -187,11 +181,7 @@ mod tests {
             width: Some(24),
             margin: 0,
             indent_size: 2,
-            short_list_max: 1,
             medium_list_max: 5,
-            grid_padding: 4,
-            grid_columns: None,
-            column_weight: 3,
             table_overflow: TableOverflow::Clip,
             table_border: TableBorderStyle::Square,
             help_table_border: TableBorderStyle::None,
@@ -223,7 +213,8 @@ mod tests {
 
     fn clap_help(args: &[&str]) -> String {
         Cli::try_parse_from(args)
-            .expect_err("args should trigger clap help")
+            .err()
+            .expect("args should trigger clap help")
             .to_string()
     }
 

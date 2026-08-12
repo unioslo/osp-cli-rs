@@ -759,10 +759,6 @@ mod tests {
             find_value(&defaults, "ui.table.border"),
             Some(&ConfigValue::String(DEFAULT_UI_TABLE_BORDER.to_string()))
         );
-        assert_eq!(
-            find_value(&defaults, "color.prompt.text"),
-            Some(&ConfigValue::String(String::new()))
-        );
         let path = match find_value(&defaults, "repl.history.path") {
             Some(ConfigValue::String(value)) => value.as_str(),
             other => panic!("unexpected history path value: {other:?}"),
