@@ -30,7 +30,6 @@
 //!
 //! Skip this module and start lower if you only need:
 //!
-//! - LDAP service execution plus DSL stages: [`crate::services`]
 //! - rendering rows/documents: [`crate::ui`]
 //! - pure completion trees or guide payloads: [`crate::completion`] or
 //!   [`crate::guide`]
@@ -53,9 +52,6 @@
 //! - [`App::with_sink`] or [`App::builder`] plus
 //!   [`AppBuilder::build_with_sink`] when a test or outer host wants captured
 //!   stdout/stderr instead of touching process stdio
-//! - [`crate::services`] when this full host layer is more machinery than the
-//!   integration needs
-//!
 //! Downstream product-wrapper pattern:
 //!
 //! - keep site-specific auth, policy, and integration state in the wrapper

@@ -43,7 +43,6 @@
 //! - sidecar subsystems such as messages live in their own folders
 
 pub mod clipboard;
-pub mod interact;
 pub mod messages;
 pub mod section_chrome;
 pub mod style;

@@ -27,6 +27,3 @@ mod plugin_manager;
 
 #[path = "integration/repl/mod.rs"]
 mod repl;
-
-#[path = "integration/services/mod.rs"]
-mod services;

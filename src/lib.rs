@@ -10,7 +10,6 @@
 //!
 //! - run the full `osp` host in-process
 //! - build a wrapper crate with site-specific native commands and defaults
-//! - execute the small LDAP service surface without the full host
 //! - render rows or run DSL pipelines in-process
 //!
 //! Most readers only need one of those lanes. You do not need to understand
@@ -37,27 +36,6 @@
 //! assert!(!sink.stdout.is_empty());
 //! assert!(sink.stderr.is_empty());
 //! # Ok::<(), miette::Report>(())
-//! ```
-//!
-//! Lightweight LDAP command execution plus DSL stages:
-//!
-//! ```
-//! use osp_cli::config::RuntimeConfig;
-//! use osp_cli::ports::mock::MockLdapClient;
-//! use osp_cli::services::{ServiceContext, execute_line};
-//!
-//! let ctx = ServiceContext::new(
-//!     Some("oistes".to_string()),
-//!     MockLdapClient::default(),
-//!     RuntimeConfig::default(),
-//! );
-//! let output = execute_line(&ctx, "ldap user oistes | P uid cn")
-//!     .expect("service command should run");
-//! let rows = output.as_rows().expect("expected row output");
-//!
-//! assert_eq!(rows.len(), 1);
-//! assert_eq!(rows[0].get("uid").and_then(|value| value.as_str()), Some("oistes"));
-//! assert!(rows[0].contains_key("cn"));
 //! ```
 //!
 //! Rendering existing rows without bootstrapping the full host:
@@ -170,7 +148,6 @@
 //!   [embedding guide](https://github.com/unioslo/osp-cli-rs/blob/main/docs/EMBEDDING.md)
 //!   and [`App::builder`]
 //! - full in-process host → [`app`]
-//! - smaller service-only integration → [`services`]
 //! - rendering / formatting only → [`ui`]
 //!
 //! Start here depending on what you need:
@@ -187,15 +164,6 @@
 //! - [`ui`] exists to lower structured output into terminal-facing text.
 //! - [`plugin`] exists to treat external command providers as part of the same
 //!   command surface.
-//! - [`services`] and [`ports`] exist for smaller embeddable integrations that
-//!   do not want the whole host stack.
-//!
-//! # Feature Flags
-//!
-//! - `clap` (enabled by default): exposes the clap conversion helpers such as
-//!   [`crate::core::command_def::CommandDef::from_clap`],
-//!   [`crate::core::plugin::DescribeCommandV1::from_clap`], and
-//!   [`crate::core::plugin::DescribeV1::from_clap_command`].
 //!
 //! At runtime, data flows roughly like this:
 //!
@@ -253,8 +221,6 @@
 //!   [`app::App::run_from`]
 //! - "I want to capture rendered stdout/stderr in tests or another host" →
 //!   [`app::App::with_sink`] or [`app::AppBuilder::build_with_sink`]
-//! - "I want parser + service execution + DSL, but not the full host" →
-//!   [`services::ServiceContext`] and [`services::execute_line`]
 //! - "I already have rows and only want pipeline transforms" →
 //!   [`dsl::apply_pipeline`] or [`dsl::apply_output_pipeline`]
 //! - "I need plugin discovery and catalog/policy integration" →
@@ -288,12 +254,8 @@ pub mod dsl;
 pub mod guide;
 /// External plugin discovery, protocol, and dispatch support.
 pub mod plugin;
-/// Service-layer ports used by command execution.
-pub mod ports;
 /// Interactive REPL editor, prompt, history, and completion surface.
 pub mod repl;
-/// Library-level service entrypoints built on the core ports.
-pub mod services;
 /// Rendering, theming, and structured output helpers.
 pub mod ui;
 
