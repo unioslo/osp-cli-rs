@@ -428,7 +428,7 @@ fn prepare_host_run(
     let known_profiles = initial_config.known_profiles().clone();
     let dispatch = build_dispatch_plan(cli, &known_profiles)?;
     tracing::debug!(
-        action = ?dispatch.action,
+        action = %dispatch.action.name(),
         profile_override = ?dispatch.profile_override,
         known_profiles = known_profiles.len(),
         "built dispatch plan"
@@ -482,7 +482,7 @@ fn prepare_host_run(
     tracing::info!(
         profile = %state.runtime.config.resolved().active_profile(),
         terminal = %state.runtime.context.terminal_kind().as_config_terminal(),
-        action = ?dispatch.action,
+        action = %dispatch.action.name(),
         plugin_timeout_ms = super::plugin_process_timeout(state.runtime.config.resolved()).as_millis(),
         "osp session initialized"
     );
