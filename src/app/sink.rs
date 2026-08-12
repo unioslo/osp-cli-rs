@@ -10,6 +10,7 @@
 //! - higher-level rendering and message formatting belong elsewhere
 
 use std::io::{self, Write};
+use std::process::{Command, Stdio};
 
 /// Terminal-facing output sink for stdout/stderr emission.
 ///
@@ -50,6 +51,14 @@ pub trait UiSink {
     /// Writes text to the sink's stdout channel.
     fn write_stdout(&mut self, text: &str);
 
+    /// Writes a complete human-facing document through a pager when supported.
+    ///
+    /// Non-terminal and buffered sinks deliberately fall back to an ordinary
+    /// stdout write so embedding and capture behavior stays deterministic.
+    fn write_stdout_paged(&mut self, text: &str, _pager: &str) {
+        self.write_stdout(text);
+    }
+
     /// Writes text to the sink's stderr channel.
     fn write_stderr(&mut self, text: &str);
 }
@@ -62,17 +71,42 @@ pub struct StdIoUiSink;
 
 impl UiSink for StdIoUiSink {
     fn write_stdout(&mut self, text: &str) {
-        if !text.is_empty()
-            && let Err(err) = io::stdout().write_all(text.as_bytes())
-            && err.kind() != io::ErrorKind::BrokenPipe
-        {
-            let _ = writeln!(io::stderr(), "failed to write command output: {err}");
+        if !text.is_empty() {
+            let mut stdout = io::stdout().lock();
+            if let Err(err) = stdout
+                .write_all(text.as_bytes())
+                .and_then(|()| stdout.flush())
+                && err.kind() != io::ErrorKind::BrokenPipe
+            {
+                let _ = writeln!(io::stderr(), "failed to write command output: {err}");
+            }
         }
     }
 
     fn write_stderr(&mut self, text: &str) {
         if !text.is_empty() {
-            let _ = io::stderr().write_all(text.as_bytes());
+            let mut stderr = io::stderr().lock();
+            let _ = stderr
+                .write_all(text.as_bytes())
+                .and_then(|()| stderr.flush());
+        }
+    }
+
+    fn write_stdout_paged(&mut self, text: &str, pager: &str) {
+        let Ok(mut child) = Command::new("sh")
+            .args(["-c", pager])
+            .stdin(Stdio::piped())
+            .spawn()
+        else {
+            self.write_stdout(text);
+            return;
+        };
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        if !matches!(child.wait(), Ok(status) if status.success()) {
+            self.write_stdout(text);
         }
     }
 }

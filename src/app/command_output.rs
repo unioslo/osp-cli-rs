@@ -18,6 +18,8 @@ use crate::ui::{
     render_structured_output_with_source_guide,
 };
 use miette::{Result, WrapErr, miette};
+use serde_json::Value;
+use terminal_size::{Height, terminal_size};
 
 use crate::app::resolve_render_settings_with_hint;
 use crate::app::sink::UiSink;
@@ -437,10 +439,60 @@ fn render_cli_output(
     output: ReplCommandOutput,
     sink: &mut dyn UiSink,
 ) {
-    sink.write_stdout(&render_repl_output_with_runtime(runtime, &output));
+    let rendered = render_repl_output_with_runtime(runtime, &output);
+    if let Some(pager) = pager_for_output(runtime, &output, &rendered) {
+        sink.write_stdout_paged(&rendered, &pager);
+    } else {
+        sink.write_stdout(&rendered);
+    }
     if let ReplCommandOutput::Output(structured) = output {
         maybe_copy_output_with_runtime(runtime, &structured.output, sink);
     }
+}
+
+fn pager_for_output(
+    runtime: &CommandRenderRuntime<'_>,
+    output: &ReplCommandOutput,
+    rendered: &str,
+) -> Option<String> {
+    if runtime.config().get_string("ui.pager") != Some("auto")
+        || !runtime.ui().render_settings.runtime.stdout_is_tty
+        || output_uses_json(runtime, output)
+        || rendered.lines().count() <= terminal_height()?
+    {
+        return None;
+    }
+
+    Some(
+        std::env::var("PAGER")
+            .ok()
+            .filter(|pager| !pager.trim().is_empty())
+            .unwrap_or_else(|| "less -RFX".to_string()),
+    )
+}
+
+fn output_uses_json(runtime: &CommandRenderRuntime<'_>, output: &ReplCommandOutput) -> bool {
+    match output {
+        ReplCommandOutput::Json(_) => true,
+        ReplCommandOutput::Output(structured) => {
+            resolve_render_settings_with_hint(&runtime.ui().render_settings, structured.format_hint)
+                .format
+                == OutputFormat::Json
+        }
+        ReplCommandOutput::Text(_) => runtime.ui().render_settings.format == OutputFormat::Json,
+    }
+}
+
+fn terminal_height() -> Option<usize> {
+    terminal_size()
+        .map(|(_, Height(rows))| rows as usize)
+        .filter(|rows| *rows > 0)
+        .or_else(|| {
+            std::env::var("LINES")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|rows| *rows > 0)
+        })
 }
 
 pub(crate) fn render_repl_output_with_runtime(

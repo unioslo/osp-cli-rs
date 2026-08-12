@@ -73,6 +73,20 @@ Rendering flags:
 
 These change how output is rendered, not the underlying command result.
 
+## Automatic paging
+
+Tall human-readable output from a one-shot command uses `$PAGER` when stdout is
+a terminal. The default command is `less -RFX`. JSON, redirected output, REPL
+output, and progress messages are never paged.
+
+Disable paging persistently with:
+
+```bash
+osp config set ui.pager never --save
+```
+
+Set it back to the default with `ui.pager auto`.
+
 ## Verbosity and Debug
 
 These are also invocation-local:
