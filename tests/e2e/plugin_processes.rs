@@ -44,7 +44,7 @@ fn external_plugin_nonzero_exit_surfaces_stderr_and_nonzero_status() {
         .args(["boom"])
         .assert()
         .failure()
-        .code(4)
+        .code(1)
         .get_output()
         .clone();
 
@@ -78,7 +78,7 @@ extensions.plugins.timeout_ms = 50
         .args(["hang"])
         .assert()
         .failure()
-        .code(4)
+        .code(1)
         .get_output()
         .clone();
 
@@ -145,7 +145,7 @@ extensions.plugins.discovery.path = true
         "plugin execution must not start before policy allows it"
     );
     let stderr = stderr_utf8(output.stderr);
-    assert!(stderr.contains("requires authentication"), "{stderr}");
+    assert!(stderr.contains("unknown command guarded"), "{stderr}");
 }
 
 #[cfg(unix)]

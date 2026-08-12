@@ -66,6 +66,7 @@
 
 use crate::config::ConfigLayer;
 use crate::core::command_policy::{CommandPolicyContext, CommandPolicyRegistry};
+use crate::core::output::OutputFormat;
 use crate::native::NativeCommandRegistry;
 use crate::ui::messages::{MessageBuffer, MessageLevel, adjust_verbosity};
 use crate::ui::render_messages_without_config;
@@ -243,6 +244,20 @@ impl App {
         self
     }
 
+    /// Adds one wrapper-owned option to the root help surface.
+    ///
+    /// Product wrappers may consume bootstrap options before the generic host
+    /// parser runs. Registering them here keeps those real options visible
+    /// without teaching the generic grammar product-specific behavior.
+    pub fn with_product_help_option(
+        mut self,
+        syntax: impl Into<String>,
+        help: impl Into<String>,
+    ) -> Self {
+        self.definition = self.definition.with_product_help_option(syntax, help);
+        self
+    }
+
     /// Replaces the product-owned command-policy context used at runtime.
     ///
     /// Wrapper crates should use this to project their normalized auth/session
@@ -414,17 +429,13 @@ impl App {
         match host::run_from_with_sink_and_app(args, sink, &self.definition) {
             Ok(code) => code,
             Err(err) => {
-                let mut messages = MessageBuffer::default();
-                messages.error(render_report_message(
+                let rendered = render_process_error(
                     &err,
                     error_detail,
                     &error_render_settings,
-                ));
-                sink.write_stderr(&render_messages_without_config(
-                    &error_render_settings,
-                    &messages,
                     message_verbosity,
-                ));
+                );
+                sink.write_stderr(&rendered);
                 classify_exit_code(&err)
             }
         }
@@ -547,6 +558,16 @@ impl AppBuilder {
     /// defaults.
     pub fn with_product_defaults(mut self, product_defaults: ConfigLayer) -> Self {
         self.definition = self.definition.with_product_defaults(product_defaults);
+        self
+    }
+
+    /// Adds one wrapper-owned bootstrap option to the root help surface.
+    pub fn with_product_help_option(
+        mut self,
+        syntax: impl Into<String>,
+        help: impl Into<String>,
+    ) -> Self {
+        self.definition = self.definition.with_product_help_option(syntax, help);
         self
     }
 
@@ -677,20 +698,48 @@ where
     match host::run_from_with_sink(args, sink) {
         Ok(code) => code,
         Err(err) => {
-            let mut messages = MessageBuffer::default();
-            messages.error(render_report_message(
+            let rendered = render_process_error(
                 &err,
                 error_detail,
                 &error_render_settings,
-            ));
-            sink.write_stderr(&render_messages_without_config(
-                &error_render_settings,
-                &messages,
                 message_verbosity,
-            ));
+            );
+            sink.write_stderr(&rendered);
             classify_exit_code(&err)
         }
     }
+}
+
+fn render_process_error(
+    err: &miette::Report,
+    detail: ErrorDetail,
+    settings: &crate::ui::RenderSettings,
+    message_verbosity: MessageLevel,
+) -> String {
+    let message = render_report_message(err, detail, settings);
+    if settings.format == OutputFormat::Json {
+        let exit_code = classify_exit_code(err);
+        let code = match exit_code {
+            host::EXIT_CODE_USAGE => "usage_error",
+            _ => "command_error",
+        };
+        return format!(
+            "{}\n",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": false,
+                "error": {"code": code, "message": message},
+                "exit_code": exit_code,
+            }))
+            .unwrap_or_else(|_| {
+                r#"{"ok":false,"error":{"code":"serialization_error","message":"failed to serialize process error"},"exit_code":1}"#
+                    .to_string()
+            })
+        );
+    }
+
+    let mut messages = MessageBuffer::default();
+    messages.error(message);
+    render_messages_without_config(settings, &messages, message_verbosity)
 }
 
 fn bootstrap_message_verbosity(args: &[OsString]) -> MessageLevel {

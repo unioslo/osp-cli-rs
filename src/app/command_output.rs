@@ -69,6 +69,26 @@ pub(crate) enum PreparedPluginResponse {
     Failure(FailedPluginOutput),
 }
 
+#[derive(Debug)]
+pub(crate) struct CommandBackendDetails {
+    details: String,
+    source: miette::Report,
+}
+
+impl std::fmt::Display for CommandBackendDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "command failed\nBackend details:\n{}", self.details)
+    }
+}
+
+impl std::error::Error for CommandBackendDetails {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+impl miette::Diagnostic for CommandBackendDetails {}
+
 impl CliCommandResult {
     pub(crate) fn exit(exit_code: i32) -> Self {
         Self {
@@ -204,6 +224,60 @@ pub(crate) fn run_cli_command(
     result: CliCommandResult,
     sink: &mut dyn UiSink,
 ) -> Result<i32> {
+    if runtime.ui().render_settings.format == OutputFormat::Json && result.exit_code != 0 {
+        let data = result
+            .output
+            .as_ref()
+            .map(|output| render_repl_output_with_runtime(runtime, output))
+            .and_then(|rendered| serde_json::from_str(&rendered).ok())
+            .unwrap_or(Value::Null);
+        let messages = result
+            .messages
+            .entries()
+            .iter()
+            .filter(|entry| entry.level <= runtime.ui().message_verbosity)
+            .map(|entry| {
+                serde_json::json!({
+                    "level": entry.level.as_env_str(),
+                    "text": entry.text.as_str(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let primary_error = result
+            .messages
+            .entries()
+            .iter()
+            .find(|entry| entry.level == MessageLevel::Error)
+            .map(|entry| entry.text.as_str());
+        let (code, message) = primary_error
+            .and_then(|text| text.split_once(": "))
+            .map(|(code, message)| (code.to_string(), message.to_string()))
+            .unwrap_or_else(|| {
+                (
+                    "command_failed".to_string(),
+                    primary_error
+                        .map(str::to_string)
+                        .or_else(|| result.failure_report.as_ref().map(ToString::to_string))
+                        .unwrap_or_else(|| "command failed".to_string()),
+                )
+            });
+        let payload = serde_json::json!({
+            "ok": false,
+            "error": {"code": code, "message": message},
+            "messages": messages,
+            "data": data,
+        });
+        sink.write_stdout(&format!(
+            "{}\n",
+            serde_json::to_string_pretty(&payload)
+                .unwrap_or_else(|_| {
+                    r#"{"ok":false,"error":{"code":"serialization_error","message":"failed to serialize command failure"}}"#
+                        .to_string()
+                })
+        ));
+        return Ok(result.exit_code);
+    }
+
     if !result.messages.is_empty() {
         emit_messages_with_runtime(
             runtime,
@@ -312,6 +386,28 @@ pub(crate) fn emit_messages_for_ui(
     verbosity: MessageLevel,
     sink: &mut dyn UiSink,
 ) {
+    if ui.render_settings.format == OutputFormat::Json {
+        let entries = messages
+            .entries()
+            .iter()
+            .filter(|entry| entry.level <= verbosity)
+            .map(|entry| {
+                serde_json::json!({
+                    "level": entry.level.as_env_str(),
+                    "text": entry.text.as_str(),
+                })
+            })
+            .collect::<Vec<_>>();
+        if !entries.is_empty() {
+            let rendered = serde_json::to_string_pretty(&serde_json::json!({
+                "messages": entries,
+            }))
+            .unwrap_or_else(|_| r#"{"messages":[]}"#.to_string());
+            sink.write_stderr(&format!("{rendered}\n"));
+        }
+        return;
+    }
+
     let rendered = crate::ui::render_messages(config, &ui.render_settings, messages, verbosity);
     if !rendered.is_empty() {
         sink.write_stderr(&rendered);
@@ -357,10 +453,25 @@ pub(crate) fn prepare_plugin_response(
     if !response.ok {
         let report = if let Some(error) = response.error {
             messages.error(format!("{}: {}", error.code, error.message));
-            miette!("{}: {}", error.code, error.message)
+            let report = miette!("{}: {}", error.code, error.message);
+            if error.details.is_null()
+                || error
+                    .details
+                    .as_object()
+                    .is_some_and(serde_json::Map::is_empty)
+            {
+                report
+            } else {
+                let details = serde_json::to_string_pretty(&error.details)
+                    .unwrap_or_else(|_| error.details.to_string());
+                miette::Report::new(CommandBackendDetails {
+                    details,
+                    source: report,
+                })
+            }
         } else {
-            messages.error("plugin command failed");
-            miette!("plugin command failed")
+            messages.error("command failed");
+            miette!("command failed")
         };
         return Ok(PreparedPluginResponse::Failure(FailedPluginOutput {
             messages,

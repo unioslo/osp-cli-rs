@@ -1,6 +1,6 @@
 #[test]
 #[cfg(unix)]
-fn unknown_domain_command_shows_plugin_hint_contract() {
+fn unknown_domain_command_shows_command_hint_contract() {
     let home = make_temp_dir("osp-cli-no-plugin-home");
     let empty_plugins = make_temp_dir("osp-cli-empty-plugins");
 
@@ -12,11 +12,8 @@ fn unknown_domain_command_shows_plugin_hint_contract() {
         .args(["ldap", "user", "oistes"]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("no plugin provides command: ldap"))
-        .stderr(predicate::str::contains(
-            "Hint: run osp plugins list and set --plugin-dir or OSP_PLUGIN_PATH",
-        ));
-
+        .stderr(predicate::str::contains("unknown command ldap"))
+        .stderr(predicate::str::contains("Try: run help to list commands"));
 }
 
 #[test]
@@ -33,8 +30,7 @@ fn errors_remain_visible_at_double_quiet_contract() {
         .args(["-qq", "ldap", "user", "oistes"]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("no plugin provides command: ldap"));
-
+        .stderr(predicate::str::contains("unknown command ldap"));
 }
 
 #[cfg(unix)]
@@ -62,7 +58,6 @@ fn external_plugin_help_is_passed_through_contract() {
     let help_subcommand_stdout =
         String::from_utf8(help_subcommand.stdout).expect("help stdout should be utf-8");
     assert_eq!(help_subcommand_stdout, help_flag_stdout);
-
 }
 
 #[cfg(unix)]
@@ -81,7 +76,6 @@ fn external_plugin_help_keeps_raw_stderr_contract() {
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
     assert_snapshot_text!("external_plugin_help_stderr_stdout", stdout);
     assert_snapshot_text!("external_plugin_help_stderr_stderr", stderr);
-
 }
 
 #[cfg(unix)]
@@ -106,7 +100,6 @@ fn ignores_non_plugin_extension_files_contract() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("osp-ignore.sh").not());
-
 }
 
 #[cfg(unix)]
@@ -126,7 +119,6 @@ fn bundled_plugin_requires_manifest_contract() {
         .stdout(predicate::str::contains("healthy:"))
         .stdout(predicate::str::contains("source:"))
         .stdout(predicate::str::contains("bundled"));
-
 }
 
 #[cfg(unix)]
@@ -155,7 +147,7 @@ commands = ["hello"]
         .env("OSP_BUNDLED_PLUGIN_DIR", &dir)
         .args(["hello"]);
     first.assert().failure().stderr(predicate::str::contains(
-        "no plugin provides command: hello",
+        "unknown command hello",
     ));
 
     let mut enable = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -177,7 +169,6 @@ commands = ["hello"]
         .assert()
         .success()
         .stdout(predicate::str::contains("hello-from-plugin"));
-
 }
 
 #[cfg(unix)]
@@ -207,7 +198,6 @@ commands = ["ldap"]
     cmd.assert().success().stdout(predicate::str::contains(
         "manifest commands mismatch for hello",
     ));
-
 }
 
 #[cfg(unix)]
@@ -247,13 +237,12 @@ commands = ["hello"]
             .iter()
             .any(|row| {
                 row["plugin_id"] == "hello"
-                    && row["issue"]
-                        .as_str()
-                        .is_some_and(|issue| issue.contains("manifest id mismatch: expected hello, got wrong"))
+                    && row["issue"].as_str().is_some_and(|issue| {
+                        issue.contains("manifest id mismatch: expected hello, got wrong")
+                    })
             }),
         "expected manifest id mismatch row in payload: {payload}"
     );
-
 }
 
 #[cfg(unix)]
@@ -283,15 +272,15 @@ fn duplicate_plugin_ids_keep_one_winner_and_shadow_later_copies_contract() {
     assert_eq!(rows.iter().filter(|row| row["healthy"] == false).count(), 1);
     assert!(rows.iter().any(|row| {
         row["healthy"] == false
-            && row["issue"].as_str().is_some_and(|issue| {
-                issue.contains("duplicate plugin id `shared-id` shadowed by")
-            })
+            && row["issue"]
+                .as_str()
+                .is_some_and(|issue| issue.contains("duplicate plugin id `shared-id` shadowed by"))
     }));
     assert!(rows.iter().any(|row| {
         row["healthy"] == true
-            && row["commands"]
-                .as_array()
-                .is_some_and(|commands| commands.contains(&serde_json::Value::String("alpha".to_string())))
+            && row["commands"].as_array().is_some_and(|commands| {
+                commands.contains(&serde_json::Value::String("alpha".to_string()))
+            })
     }));
 
     let mut commands = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -326,10 +315,10 @@ fn duplicate_plugin_ids_keep_one_winner_and_shadow_later_copies_contract() {
         .envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
         .args(["beta"]);
-    shadowed.assert().failure().stderr(predicate::str::contains(
-        "no plugin provides command: beta",
-    ));
-
+    shadowed
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown command beta"));
 }
 
 #[cfg(unix)]
@@ -363,7 +352,6 @@ fn plugin_min_osp_version_mismatch_marks_plugin_unhealthy_contract() {
             }),
         "expected min-version failure row in payload: {payload}"
     );
-
 }
 
 #[cfg(unix)]
@@ -387,10 +375,7 @@ fn plugins_commands_surface_session_requirements_contract() {
     let row = first_json_row(&payload, "plugins commands session auth view");
     assert_eq!(row["name"], "secure");
     assert_eq!(row["auth_visibility"], "authenticated");
-    assert_eq!(
-        row["auth_hint"],
-        "auth; run: token: osp fresh(600s)"
-    );
+    assert_eq!(row["auth_hint"], "auth; run: token: osp fresh(600s)");
     assert_eq!(
         row["run_session"],
         serde_json::json!({

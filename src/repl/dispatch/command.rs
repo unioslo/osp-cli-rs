@@ -21,7 +21,6 @@ use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 
 use crate::repl::{completion, input};
 
-#[derive(Debug)]
 pub(super) struct ParsedReplInvocation {
     pub(super) command: Commands,
     pub(super) effective: ResolvedInvocation,
@@ -30,7 +29,6 @@ pub(super) struct ParsedReplInvocation {
     pub(super) side_effects: CommandSideEffects,
 }
 
-#[derive(Debug)]
 pub(super) enum ParsedReplDispatch {
     Help {
         result: Box<crate::app::CliCommandResult>,
@@ -42,6 +40,7 @@ pub(super) enum ParsedReplDispatch {
 
 pub(super) struct ExecutedReplCommand {
     pub(super) result: ReplLineResult,
+    pub(super) exit_code: i32,
     pub(super) debug_verbosity: u8,
     pub(super) execute_finished: Option<Instant>,
 }
@@ -50,14 +49,21 @@ impl ExecutedReplCommand {
     fn parse_only(result: ReplLineResult, debug_verbosity: u8) -> Self {
         Self {
             result,
+            exit_code: 0,
             debug_verbosity,
             execute_finished: None,
         }
     }
 
-    fn invocation(result: ReplLineResult, debug_verbosity: u8, execute_finished: Instant) -> Self {
+    fn invocation(
+        result: ReplLineResult,
+        exit_code: i32,
+        debug_verbosity: u8,
+        execute_finished: Instant,
+    ) -> Self {
         Self {
             result,
+            exit_code,
             debug_verbosity,
             execute_finished: Some(execute_finished),
         }
@@ -88,11 +94,31 @@ pub(super) fn parse_repl_invocation(
     session: &AppSession,
     parsed: &input::ReplParsedLine,
 ) -> Result<ParsedReplDispatch> {
-    let prefixed_tokens = parsed.prefixed_tokens(&session.scope);
-    let scanned = scan_command_tokens(&prefixed_tokens)?;
+    let unscoped = scan_command_tokens(&parsed.dispatch_tokens)?;
+    let absolute_builtin = !session.scope.is_root()
+        && unscoped.tokens.first().is_some_and(|command| {
+            matches!(
+                command.as_str(),
+                "plugins" | "doctor" | "theme" | "config" | "alias" | "history" | "intro"
+            )
+        });
+    let prefixed_tokens = if absolute_builtin {
+        parsed.dispatch_tokens.clone()
+    } else {
+        parsed.prefixed_tokens(&session.scope)
+    };
+    let scanned = if absolute_builtin {
+        unscoped
+    } else {
+        scan_command_tokens(&prefixed_tokens)?
+    };
     let effective =
         app::resolve_invocation_ui(runtime.config.resolved(), &runtime.ui, &scanned.invocation);
-    let command_index = session.scope.commands().len();
+    let command_index = if absolute_builtin {
+        0
+    } else {
+        session.scope.commands().len()
+    };
     // `help` is a REPL alias layered on top of shell scope. Handle it before
     // clap parsing so `help user` inside `ldap` resolves as scoped inline help
     // instead of a normal `help` subcommand invocation.
@@ -206,9 +232,7 @@ pub(super) fn renders_repl_inline_help(kind: clap::error::ErrorKind) -> bool {
         kind,
         clap::error::ErrorKind::DisplayHelp
             | clap::error::ErrorKind::DisplayVersion
-            | clap::error::ErrorKind::InvalidSubcommand
-            | clap::error::ErrorKind::UnknownArgument
-            | clap::error::ErrorKind::MissingRequiredArgument
+            | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
     )
 }
 
@@ -224,15 +248,20 @@ fn render_repl_parse_help(help_level: crate::guide::HelpLevel, error_text: &str)
 
 pub(super) fn parse_clap_help(error_text: &str) -> ParsedClapHelp<'_> {
     let lines = error_text.lines().collect::<Vec<_>>();
-    let summary = lines
-        .iter()
-        .map(|line| line.trim())
-        .find_map(|line| line.strip_prefix("error:").map(str::trim));
-
     let body_start = lines
         .iter()
         .position(|line| line.trim_start().starts_with("Usage:"))
         .unwrap_or(0);
+    let summary = lines
+        .iter()
+        .map(|line| line.trim())
+        .find_map(|line| line.strip_prefix("error:").map(str::trim))
+        .or_else(|| {
+            lines[..body_start]
+                .iter()
+                .map(|line| line.trim())
+                .find(|line| !line.is_empty())
+        });
     let mut body_end = lines.len();
     while body_end > body_start {
         let trimmed = lines[body_end - 1].trim();
@@ -316,10 +345,7 @@ pub(super) fn command_side_effects(command: &Commands) -> CommandSideEffects {
 
 pub(super) fn config_key_change_requires_intro(key: &str) -> bool {
     let key = key.trim().to_ascii_lowercase();
-    key == "theme.name"
-        || key.starts_with("theme.")
-        || key.starts_with("color.")
-        || key.starts_with("palette.")
+    key == "theme.name" || key.starts_with("theme.") || key.starts_with("palette.")
 }
 
 pub(super) fn render_repl_command_output(
@@ -327,10 +353,15 @@ pub(super) fn render_repl_command_output(
     session: &mut AppSession,
     line: &str,
     stages: &[String],
-    result: crate::app::CliCommandResult,
+    mut result: crate::app::CliCommandResult,
     invocation: &ResolvedInvocation,
     sink: &mut dyn UiSink,
 ) -> Result<String> {
+    if result.exit_code != 0
+        && let Some(report) = result.failure_report.take()
+    {
+        return Err(report);
+    }
     app::render_repl_command_with_runtime(
         &app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
         session,
@@ -391,15 +422,18 @@ pub(super) fn execute_repl_command_dispatch(
                 },
             )?;
             let execute_finished = Instant::now();
+            let exit_code = output.exit_code;
             let rendered = render_repl_command_output(
                 runtime, session, line, &stages, output, &effective, sink,
             )?;
+            let refresh_completion = session.native_context.take_completion_refresh_request();
             Ok(ExecutedReplCommand::invocation(
                 finalize_repl_command(
                     rendered,
-                    side_effects.restart_repl,
+                    side_effects.restart_repl || refresh_completion,
                     side_effects.show_intro_on_reload,
                 ),
+                exit_code,
                 effective.ui.debug_verbosity,
                 execute_finished,
             ))
@@ -602,7 +636,12 @@ fn repl_command_behavior(command: &Commands) -> ReplCommandBehavior<'_> {
         },
         Commands::History(args) => ReplCommandBehavior {
             name: Cow::Borrowed(CMD_HISTORY),
-            supports_dsl: matches!(args.command, HistoryCommands::List),
+            supports_dsl: matches!(args.command, HistoryCommands::List(_)),
+            side_effects: CommandSideEffects::default(),
+        },
+        Commands::Completions(_) => ReplCommandBehavior {
+            name: Cow::Borrowed("completions"),
+            supports_dsl: false,
             side_effects: CommandSideEffects::default(),
         },
         Commands::Config(args) => ReplCommandBehavior {
@@ -621,6 +660,25 @@ fn repl_command_behavior(command: &Commands) -> ReplCommandBehavior<'_> {
                     show_intro_on_reload: config_key_change_requires_intro(&unset.key),
                 },
                 _ => CommandSideEffects::default(),
+            },
+        },
+        Commands::Alias(args) => ReplCommandBehavior {
+            name: Cow::Borrowed("alias"),
+            supports_dsl: matches!(args.command, crate::cli::AliasCommands::List(_)),
+            side_effects: if matches!(
+                args.command,
+                crate::cli::AliasCommands::Add(crate::cli::AliasAddArgs { dry_run: false, .. })
+                    | crate::cli::AliasCommands::Remove(crate::cli::AliasRemoveArgs {
+                        dry_run: false,
+                        ..
+                    })
+            ) {
+                CommandSideEffects {
+                    restart_repl: true,
+                    show_intro_on_reload: false,
+                }
+            } else {
+                CommandSideEffects::default()
             },
         },
         Commands::Theme(args) => ReplCommandBehavior {

@@ -154,12 +154,39 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                 .native_commands()
                 .command(&command)
                 .ok_or_else(|| miette!("no native command provides `{command}`"))?;
-            let path = native_command.describe().resolved_subcommand_path(args);
+            let description = native_command.describe();
+            let path = description.resolved_subcommand_path(args);
+            let invocation_ends_at_command = args.len() + 1 == path.as_slice().len();
+            if described_path_has_subcommands(&description, &path) || invocation_ends_at_command {
+                match native_command.command().try_get_matches_from(
+                    std::iter::once(command.clone()).chain(args.iter().cloned()),
+                ) {
+                    Ok(_) => {}
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            clap::error::ErrorKind::DisplayHelp
+                                | clap::error::ErrorKind::DisplayVersion
+                                | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                                | clap::error::ErrorKind::MissingSubcommand
+                        ) =>
+                    {
+                        return Ok(CliCommandResult::guide(guide_help(&err.to_string())));
+                    }
+                    Err(err) => {
+                        return Err(crate::app::report_std_error_with_context(
+                            err,
+                            "native command syntax is invalid",
+                        ));
+                    }
+                }
+            }
             ensure_external_path_access(
                 runtime,
                 session,
                 &path,
                 external_path_access_requirement(args),
+                "command",
             )?;
             run_native_command(
                 native_command.as_ref(),
@@ -178,6 +205,24 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
             runtime, session, clients, &command, &parsed, invocation, guide_help,
         ),
     }
+}
+
+fn described_path_has_subcommands(
+    command: &crate::core::plugin::DescribeCommandV1,
+    path: &crate::command_policy::CommandPath,
+) -> bool {
+    let mut current = command;
+    for segment in path.as_slice().iter().skip(1) {
+        let Some(child) = current
+            .subcommands
+            .iter()
+            .find(|child| child.name.eq_ignore_ascii_case(segment))
+        else {
+            return false;
+        };
+        current = child;
+    }
+    !current.subcommands.is_empty()
 }
 
 struct NativeRunInput<'args, 'stages, 'invocation, 'sink> {
@@ -209,7 +254,14 @@ fn run_native_command(
     }
 
     match command.execute(input.args, &context).map_err(|err| {
-        crate::app::report_anyhow_with_context(err, "native command execution failed")
+        match err.downcast::<clap::Error>() {
+            Ok(err) => {
+                crate::app::report_std_error_with_context(err, "native command execution failed")
+            }
+            Err(err) => {
+                crate::app::report_anyhow_with_context(err, "native command execution failed")
+            }
+        }
     })? {
         NativeCommandOutcome::Help(text) => Ok(CliCommandResult::guide(guide_help(&text))),
         NativeCommandOutcome::Exit(code) => Ok(CliCommandResult::exit(code)),
@@ -297,9 +349,12 @@ fn parse_external_invocation(
     let inline_command = match parse_inline_command_tokens(&parsed.tokens) {
         Ok(command) => command,
         Err(err) => {
-            if err.kind() == clap::error::ErrorKind::DisplayHelp
-                || err.kind() == clap::error::ErrorKind::DisplayVersion
-            {
+            if matches!(
+                err.kind(),
+                clap::error::ErrorKind::DisplayHelp
+                    | clap::error::ErrorKind::DisplayVersion
+                    | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            ) {
                 let mut view = GuideView::from_text(&err.to_string());
                 extend_with_invocation_help(&mut view, invocation.help_level);
                 return Ok(ExternalParse::Handled(Box::new(CliCommandResult::guide(
@@ -316,6 +371,7 @@ fn parse_external_invocation(
     Ok(ExternalParse::Invocation(ParsedExternalInvocation {
         tokens: rewrite_shellable_root_help_tokens(
             parsed.tokens,
+            runtime.config.resolved(),
             invocation.plugin_provider.as_deref(),
         ),
         stages: parsed.stages,
@@ -325,6 +381,7 @@ fn parse_external_invocation(
 
 fn rewrite_shellable_root_help_tokens(
     tokens: Vec<String>,
+    config: &crate::config::ResolvedConfig,
     provider_override: Option<&str>,
 ) -> Vec<String> {
     if provider_override.is_some() {
@@ -333,7 +390,7 @@ fn rewrite_shellable_root_help_tokens(
 
     if tokens.len() == 1
         && let Some(command) = tokens.first()
-        && is_repl_shellable_command(command)
+        && is_repl_shellable_command(config, command)
     {
         return vec![command.clone(), "--help".to_string()];
     }
@@ -362,12 +419,17 @@ fn run_external_plugin_command(
         .auth_mut()
         .overlay_external_policy(dispatch_policy);
     let access_requirement = external_path_access_requirement(args);
-    ensure_external_path_access(runtime_state, session, &path, access_requirement)?;
+    ensure_external_path_access(
+        runtime_state,
+        session,
+        &path,
+        access_requirement,
+        "plugin command",
+    )?;
     let runtime = ExternalCommandRuntime::from_parts(runtime_state, clients);
 
     tracing::debug!(
         command = %path.as_slice().join(" "),
-        args = ?args,
         "dispatching external command"
     );
 
@@ -663,7 +725,7 @@ mod tests {
             themes,
             LaunchContext::default(),
         );
-        let session = AppSession::builder().build();
+        let session = AppSession::default();
         let clients = AppClients::new(plugins, native_commands);
         (runtime, session, clients)
     }
@@ -982,7 +1044,7 @@ JSON
                     .expect("expected semantic guide payload")
                     .preamble
                     .iter()
-                    .any(|line| line.contains("Args: --help"))
+                    .any(|line| line.contains("HELP::") || line.contains("Directory lookup"))
         ));
     }
 
@@ -1019,6 +1081,29 @@ JSON
     }
 
     #[test]
+    fn external_dispatch_suggests_nearby_native_command_unit() {
+        let (mut runtime, mut session, clients) =
+            make_test_state_with_native(Some(NativeOutcomeKind::Help));
+        let invocation = resolve_invocation_ui(
+            runtime.config.resolved(),
+            &runtime.ui,
+            &InvocationOptions::default(),
+        );
+        let err = run_external_command_with_help_renderer(
+            &mut runtime,
+            &mut session,
+            &clients,
+            &["lpad".to_string(), "user".to_string(), "oistes".to_string()],
+            &invocation,
+            GuideView::from_text,
+        )
+        .expect_err("misspelled command should fail with a suggestion");
+
+        assert!(err.to_string().contains("unknown command `lpad`"));
+        assert!(err.to_string().contains("Try: use command `ldap`"));
+    }
+
+    #[test]
     fn external_dispatch_enforces_nested_native_command_auth_unit() {
         let (mut runtime, mut session, clients) = make_test_state_with_registry(
             NativeCommandRegistry::new().with_command(NestedAuthNativeCommand),
@@ -1048,8 +1133,9 @@ JSON
         )
         .expect_err("nested auth should block native external dispatch");
 
-        assert!(err.to_string().contains("plugin command `ldap user`"));
-        assert!(err.to_string().contains("requires additional capabilities"));
+        assert!(err.to_string().contains("command `ldap user`"));
+        assert!(err.to_string().contains("capability `ldap.user.read`"));
+        assert!(err.to_string().contains("Try: authenticate"));
     }
 
     #[test]

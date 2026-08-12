@@ -24,7 +24,7 @@ use super::manager::{
 use crate::core::plugin::{DescribeV1, ResponseV1};
 use anyhow::{Result, anyhow};
 use std::io::Read;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -33,10 +33,23 @@ const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const ETXTBSY_RETRY_COUNT: usize = 5;
 const ETXTBSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 const ENV_OSP_COMMAND: &str = "OSP_COMMAND";
+const MAX_PLUGIN_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 
 enum CommandRunError {
     Execute(std::io::Error),
     TimedOut { timeout: Duration, stderr: Vec<u8> },
+    OutputTooLarge { stream: &'static str, limit: usize },
+}
+
+struct CommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+pub(super) struct CapturedOutput {
+    pub(super) bytes: Vec<u8>,
+    pub(super) exceeded_limit: bool,
 }
 
 struct ExecutedPluginCommand {
@@ -218,6 +231,10 @@ pub(super) fn describe_plugin(path: &std::path::Path, timeout: Duration) -> Resu
                 )
             }
         }
+        CommandRunError::OutputTooLarge { stream, limit } => anyhow!(
+            "--describe from {} exceeded the {limit}-byte {stream} limit",
+            path.display()
+        ),
     })?;
 
     tracing::debug!(
@@ -324,6 +341,11 @@ pub(super) fn run_provider(
                 stderr: stderr_text,
             }
         }
+        CommandRunError::OutputTooLarge { stream, limit } => PluginDispatchError::OutputTooLarge {
+            plugin_id: provider.plugin_id.clone(),
+            stream,
+            limit,
+        },
     })?;
 
     tracing::debug!(
@@ -336,16 +358,32 @@ pub(super) fn run_provider(
     );
 
     Ok(RawPluginOutput {
-        status_code: output.status.code().unwrap_or(1),
+        status_code: exit_status_code(output.status),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
 }
 
+pub(super) fn exit_status_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+
+    1
+}
+
 fn run_command_with_timeout(
     mut command: Command,
     timeout: Duration,
-) -> Result<Output, CommandRunError> {
+) -> Result<CommandOutput, CommandRunError> {
     configure_command_process_group(&mut command);
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
@@ -356,7 +394,10 @@ fn run_command_with_timeout(
 
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return child.finish(status).map_err(CommandRunError::Execute),
+            Ok(Some(status)) => {
+                let output = child.finish(status).map_err(CommandRunError::Execute)?;
+                return output.into_result();
+            }
             Ok(None) if Instant::now() < deadline => {
                 thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
             }
@@ -366,7 +407,7 @@ fn run_command_with_timeout(
                 let output = child.finish(status).map_err(CommandRunError::Execute)?;
                 return Err(CommandRunError::TimedOut {
                     timeout,
-                    stderr: output.stderr,
+                    stderr: output.stderr.bytes,
                 });
             }
             Err(source) => return Err(CommandRunError::Execute(source)),
@@ -376,8 +417,36 @@ fn run_command_with_timeout(
 
 struct DrainedChild {
     child: Child,
-    stdout: JoinHandle<std::io::Result<Vec<u8>>>,
-    stderr: JoinHandle<std::io::Result<Vec<u8>>>,
+    stdout: JoinHandle<std::io::Result<CapturedOutput>>,
+    stderr: JoinHandle<std::io::Result<CapturedOutput>>,
+}
+
+struct DrainedOutput {
+    status: ExitStatus,
+    stdout: CapturedOutput,
+    stderr: CapturedOutput,
+}
+
+impl DrainedOutput {
+    fn into_result(self) -> Result<CommandOutput, CommandRunError> {
+        if self.stdout.exceeded_limit {
+            return Err(CommandRunError::OutputTooLarge {
+                stream: "stdout",
+                limit: MAX_PLUGIN_OUTPUT_BYTES,
+            });
+        }
+        if self.stderr.exceeded_limit {
+            return Err(CommandRunError::OutputTooLarge {
+                stream: "stderr",
+                limit: MAX_PLUGIN_OUTPUT_BYTES,
+            });
+        }
+        Ok(CommandOutput {
+            status: self.status,
+            stdout: self.stdout.bytes,
+            stderr: self.stderr.bytes,
+        })
+    }
 }
 
 impl DrainedChild {
@@ -410,8 +479,8 @@ impl DrainedChild {
         self.child.wait()
     }
 
-    fn finish(self, status: std::process::ExitStatus) -> std::io::Result<Output> {
-        Ok(Output {
+    fn finish(self, status: ExitStatus) -> std::io::Result<DrainedOutput> {
+        Ok(DrainedOutput {
             status,
             stdout: join_capture(self.stdout)?,
             stderr: join_capture(self.stderr)?,
@@ -419,18 +488,38 @@ impl DrainedChild {
     }
 }
 
-fn spawn_capture_thread<R>(mut reader: R) -> JoinHandle<std::io::Result<Vec<u8>>>
+fn spawn_capture_thread<R>(reader: R) -> JoinHandle<std::io::Result<CapturedOutput>>
 where
     R: Read + Send + 'static,
 {
-    thread::spawn(move || {
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer)?;
-        Ok(buffer)
+    thread::spawn(move || capture_reader(reader, MAX_PLUGIN_OUTPUT_BYTES))
+}
+
+pub(super) fn capture_reader<R: Read>(
+    mut reader: R,
+    limit: usize,
+) -> std::io::Result<CapturedOutput> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    let mut exceeded_limit = false;
+    loop {
+        let read = reader.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        let retained = read.min(limit.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&chunk[..retained]);
+        exceeded_limit |= retained < read;
+    }
+    Ok(CapturedOutput {
+        bytes,
+        exceeded_limit,
     })
 }
 
-fn join_capture(handle: JoinHandle<std::io::Result<Vec<u8>>>) -> std::io::Result<Vec<u8>> {
+fn join_capture(
+    handle: JoinHandle<std::io::Result<CapturedOutput>>,
+) -> std::io::Result<CapturedOutput> {
     handle
         .join()
         .map_err(|_| std::io::Error::other("plugin output capture thread panicked"))?

@@ -132,7 +132,7 @@ Welcome `{{display_name}}`!
 
 ```osp
 [
-  {"name": "Logged in as", "short_help": "{{user.name}}"},
+  {"name": "{{session.user_label}}", "short_help": "{{session.user_value}}"},
   {"name": "Theme", "short_help": "{{theme_display}}"},
   {"name": "Version", "short_help": "{{version}}"}
 ]
@@ -150,22 +150,22 @@ Welcome `{{display_name}}`!
 ## Pipes
 ```osp
 [
-  "`F` key>3",
-  "`P` col1 col2",
-  "`S` sort_key",
-  "`G` group_by_k1 k2",
-  "`A` metric()",
-  "`L` limit offset",
-  "`C` count",
-  "`K` key-only quick search",
-  "`V` value-only quick search",
-  "`contains` quick-search text",
-  "`!not` negate a quick match",
-  "`?exist` truthy / exists",
-  "`!?not_exist` missing / falsy",
-  "`= exact` exact match (ci)",
-  "`== case-sens.` exact match (cs)",
-  "`| H <verb>` verb help, e.g. `| H F`"
+  {"name": "| F key>3", "short_help": "keep rows that satisfy a field condition"},
+  {"name": "| P col1 col2", "short_help": "show only selected fields"},
+  {"name": "| S sort_key", "short_help": "sort rows by a field"},
+  {"name": "| G key1 key2", "short_help": "group rows by fields"},
+  {"name": "| A metric()", "short_help": "calculate an aggregate"},
+  {"name": "| L limit offset", "short_help": "limit rows, optionally from an offset"},
+  {"name": "| C", "short_help": "count rows"},
+  {"name": "| text", "short_help": "search keys and values"},
+  {"name": "| K text", "short_help": "search keys only"},
+  {"name": "| V text", "short_help": "search values only"},
+  {"name": "| ! text", "short_help": "exclude quick-search matches"},
+  {"name": "| ? key", "short_help": "keep rows where a field exists and is truthy"},
+  {"name": "| !? key", "short_help": "keep rows where a field is missing or false"},
+  {"name": "| = exact", "short_help": "case-insensitive exact search"},
+  {"name": "| == exact", "short_help": "case-sensitive exact search"},
+  {"name": "| H F", "short_help": "show help for a pipe verb"}
 ]
 ```
 
@@ -468,6 +468,22 @@ fn resolve_intro_placeholder(
                 .unwrap_or("anonymous")
                 .to_string();
         }
+        "session.user_label" => {
+            return if view.auth.policy_context().authenticated {
+                "Logged in as"
+            } else {
+                "User"
+            }
+            .to_string();
+        }
+        "session.user_value" => {
+            return if view.auth.policy_context().authenticated {
+                view.config.get_string("user.name").unwrap_or("anonymous")
+            } else {
+                "Not authenticated"
+            }
+            .to_string();
+        }
         "profile" => return view.config.active_profile().to_string(),
         "profile.active" => return view.config.active_profile().to_string(),
         "domain" => {
@@ -569,6 +585,7 @@ pub(crate) fn build_repl_command_overview_view(surface: &ReplSurface) -> GuideVi
                 )),
             })
             .collect(),
+        epilogue: vec!["Pipe command output with `|`; use `| H` for in-band DSL help.".to_string()],
         ..GuideView::default()
     }
 }
@@ -601,25 +618,12 @@ pub(crate) fn build_repl_appearance(view: ReplViewContext<'_>) -> ReplAppearance
         return ReplAppearance::default();
     }
     let theme = &resolved.theme;
-    let config = view.config;
-
-    let config_style = |key: &str| {
-        config
-            .get_string(key)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    };
-
-    let completion_text_style = config_style("color.prompt.completion.text")
-        .unwrap_or_else(|| theme.repl_completion_text_spec().to_string());
-    let completion_background_style = config_style("color.prompt.completion.background")
-        .unwrap_or_else(|| theme.repl_completion_background_spec().to_string());
-    let completion_highlight_style = config_style("color.prompt.completion.highlight")
-        .unwrap_or_else(|| theme.repl_completion_highlight_spec().to_string());
-    let command_highlight_style =
-        config_style("color.prompt.command").unwrap_or_else(|| theme.palette.success.to_string());
-    let history_menu_rows = match config
+    let completion_text_style = theme.repl_completion_text_spec().to_string();
+    let completion_background_style = theme.repl_completion_background_spec().to_string();
+    let completion_highlight_style = theme.repl_completion_highlight_spec().to_string();
+    let command_highlight_style = theme.palette.success.to_string();
+    let history_menu_rows = match view
+        .config
         .get("repl.history.menu_rows")
         .map(ConfigValue::reveal)
     {
@@ -675,31 +679,29 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
     let config = view.config;
     let theme = &resolved.theme;
     let prompt = ReplPromptState::from_view(view);
-    let prompt_style = config.get_string("color.prompt.text");
-
     let user_text = style_prompt_fragment(
-        prompt_style,
+        None,
         &prompt.user,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let domain_text = style_prompt_fragment(
-        prompt_style,
+        None,
         &prompt.domain,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let profile_text = style_prompt_fragment(
-        prompt_style,
+        None,
         &prompt.profile,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
     let indicator_text = style_prompt_fragment(
-        prompt_style,
+        None,
         &prompt.indicator,
         StyleToken::PromptText,
         resolved.color,
@@ -707,13 +709,8 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
     );
 
     let prompt = if prompt.simple {
-        let suffix = style_prompt_fragment(
-            prompt_style,
-            "> ",
-            StyleToken::PromptText,
-            resolved.color,
-            theme,
-        );
+        let suffix =
+            style_prompt_fragment(None, "> ", StyleToken::PromptText, resolved.color, theme);
         if prompt.indicator.trim().is_empty() {
             format!("{profile_text}{suffix}")
         } else {
@@ -732,7 +729,7 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
             &profile_text,
             &indicator_text,
             PromptTemplateStyleContext {
-                literal_style: prompt_style,
+                literal_style: None,
                 color: resolved.color,
                 theme,
             },

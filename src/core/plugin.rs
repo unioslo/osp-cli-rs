@@ -31,9 +31,8 @@
 //!   command catalogs, policy registries, and rendered output
 //!
 //! Clap-backed convenience constructors such as
-//! [`crate::core::plugin::DescribeV1::from_clap_command`] are available when
-//! the crate is built with the default `clap` feature. Builds that disable
-//! `clap` still expose the wire DTOs but omit those helper constructors.
+//! [`crate::core::plugin::DescribeV1::from_clap_command`] translate command
+//! trees into the wire DTOs.
 //!
 //! Contract:
 //!
@@ -472,6 +471,9 @@ pub struct DescribeArgV1 {
     /// Short help text for the argument.
     #[serde(default)]
     pub about: Option<String>,
+    /// Whether the argument must be supplied.
+    #[serde(default)]
+    pub required: bool,
     /// Whether the argument may be repeated.
     #[serde(default)]
     pub multi: bool,
@@ -489,6 +491,9 @@ pub struct DescribeFlagV1 {
     /// Short help text for the flag.
     #[serde(default)]
     pub about: Option<String>,
+    /// Whether the flag must be supplied.
+    #[serde(default)]
+    pub required: bool,
     /// Whether the flag is boolean-only and takes no value.
     #[serde(default)]
     pub flag_only: bool,
@@ -619,11 +624,7 @@ pub struct ResponseMessageV1 {
 }
 
 impl DescribeV1 {
-    #[cfg(feature = "clap")]
     /// Builds a v1 describe payload from a single `clap` command tree.
-    ///
-    /// Only available with the `clap` cargo feature, which is enabled by
-    /// default.
     ///
     /// # Examples
     ///
@@ -655,11 +656,7 @@ impl DescribeV1 {
         )
     }
 
-    #[cfg(feature = "clap")]
     /// Builds a v1 describe payload from multiple top-level `clap` commands.
-    ///
-    /// Only available with the `clap` cargo feature, which is enabled by
-    /// default.
     ///
     /// Use this when one plugin executable exposes multiple top-level command
     /// roots.
@@ -988,12 +985,8 @@ impl ResponseV1 {
     }
 }
 
-#[cfg(feature = "clap")]
 impl DescribeCommandV1 {
     /// Converts a `clap` command into a protocol v1 command description.
-    ///
-    /// Only available with the `clap` cargo feature, which is enabled by
-    /// default.
     ///
     /// Use this when the surrounding plugin metadata is assembled elsewhere but
     /// one command tree should still come from `clap`.
@@ -1088,6 +1081,7 @@ impl From<&ArgDef> for DescribeArgV1 {
         Self {
             name: arg.value_name.clone().or_else(|| Some(arg.id.clone())),
             about: arg.help.clone(),
+            required: arg.required,
             multi: arg.multi,
             value_type: describe_value_type(arg.value_kind),
             suggestions: arg.choices.iter().map(DescribeSuggestionV1::from).collect(),
@@ -1099,6 +1093,7 @@ impl From<&FlagDef> for DescribeFlagV1 {
     fn from(flag: &FlagDef) -> Self {
         Self {
             about: flag.help.clone(),
+            required: flag.required,
             flag_only: !flag.takes_value,
             multi: flag.multi,
             value_type: describe_value_type(flag.value_kind),
@@ -1120,6 +1115,9 @@ impl From<&DescribeArgV1> for ArgDef {
         if let Some(help) = &arg.about {
             def = def.help(help.clone());
         }
+        if arg.required {
+            def = def.required();
+        }
         if arg.multi {
             def = def.multi();
         }
@@ -1135,6 +1133,9 @@ impl From<&DescribeFlagV1> for FlagDef {
         let mut def = FlagDef::new("flag");
         if let Some(help) = &flag.about {
             def = def.help(help.clone());
+        }
+        if flag.required {
+            def = def.required();
         }
         if !flag.flag_only {
             def = def.takes_value("value");
@@ -1623,7 +1624,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "clap"))]
+#[cfg(test)]
 mod clap_tests {
     use super::{DescribeCommandV1, DescribeV1, DescribeValueTypeV1};
     use clap::{Arg, ArgAction, Command, ValueHint};

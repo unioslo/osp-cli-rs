@@ -22,12 +22,15 @@ mod command;
 mod shell;
 
 use crate::repl::{ReplLineResult, SharedHistory};
-use miette::Result;
+use miette::{Result, miette};
 use std::time::Instant;
 
+use crate::app::session::LastFailureDiagnostics;
 use crate::app::sink::{StdIoUiSink, UiSink};
 use crate::app::{AppClients, AppRuntime, AppSession};
 use crate::app::{ErrorDetail, ResolvedInvocation, render_report_message, resolve_invocation_ui};
+use crate::cli::invocation::scan_command_tokens;
+use crate::ui::messages::MessageBuffer;
 
 use super::{ReplViewContext, completion, input};
 
@@ -46,7 +49,7 @@ pub(crate) use command::repl_command_spec;
 #[cfg(test)]
 use command::{
     command_side_effects, config_key_change_requires_intro, finalize_repl_command, parse_clap_help,
-    render_repl_command_output, renders_repl_inline_help, run_repl_command,
+    render_repl_command_output, run_repl_command,
 };
 #[cfg(test)]
 pub(crate) use shell::apply_repl_shell_prefix;
@@ -55,7 +58,6 @@ pub(crate) use shell::leave_repl_shell;
 #[cfg(test)]
 use shell::{enter_repl_shell, handle_repl_exit_request, repl_help_for_scope};
 
-#[derive(Debug)]
 enum ReplLinePlan {
     Builtin {
         raw: String,
@@ -89,13 +91,19 @@ enum ReplTimingPlan {
 
 struct ExecutedReplLine {
     result: ReplLineResult,
+    exit_code: i32,
     timing: ReplTimingPlan,
 }
 
 impl ExecutedReplLine {
     fn flat(result: ReplLineResult, debug_verbosity: u8) -> Self {
+        let exit_code = match result {
+            ReplLineResult::Exit(code) => code,
+            _ => 0,
+        };
         Self {
             result,
+            exit_code,
             timing: ReplTimingPlan::Flat { debug_verbosity },
         }
     }
@@ -103,18 +111,21 @@ impl ExecutedReplLine {
     fn parse_only(result: ReplLineResult, debug_verbosity: u8) -> Self {
         Self {
             result,
+            exit_code: 0,
             timing: ReplTimingPlan::ParseOnly { debug_verbosity },
         }
     }
 
     fn invocation(
         result: ReplLineResult,
+        exit_code: i32,
         debug_verbosity: u8,
         parse_finished: Instant,
         execute_finished: Instant,
     ) -> Self {
         Self {
             result,
+            exit_code,
             timing: ReplTimingPlan::Invocation {
                 debug_verbosity,
                 parse_finished,
@@ -127,6 +138,7 @@ impl ExecutedReplLine {
         match executed.execute_finished {
             Some(execute_finished) => Self::invocation(
                 executed.result,
+                executed.exit_code,
                 executed.debug_verbosity,
                 parse_finished,
                 execute_finished,
@@ -178,13 +190,25 @@ pub(crate) fn execute_repl_plugin_line(
     history: &SharedHistory,
     line: &str,
 ) -> Result<ReplLineResult> {
-    let started = Instant::now();
     let mut sink = StdIoUiSink;
-    match execute_repl_plugin_line_inner(runtime, session, clients, history, line, &mut sink) {
+    execute_repl_plugin_line_with_sink(runtime, session, clients, history, line, &mut sink)
+        .map(|executed| executed.result)
+}
+
+fn execute_repl_plugin_line_with_sink(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    line: &str,
+    sink: &mut dyn UiSink,
+) -> Result<ExecutedReplLine> {
+    let started = Instant::now();
+    match execute_repl_plugin_line_inner(runtime, session, clients, history, line, sink) {
         Ok(executed) => {
             session.finish_repl_line();
             record_repl_timing(session, started, executed.timing);
-            Ok(executed.result)
+            Ok(executed)
         }
         Err(err) => {
             session.finish_repl_line();
@@ -197,15 +221,44 @@ pub(crate) fn execute_repl_plugin_line(
                     None,
                 );
             }
-            if !is_repl_bang_request(line) {
-                let plain_settings = runtime.ui.render_settings.plain_copy_settings();
-                let summary = render_report_message(&err, ErrorDetail::Terse, &plain_settings);
-                let detail = render_report_message(&err, ErrorDetail::Debug, &plain_settings);
-                session.record_failure(line, summary, detail);
+            let plain_settings = runtime.ui.render_settings.plain_copy_settings();
+            let summary = render_report_message(&err, ErrorDetail::Terse, &plain_settings);
+            let mut doctor_command = None;
+            if !is_repl_bang_request(line) && !is_doctor_request(line, runtime.config.resolved()) {
+                let diagnostics = LastFailureDiagnostics {
+                    normal: render_report_message(&err, ErrorDetail::Normal, &plain_settings),
+                    debug: render_report_message(&err, ErrorDetail::Debug, &plain_settings),
+                    forensic: render_report_message(&err, ErrorDetail::Forensic, &plain_settings),
+                };
+                doctor_command = if diagnostics.normal.trim() != summary.trim() {
+                    Some("doctor last -v")
+                } else {
+                    None
+                };
+                session.record_failure_diagnostics(line, summary.clone(), diagnostics);
             }
-            Err(err)
+            let mut messages = MessageBuffer::default();
+            let visible_error = doctor_command
+                .map(|command| format!("{summary}\nMore: run `{command}` for more detail."))
+                .unwrap_or(summary);
+            messages.error(visible_error);
+            let rendered = crate::ui::render_messages(
+                runtime.config.resolved(),
+                &runtime.ui.render_settings,
+                &messages,
+                runtime.ui.message_verbosity,
+            );
+            Err(miette!(rendered.trim_end().to_string()))
         }
     }
+}
+
+fn is_doctor_request(line: &str, config: &crate::config::ResolvedConfig) -> bool {
+    input::ReplParsedLine::parse(line, config)
+        .ok()
+        .and_then(|parsed| scan_command_tokens(&parsed.dispatch_tokens).ok())
+        .and_then(|scanned| scanned.tokens.into_iter().next())
+        .is_some_and(|command| command == crate::app::CMD_DOCTOR)
 }
 
 fn execute_repl_plugin_line_inner(

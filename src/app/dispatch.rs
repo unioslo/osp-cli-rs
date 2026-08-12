@@ -14,8 +14,8 @@ use crate::app::access_recovery::{
 };
 use crate::app::{AppClients, AuthState, TerminalKind};
 use crate::cli::{
-    Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, IntroArgs, PluginsArgs, ReplArgs,
-    ThemeArgs, parse_inline_command_tokens,
+    AliasArgs, Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, IntroArgs, PluginsArgs,
+    ReplArgs, ThemeArgs, parse_inline_command_tokens,
 };
 use crate::core::command_policy::{AccessReason, CommandAccess, CommandPath};
 use crate::normalize::{normalize_identifier, normalize_optional_identifier};
@@ -24,7 +24,6 @@ use crate::plugin::CommandCatalogEntry;
 #[cfg(test)]
 use super::{CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS, CMD_THEME};
 
-#[derive(Debug)]
 pub(crate) enum RunAction {
     Repl,
     ReplCommand(ReplArgs),
@@ -32,9 +31,16 @@ pub(crate) enum RunAction {
     Doctor(DoctorArgs),
     Theme(ThemeArgs),
     Config(ConfigArgs),
+    Alias(AliasArgs),
     History(HistoryArgs),
     Intro(IntroArgs),
     External(Vec<String>),
+}
+
+impl std::fmt::Debug for RunAction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.name())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +56,21 @@ pub(crate) enum ExternalPathAccessRequirement {
 }
 
 impl RunAction {
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            RunAction::Repl => "repl",
+            RunAction::ReplCommand(_) => "repl-command",
+            RunAction::Plugins(_) => "plugins",
+            RunAction::Doctor(_) => "doctor",
+            RunAction::Theme(_) => "theme",
+            RunAction::Config(_) => "config",
+            RunAction::Alias(_) => "alias",
+            RunAction::History(_) => "history",
+            RunAction::Intro(_) => "intro",
+            RunAction::External(_) => "external",
+        }
+    }
+
     pub(crate) fn terminal_kind(&self) -> TerminalKind {
         match self {
             RunAction::Repl | RunAction::ReplCommand(_) | RunAction::Intro(_) => TerminalKind::Repl,
@@ -57,6 +78,7 @@ impl RunAction {
             | RunAction::Doctor(_)
             | RunAction::Theme(_)
             | RunAction::Config(_)
+            | RunAction::Alias(_)
             | RunAction::History(_)
             | RunAction::External(_) => TerminalKind::Cli,
         }
@@ -68,25 +90,12 @@ impl RunAction {
             RunAction::Doctor(args) => Some(Commands::Doctor(args)),
             RunAction::Theme(args) => Some(Commands::Theme(args)),
             RunAction::Config(args) => Some(Commands::Config(args)),
+            RunAction::Alias(args) => Some(Commands::Alias(args)),
             RunAction::History(args) => Some(Commands::History(args)),
             RunAction::Intro(args) => Some(Commands::Intro(args)),
             RunAction::ReplCommand(args) => Some(Commands::Repl(args)),
             RunAction::Repl | RunAction::External(_) => None,
         }
-    }
-}
-
-fn run_action_name(action: &RunAction) -> &'static str {
-    match action {
-        RunAction::Repl => "repl",
-        RunAction::ReplCommand(_) => "repl-command",
-        RunAction::Plugins(_) => "plugins",
-        RunAction::Doctor(_) => "doctor",
-        RunAction::Theme(_) => "theme",
-        RunAction::Config(_) => "config",
-        RunAction::History(_) => "history",
-        RunAction::Intro(_) => "intro",
-        RunAction::External(_) => "external",
     }
 }
 
@@ -134,9 +143,15 @@ pub(crate) fn build_dispatch_plan(
         Some(Commands::Config(args)) => {
             Ok(DispatchPlan::new(RunAction::Config(args), explicit_profile))
         }
+        Some(Commands::Alias(args)) => {
+            Ok(DispatchPlan::new(RunAction::Alias(args), explicit_profile))
+        }
         Some(Commands::History(args)) => Ok(DispatchPlan::new(
             RunAction::History(args),
             explicit_profile,
+        )),
+        Some(Commands::Completions(_)) => Err(miette!(
+            "`completions` is available only as a one-shot CLI command"
         )),
         Some(Commands::Intro(args)) => {
             Ok(DispatchPlan::new(RunAction::Intro(args), explicit_profile))
@@ -175,6 +190,7 @@ pub(crate) fn ensure_dispatch_visibility(auth: &AuthState, action: &RunAction) -
         RunAction::Doctor(_) => ensure_builtin_visible_for(auth, CMD_DOCTOR),
         RunAction::Theme(_) => ensure_builtin_visible_for(auth, CMD_THEME),
         RunAction::Config(_) => ensure_builtin_visible_for(auth, CMD_CONFIG),
+        RunAction::Alias(_) => ensure_builtin_visible_for(auth, CMD_CONFIG),
         RunAction::History(_) => ensure_builtin_visible_for(auth, CMD_HISTORY),
         RunAction::ReplCommand(_) | RunAction::Repl | RunAction::Intro(_) => Ok(()),
         // External command auth needs provider/native metadata to resolve the
@@ -232,12 +248,13 @@ pub(crate) fn ensure_external_path_access(
     session: &mut crate::app::AppSession,
     path: &CommandPath,
     requirement: ExternalPathAccessRequirement,
+    kind: &'static str,
 ) -> Result<()> {
     let command = path.as_slice().join(" ");
     match requirement {
         ExternalPathAccessRequirement::Visible => ensure_command_visibility(
             &command,
-            "plugin command",
+            kind,
             runtime.auth().external_command_path_access(path),
         ),
         ExternalPathAccessRequirement::Runnable => ensure_command_access_with_recovery(
@@ -245,7 +262,7 @@ pub(crate) fn ensure_external_path_access(
             session,
             CommandAccessKind::External,
             &command,
-            "plugin command",
+            kind,
             |auth| auth.external_command_path_access(path),
         ),
     }
@@ -265,6 +282,15 @@ pub(crate) fn resolve_external_command_source(
     let matching = matching_external_command_entries(&catalog, command);
     let has_native = matching.iter().any(|entry| is_native_command_entry(entry));
     let has_plugin = matching.iter().any(|entry| !is_native_command_entry(entry));
+
+    if matching.is_empty() {
+        return Err(match closest_external_command(&catalog, command) {
+            Some(suggestion) => {
+                miette!("unknown command `{command}`\nTry: use command `{suggestion}`")
+            }
+            None => miette!("unknown command `{command}`\nTry: run `help` to list commands"),
+        });
+    }
 
     if has_native && has_plugin {
         let labels = matching
@@ -332,6 +358,40 @@ fn matching_external_command_entries<'a>(
         .collect()
 }
 
+fn closest_external_command(catalog: &[CommandCatalogEntry], command: &str) -> Option<String> {
+    let command = command.trim().to_ascii_lowercase();
+    let max_distance = if command.chars().count() >= 4 { 2 } else { 1 };
+    catalog
+        .iter()
+        .map(|entry| {
+            (
+                levenshtein_distance(&command, &entry.name.to_ascii_lowercase()),
+                &entry.name,
+            )
+        })
+        .filter(|(distance, _)| *distance <= max_distance)
+        .min_by(|left, right| left.cmp(right))
+        .map(|(_, name)| name.clone())
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    let mut row = (0..=right.chars().count()).collect::<Vec<_>>();
+    for (left_index, left_char) in left.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = left_index + 1;
+        for (right_index, right_char) in right.chars().enumerate() {
+            let above = row[right_index + 1];
+            row[right_index + 1] = if left_char == right_char {
+                diagonal
+            } else {
+                1 + diagonal.min(above).min(row[right_index])
+            };
+            diagonal = above;
+        }
+    }
+    row[right.chars().count()]
+}
+
 pub(crate) fn normalize_profile_override(value: Option<String>) -> Option<String> {
     normalize_optional_identifier(value)
 }
@@ -367,10 +427,10 @@ fn profile_prefixed_external_plan(
         .wrap_err_with(|| {
             format!("failed to parse command after profile shorthand `{normalized}`")
         })?;
-    let action = inline_run_action(parsed);
+    let action = inline_run_action(parsed)?;
     tracing::debug!(
         profile = %normalized,
-        action = %run_action_name(&action),
+        action = %action.name(),
         command = %remaining
             .first()
             .map(String::as_str)
@@ -380,23 +440,81 @@ fn profile_prefixed_external_plan(
     Ok(Some(DispatchPlan::new(action, Some(normalized))))
 }
 
-fn inline_run_action(parsed: Option<Commands>) -> RunAction {
-    match parsed {
+fn inline_run_action(parsed: Option<Commands>) -> Result<RunAction> {
+    Ok(match parsed {
         Some(Commands::Plugins(args)) => RunAction::Plugins(args),
         Some(Commands::Doctor(args)) => RunAction::Doctor(args),
         Some(Commands::Theme(args)) => RunAction::Theme(args),
         Some(Commands::Config(args)) => RunAction::Config(args),
+        Some(Commands::Alias(args)) => RunAction::Alias(args),
         Some(Commands::History(args)) => RunAction::History(args),
+        Some(Commands::Completions(_)) => {
+            return Err(miette!(
+                "`completions` is available only as a top-level one-shot command"
+            ));
+        }
         Some(Commands::Intro(args)) => RunAction::Intro(args),
         Some(Commands::Repl(args)) => RunAction::ReplCommand(args),
         Some(Commands::External(external)) => RunAction::External(external),
         None => RunAction::Repl,
+    })
+}
+
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+#[error(
+    "{kind} `{command}` requires {required}. Try: authenticate with an identity granted {required}, then retry"
+)]
+#[diagnostic(
+    code(osp::auth::missing_capabilities),
+    help(
+        "The capability policy gate for `{command}` requires {required}. If authenticating again does not add them, ask the command owner for access."
+    )
+)]
+pub(crate) struct MissingCommandCapabilities {
+    kind: &'static str,
+    command: String,
+    required: String,
+}
+
+impl MissingCommandCapabilities {
+    fn new(kind: &'static str, command: &str, missing: &BTreeSet<String>) -> Self {
+        let required = match missing.iter().next() {
+            Some(capability) if missing.len() == 1 => format!("capability `{capability}`"),
+            _ => format!(
+                "capabilities {}",
+                missing
+                    .iter()
+                    .map(|capability| format!("`{capability}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        Self {
+            kind,
+            command: command.to_string(),
+            required,
+        }
+    }
+
+    pub(crate) fn normal_detail(&self) -> String {
+        format!(
+            "Missing requirement: `{}` needs {} for this command path.",
+            self.command, self.required
+        )
     }
 }
 
-fn ensure_command_access(command: &str, kind: &str, access: CommandAccess) -> Result<()> {
+fn ensure_command_access(command: &str, kind: &'static str, access: CommandAccess) -> Result<()> {
     if access.is_runnable() {
         return Ok(());
+    }
+
+    if !access.missing_capabilities.is_empty() {
+        return Err(miette::Report::new(MissingCommandCapabilities::new(
+            kind,
+            command,
+            &access.missing_capabilities,
+        )));
     }
 
     let detail = access
@@ -404,10 +522,19 @@ fn ensure_command_access(command: &str, kind: &str, access: CommandAccess) -> Re
         .first()
         .map(render_access_reason)
         .unwrap_or_else(|| "denied by current auth policy".to_string());
-    Err(miette!("{kind} `{command}` {detail}"))
+    let action = access
+        .reasons
+        .first()
+        .map(access_reason_action)
+        .unwrap_or_else(|| "ask the command owner for access, then retry".to_string());
+    Err(miette!("{kind} `{command}` {detail}. Try: {action}"))
 }
 
-fn ensure_command_visibility(command: &str, kind: &str, access: CommandAccess) -> Result<()> {
+fn ensure_command_visibility(
+    command: &str,
+    kind: &'static str,
+    access: CommandAccess,
+) -> Result<()> {
     if access.is_visible() {
         return Ok(());
     }
@@ -419,7 +546,7 @@ fn ensure_command_access_with_recovery(
     session: &mut crate::app::AppSession,
     command_kind: CommandAccessKind,
     command: &str,
-    kind: &str,
+    kind: &'static str,
     access_for: impl Fn(&AuthState) -> CommandAccess,
 ) -> Result<()> {
     let access = access_for(runtime.auth());
@@ -476,6 +603,41 @@ fn render_access_reason(reason: &AccessReason) -> String {
         }
         AccessReason::ProfileUnavailable(profile) => {
             format!("is unavailable in profile `{profile}`")
+        }
+    }
+}
+
+fn access_reason_action(reason: &AccessReason) -> String {
+    match reason {
+        AccessReason::Unauthenticated => "authenticate, then retry".to_string(),
+        AccessReason::MissingCapabilities => {
+            "authenticate with an identity granted the required capabilities, then retry"
+                .to_string()
+        }
+        AccessReason::MissingCredential(service) => {
+            format!("configure the `{service}` credential, then retry")
+        }
+        AccessReason::InvalidCredential(service)
+        | AccessReason::InsufficientCredentialTtl { service, .. } => {
+            format!("renew the `{service}` credential, then retry")
+        }
+        AccessReason::InsufficientAuthStrength(required) => {
+            format!(
+                "authenticate with {} authentication, then retry",
+                required.as_label()
+            )
+        }
+        AccessReason::FeatureDisabled(flag) => {
+            format!("enable feature `{flag}`, then retry")
+        }
+        AccessReason::ProfileUnavailable(profile) if profile.is_empty() => {
+            "switch to an eligible profile, then retry".to_string()
+        }
+        AccessReason::ProfileUnavailable(profile) => {
+            format!("switch from profile `{profile}` to an eligible profile, then retry")
+        }
+        AccessReason::HiddenByPolicy | AccessReason::DisabledByProduct => {
+            "ask the command owner to enable access, then retry".to_string()
         }
     }
 }
@@ -623,6 +785,7 @@ mod tests {
         let err = ensure_builtin_visible_for(&gated_auth, "config")
             .expect_err("unauthenticated builtin should be denied");
         assert!(err.to_string().contains("requires authentication"));
+        assert!(err.to_string().contains("Try: authenticate, then retry"));
 
         let profiles = BTreeSet::from(["dev".to_string()]);
         let auth = auth_state(
@@ -704,11 +867,10 @@ mod tests {
         );
         let capability_err = ensure_plugin_visible_for(&auth, "orch")
             .expect_err("missing capability should deny plugin");
-        assert!(
-            capability_err
-                .to_string()
-                .contains("requires additional capabilities")
-        );
+        let capability_text = capability_err.to_string();
+        assert!(capability_text.contains("plugin command `orch`"));
+        assert!(capability_text.contains("capability `orch.approval.decide`"));
+        assert!(capability_text.contains("Try: authenticate"));
 
         assert_eq!(
             super::render_access_reason(&AccessReason::DisabledByProduct),

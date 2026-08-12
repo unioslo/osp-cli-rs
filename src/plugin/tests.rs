@@ -1,6 +1,6 @@
 use super::conversion::{
-    collect_completion_words, direct_subcommand_names, to_arg_node, to_command_spec, to_flag_node,
-    to_suggestion_entry, to_value_type,
+    direct_subcommand_names, to_arg_node, to_command_spec, to_flag_node, to_suggestion_entry,
+    to_value_type,
 };
 use super::discovery::{
     DescribeCacheEntry, DescribeCacheFile, ManifestPlugin, ManifestState, SearchRoot,
@@ -10,7 +10,7 @@ use super::discovery::{
     load_manifest_state_from_path, mark_duplicate_plugin_ids, min_osp_version_issue,
     normalize_checksum, prune_stale_describe_cache_entries, upsert_cached_describe,
 };
-use super::dispatch::{describe_plugin, run_provider};
+use super::dispatch::{capture_reader, describe_plugin, exit_status_code, run_provider};
 use super::manager::{
     DiscoveredPlugin, PluginDispatchContext, PluginDispatchError, PluginManager, PluginSource,
 };

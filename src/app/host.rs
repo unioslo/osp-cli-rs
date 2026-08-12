@@ -63,8 +63,7 @@ pub(crate) const CMD_SHOW: &str = "show";
 pub(crate) const CMD_USE: &str = "use";
 pub const EXIT_CODE_ERROR: i32 = 1;
 pub const EXIT_CODE_USAGE: i32 = 2;
-pub const EXIT_CODE_CONFIG: i32 = 3;
-pub const EXIT_CODE_PLUGIN: i32 = 4;
+pub const EXIT_CODE_WAITING_APPROVAL: i32 = 3;
 pub(crate) const DEFAULT_REPL_PROMPT: &str = "╭─{user}@{domain} {indicator}\n╰─{profile}> ";
 pub(crate) const CURRENT_TERMINAL_SENTINEL: &str = "__current__";
 pub(crate) const REPL_SHELLABLE_COMMANDS: [&str; 5] = ["nh", "mreg", "ldap", "vm", "orch"];
@@ -103,9 +102,11 @@ struct ReportContextError {
 
 #[derive(Clone, Copy)]
 struct KnownErrorChain<'a> {
+    boxed_context: Option<&'a BoxedContextError>,
     clap: Option<&'a clap::Error>,
     config: Option<&'a crate::config::ConfigError>,
     plugin: Option<&'a PluginDispatchError>,
+    missing_capabilities: Option<&'a crate::app::dispatch::MissingCommandCapabilities>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -147,9 +148,13 @@ impl ErrorDetail {
 impl<'a> KnownErrorChain<'a> {
     fn inspect(err: &'a miette::Report) -> Self {
         Self {
+            boxed_context: find_error_in_chain::<BoxedContextError>(err),
             clap: find_error_in_chain::<clap::Error>(err),
             config: find_error_in_chain::<crate::config::ConfigError>(err),
             plugin: find_error_in_chain::<PluginDispatchError>(err),
+            missing_capabilities: find_error_in_chain::<
+                crate::app::dispatch::MissingCommandCapabilities,
+            >(err),
         }
     }
 }
@@ -557,10 +562,6 @@ pub fn classify_exit_code(err: &miette::Report) -> i32 {
     let known = KnownErrorChain::inspect(err);
     if known.clap.is_some() {
         EXIT_CODE_USAGE
-    } else if known.config.is_some() {
-        EXIT_CODE_CONFIG
-    } else if known.plugin.is_some() {
-        EXIT_CODE_PLUGIN
     } else {
         EXIT_CODE_ERROR
     }
@@ -592,10 +593,24 @@ pub fn render_report_message(
     }
 
     let known = KnownErrorChain::inspect(err);
-    let mut message = base_error_message(err, &known);
+    let mut message = match (detail, known.clap) {
+        (ErrorDetail::Terse, Some(clap)) => terse_clap_error(clap),
+        _ => base_error_message(err, &known),
+    };
 
-    if detail >= ErrorDetail::Normal {
-        let mut next: Option<&(dyn std::error::Error + 'static)> = Some(err.as_ref());
+    if detail >= ErrorDetail::Normal && known.clap.is_some() {
+        if let Some(context) = known.boxed_context
+            && context.context != "native command execution failed"
+        {
+            message.push_str("\nContext: ");
+            message.push_str(context.context);
+        }
+    } else if detail >= ErrorDetail::Normal {
+        let mut next: Option<&(dyn std::error::Error + 'static)> = known
+            .boxed_context
+            .filter(|context| context.context == "native command execution failed")
+            .map(|context| context.source.as_ref() as &(dyn std::error::Error + 'static))
+            .or_else(|| Some(err.as_ref()));
         while let Some(source) = next {
             let source_text = source.to_string();
             if !source_text.is_empty() && !message.contains(&source_text) {
@@ -604,17 +619,24 @@ pub fn render_report_message(
             }
             next = source.source();
         }
+        if let Some(access) = known.missing_capabilities {
+            let normal_detail = access.normal_detail();
+            if !message.contains(&normal_detail) {
+                message.push('\n');
+                message.push_str(&normal_detail);
+            }
+        }
     }
 
-    if detail == ErrorDetail::Terse
-        && let Some(hint) = known_error_hint(&known)
-        && !message.contains(hint)
-    {
-        message.push_str("\nHint: ");
-        message.push_str(hint);
-    }
     if detail == ErrorDetail::Terse {
-        message.push_str("\nMore: run again with -v, -vv, or -vvv for more detail");
+        match known_error_hint(&known) {
+            Some(hint) if !message.contains(&hint) => {
+                message.push_str("\nTry: ");
+                message.push_str(&hint);
+            }
+            Some(_) => {}
+            None => {}
+        }
     }
 
     message
@@ -714,7 +736,7 @@ pub(crate) fn adjust_error_detail(base: ErrorDetail, verbose: u8, quiet: u8) -> 
     ErrorDetail::from_rank(rank + verbose as i8 - quiet as i8)
 }
 
-fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
+fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<String> {
     if let Some(plugin_err) = known.plugin {
         return Some(match plugin_err {
             PluginDispatchError::CommandNotFound { .. } => {
@@ -735,6 +757,9 @@ fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
             PluginDispatchError::TimedOut { .. } => {
                 "increase extensions.plugins.timeout_ms or inspect the plugin executable"
             }
+            PluginDispatchError::OutputTooLarge { .. } => {
+                "reduce the plugin response size or return a narrower result"
+            }
             PluginDispatchError::NonZeroExit { .. } => {
                 "inspect the plugin stderr output or rerun with -v/-vv for more context"
             }
@@ -742,26 +767,90 @@ fn known_error_hint(known: &KnownErrorChain<'_>) -> Option<&'static str> {
             | PluginDispatchError::InvalidResponsePayload { .. } => {
                 "inspect the plugin response contract and stderr output"
             }
-        });
+        }
+        .to_string());
     }
 
     if let Some(config_err) = known.config {
-        return Some(match config_err {
-            crate::config::ConfigError::UnknownProfile { .. } => {
-                "run `osp config explain profile.default` or choose a known profile"
+        return Some(
+            match config_err {
+                crate::config::ConfigError::UnknownProfile { .. } => {
+                    "run `osp config explain profile.default` or choose a known profile"
+                }
+                crate::config::ConfigError::InsecureSecretsPermissions { .. } => {
+                    "restrict the secrets file permissions to 0600"
+                }
+                _ => "run `osp config explain <key>` to inspect config provenance",
             }
-            crate::config::ConfigError::InsecureSecretsPermissions { .. } => {
-                "restrict the secrets file permissions to 0600"
-            }
-            _ => "run `osp config explain <key>` to inspect config provenance",
-        });
+            .to_string(),
+        );
     }
 
-    if known.clap.is_some() {
-        return Some("use --help to inspect accepted flags and subcommands");
+    if let Some(clap) = known.clap {
+        return Some(clap_error_action(clap));
     }
 
     None
+}
+
+fn terse_clap_error(error: &clap::Error) -> String {
+    let rendered = error.to_string();
+    let mut lines = rendered
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let first = lines.next().unwrap_or("command usage is invalid");
+    let mut terse = first
+        .strip_prefix("error:")
+        .unwrap_or(first)
+        .trim()
+        .to_string();
+    if error.kind() == clap::error::ErrorKind::MissingRequiredArgument
+        && let Some(argument) = lines.find(|line| line.starts_with(['<', '-']))
+    {
+        terse.push(' ');
+        terse.push_str(argument);
+    }
+    terse
+}
+
+fn clap_error_action(error: &clap::Error) -> String {
+    let rendered = error.to_string();
+    let suggestions = rendered
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("tip: a similar subcommand exists:")
+                .or_else(|| line.strip_prefix("tip: some similar subcommands exist:"))
+        })
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(|value| value.trim().trim_matches(['`', '\'', '"']))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let prefix = rendered.lines().find_map(|line| {
+        let usage = line.trim().strip_prefix("Usage:")?.trim();
+        let words = usage
+            .split_whitespace()
+            .take_while(|word| !word.starts_with(['[', '<']))
+            .skip_while(|word| *word == "osp")
+            .collect::<Vec<_>>();
+        (!words.is_empty()).then(|| words.join(" "))
+    });
+    match (prefix, suggestions.as_slice()) {
+        (Some(prefix), [suggestion]) => format!("use `{prefix} {suggestion}`"),
+        (Some(prefix), suggestions) if !suggestions.is_empty() => format!(
+            "use one of {}; run `{prefix} --help` to see every subcommand",
+            suggestions
+                .iter()
+                .map(|suggestion| format!("`{prefix} {suggestion}`"))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ),
+        (None, [suggestion]) => format!("use subcommand `{suggestion}`"),
+        (Some(prefix), _) => format!("use `{prefix} --help`"),
+        _ => "rerun this command with `--help` to inspect accepted values and options".to_string(),
+    }
 }
 
 fn base_error_message(err: &miette::Report, known: &KnownErrorChain<'_>) -> String {
@@ -775,6 +864,19 @@ fn base_error_message(err: &miette::Report, known: &KnownErrorChain<'_>) -> Stri
 
     if let Some(clap_err) = known.clap {
         return clap_err.to_string();
+    }
+
+    if let Some(context) = known.boxed_context
+        && context.context == "native command execution failed"
+    {
+        return context.source.to_string();
+    }
+
+    if let Some(details) =
+        find_error_in_chain::<crate::app::command_output::CommandBackendDetails>(err)
+        && let Some(source) = std::error::Error::source(details)
+    {
+        return source.to_string();
     }
 
     let outer = err.to_string();

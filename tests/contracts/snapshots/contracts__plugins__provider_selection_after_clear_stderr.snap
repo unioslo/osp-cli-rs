@@ -6,5 +6,4 @@ expression: sanitized
   command shared requires provider selection; available: alpha-provider
   (env), beta-provider (env); use --plugin-provider <plugin-id> or
   plugins select-provider shared <plugin-id>
-  More: run again with -v, -vv, or -vvv for more detail
 ------------------------------------------------------------------------

@@ -311,6 +311,7 @@ pub struct AppSession {
     pub(crate) last_success: Option<LastSuccess>,
     /// Summary of the most recent failed REPL command.
     pub last_failure: Option<LastFailure>,
+    pub(crate) last_failure_diagnostics: Option<LastFailureDiagnostics>,
     /// Cached row outputs keyed by command line.
     pub result_cache: HashMap<String, Vec<Row>>,
     /// Eviction order for the row-result cache.
@@ -332,6 +333,17 @@ pub struct LastFailure {
     pub summary: String,
     /// Longer failure detail for follow-up inspection.
     pub detail: String,
+}
+
+/// Pre-rendered diagnostic ladder retained for `doctor last`.
+///
+/// Reports can borrow short-lived dispatch state, so the session stores safe
+/// rendered evidence rather than retaining error objects across REPL commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LastFailureDiagnostics {
+    pub(crate) normal: String,
+    pub(crate) debug: String,
+    pub(crate) forensic: String,
 }
 
 #[derive(Debug, Clone)]
@@ -451,6 +463,7 @@ impl AppSession {
             last_rows: Vec::new(),
             last_success: None,
             last_failure: None,
+            last_failure_diagnostics: None,
             result_cache: HashMap::new(),
             cache_order: VecDeque::new(),
             command_cache: HashMap::new(),
@@ -615,11 +628,37 @@ impl AppSession {
         if command_line.is_empty() {
             return;
         }
+        let summary = summary.into();
+        let detail = detail.into();
         self.last_failure = Some(LastFailure {
             command_line,
-            summary: summary.into(),
-            detail: detail.into(),
+            summary,
+            detail: detail.clone(),
         });
+        self.last_failure_diagnostics = Some(LastFailureDiagnostics {
+            normal: detail.clone(),
+            debug: detail.clone(),
+            forensic: detail,
+        });
+    }
+
+    /// Records a failure with distinct evidence for each verbosity level.
+    pub(crate) fn record_failure_diagnostics(
+        &mut self,
+        command_line: &str,
+        summary: String,
+        diagnostics: LastFailureDiagnostics,
+    ) {
+        let command_line = command_line.trim().to_string();
+        if command_line.is_empty() {
+            return;
+        }
+        self.last_failure = Some(LastFailure {
+            command_line,
+            summary,
+            detail: diagnostics.normal.clone(),
+        });
+        self.last_failure_diagnostics = Some(diagnostics);
     }
 
     /// Returns cached rows for a previously executed command line.

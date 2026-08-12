@@ -72,6 +72,26 @@ fn dispatch_drains_large_plugin_output_without_false_timeout_unit() {
     );
 }
 
+#[test]
+fn plugin_output_capture_retains_only_the_configured_limit_unit() {
+    let captured = capture_reader(std::io::Cursor::new(b"0123456789"), 4)
+        .expect("in-memory capture should succeed");
+
+    assert_eq!(captured.bytes, b"0123");
+    assert!(captured.exceeded_limit);
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_signal_exit_uses_the_conventional_shell_status_unit() {
+    let status = std::process::Command::new("sh")
+        .args(["-c", "kill -TERM $$"])
+        .status()
+        .expect("shell fixture should run");
+
+    assert_eq!(exit_status_code(status), 143);
+}
+
 #[cfg(unix)]
 #[cfg_attr(miri, ignore = "plugin subprocess integration test")]
 #[test]
@@ -170,6 +190,17 @@ fn plugin_dispatch_context_and_error_formats_cover_local_helper_paths_unit() {
         stderr: "boom".to_string(),
     };
     assert!(nonzero_stderr.to_string().contains("boom"));
+
+    let too_large = PluginDispatchError::OutputTooLarge {
+        plugin_id: "beta".to_string(),
+        stream: "stdout",
+        limit: 64,
+    };
+    assert_eq!(
+        too_large.to_string(),
+        "plugin beta exceeded the 64-byte stdout limit"
+    );
+    assert!(too_large.source().is_none());
 
     let ambiguous = PluginDispatchError::CommandAmbiguous {
         command: "shared".to_string(),

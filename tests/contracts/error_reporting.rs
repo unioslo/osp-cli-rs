@@ -75,8 +75,8 @@ fn default_usage_failure_stays_terse_with_hint_contract() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unexpected argument '--definitely-not-a-flag' found"));
-    assert!(stderr.contains("Hint: use --help to inspect accepted flags and subcommands"));
-    assert!(stderr.contains("run again with -v, -vv, or -vvv"));
+    assert!(stderr.contains("Try: rerun this command with --help"));
+    assert!(!stderr.contains("run again with -v"));
 }
 
 #[test]
@@ -101,7 +101,7 @@ ui.message.verbosity = "definitely-invalid"
         ),
     );
 
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     let normalized = normalized_whitespace(&stderr);
     assert!(normalized.contains("failed to resolve initial config for startup"));
@@ -160,7 +160,7 @@ fn debug_plugin_failure_shows_context_without_stacktrace_contract() {
 
     let output = run_osp_with_plugin_path(&["-vv", "boom"], None, Some(dir.path()));
 
-    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("plugin command failed"));
     assert!(stderr.contains("plugin boom exited with status 7"));
@@ -175,7 +175,7 @@ fn debug_toml_parse_failure_shows_snippet_without_stacktrace_contract() {
         Some("not = [valid\n"),
     );
 
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     let normalized = normalized_whitespace(&stderr);
     assert!(normalized.contains("failed to parse TOML"));
@@ -191,7 +191,7 @@ fn forensic_toml_parse_failure_shows_snippet_and_stacktrace_contract() {
         Some("not = [valid\n"),
     );
 
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     let normalized = normalized_whitespace(&stderr);
     assert!(normalized.contains("failed to parse TOML"));

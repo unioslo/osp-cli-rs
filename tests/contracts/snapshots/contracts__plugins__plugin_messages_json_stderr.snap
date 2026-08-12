@@ -1,7 +1,12 @@
 ---
-source: crates/osp-cli/tests/contracts/plugins.rs
-expression: stderr
+source: tests/contracts/plugins/dispatch.rs
+expression: sanitized
 ---
-- Warnings -------------------------------------------------------------
-  plugin-warning-line
-------------------------------------------------------------------------
+{
+  "messages": [
+    {
+      "level": "warning",
+      "text": "plugin-warning-line"
+    }
+  ]
+}

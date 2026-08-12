@@ -109,25 +109,36 @@ fn parse_repl_invocation_covers_missing_command_and_inline_help_errors_unit() {
 
     let parsed = ReplParsedLine::parse("config show --wat", state.runtime.config.resolved())
         .expect("line should parse");
+    let err = match parse_repl_invocation(&state.runtime, &state.session, &parsed) {
+        Ok(_) => panic!("unknown argument should be reported as a syntax error"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("--wat"));
+    assert!(err.to_string().contains("Usage: config show"));
+    let mut sink = BufferedUiSink::default();
+
+    let parsed = ReplParsedLine::parse("theme", state.runtime.config.resolved())
+        .expect("bare theme line should parse");
     let ParsedReplDispatch::Help {
         result, effective, ..
     } = parse_repl_invocation(&state.runtime, &state.session, &parsed)
-        .expect("unknown argument should turn into inline help")
+        .expect("missing theme subcommand should turn into inline help")
     else {
         panic!("expected help dispatch");
     };
-    let mut sink = BufferedUiSink::default();
     let rendered = render_repl_command_output(
         &state.runtime,
         &mut state.session,
-        "config show --wat",
+        "theme",
         &[],
         *result,
         &effective,
         &mut sink,
     )
-    .expect("inline help should render");
+    .expect("bare theme help should render");
+    assert!(rendered.contains("Inspect and change output themes"));
     assert!(rendered.contains("Usage"));
+    assert!(!rendered.contains("Try:"));
 
     let staged = ReplParsedLine::parse(
         "config show --wat | config",
@@ -220,4 +231,36 @@ fn render_repl_command_output_covers_json_and_text_pipeline_paths_unit() {
     )
     .expect("text pipeline should render");
     assert_eq!(text_rendered.trim(), "beta");
+}
+
+#[test]
+fn structured_command_failures_are_not_mislabeled_as_render_failures() {
+    let mut state = make_state();
+    let invocation = base_invocation(&state);
+    let mut sink = BufferedUiSink::default();
+    let result = CliCommandResult {
+        exit_code: 1,
+        messages: Default::default(),
+        output: None,
+        stderr_text: None,
+        failure_report: Some(miette::miette!(
+            "resource_not_found: No visible resource matched"
+        )),
+    };
+
+    let err = render_repl_command_output(
+        &state.runtime,
+        &mut state.session,
+        "orch vm info missing",
+        &[],
+        result,
+        &invocation,
+        &mut sink,
+    )
+    .expect_err("backend problem should remain a command failure");
+
+    assert_eq!(
+        err.to_string(),
+        "resource_not_found: No visible resource matched"
+    );
 }

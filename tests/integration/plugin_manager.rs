@@ -126,11 +126,6 @@ fn plugin_manager_surfaces_provider_selection_across_catalog_help_and_completion
     assert!(ambiguous_help.contains("shared"));
     assert!(ambiguous_help.contains("providers: alpha (explicit), beta (explicit)"));
 
-    let words = manager.completion_words();
-    assert!(words.contains(&"shared".to_string()));
-    assert!(words.contains(&"help".to_string()));
-    assert!(words.contains(&"|".to_string()));
-
     let doctor = manager.doctor();
     assert!(
         doctor

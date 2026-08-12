@@ -27,8 +27,8 @@
 use super::active::ActivePluginView;
 use super::catalog::{
     build_command_catalog, build_command_policy_registry, build_doctor_report,
-    command_provider_labels, completion_words_from_catalog, list_plugins,
-    register_describe_command_policies, render_repl_help, selected_provider_label,
+    command_provider_labels, list_plugins, register_describe_command_policies, render_repl_help,
+    selected_provider_label,
 };
 use super::conversion::to_command_spec;
 use super::selection::{ProviderResolution, ProviderResolutionError, provider_labels};
@@ -324,8 +324,8 @@ impl CommandCatalogEntry {
 /// semantic response or validation error.
 #[derive(Debug, Clone)]
 pub struct RawPluginOutput {
-    /// Process exit status code, or `1` when the child ended without a
-    /// conventional exit code.
+    /// Process exit status code. Unix signals use the conventional
+    /// `128 + signal` shell status; other non-code exits fall back to `1`.
     pub status_code: i32,
     /// Captured standard output.
     pub stdout: String,
@@ -521,6 +521,15 @@ pub enum PluginDispatchError {
         /// Captured standard error emitted before timeout.
         stderr: String,
     },
+    /// The plugin produced more output than the host will retain.
+    OutputTooLarge {
+        /// Plugin identifier being invoked.
+        plugin_id: String,
+        /// Stream that exceeded the limit.
+        stream: &'static str,
+        /// Maximum retained bytes for the stream.
+        limit: usize,
+    },
     /// The plugin process exited with a non-zero status code.
     NonZeroExit {
         /// Plugin identifier being invoked.
@@ -600,6 +609,14 @@ impl Display for PluginDispatchError {
                     )
                 }
             }
+            PluginDispatchError::OutputTooLarge {
+                plugin_id,
+                stream,
+                limit,
+            } => write!(
+                f,
+                "plugin {plugin_id} exceeded the {limit}-byte {stream} limit"
+            ),
             PluginDispatchError::NonZeroExit {
                 plugin_id,
                 status_code,
@@ -635,6 +652,7 @@ impl StdError for PluginDispatchError {
             | PluginDispatchError::ProviderNotFound { .. }
             | PluginDispatchError::InvalidEnvironment { .. }
             | PluginDispatchError::TimedOut { .. }
+            | PluginDispatchError::OutputTooLarge { .. }
             | PluginDispatchError::NonZeroExit { .. }
             | PluginDispatchError::InvalidResponsePayload { .. } => None,
         }
@@ -997,25 +1015,6 @@ impl PluginManager {
             register_describe_command_policies(&mut policy, describe, &[]);
             (describe.resolved_subcommand_path(args), policy)
         })
-    }
-
-    /// Returns completion words derived from the current plugin command catalog.
-    ///
-    /// The returned list always includes the REPL backbone words used by the
-    /// plugin/completion surface, even when no plugins are currently available.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use osp_cli::plugin::PluginManager;
-    ///
-    /// let words = PluginManager::new(Vec::new()).completion_words();
-    ///
-    /// assert!(words.contains(&"help".to_string()));
-    /// assert!(words.contains(&"|".to_string()));
-    /// ```
-    pub fn completion_words(&self) -> Vec<String> {
-        self.with_passive_catalog(|catalog| completion_words_from_catalog(&catalog))
     }
 
     /// Renders a plain-text help view for plugin commands in the REPL.
