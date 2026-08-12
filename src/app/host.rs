@@ -26,8 +26,8 @@ use super::help::help_level;
 use crate::app::logging::{bootstrap_logging_config, init_developer_logging};
 use crate::app::sink::{StdIoUiSink, UiSink};
 use crate::app::{AppClients, AppState, AuthState, UiState};
-use crate::cli::Cli;
 use crate::cli::invocation::{InvocationOptions, extend_with_invocation_help, scan_cli_argv};
+use crate::cli::{Cli, Commands};
 use crate::plugin::{CommandCatalogEntry, PluginDispatchError};
 
 pub(crate) use super::bootstrap::{
@@ -262,6 +262,13 @@ where
     init_developer_logging(bootstrap_logging_config(&argv));
     let scanned = scan_cli_argv(&argv)?;
     match Cli::try_parse_from(scanned.argv.iter().cloned()) {
+        Ok(Cli {
+            command: Some(Commands::Completions(args)),
+            ..
+        }) => {
+            sink.write_stdout(&crate::cli::render_shell_completions(args));
+            Ok(0)
+        }
         Ok(cli) => run(cli, scanned.invocation, sink, app),
         Err(err) => handle_clap_parse_error(&argv, err, sink, app),
     }
@@ -274,11 +281,19 @@ fn handle_clap_parse_error(
     app: &super::AppDefinition,
 ) -> Result<i32> {
     match err.kind() {
-        clap::error::ErrorKind::DisplayHelp => {
+        clap::error::ErrorKind::DisplayHelp
+        | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
             let help_context = help::render_settings_for_help(args, &app.product_defaults);
-            let mut body = GuideView::from_text(&err.to_string());
+            let raw_help = err.to_string();
+            let root_help = raw_help
+                .lines()
+                .any(|line| line.trim() == "Usage: osp [OPTIONS] [COMMAND]");
+            let mut body = GuideView::from_text(&raw_help);
             extend_with_invocation_help(&mut body, help_context.help_level);
-            add_native_command_help(&mut body, &app.native_commands);
+            if root_help {
+                add_product_option_help(&mut body, &app.product_help_options);
+                add_native_command_help(&mut body, &app.native_commands);
+            }
             let filtered = body.filtered_for_help_level(help_context.help_level);
             let rendered = crate::ui::render_structured_output_with_source_guide(
                 &filtered.to_output_result(),
@@ -973,6 +988,18 @@ fn add_native_command_help(view: &mut GuideView, native_commands: &NativeCommand
     let mut section = GuideSection::new("Native integrations", GuideSectionKind::Custom);
     for entry in catalog {
         section = section.entry(entry.name, entry.about.trim());
+    }
+    view.sections.push(section);
+}
+
+fn add_product_option_help(view: &mut GuideView, options: &[(String, String)]) {
+    if options.is_empty() {
+        return;
+    }
+
+    let mut section = GuideSection::new("Product options", GuideSectionKind::Options);
+    for (syntax, help) in options {
+        section = section.entry(syntax, help);
     }
     view.sections.push(section);
 }

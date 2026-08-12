@@ -128,6 +128,7 @@ pub use sink::{BufferedUiSink, StdIoUiSink, UiSink};
 pub(crate) struct AppDefinition {
     native_commands: NativeCommandRegistry,
     product_defaults: ConfigLayer,
+    product_help_options: Vec<(String, String)>,
     policy_context: CommandPolicyContext,
     builtin_policy: CommandPolicyRegistry,
     access_recovery: Option<Arc<dyn CommandAccessRecovery>>,
@@ -141,6 +142,15 @@ impl AppDefinition {
 
     fn with_product_defaults(mut self, product_defaults: ConfigLayer) -> Self {
         self.product_defaults = product_defaults;
+        self
+    }
+
+    fn with_product_help_option(
+        mut self,
+        syntax: impl Into<String>,
+        help: impl Into<String>,
+    ) -> Self {
+        self.product_help_options.push((syntax.into(), help.into()));
         self
     }
 
