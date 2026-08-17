@@ -53,7 +53,7 @@ This repo expects `just` for the documented developer commands.
 Install it with:
 
 ```bash
-cargo install just --locked
+cargo install just cargo-audit --locked
 ```
 
 If `just` is still not found afterwards, make sure `~/.cargo/bin` is on your

@@ -798,9 +798,9 @@ pub(crate) fn runtime_load_options_from_flags(
 ///         ThemeCommands::Show(show) => {
 ///             assert_eq!(show.name.as_deref(), Some("dracula"));
 ///         }
-///         other => panic!("unexpected theme command: {other:?}"),
+///         _ => panic!("unexpected theme command"),
 ///     },
-///     other => panic!("unexpected command: {other:?}"),
+///     _ => panic!("unexpected command"),
 /// }
 /// ```
 pub fn parse_inline_command_tokens(tokens: &[String]) -> Result<Option<Commands>, clap::Error> {
