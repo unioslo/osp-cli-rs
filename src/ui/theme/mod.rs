@@ -218,7 +218,7 @@ fn builtin_theme_defs() -> &'static [ThemeDefinition] {
                     success: "#50fa7b",
                     error: "bold #ff5555",
                     border: "#ff79c6",
-                    title: "#ff79c6",
+                    title: "#bd93f9",
                 }),
                 ThemeOverrides {
                     value_number: Some("#ff79c6".to_string()),

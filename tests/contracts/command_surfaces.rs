@@ -374,7 +374,7 @@ theme.name = "rose-pine-moon"
         .find("- Keybindings ")
         .expect("Keybindings section should render");
     let pipes = guide.find("- Pipes ").expect("Pipes section should render");
-    let usage = guide.find("- Usage ").expect("Usage section should render");
+    let usage = guide.find("Usage:").expect("Usage section should render");
     let commands = guide
         .find("- Commands ")
         .expect("Commands section should render");
@@ -408,8 +408,8 @@ theme.name = "rose-pine-moon"
     );
 
     assert!(stdout.contains("Welcome Demo!"), "{stdout}");
-    assert!(stdout.contains("User     Not authenticated"), "{stdout}");
-    assert!(stdout.contains("Theme    Rose Pine Moon"), "{stdout}");
+    assert!(stdout.contains("User: Not authenticated"), "{stdout}");
+    assert!(stdout.contains("Theme: Rose Pine Moon"), "{stdout}");
     assert!(stdout.contains("Show this command overview."), "{stdout}");
 
     let osp = stdout.find("OSP").expect("OSP section should render");

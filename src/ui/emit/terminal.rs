@@ -11,7 +11,6 @@ use crate::ui::doc::{
 use crate::ui::settings::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 use crate::ui::style::{StyleToken, ThemeStyler};
 use crate::ui::text::{crop_display_width, wrap_display_width};
-use crate::ui::visible_inline_text;
 
 use super::grid::PreparedGridList;
 use super::guide_entries::{PreparedGuideEntriesBlock, PreparedGuideEntryRow};
@@ -52,14 +51,15 @@ fn emit_blocks(blocks: &[Block], settings: &ResolvedRenderSettings) -> String {
 
 fn emit_paragraph(block: &ParagraphBlock, settings: &ResolvedRenderSettings) -> String {
     let styler = ThemeStyler::new(settings.color, &settings.theme, &settings.style_overrides);
-    let text = if block.inline_markup {
-        visible_inline_text(&block.text)
-    } else {
-        block.text.clone()
-    };
-    let styled = indent_lines(&text, block.indent)
+    let styled = indent_lines(&block.text, block.indent)
         .lines()
-        .map(|line| styler.paint_value(line))
+        .map(|line| {
+            if block.inline_markup {
+                styler.paint_inline(line, StyleToken::Text)
+            } else {
+                styler.paint_value(line)
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
     indent_lines(&styled, settings.margin)
@@ -79,7 +79,7 @@ fn emit_section(block: &SectionBlock, settings: &ResolvedRenderSettings) -> Stri
         );
         if let Some(suffix) = block.inline_title_suffix.as_deref() {
             title_line.push(' ');
-            title_line.push_str(suffix);
+            title_line.push_str(&styler.paint(suffix, StyleToken::Text));
         }
         let title_margin = match block.title_chrome {
             SectionTitleChrome::Plain => settings.margin,
@@ -146,7 +146,7 @@ fn emit_guide_entry_row(row: &PreparedGuideEntryRow, styler: &ThemeStyler<'_>) -
     if row.value.is_empty() {
         format!("{}{}", row.indent, key)
     } else {
-        let value = styler.paint_value(&row.value);
+        let value = styler.paint_inline(&row.value, StyleToken::TextMuted);
         format!("{}{}{}{}", row.indent, key, row.gap, value)
     }
 }

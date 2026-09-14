@@ -94,6 +94,25 @@ impl<'a> ThemeStyler<'a> {
     pub fn paint_value(&self, text: &str) -> String {
         self.paint(text, value_style_token(text))
     }
+
+    /// Style inline code without treating ordinary prose as a data value.
+    pub(crate) fn paint_inline(&self, text: &str, base: StyleToken) -> String {
+        use pulldown_cmark::{Event, Parser};
+        let mut out = String::new();
+        let mut start = 0;
+        for (event, range) in Parser::new(text).into_offset_iter() {
+            if let Event::Code(code) = event {
+                out.push_str(&self.paint(
+                    &super::text::visible_inline_text(&text[start..range.start]),
+                    base,
+                ));
+                out.push_str(&self.paint(&code, StyleToken::Code));
+                start = range.end;
+            }
+        }
+        out.push_str(&self.paint(&super::text::visible_inline_text(&text[start..]), base));
+        out
+    }
 }
 
 #[cfg(test)]
@@ -168,10 +187,11 @@ pub fn style_spec<'a>(
         | StyleToken::PromptCommand
         | StyleToken::MessageSuccess => theme.palette.success.as_str(),
         StyleToken::PanelTitle => theme.palette.title.as_str(),
+        StyleToken::Code => theme.palette.accent.as_str(),
         StyleToken::Key | StyleToken::TableHeader | StyleToken::MregKey | StyleToken::JsonKey => {
             theme.palette.accent.as_str()
         }
-        StyleToken::Text | StyleToken::PromptText | StyleToken::Code | StyleToken::Value => {
+        StyleToken::Text | StyleToken::PromptText | StyleToken::Value => {
             theme.palette.text.as_str()
         }
         StyleToken::Number | StyleToken::ValueNumber => theme.value_number_spec(),
@@ -237,6 +257,13 @@ pub fn value_style_token(value: &str) -> StyleToken {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return StyleToken::Value;
+    }
+
+    if let Ok(address) = trimmed.parse::<std::net::IpAddr>() {
+        return match address {
+            std::net::IpAddr::V4(_) => StyleToken::Ipv4,
+            std::net::IpAddr::V6(_) => StyleToken::Ipv6,
+        };
     }
 
     match trimmed.to_ascii_lowercase().as_str() {

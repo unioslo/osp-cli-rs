@@ -479,7 +479,7 @@ fn ui2_resolves_theme_catalog_from_caller_theme_name_unit() {
 }
 
 #[test]
-fn ui2_full_help_layout_titles_stay_flush_when_margin_is_set_unit() {
+fn ui2_full_help_layout_keeps_usage_inline_with_explicit_margin_unit() {
     let guide = GuideView::from_text("Usage: osp history <COMMAND>\n");
     let mut settings = RenderSettings::test_plain(OutputFormat::Guide);
     settings.width = Some(60);
@@ -487,8 +487,7 @@ fn ui2_full_help_layout_titles_stay_flush_when_margin_is_set_unit() {
 
     let rendered = render_guide_with_layout(&guide, &settings, HelpLayout::Full);
 
-    assert!(rendered.starts_with("- Usage"));
-    assert!(rendered.contains("\n    osp history <COMMAND>\n"));
+    assert!(rendered.starts_with("  Usage: osp history <COMMAND>\n"));
 }
 
 #[test]

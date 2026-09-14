@@ -155,6 +155,16 @@ command data.
 
 ## Prompt and REPL Presentation
 
+The full startup overview keeps a compact welcome and pipe cheat sheet; use
+`| H` for the detailed DSL reference. Inline code is highlighted, while command
+descriptions use the theme's muted text colour. `ui.margin` has the same default
+in the CLI and REPL, without an additional implicit REPL margin.
+
+Grouped and compact messages retain event order. Adjacent untitled messages of
+the same severity share a heading; a single message uses “Error” or “Warning”.
+Embedders can use `MessageBuffer::push_titled` for contextual headings. Message
+bodies and JSON error payloads are unchanged; titles are presentation metadata.
+
 The REPL prompt and intro surface are controlled primarily by:
 
 - `repl.prompt`

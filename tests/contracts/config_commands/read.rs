@@ -279,7 +279,7 @@ profile.default = "uio"
     cmd.assert()
         .failure()
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains("─ Errors "))
+        .stderr(predicate::str::contains("─ Unknown configuration key "))
         .stderr(predicate::str::contains("\x1b["));
 
 }

@@ -580,11 +580,11 @@ fn repl_intro_payload_uses_custom_full_section_templates() {
         build_repl_intro_payload(repl_view(&state), &intro_surface(&["help", "config"]), None);
 
     assert_eq!(payload.sections.len(), 3);
-    assert_eq!(payload.sections[0].paragraphs, vec!["  User anonymous"]);
-    assert_eq!(payload.sections[1].paragraphs, vec!["  Keys default"]);
+    assert_eq!(payload.sections[0].paragraphs, vec!["User anonymous"]);
+    assert_eq!(payload.sections[1].paragraphs, vec!["Keys default"]);
     assert_eq!(
         payload.sections[2].paragraphs,
-        vec!["  Pipe Authored Theme Name".to_string()]
+        vec!["Pipe Authored Theme Name".to_string()]
     );
 }
 
@@ -650,7 +650,7 @@ fn repl_intro_payload_overview_placeholders_preserve_sections_and_authored_order
     assert_eq!(authored_payload.sections[2].title, "Footer");
     assert_eq!(
         authored_payload.sections[2].paragraphs,
-        vec!["  After overview"]
+        vec!["After overview"]
     );
 }
 

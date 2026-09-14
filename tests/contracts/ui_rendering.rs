@@ -5,6 +5,101 @@ use osp_cli::dsl::apply_pipeline;
 use osp_cli::ui::{RenderSettings, render_output};
 use serde_json::json;
 
+#[test]
+fn contextual_messages_preserve_event_order_and_theme_controls() {
+    use osp_cli::ui::messages::{MessageBuffer, MessageLayout, MessageLevel};
+    let mut messages = MessageBuffer::new();
+    messages.warning("Task still running.");
+    messages.push_titled(
+        MessageLevel::Error,
+        "Host lookup failed",
+        "No matching host found.",
+    );
+    let theme = osp_cli::ui::theme::resolve_theme("dracula");
+    let rendered = messages.render_grouped_styled(
+        MessageLevel::Warning,
+        true,
+        true,
+        Some(72),
+        &theme,
+        MessageLayout::Grouped,
+    );
+    let plain = crate::output_support::strip_ansi(&rendered);
+    assert!(plain.find("Warning").unwrap() < plain.find("Host lookup failed").unwrap());
+    assert!(!plain.contains("Errors") && !plain.contains("Warnings"));
+    assert!(rendered.contains("\x1b[38;2;241;250;140m"));
+    assert!(rendered.contains("\x1b[1;38;2;255;85;85m"));
+    assert!(rendered.contains("\x1b[38;2;248;248;242m  No matching host found."));
+    let uncolored = messages.render_grouped_styled(
+        MessageLevel::Warning,
+        false,
+        false,
+        Some(72),
+        &theme,
+        MessageLayout::Grouped,
+    );
+    assert!(uncolored.contains("Host lookup failed") && !uncolored.contains('\x1b'));
+}
+
+#[test]
+fn startup_is_a_compact_console_overview_not_a_pipe_manual() {
+    let output = assert_cmd::Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+        .args([
+            "--defaults-only",
+            "--theme",
+            "dracula",
+            "--color",
+            "always",
+            "--unicode",
+            "always",
+            "intro",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let rendered = String::from_utf8(output).unwrap();
+    let plain = crate::output_support::strip_ansi(&rendered);
+    let lines = plain.lines().map(str::trim).collect::<Vec<_>>().join("\n");
+    assert!(
+        lines.contains("Welcome anonymous!\nUser: Not authenticated\nTheme: Dracula"),
+        "{plain}"
+    );
+    let pipes = plain
+        .split("Pipes")
+        .nth(1)
+        .unwrap()
+        .split("Usage:")
+        .next()
+        .unwrap();
+    assert!(pipes.lines().count() <= 6, "{pipes}");
+    assert!(pipes.contains("text search") && pipes.contains("| H <verb>"));
+    assert!(plain.lines().count() <= 33, "{plain}");
+    assert!(rendered.contains("\x1b[38;2;189;147;249mOSP"));
+    assert!(rendered.contains("\x1b[38;2;104;121;173mShow this command overview."));
+}
+
+#[test]
+fn address_colors_follow_theme_overrides_only_in_colored_output() {
+    let output = OutputResult::from_rows(vec![osp_cli::row! {
+        "ipv4" => "192.0.2.1", "ipv6" => "2001:db8::1", "text" => "999.0.0.1"
+    }]);
+    let mut settings = RenderSettings::test_plain(OutputFormat::Mreg);
+    settings.color = ColorMode::Always;
+    settings.mode = RenderMode::Rich;
+    settings.style_overrides.ipv4 = Some("red".into());
+    settings.style_overrides.ipv6 = Some("green".into());
+    let rendered = render_output(&output, &settings);
+    assert!(rendered.contains("\x1b[31m192.0.2.1\x1b[0m"));
+    assert!(rendered.contains("\x1b[32m2001:db8::1\x1b[0m"));
+    assert!(!rendered.contains("\x1b[31m999.0.0.1"));
+    settings.color = ColorMode::Never;
+    let plain = render_output(&output, &settings);
+    assert!(plain.contains("192.0.2.1") && plain.contains("2001:db8::1"));
+    assert!(!plain.contains('\x1b'));
+}
+
 fn representative_single_row_output() -> OutputResult {
     let mut output = OutputResult::from_rows(vec![osp_cli::row! {
         "cn" => "Oistein Sovik",

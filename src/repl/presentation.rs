@@ -129,45 +129,18 @@ const DEFAULT_COMPACT_INTRO_TEMPLATE: &str = "{{ help }}";
 // through the same data/document path as help and other guide output.
 const DEFAULT_FULL_INTRO_TEMPLATE: &str = r#"## OSP
 Welcome `{{display_name}}`!
-
-```osp
-[
-  {"name": "{{session.user_label}}", "short_help": "{{session.user_value}}"},
-  {"name": "Theme", "short_help": "{{theme_display}}"},
-  {"name": "Version", "short_help": "{{version}}"}
-]
-```
+{{session.user_label}}: `{{session.user_value}}`
+Theme: `{{theme_display}}`
 
 ## Keybindings
-```osp
-[
-  {"name": "Ctrl-D", "short_help": "exit"},
-  {"name": "Ctrl-L", "short_help": "clear screen"},
-  {"name": "Ctrl-R", "short_help": "reverse search history"}
-]
-```
+`Ctrl-D`    exit
+`Ctrl-L`    clear screen
+`Ctrl-R`    reverse search history
 
 ## Pipes
-```osp
-[
-  {"name": "| F key>3", "short_help": "keep rows that satisfy a field condition"},
-  {"name": "| P col1 col2", "short_help": "show only selected fields"},
-  {"name": "| S sort_key", "short_help": "sort rows by a field"},
-  {"name": "| G key1 key2", "short_help": "group rows by fields"},
-  {"name": "| A metric()", "short_help": "calculate an aggregate"},
-  {"name": "| L limit offset", "short_help": "limit rows, optionally from an offset"},
-  {"name": "| C", "short_help": "count rows"},
-  {"name": "| text", "short_help": "search keys and values"},
-  {"name": "| K text", "short_help": "search keys only"},
-  {"name": "| V text", "short_help": "search values only"},
-  {"name": "| ! text", "short_help": "exclude quick-search matches"},
-  {"name": "| ? key", "short_help": "keep rows where a field exists and is truthy"},
-  {"name": "| !? key", "short_help": "keep rows where a field is missing or false"},
-  {"name": "| = exact", "short_help": "case-insensitive exact search"},
-  {"name": "| == exact", "short_help": "case-sensitive exact search"},
-  {"name": "| H F", "short_help": "show help for a pipe verb"}
-]
-```
+`text` search | `!text` exclude | `K key` | `V value` | `=exact` | `==case-sensitive`
+`F key>3` | `P col1 col2` | `S sort_key` | `G key` | `A count()` | `L 10` | `C`
+Help: `| H` or `| H <verb>` e.g. `| H F`
 
 {{ help }}"#;
 
@@ -260,9 +233,7 @@ fn parse_intro_template_payload(template: &str, help: &GuideView) -> GuideView {
                     .map(str::to_string)
                     .collect::<Vec<_>>();
                 if let Some(section) = current_section.as_mut() {
-                    section
-                        .paragraphs
-                        .extend(lines.into_iter().map(|line| format!("  {line}")));
+                    section.paragraphs.extend(lines);
                 } else {
                     payload.preamble.extend(lines);
                 }

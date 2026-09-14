@@ -103,8 +103,7 @@ pub(crate) fn build_repl_surface(
         },
         ReplOverviewEntry {
             name: "last".to_string(),
-            summary: "Replay the last successful result; use --raw for the pre-pipeline payload."
-                .to_string(),
+            summary: "Replay the last result (--raw before pipes).".to_string(),
         },
         ReplOverviewEntry {
             name: "source".to_string(),
@@ -187,7 +186,13 @@ pub(crate) fn build_repl_surface(
         overview_entries.push(overview_entry_from_command_def(&def));
     }
 
-    overview_entries.extend(catalog.iter().map(plugin_overview_entry));
+    overview_entries.extend(catalog.iter().map(|entry| {
+        let mut overview = plugin_overview_entry(entry);
+        if !view.auth.external_command_access(&entry.name).is_runnable() {
+            overview.summary.push_str(" (restricted)");
+        }
+        overview
+    }));
 
     root_words.extend(view.themes.ids());
     root_words.extend(aliases.iter().map(|entry| entry.name.clone()));
@@ -359,11 +364,6 @@ fn plugin_overview_entry(entry: &CommandCatalogEntry) -> ReplOverviewEntry {
     } else {
         entry.about.clone()
     };
-    let summary = entry
-        .auth_hint()
-        .map(|hint| format!("{summary} [{hint}]"))
-        .unwrap_or(summary);
-
     ReplOverviewEntry {
         name: entry.name.clone(),
         summary,

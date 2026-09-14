@@ -12,7 +12,7 @@
 
 use miette::Result;
 
-use crate::config::{ConfigSource, ResolvedConfig};
+use crate::config::ResolvedConfig;
 use crate::plugin::PluginManager;
 use crate::plugin::state::PluginCommandPreferences;
 use crate::ui::RenderSettings;
@@ -20,10 +20,9 @@ use crate::ui::theme::DEFAULT_THEME_NAME;
 use crate::ui::theme_catalog::ThemeCatalog;
 
 use super::{
-    AppSession, LaunchContext, RuntimeContext, TerminalKind, UiState, build_logging_config,
-    build_render_runtime, debug_verbosity_from_config, message_verbosity_from_config,
-    plugin_path_discovery_enabled, plugin_process_timeout, resolve_default_render_width,
-    resolve_known_theme_name,
+    AppSession, LaunchContext, RuntimeContext, UiState, build_logging_config, build_render_runtime,
+    debug_verbosity_from_config, message_verbosity_from_config, plugin_path_discovery_enabled,
+    plugin_process_timeout, resolve_default_render_width, resolve_known_theme_name,
 };
 
 /// Render-settings baseline to use when deriving host-facing UI state.
@@ -169,7 +168,6 @@ fn derive_base_render_settings(
 ) -> RenderSettings {
     let mut render_settings = render_seed.into_settings(context);
     crate::ui::settings::apply_render_config_overrides(&mut render_settings, config);
-    apply_repl_render_defaults(context, config, &mut render_settings);
     render_settings.width = Some(resolve_default_render_width(config));
     render_settings
 }
@@ -199,24 +197,6 @@ pub(crate) fn derive_ui_state(
         message_verbosity_from_config(config),
         debug_verbosity_from_config(config),
     ))
-}
-
-fn apply_repl_render_defaults(
-    context: &RuntimeContext,
-    config: &ResolvedConfig,
-    render_settings: &mut RenderSettings,
-) {
-    // REPL output benefits from a small left margin so intro/help/JSON payloads
-    // sit under the prompt area instead of hugging the terminal edge. Keep this
-    // as a terminal-specific default only when the user did not set `ui.margin`
-    // explicitly.
-    let margin_is_builtin_default = config
-        .get_value_entry("ui.margin")
-        .map(|entry| matches!(entry.source, ConfigSource::BuiltinDefaults))
-        .unwrap_or(true);
-    if matches!(context.terminal_kind(), TerminalKind::Repl) && margin_is_builtin_default {
-        render_settings.margin = 2;
-    }
 }
 
 /// Builds the config-derived plugin manager for one launch context.
@@ -298,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_ui_state_applies_repl_margin_default_without_affecting_cli_unit() {
+    fn derive_ui_state_uses_the_same_margin_default_in_cli_and_repl_unit() {
         let config = resolved(&[]);
         let themes = crate::ui::theme_catalog::load_theme_catalog(&config);
 
@@ -319,7 +299,7 @@ mod tests {
         )
         .expect("cli ui state should derive");
 
-        assert_eq!(repl.render_settings.margin, 2);
+        assert_eq!(repl.render_settings.margin, 0);
         assert_eq!(cli.render_settings.margin, 0);
     }
 

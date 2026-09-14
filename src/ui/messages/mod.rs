@@ -124,6 +124,8 @@ impl MessageLayout {
 pub struct UiMessage {
     pub level: MessageLevel,
     pub text: String,
+    /// Human-facing context; machine-readable message text stays unchanged.
+    pub title: Option<String>,
 }
 
 /// In-memory buffer for messages collected during command execution.
@@ -152,6 +154,18 @@ impl MessageBuffer {
 
     pub fn push<T: Into<String>>(&mut self, level: MessageLevel, text: T) {
         self.push_message(UiMessage::new(level, text));
+    }
+
+    /// Give an event its own heading instead of merging it into a severity group.
+    pub fn push_titled(
+        &mut self,
+        level: MessageLevel,
+        title: impl Into<String>,
+        text: impl Into<String>,
+    ) {
+        let mut message = UiMessage::new(level, text);
+        message.title = Some(title.into());
+        self.push_message(message);
     }
 
     pub(crate) fn push_message(&mut self, message: UiMessage) {
@@ -303,7 +317,10 @@ pub(crate) fn render_messages_without_config(
 fn visible_message_buffer(messages: &MessageBuffer) -> MessageBuffer {
     let mut out = MessageBuffer::default();
     for entry in messages.entries() {
-        out.push(entry.level, visible_inline_text(&entry.text));
+        out.push_message(UiMessage {
+            text: visible_inline_text(&entry.text),
+            ..entry.clone()
+        });
     }
     out
 }
@@ -327,6 +344,7 @@ impl UiMessage {
         Self {
             level,
             text: text.into(),
+            title: None,
         }
     }
 }

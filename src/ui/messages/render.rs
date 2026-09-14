@@ -230,18 +230,39 @@ fn render_plain(
 
 fn sectioned_messages(buffer: &MessageBuffer, max_level: MessageLevel) -> Vec<RenderedSection> {
     let mut sections = Vec::new();
-    for level in MessageLevel::ordered().filter(|level| *level <= max_level) {
-        let lines = buffer
-            .entries_for_level(level)
-            .map(|entry| entry.text.clone())
-            .collect::<Vec<_>>();
-        if lines.is_empty() {
+    // Keep the sequence of events: a warning followed by a failure is not a
+    // severity-sorted report. Adjacent untitled messages still share a heading.
+    let mut previous_untitled = false;
+    for entry in buffer
+        .entries()
+        .iter()
+        .filter(|entry| entry.level <= max_level)
+    {
+        if previous_untitled
+            && entry.title.is_none()
+            && let Some(RenderedSection {
+                level,
+                title,
+                lines,
+            }) = sections.last_mut()
+            && *level == entry.level
+        {
+            lines.push(entry.text.clone());
+            *title = level.title().to_string();
             continue;
         }
+        previous_untitled = entry.title.is_none();
         sections.push(RenderedSection {
-            level,
-            title: level.title().to_string(),
-            lines,
+            level: entry.level,
+            title: entry.title.clone().unwrap_or_else(|| {
+                match entry.level {
+                    MessageLevel::Error => "Error",
+                    MessageLevel::Warning => "Warning",
+                    level => level.title(),
+                }
+                .to_string()
+            }),
+            lines: vec![entry.text.clone()],
         });
     }
     sections
@@ -382,9 +403,9 @@ mod tests {
         buffer.info("hint");
 
         let rendered = render_messages(&buffer, MessageRenderOptions::full(MessageLevel::Success));
-        assert!(rendered.contains("Errors"));
+        assert!(rendered.contains("Error"));
         assert!(rendered.contains("\n  bad"));
-        assert!(rendered.contains("Warnings"));
+        assert!(rendered.contains("Warning"));
         assert!(rendered.contains("\n  careful"));
         assert!(rendered.contains("Success"));
         assert!(rendered.contains("\n  done"));
@@ -402,9 +423,9 @@ mod tests {
             MessageRenderOptions::compact(MessageLevel::Warning),
         );
 
-        assert!(rendered.contains("Errors:"));
+        assert!(rendered.contains("Error:"));
         assert!(rendered.contains("\n  bad"));
-        assert!(rendered.contains("Warnings:"));
+        assert!(rendered.contains("Warning:"));
         assert!(!rendered.contains("--------"));
     }
 
@@ -416,8 +437,8 @@ mod tests {
 
         let rendered = render_messages(&buffer, MessageRenderOptions::plain(MessageLevel::Warning));
 
-        assert!(!rendered.contains("Errors"));
-        assert!(!rendered.contains("Warnings"));
+        assert!(!rendered.contains("Error"));
+        assert!(!rendered.contains("Warning"));
         assert!(rendered.contains("  bad"));
         assert!(rendered.contains("  careful"));
     }
@@ -439,8 +460,8 @@ mod tests {
             },
         );
 
-        assert!(rendered.contains("- Errors "));
-        assert!(rendered.contains("- Warnings "));
+        assert!(rendered.contains("- Error "));
+        assert!(rendered.contains("- Warning "));
         assert!(rendered.ends_with("----------------\n"));
     }
 
@@ -539,7 +560,7 @@ mod tests {
             MessageChrome::default(),
         );
 
-        assert!(rendered.contains("Errors:"));
+        assert!(rendered.contains("Error:"));
         assert!(rendered.contains("bad"));
         assert!(!rendered.contains("--------"));
     }
@@ -559,7 +580,7 @@ mod tests {
                 width: Some(12),
             },
         );
-        assert!(bottom.starts_with("Errors:"));
+        assert!(bottom.starts_with("Error:"));
         assert!(bottom.contains("\n------------"));
 
         let round = render_messages_unstyled_with_chrome(

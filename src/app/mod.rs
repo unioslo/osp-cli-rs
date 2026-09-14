@@ -748,7 +748,15 @@ fn render_process_error(
     }
 
     let mut messages = MessageBuffer::default();
-    messages.error(message);
+    messages.push_titled(
+        MessageLevel::Error,
+        if classify_exit_code(err) == host::EXIT_CODE_USAGE {
+            "Invalid command"
+        } else {
+            "Command failed"
+        },
+        message,
+    );
     render_messages_without_config(settings, &messages, message_verbosity)
 }
 

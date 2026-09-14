@@ -11,7 +11,7 @@ use crate::config::{
 };
 use crate::core::fuzzy::{config_fuzzy_matcher, fold_case};
 use crate::core::output::OutputFormat;
-use crate::ui::messages::MessageBuffer;
+use crate::ui::messages::{MessageBuffer, MessageLevel};
 use miette::{IntoDiagnostic, Result, WrapErr};
 
 use crate::app::{RuntimeContext, UiState};
@@ -541,7 +541,11 @@ pub(crate) fn push_missing_config_key_messages(
     key: &str,
 ) {
     let suggestions = suggest_config_keys(config, key);
-    messages.error(format!("config key not found: {key}"));
+    messages.push_titled(
+        MessageLevel::Error,
+        "Unknown configuration key",
+        format!("config key not found: {key}"),
+    );
     if !suggestions.is_empty() {
         messages.warning(format!("did you mean: {}", suggestions.join(", ")));
     }

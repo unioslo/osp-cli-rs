@@ -2,7 +2,7 @@
 source: tests/contracts/plugins/provider_selection.rs
 expression: sanitized
 ---
-- Errors ---------------------------------------------------------------
+- Command failed -------------------------------------------------------
   command shared requires provider selection; available: alpha-provider
   (env), beta-provider (env); use --plugin-provider <plugin-id> or
   plugins select-provider shared <plugin-id>

@@ -40,6 +40,18 @@ user.display_name = "demo"
         plain.contains("demo"),
         "expected config-driven intro content before the prompt; output:\n{plain}",
     );
+    let pipes = plain
+        .split("Pipes")
+        .nth(1)
+        .expect("startup should show pipe hints")
+        .split("Usage:")
+        .next()
+        .unwrap();
+    assert!(
+        pipes.lines().count() <= 6,
+        "startup should show a cheat sheet, not a manual:\n{plain}"
+    );
+    assert!(plain.contains("Theme:") && plain.contains("Commands"));
 
     session.write_bytes(b"exit\r");
     assert!(

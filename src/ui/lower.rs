@@ -644,7 +644,7 @@ fn help_layout_section_block(
         2
     };
     let lines = trimmed_lines(section.paragraphs);
-    let inline_title_suffix = compact_usage_title_suffix(layout, section, &lines);
+    let inline_title_suffix = usage_title_suffix(section, &lines);
     let mut blocks = if lines.is_empty() || inline_title_suffix.is_some() {
         Vec::new()
     } else {
@@ -676,7 +676,11 @@ fn help_layout_section_block(
     } else {
         Some(SectionBlock {
             title: Some(section.title.to_string()),
-            title_chrome: help_layout_title_chrome(layout),
+            title_chrome: if inline_title_suffix.is_some() {
+                SectionTitleChrome::Plain
+            } else {
+                help_layout_title_chrome(layout)
+            },
             body_indent: 0,
             inline_title_suffix,
             trailing_newline: false,
@@ -738,13 +742,8 @@ fn help_layout_blocks_from_value(
     }
 }
 
-fn compact_usage_title_suffix(
-    layout: HelpLayout,
-    section: GuideSectionRef<'_>,
-    lines: &[String],
-) -> Option<String> {
-    if !matches!(layout, HelpLayout::Compact | HelpLayout::Minimal)
-        || section.title.trim_end_matches(':') != "Usage"
+fn usage_title_suffix(section: GuideSectionRef<'_>, lines: &[String]) -> Option<String> {
+    if section.title.trim_end_matches(':') != "Usage"
         || lines.len() != 1
         || !section.entries.is_empty()
         || !matches!(section.data, None | Some(Value::Null))

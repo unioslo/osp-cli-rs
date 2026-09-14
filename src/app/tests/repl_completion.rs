@@ -660,7 +660,7 @@ fn repl_surface_exposes_selected_provider_for_conflicts_unit() {
 }
 
 #[test]
-fn repl_surface_includes_plugin_auth_hints_in_overview_and_tooltip_unit() {
+fn repl_surface_keeps_policy_details_in_tooltips_not_the_overview_unit() {
     let state = make_completion_state(None);
     let surface = surface::build_repl_surface(
         repl_view(&state.runtime, &state.session),
@@ -689,11 +689,7 @@ fn repl_surface_includes_plugin_auth_hints_in_overview_and_tooltip_unit() {
         .iter()
         .find(|entry| entry.name == "orch")
         .expect("orch overview should exist");
-    assert!(
-        overview
-            .summary
-            .contains("[cap: orch.approval.decide; feature: orch]")
-    );
+    assert_eq!(overview.summary, "orch plugin");
 
     let spec = surface
         .specs

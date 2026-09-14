@@ -15,7 +15,7 @@ warning:   #f1fa8c
 success:   #50fa7b
 error:     bold #ff5555
 border:    #ff79c6
-title:     #ff79c6
+title:     #bd93f9
 selection: #bd93f9
 link:      #bd93f9
 bg:        null

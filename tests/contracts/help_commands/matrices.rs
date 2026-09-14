@@ -57,12 +57,12 @@ fn help_color_unicode_presentation_matrix_contract() {
 
                 if unicode == "always" {
                     assert!(
-                        plain.contains("─ Usage"),
+                        plain.contains("─ Commands"),
                         "missing unicode chrome for {presentation}/{color}: {plain:?}"
                     );
                 } else {
                     assert!(
-                        plain.contains("- Usage"),
+                        plain.contains("- Commands"),
                         "missing ascii chrome for {presentation}/{color}: {plain:?}"
                     );
                 }
@@ -244,11 +244,11 @@ fn message_color_unicode_presentation_matrix_contract() {
                     "compact success should use titled paragraphs for {color}/{unicode}: {success_plain:?}"
                 );
                 assert!(
-                    warning_plain.contains("Warnings:\n  writing a sensitive key"),
+                    warning_plain.contains("Warning:\n  writing a sensitive key"),
                     "compact warning should use titled paragraphs for {color}/{unicode}: {warning_plain:?}"
                 );
                 assert!(
-                    error_plain.contains("Errors:\n  config key not found: missing.key"),
+                    error_plain.contains("Unknown configuration key:\n  config key not found: missing.key"),
                     "compact error should use titled paragraphs for {color}/{unicode}: {error_plain:?}"
                 );
                 let rule = if unicode == "always" { '─' } else { '-' };
@@ -264,11 +264,11 @@ fn message_color_unicode_presentation_matrix_contract() {
                     "full success should keep ruled chrome for {presentation}/{color}/{unicode}: {success_plain:?}"
                 );
                 assert!(
-                    warning_plain.contains(rule) && warning_plain.contains("Warnings"),
+                    warning_plain.contains(rule) && warning_plain.contains("Warning"),
                     "full warning should keep ruled chrome for {presentation}/{color}/{unicode}: {warning_plain:?}"
                 );
                 assert!(
-                    error_plain.contains(rule) && error_plain.contains("Errors"),
+                    error_plain.contains(rule) && error_plain.contains("Unknown configuration key"),
                     "full error should keep ruled chrome for {presentation}/{color}/{unicode}: {error_plain:?}"
                 );
             }

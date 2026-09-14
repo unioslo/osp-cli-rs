@@ -30,7 +30,7 @@ use crate::app::sink::{StdIoUiSink, UiSink};
 use crate::app::{AppClients, AppRuntime, AppSession};
 use crate::app::{ErrorDetail, ResolvedInvocation, render_report_message, resolve_invocation_ui};
 use crate::cli::invocation::scan_command_tokens;
-use crate::ui::messages::MessageBuffer;
+use crate::ui::messages::{MessageBuffer, MessageLevel};
 
 use super::{ReplViewContext, completion, input};
 
@@ -241,7 +241,7 @@ fn execute_repl_plugin_line_with_sink(
             let visible_error = doctor_command
                 .map(|command| format!("{summary}\nMore: run `{command}` for more detail."))
                 .unwrap_or(summary);
-            messages.error(visible_error);
+            messages.push_titled(MessageLevel::Error, "Command failed", visible_error);
             let rendered = crate::ui::render_messages(
                 runtime.config.resolved(),
                 &runtime.ui.render_settings,
