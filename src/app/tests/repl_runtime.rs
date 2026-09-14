@@ -16,7 +16,7 @@ impl crate::app::CommandAccessRecovery for ReplConfigRecovery {
             return Ok(crate::app::AccessRecoveryOutcome::NoChange);
         }
 
-        runtime.auth_mut().set_policy_context(
+        runtime.set_policy_context(
             crate::core::command_policy::CommandPolicyContext::default().authenticated(true),
         );
         Ok(crate::app::AccessRecoveryOutcome::Recovered)
@@ -123,10 +123,7 @@ fn repl_denied_builtin_command_can_recover_and_retry_unit() {
         )
         .visibility(crate::core::command_policy::VisibilityMode::Authenticated),
     );
-    state
-        .runtime
-        .auth_mut()
-        .replace_builtin_policy(builtin_policy);
+    state.runtime.auth.replace_builtin_policy(builtin_policy);
     state
         .runtime
         .set_access_recovery(Some(std::sync::Arc::new(ReplConfigRecovery)));

@@ -283,6 +283,9 @@ fn handle_clap_parse_error(
         clap::error::ErrorKind::DisplayHelp
         | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
             let help_context = help::render_settings_for_help(args, &app.product_defaults);
+            if let Some(config) = &help_context.config {
+                app.native_commands.configure(config);
+            }
             let raw_help = err.to_string();
             let root_help = raw_help
                 .lines()
@@ -359,21 +362,14 @@ fn run(
                 sink,
             )
         }),
-        action => {
-            let Some(command) = action.into_builtin_command() else {
-                return Err(miette!(
-                    "internal error: non-builtin run action reached builtin dispatch"
-                ));
-            };
-            super::run_cli_builtin_command_parts(
-                &mut state.runtime,
-                &mut state.session,
-                &state.clients,
-                &invocation_ui,
-                command,
-                sink,
-            )
-        }
+        RunAction::Builtin(command) => super::run_cli_builtin_command_parts(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &invocation_ui,
+            command,
+            sink,
+        ),
     };
 
     if !is_repl && invocation_ui.ui.debug_verbosity > 0 {
@@ -452,14 +448,10 @@ fn prepare_host_run(
     state
         .runtime
         .set_product_defaults(app.product_defaults.clone());
-    let policy_context = super::runtime::policy_context_for_resolved(
-        app.policy_context.clone(),
-        state.runtime.config.resolved(),
-    );
-    state.runtime.auth_mut().set_policy_context(policy_context);
+    state.runtime.set_policy_context(app.policy_context.clone());
     state
         .runtime
-        .auth_mut()
+        .auth
         .replace_builtin_policy(app.builtin_policy.clone());
     state
         .runtime

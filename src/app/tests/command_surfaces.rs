@@ -5,7 +5,10 @@ fn intro_command_dispatches_as_repl_scoped_builtin_unit() {
     let mut cli = Cli::try_parse_from(["osp", "intro"]).expect("cli parse");
     let plan = build_dispatch_plan(&mut cli, &profiles(&["default"])).expect("dispatch plan");
 
-    assert!(matches!(plan.action, RunAction::Intro(_)));
+    assert!(matches!(
+        plan.action,
+        RunAction::Builtin(Commands::Intro(_))
+    ));
     assert_eq!(plan.action.terminal_kind(), TerminalKind::Repl);
 }
 

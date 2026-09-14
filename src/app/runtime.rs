@@ -473,16 +473,16 @@ impl Default for AppClients {
 #[non_exhaustive]
 pub struct AppRuntime {
     /// Startup-time runtime identity used for config selection and rebuilds.
-    pub context: RuntimeContext,
+    pub(crate) context: RuntimeContext,
     /// Authoritative resolved config snapshot and its in-memory revision.
-    pub config: ConfigState,
+    pub(crate) config: ConfigState,
     /// UI-facing state derived from the current resolved config.
-    pub ui: UiState,
+    pub(crate) ui: UiState,
     /// Authorization and command-visibility policy state derived from config.
-    pub auth: AuthState,
+    pub(crate) auth: AuthState,
     pub(crate) themes: ThemeCatalog,
     /// Launch-time inputs used to assemble caches and external services.
-    pub launch: LaunchContext,
+    pub(crate) launch: LaunchContext,
     product_defaults: ConfigLayer,
     access_recovery: Option<Arc<dyn CommandAccessRecovery>>,
 }
@@ -519,19 +519,9 @@ impl AppRuntime {
         &self.config
     }
 
-    /// Returns mutable resolved-config state.
-    pub fn config_state_mut(&mut self) -> &mut ConfigState {
-        &mut self.config
-    }
-
     /// Returns the UI state derived from the current config snapshot.
     pub fn ui(&self) -> &UiState {
         &self.ui
-    }
-
-    /// Returns mutable UI state for in-process adjustments.
-    pub fn ui_mut(&mut self) -> &mut UiState {
-        &mut self.ui
     }
 
     /// Returns the command-visibility/auth state.
@@ -539,9 +529,11 @@ impl AppRuntime {
         &self.auth
     }
 
-    /// Returns mutable command-visibility/auth state.
-    pub fn auth_mut(&mut self) -> &mut AuthState {
-        &mut self.auth
+    /// Updates product-owned authentication facts after session acquisition.
+    /// Profile identity remains owned by the resolved host configuration.
+    pub fn set_policy_context(&mut self, context: CommandPolicyContext) {
+        self.auth
+            .set_policy_context(policy_context_for_resolved(context, self.config.resolved()));
     }
 
     /// Returns the launch-time provenance used to assemble the runtime.

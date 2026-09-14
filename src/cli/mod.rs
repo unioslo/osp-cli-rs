@@ -53,7 +53,7 @@ pub(crate) mod invocation;
 pub(crate) mod pipeline;
 pub(crate) mod rows;
 use crate::config::{ConfigLayer, RuntimeLoadOptions};
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use crate::ui::UiPresentation;
@@ -143,10 +143,60 @@ pub struct Cli {
 }
 
 impl Cli {
+    /// Reads host-owned bootstrap options using the normal CLI grammar, with
+    /// additional root-only options supplied by a product wrapper.
+    ///
+    /// This is a preflight view: incomplete commands and help are left for the
+    /// host to validate/render. The returned CLI has no command payload. Product
+    /// options remain in the matches; wrappers must remove only options actually
+    /// matched at the root before forwarding the original argv to the host.
+    pub fn bootstrap_from<I, T>(
+        args: I,
+        product_options: impl IntoIterator<Item = clap::Arg>,
+    ) -> miette::Result<(Self, clap::ArgMatches)>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        use miette::IntoDiagnostic;
+        let argv = args.into_iter().map(Into::into).collect::<Vec<_>>();
+        let scanned = invocation::scan_cli_argv(&argv)?;
+        let mut matches = bootstrap_command(Self::command())
+            .args(product_options)
+            .arg(
+                clap::Arg::new("bootstrap_help")
+                    .long("help")
+                    .short('h')
+                    .global(true)
+                    .action(clap::ArgAction::SetTrue),
+            )
+            .arg(
+                clap::Arg::new("bootstrap_version")
+                    .long("version")
+                    .short('V')
+                    .global(true)
+                    .action(clap::ArgAction::SetTrue),
+            )
+            .ignore_errors(true)
+            .try_get_matches_from(scanned.argv)
+            .into_diagnostic()?;
+        matches.remove_subcommand();
+        let cli = Self::from_arg_matches(&matches).into_diagnostic()?;
+        Ok((cli, matches))
+    }
+
     /// Returns the runtime source-loading options implied by global CLI flags.
     pub fn runtime_load_options(&self) -> RuntimeLoadOptions {
         runtime_load_options_from_flags(self.no_env, self.no_config_file, self.defaults_only)
     }
+}
+
+fn bootstrap_command(command: clap::Command) -> clap::Command {
+    command
+        .disable_help_flag(true)
+        .disable_version_flag(true)
+        .disable_help_subcommand(true)
+        .mut_subcommands(bootstrap_command)
 }
 
 /// Top-level commands accepted by `osp`.

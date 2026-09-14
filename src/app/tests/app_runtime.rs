@@ -122,7 +122,7 @@ impl crate::app::CommandAccessRecovery for AuthenticatedBuiltinRecovery {
             return Ok(crate::app::AccessRecoveryOutcome::NoChange);
         }
 
-        runtime.auth_mut().set_policy_context(
+        runtime.set_policy_context(
             crate::core::command_policy::CommandPolicyContext::default().authenticated(true),
         );
         Ok(crate::app::AccessRecoveryOutcome::Recovered)
@@ -441,7 +441,7 @@ fn capability_denial_and_doctor_last_add_progressive_detail_unit() {
         &[],
         NativeCommandRegistry::new().with_command(CapabilityGatedNativeCommand),
     );
-    state.runtime.auth_mut().set_policy_context(
+    state.runtime.set_policy_context(
         crate::core::command_policy::CommandPolicyContext::default().authenticated(true),
     );
     let history = make_test_history(&mut state);

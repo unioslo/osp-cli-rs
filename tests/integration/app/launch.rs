@@ -108,7 +108,7 @@ fn app_state_builder_uses_launch_context_for_plugin_roots_and_path_discovery() {
         .build();
 
         assert_eq!(
-            state.runtime.launch.plugin_dirs,
+            state.runtime.launch().plugin_dirs,
             vec![explicit_dir.path().to_path_buf()]
         );
         assert_eq!(
@@ -155,13 +155,13 @@ fn app_state_builder_projects_native_registry_into_external_policy() {
     assert!(
         state
             .runtime
-            .auth
+            .auth()
             .external_policy()
             .contains(&CommandPath::new(["launch-native"]))
     );
     let policy = state
         .runtime
-        .auth
+        .auth()
         .external_policy()
         .resolved_policy(&CommandPath::new(["launch-native"]))
         .expect("native policy should resolve");
@@ -185,10 +185,24 @@ fn auth_state_enforces_native_session_requirements_end_to_end() {
     .with_native_commands(launch_native_registry())
     .build();
 
-    state.runtime.auth_mut().set_policy_context(
-        osp_cli::core::command_policy::CommandPolicyContext::default().with_features(["launch"]),
+    state.runtime.set_policy_context(
+        osp_cli::core::command_policy::CommandPolicyContext::default()
+            .with_profile("unrelated-product-profile")
+            .with_features(["launch"]),
     );
-    let hidden = state.runtime.auth.external_command_access("launch-native");
+    assert_eq!(
+        state
+            .runtime
+            .auth()
+            .policy_context()
+            .active_profile
+            .as_deref(),
+        Some("default")
+    );
+    let hidden = state
+        .runtime
+        .auth()
+        .external_command_access("launch-native");
     assert_eq!(
         hidden.reasons,
         vec![
@@ -198,19 +212,22 @@ fn auth_state_enforces_native_session_requirements_end_to_end() {
         ]
     );
 
-    state.runtime.auth_mut().set_policy_context(
+    state.runtime.set_policy_context(
         osp_cli::core::command_policy::CommandPolicyContext::default()
             .authenticated(true)
             .with_auth_strength(AuthStrength::Strong)
             .with_features(["launch"]),
     );
-    let denied = state.runtime.auth.external_command_access("launch-native");
+    let denied = state
+        .runtime
+        .auth()
+        .external_command_access("launch-native");
     assert_eq!(
         denied.reasons,
         vec![osp_cli::core::command_policy::AccessReason::MissingCredential("osp".to_string())]
     );
 
-    state.runtime.auth_mut().set_policy_context(
+    state.runtime.set_policy_context(
         osp_cli::core::command_policy::CommandPolicyContext::default()
             .authenticated(true)
             .with_auth_strength(AuthStrength::Strong)
@@ -220,7 +237,7 @@ fn auth_state_enforces_native_session_requirements_end_to_end() {
     assert!(
         state
             .runtime
-            .auth
+            .auth()
             .external_command_access("launch-native")
             .is_runnable()
     );

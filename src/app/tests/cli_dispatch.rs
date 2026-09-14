@@ -132,9 +132,9 @@ fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit()
     assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
     assert!(matches!(
         plan.action,
-        RunAction::Plugins(crate::cli::PluginsArgs {
+        RunAction::Builtin(Commands::Plugins(crate::cli::PluginsArgs {
             command: PluginsCommands::List
-        })
+        }))
     ));
 
     let positional = dispatch_plan_for(&["osp", "tsd", "plugins", "list"], &["uio", "tsd"]);
@@ -143,8 +143,14 @@ fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit()
         &["uio", "tsd"],
     );
     assert_eq!(positional.profile_override, explicit.profile_override);
-    assert!(matches!(positional.action, RunAction::Plugins(_)));
-    assert!(matches!(explicit.action, RunAction::Plugins(_)));
+    assert!(matches!(
+        positional.action,
+        RunAction::Builtin(Commands::Plugins(_))
+    ));
+    assert!(matches!(
+        explicit.action,
+        RunAction::Builtin(Commands::Plugins(_))
+    ));
 
     let normalized = dispatch_plan_for(&["osp", "--profile", "TSD"], &["tsd"]);
     assert_eq!(normalized.profile_override.as_deref(), Some("tsd"));
@@ -155,9 +161,9 @@ fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit()
     assert_eq!(plan.profile_override, None);
     assert!(matches!(
         plan.action,
-        RunAction::Plugins(crate::cli::PluginsArgs {
+        RunAction::Builtin(Commands::Plugins(crate::cli::PluginsArgs {
             command: PluginsCommands::Doctor
-        })
+        }))
     ));
     assert!(matches!(cli.command, None | Some(Commands::Plugins(_))));
 
@@ -166,7 +172,7 @@ fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit()
         .expect("dispatch plan should parse");
     assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
     match plan.action {
-        RunAction::Config(args) => {
+        RunAction::Builtin(Commands::Config(args)) => {
             assert!(matches!(
                 args.command,
                 ConfigCommands::Show(crate::cli::ConfigShowArgs {

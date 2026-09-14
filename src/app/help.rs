@@ -50,6 +50,7 @@ impl HelpRenderOverrides {
 }
 
 pub(crate) struct HelpRenderContext {
+    pub(crate) config: Option<crate::config::ResolvedConfig>,
     pub(crate) settings: RenderSettings,
     pub(crate) layout: HelpLayout,
     pub(crate) help_level: HelpLevel,
@@ -120,6 +121,7 @@ pub(crate) fn render_settings_for_help(
     }
 
     HelpRenderContext {
+        config,
         settings,
         layout,
         help_level: effective_help_level,

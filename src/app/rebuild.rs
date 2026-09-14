@@ -100,13 +100,9 @@ impl ReplStateRebuilder {
                 .with_native_commands(self.native_commands)
                 .build();
         next.runtime.set_product_defaults(self.product_defaults);
-        let policy_context = super::runtime::policy_context_for_resolved(
-            self.policy_context,
-            next.runtime.config.resolved(),
-        );
-        next.runtime.auth_mut().set_policy_context(policy_context);
+        next.runtime.set_policy_context(self.policy_context);
         next.runtime
-            .auth_mut()
+            .auth
             .replace_builtin_policy(self.builtin_policy);
         next.runtime.set_access_recovery(self.access_recovery);
         next.session.restore_rebuild_state(self.preserved_session);

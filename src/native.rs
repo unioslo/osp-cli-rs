@@ -274,6 +274,14 @@ pub enum NativeCommandOutcome {
 
 /// Trait implemented by in-process commands registered alongside plugins.
 pub trait NativeCommand: Send + Sync {
+    /// Applies the resolved host configuration before help, policy, completion,
+    /// or execution reads this command's state. Called again on REPL rebuild.
+    ///
+    /// Keep this local: select the service/session context and invalidate stale
+    /// snapshots here; remote refresh belongs in execution or refresh_completion.
+    /// The registered command name must remain stable across configurations.
+    fn configure(&self, _config: &ResolvedConfig) {}
+
     /// Returns the clap command definition for this command.
     fn command(&self) -> Command;
 
@@ -373,6 +381,12 @@ pub struct NativeCommandRegistry {
 }
 
 impl NativeCommandRegistry {
+    pub(crate) fn configure(&self, config: &ResolvedConfig) {
+        for command in self.commands.values() {
+            command.configure(config);
+        }
+    }
+
     /// Creates an empty native command registry.
     pub fn new() -> Self {
         Self::default()

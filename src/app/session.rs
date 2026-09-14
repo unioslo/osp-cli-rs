@@ -741,6 +741,7 @@ pub(crate) struct AppStateParts {
 
 impl AppStateParts {
     fn from_init(init: AppStateInit, session_override: Option<AppSession>) -> Self {
+        init.native_commands.configure(&init.config);
         let clients = AppClients::new(init.plugins, init.native_commands);
         let config = crate::app::ConfigState::new(init.config);
         let ui = crate::app::UiState::new(
@@ -804,8 +805,8 @@ impl AppState {
     /// )
     /// .unwrap();
     ///
-    /// assert_eq!(state.runtime.config.resolved().active_profile(), "default");
-    /// assert_eq!(state.runtime.ui.message_verbosity.as_env_str(), "warning");
+    /// assert_eq!(state.runtime.config_state().resolved().active_profile(), "default");
+    /// assert_eq!(state.runtime.ui().message_verbosity.as_env_str(), "warning");
     /// assert!(state.clients.plugins().explicit_dirs().is_empty());
     /// ```
     pub fn from_resolved_config(
@@ -889,9 +890,7 @@ impl AppState {
 ///
 /// Use [`AppStateBuilder::from_resolved_config`] for the normal config-driven
 /// path, then override specific pieces such as the session or plugin manager as
-/// needed. Use [`AppStateBuilder::new`] only when the caller already has a
-/// fully chosen [`UiState`] and wants the builder to assemble the remaining
-/// runtime/session/client pieces around it.
+/// needed. Derived UI state always comes from the resolved configuration.
 ///
 /// # Examples
 ///
@@ -937,7 +936,8 @@ impl AppStateBuilder {
     /// This is the manual-construction path. Prefer
     /// [`AppStateBuilder::from_resolved_config`] when the builder should derive
     /// UI defaults from config and runtime context first.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         context: RuntimeContext,
         config: crate::config::ResolvedConfig,
         ui: UiState,

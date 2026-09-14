@@ -415,9 +415,7 @@ fn run_external_plugin_command(
         args,
         invocation.plugin_provider.as_deref(),
     );
-    runtime_state
-        .auth_mut()
-        .overlay_external_policy(dispatch_policy);
+    runtime_state.auth.overlay_external_policy(dispatch_policy);
     let access_requirement = external_path_access_requirement(args);
     ensure_external_path_access(
         runtime_state,

@@ -38,6 +38,25 @@ You can ignore for now:
 - the optional `site_runtime_config_for(...)` helper if you do not need
   wrapper-owned tooling/tests outside the host
 
+## Development API cutover (2026-09-14)
+
+Update product wrappers alongside the core checkout. Development uses one
+current API; there is no compatibility shim or release-version bump for this
+cutover. The unpublished UiO companion uses the sibling path dependency.
+
+| Previous access | Current API |
+| --- | --- |
+| Public `AppRuntime` fields | `context()`, `config_state()`, `ui()`, `auth()`, `launch()` |
+| `auth_mut().set_policy_context(...)` | `set_policy_context(...)`, preserving the resolved profile |
+| `config_state_mut()` / `ui_mut()` | Change configuration through host configuration/rebuild paths |
+| `AppStateBuilder::new(...)` | `AppStateBuilder::from_resolved_config(...)` |
+| Wrapper-owned bootstrap scanning | `Cli::bootstrap_from(...)` with product root options |
+
+Native commands can implement `configure(&ResolvedConfig)` to select their
+local session before help, completion, policy, or execution reads it. Remote
+refresh still belongs to execution or completion refresh. Derived UI and auth
+state remain owned by the host.
+
 ## Ownership Split
 
 Keep the split boring:
@@ -317,6 +336,12 @@ Keep the boundary small:
   must accompany a meaningful non-zero outcome
 - product-specific state should live in the wrapper crate, not in
   `osp-cli::app`
+- use `NativeCommand::configure` to select local service/session state from the
+  resolved host config before help, policy, completion, and execution inspect
+  it; keep remote refresh out of this hook
+- authentication recovery updates product facts through
+  `AppRuntime::set_policy_context`; resolved configuration and derived UI state
+  are read-only to wrappers and change through host configuration workflows
 - registration should happen in one place, usually a product integrations
   module
 

@@ -13,10 +13,7 @@ use crate::app::access_recovery::{
     AccessRecoveryOutcome, AccessRecoveryRequest, CommandAccessKind,
 };
 use crate::app::{AppClients, AuthState, TerminalKind};
-use crate::cli::{
-    AliasArgs, Cli, Commands, ConfigArgs, DoctorArgs, HistoryArgs, IntroArgs, PluginsArgs,
-    ReplArgs, ThemeArgs, parse_inline_command_tokens,
-};
+use crate::cli::{Cli, Commands, parse_inline_command_tokens};
 use crate::core::command_policy::{AccessReason, CommandAccess, CommandPath};
 use crate::normalize::{normalize_identifier, normalize_optional_identifier};
 use crate::plugin::CommandCatalogEntry;
@@ -26,14 +23,7 @@ use super::{CMD_CONFIG, CMD_DOCTOR, CMD_HISTORY, CMD_PLUGINS, CMD_THEME};
 
 pub(crate) enum RunAction {
     Repl,
-    ReplCommand(ReplArgs),
-    Plugins(PluginsArgs),
-    Doctor(DoctorArgs),
-    Theme(ThemeArgs),
-    Config(ConfigArgs),
-    Alias(AliasArgs),
-    History(HistoryArgs),
-    Intro(IntroArgs),
+    Builtin(Commands),
     External(Vec<String>),
 }
 
@@ -59,42 +49,17 @@ impl RunAction {
     pub(crate) fn name(&self) -> &'static str {
         match self {
             RunAction::Repl => "repl",
-            RunAction::ReplCommand(_) => "repl-command",
-            RunAction::Plugins(_) => "plugins",
-            RunAction::Doctor(_) => "doctor",
-            RunAction::Theme(_) => "theme",
-            RunAction::Config(_) => "config",
-            RunAction::Alias(_) => "alias",
-            RunAction::History(_) => "history",
-            RunAction::Intro(_) => "intro",
+            RunAction::Builtin(_) => "builtin",
             RunAction::External(_) => "external",
         }
     }
 
     pub(crate) fn terminal_kind(&self) -> TerminalKind {
         match self {
-            RunAction::Repl | RunAction::ReplCommand(_) | RunAction::Intro(_) => TerminalKind::Repl,
-            RunAction::Plugins(_)
-            | RunAction::Doctor(_)
-            | RunAction::Theme(_)
-            | RunAction::Config(_)
-            | RunAction::Alias(_)
-            | RunAction::History(_)
-            | RunAction::External(_) => TerminalKind::Cli,
-        }
-    }
-
-    pub(crate) fn into_builtin_command(self) -> Option<Commands> {
-        match self {
-            RunAction::Plugins(args) => Some(Commands::Plugins(args)),
-            RunAction::Doctor(args) => Some(Commands::Doctor(args)),
-            RunAction::Theme(args) => Some(Commands::Theme(args)),
-            RunAction::Config(args) => Some(Commands::Config(args)),
-            RunAction::Alias(args) => Some(Commands::Alias(args)),
-            RunAction::History(args) => Some(Commands::History(args)),
-            RunAction::Intro(args) => Some(Commands::Intro(args)),
-            RunAction::ReplCommand(args) => Some(Commands::Repl(args)),
-            RunAction::Repl | RunAction::External(_) => None,
+            RunAction::Repl | RunAction::Builtin(Commands::Repl(_) | Commands::Intro(_)) => {
+                TerminalKind::Repl
+            }
+            RunAction::Builtin(_) | RunAction::External(_) => TerminalKind::Cli,
         }
     }
 }
@@ -130,35 +95,8 @@ pub(crate) fn build_dispatch_plan(
 
     match command {
         None => Ok(DispatchPlan::repl(explicit_profile)),
-        Some(Commands::Plugins(args)) => Ok(DispatchPlan::new(
-            RunAction::Plugins(args),
-            explicit_profile,
-        )),
-        Some(Commands::Doctor(args)) => {
-            Ok(DispatchPlan::new(RunAction::Doctor(args), explicit_profile))
-        }
-        Some(Commands::Theme(args)) => {
-            Ok(DispatchPlan::new(RunAction::Theme(args), explicit_profile))
-        }
-        Some(Commands::Config(args)) => {
-            Ok(DispatchPlan::new(RunAction::Config(args), explicit_profile))
-        }
-        Some(Commands::Alias(args)) => {
-            Ok(DispatchPlan::new(RunAction::Alias(args), explicit_profile))
-        }
-        Some(Commands::History(args)) => Ok(DispatchPlan::new(
-            RunAction::History(args),
-            explicit_profile,
-        )),
         Some(Commands::Completions(_)) => Err(miette!(
             "`completions` is available only as a one-shot CLI command"
-        )),
-        Some(Commands::Intro(args)) => {
-            Ok(DispatchPlan::new(RunAction::Intro(args), explicit_profile))
-        }
-        Some(Commands::Repl(args)) => Ok(DispatchPlan::new(
-            RunAction::ReplCommand(args),
-            explicit_profile,
         )),
         Some(Commands::External(tokens)) => {
             if let Some(plan) = profile_prefixed_external_plan(
@@ -174,6 +112,10 @@ pub(crate) fn build_dispatch_plan(
                 explicit_profile,
             ))
         }
+        Some(command) => Ok(DispatchPlan::new(
+            RunAction::Builtin(command),
+            explicit_profile,
+        )),
     }
 }
 
@@ -186,13 +128,14 @@ pub(crate) fn normalize_cli_profile(cli: &mut Cli) -> Option<String> {
 #[cfg(test)]
 pub(crate) fn ensure_dispatch_visibility(auth: &AuthState, action: &RunAction) -> Result<()> {
     match action {
-        RunAction::Plugins(_) => ensure_builtin_visible_for(auth, CMD_PLUGINS),
-        RunAction::Doctor(_) => ensure_builtin_visible_for(auth, CMD_DOCTOR),
-        RunAction::Theme(_) => ensure_builtin_visible_for(auth, CMD_THEME),
-        RunAction::Config(_) => ensure_builtin_visible_for(auth, CMD_CONFIG),
-        RunAction::Alias(_) => ensure_builtin_visible_for(auth, CMD_CONFIG),
-        RunAction::History(_) => ensure_builtin_visible_for(auth, CMD_HISTORY),
-        RunAction::ReplCommand(_) | RunAction::Repl | RunAction::Intro(_) => Ok(()),
+        RunAction::Builtin(Commands::Plugins(_)) => ensure_builtin_visible_for(auth, CMD_PLUGINS),
+        RunAction::Builtin(Commands::Doctor(_)) => ensure_builtin_visible_for(auth, CMD_DOCTOR),
+        RunAction::Builtin(Commands::Theme(_)) => ensure_builtin_visible_for(auth, CMD_THEME),
+        RunAction::Builtin(Commands::Config(_) | Commands::Alias(_)) => {
+            ensure_builtin_visible_for(auth, CMD_CONFIG)
+        }
+        RunAction::Builtin(Commands::History(_)) => ensure_builtin_visible_for(auth, CMD_HISTORY),
+        RunAction::Builtin(_) | RunAction::Repl => Ok(()),
         // External command auth needs provider/native metadata to resolve the
         // real command path. Do that in the runtime dispatch layer instead of
         // guessing from raw tokens here.
@@ -442,20 +385,13 @@ fn profile_prefixed_external_plan(
 
 fn inline_run_action(parsed: Option<Commands>) -> Result<RunAction> {
     Ok(match parsed {
-        Some(Commands::Plugins(args)) => RunAction::Plugins(args),
-        Some(Commands::Doctor(args)) => RunAction::Doctor(args),
-        Some(Commands::Theme(args)) => RunAction::Theme(args),
-        Some(Commands::Config(args)) => RunAction::Config(args),
-        Some(Commands::Alias(args)) => RunAction::Alias(args),
-        Some(Commands::History(args)) => RunAction::History(args),
         Some(Commands::Completions(_)) => {
             return Err(miette!(
                 "`completions` is available only as a top-level one-shot command"
             ));
         }
-        Some(Commands::Intro(args)) => RunAction::Intro(args),
-        Some(Commands::Repl(args)) => RunAction::ReplCommand(args),
         Some(Commands::External(external)) => RunAction::External(external),
+        Some(command) => RunAction::Builtin(command),
         None => RunAction::Repl,
     })
 }
@@ -714,7 +650,7 @@ mod tests {
             profile_override,
         } = build_dispatch_plan(&mut config_cli, &profiles)
             .expect("profile-prefixed config command should work");
-        assert!(matches!(action, RunAction::Config(_)));
+        assert!(matches!(action, RunAction::Builtin(Commands::Config(_))));
         assert_eq!(profile_override.as_deref(), Some("dev"));
 
         let mut explicit_profile_cli =
@@ -745,7 +681,7 @@ mod tests {
             action,
             profile_override,
         } = build_dispatch_plan(&mut repl_cli, &profiles).expect("repl subcommand should parse");
-        assert!(matches!(action, RunAction::ReplCommand(_)));
+        assert!(matches!(action, RunAction::Builtin(Commands::Repl(_))));
         assert!(profile_override.is_none());
 
         let mut bad_shorthand_cli = parse_cli(&["osp", "dev", "config", "set", "ui.format"]);
@@ -808,22 +744,6 @@ mod tests {
         let external = RunAction::External(vec!["ldap".to_string(), "user".to_string()]);
         assert_eq!(external.terminal_kind(), TerminalKind::Cli);
         ensure_dispatch_visibility(&auth, &external).expect("visible plugin should pass");
-    }
-
-    #[test]
-    fn run_action_builtin_conversion_covers_builtin_and_non_builtin_paths_unit() {
-        let plugins = RunAction::Plugins(crate::cli::PluginsArgs {
-            command: crate::cli::PluginsCommands::List,
-        });
-        let repl = RunAction::Repl;
-        let external = RunAction::External(vec!["ldap".to_string()]);
-
-        assert!(matches!(
-            plugins.into_builtin_command(),
-            Some(Commands::Plugins(_))
-        ));
-        assert!(repl.into_builtin_command().is_none());
-        assert!(external.into_builtin_command().is_none());
     }
 
     #[test]
