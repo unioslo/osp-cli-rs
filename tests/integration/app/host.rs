@@ -40,6 +40,59 @@ fn with_config_path<T>(config_toml: &str, callback: impl FnOnce() -> T) -> T {
 
 struct NativeProbeCommand;
 
+struct GroupShapedServiceCommand;
+
+impl NativeCommand for GroupShapedServiceCommand {
+    fn command(&self) -> Command {
+        Command::new("group-shaped")
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        _context: &NativeCommandContext<'_>,
+    ) -> Result<NativeCommandOutcome> {
+        Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            ok: true,
+            data: json!([{"groups": {}, "aggregates": {}, "rows": []}]),
+            error: None,
+            messages: Vec::new(),
+            meta: ResponseMetaV1::default(),
+        })))
+    }
+}
+
+#[test]
+fn service_group_field_names_are_not_interpreted_as_dsl_groups() {
+    let app = App::builder()
+        .with_native_commands(NativeCommandRegistry::new().with_command(GroupShapedServiceCommand))
+        .build();
+    let mut sink = BufferedUiSink::default();
+    assert_eq!(
+        app.run_with_sink(
+            [
+                "osp",
+                "--defaults-only",
+                "--json",
+                "group-shaped",
+                "|",
+                "A",
+                "count()",
+                "AS",
+                "total"
+            ],
+            &mut sink
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&sink.stdout).unwrap(),
+        json!([{"total": 1}])
+    );
+}
+
 impl NativeCommand for NativeProbeCommand {
     fn command(&self) -> Command {
         Command::new("native-probe").about("Inspect resolved host config")

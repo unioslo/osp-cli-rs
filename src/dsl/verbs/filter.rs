@@ -65,8 +65,13 @@ pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &FilterPlan) -> R
     let mut out = Vec::new();
 
     for mut group in groups {
-        if plan.matches(&group.groups) || plan.matches(&group.aggregates) {
-            out.push(group);
+        let mut header = group.groups.clone();
+        header.extend(group.aggregates.clone());
+        let selector = &plan.parsed.column.key_spec;
+        if !resolve_values(&header, &selector.token, selector.exact).is_empty() {
+            if plan.matches(&header) {
+                out.push(group);
+            }
             continue;
         }
 
@@ -162,6 +167,22 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
                 regex: None,
             };
         }
+        index += 1;
+    }
+
+    // A date and clock separated by whitespace are one timestamp operand.
+    // Consume both explicitly rather than silently treating it as midnight.
+    if index + 1 == words.len() && parse_date(&value.text).is_some() {
+        let timestamp = format!("{} {}", value.text, words[index]);
+        if parse_timestamp(&timestamp).is_some() {
+            value.text = timestamp;
+            index += 1;
+        }
+    }
+    if index < words.len() {
+        return Err(anyhow!(
+            "F: unexpected trailing predicate text; chain predicates with `| F ...`"
+        ));
     }
 
     let original_operator = operator;
@@ -457,7 +478,14 @@ fn parse_date(input: &str) -> Option<(i32, u32, u32)> {
     let year = parts.next()?.parse::<i32>().ok()?;
     let month = parts.next()?.parse::<u32>().ok()?;
     let day = parts.next()?.parse::<u32>().ok()?;
-    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let days_in_month = match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        _ => return None,
+    };
+    if parts.next().is_some() || !(1..=days_in_month).contains(&day) {
         return None;
     }
     Some((year, month, day))
@@ -477,7 +505,10 @@ fn parse_time(input: &str) -> Option<(u32, u32, u32, i32)> {
     let mut parts = clock.split(':');
     let hour = parts.next()?.parse::<u32>().ok()?;
     let minute = parts.next()?.parse::<u32>().ok()?;
-    let second = parts.next().and_then(parse_second_component).unwrap_or(0);
+    let second = match parts.next() {
+        Some(second) => parse_second_component(second)?,
+        None => 0,
+    };
     if parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
         return None;
     }
@@ -513,7 +544,7 @@ fn parse_offset_minutes(input: &str) -> Option<i32> {
 
     let hours = hours.parse::<i32>().ok()?;
     let minutes = minutes.parse::<i32>().ok()?;
-    if hours > 23 || minutes > 59 {
+    if !(0..=23).contains(&hours) || !(0..=59).contains(&minutes) {
         return None;
     }
 
@@ -521,10 +552,15 @@ fn parse_offset_minutes(input: &str) -> Option<i32> {
 }
 
 fn parse_second_component(input: &str) -> Option<u32> {
-    let whole = input
-        .split_once('.')
-        .map(|(whole, _)| whole)
-        .unwrap_or(input);
+    let whole = match input.split_once('.') {
+        Some((whole, fraction)) => {
+            if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            whole
+        }
+        None => input,
+    };
     whole.parse::<u32>().ok()
 }
 

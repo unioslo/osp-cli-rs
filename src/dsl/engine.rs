@@ -27,10 +27,9 @@
 //!   semantic-document or metadata state attached
 
 use crate::core::{
-    output::OutputFormat,
     output_model::{
-        OutputDocument, OutputItems, OutputMeta, OutputResult, RenderRecommendation,
-        output_items_from_value,
+        OutputDocument, OutputDocumentKind, OutputItems, OutputMeta, OutputResult,
+        RenderRecommendation, output_items_from_value, rows_from_value,
     },
     row::Row,
 };
@@ -46,7 +45,6 @@ use crate::dsl::{
     eval::context::RowContext,
     parse::pipeline::parse_stage_list,
 };
-use serde_json::Value;
 
 /// Apply a pipeline to plain row output.
 ///
@@ -115,6 +113,7 @@ pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<
         output.document,
         output.meta.wants_copy,
         output.meta.render_recommendation,
+        output.meta.grouped,
         stages,
     )
 }
@@ -146,7 +145,7 @@ pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn execute_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult> {
-    execute_pipeline_items(OutputItems::Rows(rows), None, false, None, stages)
+    execute_pipeline_items(OutputItems::Rows(rows), None, false, None, false, stages)
 }
 
 fn execute_pipeline_items(
@@ -154,21 +153,19 @@ fn execute_pipeline_items(
     initial_document: Option<OutputDocument>,
     initial_wants_copy: bool,
     initial_render_recommendation: Option<RenderRecommendation>,
+    initial_grouped: bool,
     stages: &[String],
 ) -> Result<OutputResult> {
     let parsed = parse_stage_list(stages)?;
     let compiled = CompiledPipeline::from_parsed(parsed)?;
-    let promote_nested_single_row =
-        initial_document.is_none() && recommends_document_like_rows(initial_render_recommendation);
     PipelineExecutor::new(
         items,
         initial_document,
         initial_wants_copy,
         initial_render_recommendation,
-        compiled,
-        promote_nested_single_row,
+        initial_grouped,
     )
-    .run()
+    .run(compiled)
 }
 
 /// Small stateful executor for one parsed pipeline.
@@ -182,10 +179,10 @@ enum PipelineItems {
 
 struct PipelineExecutor {
     items: PipelineItems,
-    document: Option<OutputDocument>,
+    document_kind: Option<OutputDocumentKind>,
     wants_copy: bool,
     render_recommendation: Option<RenderRecommendation>,
-    compiled: CompiledPipeline,
+    semantic_grouped: bool,
 }
 
 impl PipelineExecutor {
@@ -194,43 +191,29 @@ impl PipelineExecutor {
         document: Option<OutputDocument>,
         wants_copy: bool,
         render_recommendation: Option<RenderRecommendation>,
-        compiled: CompiledPipeline,
-        promote_nested_single_row: bool,
+        semantic_grouped: bool,
     ) -> Self {
-        let items = if let Some(document) = document.as_ref() {
-            // Semantic payloads stay canonical as JSON through the DSL.
-            // Generic rows/groups are derived only when the pipeline needs to
-            // emit the final `OutputResult`.
-            PipelineItems::Semantic(document.value.clone())
-        } else {
-            match items {
-                OutputItems::Rows(rows)
-                    if promote_nested_single_row && is_single_nested_row(&rows) =>
-                {
-                    let mut rows = rows;
-                    PipelineItems::Semantic(Value::Object(rows.pop().unwrap_or_default()))
-                }
-                OutputItems::Rows(rows) => PipelineItems::Materialized(OutputItems::Rows(rows)),
-                OutputItems::Groups(groups) => {
-                    PipelineItems::Materialized(OutputItems::Groups(groups))
-                }
-            }
+        let semantic_grouped = semantic_grouped && document.is_some();
+        // Document identity is explicit; a preferred renderer never changes
+        // whether selectors operate on rows or on a nested document.
+        let (items, document_kind) = match document {
+            Some(document) => (PipelineItems::Semantic(document.value), Some(document.kind)),
+            None => (PipelineItems::Materialized(items), None),
         };
         Self {
             items,
-            document,
+            document_kind,
             wants_copy,
             render_recommendation,
-            compiled,
+            semantic_grouped,
         }
     }
 
-    fn run(mut self) -> Result<OutputResult> {
-        let stages = self.compiled.stages.clone();
-        for stage in &stages {
+    fn run(mut self, compiled: CompiledPipeline) -> Result<OutputResult> {
+        for stage in &compiled.stages {
             self.apply_stage(stage)?;
         }
-        self.into_output_result()
+        Ok(self.into_output_result())
     }
 
     fn apply_stage(&mut self, stage: &CompiledStage) -> Result<()> {
@@ -243,9 +226,8 @@ impl PipelineExecutor {
         if matches!(self.items, PipelineItems::Semantic(_)) {
             self.apply_semantic_stage(stage, behavior.semantic_effect)
         } else {
-            let items = self.materialize_items()?;
+            let items = self.materialize_items();
             self.items = PipelineItems::Materialized(self.apply_flat_stage(items, stage)?);
-            self.sync_document_to_items();
             Ok(())
         }
     }
@@ -270,19 +252,26 @@ impl PipelineExecutor {
             return Err(anyhow!("semantic stage dispatch requires semantic items"));
         };
 
-        let transformed = value_stage::apply_stage_preserving_matching_rows(value, stage)?;
+        let transformed =
+            value_stage::apply_stage_preserving_matching_rows(value, stage, self.semantic_grouped)?;
+        match stage {
+            CompiledStage::Group(_) => self.semantic_grouped = true,
+            CompiledStage::Collapse
+            | CompiledStage::CountMacro
+            | CompiledStage::Jq(_)
+            | CompiledStage::Values(_) => self.semantic_grouped = false,
+            _ => {}
+        }
         self.items = PipelineItems::Semantic(transformed);
         match semantic_effect {
             // Preserve/transform both keep the semantic payload attached. The
             // renderer decides later whether the transformed JSON still
             // restores as the original semantic kind.
-            SemanticEffect::Preserve | SemanticEffect::Transform => {
-                self.sync_document_to_items();
-            }
+            SemanticEffect::Preserve | SemanticEffect::Transform => {}
             // Destructive stages like `C`, `Z`, and `JQ` intentionally stop
             // claiming the result is still guide/help-shaped semantic output.
             SemanticEffect::Degrade => {
-                self.document = None;
+                self.document_kind = None;
             }
         }
         Ok(())
@@ -372,61 +361,28 @@ impl PipelineExecutor {
         }
     }
 
-    fn materialize_items(&mut self) -> Result<OutputItems> {
+    fn materialize_items(&mut self) -> OutputItems {
         match std::mem::replace(
             &mut self.items,
             PipelineItems::Materialized(OutputItems::Rows(Vec::new())),
         ) {
-            PipelineItems::Materialized(items) => Ok(items),
-            PipelineItems::Semantic(value) => Ok(output_items_from_value(value)),
+            PipelineItems::Materialized(items) => items,
+            PipelineItems::Semantic(value) => decode_semantic_items(value, self.semantic_grouped),
         }
     }
 
-    fn finish_items(&mut self) -> Result<OutputItems> {
-        self.materialize_items()
-    }
-
-    fn into_output_result(mut self) -> Result<OutputResult> {
-        // Capture the semantic value before finish_items replaces self.items via
-        // mem::replace — after that call self.items is always Materialized.
-        let semantic_value = if let PipelineItems::Semantic(ref v) = self.items {
-            Some(v.clone())
-        } else {
-            None
+    fn into_output_result(self) -> OutputResult {
+        let (items, document) = match self.items {
+            PipelineItems::Materialized(items) => (items, None),
+            PipelineItems::Semantic(value) => match self.document_kind {
+                Some(kind) => (
+                    decode_semantic_items(value.clone(), self.semantic_grouped),
+                    Some(OutputDocument::new(kind, value)),
+                ),
+                None => (decode_semantic_items(value, self.semantic_grouped), None),
+            },
         };
-        let items = self.finish_items()?;
-        let meta = self.build_output_meta(&items);
-        let document = match semantic_value {
-            Some(value) => self.document.map(|document| OutputDocument {
-                kind: document.kind,
-                value,
-            }),
-            None => self.document,
-        };
-
-        Ok(OutputResult {
-            items,
-            document,
-            meta,
-        })
-    }
-
-    fn sync_document_to_items(&mut self) {
-        let Some(document) = self.document.as_mut() else {
-            return;
-        };
-        match &self.items {
-            PipelineItems::Materialized(items) => {
-                *document = document.project_over_items(items);
-            }
-            PipelineItems::Semantic(value) => {
-                document.value = value.clone();
-            }
-        }
-    }
-
-    fn build_output_meta(&self, items: &OutputItems) -> OutputMeta {
-        let key_index = match items {
+        let key_index = match &items {
             OutputItems::Rows(rows) => RowContext::from_rows(rows).key_index().to_vec(),
             OutputItems::Groups(groups) => {
                 let headers = groups.iter().map(merged_group_header).collect::<Vec<_>>();
@@ -434,27 +390,27 @@ impl PipelineExecutor {
             }
         };
 
-        OutputMeta {
+        let meta = OutputMeta {
             key_index,
             column_align: Vec::new(),
             wants_copy: self.wants_copy,
-            grouped: matches!(items, OutputItems::Groups(_)),
+            grouped: self.semantic_grouped || matches!(&items, OutputItems::Groups(_)),
             render_recommendation: self.render_recommendation,
+        };
+        OutputResult {
+            items,
+            document,
+            meta,
         }
     }
 }
 
-fn is_single_nested_row(rows: &[Row]) -> bool {
-    matches!(rows, [row] if row.values().any(|value| matches!(value, Value::Array(_) | Value::Object(_))))
-}
-
-fn recommends_document_like_rows(recommendation: Option<RenderRecommendation>) -> bool {
-    matches!(
-        recommendation,
-        Some(RenderRecommendation::Format(
-            OutputFormat::Markdown | OutputFormat::Mreg
-        ))
-    )
+fn decode_semantic_items(value: serde_json::Value, grouped: bool) -> OutputItems {
+    if grouped {
+        output_items_from_value(value)
+    } else {
+        OutputItems::Rows(rows_from_value(value))
+    }
 }
 
 fn merged_group_header(group: &crate::core::output_model::Group) -> Row {

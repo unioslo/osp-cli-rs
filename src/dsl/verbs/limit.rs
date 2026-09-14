@@ -1,8 +1,6 @@
 use anyhow::{Result, anyhow};
 use serde_json::{Map, Value};
 
-use super::json;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LimitSpec {
     pub(crate) count: i64,
@@ -80,9 +78,7 @@ pub(crate) fn apply_value_with_spec(value: Value, spec: LimitSpec) -> Result<Val
             let mut out = Map::new();
             for (key, child) in map {
                 let limited = apply_value_with_spec(child, spec)?;
-                if !json::is_structurally_empty(&limited) {
-                    out.insert(key, limited);
-                }
+                out.insert(key, limited);
             }
             Ok(Value::Object(out))
         }

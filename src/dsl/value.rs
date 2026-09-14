@@ -3,7 +3,8 @@ use serde_json::Value;
 
 use crate::dsl::compiled::CompiledStage;
 use crate::dsl::verbs::{
-    aggregate, collapse, filter, group, jq, limit, project, question, quick, sort, unroll, values,
+    aggregate, collapse, filter, group, jq, json, limit, project, question, quick, sort, unroll,
+    values,
 };
 
 /// Applies one parsed stage directly to canonical JSON.
@@ -24,15 +25,46 @@ pub(crate) fn apply_stage(value: Value, stage: &CompiledStage) -> Result<Value> 
 pub(crate) fn apply_stage_preserving_matching_rows(
     value: Value,
     stage: &CompiledStage,
+    grouped: bool,
 ) -> Result<Value> {
     if let Some(plan) = stage.quick_plan() {
-        return if matches!(stage, CompiledStage::Quick(_)) {
-            quick::apply_value_with_plan_preserving_matching_rows(value, plan)
-        } else {
-            quick::apply_value_with_plan(value, plan)
-        };
+        return quick::apply_value_with_plan_preserving_matching_rows(value, plan);
     }
 
+    if grouped {
+        use crate::core::output_model::OutputItems;
+        match stage {
+            CompiledStage::Sort(plan) => {
+                return json::traverse_group_collections(value, |items| {
+                    sort::apply_with_plan(items, plan)
+                });
+            }
+            CompiledStage::Aggregate(plan) => {
+                return json::traverse_group_collections(value, |items| {
+                    aggregate::apply_with_plan(items, plan)
+                });
+            }
+            CompiledStage::Group(plan) => {
+                return json::traverse_group_collections(value, |items| match items {
+                    OutputItems::Rows(rows) => {
+                        group::group_rows_with_plan(rows, plan).map(OutputItems::Groups)
+                    }
+                    OutputItems::Groups(groups) => {
+                        group::regroup_groups_with_plan(groups, plan).map(OutputItems::Groups)
+                    }
+                });
+            }
+            CompiledStage::Collapse => {
+                return json::traverse_group_collections(value, collapse::apply);
+            }
+            CompiledStage::CountMacro => {
+                return json::traverse_group_collections(value, |items| {
+                    aggregate::count_macro(items, "")
+                });
+            }
+            _ => {}
+        }
+    }
     apply_non_quick_stage(value, stage)
 }
 

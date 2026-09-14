@@ -103,7 +103,7 @@ fn compare_rows(left: &Row, right: &Row, keys: &[SortKeySpec]) -> Ordering {
 
         let mut ordering =
             compare_optional_values(left_value.as_ref(), right_value.as_ref(), key.cast);
-        if key.descending {
+        if key.descending && left_value.is_some() && right_value.is_some() {
             ordering = ordering.reverse();
         }
 
@@ -150,34 +150,31 @@ fn compare_values(left: &Value, right: &Value, cast: SortCast) -> Ordering {
 }
 
 fn compare_auto(left: &Value, right: &Value) -> Ordering {
-    let left_num = to_f64(left);
-    let right_num = to_f64(right);
-    if let (Some(left_num), Some(right_num)) = (left_num, right_num) {
-        return left_num.partial_cmp(&right_num).unwrap_or(Ordering::Equal);
+    // Classification must depend on each value, never on its comparison
+    // partner: pairwise numeric/text fallback produces ordering cycles.
+    match (to_f64(left), to_f64(right)) {
+        (Some(left), Some(right)) => left.total_cmp(&right),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => compare_ip(left, right),
     }
-
-    let left_ip = to_ip(left);
-    let right_ip = to_ip(right);
-    if let (Some(left_ip), Some(right_ip)) = (left_ip, right_ip) {
-        return left_ip.cmp(&right_ip);
-    }
-
-    to_string_normalized(left).cmp(&to_string_normalized(right))
 }
 
 fn compare_numbers(left: &Value, right: &Value) -> Ordering {
     match (to_f64(left), to_f64(right)) {
-        (Some(left_num), Some(right_num)) => {
-            left_num.partial_cmp(&right_num).unwrap_or(Ordering::Equal)
-        }
-        _ => to_string_normalized(left).cmp(&to_string_normalized(right)),
+        (Some(left_num), Some(right_num)) => left_num.total_cmp(&right_num),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => to_string_normalized(left).cmp(&to_string_normalized(right)),
     }
 }
 
 fn compare_ip(left: &Value, right: &Value) -> Ordering {
     match (to_ip(left), to_ip(right)) {
         (Some(left_ip), Some(right_ip)) => left_ip.cmp(&right_ip),
-        _ => to_string_normalized(left).cmp(&to_string_normalized(right)),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => to_string_normalized(left).cmp(&to_string_normalized(right)),
     }
 }
 
@@ -188,6 +185,7 @@ fn to_f64(value: &Value) -> Option<f64> {
         Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
         _ => None,
     }
+    .filter(|number| !number.is_nan())
 }
 
 fn to_ip(value: &Value) -> Option<IpAddr> {
@@ -210,7 +208,16 @@ pub(crate) fn apply_value_with_plan(value: Value, plan: &SortPlan) -> Result<Val
             json::apply_collection_stage(Value::Array(items), |items| apply_with_plan(items, plan))
         }
         Value::Array(mut items) => {
-            items.sort_by(json::compare_scalar_values);
+            if let Some(key) = plan.keys.first() {
+                items.sort_by(|left, right| {
+                    let order = compare_values(left, right, key.cast);
+                    if key.descending {
+                        order.reverse()
+                    } else {
+                        order
+                    }
+                });
+            }
             Ok(Value::Array(items))
         }
         Value::Object(map) => {

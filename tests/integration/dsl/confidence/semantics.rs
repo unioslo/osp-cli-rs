@@ -1,6 +1,39 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn presentation_recommendations_do_not_change_pipeline_semantics() {
+    use osp_cli::core::output::OutputFormat;
+    use osp_cli::core::output_model::{OutputDocument, OutputDocumentKind, RenderRecommendation};
+
+    let rows = vec![osp_cli::row! {
+        "members" => json!([{"role": "primary"}, {"role": "secondary"}])
+    }];
+    for document in [
+        None,
+        Some(OutputDocument::new(
+            OutputDocumentKind::Json,
+            Value::Object(rows[0].clone()),
+        )),
+    ] {
+        let mut output = OutputResult::from_rows(rows.clone());
+        output.document = document;
+        let stages = ["F role=primary".to_string()];
+        let expected = apply_output_pipeline(output.clone(), &stages).unwrap();
+        for format in [
+            OutputFormat::Mreg,
+            OutputFormat::Markdown,
+            OutputFormat::Table,
+            OutputFormat::Json,
+        ] {
+            output.meta.render_recommendation = Some(RenderRecommendation::Format(format));
+            let actual = apply_output_pipeline(output.clone(), &stages).unwrap();
+            assert_eq!(actual.items, expected.items);
+            assert_eq!(actual.document, expected.document);
+        }
+    }
+}
+
 // Protects the happy semantic path: a narrowed guide payload should still round
 // trip through the DSL and restore as a guide rather than degrading to generic
 // rows.

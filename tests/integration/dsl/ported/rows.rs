@@ -180,10 +180,11 @@ fn ported_group_nested_slice_chain_uses_selector_result() {
 fn ported_filter_datetime_comparison_handles_naive_rhs() {
     let rows = vec![
         row(json!({"ts": "2026-02-13T20:00:00+00:00"})),
+        row(json!({"ts": "2026-02-13T08:00:00+00:00"})),
         row(json!({"ts": "2026-02-12T08:00:00+00:00"})),
     ];
 
-    let output = run_rows_pipeline(rows, "F ts>2026-02-13 00:00:00");
+    let output = run_rows_pipeline(rows, "F ts>2026-02-13 12:00:00");
     let OutputItems::Rows(rows) = output.items else {
         panic!("expected flat rows");
     };

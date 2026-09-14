@@ -27,7 +27,8 @@ use crate::dsl::eval::resolve::{
 ///
 /// This is the bridge for verbs whose semantics are naturally defined over
 /// tabular collections (`Rows` / `Groups`) while the DSL keeps canonical JSON as
-/// the payload authority. Structurally empty results are pruned.
+/// the payload authority. Unrelated fields and empty collections remain data;
+/// only the explicit clean stage removes them.
 ///
 /// Selector verbs should not add new behavior here. If a verb is selecting or
 /// rewriting addressed descendants, route it through `verbs::selector` instead
@@ -36,29 +37,42 @@ pub(crate) fn traverse_collections<F>(value: Value, stage: F) -> Result<Value>
 where
     F: Fn(OutputItems) -> Result<OutputItems> + Copy,
 {
+    transform_collections(value, stage, |value| {
+        OutputItems::Rows(crate::core::output_model::rows_from_value(value))
+    })
+}
+
+/// Only the executor may opt into group-envelope decoding, after an explicit G.
+pub(crate) fn traverse_group_collections<F>(value: Value, stage: F) -> Result<Value>
+where
+    F: Fn(OutputItems) -> Result<OutputItems> + Copy,
+{
+    transform_collections(value, stage, output_items_from_value)
+}
+
+fn transform_collections<F>(
+    value: Value,
+    stage: F,
+    decode: fn(Value) -> OutputItems,
+) -> Result<Value>
+where
+    F: Fn(OutputItems) -> Result<OutputItems> + Copy,
+{
     match value {
-        Value::Array(items) if is_collection_array(&items) => {
-            apply_collection_stage(Value::Array(items), stage)
-        }
+        Value::Array(items) if is_collection_array(&items) => Ok(collection_items_to_value(stage(
+            decode(Value::Array(items)),
+        )?)),
         Value::Array(items) => Ok(Value::Array(
             items
                 .into_iter()
-                .filter_map(|item| match traverse_collections(item, stage) {
-                    Ok(transformed) if !is_structurally_empty(&transformed) => {
-                        Some(Ok(transformed))
-                    }
-                    Ok(_) => None,
-                    Err(err) => Some(Err(err)),
-                })
+                .map(|item| transform_collections(item, stage, decode))
                 .collect::<Result<Vec<_>>>()?,
         )),
         Value::Object(map) => {
             let mut out = Map::new();
             for (key, child) in map {
-                let transformed = traverse_collections(child, stage)?;
-                if !is_structurally_empty(&transformed) {
-                    out.insert(key, transformed);
-                }
+                let transformed = transform_collections(child, stage, decode)?;
+                out.insert(key, transformed);
             }
             Ok(Value::Object(out))
         }
@@ -72,11 +86,13 @@ where
 {
     match value {
         Value::Array(items) => {
-            let transformed = stage(output_items_from_value(Value::Array(items)))?;
+            let transformed = stage(OutputItems::Rows(
+                crate::core::output_model::rows_from_value(Value::Array(items)),
+            ))?;
             Ok(collection_items_to_value(transformed))
         }
-        other => Ok(output_items_to_value(&stage(output_items_from_value(
-            other,
+        other => Ok(output_items_to_value(&stage(OutputItems::Rows(
+            crate::core::output_model::rows_from_value(other),
         ))?)),
     }
 }
@@ -112,15 +128,7 @@ pub(crate) fn clean_value(value: Value) -> Option<Value> {
 }
 
 pub(crate) fn is_collection_array(items: &[Value]) -> bool {
-    !items.is_empty()
-        && (items.iter().all(|item| item.is_object()) || items.iter().all(is_group_value))
-}
-
-pub(crate) fn is_group_value(value: &Value) -> bool {
-    let Value::Object(map) = value else {
-        return false;
-    };
-    map.get("groups").is_some() && map.get("aggregates").is_some() && map.get("rows").is_some()
+    !items.is_empty() && items.iter().all(Value::is_object)
 }
 
 pub(crate) fn is_leaf_record_map(map: &Map<String, Value>) -> bool {
@@ -239,29 +247,6 @@ fn group_to_value(group: Group) -> Value {
         ),
     );
     Value::Object(item)
-}
-
-pub(crate) fn compare_scalar_values(left: &Value, right: &Value) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-
-    match (left, right) {
-        (Value::Number(left), Value::Number(right)) => {
-            let left = left.as_f64().unwrap_or(0.0);
-            let right = right.as_f64().unwrap_or(0.0);
-            left.partial_cmp(&right).unwrap_or(Ordering::Equal)
-        }
-        _ => render_value(left).cmp(&render_value(right)),
-    }
-}
-
-pub(crate) fn render_value(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        Value::String(value) => value.clone(),
-        Value::Array(_) | Value::Object(_) => value.to_string(),
-    }
 }
 
 fn preserve_object_envelope(

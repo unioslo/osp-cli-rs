@@ -468,6 +468,10 @@ Notes:
 - Prefix a key with `!` for descending order.
 - `AS num`, `AS str`, and `AS ip` force a cast.
 - Missing values sort last.
+- In ascending auto order, numeric values precede IP addresses, which precede
+  remaining text. Values that cannot use an explicit numeric/IP cast sort as
+  text after valid values. Descending reverses present values, not missingness.
+- On scalar arrays, the first sort key's direction and cast apply to each value.
 
 ### `G` Group
 

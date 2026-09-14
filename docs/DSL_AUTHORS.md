@@ -72,6 +72,9 @@ two models inside every verb is how semantic drift comes back.
 
 ## Intentional Divergences
 
+See [DSL_REVIEW.md](DSL_REVIEW.md) for the remaining disagreements between these
+principles and existing tested behavior, and the proposed v2 decisions.
+
 Not every verb returns the same shape, but the differences should be deliberate.
 
 - Bare quick always behaves like a row/member filter and retains complete

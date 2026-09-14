@@ -15,8 +15,6 @@ use crate::core::{output_model::Group, row::Row};
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::dsl::eval::resolve::resolve_values;
-
 use crate::dsl::verbs::common::{map_group_rows, parse_terms};
 
 use super::{json, selector};
@@ -26,25 +24,12 @@ pub(crate) struct ValuesPlan {
     selectors: Vec<selector::CompiledSelector>,
 }
 
-impl ValuesPlan {
-    pub(crate) fn extract_row(&self, row: &Row) -> Vec<Row> {
-        let mut out = Vec::new();
-
-        if self.selectors.is_empty() {
-            for value in row.values() {
-                emit_value_rows(&mut out, value);
-            }
-            return out;
-        }
-
-        for selector in &self.selectors {
-            for value in resolve_values(row, selector.token(), selector.exact()) {
-                emit_value_rows(&mut out, &value);
-            }
-        }
-
-        out
+fn extract_all_row_values(row: &Row) -> Vec<Row> {
+    let mut out = Vec::new();
+    for value in row.values() {
+        emit_value_rows(&mut out, value);
     }
+    out
 }
 
 pub(crate) fn compile(spec: &str) -> Result<ValuesPlan> {
@@ -71,23 +56,23 @@ pub fn apply(rows: Vec<Row>, spec: &str) -> Result<Vec<Row>> {
 }
 
 pub(crate) fn apply_with_plan(rows: Vec<Row>, plan: &ValuesPlan) -> Result<Vec<Row>> {
+    if !plan.selectors.is_empty() {
+        let root = Value::Array(rows.into_iter().map(Value::Object).collect());
+        return Ok(crate::core::output_model::rows_from_value(
+            extract_semantic_values(&root, plan),
+        ));
+    }
     let mut out: Vec<Row> = Vec::new();
 
     for row in rows {
-        out.extend(plan.extract_row(&row));
+        out.extend(extract_all_row_values(&row));
     }
 
     Ok(out)
 }
 
 pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &ValuesPlan) -> Result<Vec<Group>> {
-    map_group_rows(groups, |rows| {
-        let mut out = Vec::new();
-        for row in &rows {
-            out.extend(plan.extract_row(row));
-        }
-        Ok(out)
-    })
+    map_group_rows(groups, |rows| apply_with_plan(rows, plan))
 }
 
 fn emit_value_rows(out: &mut Vec<Row>, value: &Value) {
@@ -108,11 +93,17 @@ fn emit_value_rows(out: &mut Vec<Row>, value: &Value) {
 }
 
 pub(crate) fn apply_value_with_plan(value: Value, plan: &ValuesPlan) -> Result<Value> {
-    if let Some(extracted) = try_extract_semantic_values(&value, plan) {
-        return Ok(extracted);
+    if !plan.selectors.is_empty() {
+        return Ok(extract_semantic_values(&value, plan));
     }
 
     match value {
+        Value::Object(row) => Ok(Value::Array(
+            extract_all_row_values(&row)
+                .into_iter()
+                .map(Value::Object)
+                .collect(),
+        )),
         Value::Array(items) if items.iter().all(json::is_scalar_like) => Ok(Value::Array(
             items
                 .into_iter()
@@ -136,11 +127,7 @@ pub(crate) fn apply_value_with_plan(value: Value, plan: &ValuesPlan) -> Result<V
     }
 }
 
-fn try_extract_semantic_values(root: &Value, plan: &ValuesPlan) -> Option<Value> {
-    if plan.selectors.is_empty() {
-        return None;
-    }
-
+fn extract_semantic_values(root: &Value, plan: &ValuesPlan) -> Value {
     let matches = selector::collect_compiled_matches(root, plan.selectors.iter());
     let mut rows = Vec::new();
     for entry in matches {
@@ -149,7 +136,7 @@ fn try_extract_semantic_values(root: &Value, plan: &ValuesPlan) -> Option<Value>
             scalar => rows.push(wrap_value_row(&scalar)),
         }
     }
-    Some(Value::Array(rows))
+    Value::Array(rows)
 }
 
 fn wrap_value_row(value: &Value) -> Value {

@@ -405,26 +405,6 @@ fn aggregate_and_count_aliases_produce_same_nested_semantic_count_unit() {
 }
 
 #[test]
-fn collapse_summarizes_grouped_semantic_values_unit() {
-    let collapsed = apply_stage(
-        json!([
-            {
-                "groups": {"team": "ops"},
-                "aggregates": {"member_count": 2},
-                "rows": [
-                    {"uid": "alice"},
-                    {"uid": "bob"}
-                ]
-            }
-        ]),
-        &CompiledStage::Collapse,
-    )
-    .expect("collapse stage should succeed");
-
-    assert_eq!(collapsed, json!([{"team": "ops", "member_count": 2}]));
-}
-
-#[test]
 fn unroll_expands_nested_semantic_entry_collections_unit() {
     let unrolled = apply_stage(
         json!({

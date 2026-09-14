@@ -46,7 +46,7 @@ pub struct Group {
     pub rows: Vec<Row>,
 }
 
-/// Rendering metadata attached to an [`OutputResult`].
+/// Output identity and rendering metadata attached to an [`OutputResult`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OutputMeta {
     /// Stable first-seen column order for row rendering.
@@ -55,7 +55,9 @@ pub struct OutputMeta {
     pub column_align: Vec<ColumnAlignment>,
     /// Whether the result should be easy to copy as plain text.
     pub wants_copy: bool,
-    /// Whether the payload represents grouped data.
+    /// Whether the payload represents grouped data, including collections inside
+    /// a semantic document. Pipeline continuations preserve this identity;
+    /// service field names alone must never set it.
     pub grouped: bool,
     /// Preferred renderer for this result, when known.
     pub render_recommendation: Option<RenderRecommendation>,
@@ -367,11 +369,12 @@ pub fn output_items_to_value(items: &OutputItems) -> Value {
     }
 }
 
-/// Projects a canonical JSON value back into generic output items.
+/// Decodes JSON that may contain engine-generated group envelopes.
 ///
-/// This is the inverse substrate bridge used by the canonical DSL: semantic payloads stay
-/// canonical as JSON, while the existing stage logic continues to operate over
-/// rows and groups derived from that JSON.
+/// Use this inverse bridge only when group identity is already known, such as
+/// after an explicit DSL grouping stage. It recognizes the serialized group
+/// shape; arbitrary service JSON must use [`rows_from_value`] instead, since
+/// a service may legitimately use the same field names.
 ///
 /// # Examples
 ///
@@ -439,6 +442,11 @@ fn group_from_value(value: &Value) -> Option<Group> {
     let Value::Object(map) = value else {
         return None;
     };
+    // This bridge reads engine group envelopes, not arbitrary service records.
+    // Never discard additional fields just because three familiar keys exist.
+    if map.len() != 3 {
+        return None;
+    }
     let groups = map.get("groups")?.as_object()?.clone();
     let aggregates = map.get("aggregates")?.as_object()?.clone();
     let Value::Array(rows) = map.get("rows")? else {

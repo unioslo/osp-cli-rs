@@ -75,9 +75,6 @@ pub(crate) fn apply_value_with_expr(value: Value, expr: &str) -> Result<Value> {
 }
 
 fn apply_rows(rows: Vec<Row>, program: &JaqProgram) -> Result<Vec<Row>> {
-    if rows.is_empty() {
-        return Ok(Vec::new());
-    }
     let payload = Value::Array(rows.into_iter().map(Value::Object).collect());
     match run_jaq(program, &payload)? {
         None => Ok(Vec::new()),

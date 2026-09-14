@@ -5,8 +5,8 @@
 //! metadata" conversions.
 
 use crate::core::output_model::{
-    ColumnAlignment, OutputDocument, OutputDocumentKind, OutputMeta, OutputResult,
-    compute_key_index, output_items_from_value, output_items_to_rows,
+    ColumnAlignment, OutputDocument, OutputDocumentKind, OutputItems, OutputMeta, OutputResult,
+    compute_key_index, output_items_to_rows, rows_from_value,
 };
 use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
 use crate::core::row::Row;
@@ -44,7 +44,8 @@ pub(crate) fn plugin_data_to_output_result(
         Some(meta) => project_display_value(row_data, meta),
         None => row_data,
     };
-    let items = output_items_from_value(row_data);
+    // Service JSON has no implicit knowledge of the engine's group envelope.
+    let items = OutputItems::Rows(rows_from_value(row_data));
     let rows = output_items_to_rows(&items);
     let key_index = meta
         .and_then(|value| {

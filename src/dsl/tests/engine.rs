@@ -1,5 +1,6 @@
 use crate::core::output_model::{
-    OutputItems, OutputResult, RenderRecommendation, output_items_to_value,
+    OutputDocument, OutputDocumentKind, OutputItems, OutputResult, RenderRecommendation,
+    output_items_to_value,
 };
 use crate::guide::GuideView;
 use serde_json::json;
@@ -167,6 +168,10 @@ fn output_pipeline_filters_nested_single_record_documents_unit() {
         .expect("object"),
     ]);
     let mut output = output;
+    output.document = Some(OutputDocument::new(
+        OutputDocumentKind::Json,
+        output_items_to_value(&output.items),
+    ));
     output.meta.render_recommendation = Some(RenderRecommendation::Format(
         crate::core::output::OutputFormat::Mreg,
     ));

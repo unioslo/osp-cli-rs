@@ -109,9 +109,12 @@ fn parse_aggregate_spec(spec: &str) -> Result<AggregateSpec> {
     }
 
     let alias = if let Some(alias) = parse_alias_after_as(&words, index, "A")? {
+        index += 2;
         alias
     } else if index < words.len() {
-        words[index].clone()
+        let alias = words[index].clone();
+        index += 1;
+        alias
     } else if let Some(column) = &column_raw {
         if from_parenthesized {
             format!("{}({column})", function.as_str())
@@ -121,6 +124,13 @@ fn parse_aggregate_spec(spec: &str) -> Result<AggregateSpec> {
     } else {
         function.default_alias().to_string()
     };
+
+    if index < words.len() {
+        return Err(anyhow!("A: unexpected trailing aggregate text"));
+    }
+    if function != AggregateFn::Count && column_raw.is_none() {
+        return Err(anyhow!("A: {} requires a field", function.as_str()));
+    }
 
     Ok(AggregateSpec {
         function,
