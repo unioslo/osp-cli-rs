@@ -995,11 +995,25 @@ fn add_native_command_help(view: &mut GuideView, native_commands: &NativeCommand
         return;
     }
 
-    let mut section = GuideSection::new("Native integrations", GuideSectionKind::Custom);
+    let mut section = GuideSection::new("Commands", GuideSectionKind::Commands);
     for entry in catalog {
         section = section.entry(entry.name, entry.about.trim());
     }
-    view.sections.push(section);
+    let native_entries = section.entries;
+    view.commands.splice(0..0, native_entries.iter().cloned());
+    if let Some(commands) = view.sections.iter_mut().find(|section| {
+        section.kind == GuideSectionKind::Commands && section.is_canonical_builtin_section()
+    }) {
+        if commands.entries.is_empty() {
+            commands.entries = view.commands.clone();
+        } else {
+            commands.entries.splice(0..0, native_entries);
+        }
+    } else {
+        let mut commands = GuideSection::new("Commands", GuideSectionKind::Commands);
+        commands.entries = view.commands.clone();
+        view.sections.push(commands);
+    }
 }
 
 fn add_product_option_help(view: &mut GuideView, options: &[(String, String)]) {

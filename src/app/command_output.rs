@@ -286,7 +286,10 @@ pub(crate) fn run_cli_command(
             sink,
         );
     }
-    if let Some(output) = result.output {
+    // Keep structured backend details behind the normal verbose diagnostic gate.
+    if let Some(output) = result.output
+        && (result.failure_report.is_none() || runtime.ui().message_verbosity >= MessageLevel::Info)
+    {
         render_cli_output(runtime, output, sink);
     }
     if let Some(stderr_text) = result.stderr_text
