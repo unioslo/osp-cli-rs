@@ -10,13 +10,14 @@ use std::cell::RefCell;
 use miette::{Result, WrapErr, miette};
 
 use crate::app::{AppClients, AppRuntime, AppSession};
-use crate::app::{RuntimeContext, UiState};
+use crate::app::{RuntimeContext, TerminalKind, UiState};
 use crate::cli::invocation::extend_with_invocation_help;
 use crate::cli::pipeline::parse_command_tokens_with_aliases;
 use crate::cli::{Commands, parse_inline_command_tokens};
 use crate::guide::GuideView;
 use crate::native::{
     NativeCommandContext, NativeCommandOutcome, NativeProgressEvent, NativeProgressSink,
+    NativeSessionContext,
 };
 use crate::plugin::PluginManager;
 use crate::repl::ReplViewContext;
@@ -239,6 +240,7 @@ fn run_native_command(
     input: NativeRunInput<'_, '_, '_, '_>,
     guide_help: impl Fn(&str) -> GuideView,
 ) -> Result<CliCommandResult> {
+    session.native_context.clear_pagination();
     let progress_renderer = input.progress_sink.map(|sink| NativeProgressRenderer {
         config: runtime.config.resolved(),
         ui: &input.invocation.ui,
@@ -265,12 +267,22 @@ fn run_native_command(
     })? {
         NativeCommandOutcome::Help(text) => Ok(CliCommandResult::guide(guide_help(&text))),
         NativeCommandOutcome::Exit(code) => Ok(CliCommandResult::exit(code)),
-        NativeCommandOutcome::Response(response) => render_native_response(*response, input.stages),
+        NativeCommandOutcome::Response(response) => render_native_response_with_context(
+            *response,
+            input.stages,
+            session,
+            runtime.context.terminal_kind() == TerminalKind::Repl,
+        ),
         NativeCommandOutcome::ResponseWithExit {
             response,
             exit_code,
         } => {
-            let mut result = render_native_response(*response, input.stages)?;
+            let mut result = render_native_response_with_context(
+                *response,
+                input.stages,
+                session,
+                runtime.context.terminal_kind() == TerminalKind::Repl,
+            )?;
             result.exit_code = exit_code;
             Ok(result)
         }
@@ -325,6 +337,40 @@ fn render_native_response(
     stages: &[String],
 ) -> Result<CliCommandResult> {
     cli_result_from_plugin_response(response, stages)
+}
+
+fn render_native_response_with_context(
+    response: crate::core::plugin::ResponseV1,
+    stages: &[String],
+    session: &mut AppSession,
+    show_pagination_hint: bool,
+) -> Result<CliCommandResult> {
+    let mut result = match render_native_response(response, stages) {
+        Ok(result) => result,
+        Err(error) => {
+            session.native_context.clear_pagination();
+            return Err(error);
+        }
+    };
+    if show_pagination_hint {
+        add_native_pagination_hint(&mut result, &session.native_context);
+    }
+    Ok(result)
+}
+
+fn add_native_pagination_hint(result: &mut CliCommandResult, context: &NativeSessionContext) {
+    let Some(pagination) = context.pagination() else {
+        return;
+    };
+    let text = match (pagination.previous.is_some(), pagination.next.is_some()) {
+        (true, true) => {
+            "More results are available. Type `next` for the next page or `prev` for the previous page."
+        }
+        (false, true) => "More results are available. Type `next` for the next page.",
+        (true, false) => "Type `prev` for the previous page.",
+        (false, false) => return,
+    };
+    result.messages.success(text);
 }
 
 fn parse_external_invocation(
@@ -488,7 +534,7 @@ fn external_path_access_requirement(args: &[String]) -> ExternalPathAccessRequir
 #[cfg(test)]
 mod tests {
     use super::{
-        ExternalParse, is_help_passthrough, parse_external_invocation,
+        ExternalParse, add_native_pagination_hint, is_help_passthrough, parse_external_invocation,
         render_external_plugin_response, run_external_command_with_help_renderer,
         run_external_command_with_help_renderer_and_progress,
     };
@@ -508,7 +554,7 @@ mod tests {
     use crate::guide::GuideView;
     use crate::native::{
         NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
-        NativeProgressEvent,
+        NativePagination, NativeProgressEvent, NativeSessionContext,
     };
     use crate::plugin::PluginManager;
     use crate::ui::RenderSettings;
@@ -882,6 +928,33 @@ JSON
         let result =
             render_external_plugin_response(response, &[]).expect("response should prepare");
         assert!(!result.messages.is_empty());
+    }
+
+    #[test]
+    fn native_pagination_hint_describes_available_directions_unit() {
+        let context = NativeSessionContext::default();
+        let mut result = CliCommandResult::exit(0);
+        add_native_pagination_hint(&mut result, &context);
+        assert!(result.messages.is_empty());
+
+        context.set_pagination(NativePagination {
+            previous: None,
+            next: Some(vec!["orch".to_string()]),
+        });
+        add_native_pagination_hint(&mut result, &context);
+        assert_eq!(
+            result.messages.entries()[0].text,
+            "More results are available. Type `next` for the next page."
+        );
+
+        let mut result = CliCommandResult::exit(0);
+        context.set_pagination(NativePagination {
+            previous: Some(vec!["orch".to_string()]),
+            next: Some(vec!["orch".to_string()]),
+        });
+        add_native_pagination_hint(&mut result, &context);
+        assert!(result.messages.entries()[0].text.contains("`prev`"));
+        assert!(result.messages.entries()[0].text.contains("`next`"));
     }
 
     #[test]

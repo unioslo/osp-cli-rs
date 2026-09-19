@@ -15,8 +15,15 @@ pub(super) enum ReplBuiltin {
     Help,
     Exit,
     Last { raw: bool },
+    Pagination(PaginationDirection),
     Source(SourceCommand),
     Bang(BangCommand),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PaginationDirection {
+    Previous,
+    Next,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +63,9 @@ pub(super) fn execute_repl_builtin(
         )?)),
         ReplBuiltin::Exit => Ok(handle_repl_exit_request(session)),
         ReplBuiltin::Last { raw } => execute_last_result_builtin(runtime, session, raw),
+        ReplBuiltin::Pagination(direction) => {
+            execute_pagination_builtin(runtime, session, clients, history, direction, sink)
+        }
         ReplBuiltin::Source(command) => {
             execute_source_command(runtime, session, clients, history, command, sink)
         }
@@ -73,6 +83,12 @@ pub(super) fn parse_repl_builtin(raw: &str) -> Result<Option<ReplBuiltin>> {
     }
     if raw == "exit" || raw == "quit" {
         return Ok(Some(ReplBuiltin::Exit));
+    }
+    if raw == "next" {
+        return Ok(Some(ReplBuiltin::Pagination(PaginationDirection::Next)));
+    }
+    if raw == "prev" {
+        return Ok(Some(ReplBuiltin::Pagination(PaginationDirection::Previous)));
     }
     if let Some(raw) = parse_last_builtin(raw)? {
         return Ok(Some(ReplBuiltin::Last { raw }));
@@ -221,6 +237,46 @@ fn execute_source_command(
         }
     }
     Ok(ReplLineResult::Continue(String::new()))
+}
+
+fn execute_pagination_builtin(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    direction: PaginationDirection,
+    sink: &mut dyn UiSink,
+) -> Result<ReplLineResult> {
+    let Some(pagination) = session.native_context.pagination() else {
+        return Ok(ReplLineResult::Continue(
+            "No paginated result to continue. Run a paginated list command first.\n".to_string(),
+        ));
+    };
+
+    let command = match direction {
+        PaginationDirection::Previous => pagination.previous,
+        PaginationDirection::Next => pagination.next,
+    };
+    let Some(command) = command else {
+        let message = match direction {
+            PaginationDirection::Previous => "Already at the first page.\n",
+            PaginationDirection::Next => "Already at the last page.\n",
+        };
+        return Ok(ReplLineResult::Continue(message.to_string()));
+    };
+
+    // NativePagination stores tokenized argv. Re-encode it only at the REPL
+    // parser boundary, so a native command cannot smuggle shell syntax into
+    // the nested dispatch.
+    session.native_context.take_pagination();
+    let line = command
+        .iter()
+        .map(|argument| crate::core::shell_words::escape_for_shell(argument))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let executed =
+        super::execute_repl_plugin_line_with_sink(runtime, session, clients, history, &line, sink)?;
+    Ok(executed.result)
 }
 
 fn source_help() -> String {
@@ -394,7 +450,7 @@ pub(super) fn is_repl_bang_request(raw: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BangCommand, execute_repl_builtin, parse_repl_builtin};
+    use super::{BangCommand, PaginationDirection, execute_repl_builtin, parse_repl_builtin};
     use crate::app::{
         AppState, AppStateInit, LaunchContext, ReplCommandOutput, RuntimeContext,
         StructuredCommandOutput, TerminalKind,
@@ -402,11 +458,17 @@ mod tests {
     use crate::cli::rows::output::rows_to_output_result;
     use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
     use crate::core::output::OutputFormat;
+    use crate::native::{NativeCommand, NativeCommandContext, NativeCommandOutcome};
     use crate::repl::{HistoryConfig, ReplLineResult, SharedHistory};
     use crate::ui::RenderSettings;
     use crate::ui::messages::MessageLevel;
+    use clap::Command;
 
     fn app_state() -> AppState {
+        app_state_with_registry(crate::native::NativeCommandRegistry::default())
+    }
+
+    fn app_state_with_registry(native_commands: crate::native::NativeCommandRegistry) -> AppState {
         let mut defaults = ConfigLayer::default();
         defaults.set("profile.default", "default");
         defaults.set("repl.history.path", "/tmp/osp-repl-builtins-history.jsonl");
@@ -427,7 +489,7 @@ mod tests {
             plugins: crate::plugin::PluginManager::new(Vec::new())
                 .with_bundled_roots(false)
                 .with_default_roots(false),
-            native_commands: crate::native::NativeCommandRegistry::default(),
+            native_commands,
             themes: crate::ui::theme_catalog::ThemeCatalog::default(),
             launch: LaunchContext::default(),
         })
@@ -443,6 +505,25 @@ mod tests {
                 .with_shell_context(Default::default())
                 .build(),
         )
+    }
+
+    struct PageCommand;
+
+    impl NativeCommand for PageCommand {
+        fn command(&self) -> Command {
+            Command::new("page")
+        }
+
+        fn execute(
+            &self,
+            args: &[String],
+            _context: &NativeCommandContext<'_>,
+        ) -> anyhow::Result<NativeCommandOutcome> {
+            Ok(NativeCommandOutcome::Help(format!(
+                "page command received: {}",
+                args.join(" ")
+            )))
+        }
     }
 
     #[test]
@@ -463,6 +544,16 @@ mod tests {
         assert!(matches!(
             parse_repl_builtin("last --raw").expect("last raw"),
             Some(super::ReplBuiltin::Last { raw: true })
+        ));
+        assert!(matches!(
+            parse_repl_builtin("next").expect("next"),
+            Some(super::ReplBuiltin::Pagination(PaginationDirection::Next))
+        ));
+        assert!(matches!(
+            parse_repl_builtin("prev").expect("prev"),
+            Some(super::ReplBuiltin::Pagination(
+                PaginationDirection::Previous
+            ))
         ));
         assert!(matches!(
             parse_repl_builtin("!!").expect("bang"),
@@ -578,5 +669,104 @@ mod tests {
             .expect("last raw should succeed"),
             ReplLineResult::Continue(text) if text.contains("alice") && text.contains("admin")
         ));
+    }
+
+    #[test]
+    fn pagination_builtin_reports_missing_and_boundary_context_unit() {
+        let mut state = app_state();
+        let history = history();
+        let mut sink = crate::app::sink::BufferedUiSink::default();
+
+        let result = execute_repl_builtin(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "next",
+            parse_repl_builtin("next")
+                .expect("next should parse")
+                .expect("next should classify"),
+            &mut sink,
+        )
+        .expect("missing pagination should be handled");
+        assert!(matches!(
+            result,
+            ReplLineResult::Continue(text) if text.contains("Run a paginated list command first")
+        ));
+
+        state
+            .session
+            .native_context
+            .set_pagination(crate::native::NativePagination {
+                previous: None,
+                next: None,
+            });
+        let result = execute_repl_builtin(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "prev",
+            parse_repl_builtin("prev")
+                .expect("prev should parse")
+                .expect("prev should classify"),
+            &mut sink,
+        )
+        .expect("first-page boundary should be handled");
+        assert!(matches!(
+            result,
+            ReplLineResult::Continue(text) if text.contains("Already at the first page")
+        ));
+
+        let result = execute_repl_builtin(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "next",
+            parse_repl_builtin("next")
+                .expect("next should parse")
+                .expect("next should classify"),
+            &mut sink,
+        )
+        .expect("last-page boundary should be handled");
+        assert!(matches!(
+            result,
+            ReplLineResult::Continue(text) if text.contains("Already at the last page")
+        ));
+    }
+
+    #[test]
+    fn pagination_builtin_replays_only_the_trusted_native_argv_unit() {
+        let mut state = app_state_with_registry(
+            crate::native::NativeCommandRegistry::new().with_command(PageCommand),
+        );
+        let history = history();
+        let mut sink = crate::app::sink::BufferedUiSink::default();
+        state
+            .session
+            .native_context
+            .set_pagination(crate::native::NativePagination {
+                previous: None,
+                next: Some(vec!["page".to_string(), "next page".to_string()]),
+            });
+
+        let result = execute_repl_builtin(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "next",
+            parse_repl_builtin("next")
+                .expect("next should parse")
+                .expect("next should classify"),
+            &mut sink,
+        )
+        .expect("trusted continuation should dispatch");
+        assert!(matches!(
+            result,
+            ReplLineResult::Continue(text) if text.contains("page command received: next page")
+        ));
+        assert_eq!(state.session.native_context.pagination(), None);
     }
 }

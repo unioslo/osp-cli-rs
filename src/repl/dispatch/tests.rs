@@ -981,3 +981,45 @@ printf '%s\n' '{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":n
     .expect("cached external run should succeed");
     assert_eq!(cached.exit_code, 0);
 }
+
+#[test]
+fn repl_unrelated_lines_clear_native_pagination_context_unit() {
+    let mut state = make_state_with_plugins(empty_plugins());
+    let history = test_history();
+    state
+        .session
+        .native_context
+        .set_pagination(crate::native::NativePagination {
+            previous: None,
+            next: Some(vec!["trusted".to_string()]),
+        });
+
+    execute_repl_plugin_line(
+        &mut state.runtime,
+        &mut state.session,
+        &state.clients,
+        &history,
+        "help",
+    )
+    .expect("help should render");
+    assert_eq!(state.session.native_context.pagination(), None);
+
+    state
+        .session
+        .native_context
+        .set_pagination(crate::native::NativePagination {
+            previous: None,
+            next: Some(vec!["trusted".to_string()]),
+        });
+    assert!(
+        execute_repl_plugin_line(
+            &mut state.runtime,
+            &mut state.session,
+            &state.clients,
+            &history,
+            "not-a-real-command",
+        )
+        .is_err()
+    );
+    assert_eq!(state.session.native_context.pagination(), None);
+}

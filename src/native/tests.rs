@@ -1,6 +1,6 @@
 use super::{
     NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
-    NativeProgressEvent, NativeProgressSink, NativeSessionContext,
+    NativePagination, NativeProgressEvent, NativeProgressSink, NativeSessionContext,
 };
 use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions, ResolvedConfig};
 use crate::core::command_policy::CommandPath;
@@ -128,6 +128,43 @@ fn native_session_context_completion_refresh_request_is_one_shot_unit() {
 
     assert!(context.take_completion_refresh_request());
     assert!(!context.take_completion_refresh_request());
+}
+
+#[test]
+fn native_session_context_pagination_is_replaceable_and_clearable_unit() {
+    let context = NativeSessionContext::default();
+    assert_eq!(context.pagination(), None);
+
+    let first = NativePagination {
+        previous: None,
+        next: Some(vec![
+            "orch".to_string(),
+            "task".to_string(),
+            "list".to_string(),
+        ]),
+    };
+    context.set_pagination(first.clone());
+    assert_eq!(context.pagination(), Some(first));
+
+    let second = NativePagination {
+        previous: Some(vec![
+            "orch".to_string(),
+            "task".to_string(),
+            "list".to_string(),
+        ]),
+        next: None,
+    };
+    context.set_pagination(second.clone());
+    assert_eq!(context.pagination(), Some(second.clone()));
+    assert_eq!(context.take_pagination(), Some(second));
+    assert_eq!(context.pagination(), None);
+
+    context.set_pagination(NativePagination {
+        previous: None,
+        next: None,
+    });
+    context.clear_pagination();
+    assert_eq!(context.pagination(), None);
 }
 
 fn resolved_config() -> ResolvedConfig {

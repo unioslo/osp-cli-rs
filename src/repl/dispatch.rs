@@ -269,6 +269,9 @@ fn execute_repl_plugin_line_inner(
     line: &str,
     sink: &mut dyn UiSink,
 ) -> Result<ExecutedReplLine> {
+    if !matches!(line.trim(), "next" | "prev") {
+        session.native_context.clear_pagination();
+    }
     let plan = classify_repl_line(runtime, session, line)?;
     let parse_finished = Instant::now();
     execute_repl_line_plan(

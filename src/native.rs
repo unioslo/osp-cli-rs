@@ -164,6 +164,20 @@ pub struct NativePromptContextEntry {
     pub value: String,
 }
 
+/// Trusted REPL commands for moving between pages produced by a native
+/// command.
+///
+/// The host only accepts this context from native commands. Plugin responses
+/// cannot publish commands here, so a provider cannot make the REPL execute
+/// an arbitrary continuation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativePagination {
+    /// Tokenized command to run for the previous page, if one exists.
+    pub previous: Option<Vec<String>>,
+    /// Tokenized command to run for the next page, if one exists.
+    pub next: Option<Vec<String>>,
+}
+
 /// Session-scoped context shared between native commands and the REPL host.
 ///
 /// This is deliberately in-memory only. Native commands can retain small
@@ -173,6 +187,7 @@ pub struct NativePromptContextEntry {
 pub struct NativeSessionContext {
     values: Arc<RwLock<BTreeMap<String, String>>>,
     prompt_entries: Arc<RwLock<BTreeMap<String, NativePromptContextEntry>>>,
+    pagination: Arc<RwLock<Option<NativePagination>>>,
     completion_refresh_requested: Arc<AtomicBool>,
 }
 
@@ -182,6 +197,7 @@ impl fmt::Debug for NativeSessionContext {
             .debug_struct("NativeSessionContext")
             .field("values", &"[redacted]")
             .field("prompt_entries", &self.prompt_entries)
+            .field("pagination", &"[redacted]")
             .field(
                 "completion_refresh_requested",
                 &self.completion_refresh_requested,
@@ -237,6 +253,35 @@ impl NativeSessionContext {
             .read()
             .map(|entries| entries.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Replaces the trusted native-command pagination context for this REPL.
+    pub fn set_pagination(&self, pagination: NativePagination) {
+        if let Ok(mut current) = self.pagination.write() {
+            *current = Some(pagination);
+        }
+    }
+
+    /// Returns the current native-command pagination context, if any.
+    pub fn pagination(&self) -> Option<NativePagination> {
+        self.pagination
+            .read()
+            .ok()
+            .and_then(|current| current.clone())
+    }
+
+    /// Clears any native-command pagination context.
+    pub fn clear_pagination(&self) {
+        if let Ok(mut current) = self.pagination.write() {
+            *current = None;
+        }
+    }
+
+    pub(crate) fn take_pagination(&self) -> Option<NativePagination> {
+        self.pagination
+            .write()
+            .ok()
+            .and_then(|mut current| current.take())
     }
 
     /// Requests rebuilding the active REPL completion tree after execution.
