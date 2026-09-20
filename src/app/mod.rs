@@ -102,7 +102,7 @@ pub(crate) use bootstrap::*;
 pub(crate) use builtin::*;
 pub(crate) use command_output::*;
 pub(crate) use config_explain::{
-    ConfigExplainContext, config_explain_json, config_explain_result, config_value_to_json,
+    ConfigExplainContext, config_explain_json, config_explain_result, config_value_to_json_for_key,
     explain_runtime_config, format_scope, is_sensitive_key, push_missing_config_key_messages,
     render_config_explain_text,
 };

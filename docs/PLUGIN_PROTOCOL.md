@@ -77,7 +77,10 @@ Plugins are separate binaries discovered at runtime (Option B).
 
 Rules:
 - `protocol_version` must be exactly `1`.
-- `plugin_id` must be unique within discovery scope.
+- `plugin_id` must be unique within discovery scope and use lowercase ASCII
+  letters, digits, `-`, or `_`.
+- `env` is reserved for the shared plugin-config namespace and cannot be used
+  as a plugin ID.
 - `commands[].name` is the top-level command claimed by the plugin.
 - `commands[].name` must use lowercase ASCII letters, digits, `-`, or `_`.
 
@@ -191,6 +194,13 @@ Optional hints:
 
 Additional process env:
 - `OSP_COMMAND=<selected-top-level-command>`
+
+The host starts plugins with a deliberately small inherited environment:
+`PATH`, `HOME`, terminal/locale variables, `TMPDIR`, and the XDG config/data/
+cache roots. It then adds the normalized `OSP_*` runtime hints and the
+explicit `OSP_PLUGIN_CFG_*` values described below. Arbitrary variables from
+the host process are not forwarded implicitly; secrets must be configured in a
+documented plugin environment entry.
 
 ## Config-Driven Plugin Env
 

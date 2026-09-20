@@ -4,7 +4,7 @@ This document is about why the REPL is useful in practice.
 
 The short version is: the REPL does not invent a second command system. It
 reuses the same command path as one-shot `osp`, but keeps shell scope, history,
-cache, and session config alive between commands.
+last-result state, and session config alive between commands.
 
 Use the REPL when you are exploring, iterating, or repeatedly looking at the
 same backend data with different pipes and output formats. Use one-shot CLI
@@ -58,7 +58,6 @@ That includes:
 - `--format` and legacy format shorthands like `--json`
 - `-v/-q/-d`
 - `--plugin-provider`
-- `--cache` inside the REPL
 
 This is the main promise of the REPL: interactive shell on top, same command
 language underneath.
@@ -103,7 +102,7 @@ The REPL is useful because it keeps a few things alive across commands:
 - shell scope
 - history and history expansion
 - completion
-- cached command results
+- the last successful result for local replay and inspection
 - session-scoped config overrides
 
 That is the whole point. If you do not need those, a one-shot command is
@@ -143,24 +142,6 @@ nested-shell cases. It is not the primary user-facing model.
 
 Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned. They
 manage the shell rather than dispatching a normal command.
-
-## Cache And Repeated Inspection
-
-`--cache` is REPL-only. It reuses a successful provider-backed command result
-from the current session so you can keep changing pipes or output format
-without hitting the same backend again.
-
-```text
-inventory host web-01 --cache | P name owner
-inventory host web-01 --cache | P name
-inventory host web-01 --cache --format json
-```
-
-The second and third commands reuse the same command result and only re-run the
-local transform and render path.
-
-This is the highest-value REPL feature when you are exploring one dataset and
-want to ask several small questions about it.
 
 ## History And Completion
 
@@ -279,14 +260,12 @@ config set ui.presentation compact
 config set repl.simple_prompt true
 ```
 
-Do one external fetch, then keep slicing it locally:
+Inspect the most recent result, then keep slicing it locally:
 
 ```text
-inventory host web-01 --cache | P name owner
 last
 last --raw
-inventory host web-01 --cache | P name
-inventory host web-01 --cache --format json
+last --format json
 ```
 
 ## When Not To Use The REPL

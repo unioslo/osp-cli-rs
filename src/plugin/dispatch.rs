@@ -34,6 +34,18 @@ const ETXTBSY_RETRY_COUNT: usize = 5;
 const ETXTBSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 const ENV_OSP_COMMAND: &str = "OSP_COMMAND";
 const MAX_PLUGIN_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const INHERITED_PLUGIN_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TERM",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+];
 
 enum CommandRunError {
     Execute(std::io::Error),
@@ -189,6 +201,7 @@ impl PluginManager {
 
 pub(super) fn describe_plugin(path: &std::path::Path, timeout: Duration) -> Result<DescribeV1> {
     let mut command = Command::new(path);
+    configure_plugin_environment(&mut command);
     command.arg("--describe");
     let started_at = Instant::now();
     tracing::debug!(
@@ -292,6 +305,7 @@ pub(super) fn run_provider(
     }
 
     let mut command = Command::new(&provider.executable);
+    configure_plugin_environment(&mut command);
     let started_at = Instant::now();
     tracing::debug!(
         plugin_id = %provider.plugin_id,
@@ -411,6 +425,15 @@ fn run_command_with_timeout(
                 });
             }
             Err(source) => return Err(CommandRunError::Execute(source)),
+        }
+    }
+}
+
+fn configure_plugin_environment(command: &mut Command) {
+    command.env_clear();
+    for key in INHERITED_PLUGIN_ENV {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
         }
     }
 }

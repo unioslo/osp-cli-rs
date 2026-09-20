@@ -113,7 +113,7 @@ pub(crate) fn build_repl_surface(
     if shows_invocation_options_overview(help_level) {
         overview_entries.push(ReplOverviewEntry {
             name: "options".to_string(),
-            summary: "per invocation: --format/--guide/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --cache, --plugin-provider".to_string(),
+            summary: "per invocation: --format/--guide/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --plugin-provider".to_string(),
         });
     }
 

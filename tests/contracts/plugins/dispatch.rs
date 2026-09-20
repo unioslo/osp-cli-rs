@@ -103,6 +103,34 @@ extensions.plugins.cfg.env.retries = 3
 
 #[cfg(unix)]
 #[test]
+fn plugin_dispatch_uses_an_explicit_environment_boundary_contract() {
+    let dir = make_temp_dir("osp-cli-plugin-env-boundary");
+    let _plugin_path = write_env_boundary_plugin(&dir);
+    let home = make_temp_dir("osp-cli-plugin-env-boundary-home");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let output = cmd
+        .envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/tmp/parent-secret-path")
+        .env("OSP_PASSWORD", "synthetic-password")
+        .env("OSP_MFA_TOKEN", "synthetic-mfa")
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "env-boundary"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let payload = parse_json_stdout(&output.stdout);
+    let row = first_json_row(&payload, "plugin environment boundary");
+    assert_eq!(row["password"], "");
+    assert_eq!(row["mfa"], "");
+    assert_eq!(row["path"], "/tmp/parent-secret-path");
+    assert!(output.stderr.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn plugin_non_zero_exit_surfaces_stderr_contract() {
     let dir = make_temp_dir("osp-cli-plugin-non-zero-exit");
     let _plugin_path = write_non_zero_plugin(&dir);

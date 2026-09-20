@@ -26,13 +26,14 @@ use crate::repl::is_repl_shellable_command;
 
 use super::dispatch::{
     ExternalCommandSource, ExternalPathAccessRequirement, canonical_external_command_name,
-    ensure_external_path_access, resolve_external_command_source,
+    ensure_external_path_access, ensure_external_path_access_with_policy,
+    resolve_external_command_source,
 };
 use super::sink::UiSink;
 use super::{
-    CMD_HELP, CliCommandResult, ResolvedInvocation, cli_result_from_plugin_response,
-    enrich_dispatch_error, plugin_dispatch_context_for, run_cli_command_with_ui,
-    run_inline_builtin_command, runtime_hints_for_invocation,
+    CliCommandResult, ResolvedInvocation, cli_result_from_plugin_response, enrich_dispatch_error,
+    plugin_dispatch_context_for, run_cli_command_with_ui, run_inline_builtin_command,
+    runtime_hints_for_invocation,
 };
 
 pub(super) struct ExternalCommandRuntime<'a> {
@@ -158,35 +159,39 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
             let description = native_command.describe();
             let path = description.resolved_subcommand_path(args);
             let invocation_ends_at_command = args.len() + 1 == path.as_slice().len();
-            if described_path_has_subcommands(&description, &path) || invocation_ends_at_command {
-                match native_command.command().try_get_matches_from(
-                    std::iter::once(command.clone()).chain(args.iter().cloned()),
+            let native_parse = native_command
+                .command()
+                .try_get_matches_from(std::iter::once(command.clone()).chain(args.iter().cloned()));
+            if let Err(err) = native_parse {
+                if matches!(
+                    err.kind(),
+                    clap::error::ErrorKind::DisplayHelp
+                        | clap::error::ErrorKind::DisplayVersion
+                        | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                        | clap::error::ErrorKind::MissingSubcommand
                 ) {
-                    Ok(_) => {}
-                    Err(err)
-                        if matches!(
-                            err.kind(),
-                            clap::error::ErrorKind::DisplayHelp
-                                | clap::error::ErrorKind::DisplayVersion
-                                | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-                                | clap::error::ErrorKind::MissingSubcommand
-                        ) =>
-                    {
-                        return Ok(CliCommandResult::guide(guide_help(&err.to_string())));
-                    }
-                    Err(err) => {
-                        return Err(crate::app::report_std_error_with_context(
-                            err,
-                            "native command syntax is invalid",
-                        ));
-                    }
+                    ensure_external_path_access(
+                        runtime,
+                        session,
+                        &path,
+                        ExternalPathAccessRequirement::Visible,
+                        "command",
+                    )?;
+                    return Ok(CliCommandResult::guide(guide_help(&err.to_string())));
+                }
+                if described_path_has_subcommands(&description, &path) || invocation_ends_at_command
+                {
+                    return Err(crate::app::report_std_error_with_context(
+                        err,
+                        "native command syntax is invalid",
+                    ));
                 }
             }
             ensure_external_path_access(
                 runtime,
                 session,
                 &path,
-                external_path_access_requirement(args),
+                ExternalPathAccessRequirement::Runnable,
                 "command",
             )?;
             run_native_command(
@@ -456,19 +461,21 @@ fn run_external_plugin_command(
         .tokens
         .split_first()
         .ok_or_else(|| miette!("missing external command"))?;
-    let (path, dispatch_policy) = clients.plugins().resolved_command_path_and_policy(
-        command,
-        args,
-        invocation.plugin_provider.as_deref(),
-    );
-    runtime_state.auth.overlay_external_policy(dispatch_policy);
-    let access_requirement = external_path_access_requirement(args);
-    ensure_external_path_access(
+    let (path, dispatch_policy, help_requested) = clients
+        .plugins()
+        .resolved_command_path_and_policy(command, args, invocation.plugin_provider.as_deref());
+    let access_requirement = if help_requested {
+        ExternalPathAccessRequirement::Visible
+    } else {
+        ExternalPathAccessRequirement::Runnable
+    };
+    ensure_external_path_access_with_policy(
         runtime_state,
         session,
         &path,
         access_requirement,
         "plugin command",
+        &dispatch_policy,
     )?;
     let runtime = ExternalCommandRuntime::from_parts(runtime_state, clients);
 
@@ -511,30 +518,10 @@ fn render_external_plugin_response(
     cli_result_from_plugin_response(response, stages)
 }
 
-pub(crate) fn is_help_passthrough(args: &[String]) -> bool {
-    if args.is_empty() {
-        return false;
-    }
-
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        return true;
-    }
-
-    matches!(args.first(), Some(first) if first == CMD_HELP)
-}
-
-fn external_path_access_requirement(args: &[String]) -> ExternalPathAccessRequirement {
-    if is_help_passthrough(args) {
-        ExternalPathAccessRequirement::Visible
-    } else {
-        ExternalPathAccessRequirement::Runnable
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        ExternalParse, add_native_pagination_hint, is_help_passthrough, parse_external_invocation,
+        ExternalParse, add_native_pagination_hint, parse_external_invocation,
         render_external_plugin_response, run_external_command_with_help_renderer,
         run_external_command_with_help_renderer_and_progress,
     };
@@ -820,11 +807,7 @@ mod tests {
             args: &[String],
             _context: &NativeCommandContext<'_>,
         ) -> anyhow::Result<NativeCommandOutcome> {
-            if super::is_help_passthrough(args) {
-                return Ok(NativeCommandOutcome::Help(
-                    "Usage: osp ldap user <UID>".to_string(),
-                ));
-            }
+            let _ = args;
             panic!("nested-auth native command should not execute when auth denies it")
         }
     }
@@ -955,21 +938,6 @@ JSON
         add_native_pagination_hint(&mut result, &context);
         assert!(result.messages.entries()[0].text.contains("`prev`"));
         assert!(result.messages.entries()[0].text.contains("`next`"));
-    }
-
-    #[test]
-    fn help_passthrough_detection_covers_flags_and_help_subcommand_unit() {
-        assert!(!is_help_passthrough(&[]));
-        assert!(is_help_passthrough(&["--help".to_string()]));
-        assert!(is_help_passthrough(&[
-            "topic".to_string(),
-            "-h".to_string()
-        ]));
-        assert!(is_help_passthrough(&["help".to_string()]));
-        assert!(!is_help_passthrough(&[
-            "ldap".to_string(),
-            "user".to_string()
-        ]));
     }
 
     #[test]

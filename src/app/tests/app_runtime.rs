@@ -110,6 +110,10 @@ impl crate::NativeCommand for CompletionRefreshingNativeCommand {
 struct AuthenticatedBuiltinRecovery;
 
 impl crate::app::CommandAccessRecovery for AuthenticatedBuiltinRecovery {
+    fn refresh(&self, _runtime: &mut crate::app::AppRuntime) -> miette::Result<()> {
+        Ok(())
+    }
+
     fn try_recover(
         &self,
         request: &crate::app::AccessRecoveryRequest,
@@ -915,18 +919,6 @@ fn app_session_cache_helpers_cover_public_session_surface_unit() {
             .summary,
         "boom"
     );
-
-    let cached = StructuredCommandOutput {
-        source_guide: None,
-        output: rows_to_output_result(vec![crate::row! { "value" => "cached" }]),
-        format_hint: None,
-    };
-    session.record_cached_command("   ", &cached);
-    assert!(session.cached_command("missing").is_none());
-    session.record_cached_command("ldap user alice", &cached);
-    session.record_cached_command("ldap user bob", &cached);
-    assert!(session.cached_command("ldap user alice").is_none());
-    assert!(session.cached_command("ldap user bob").is_some());
 
     session.record_prompt_timing(1, std::time::Duration::from_millis(10), None, None, None);
     assert!(session.prompt_timing.badge().is_some());

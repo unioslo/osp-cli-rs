@@ -339,6 +339,7 @@ pub trait NativeCommand: Send + Sync {
     fn describe(&self) -> DescribeCommandV1 {
         let mut describe = DescribeCommandV1::from_clap(self.command());
         describe.auth = self.auth();
+        describe.inherit_auth_from_parents();
         describe
     }
 
@@ -533,7 +534,8 @@ impl NativeCommandRegistry {
         self.commands
             .values()
             .map(|command| {
-                let describe = command.describe();
+                let mut describe = command.describe();
+                describe.inherit_auth_from_parents();
                 let mut completion = crate::plugin::conversion::to_command_spec(&describe);
                 if augment_completion {
                     command.augment_completion(&mut completion);
@@ -553,7 +555,8 @@ impl NativeCommandRegistry {
     pub fn command_policy_registry(&self) -> CommandPolicyRegistry {
         let mut registry = CommandPolicyRegistry::new();
         for command in self.commands.values() {
-            let describe = command.describe();
+            let mut describe = command.describe();
+            describe.inherit_auth_from_parents();
             register_describe_command_policies(&mut registry, &describe, &[]);
         }
         registry

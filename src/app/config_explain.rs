@@ -68,11 +68,8 @@ pub(crate) fn config_explain_result(
     )))
 }
 
-pub(crate) fn config_value_to_json(value: &ConfigValue) -> serde_json::Value {
-    if value.is_secret() {
-        return "[REDACTED]".into();
-    }
-    config_value_to_json_exposed(value)
+pub(crate) fn config_value_to_json_for_key(key: &str, value: &ConfigValue) -> serde_json::Value {
+    redact_value_json(key, value, false)
 }
 
 fn config_value_to_json_exposed(value: &ConfigValue) -> serde_json::Value {
@@ -196,11 +193,7 @@ pub(crate) fn render_config_explain_text(
         out.push_str("interpolation:\n");
         out.push_str(&format!(
             "  template: {}\n",
-            display_value(
-                &explain.key,
-                &ConfigValue::String(interpolation.template.clone()),
-                show_secrets
-            )
+            display_value(&explain.key, &interpolation.template, show_secrets)
         ));
         for step in &interpolation.steps {
             out.push_str(&format!(
@@ -313,11 +306,7 @@ pub(crate) fn config_explain_json(
         let mut section = serde_json::Map::new();
         section.insert(
             "template".to_string(),
-            redact_value_json(
-                &explain.key,
-                &ConfigValue::String(interpolation.template.clone()),
-                show_secrets,
-            ),
+            redact_value_json(&explain.key, &interpolation.template, show_secrets),
         );
         let mut steps = Vec::new();
         for step in &interpolation.steps {
@@ -477,19 +466,7 @@ fn display_value(key: &str, value: &ConfigValue, show_secrets: bool) -> String {
 }
 
 pub(crate) fn is_sensitive_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase();
-    normalized.contains("password")
-        || normalized.contains("token")
-        || normalized.contains("secret")
-        || normalized.contains("apikey")
-        || normalized.contains("api_key")
-        || normalized.contains("access_key")
-        || normalized.contains("private_key")
-        || normalized.contains("ssh_key")
-        || normalized.contains("client_secret")
-        || normalized.contains("bearer")
-        || normalized.contains("jwt")
-        || normalized.ends_with(".key")
+    crate::config::is_sensitive_key(key)
 }
 
 pub(crate) fn format_scope(scope: &crate::config::Scope) -> String {
@@ -701,7 +678,7 @@ mod tests {
                 origin: Some("secrets.toml".to_string()),
             }),
             interpolation: Some(ExplainInterpolation {
-                template: "${auth.api_token}".to_string(),
+                template: ConfigValue::String("${auth.api_token}".to_string()),
                 steps: vec![ExplainInterpolationStep {
                     placeholder: "auth.api_token".to_string(),
                     raw_value: ConfigValue::String("secret-token".to_string()).into_secret(),

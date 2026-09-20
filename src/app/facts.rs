@@ -8,6 +8,7 @@
 
 use crate::config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
 use crate::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
+use crate::plugin::config::config_value_to_plugin_env;
 use crate::plugin::{DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext};
 use crate::ui::RenderRuntime;
 use crate::ui::messages::MessageLevel;
@@ -145,7 +146,12 @@ fn build_plugin_dispatch_context(
             .shared
             .iter()
             .filter(|entry| entry.issue.is_none())
-            .map(|entry| (entry.env_key.clone(), entry.value.clone()))
+            .map(|entry| {
+                (
+                    entry.env_key.clone(),
+                    config_value_to_plugin_env(&entry.value),
+                )
+            })
             .collect::<Vec<_>>(),
     )
     .with_shared_env_issues(shared_env_issues)
@@ -160,7 +166,7 @@ fn build_plugin_dispatch_context(
                     entries
                         .into_iter()
                         .filter(|entry| entry.issue.is_none())
-                        .map(|entry| (entry.env_key, entry.value))
+                        .map(|entry| (entry.env_key, config_value_to_plugin_env(&entry.value)))
                         .collect(),
                 )
             })

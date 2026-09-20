@@ -15,6 +15,7 @@ use crate::config::{
 };
 use crate::core::plugin::canonical_plugin_command_name;
 use crate::core::row::Row;
+use crate::plugin::config::plugin_config_value_for_display;
 use crate::plugin::{
     CommandCatalogEntry, DoctorReport, PluginManager, PluginSummary, state::PluginCommandState,
 };
@@ -513,7 +514,7 @@ fn plugin_config_rows(plugin_id: &str, entries: &[crate::app::PluginConfigEntry]
             crate::row! {
                 "plugin_id" => plugin_id.to_string(),
                 "env" => entry.env_key.clone(),
-                "value" => entry.value.clone(),
+                "value" => plugin_config_value_for_display(entry),
                 "config_key" => entry.config_key.clone(),
                 "scope" => scope,
                 "issue" => entry
@@ -565,6 +566,7 @@ mod tests {
         plugin_list_rows,
     };
     use crate::app::PluginConfigEntry;
+    use crate::config::ConfigValue;
     use crate::core::plugin::{
         DescribeAuthStrengthV1, DescribeCommandAuthV1, DescribeCredentialRequirementV1,
         DescribeSessionRequirementsV1, DescribeVisibilityModeV1,
@@ -672,14 +674,14 @@ mod tests {
             &[
                 PluginConfigEntry {
                     env_key: "OSP_SHARED_TOKEN".to_string(),
-                    value: "1".to_string(),
+                    value: ConfigValue::String("1".to_string()),
                     config_key: "extensions.demo.token".to_string(),
                     scope: crate::app::PluginConfigScope::Shared,
                     issue: None,
                 },
                 PluginConfigEntry {
                     env_key: "OSP_PLUGIN_FLAG".to_string(),
-                    value: "2".to_string(),
+                    value: ConfigValue::String("2".to_string()),
                     config_key: "extensions.plugins.demo.flag".to_string(),
                     scope: crate::app::PluginConfigScope::Plugin,
                     issue: None,

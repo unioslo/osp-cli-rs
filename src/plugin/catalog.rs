@@ -12,7 +12,7 @@ use super::manager::{CommandCatalogEntry, CommandConflict, DoctorReport, PluginS
 use super::selection::{ProviderResolution, ProviderSelectionMode, plugin_enabled, plugin_label};
 use crate::completion::CommandSpec;
 use crate::core::command_policy::{CommandPath, CommandPolicyRegistry};
-use crate::core::plugin::DescribeCommandV1;
+use crate::core::plugin::{DescribeCommandAuthV1, DescribeCommandV1};
 
 pub(crate) fn list_plugins(view: &ActivePluginView<'_>) -> Vec<PluginSummary> {
     view.discovered()
@@ -217,14 +217,24 @@ pub(crate) fn register_describe_command_policies(
     command: &DescribeCommandV1,
     prefix: &[String],
 ) {
+    register_describe_command_policies_with_parent(registry, command, prefix, None);
+}
+
+fn register_describe_command_policies_with_parent(
+    registry: &mut CommandPolicyRegistry,
+    command: &DescribeCommandV1,
+    prefix: &[String],
+    parent_auth: Option<&DescribeCommandAuthV1>,
+) {
     let mut segments = prefix.to_vec();
     segments.push(command.name.clone());
     let path = CommandPath::new(segments.clone());
-    if let Some(policy) = command.command_policy(path) {
-        registry.register(policy);
+    let auth = command.auth.as_ref().or(parent_auth);
+    if let Some(auth) = auth {
+        registry.register(DescribeCommandV1::command_policy_for_auth(path, auth));
     }
     for subcommand in &command.subcommands {
-        register_describe_command_policies(registry, subcommand, &segments);
+        register_describe_command_policies_with_parent(registry, subcommand, &segments, auth);
     }
 }
 

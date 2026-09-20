@@ -1,6 +1,5 @@
 use super::command_output::{
-    CommandRenderRuntime, StructuredCommandOutput, apply_output_stages, parse_output_format_hint,
-    run_cli_command,
+    CommandRenderRuntime, apply_output_stages, parse_output_format_hint, run_cli_command,
 };
 use super::help::parse_help_render_overrides;
 use super::{
@@ -20,7 +19,6 @@ use crate::app::sink::BufferedUiSink;
 use crate::app::{AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
 use crate::cli::commands::doctor as doctor_cmd;
 use crate::cli::invocation::{InvocationOptions, scan_cli_argv};
-use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{Cli, Commands, ConfigCommands, PluginsCommands, ThemeCommands};
 use crate::config::{ConfigLayer, ConfigResolver, ConfigValue, ResolveOptions, RuntimeLoadOptions};
 use crate::core::command_policy::{CommandPath, VisibilityMode};

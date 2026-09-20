@@ -3,11 +3,11 @@ use std::path::PathBuf;
 
 use super::{
     BangCommand, ReplLinePlanKind, classify_repl_line_kind, command_side_effects,
-    config_key_change_requires_intro, current_history_scope, enter_repl_shell,
-    execute_bang_command, execute_repl_plugin_line, finalize_repl_command,
-    handle_repl_exit_request, is_repl_bang_request, leave_repl_shell, parse_bang_command,
-    parse_clap_help, parse_repl_builtin, render_repl_command_output, repl_command_spec,
-    repl_help_for_scope, run_repl_command, strip_history_scope,
+    config_key_change_requires_intro, current_history_scope, execute_bang_command,
+    execute_repl_plugin_line, finalize_repl_command, handle_repl_exit_request,
+    is_repl_bang_request, leave_repl_shell, parse_bang_command, parse_clap_help,
+    parse_repl_builtin, render_repl_command_output, repl_command_spec, repl_help_for_scope,
+    run_repl_command, strip_history_scope,
 };
 use crate::app::{AppSession, AppState, AppStateInit, LaunchContext, RuntimeContext, TerminalKind};
 use crate::app::{CliCommandResult, ReplCommandOutput, StructuredCommandOutput};
@@ -568,7 +568,6 @@ fn intro_pipeline_keeps_filtered_guide_structure_unit() {
         Commands::Intro(IntroArgs::default()),
         &invocation,
         &test_history(),
-        None,
     )
     .expect("intro command should succeed");
 
@@ -762,7 +761,6 @@ fn intro_value_pipeline_prefers_matching_entry_content_unit() {
         Commands::Intro(IntroArgs::default()),
         &invocation,
         &test_history(),
-        None,
     )
     .expect("intro command should succeed");
 
@@ -800,7 +798,6 @@ fn theme_show_value_pipeline_renders_selected_field_rhs_unit() {
         }),
         &invocation,
         &test_history(),
-        None,
     )
     .expect("theme show should succeed");
 
@@ -885,101 +882,6 @@ fn render_repl_command_output_handles_text_none_and_stderr_unit() {
     )
     .expect("empty result should render");
     assert!(empty.is_empty());
-}
-
-#[cfg(unix)]
-#[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
-#[test]
-fn shell_entry_help_and_repl_command_cache_paths_cover_external_flow_unit() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let root = crate::tests::make_temp_dir("osp-cli-repl-dispatch");
-    let plugins_dir = root.join("plugins");
-    std::fs::create_dir_all(&plugins_dir).expect("plugin dir should be created");
-    let plugin_path = plugins_dir.join("osp-cache");
-    std::fs::write(
-        &plugin_path,
-        r#"#!/bin/sh
-PATH=/usr/bin:/bin:$PATH
-if [ "$1" = "--describe" ]; then
-  printf '%s\n' '{"protocol_version":1,"plugin_id":"cache","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"cache","about":"cache plugin","args":[],"flags":{},"subcommands":[]}]}'
-  exit 0
-fi
-printf '%s\n' '{"protocol_version":1,"ok":true,"data":{"message":"ok"},"error":null,"meta":{"format_hint":"table","columns":["message"]}}'
-"#,
-    )
-    .expect("plugin script should be written");
-    let mut perms = std::fs::metadata(&plugin_path)
-        .expect("plugin metadata should be readable")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
-
-    let mut state =
-        make_state_with_plugins(crate::plugin::PluginManager::new(vec![plugins_dir.clone()]));
-    let invocation = super::base_repl_invocation(&state.runtime);
-    let mut sink = crate::app::sink::BufferedUiSink::default();
-
-    let entered = enter_repl_shell(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        "cache",
-        &invocation,
-        &mut sink,
-    )
-    .expect("shell entry should succeed");
-    assert!(entered.contains("Entering cache shell"));
-    assert!(!state.session.scope.is_root());
-
-    let nested_help = repl_help_for_scope(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        &invocation,
-    )
-    .expect("nested help should render");
-    assert!(!nested_help.is_empty());
-
-    let first = run_repl_command(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        Commands::External(vec!["cache".to_string()]),
-        &invocation,
-        &SharedHistory::new(
-            HistoryConfig::builder()
-                .with_max_entries(8)
-                .with_enabled(true)
-                .with_dedupe(true)
-                .with_profile_scoped(false)
-                .with_shell_context(Default::default())
-                .build(),
-        ),
-        Some("cache-key"),
-    )
-    .expect("first external run should succeed");
-    assert_eq!(first.exit_code, 0);
-
-    let cached = run_repl_command(
-        &mut state.runtime,
-        &mut state.session,
-        &state.clients,
-        Commands::External(vec!["cache".to_string()]),
-        &invocation,
-        &SharedHistory::new(
-            HistoryConfig::builder()
-                .with_max_entries(8)
-                .with_enabled(true)
-                .with_dedupe(true)
-                .with_profile_scoped(false)
-                .with_shell_context(Default::default())
-                .build(),
-        ),
-        Some("cache-key"),
-    )
-    .expect("cached external run should succeed");
-    assert_eq!(cached.exit_code, 0);
 }
 
 #[test]

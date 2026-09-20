@@ -89,7 +89,6 @@ CLI, such as:
 - `--quiet`
 - `--debug`
 - `--plugin-provider`
-- `--cache`
 
 Parsing also accepts short forms like `-v/-q/-d`, but completion suggestions
 use the long names.

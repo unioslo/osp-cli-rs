@@ -25,7 +25,6 @@ pub(super) struct ParsedReplInvocation {
     pub(super) command: Commands,
     pub(super) effective: ResolvedInvocation,
     pub(super) stages: Vec<String>,
-    pub(super) cache_key: Option<String>,
     pub(super) side_effects: CommandSideEffects,
 }
 
@@ -182,7 +181,6 @@ pub(super) fn parse_repl_invocation(
 
     Ok(ParsedReplDispatch::Invocation(Box::new(
         ParsedReplInvocation {
-            cache_key: repl_cache_key_for_command(runtime, &command, &scanned.invocation),
             effective,
             side_effects: command_side_effects(&command),
             command,
@@ -301,44 +299,6 @@ fn line_end_offset(lines: &[&str], line_count: usize) -> usize {
     offset
 }
 
-fn repl_cache_key_for_command(
-    runtime: &AppRuntime,
-    command: &Commands,
-    invocation: &crate::cli::invocation::InvocationOptions,
-) -> Option<String> {
-    if !invocation.cache {
-        return None;
-    }
-
-    let Commands::External(tokens) = command else {
-        return None;
-    };
-
-    let provider = invocation.plugin_provider.as_deref().unwrap_or_default();
-
-    // Cache entries are tied to config revision and active profile so REPL
-    // `--cache` never replays output across theme/profile/provider changes that
-    // could make the command semantically different.
-    Some(format!(
-        "rev:{}|profile:{}|provider:{}|tokens:{}",
-        runtime.config.revision(),
-        runtime.config.resolved().active_profile(),
-        provider,
-        encode_cache_key_tokens(tokens)
-    ))
-}
-
-fn encode_cache_key_tokens(tokens: &[String]) -> String {
-    let mut encoded = String::new();
-    for token in tokens {
-        encoded.push_str(&token.len().to_string());
-        encoded.push(':');
-        encoded.push_str(token);
-        encoded.push('|');
-    }
-    encoded
-}
-
 pub(super) fn command_side_effects(command: &Commands) -> CommandSideEffects {
     repl_command_behavior(command).side_effects
 }
@@ -403,7 +363,6 @@ pub(super) fn execute_repl_command_dispatch(
                 command,
                 effective,
                 stages,
-                cache_key,
                 side_effects,
             } = *invocation;
             let history = history.ok_or_else(|| {
@@ -417,7 +376,6 @@ pub(super) fn execute_repl_command_dispatch(
                 ReplRunInput {
                     command,
                     invocation: &effective,
-                    cache_key: cache_key.as_deref(),
                     progress_sink: Some(sink),
                 },
             )?;
@@ -441,10 +399,9 @@ pub(super) fn execute_repl_command_dispatch(
     }
 }
 
-struct ReplRunInput<'invocation, 'cache, 'sink> {
+struct ReplRunInput<'invocation, 'sink> {
     command: Commands,
     invocation: &'invocation ResolvedInvocation,
-    cache_key: Option<&'cache str>,
     progress_sink: Option<&'sink mut dyn UiSink>,
 }
 
@@ -453,15 +410,8 @@ fn run_repl_command_with_progress(
     session: &mut AppSession,
     clients: &AppClients,
     history: &SharedHistory,
-    input: ReplRunInput<'_, '_, '_>,
+    input: ReplRunInput<'_, '_>,
 ) -> Result<crate::app::CliCommandResult> {
-    if let Some(cache_key) = input.cache_key
-        && let Some(cached) = session.cached_command(cache_key)
-    {
-        tracing::trace!(cache_key = %cache_key, "REPL command cache hit");
-        return Ok(cached);
-    }
-
     let result = match input.command {
         Commands::External(tokens) => run_repl_external_command_with_progress(
             runtime,
@@ -480,14 +430,6 @@ fn run_repl_command_with_progress(
             builtin,
         ),
     }?;
-
-    if let Some(cache_key) = input.cache_key
-        && result.exit_code == 0
-        && let Some(crate::app::ReplCommandOutput::Output(output)) = result.output.as_ref()
-    {
-        tracing::trace!(cache_key = %cache_key, "REPL command cached");
-        session.record_cached_command(cache_key, output.as_ref());
-    }
 
     Ok(result)
 }
@@ -526,7 +468,6 @@ pub(super) fn run_repl_command(
     command: Commands,
     invocation: &ResolvedInvocation,
     history: &SharedHistory,
-    cache_key: Option<&str>,
 ) -> Result<crate::app::CliCommandResult> {
     run_repl_command_with_progress(
         runtime,
@@ -536,7 +477,6 @@ pub(super) fn run_repl_command(
         ReplRunInput {
             command,
             invocation,
-            cache_key,
             progress_sink: None,
         },
     )

@@ -25,11 +25,10 @@ pub(crate) const INVOCATION_HELP_SECTION: &str = r#"Common Invocation Options:
   -v, --verbose                             Increase message verbosity
   -q, --quiet                               Decrease message verbosity
   -d, --debug                               Increase developer log verbosity
-  --cache                                   Reuse identical result in this REPL session
   --plugin-provider <PLUGIN_ID>             Select provider for this invocation
 
 These flags may appear anywhere before `--` and affect only the current command.
-`--cache` is available only inside the interactive REPL."#;
+"#;
 
 const INVOCATION_COMPLETION_FLAGS: &[&str] = &[
     "--format",
@@ -48,7 +47,6 @@ const INVOCATION_COMPLETION_FLAGS: &[&str] = &[
     "--verbose",
     "--quiet",
     "--debug",
-    "--cache",
     "--plugin-provider",
 ];
 
@@ -67,7 +65,6 @@ pub(crate) struct InvocationOptions {
     pub(crate) verbose: u8,
     pub(crate) quiet: u8,
     pub(crate) debug: u8,
-    pub(crate) cache: bool,
     pub(crate) plugin_provider: Option<String>,
 }
 
@@ -180,12 +177,6 @@ pub(crate) fn scan_command_tokens_with_trace(
 
         if token == "--debug" {
             invocation.debug = invocation.debug.saturating_add(1);
-            index += 1;
-            continue;
-        }
-
-        if token == "--cache" {
-            invocation.cache = true;
             index += 1;
             continue;
         }
@@ -351,9 +342,6 @@ pub(crate) fn hidden_invocation_completion_flags(
                 .iter()
                 .map(|flag| (*flag).to_string()),
         );
-    }
-    if invocation.cache {
-        hidden.insert("--cache".to_string());
     }
     if invocation.plugin_provider.is_some() {
         hidden.insert("--plugin-provider".to_string());
@@ -542,7 +530,6 @@ mod tests {
                 verbose: 2,
                 quiet: 0,
                 debug: 0,
-                cache: false,
                 plugin_provider: Some("uio-ldap".to_string()),
             }
         );
@@ -550,10 +537,6 @@ mod tests {
         let passthrough = scan(&["ldap", "--", "--json", "-vv"]);
         assert_eq!(passthrough.tokens, vec!["ldap", "--", "--json", "-vv"]);
         assert_eq!(passthrough.invocation, InvocationOptions::default());
-
-        let cache = scan(&["ldap", "user", "alice", "--cache"]);
-        assert_eq!(cache.tokens, vec!["ldap", "user", "alice"]);
-        assert!(cache.invocation.cache);
 
         let non_host_short = scan(&["ldap", "-x", "--json", "alice"]);
         assert_eq!(non_host_short.tokens, vec!["ldap", "-x", "alice"]);
@@ -658,8 +641,6 @@ mod tests {
                 .iter()
                 .any(|entry| entry.name.contains("--json"))
         );
-        assert!(INVOCATION_HELP_SECTION.contains("--cache"));
-        assert!(INVOCATION_HELP_SECTION.contains("interactive REPL"));
         assert!(INVOCATION_HELP_SECTION.contains("--guide"));
         assert!(INVOCATION_HELP_SECTION.contains("guide|json|table"));
 
@@ -694,7 +675,6 @@ mod tests {
         let used_one_shots = hidden_invocation_completion_flags(&InvocationOptions {
             verbose: 1,
             format: Some(OutputFormat::Json),
-            cache: true,
             plugin_provider: Some("ldap".to_string()),
             ..InvocationOptions::default()
         });
@@ -702,7 +682,6 @@ mod tests {
         assert!(used_one_shots.contains("--guide"));
         assert!(used_one_shots.contains("--json"));
         assert!(used_one_shots.contains("--table"));
-        assert!(used_one_shots.contains("--cache"));
         assert!(used_one_shots.contains("--plugin-provider"));
         assert!(!used_one_shots.contains("--debug"));
 

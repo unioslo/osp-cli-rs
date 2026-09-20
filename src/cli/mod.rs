@@ -21,7 +21,7 @@
 //! clap grammar for builtins and shared flags
 //!      │
 //!      ├── [ invocation ] one-shot execution/render flags (`--format`, `-v`,
-//!      │                  `--cache`, `--plugin-provider`, ...)
+//!      │                  `--plugin-provider`, ...)
 //!      ├── [ pipeline ]   alias-aware command token parsing plus DSL stages
 //!      └── [ commands ]   built-in command handlers once parsing is complete
 //!      │

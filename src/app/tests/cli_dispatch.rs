@@ -64,7 +64,6 @@ fn invocation_ui_and_format_hints_overlay_runtime_defaults_unit() {
         verbose: 2,
         quiet: 1,
         debug: 3,
-        cache: false,
         plugin_provider: Some("beta".to_string()),
     };
 
@@ -92,17 +91,6 @@ fn invocation_ui_and_format_hints_overlay_runtime_defaults_unit() {
         Some(OutputFormat::Table),
     );
     assert_eq!(pinned.format, OutputFormat::Json);
-}
-
-#[test]
-fn cli_cache_flag_is_rejected_outside_repl_unit() {
-    let err = super::run_from(["osp", "--cache", "config", "show"])
-        .expect_err("cache should be rejected outside repl");
-
-    assert!(
-        err.to_string()
-            .contains("`--cache` is only available inside the interactive REPL")
-    );
 }
 
 #[test]

@@ -14,7 +14,9 @@ use crate::app::access_recovery::{
 };
 use crate::app::{AppClients, AuthState, TerminalKind};
 use crate::cli::{Cli, Commands, parse_inline_command_tokens};
-use crate::core::command_policy::{AccessReason, CommandAccess, CommandPath};
+use crate::core::command_policy::{
+    AccessReason, CommandAccess, CommandPath, CommandPolicyRegistry,
+};
 use crate::normalize::{normalize_identifier, normalize_optional_identifier};
 use crate::plugin::CommandCatalogEntry;
 
@@ -207,6 +209,34 @@ pub(crate) fn ensure_external_path_access(
             &command,
             kind,
             |auth| auth.external_command_path_access(path),
+        ),
+    }
+}
+
+pub(crate) fn ensure_external_path_access_with_policy(
+    runtime: &mut crate::app::AppRuntime,
+    session: &mut crate::app::AppSession,
+    path: &CommandPath,
+    requirement: ExternalPathAccessRequirement,
+    kind: &'static str,
+    policy: &CommandPolicyRegistry,
+) -> Result<()> {
+    let command = path.as_slice().join(" ");
+    match requirement {
+        ExternalPathAccessRequirement::Visible => ensure_command_visibility(
+            &command,
+            kind,
+            runtime
+                .auth()
+                .external_command_path_access_with_policy(path, policy),
+        ),
+        ExternalPathAccessRequirement::Runnable => ensure_command_access_with_recovery(
+            runtime,
+            session,
+            CommandAccessKind::External,
+            &command,
+            kind,
+            |auth| auth.external_command_path_access_with_policy(path, policy),
         ),
     }
 }
@@ -485,6 +515,9 @@ fn ensure_command_access_with_recovery(
     kind: &'static str,
     access_for: impl Fn(&AuthState) -> CommandAccess,
 ) -> Result<()> {
+    if let Some(recovery) = runtime.access_recovery() {
+        recovery.refresh(runtime)?;
+    }
     let access = access_for(runtime.auth());
     if access.is_runnable() {
         return Ok(());

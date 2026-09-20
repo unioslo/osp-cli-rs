@@ -10,7 +10,7 @@ use super::conversion::to_command_spec;
 use super::manager::{DiscoveredPlugin, PluginManager, PluginSource};
 use crate::completion::CommandSpec;
 use crate::config::{default_cache_root_dir, default_config_root_dir};
-use crate::core::plugin::DescribeV1;
+use crate::core::plugin::{DescribeV1, canonical_plugin_id};
 use anyhow::{Context, Result, anyhow};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -902,9 +902,8 @@ fn index_manifest_plugins(plugins: Vec<ManifestPlugin>) -> Result<HashMap<String
 }
 
 fn validate_manifest_plugin(plugin: &ManifestPlugin) -> Result<()> {
-    if plugin.id.trim().is_empty() {
-        return Err(anyhow!("manifest plugin id must not be empty"));
-    }
+    canonical_plugin_id(&plugin.id)
+        .map_err(|reason| anyhow!("invalid manifest plugin id `{}`: {reason}", plugin.id))?;
     if plugin.exe.trim().is_empty() {
         return Err(anyhow!("manifest plugin exe must not be empty"));
     }

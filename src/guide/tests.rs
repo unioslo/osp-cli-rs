@@ -195,7 +195,7 @@ fn guide_markdown_surfaces_sections_and_bounds_entry_rows_unit() {
             },
             GuideEntry {
                 name: "options".to_string(),
-                short_help: "per invocation: --format/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --cache, --plugin-provider".to_string(),
+                short_help: "per invocation: --format/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --plugin-provider".to_string(),
                 display_indent: None,
                 display_gap: None,
             },

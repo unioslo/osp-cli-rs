@@ -3,6 +3,10 @@ use super::*;
 struct ReplConfigRecovery;
 
 impl crate::app::CommandAccessRecovery for ReplConfigRecovery {
+    fn refresh(&self, _runtime: &mut crate::app::AppRuntime) -> miette::Result<()> {
+        Ok(())
+    }
+
     fn try_recover(
         &self,
         request: &crate::app::AccessRecoveryRequest,

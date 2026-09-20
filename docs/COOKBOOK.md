@@ -85,15 +85,6 @@ osp inventory host web-01 --plugin-provider inventory-a
 osp plugins select-provider inventory inventory-a
 ```
 
-## Cache One Provider Result In The REPL
-
-Illustrative provider-backed example:
-
-```text
-inventory host web-01 --cache | P name owner
-inventory host web-01 --cache --format json
-```
-
 ## Set Sane Daily Defaults
 
 ```bash

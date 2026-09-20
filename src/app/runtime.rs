@@ -641,14 +641,6 @@ impl AuthState {
         self.external_policy = registry;
     }
 
-    /// Overlays newly discovered external policies without discarding native
-    /// or product-owned entries already installed in the runtime.
-    pub(crate) fn overlay_external_policy(&mut self, registry: CommandPolicyRegistry) {
-        for policy in registry.entries() {
-            self.external_policy.register(policy.clone());
-        }
-    }
-
     /// Evaluates access for a built-in command.
     pub fn builtin_access(&self, command: &str) -> CommandAccess {
         command_access_for(
@@ -677,6 +669,14 @@ impl AuthState {
             &self.external_policy,
             &self.policy_context,
         )
+    }
+
+    pub(crate) fn external_command_path_access_with_policy(
+        &self,
+        path: &CommandPath,
+        policy: &CommandPolicyRegistry,
+    ) -> CommandAccess {
+        command_access_for_path(path, &self.external_allowlist, policy, &self.policy_context)
     }
 
     /// Returns whether a built-in command should be shown to the user.

@@ -145,7 +145,7 @@ payload.
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `protocol_version` | integer | yes | Must be `1` |
-| `plugin_id` | string | yes | Unique identifier, non-empty |
+| `plugin_id` | string | yes | Unique lowercase ASCII identifier using letters, digits, `-`, or `_`; `env` is reserved |
 | `plugin_version` | string | yes | Semantic version |
 | `min_osp_version` | string | no | Minimum osp version required |
 | `commands` | array | yes | At least one command |

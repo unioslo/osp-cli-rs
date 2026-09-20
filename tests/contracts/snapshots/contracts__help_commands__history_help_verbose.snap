@@ -48,8 +48,6 @@ Usage: osp history [OPTIONS] <COMMAND>
   -v, --verbose                             Increase message verbosity
   -q, --quiet                               Decrease message verbosity
   -d, --debug                               Increase developer log verbosity
-  --cache                                   Reuse identical result in this REPL session
   --plugin-provider <PLUGIN_ID>             Select provider for this invocation
 These flags may appear anywhere before `--` and affect only the current command.
-`--cache` is available only inside the interactive REPL.
 ------------------------------------------------------------------------

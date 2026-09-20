@@ -35,7 +35,7 @@ use crate::native::{NativeCommandRegistry, NativeSessionContext};
 use crate::plugin::PluginManager;
 use crate::repl::HistoryShellContext;
 
-use super::command_output::{CliCommandResult, ReplCommandOutput, StructuredCommandOutput};
+use super::command_output::ReplCommandOutput;
 use super::runtime::{AppClients, AppRuntime, LaunchContext, RuntimeContext, UiState};
 use super::timing::TimingSummary;
 
@@ -317,8 +317,6 @@ pub struct AppSession {
     pub result_cache: HashMap<String, Vec<Row>>,
     /// Eviction order for the row-result cache.
     pub cache_order: VecDeque<String>,
-    pub(crate) command_cache: HashMap<String, StructuredCommandOutput>,
-    pub(crate) command_cache_order: VecDeque<String>,
     /// Maximum number of cached result sets to retain.
     pub max_cached_results: usize,
     /// Session-scoped config overrides layered above persisted config.
@@ -382,7 +380,7 @@ impl AppSessionRebuildState {
 }
 
 impl AppSession {
-    /// Creates a session with bounded caches for row and command results.
+    /// Creates a session with a bounded row-result cache.
     ///
     /// A requested cache limit of `0` is clamped to `1` so the session never
     /// stores a zero-capacity cache by accident.
@@ -413,8 +411,6 @@ impl AppSession {
             last_failure_diagnostics: None,
             result_cache: HashMap::new(),
             cache_order: VecDeque::new(),
-            command_cache: HashMap::new(),
-            command_cache_order: VecDeque::new(),
             max_cached_results: bounded,
             config_overrides: ConfigLayer::default(),
         }
@@ -504,10 +500,7 @@ impl AppSession {
 
     /// Captures the session-scoped state that must survive a runtime rebuild.
     pub(crate) fn capture_rebuild_state(&self) -> AppSessionRebuildState {
-        let mut state = self.clone();
-        // Command execution results depend on live runtime/plugin/config state,
-        // so a rebuild keeps row history but must drop command-result caches.
-        state.clear_command_cache();
+        let state = self.clone();
         AppSessionRebuildState(state)
     }
 
@@ -604,43 +597,6 @@ impl AppSession {
     /// Returns the last successful REPL output contract, if available.
     pub(crate) fn last_success(&self) -> Option<&LastSuccess> {
         self.last_success.as_ref()
-    }
-
-    pub(crate) fn record_cached_command(
-        &mut self,
-        cache_key: &str,
-        output: &StructuredCommandOutput,
-    ) {
-        let cache_key = cache_key.trim().to_string();
-        if cache_key.is_empty() {
-            return;
-        }
-
-        insert_bounded_cache(
-            &mut self.command_cache,
-            &mut self.command_cache_order,
-            self.max_cached_results,
-            cache_key,
-            output.clone(),
-        );
-    }
-
-    fn clear_command_cache(&mut self) {
-        self.command_cache.clear();
-        self.command_cache_order.clear();
-    }
-
-    pub(crate) fn cached_command(&self, cache_key: &str) -> Option<CliCommandResult> {
-        self.command_cache
-            .get(cache_key.trim())
-            .cloned()
-            .map(|output| CliCommandResult {
-                exit_code: 0,
-                messages: Default::default(),
-                output: Some(ReplCommandOutput::Output(Box::new(output))),
-                stderr_text: None,
-                failure_report: None,
-            })
     }
 
     /// Updates the prompt timing badge for the most recent command.
@@ -1165,19 +1121,7 @@ mod tests {
             &["P name".to_string()],
         );
         session.record_failure("list users", "Command failed", "detail");
-        session.record_cached_command(
-            "config show",
-            &super::StructuredCommandOutput {
-                source_guide: None,
-                output: crate::cli::rows::output::rows_to_output_result(vec![
-                    crate::row! { "value" => "cached" },
-                ]),
-                format_hint: None,
-            },
-        );
-
         let snapshot = session.capture_rebuild_state();
-        assert!(session.cached_command("config show").is_some());
         let mut restored = AppSession::with_cache_limit(1);
         restored.restore_rebuild_state(snapshot);
 
@@ -1194,8 +1138,6 @@ mod tests {
         );
         assert_eq!(restored.cached_rows("list users"), Some(&[row][..]));
         assert!(restored.last_success().is_some());
-        assert!(restored.command_cache.is_empty());
-        assert!(restored.command_cache_order.is_empty());
         assert_eq!(
             restored
                 .last_failure

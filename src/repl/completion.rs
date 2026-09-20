@@ -274,9 +274,6 @@ fn invocation_prefilled_flags(
     if invocation.debug > 0 {
         out.insert("--debug".to_string(), Vec::new());
     }
-    if invocation.cache {
-        out.insert("--cache".to_string(), Vec::new());
-    }
     if let Some(provider) = invocation.plugin_provider.clone() {
         out.insert("--plugin-provider".to_string(), vec![provider]);
     }
@@ -461,12 +458,6 @@ fn invocation_flag_nodes() -> Vec<(String, FlagNode)> {
             FlagNode::new()
                 .flag_only()
                 .tooltip("Increase developer log verbosity"),
-        ),
-        (
-            "--cache".to_string(),
-            FlagNode::new()
-                .flag_only()
-                .tooltip("Reuse identical result in this REPL session"),
         ),
         (
             "--plugin-provider".to_string(),

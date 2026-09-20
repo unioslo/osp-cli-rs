@@ -65,6 +65,13 @@ pub enum AccessRecoveryOutcome {
 /// appropriate, mutate the provided runtime/session in place, and return
 /// [`AccessRecoveryOutcome::Recovered`] only when a retry is warranted.
 pub trait CommandAccessRecovery: Send + Sync {
+    /// Refreshes product-owned facts before command access is evaluated.
+    ///
+    /// This is intentionally separate from [`Self::try_recover`]: a token can
+    /// expire while a long-lived REPL is running, so the host must not keep
+    /// evaluating a startup-time `valid` snapshot.
+    fn refresh(&self, runtime: &mut AppRuntime) -> Result<()>;
+
     /// Attempts to recover from denied access for one command.
     fn try_recover(
         &self,

@@ -328,6 +328,33 @@ JSON
 }
 
 #[cfg(unix)]
+fn write_env_boundary_plugin(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let plugin_path = dir.join("osp-env-boundary");
+    let plugin_script = r#"#!/bin/sh
+if [ "$1" = "--describe" ]; then
+  /bin/cat <<'JSON'
+{"protocol_version":1,"plugin_id":"env-boundary","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"env-boundary","about":"environment boundary plugin","args":[],"flags":{},"subcommands":[]}]}
+JSON
+  exit 0
+fi
+
+/bin/cat <<JSON
+{"protocol_version":1,"ok":true,"data":{"password":"${OSP_PASSWORD:-}","mfa":"${OSP_MFA_TOKEN:-}","path":"${PATH:-}"},"error":null,"meta":{"format_hint":"json"}}
+JSON
+"#;
+
+    std::fs::write(&plugin_path, plugin_script).expect("plugin script should be written");
+    let mut perms = std::fs::metadata(&plugin_path)
+        .expect("plugin metadata should be readable")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&plugin_path, perms).expect("plugin should be executable");
+    plugin_path
+}
+
+#[cfg(unix)]
 fn write_non_zero_plugin(dir: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 

@@ -1,7 +1,7 @@
 # Output and Invocation Flags
 
-These flags affect one command at a time. Most of them work the same way in
-the CLI and in the REPL. The main exception is `--cache`, which is REPL-only.
+These flags affect one command at a time and work the same way in the CLI and
+in the REPL.
 
 The useful split is:
 
@@ -136,14 +136,6 @@ osp plugins commands --json -q
 
 Use `--plugin-provider <plugin-id>` when multiple plugins provide the same
 command and you want to choose the provider for one invocation.
-
-## REPL Cache
-
-`--cache` is supported only in the REPL.
-
-It reuses a successful external command result and reapplies the current pipe
-and output rendering. This is useful when the backend is slow and you want to
-run multiple pipelines against the same response.
 
 ## Placement Rules
 

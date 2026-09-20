@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::config::{
     ConfigError, ConfigValue, ExplainInterpolation, ExplainInterpolationStep, ResolvedValue,
+    is_sensitive_key,
 };
 
 #[derive(Debug, Clone)]
@@ -74,8 +75,21 @@ impl Interpolator {
             &mut Vec::new(),
         )?;
 
+        let template_value = self
+            .raw
+            .get(key)
+            .map(|value| {
+                let template_value = ConfigValue::String(template.raw.clone());
+                if value.is_secret() {
+                    template_value.into_secret()
+                } else {
+                    template_value
+                }
+            })
+            .unwrap_or_else(|| ConfigValue::String(template.raw.clone()));
+
         Ok(Some(ExplainInterpolation {
-            template: template.raw,
+            template: template_value,
             steps,
         }))
     }
@@ -109,15 +123,21 @@ impl Interpolator {
         let resolved = match value {
             ConfigValue::Secret(secret) => match secret.into_inner() {
                 ConfigValue::String(template) => {
-                    let (interpolated, _contains_secret) =
-                        self.interpolate_template(key, parse_template(key, &template)?, stack)?;
+                    let (interpolated, _contains_secret) = self.interpolate_template(
+                        key,
+                        parse_template_with_sensitivity(key, &template, true)?,
+                        stack,
+                    )?;
                     ConfigValue::String(interpolated).into_secret()
                 }
                 other => other.into_secret(),
             },
             ConfigValue::String(template) => {
-                let (interpolated, contains_secret) =
-                    self.interpolate_template(key, parse_template(key, &template)?, stack)?;
+                let (interpolated, contains_secret) = self.interpolate_template(
+                    key,
+                    parse_template_with_sensitivity(key, &template, is_sensitive_key(key))?,
+                    stack,
+                )?;
                 let value = ConfigValue::String(interpolated);
                 if contains_secret {
                     value.into_secret()
@@ -163,10 +183,17 @@ impl Interpolator {
     }
 
     fn parsed_template(&self, key: &str) -> Result<Option<ParsedTemplate>, ConfigError> {
-        let Some(ConfigValue::String(template)) = self.raw.get(key).map(ConfigValue::reveal) else {
+        let Some(value) = self.raw.get(key) else {
             return Ok(None);
         };
-        let parsed = parse_template(key, template)?;
+        let ConfigValue::String(template) = value.reveal() else {
+            return Ok(None);
+        };
+        let parsed = parse_template_with_sensitivity(
+            key,
+            template,
+            value.is_secret() || is_sensitive_key(key),
+        )?;
         Ok((!parsed.placeholders.is_empty()).then_some(parsed))
     }
 
@@ -268,7 +295,16 @@ pub(crate) fn explain_interpolation(
 
 /// Parse `${key}` segments once so interpolation and explain tracing can share
 /// the same validated template shape.
+#[cfg(test)]
 fn parse_template(key: &str, template: &str) -> Result<ParsedTemplate, ConfigError> {
+    parse_template_with_sensitivity(key, template, is_sensitive_key(key))
+}
+
+fn parse_template_with_sensitivity(
+    key: &str,
+    template: &str,
+    sensitive: bool,
+) -> Result<ParsedTemplate, ConfigError> {
     let mut placeholders = Vec::new();
     let mut cursor = 0usize;
 
@@ -278,7 +314,7 @@ fn parse_template(key: &str, template: &str) -> Result<ParsedTemplate, ConfigErr
         let Some(rel_end) = template[after_open..].find('}') else {
             return Err(ConfigError::InvalidPlaceholderSyntax {
                 key: key.to_string(),
-                template: template.to_string(),
+                template: diagnostic_template(template, sensitive),
             });
         };
         let end = after_open + rel_end;
@@ -287,7 +323,7 @@ fn parse_template(key: &str, template: &str) -> Result<ParsedTemplate, ConfigErr
         if placeholder.is_empty() {
             return Err(ConfigError::InvalidPlaceholderSyntax {
                 key: key.to_string(),
-                template: template.to_string(),
+                template: diagnostic_template(template, sensitive),
             });
         }
 
@@ -303,6 +339,14 @@ fn parse_template(key: &str, template: &str) -> Result<ParsedTemplate, ConfigErr
         raw: template.to_string(),
         placeholders,
     })
+}
+
+fn diagnostic_template(template: &str, sensitive: bool) -> String {
+    if sensitive {
+        "[REDACTED]".to_string()
+    } else {
+        template.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -382,7 +426,10 @@ mod tests {
             .expect("explain should succeed")
             .expect("template should be explained");
 
-        assert_eq!(explain.template, "${ui.user}@${ui.host}");
+        assert_eq!(
+            explain.template,
+            ConfigValue::String("${ui.user}@${ui.host}".to_string())
+        );
         assert_eq!(
             explain
                 .steps

@@ -263,7 +263,13 @@ fn registry_catalog_and_policy_projection_cover_lookup_completion_and_root_auth_
 
     let policy = registry.command_policy_registry();
     assert!(policy.contains(&CommandPath::new(["ldap"])));
-    assert!(!policy.contains(&CommandPath::new(["ldap", "user"])));
+    let user_policy = policy
+        .resolved_policy(&CommandPath::new(["ldap", "user"]))
+        .expect("child commands inherit the native root policy");
+    assert_eq!(
+        user_policy.feature_flags,
+        ["uio".to_string()].into_iter().collect()
+    );
 }
 
 #[test]
@@ -371,11 +377,13 @@ impl NativeCommand for TestNativeCommandWithNestedAuth {
 #[test]
 fn registry_collects_nested_auth_policies_when_describe_is_overridden_unit() {
     let default_registry = NativeCommandRegistry::new().with_command(TestNativeCommand);
-    assert!(
-        default_registry
-            .command_policy_registry()
-            .resolved_policy(&CommandPath::new(["ldap", "user"]))
-            .is_none()
+    let inherited_policy = default_registry
+        .command_policy_registry()
+        .resolved_policy(&CommandPath::new(["ldap", "user"]))
+        .expect("default child policy should inherit the root auth contract");
+    assert_eq!(
+        inherited_policy.feature_flags,
+        ["uio".to_string()].into_iter().collect()
     );
 
     let overridden_registry =

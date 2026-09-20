@@ -1,13 +1,9 @@
-use super::{
-    ParsedReplDispatch, parse_repl_invocation, render_repl_command_output,
-    repl_cache_key_for_command,
-};
+use super::{ParsedReplDispatch, parse_repl_invocation, render_repl_command_output};
 use crate::app::sink::BufferedUiSink;
 use crate::app::{
     AppState, AppStateInit, CliCommandResult, LaunchContext, ReplCommandOutput, RuntimeContext,
     TerminalKind,
 };
-use crate::cli::{Commands, IntroArgs};
 use crate::config::{ConfigLayer, ConfigResolver, ResolveOptions};
 use crate::core::output::OutputFormat;
 use crate::repl::input::ReplParsedLine;
@@ -150,40 +146,6 @@ fn parse_repl_invocation_covers_missing_command_and_inline_help_errors_unit() {
         Err(err) => err,
     };
     assert!(err.to_string().contains("--wat"));
-}
-
-#[test]
-fn repl_cache_key_covers_disabled_builtin_and_external_paths_unit() {
-    let state = make_state();
-    let mut invocation = crate::cli::invocation::InvocationOptions::default();
-    assert!(
-        repl_cache_key_for_command(
-            &state.runtime,
-            &Commands::Intro(IntroArgs::default()),
-            &invocation
-        )
-        .is_none()
-    );
-
-    invocation.cache = true;
-    assert!(
-        repl_cache_key_for_command(
-            &state.runtime,
-            &Commands::Intro(IntroArgs::default()),
-            &invocation
-        )
-        .is_none()
-    );
-
-    invocation.plugin_provider = Some("plugin-a".to_string());
-    let key = repl_cache_key_for_command(
-        &state.runtime,
-        &Commands::External(vec!["theme".to_string(), "show".to_string()]),
-        &invocation,
-    )
-    .expect("external cache key should exist");
-    assert!(key.contains("provider:plugin-a"));
-    assert!(key.contains("tokens:5:theme|4:show|"));
 }
 
 #[test]

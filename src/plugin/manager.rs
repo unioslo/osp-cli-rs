@@ -994,26 +994,29 @@ impl PluginManager {
     ) -> (
         CommandPath,
         crate::core::command_policy::CommandPolicyRegistry,
+        bool,
     ) {
         self.with_dispatch_view(|view| {
-            let mut policy = build_command_policy_registry(view);
+            let mut policy = crate::core::command_policy::CommandPolicyRegistry::new();
             let Ok(ProviderResolution::Selected(selection)) =
                 view.resolve_provider(command, provider_override)
             else {
-                return (CommandPath::new([command]), policy);
+                return (CommandPath::new([command]), policy, false);
             };
             let Some(describe) = selection
                 .plugin
                 .canonical_command(command)
                 .and_then(|command| command.describe())
             else {
-                return (CommandPath::new([command]), policy);
+                return (CommandPath::new([command]), policy, false);
             };
 
-            // Explicit provider selection can resolve an otherwise ambiguous
-            // command that the general active registry intentionally omits.
             register_describe_command_policies(&mut policy, describe, &[]);
-            (describe.resolved_subcommand_path(args), policy)
+            (
+                describe.resolved_subcommand_path(args),
+                policy,
+                describe.is_help_invocation(args),
+            )
         })
     }
 

@@ -737,14 +737,31 @@ impl DescribeV1 {
                 self.protocol_version
             ));
         }
-        if self.plugin_id.trim().is_empty() {
-            return Err("plugin_id must not be empty".to_string());
-        }
+        canonical_plugin_id(&self.plugin_id)?;
         for command in &self.commands {
             validate_command(command)?;
         }
         Ok(())
     }
+}
+
+pub(crate) fn canonical_plugin_id(plugin_id: &str) -> Result<String, String> {
+    let plugin_id = plugin_id.trim();
+    if plugin_id.is_empty() {
+        return Err("plugin_id must not be empty".to_string());
+    }
+    if plugin_id == "env" {
+        return Err("plugin_id `env` is reserved for shared plugin config".to_string());
+    }
+    if !plugin_id
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
+    {
+        return Err(format!(
+            "plugin_id `{plugin_id}` must use lowercase ASCII letters, digits, `-`, or `_`"
+        ));
+    }
+    Ok(plugin_id.to_string())
 }
 
 pub(crate) fn canonical_plugin_command_name(command: &str) -> Result<String, String> {
@@ -768,6 +785,7 @@ impl DescribeCommandV1 {
         let mut segments = vec![self.name.clone()];
         let mut current = self;
         let mut inherited_flags = Vec::new();
+        let mut positional_index = 0;
         let mut index = 0;
 
         while let Some(token) = args.get(index) {
@@ -783,6 +801,7 @@ impl DescribeCommandV1 {
                 segments.push(subcommand.name.clone());
                 inherited_flags.push(&current.flags);
                 current = subcommand;
+                positional_index = 0;
                 index += 1;
                 continue;
             }
@@ -796,13 +815,110 @@ impl DescribeCommandV1 {
                 || (token.starts_with('-')
                     && !token.starts_with("--")
                     && token.chars().count() > 2);
-            index += match flag {
-                Some(flag) if !flag.flag_only && !has_attached_value => 2,
-                _ => 1,
-            };
+            if let Some(flag) = flag {
+                index += if !flag.flag_only && !has_attached_value {
+                    2
+                } else {
+                    1
+                };
+                continue;
+            }
+
+            if let Some(argument) = current.args.get(positional_index) {
+                positional_index += 1;
+                index += 1;
+                if argument.multi {
+                    while let Some(value) = args.get(index) {
+                        if value == "--" || value.starts_with('-') {
+                            break;
+                        }
+                        index += 1;
+                    }
+                }
+            } else {
+                index += 1;
+            }
         }
 
         CommandPath::new(segments)
+    }
+
+    /// Returns whether `args` use the delegated-help contract.
+    ///
+    /// Help flags are recognized only while parsing the described command
+    /// grammar. A token after `--`, or a token consumed as a flag value, is an
+    /// ordinary execution argument.
+    pub(crate) fn is_help_invocation(&self, args: &[String]) -> bool {
+        if matches!(args.first().map(String::as_str), Some("help")) {
+            return true;
+        }
+
+        let mut current = self;
+        let mut inherited_flags = Vec::new();
+        let mut positional_index = 0;
+        let mut index = 0;
+
+        while let Some(token) = args.get(index) {
+            if token == "--" {
+                return false;
+            }
+
+            if let Some(subcommand) = current
+                .subcommands
+                .iter()
+                .find(|subcommand| subcommand.name.eq_ignore_ascii_case(token))
+            {
+                inherited_flags.push(&current.flags);
+                current = subcommand;
+                positional_index = 0;
+                index += 1;
+                continue;
+            }
+
+            if token == "--help" || token == "-h" {
+                return true;
+            }
+
+            let flag = current
+                .flags
+                .iter()
+                .chain(inherited_flags.iter().rev().flat_map(|flags| flags.iter()))
+                .find_map(|(name, flag)| flag_token_matches(name, token).then_some(flag));
+            let has_attached_value = token.contains('=')
+                || (token.starts_with('-')
+                    && !token.starts_with("--")
+                    && token.chars().count() > 2);
+            if let Some(flag) = flag {
+                index += if !flag.flag_only && !has_attached_value {
+                    2
+                } else {
+                    1
+                };
+                continue;
+            }
+
+            if token.starts_with('-') {
+                index += 1;
+                continue;
+            }
+
+            if let Some(argument) = current.args.get(positional_index) {
+                positional_index += 1;
+                index += 1;
+                if argument.multi {
+                    while let Some(value) = args.get(index) {
+                        if value == "--" || value.starts_with('-') {
+                            break;
+                        }
+                        index += 1;
+                    }
+                }
+            } else {
+                index += 1;
+            }
+        }
+
+        false
     }
 
     /// Converts command auth metadata into an internal command policy for
@@ -850,6 +966,13 @@ impl DescribeCommandV1 {
     /// ```
     pub fn command_policy(&self, path: CommandPath) -> Option<CommandPolicy> {
         let auth = self.auth.as_ref()?;
+        Some(Self::command_policy_for_auth(path, auth))
+    }
+
+    pub(crate) fn command_policy_for_auth(
+        path: CommandPath,
+        auth: &DescribeCommandAuthV1,
+    ) -> CommandPolicy {
         let mut policy = CommandPolicy::new(path);
         if let Some(visibility) = auth.visibility {
             policy = policy.visibility(visibility.as_visibility_mode());
@@ -876,7 +999,22 @@ impl DescribeCommandV1 {
                 policy = policy.require_credential(requirement.as_command_requirement());
             }
         }
-        Some(policy)
+        policy
+    }
+
+    /// Fills unannotated descendants with their nearest parent's auth policy.
+    pub(crate) fn inherit_auth_from_parents(&mut self) {
+        self.inherit_auth(None);
+    }
+
+    fn inherit_auth(&mut self, parent: Option<&DescribeCommandAuthV1>) {
+        if self.auth.is_none() {
+            self.auth = parent.cloned();
+        }
+        let inherited = self.auth.as_ref();
+        for subcommand in &mut self.subcommands {
+            subcommand.inherit_auth(inherited);
+        }
     }
 }
 
@@ -1621,6 +1759,30 @@ mod tests {
                 .as_slice(),
             &["orch".to_string(), "approval".to_string()]
         );
+    }
+
+    #[test]
+    fn help_intent_respects_described_values_and_option_terminator_unit() {
+        let mut flags = BTreeMap::new();
+        flags.insert(
+            "--label".to_string(),
+            super::DescribeFlagV1 {
+                flag_only: false,
+                ..super::DescribeFlagV1::default()
+            },
+        );
+        let command = DescribeCommandV1 {
+            name: "demo".to_string(),
+            about: String::new(),
+            auth: None,
+            args: vec![super::DescribeArgV1::default()],
+            flags,
+            subcommands: Vec::new(),
+        };
+
+        assert!(command.is_help_invocation(&["--help".to_string()]));
+        assert!(!command.is_help_invocation(&["--label".to_string(), "--help".to_string(),]));
+        assert!(!command.is_help_invocation(&["--".to_string(), "--help".to_string(),]));
     }
 }
 

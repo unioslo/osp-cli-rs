@@ -8,9 +8,9 @@ use super::resolve_terminal_selector;
 use crate::app::{AppRuntime, AppSession, RuntimeContext, TerminalKind, UiState};
 use crate::app::{
     CliCommandResult, ConfigExplainContext, ReplCommandOutput, RuntimeConfigRequest,
-    config_explain_json, config_explain_result, config_value_to_json, explain_runtime_config,
-    format_scope, is_sensitive_key, push_missing_config_key_messages, render_config_explain_text,
-    resolve_runtime_config,
+    config_explain_json, config_explain_result, config_value_to_json_for_key,
+    explain_runtime_config, format_scope, is_sensitive_key, push_missing_config_key_messages,
+    render_config_explain_text, resolve_runtime_config,
 };
 use crate::cli::pipeline::validate_alias_template;
 use crate::cli::rows::output::rows_to_output_result;
@@ -158,7 +158,10 @@ fn alias_list_rows(context: ConfigReadContext<'_>, args: AliasListArgs) -> Vec<R
                 "name",
                 key.strip_prefix("alias.").unwrap_or(key).to_string(),
             );
-            row.insert("template", config_value_to_json(&entry.raw_value));
+            row.insert(
+                "template",
+                config_value_to_json_for_key(key, &entry.raw_value),
+            );
             if args.sources {
                 row.insert("source", entry.source.to_string());
                 row.insert("scope", format_scope(&entry.scope));
@@ -458,11 +461,14 @@ fn config_entry_row(
     row.insert("key", key.to_string());
     row.insert(
         "value",
-        config_value_to_json(if show_raw {
-            &entry.raw_value
-        } else {
-            &entry.value
-        }),
+        config_value_to_json_for_key(
+            key,
+            if show_raw {
+                &entry.raw_value
+            } else {
+                &entry.value
+            },
+        ),
     );
 
     if include_sources {
@@ -541,7 +547,7 @@ fn run_config_set(
         };
         let mut row = RowBuilder::new();
         row.insert("key", key.clone());
-        row.insert("value", config_value_to_json(&display_value));
+        row.insert("value", config_value_to_json_for_key(&key, &display_value));
         row.insert("scope", format_scope(scope));
         row.insert("store", config_store_name(store));
         row.insert("dry_run", args.dry_run);
@@ -592,7 +598,7 @@ fn run_config_set(
                     set_result
                         .previous
                         .as_ref()
-                        .map(config_value_to_json)
+                        .map(|previous| config_value_to_json_for_key(&key, previous))
                         .unwrap_or(serde_json::Value::Null),
                 );
             }
@@ -618,7 +624,10 @@ fn run_config_set(
                 row.insert(
                     "previous",
                     edit.previous
-                        .map(|previous| config_value_to_json(&previous.into_secret()))
+                        .map(|previous| {
+                            let previous = previous.into_secret();
+                            config_value_to_json_for_key(&key, &previous)
+                        })
                         .unwrap_or(serde_json::Value::Null),
                 );
             }
@@ -718,7 +727,7 @@ fn run_config_unset(
                 row.insert(
                     "previous",
                     previous
-                        .map(|value| config_value_to_json(&value))
+                        .map(|value| config_value_to_json_for_key(&key, &value))
                         .unwrap_or(serde_json::Value::Null),
                 );
             }
@@ -757,7 +766,7 @@ fn run_config_unset(
                     edit_result
                         .previous
                         .as_ref()
-                        .map(config_value_to_json)
+                        .map(|previous| config_value_to_json_for_key(&key, previous))
                         .unwrap_or(serde_json::Value::Null),
                 );
             }
@@ -782,7 +791,10 @@ fn run_config_unset(
                 row.insert(
                     "previous",
                     edit.previous
-                        .map(|previous| config_value_to_json(&previous.into_secret()))
+                        .map(|previous| {
+                            let previous = previous.into_secret();
+                            config_value_to_json_for_key(&key, &previous)
+                        })
                         .unwrap_or(serde_json::Value::Null),
                 );
             }

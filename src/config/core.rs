@@ -998,6 +998,7 @@ impl ConfigSchema {
     /// Rejects read-only keys for user-supplied config input.
     pub fn validate_writable_key(&self, key: &str) -> Result<(), ConfigError> {
         let normalized = key.trim().to_ascii_lowercase();
+        validate_plugin_config_key(&normalized)?;
         if let Some(entry) = self.entries.get(&normalized)
             && !entry.writable()
         {
@@ -1807,7 +1808,7 @@ pub struct ExplainInterpolationStep {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExplainInterpolation {
     /// Original string template before placeholder substitution.
-    pub template: String,
+    pub template: ConfigValue,
     /// Placeholder expansion steps applied to the template.
     pub steps: Vec<ExplainInterpolationStep>,
 }
@@ -2118,6 +2119,23 @@ pub fn validate_bootstrap_value(key: &str, value: &ConfigValue) -> Result<(), Co
     builtin_config_schema().validate_bootstrap_value(key, value)
 }
 
+/// Returns whether a config key is conventionally sensitive.
+pub(crate) fn is_sensitive_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    normalized.contains("password")
+        || normalized.contains("token")
+        || normalized.contains("secret")
+        || normalized.contains("apikey")
+        || normalized.contains("api_key")
+        || normalized.contains("access_key")
+        || normalized.contains("private_key")
+        || normalized.contains("ssh_key")
+        || normalized.contains("client_secret")
+        || normalized.contains("bearer")
+        || normalized.contains("jwt")
+        || normalized.ends_with(".key")
+}
+
 fn adapt_value_for_schema(
     key: &str,
     value: &ConfigValue,
@@ -2350,6 +2368,35 @@ fn dynamic_schema_key_kind(key: &str) -> Option<DynamicSchemaKeyKind> {
         "provider" => Some(DynamicSchemaKeyKind::PluginCommandProvider),
         _ => None,
     }
+}
+
+fn validate_plugin_config_key(key: &str) -> Result<(), ConfigError> {
+    let Some(remainder) = key.strip_prefix("extensions.plugins.") else {
+        return Ok(());
+    };
+
+    // `env` is the shared-config namespace. It is intentionally not a valid
+    // plugin id, so this first segment can never mean two different things.
+    if remainder.starts_with("env.") {
+        return Ok(());
+    }
+
+    let Some((plugin_id, env_name)) = remainder.split_once(".env.") else {
+        return Ok(());
+    };
+    crate::core::plugin::canonical_plugin_id(plugin_id).map_err(|reason| {
+        ConfigError::InvalidConfigKey {
+            key: key.to_string(),
+            reason,
+        }
+    })?;
+    if env_name.is_empty() {
+        return Err(ConfigError::InvalidConfigKey {
+            key: key.to_string(),
+            reason: "plugin environment name must not be empty".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn parse_bool(value: &str) -> Option<bool> {

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::RwLock;
 
 use crate::config::{ConfigValue, ResolvedConfig};
+use crate::core::plugin::canonical_plugin_id;
 
 use crate::app::ConfigState;
 
@@ -60,13 +61,23 @@ pub(crate) enum PluginConfigScope {
     Plugin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PluginConfigEntry {
     pub(crate) env_key: String,
-    pub(crate) value: String,
+    /// Value retained in its sensitivity-preserving config representation.
+    ///
+    /// Dispatch explicitly unwraps this at the subprocess boundary; read
+    /// surfaces use [`Self::is_sensitive`] before rendering it.
+    pub(crate) value: ConfigValue,
     pub(crate) config_key: String,
     pub(crate) scope: PluginConfigScope,
     pub(crate) issue: Option<String>,
+}
+
+impl PluginConfigEntry {
+    pub(crate) fn is_sensitive(&self) -> bool {
+        self.value.is_secret() || crate::config::is_sensitive_key(&self.config_key)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -144,7 +155,7 @@ pub(crate) fn collect_plugin_config_env(config: &ResolvedConfig) -> PluginConfig
         let Some((plugin_id, name)) = plugin_key.split_once(PLUGIN_ENV_SEPARATOR) else {
             continue;
         };
-        if plugin_id.is_empty() {
+        if canonical_plugin_id(plugin_id).is_err() {
             continue;
         }
         if let Some(env_entry) =
@@ -193,7 +204,7 @@ fn plugin_env_mapping(
 ) -> Option<PluginConfigEntry> {
     Some(PluginConfigEntry {
         env_key: plugin_config_env_name(name)?,
-        value: config_value_to_plugin_env(value),
+        value: value.clone(),
         config_key: config_key.to_string(),
         scope,
         issue: None,
@@ -266,6 +277,32 @@ pub(crate) fn config_value_to_plugin_env(value: &ConfigValue) -> String {
     }
 }
 
+pub(crate) fn config_value_to_plugin_json(value: &ConfigValue) -> serde_json::Value {
+    match value {
+        ConfigValue::Secret(_) => serde_json::Value::String("[REDACTED]".to_string()),
+        ConfigValue::String(value) => serde_json::Value::String(value.clone()),
+        ConfigValue::Bool(value) => serde_json::Value::Bool(*value),
+        ConfigValue::Integer(value) => serde_json::Value::Number((*value).into()),
+        ConfigValue::Float(value) => serde_json::Number::from_f64(*value)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        ConfigValue::List(values) => serde_json::Value::Array(
+            values
+                .iter()
+                .map(config_value_to_plugin_json)
+                .collect::<Vec<_>>(),
+        ),
+    }
+}
+
+pub(crate) fn plugin_config_value_for_display(entry: &PluginConfigEntry) -> serde_json::Value {
+    if entry.is_sensitive() {
+        serde_json::Value::String("[REDACTED]".to_string())
+    } else {
+        config_value_to_plugin_json(&entry.value)
+    }
+}
+
 fn config_value_to_plugin_env_json(value: &ConfigValue) -> serde_json::Value {
     match value {
         ConfigValue::Secret(secret) => config_value_to_plugin_env_json(secret.expose()),
@@ -321,21 +358,20 @@ mod tests {
             .iter()
             .find(|entry| entry.env_key == "OSP_PLUGIN_CFG_ENDPOINT")
             .expect("endpoint entry should exist");
-        assert_eq!(endpoint.value, "plugin");
+        assert_eq!(endpoint.value, ConfigValue::String("plugin".to_string()));
         assert_eq!(endpoint.scope, PluginConfigScope::Plugin);
 
         let token = entries
             .iter()
             .find(|entry| entry.env_key == "OSP_PLUGIN_CFG_API_TOKEN")
             .expect("plugin token should exist");
-        assert_eq!(token.value, "token-123");
+        assert_eq!(token.value, ConfigValue::String("token-123".to_string()));
         assert!(token.issue.is_none());
     }
 
     #[test]
-    fn collect_plugin_config_env_ignores_incomplete_plugin_keys() {
+    fn collect_plugin_config_env_ignores_non_env_plugin_keys() {
         let config = resolved_config(&[
-            ("extensions.plugins..env.endpoint", "skip-empty-plugin"),
             ("extensions.plugins.demo.value", "skip-non-env"),
             (
                 "extensions.plugins.env.shared.url",
@@ -356,7 +392,10 @@ mod tests {
         let mut state = ConfigState::new(first);
 
         let shared = cache.collect(&state);
-        assert_eq!(shared.shared[0].value, "shared");
+        assert_eq!(
+            shared.shared[0].value,
+            ConfigValue::String("shared".to_string())
+        );
 
         let changed = state.replace_resolved(resolved_config(&[(
             "extensions.plugins.env.endpoint",
@@ -365,7 +404,10 @@ mod tests {
         assert!(changed);
 
         let updated = cache.collect(&state);
-        assert_eq!(updated.shared[0].value, "updated");
+        assert_eq!(
+            updated.shared[0].value,
+            ConfigValue::String("updated".to_string())
+        );
     }
 
     #[test]

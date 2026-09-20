@@ -96,14 +96,14 @@ fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
         vec![
             PluginConfigEntry {
                 env_key: "OSP_PLUGIN_CFG_ENDPOINT".to_string(),
-                value: "shared".to_string(),
+                value: ConfigValue::String("shared".to_string()),
                 config_key: "extensions.plugins.env.endpoint".to_string(),
                 scope: PluginConfigScope::Shared,
                 issue: None,
             },
             PluginConfigEntry {
                 env_key: "OSP_PLUGIN_CFG_SHARED_URL".to_string(),
-                value: "https://common.example".to_string(),
+                value: ConfigValue::String("https://common.example".to_string()),
                 config_key: "extensions.plugins.env.shared.url".to_string(),
                 scope: PluginConfigScope::Shared,
                 issue: None,
@@ -115,14 +115,14 @@ fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
         Some(&vec![
             PluginConfigEntry {
                 env_key: "OSP_PLUGIN_CFG_API_TOKEN".to_string(),
-                value: "token-123".to_string(),
+                value: ConfigValue::String("token-123".to_string()),
                 config_key: "extensions.plugins.cfg.env.api.token".to_string(),
                 scope: PluginConfigScope::Plugin,
                 issue: None,
             },
             PluginConfigEntry {
                 env_key: "OSP_PLUGIN_CFG_ENDPOINT".to_string(),
-                value: "plugin".to_string(),
+                value: ConfigValue::String("plugin".to_string()),
                 config_key: "extensions.plugins.cfg.env.endpoint".to_string(),
                 scope: PluginConfigScope::Plugin,
                 issue: None,
@@ -133,7 +133,7 @@ fn plugin_config_env_collects_shared_and_plugin_specific_entries_unit() {
         env.by_plugin_id.get("other"),
         Some(&vec![PluginConfigEntry {
             env_key: "OSP_PLUGIN_CFG_ENDPOINT".to_string(),
-            value: "other".to_string(),
+            value: ConfigValue::String("other".to_string()),
             config_key: "extensions.plugins.other.env.endpoint".to_string(),
             scope: PluginConfigScope::Plugin,
             issue: None,

@@ -326,12 +326,6 @@ fn run(
     app: &super::AppDefinition,
 ) -> Result<i32> {
     let run_started = Instant::now();
-    if invocation.cache {
-        return Err(miette!(
-            "`--cache` is only available inside the interactive REPL"
-        ));
-    }
-
     let PreparedHostRun {
         mut state,
         dispatch,
