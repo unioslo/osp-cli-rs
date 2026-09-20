@@ -97,6 +97,7 @@ pub(crate) mod timing;
 
 pub use access_recovery::{
     AccessRecoveryOutcome, AccessRecoveryRequest, CommandAccessKind, CommandAccessRecovery,
+    StartupHook,
 };
 pub(crate) use bootstrap::*;
 pub(crate) use builtin::*;
@@ -132,6 +133,7 @@ pub(crate) struct AppDefinition {
     policy_context: CommandPolicyContext,
     builtin_policy: CommandPolicyRegistry,
     access_recovery: Option<Arc<dyn CommandAccessRecovery>>,
+    startup_hook: Option<Arc<dyn StartupHook>>,
 }
 
 impl AppDefinition {
@@ -166,6 +168,11 @@ impl AppDefinition {
 
     fn with_access_recovery(mut self, access_recovery: Arc<dyn CommandAccessRecovery>) -> Self {
         self.access_recovery = Some(access_recovery);
+        self
+    }
+
+    fn with_startup_hook(mut self, startup_hook: Arc<dyn StartupHook>) -> Self {
+        self.startup_hook = Some(startup_hook);
         self
     }
 }
@@ -300,6 +307,16 @@ impl App {
         self.definition = self
             .definition
             .with_access_recovery(Arc::new(access_recovery));
+        self
+    }
+
+    /// Installs a product-owned hook that runs after final startup config
+    /// resolution and before command dispatch.
+    pub fn with_startup_hook<R>(mut self, startup_hook: R) -> Self
+    where
+        R: StartupHook + 'static,
+    {
+        self.definition = self.definition.with_startup_hook(Arc::new(startup_hook));
         self
     }
 
@@ -605,6 +622,16 @@ impl AppBuilder {
         self.definition = self
             .definition
             .with_access_recovery(Arc::new(access_recovery));
+        self
+    }
+
+    /// Installs a product-owned hook that runs after final startup config
+    /// resolution and before command dispatch.
+    pub fn with_startup_hook<R>(mut self, startup_hook: R) -> Self
+    where
+        R: StartupHook + 'static,
+    {
+        self.definition = self.definition.with_startup_hook(Arc::new(startup_hook));
         self
     }
 

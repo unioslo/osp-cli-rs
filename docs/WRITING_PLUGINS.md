@@ -209,9 +209,15 @@ Author checklist:
 - command data lives in `data`; operator-facing commentary lives in `messages`
 - `messages[].text` is never empty
 
-For delegated help (`osp <plugin-command> --help` or `help`), `osp` passes
-the request through directly. In that mode, the plugin may print plain help
-text instead of `ResponseV1`.
+For delegated help, `osp` passes through only a described command/subcommand
+path ending in one terminal `help`, `--help`, or `-h` marker. No option or
+positional operand may precede the marker. A marker used as an option value,
+after `--`, or alongside an option/operand is normal execution and remains
+subject to the command's runnable policy. If an unknown argument could conceal
+a nested described command, the host rejects the invocation until the plugin
+describes that grammar; this prevents a parent command's weaker policy from
+being used to reach a guarded child. In delegated-help mode the plugin may
+print plain help text instead of `ResponseV1`.
 
 #### ResponseV1
 

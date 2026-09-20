@@ -12,7 +12,7 @@ use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use super::{dispatch, input, lifecycle};
 use crate::app::sink::StdIoUiSink;
 use crate::app::{AppRuntime, AppSession, AppState};
-use crate::app::{AuthState, ReplScopeStack, UiState};
+use crate::app::{AuthState, ReplScopeStack, RuntimeContext, UiState};
 use crate::native::NativeSessionContext;
 use crate::ui::theme_catalog::ThemeCatalog;
 
@@ -25,6 +25,7 @@ pub(crate) use dispatch::repl_command_spec;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ReplViewContext<'a> {
+    pub(crate) context: &'a RuntimeContext,
     pub(crate) config: &'a ResolvedConfig,
     pub(crate) ui: &'a UiState,
     pub(crate) auth: &'a AuthState,
@@ -37,6 +38,7 @@ pub(crate) struct ReplViewContext<'a> {
 impl<'a> ReplViewContext<'a> {
     pub(crate) fn from_parts(runtime: &'a AppRuntime, session: &'a AppSession) -> Self {
         Self {
+            context: &runtime.context,
             config: runtime.config.resolved(),
             ui: &runtime.ui,
             auth: &runtime.auth,

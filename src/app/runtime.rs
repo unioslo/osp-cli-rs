@@ -82,6 +82,7 @@ pub struct RuntimeContext {
     profile_override: Option<String>,
     terminal_kind: TerminalKind,
     terminal_env: Option<String>,
+    authenticated_subject: Option<String>,
 }
 
 impl RuntimeContext {
@@ -113,6 +114,7 @@ impl RuntimeContext {
                 .filter(|value| !value.is_empty()),
             terminal_kind,
             terminal_env,
+            authenticated_subject: None,
         }
     }
 
@@ -129,6 +131,12 @@ impl RuntimeContext {
     /// Returns the detected terminal environment string, if available.
     pub fn terminal_env(&self) -> Option<&str> {
         self.terminal_env.as_deref()
+    }
+
+    /// Returns the subject of the credential currently projected into the
+    /// running host, when the product has authenticated one.
+    pub fn authenticated_subject(&self) -> Option<&str> {
+        self.authenticated_subject.as_deref()
     }
 }
 
@@ -534,6 +542,15 @@ impl AppRuntime {
     pub fn set_policy_context(&mut self, context: CommandPolicyContext) {
         self.auth
             .set_policy_context(policy_context_for_resolved(context, self.config.resolved()));
+    }
+
+    /// Projects the authenticated subject into the host context used by
+    /// prompts and product defaults without re-resolving invocation config.
+    pub fn set_authenticated_subject(&mut self, subject: Option<&str>) {
+        self.context.authenticated_subject = subject
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
     }
 
     /// Returns the launch-time provenance used to assemble the runtime.

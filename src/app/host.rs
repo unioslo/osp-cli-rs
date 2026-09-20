@@ -450,6 +450,9 @@ fn prepare_host_run(
     state
         .runtime
         .set_access_recovery(app.access_recovery.clone());
+    if let Some(startup_hook) = &app.startup_hook {
+        startup_hook.prepare(&mut state.runtime)?;
+    }
     let invocation_ui = resolve_invocation_ui(
         state.runtime.config.resolved(),
         &state.runtime.ui,

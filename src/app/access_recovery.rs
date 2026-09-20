@@ -80,3 +80,16 @@ pub trait CommandAccessRecovery: Send + Sync {
         session: &mut AppSession,
     ) -> Result<AccessRecoveryOutcome>;
 }
+
+/// Product-owned startup hook invoked after the host has resolved the final
+/// invocation configuration and assembled its runtime state.
+///
+/// Wrappers that need to acquire or restore credentials can use this seam to
+/// consume the host's authoritative resolved configuration before command
+/// access is evaluated. The hook runs once for a one-shot invocation or once
+/// when an interactive host starts; command-level recovery remains the job of
+/// [`CommandAccessRecovery`].
+pub trait StartupHook: Send + Sync {
+    /// Applies product-owned startup state to the resolved host runtime.
+    fn prepare(&self, runtime: &mut AppRuntime) -> Result<()>;
+}

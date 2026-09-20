@@ -157,19 +157,28 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                 .command(&command)
                 .ok_or_else(|| miette!("no native command provides `{command}`"))?;
             let description = native_command.describe();
-            let path = description.resolved_subcommand_path(args);
-            let invocation_ends_at_command = args.len() + 1 == path.as_slice().len();
             let native_parse = native_command
                 .command()
                 .try_get_matches_from(std::iter::once(command.clone()).chain(args.iter().cloned()));
+            // A successful clap parse is authoritative for aliases, option
+            // values, and the selected nested command. The describe payload
+            // is only a conservative fallback for non-help errors. Clap does
+            // not return matches for help, so retry the parse without help
+            // markers to preserve canonical aliases on that path too.
+            let (path, path_ambiguous) = match native_parse.as_ref() {
+                Ok(matches) => (native_path_from_matches(&command, matches), false),
+                Err(error) if is_native_help_error(error.kind()) => (
+                    native_help_path(native_command.as_ref(), &command, args, &description),
+                    false,
+                ),
+                Err(_) => {
+                    let resolved = description.resolve_invocation(args);
+                    (resolved.path, resolved.ambiguous)
+                }
+            };
+            let invocation_ends_at_command = args.len() + 1 == path.as_slice().len();
             if let Err(err) = native_parse {
-                if matches!(
-                    err.kind(),
-                    clap::error::ErrorKind::DisplayHelp
-                        | clap::error::ErrorKind::DisplayVersion
-                        | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-                        | clap::error::ErrorKind::MissingSubcommand
-                ) {
+                if is_native_help_error(err.kind()) {
                     ensure_external_path_access(
                         runtime,
                         session,
@@ -179,7 +188,9 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                     )?;
                     return Ok(CliCommandResult::guide(guide_help(&err.to_string())));
                 }
-                if described_path_has_subcommands(&description, &path) || invocation_ends_at_command
+                if path_ambiguous
+                    || described_path_has_subcommands(&description, &path)
+                    || invocation_ends_at_command
                 {
                     return Err(crate::app::report_std_error_with_context(
                         err,
@@ -211,6 +222,48 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
             runtime, session, clients, &command, &parsed, invocation, guide_help,
         ),
     }
+}
+
+fn native_path_from_matches(
+    command: &str,
+    matches: &clap::ArgMatches,
+) -> crate::command_policy::CommandPath {
+    let mut segments = vec![command.to_string()];
+    let mut current = matches;
+    while let Some((subcommand, submatches)) = current.subcommand() {
+        segments.push(subcommand.to_string());
+        current = submatches;
+    }
+    crate::command_policy::CommandPath::new(segments)
+}
+
+fn is_native_help_error(kind: clap::error::ErrorKind) -> bool {
+    matches!(
+        kind,
+        clap::error::ErrorKind::DisplayHelp
+            | clap::error::ErrorKind::DisplayVersion
+            | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            | clap::error::ErrorKind::MissingSubcommand
+    )
+}
+
+fn native_help_path(
+    command: &dyn crate::native::NativeCommand,
+    name: &str,
+    args: &[String],
+    description: &crate::core::plugin::DescribeCommandV1,
+) -> crate::command_policy::CommandPath {
+    let without_help = args
+        .iter()
+        .filter(|arg| !matches!(arg.as_str(), "--help" | "-h"))
+        .cloned();
+    let parsed = command
+        .command()
+        .try_get_matches_from(std::iter::once(name.to_string()).chain(without_help));
+    parsed
+        .as_ref()
+        .map(|matches| native_path_from_matches(name, matches))
+        .unwrap_or_else(|_| description.resolve_invocation(args).path)
 }
 
 fn described_path_has_subcommands(
@@ -463,7 +516,8 @@ fn run_external_plugin_command(
         .ok_or_else(|| miette!("missing external command"))?;
     let (path, dispatch_policy, help_requested) = clients
         .plugins()
-        .resolved_command_path_and_policy(command, args, invocation.plugin_provider.as_deref());
+        .resolved_command_path_and_policy(command, args, invocation.plugin_provider.as_deref())
+        .map_err(|error| miette!(error.to_string()))?;
     let access_requirement = if help_requested {
         ExternalPathAccessRequirement::Visible
     } else {
@@ -772,6 +826,8 @@ mod tests {
 
     struct NestedAuthNativeCommand;
 
+    struct AliasedNestedAuthNativeCommand;
+
     impl NativeCommand for NestedAuthNativeCommand {
         fn command(&self) -> Command {
             Command::new("ldap")
@@ -809,6 +865,34 @@ mod tests {
         ) -> anyhow::Result<NativeCommandOutcome> {
             let _ = args;
             panic!("nested-auth native command should not execute when auth denies it")
+        }
+    }
+
+    impl NativeCommand for AliasedNestedAuthNativeCommand {
+        fn command(&self) -> Command {
+            Command::new("lookup").subcommand(Command::new("user").visible_alias("u"))
+        }
+
+        fn describe(&self) -> DescribeCommandV1 {
+            let mut root = DescribeCommandV1::from_clap(self.command());
+            root.auth = Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::Public),
+                ..DescribeCommandAuthV1::default()
+            });
+            root.subcommands[0].auth = Some(DescribeCommandAuthV1 {
+                visibility: Some(DescribeVisibilityModeV1::CapabilityGated),
+                required_capabilities: vec!["lookup.user.read".to_string()],
+                ..DescribeCommandAuthV1::default()
+            });
+            root
+        }
+
+        fn execute(
+            &self,
+            _args: &[String],
+            _context: &NativeCommandContext<'_>,
+        ) -> anyhow::Result<NativeCommandOutcome> {
+            panic!("aliased nested command should not execute when auth denies it")
         }
     }
 
@@ -1175,6 +1259,34 @@ JSON
         assert!(err.to_string().contains("command `ldap user`"));
         assert!(err.to_string().contains("capability `ldap.user.read`"));
         assert!(err.to_string().contains("Try: authenticate"));
+    }
+
+    #[test]
+    fn native_path_uses_clap_canonical_subcommand_for_aliases_unit() {
+        let (mut runtime, mut session, clients) = make_test_state_with_registry(
+            NativeCommandRegistry::new().with_command(AliasedNestedAuthNativeCommand),
+        );
+        runtime
+            .auth
+            .set_policy_context(CommandPolicyContext::default().authenticated(true));
+
+        let invocation = resolve_invocation_ui(
+            runtime.config.resolved(),
+            &runtime.ui,
+            &InvocationOptions::default(),
+        );
+        let err = run_external_command_with_help_renderer(
+            &mut runtime,
+            &mut session,
+            &clients,
+            &["lookup".to_string(), "u".to_string()],
+            &invocation,
+            GuideView::from_text,
+        )
+        .expect_err("the canonical aliased child policy should deny execution");
+
+        assert!(err.to_string().contains("command `lookup user`"));
+        assert!(err.to_string().contains("lookup.user.read"));
     }
 
     #[test]

@@ -37,12 +37,28 @@ Plugins are separate binaries discovered at runtime (Option B).
 
 ## Help Delegation
 
-- `osp <plugin-command> --help` and `osp <plugin-command> help` are passed
-  through directly to the plugin process.
-- For delegated help, backbone does not require `ResponseV1` JSON.
-- Plugins may print plain help text to stdout and stderr in this mode.
-- Exit code 0 is preferred for normal help output; exit code 2 is acceptable
-  for usage-style failures.
+Delegated help has one deliberately narrow shape. The host may pass a request
+through directly only when the described command grammar proves that the
+invocation is a path of described command/subcommand names followed by one
+terminal `help`, `--help`, or `-h` token. No option or positional operand may
+appear before the marker. For example, `osp inventory --help`,
+`osp inventory help`, and `osp inventory host --help` are supported.
+If `help` could instead be consumed by a described positional argument, the
+host treats it as execution.
+
+Help-looking text consumed as an option value, text after `--`, a non-terminal
+help token, an option or positional operand before the marker, or an otherwise
+ambiguous argument is normal execution (and therefore requires runnable
+access). If an ambiguous argument could hide a described nested command, the
+host rejects the invocation and asks the plugin to describe that grammar; it
+never evaluates the weaker parent policy and starts the process. Plugins must
+describe every option and positional argument that can appear before a nested
+command.
+
+For delegated help, backbone does not require `ResponseV1` JSON. Plugins may
+print plain help text to stdout and stderr in this mode. Exit code 0 is
+preferred for normal help output; exit code 2 is acceptable for usage-style
+failures.
 
 ## Describe Caching (Backbone Behavior)
 

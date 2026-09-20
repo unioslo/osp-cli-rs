@@ -25,6 +25,7 @@ impl<'a> IntroCommandContext<'a> {
         ui: &'a crate::app::UiState,
     ) -> Self {
         let view = ReplViewContext {
+            context: &runtime.context,
             config: runtime.config.resolved(),
             ui,
             auth: &runtime.auth,

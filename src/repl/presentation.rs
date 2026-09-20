@@ -404,28 +404,27 @@ fn resolve_intro_placeholder(
     intro_commands: &[String],
     key: &str,
 ) -> String {
+    let effective_user = || {
+        view.context
+            .authenticated_subject()
+            .or_else(|| view.config.get_string("user.name"))
+            .unwrap_or("anonymous")
+    };
     match key {
         "help" => return "{{ help }}".to_string(),
         "overview" => return "{{ overview }}".to_string(),
         "user" => {
-            return view
-                .config
-                .get_string("user.name")
-                .unwrap_or("anonymous")
-                .to_string();
+            return effective_user().to_string();
         }
         "user.name" => {
-            return view
-                .config
-                .get_string("user.name")
-                .unwrap_or("anonymous")
-                .to_string();
+            return effective_user().to_string();
         }
         "display_name" => {
             return view
                 .config
                 .get_string("user.display_name")
                 .or_else(|| view.config.get_string("user.full_name"))
+                .or_else(|| view.context.authenticated_subject())
                 .or_else(|| view.config.get_string("user.name"))
                 .unwrap_or("anonymous")
                 .to_string();
@@ -435,6 +434,7 @@ fn resolve_intro_placeholder(
                 .config
                 .get_string("user.display_name")
                 .or_else(|| view.config.get_string("user.full_name"))
+                .or_else(|| view.context.authenticated_subject())
                 .or_else(|| view.config.get_string("user.name"))
                 .unwrap_or("anonymous")
                 .to_string();
@@ -449,7 +449,7 @@ fn resolve_intro_placeholder(
         }
         "session.user_value" => {
             return if view.auth.policy_context().authenticated {
-                view.config.get_string("user.name").unwrap_or("anonymous")
+                effective_user()
             } else {
                 "Not authenticated"
             }
@@ -625,8 +625,9 @@ impl ReplPromptState {
             simple: repl_simple_prompt(view.config),
             profile: view.config.active_profile().to_string(),
             user: view
-                .config
-                .get_string("user.name")
+                .context
+                .authenticated_subject()
+                .or_else(|| view.config.get_string("user.name"))
                 .unwrap_or("anonymous")
                 .to_string(),
             domain: view

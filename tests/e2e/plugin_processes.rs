@@ -202,3 +202,94 @@ JSON
     );
     assert!(!execution_marker.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn option_looking_plugin_argument_cannot_turn_denied_execution_into_help() {
+    let home = make_temp_dir("osp-e2e-plugin-option-looking-home");
+    let plugins = make_temp_dir("osp-e2e-plugin-option-looking-plugins");
+    let execution_marker = home.path().join("plugin-executed");
+    let plugin_path = plugins.path().join("osp-option-looking");
+    let script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"option-looking","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"option-looking","about":"guarded plugin","auth":{{"visibility":"authenticated"}},"args":[{{"name":"first"}},{{"name":"second"}}],"flags":{{}},"subcommands":[]}}]}}
+JSON
+  exit 0
+fi
+
+touch "{marker}"
+echo "unexpected help or execution" >&2
+exit 0
+"#,
+        marker = execution_marker.display(),
+    );
+    write_executable_script(&plugin_path, &script);
+
+    let output = osp_command(home.path())
+        .env("OSP_PLUGIN_PATH", plugins.path())
+        .args(["option-looking", "--unknown-value", "--help"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(!execution_marker.exists());
+    let stderr = stderr_utf8(output.stderr);
+    assert!(stderr.contains("requires authentication"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("unexpected"));
+
+    let output = osp_command(home.path())
+        .env("OSP_PLUGIN_PATH", plugins.path())
+        .args(["option-looking", "ordinary", "help"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(!execution_marker.exists());
+    let stderr = stderr_utf8(output.stderr);
+    assert!(stderr.contains("requires authentication"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("unexpected"));
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_child_inherits_parent_auth_policy_before_process_start() {
+    let home = make_temp_dir("osp-e2e-plugin-inherited-auth-home");
+    let plugins = make_temp_dir("osp-e2e-plugin-inherited-auth-plugins");
+    let execution_marker = home.path().join("plugin-executed");
+    let plugin_path = plugins.path().join("osp-inherited-auth");
+    let script = format!(
+        r#"#!/bin/sh
+PATH=/usr/bin:/bin
+if [ "$1" = "--describe" ]; then
+  cat <<'JSON'
+{{"protocol_version":1,"plugin_id":"inherited-auth","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{{"name":"inherited-auth","about":"parent-auth plugin","auth":{{"visibility":"authenticated"}},"args":[],"flags":{{}},"subcommands":[{{"name":"child","about":"inherited child","args":[],"flags":{{}},"subcommands":[]}}]}}]}}
+JSON
+  exit 0
+fi
+
+touch "{marker}"
+cat <<'JSON'
+{{"protocol_version":1,"ok":true,"data":{{"message":"should-not-run"}},"error":null,"meta":{{"format_hint":"table"}}}}
+JSON
+"#,
+        marker = execution_marker.display(),
+    );
+    write_executable_script(&plugin_path, &script);
+
+    let output = osp_command(home.path())
+        .env("OSP_PLUGIN_PATH", plugins.path())
+        .args(["inherited-auth", "child"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+
+    assert!(!execution_marker.exists());
+    let stderr = stderr_utf8(output.stderr);
+    assert!(stderr.contains("requires authentication"), "{stderr}");
+}

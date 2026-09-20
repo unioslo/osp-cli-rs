@@ -1,6 +1,6 @@
 use super::*;
 use miette::WrapErr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 fn env_lock() -> &'static Mutex<()> {
     crate::tests::env_lock()
@@ -108,6 +108,26 @@ impl crate::NativeCommand for CompletionRefreshingNativeCommand {
 }
 
 struct AuthenticatedBuiltinRecovery;
+
+#[derive(Clone, Default)]
+struct StartupResolutionProbe(Arc<Mutex<Vec<(String, crate::app::TerminalKind)>>>);
+
+impl crate::app::StartupHook for StartupResolutionProbe {
+    fn prepare(&self, runtime: &mut crate::app::AppRuntime) -> miette::Result<()> {
+        self.0
+            .lock()
+            .expect("startup probe should not be poisoned")
+            .push((
+                runtime
+                    .config_state()
+                    .resolved()
+                    .active_profile()
+                    .to_string(),
+                runtime.context().terminal_kind(),
+            ));
+        Ok(())
+    }
+}
 
 impl crate::app::CommandAccessRecovery for AuthenticatedBuiltinRecovery {
     fn refresh(&self, _runtime: &mut crate::app::AppRuntime) -> miette::Result<()> {
@@ -237,6 +257,89 @@ fn app_public_entrypoints_cover_owned_runner_and_free_process_wrappers_unit() {
         );
         assert!(!sink.stdout.is_empty());
         assert!(sink.stderr.is_empty());
+    });
+}
+
+#[cfg_attr(miri, ignore = "public app bootstrap integration test")]
+#[test]
+fn startup_hook_receives_parent_owned_profile_and_terminal_resolution_unit() {
+    with_test_xdg_env(|| {
+        let mut product_defaults = crate::config::ConfigLayer::default();
+        product_defaults.set("profile.default", "default");
+        product_defaults.set_for_profile("production", "ui.format", "table");
+        product_defaults.set("theme.path", Vec::<String>::new());
+
+        let probe = StartupResolutionProbe::default();
+        let run = |args: &[&str]| {
+            let mut sink = BufferedUiSink::default();
+            let exit = crate::app::App::builder()
+                .with_product_defaults(product_defaults.clone())
+                .with_startup_hook(probe.clone())
+                .build()
+                .run_with_sink(args, &mut sink)
+                .expect("prepared command should run");
+            assert_eq!(exit, 0, "startup probe command should succeed");
+        };
+
+        run(&["osp", "production", "intro"]);
+        run(&["osp", "--profile", "production", "intro"]);
+        run(&[
+            "osp",
+            "--profile",
+            "production",
+            "config",
+            "get",
+            "profile.active",
+        ]);
+
+        assert_eq!(
+            *probe
+                .0
+                .lock()
+                .expect("startup probe should not be poisoned"),
+            vec![
+                ("production".to_string(), crate::app::TerminalKind::Repl),
+                ("production".to_string(), crate::app::TerminalKind::Repl),
+                ("production".to_string(), crate::app::TerminalKind::Cli),
+            ]
+        );
+    });
+}
+
+#[cfg_attr(miri, ignore = "public app startup context integration test")]
+#[test]
+fn startup_hook_can_publish_authenticated_subject_without_re_resolving_config_unit() {
+    with_test_xdg_env(|| {
+        #[derive(Clone)]
+        struct SubjectHook(Arc<Mutex<Option<String>>>);
+
+        impl crate::app::StartupHook for SubjectHook {
+            fn prepare(&self, runtime: &mut crate::app::AppRuntime) -> miette::Result<()> {
+                runtime.set_authenticated_subject(Some("alice"));
+                *self.0.lock().expect("subject probe should not be poisoned") = runtime
+                    .context()
+                    .authenticated_subject()
+                    .map(ToOwned::to_owned);
+                Ok(())
+            }
+        }
+
+        let subject = Arc::new(Mutex::new(None));
+        let mut sink = BufferedUiSink::default();
+        let exit = crate::app::App::builder()
+            .with_startup_hook(SubjectHook(subject.clone()))
+            .build()
+            .run_with_sink(["osp", "config", "get", "profile.active"], &mut sink)
+            .expect("startup subject command should run");
+
+        assert_eq!(exit, 0);
+        assert_eq!(
+            subject
+                .lock()
+                .expect("subject probe should not be poisoned")
+                .as_deref(),
+            Some("alice")
+        );
     });
 }
 

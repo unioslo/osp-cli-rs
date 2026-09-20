@@ -991,32 +991,34 @@ impl PluginManager {
         command: &str,
         args: &[String],
         provider_override: Option<&str>,
-    ) -> (
+    ) -> Result<(
         CommandPath,
         crate::core::command_policy::CommandPolicyRegistry,
         bool,
-    ) {
+    )> {
         self.with_dispatch_view(|view| {
             let mut policy = crate::core::command_policy::CommandPolicyRegistry::new();
             let Ok(ProviderResolution::Selected(selection)) =
                 view.resolve_provider(command, provider_override)
             else {
-                return (CommandPath::new([command]), policy, false);
+                return Ok((CommandPath::new([command]), policy, false));
             };
             let Some(describe) = selection
                 .plugin
                 .canonical_command(command)
                 .and_then(|command| command.describe())
             else {
-                return (CommandPath::new([command]), policy, false);
+                return Ok((CommandPath::new([command]), policy, false));
             };
 
             register_describe_command_policies(&mut policy, describe, &[]);
-            (
-                describe.resolved_subcommand_path(args),
-                policy,
-                describe.is_help_invocation(args),
-            )
+            let resolved = describe.resolve_invocation(args);
+            if resolved.ambiguous {
+                return Err(anyhow!(
+                    "cannot resolve plugin command `{command}`: its describe metadata does not cover the arguments before a nested command; pass a described option/argument or run the plugin directly"
+                ));
+            }
+            Ok((resolved.path, policy, resolved.delegated_help))
         })
     }
 
