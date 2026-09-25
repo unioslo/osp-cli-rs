@@ -35,6 +35,27 @@ fn run_cli_stdout_with_config(config_toml: Option<&str>, args: &[&str]) -> Strin
 }
 
 #[test]
+fn alias_catalog_preserves_configured_pipeline_templates_contract() {
+    let stdout = run_cli_stdout_with_config(
+        Some("[default]\nalias.recent = 'history list | L 5'\n"),
+        &[
+            "--no-env",
+            "--json",
+            "alias",
+            "list",
+            "|",
+            "F name=recent",
+            "|",
+            "P name template",
+        ],
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stdout).unwrap(),
+        serde_json::json!([{"name": "recent", "template": "history list | L 5"}])
+    );
+}
+
+#[test]
 fn intro_command_emits_semantic_json_with_explicit_format_contract() {
     let stdout = run_cli_stdout(&["--no-env", "--no-config-file", "--json", "intro"]);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("intro JSON should parse");

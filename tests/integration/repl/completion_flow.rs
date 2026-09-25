@@ -77,6 +77,11 @@ fn repl_completion_flow_tracks_committed_scope_and_consumed_flags() {
     let committed_flag = match_labels(&debug_complete_payload("config show --raw ", &[]));
     assert!(!committed_flag.contains(&"--raw".to_string()));
     assert!(committed_flag.contains(&"--sources".to_string()));
+
+    let pipeline = match_labels(&debug_complete_payload("config show | ", &[]));
+    for verb in ["F", "P", "S", "G"] {
+        assert!(pipeline.contains(&verb.to_string()), "{pipeline:?}");
+    }
 }
 
 #[test]

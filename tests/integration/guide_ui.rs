@@ -40,6 +40,25 @@ fn guide_payload_narrowing_restores_and_renders_as_markdown_guide() {
 }
 
 #[test]
+fn one_shot_help_pipeline_explains_sort_syntax_and_examples() {
+    let mut sink = osp_cli::app::BufferedUiSink::default();
+    let exit = osp_cli::App::new()
+        .run_with_sink(
+            ["osp", "--defaults-only", "--plain", "--help", "|", "H", "S"],
+            &mut sink,
+        )
+        .unwrap();
+    assert_eq!(exit, 0);
+    let text = sink.stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        text.contains("S field [asc|desc] [AS num|str|ip]"),
+        "{text}"
+    );
+    assert!(text.contains("S -created_at id"), "{text}");
+    assert!(sink.stderr.is_empty());
+}
+
+#[test]
 fn guide_payload_value_extraction_degrades_and_renders_as_plain_values() {
     let output = run_guide_pipeline(sample_guide(), "P name | VALUE name | S value | L 2");
     assert!(GuideView::try_from_output_result(&output).is_none());

@@ -130,6 +130,31 @@ fn native_probe_registry() -> NativeCommandRegistry {
     NativeCommandRegistry::new().with_command(NativeProbeCommand)
 }
 
+#[test]
+fn native_session_context_shares_selection_and_redacts_private_state() {
+    let session = osp_cli::NativeSessionContext::default();
+    let next_command = session.clone();
+    session.set_value("selected_target", "private-resource-ref");
+    session.set_prompt_value("selection", "Target", "public-label");
+    assert_eq!(
+        next_command.value("selected_target").as_deref(),
+        Some("private-resource-ref")
+    );
+    let entries = next_command.prompt_entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].label, "Target");
+    assert_eq!(entries[0].value, "public-label");
+    let diagnostic = format!("{next_command:?}");
+    assert!(diagnostic.contains("[redacted]"));
+    assert!(!diagnostic.contains("private-resource-ref"));
+    next_command.remove_prompt_value("selection");
+    assert!(session.prompt_entries().is_empty());
+    assert_eq!(
+        session.value("selected_target").as_deref(),
+        Some("private-resource-ref")
+    );
+}
+
 struct SiteStatusCommand;
 
 struct CuratedOrchRowsCommand;

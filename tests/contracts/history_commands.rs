@@ -16,4 +16,18 @@ fn history_list_is_available_outside_repl_contract() {
         .success()
         .stderr(predicate::str::is_empty())
         .stdout(predicate::str::is_empty());
+
+    // Empty history remains a usable collection in a one-shot pipeline.
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+        .envs(crate::test_env::isolated_env(&home))
+        .args(["--json", "history", "list", "|", "C"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
+        serde_json::json!([{"count": 0}])
+    );
 }

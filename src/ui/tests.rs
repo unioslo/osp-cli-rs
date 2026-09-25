@@ -226,6 +226,7 @@ fn ui2_mreg_renders_nested_object_fields_recursively_unit() {
         "profile" => json!({
             "owner": "alice",
             "groups": ["dev", "ops"],
+            "evidence": [null, "pending", {"source": "inventory"}, ["first", "second"]],
         }),
     }]);
     output.meta.key_index = vec!["uid".to_string(), "profile".to_string()];
@@ -237,8 +238,22 @@ fn ui2_mreg_renders_nested_object_fields_recursively_unit() {
     assert!(rendered.contains("uid:"));
     assert!(rendered.contains("profile:"));
     assert!(rendered.contains("owner:"));
-    assert!(rendered.contains("groups (2): dev"));
+    assert!(
+        rendered
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("groups (2): dev"),
+        "{rendered}"
+    );
     assert!(rendered.contains("ops"));
+    assert!(rendered.contains("evidence (4)"), "{rendered}");
+    for marker in ["[1]", "[2]", "[3]", "[4]"] {
+        assert!(rendered.contains(marker), "{rendered}");
+    }
+    for value in ["pending", "source:", "inventory", "first", "second"] {
+        assert!(rendered.contains(value), "{rendered}");
+    }
     assert!(!rendered.contains("{\"owner\":\"alice\""));
 }
 
@@ -805,4 +820,24 @@ fn ui_help_layout_lowers_mixed_structured_section_data_to_local_block_kinds_unit
         panic!("expected matrix section");
     };
     assert!(matches!(matrix.blocks[0], Block::Table(_)));
+
+    // Verify the lowered grid reaches the terminal with every copyable example
+    // intact, rather than checking only the intermediate block types.
+    let rendered = super::render_structured_output_with_layout(
+        &guide.to_output_result(),
+        &settings,
+        HelpLayout::Full,
+    );
+    for example in ["list", "clear", "last", "search", "export", "import"] {
+        assert!(
+            rendered.contains(&format!("osp history {example}")),
+            "{rendered}"
+        );
+    }
+    assert!(rendered.contains("alice") && rendered.contains("bob"));
+    assert!(
+        rendered
+            .lines()
+            .all(|line| unicode_width::UnicodeWidthStr::width(line) <= 40)
+    );
 }

@@ -12,18 +12,36 @@ fn flat_pipeline_filter_sort_limit_project_produces_ranked_subset() {
         row(json!({"host": "delta", "status": "active", "score": 20, "owner": "api"})),
     ];
 
-    let output = run_rows_pipeline(rows, "F status=active | S score | L 2 | P host score owner");
-    let OutputItems::Rows(rows) = output.items else {
-        panic!("expected flat rows");
-    };
-
-    assert_eq!(
-        rows,
-        vec![
+    for (sort, first) in [
+        (
+            "score",
             row(json!({"host": "beta", "score": 10, "owner": "db"})),
-            row(json!({"host": "delta", "score": 20, "owner": "api"})),
-        ]
-    );
+        ),
+        (
+            "score desc",
+            row(json!({"host": "alpha", "score": 30, "owner": "ops"})),
+        ),
+        (
+            "-score",
+            row(json!({"host": "alpha", "score": 30, "owner": "ops"})),
+        ),
+    ] {
+        let output = run_rows_pipeline(
+            rows.clone(),
+            &format!("F status=active | S {sort} | L 2 | P host score owner"),
+        );
+        let OutputItems::Rows(selected) = output.items else {
+            panic!("expected flat rows");
+        };
+        assert_eq!(
+            selected,
+            vec![
+                first,
+                row(json!({"host": "delta", "score": 20, "owner": "api"}))
+            ],
+            "{sort}"
+        );
+    }
 }
 
 // Protects composed fanout/filter/project/sort behavior on nested row data so
