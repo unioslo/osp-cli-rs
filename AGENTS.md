@@ -13,9 +13,10 @@ If those workspace files are absent, use this repo's own docs and instructions.
 ## Engineering
 
 Prefer simple code, narrow interfaces, existing dependencies, and small
-behavior-preserving refactors. Centralize shared decisions rather than similar
-syntax. For bugs, write a failing regression test first; prefer stable-boundary
-tests and useful public examples over overlapping tests and noisy comments.
+reversible refactors. Centralize shared decisions rather than similar syntax.
+Do not add per-bug regression or negative tests (see the workspace AGENTS.md);
+prefer stable-boundary tests and useful public examples over overlapping tests
+and noisy comments.
 
 ## Commit message contract (enforced in this repo)
 - The installed hook enforces: `<type>(<scope>): <Subject>`
