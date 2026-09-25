@@ -41,10 +41,7 @@ fn guide_payload_narrowing_restores_and_renders_as_markdown_guide() {
 
 #[test]
 fn guide_payload_value_extraction_degrades_and_renders_as_plain_values() {
-    let output = run_guide_pipeline(
-        sample_guide(),
-        "P commands[].name | VALUE name | S value | L 2",
-    );
+    let output = run_guide_pipeline(sample_guide(), "P name | VALUE name | S value | L 2");
     assert!(GuideView::try_from_output_result(&output).is_none());
 
     let rendered = render_output(&output, &RenderSettings::test_plain(OutputFormat::Value));

@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 
+#[cfg(test)]
 use crate::core::{output_model::Group, row::Row};
 
 use crate::dsl::parse::lexer::{Span, StageSegment, tokenize_stage, tokenize_stage_terms};
@@ -25,20 +26,17 @@ pub fn parse_terms(spec: &str) -> Result<Vec<String>> {
 // Row-oriented grouped stages should preserve the group envelope and only
 // transform the rows inside it. Keep that contract in one helper so new stages
 // do not silently diverge.
+#[cfg(test)]
 pub(crate) fn map_group_rows(
     groups: Vec<Group>,
-    mut map_rows: impl FnMut(Vec<Row>) -> Result<Vec<Row>>,
+    map_rows: impl FnMut(Vec<Row>) -> Result<Vec<Row>>,
 ) -> Result<Vec<Group>> {
-    let mut out = Vec::with_capacity(groups.len());
-    for group in groups {
-        let rows = map_rows(group.rows)?;
-        out.push(Group {
-            groups: group.groups,
-            aggregates: group.aggregates,
-            rows,
-        });
+    crate::dsl::model::RowSet {
+        partitions: groups,
+        grouped: true,
     }
-    Ok(out)
+    .map_rows(map_rows)
+    .map(|set| set.partitions)
 }
 
 /// Splits a stage spec into shell-like words without comma handling.

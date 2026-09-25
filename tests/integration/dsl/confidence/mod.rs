@@ -89,3 +89,20 @@ fn help_like_guide() -> GuideView {
         ..GuideView::default()
     }
 }
+
+// Structured JSON fixtures deliberately use the service/document boundary;
+// guide fixtures above use the declared guide-content boundary.
+fn run_document_pipeline(view: GuideView, pipeline: &str) -> OutputResult {
+    let parsed = parse_pipeline(&format!("fixture | {pipeline}")).expect("pipeline should parse");
+    let output = OutputResult::from_rows(Vec::new()).with_document(
+        osp_cli::core::output_model::OutputDocument::new(
+            osp_cli::core::output_model::OutputDocumentKind::Json,
+            view.to_json_value(),
+        ),
+    );
+    apply_output_pipeline(output, &parsed.stages).expect("pipeline should succeed")
+}
+
+fn result_rows(output: &OutputResult) -> Value {
+    serde_json::to_value(output.as_rows().expect("canonical rows")).unwrap()
+}

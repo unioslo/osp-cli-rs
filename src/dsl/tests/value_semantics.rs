@@ -7,6 +7,28 @@ use crate::dsl::{
 
 use super::apply_stage;
 
+fn apply_guide_stage(
+    value: serde_json::Value,
+    stage: &CompiledStage,
+) -> anyhow::Result<serde_json::Value> {
+    let output = crate::core::output_model::OutputResult::from_rows(Vec::new()).with_document(
+        crate::core::output_model::OutputDocument::new(
+            crate::core::output_model::OutputDocumentKind::Guide,
+            value,
+        ),
+    );
+    let output = crate::dsl::engine::run_compiled(
+        output,
+        &crate::dsl::compiled::CompiledPipeline {
+            stages: vec![stage.clone()],
+        },
+    )?;
+    Ok(output
+        .document
+        .map(|document| document.value)
+        .unwrap_or_else(|| crate::core::output_model::output_items_to_value(&output.items)))
+}
+
 fn stage(kind: ParsedStageKind, verb: &str, spec: &str, raw: &str) -> CompiledStage {
     let parsed = ParsedStage::new(kind, verb, spec, raw);
     CompiledStage::from_parsed(&parsed).expect("stage should compile")
@@ -65,12 +87,12 @@ fn quick_keeps_only_matching_root_fields_and_matching_array_elements_unit() {
         ]
     });
 
-    let filtered = apply_stage(value, &stage(ParsedStageKind::Quick, "", "", "show"))
+    let filtered = apply_guide_stage(value, &stage(ParsedStageKind::Quick, "", "", "show"))
         .expect("quick stage should succeed");
 
     assert!(filtered.get("commands").is_some());
-    assert!(filtered.get("usage").is_none());
-    assert!(filtered.get("notes").is_none());
+    assert_eq!(filtered["usage"], json!([]));
+    assert_eq!(filtered["notes"], json!([]));
     let commands = filtered["commands"].as_array().expect("commands array");
     assert_eq!(commands.len(), 1);
     assert_eq!(
@@ -89,38 +111,24 @@ fn quick_keeps_matching_array_object_elements_whole_without_inventing_values_uni
         ]
     });
 
-    let filtered = apply_stage(value, &stage(ParsedStageKind::Quick, "", "", "c"))
+    let filtered = apply_stage(value.clone(), &stage(ParsedStageKind::Quick, "", "", "c"))
         .expect("quick stage should succeed");
 
-    assert_eq!(
-        filtered,
-        json!({
-            "k": [
-                {"a": "d", "k": "c"}
-            ]
-        })
-    );
+    assert_eq!(filtered, json!([value]));
 }
 
 #[test]
-fn quick_narrows_singleton_matching_array_element_when_whole_element_would_be_noop_unit() {
+fn quick_preserves_singleton_matching_array_member_and_siblings_unit() {
     let value = json!({
         "k": [
             {"c2": "d2", "e1": "e2"}
         ]
     });
 
-    let filtered = apply_stage(value, &stage(ParsedStageKind::Quick, "", "", "d2"))
+    let filtered = apply_stage(value.clone(), &stage(ParsedStageKind::Quick, "", "", "d2"))
         .expect("quick stage should succeed");
 
-    assert_eq!(
-        filtered,
-        json!({
-            "k": [
-                {"c2": "d2"}
-            ]
-        })
-    );
+    assert_eq!(filtered, json!([value]));
 }
 
 #[test]
@@ -132,7 +140,7 @@ fn limit_trims_nested_semantic_collections_unit() {
         ]
     });
 
-    let limited = apply_stage(value, &stage(ParsedStageKind::Explicit, "L", "1", "L 1"))
+    let limited = apply_guide_stage(value, &stage(ParsedStageKind::Explicit, "L", "1", "L 1"))
         .expect("limit stage should succeed");
 
     let commands = limited["commands"].as_array().expect("commands array");
@@ -156,7 +164,7 @@ fn quick_preserves_container_metadata_when_descendants_match_unit() {
         ]
     });
 
-    let filtered = apply_stage(value, &stage(ParsedStageKind::Quick, "", "", "show"))
+    let filtered = apply_guide_stage(value, &stage(ParsedStageKind::Quick, "", "", "show"))
         .expect("quick stage should succeed");
 
     let section = &filtered["sections"].as_array().expect("sections")[0];
@@ -167,7 +175,7 @@ fn quick_preserves_container_metadata_when_descendants_match_unit() {
 
 #[test]
 fn filter_preserves_section_metadata_when_descendants_match_unit() {
-    let filtered = apply_stage(
+    let filtered = apply_guide_stage(
         guide_like_value(),
         &stage(ParsedStageKind::Explicit, "F", "name=help", "F name=help"),
     )
@@ -181,15 +189,14 @@ fn filter_preserves_section_metadata_when_descendants_match_unit() {
 }
 
 #[test]
-fn addressed_filter_distinguishes_empty_owners_from_missing_paths_unit() {
+fn addressed_filter_returns_empty_rows_for_mismatches_and_missing_paths_unit() {
     let spec = "sections[0].entries[1].name!=exit";
     let filtered = apply_stage(
         guide_like_value(),
         &stage(ParsedStageKind::Explicit, "F", spec, &format!("F {spec}")),
     )
     .expect("filter stage should succeed");
-    assert_eq!(filtered["sections"][0]["entries"], json!([]));
-    assert_eq!(filtered["commands"].as_array().map(Vec::len), Some(2));
+    assert_eq!(filtered, json!([]));
 
     let spec = "sections[5].entries[0].name=help";
     let filtered = apply_stage(
@@ -197,7 +204,7 @@ fn addressed_filter_distinguishes_empty_owners_from_missing_paths_unit() {
         &stage(ParsedStageKind::Explicit, "F", spec, &format!("F {spec}")),
     )
     .expect("filter stage should succeed");
-    assert_eq!(filtered, json!(null));
+    assert_eq!(filtered, json!([]));
 }
 
 #[test]
@@ -213,10 +220,13 @@ fn project_path_dropper_only_removes_selected_branch_unit() {
     )
     .expect("project stage should succeed");
 
-    let section = &projected["sections"].as_array().expect("sections")[0];
+    let section = &projected[0]["sections"].as_array().expect("sections")[0];
     assert_eq!(section["entries"].as_array().expect("entries").len(), 1);
     assert_eq!(section["entries"][0]["name"], json!("exit"));
-    assert_eq!(projected["commands"].as_array().expect("commands").len(), 2);
+    assert_eq!(
+        projected[0]["commands"].as_array().expect("commands").len(),
+        2
+    );
 }
 
 #[test]
@@ -227,7 +237,7 @@ fn project_structural_selection_preserves_selected_null_array_items_unit() {
     )
     .expect("project stage should succeed");
 
-    assert_eq!(projected, json!({"items": [null]}));
+    assert_eq!(projected, json!([{"items": null}]));
 }
 
 #[test]
@@ -238,7 +248,7 @@ fn project_structural_selection_preserves_user_strings_that_look_like_old_hole_m
     )
     .expect("project stage should succeed");
 
-    assert_eq!(projected, json!({"items": ["\u{0}__osp_sparse_hole__"]}));
+    assert_eq!(projected, json!([{"items": "\u{0}__osp_sparse_hole__"}]));
 }
 
 #[test]
@@ -249,24 +259,23 @@ fn project_relative_path_requires_real_path_matches_unit() {
     )
     .expect("project stage should succeed");
 
-    assert_eq!(projected, json!(null));
+    assert_eq!(projected, json!([]));
 }
 
 #[test]
-fn project_structural_keeper_and_dropper_variants_preserve_section_alignment_unit() {
-    let expected = json!({
-        "sections": [
-            {
-                "title": "Options",
-                "kind": "options",
-                "entries": [{"name": "--verbose"}]
-            }
-        ]
-    });
-
-    for spec in [
-        "title sections[1].entries[0].name",
-        "sections[1].entries[0].name !sections[0]",
+fn project_structural_keeper_and_dropper_variants_preserve_explicit_parent_fields_unit() {
+    for (spec, expected) in [
+        (
+            "title sections[1].entries[0].name",
+            json!([{
+                "sections": [{"title": "Commands"}, {"title": "Options"}],
+                "name": "--verbose"
+            }]),
+        ),
+        (
+            "sections[1].entries[0].name !sections[0]",
+            json!([{"name": "--verbose"}]),
+        ),
     ] {
         let raw = format!("P {spec}");
         let projected = apply_stage(
@@ -280,19 +289,22 @@ fn project_structural_keeper_and_dropper_variants_preserve_section_alignment_uni
 }
 
 #[test]
-fn negated_path_quick_preserves_user_strings_that_look_like_old_remove_markers_unit() {
+fn path_projection_preserves_user_strings_that_look_like_old_remove_markers_unit() {
     let projected = apply_stage(
         json!({"items": ["\u{0}__osp_removed_value__", "drop"]}),
-        &stage(ParsedStageKind::Quick, "", "", "!items[1]"),
+        &stage(ParsedStageKind::Explicit, "P", "!items[1]", "P !items[1]"),
     )
-    .expect("quick stage should succeed");
+    .expect("projection stage should succeed");
 
-    assert_eq!(projected, json!({"items": ["\u{0}__osp_removed_value__"]}));
+    assert_eq!(
+        projected,
+        json!([{"items": ["\u{0}__osp_removed_value__"]}])
+    );
 }
 
 #[test]
 fn value_scope_alias_filters_semantic_entries_by_value_unit() {
-    let filtered = apply_stage(
+    let filtered = apply_guide_stage(
         guide_like_value(),
         &stage(ParsedStageKind::Explicit, "V", "show", "V show"),
     )
@@ -306,7 +318,7 @@ fn value_scope_alias_filters_semantic_entries_by_value_unit() {
 
 #[test]
 fn key_scope_alias_filters_semantic_entries_by_key_unit() {
-    let filtered = apply_stage(
+    let filtered = apply_guide_stage(
         guide_like_value(),
         &stage(ParsedStageKind::Explicit, "K", "name", "K name"),
     )
@@ -319,7 +331,7 @@ fn key_scope_alias_filters_semantic_entries_by_key_unit() {
 
 #[test]
 fn fuzzy_quick_filters_semantic_entries_with_typo_tolerance_unit() {
-    let filtered = apply_stage(
+    let filtered = apply_guide_stage(
         guide_like_value(),
         &stage(ParsedStageKind::Quick, "", "", "% exti"),
     )
@@ -348,7 +360,7 @@ fn fuzzy_quick_rejects_structural_path_tokens_unit() {
 
 #[test]
 fn sort_orders_nested_semantic_entry_collections_unit() {
-    let sorted = apply_stage(
+    let sorted = apply_guide_stage(
         json!({
             "commands": [
                 {"name": "help", "short_help": "Show overview"},
@@ -366,7 +378,7 @@ fn sort_orders_nested_semantic_entry_collections_unit() {
 
 #[test]
 fn group_groups_nested_semantic_entry_collections_unit() {
-    let grouped = apply_stage(
+    let grouped = apply_guide_stage(
         json!({
             "commands": [
                 {"name": "help", "short_help": "Show overview"},
@@ -378,7 +390,7 @@ fn group_groups_nested_semantic_entry_collections_unit() {
     )
     .expect("group stage should succeed");
 
-    let commands = grouped["commands"].as_array().expect("commands");
+    let commands = grouped.as_array().expect("group summaries");
     assert_eq!(commands.len(), 2);
     assert_eq!(commands[0]["groups"]["name"], json!("help"));
     assert_eq!(commands[0]["rows"].as_array().expect("rows").len(), 2);
@@ -387,7 +399,7 @@ fn group_groups_nested_semantic_entry_collections_unit() {
 #[test]
 fn aggregate_and_count_aliases_produce_same_nested_semantic_count_unit() {
     for (verb, spec, raw) in [("A", "count AS count", "A count AS count"), ("C", "", "C")] {
-        let counted = apply_stage(
+        let counted = apply_guide_stage(
             json!({
                 "commands": [
                     {"name": "help", "short_help": "Show overview"},
@@ -398,9 +410,7 @@ fn aggregate_and_count_aliases_produce_same_nested_semantic_count_unit() {
         )
         .expect("counting stage should succeed");
 
-        let commands = counted["commands"].as_array().expect("commands array");
-        assert_eq!(commands.len(), 1, "raw={raw}");
-        assert_eq!(commands[0]["count"], json!(2), "raw={raw}");
+        assert_eq!(counted, json!({"count": 2}), "raw={raw}");
     }
 }
 
@@ -423,7 +433,7 @@ fn unroll_expands_nested_semantic_entry_collections_unit() {
     )
     .expect("unroll stage should succeed");
 
-    let sections = unrolled["sections"].as_array().expect("sections");
+    let sections = unrolled[0]["sections"].as_array().expect("sections");
     assert_eq!(sections.len(), 2);
     assert_eq!(sections[0]["title"], json!("Commands"));
     assert_eq!(sections[0]["entries"]["name"], json!("help"));
@@ -446,11 +456,11 @@ fn question_cleans_nested_semantic_values_unit() {
     )
     .expect("question stage should succeed");
 
-    assert!(cleaned.get("usage").is_none());
-    assert!(cleaned.get("notes").is_none());
-    let commands = cleaned["commands"].as_array().expect("commands");
+    assert_eq!(cleaned[0]["usage"], json!([""]));
+    assert!(cleaned[0].get("notes").is_none());
+    let commands = cleaned[0]["commands"].as_array().expect("commands");
     assert_eq!(commands.len(), 2);
-    assert!(commands[0].get("short_help").is_none());
+    assert_eq!(commands[0]["short_help"], json!(""));
 }
 
 #[test]
@@ -477,7 +487,7 @@ fn copy_stage_preserves_semantic_value_verbatim_unit() {
     let value = guide_like_value();
     let copied =
         apply_stage(value.clone(), &CompiledStage::Copy).expect("copy stage should succeed");
-    assert_eq!(copied, value);
+    assert_eq!(copied, json!([value]));
 }
 
 #[test]
@@ -488,5 +498,5 @@ fn jq_stage_transforms_semantic_values_with_real_jaq_unit() {
     ]);
     let transformed = apply_stage(value, &CompiledStage::Jq("map(.uid)".to_string()))
         .expect("jq stage should succeed");
-    assert_eq!(transformed, json!(["alice", "bob"]));
+    assert_eq!(transformed, json!([{"value": "alice"}, {"value": "bob"}]));
 }

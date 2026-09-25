@@ -1,10 +1,14 @@
+#[cfg(test)]
+use crate::dsl::verbs::common::map_group_rows;
 use std::borrow::Cow;
 use std::collections::HashSet;
 
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use crate::core::{output_model::Group, row::Row};
+#[cfg(test)]
+use crate::core::output_model::Group;
+use crate::core::row::Row;
 use crate::dsl::{
     eval::{
         flatten::{coalesce_flat_row, flatten_row},
@@ -18,7 +22,6 @@ use crate::dsl::{
         key_spec::ExactMode,
         quick::{QuickScope, parse_quick_spec},
     },
-    verbs::common::map_group_rows,
 };
 
 use super::selector;
@@ -106,6 +109,7 @@ pub(crate) fn apply_with_plan(rows: Vec<Row>, plan: &QuickPlan) -> Result<Vec<Ro
         .collect())
 }
 
+#[cfg(test)]
 pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &QuickPlan) -> Result<Vec<Group>> {
     map_group_rows(groups, |rows| apply_with_plan(rows, plan))
 }
@@ -197,44 +201,6 @@ fn unescape_search_token(token: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-pub(crate) fn apply_value(value: Value, raw_stage: &str) -> Result<Value> {
-    let plan = compile(raw_stage)?;
-    apply_value_with_plan(value, &plan)
-}
-
-pub(crate) fn apply_value_with_plan(value: Value, plan: &QuickPlan) -> Result<Value> {
-    apply_value_filter(value, plan, false)
-}
-
-pub(crate) fn apply_value_with_plan_preserving_matching_rows(
-    value: Value,
-    plan: &QuickPlan,
-) -> Result<Value> {
-    apply_value_filter(value, plan, true)
-}
-
-fn apply_value_filter(
-    value: Value,
-    plan: &QuickPlan,
-    preserve_matching_leaf_rows: bool,
-) -> Result<Value> {
-    if plan.spec.is_structural() && plan.spec.negated() && !plan.spec.existence() {
-        return Ok(selector::remove_compiled(
-            value,
-            std::iter::once(&plan.spec.selector),
-        ));
-    }
-    if let Some(matched) = match_structural_value(&value, &plan.spec) {
-        return Ok(if matched { value } else { Value::Null });
-    }
-    selector::filter_descendants_preserving_matching_rows_with_options(
-        value,
-        |row| plan.matches_row_filter_mode(row),
-        !plan.spec.fuzzy,
-        preserve_matching_leaf_rows,
-    )
-}
-
 fn match_structural_value(root: &Value, spec: &CompiledQuickSpec) -> Option<bool> {
     if !spec.is_structural() || spec.key_not_equals {
         return None;
@@ -249,6 +215,22 @@ fn match_structural_value(root: &Value, spec: &CompiledQuickSpec) -> Option<bool
         true
     };
     Some(if spec.negated() { !found } else { found })
+}
+
+#[cfg(test)]
+fn apply_value(value: Value, spec: &str) -> Result<Value> {
+    crate::dsl::value::apply_stage(
+        value,
+        &crate::dsl::compiled::CompiledStage::Quick(compile(spec)?),
+    )
+}
+
+#[cfg(test)]
+fn apply_value_with_plan(value: Value, plan: &QuickPlan) -> Result<Value> {
+    crate::dsl::value::apply_stage(
+        value,
+        &crate::dsl::compiled::CompiledStage::Quick(plan.clone()),
+    )
 }
 
 #[cfg(test)]

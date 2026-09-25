@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow};
-use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LimitSpec {
@@ -71,18 +70,15 @@ pub(crate) fn apply_with_spec<T>(items: Vec<T>, spec: LimitSpec) -> Vec<T> {
     }
 }
 
-pub(crate) fn apply_value_with_spec(value: Value, spec: LimitSpec) -> Result<Value> {
-    match value {
-        Value::Array(items) => Ok(Value::Array(apply_with_spec(items, spec))),
-        Value::Object(map) => {
-            let mut out = Map::new();
-            for (key, child) in map {
-                let limited = apply_value_with_spec(child, spec)?;
-                out.insert(key, limited);
-            }
-            Ok(Value::Object(out))
-        }
-        scalar => Ok(scalar),
+pub(crate) fn apply_set(
+    mut set: crate::dsl::model::RowSet,
+    spec: LimitSpec,
+) -> Result<crate::dsl::model::RowSet> {
+    if set.grouped {
+        set.partitions = apply_with_spec(set.partitions, spec);
+        Ok(set)
+    } else {
+        set.map_rows(|rows| Ok(apply_with_spec(rows, spec)))
     }
 }
 

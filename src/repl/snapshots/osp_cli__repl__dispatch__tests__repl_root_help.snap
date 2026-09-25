@@ -5,7 +5,7 @@ expression: help
 ---
 Usage: [INVOCATION_OPTIONS] COMMAND [ARGS]...
 
-- Commands -------------
+- Commands -------------------------------------------------------------
   exit        Exit application.
   help        Show this command overview.
   last        Replay the last result (--raw before pipes).
@@ -16,5 +16,6 @@ Usage: [INVOCATION_OPTIONS] COMMAND [ARGS]...
   config      Inspect and edit runtime config
   alias       Create and manage command aliases
   history     Inspect or prune REPL history
+------------------------------------------------------------------------
 
 Pipe command output with |; use | H for in-band DSL help.

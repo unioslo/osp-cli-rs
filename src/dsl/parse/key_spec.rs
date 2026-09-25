@@ -24,9 +24,6 @@ impl KeySpec {
         let mut strict_ambiguous = false;
 
         loop {
-            if remaining.starts_with("!=") {
-                break;
-            }
             if let Some(rest) = remaining.strip_prefix('!') {
                 negated = !negated;
                 remaining = rest.trim_start();
@@ -90,9 +87,10 @@ mod tests {
     }
 
     #[test]
-    fn does_not_treat_bang_equal_as_prefix() {
+    fn parses_bang_equal_as_negated_exact_prefix() {
         let spec = KeySpec::parse("!=uid");
-        assert_eq!(spec.token, "!=uid");
-        assert!(!spec.negated);
+        assert_eq!(spec.token, "uid");
+        assert!(spec.negated);
+        assert_eq!(spec.exact, ExactMode::CaseInsensitive);
     }
 }

@@ -874,12 +874,8 @@ JSON
             rows[0].get("usage").is_none(),
             "filtered root help should not retain unrelated usage envelope",
         );
-        let commands = rows[0]["commands"]
-            .as_array()
-            .expect("help row should contain commands");
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0]["name"], "doctor");
-        assert_eq!(commands[0]["short_help"], "Run diagnostics checks");
+        assert_eq!(rows[0]["name"], "doctor");
+        assert_eq!(rows[0]["short_help"], "Run diagnostics checks");
     }
 
     #[test]
@@ -892,30 +888,28 @@ JSON
             .as_array()
             .expect("staged help json should be row array");
         assert_eq!(json_rows.len(), 1);
-        assert!(json_rows[0].get("usage").is_some());
+        assert!(json_rows[0].get("value").is_some());
 
         let mut guide_state = app_state();
         let guide = render_root_help_line(&mut guide_state, "--guide help | L 1");
         assert!(guide.contains("Usage"));
-        assert!(guide.contains("Commands"));
+        assert!(!guide.contains("Commands"));
 
         let mut markdown_state = app_state();
         let markdown = render_root_help_line(&mut markdown_state, "--md help | L 1");
         assert!(markdown.contains("## Usage"));
-        assert!(markdown.contains("## Commands"));
+        assert!(!markdown.contains("## Commands"));
         assert!(!markdown.contains("- `cd` Enter a shellable command scope."));
         assert!(!markdown.contains("| name"));
 
         let mut table_state = app_state();
         let table = render_root_help_line(&mut table_state, "--table help | L 1");
-        assert!(table.contains("usage") || table.contains("Usage"));
-        assert!(table.contains("commands"));
+        assert!(table.contains("value"));
+        assert!(table.contains("COMMAND"));
 
         let mut mreg_state = app_state();
         let mreg = render_root_help_line(&mut mreg_state, "--mreg help | L 1");
         assert!(mreg.contains("usage:") || mreg.contains("Usage"));
-        assert!(
-            mreg.contains("commands:") || mreg.contains("commands (") || mreg.contains("Commands")
-        );
+        assert!(!mreg.contains("Commands"));
     }
 }

@@ -39,12 +39,6 @@ pub fn parse_quick_spec(input: &str) -> QuickSpec {
             remaining = rest.trim_start();
             continue;
         }
-        if let Some(rest) = remaining.strip_prefix("!=") {
-            negated = true;
-            exact = ExactMode::CaseInsensitive;
-            remaining = rest.trim_start();
-            continue;
-        }
         if let Some(rest) = remaining.strip_prefix("==") {
             exact = ExactMode::CaseSensitive;
             strict_ambiguous = true;

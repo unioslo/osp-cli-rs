@@ -101,19 +101,21 @@ pub(super) fn parse_repl_invocation(
                 "plugins" | "doctor" | "theme" | "config" | "alias" | "history" | "intro"
             )
         });
-    let prefixed_tokens = if absolute_builtin {
+    let absolute_external = unscoped.tokens.first().map(String::as_str) == Some("sudo");
+    let absolute_command = absolute_builtin || absolute_external;
+    let prefixed_tokens = if absolute_command {
         parsed.dispatch_tokens.clone()
     } else {
         parsed.prefixed_tokens(&session.scope)
     };
-    let scanned = if absolute_builtin {
+    let scanned = if absolute_command {
         unscoped
     } else {
         scan_command_tokens(&prefixed_tokens)?
     };
     let effective =
         app::resolve_invocation_ui(runtime.config.resolved(), &runtime.ui, &scanned.invocation);
-    let command_index = if absolute_builtin {
+    let command_index = if absolute_command {
         0
     } else {
         session.scope.commands().len()

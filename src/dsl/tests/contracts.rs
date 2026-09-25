@@ -145,24 +145,24 @@ fn nested_array_value_selection_preserves_every_branch_in_document_order() {
 fn nested_array_filter_preserves_every_matching_semantic_branch() {
     let document = deep_array_document();
 
-    let mut filtered_documents = Vec::new();
+    // This is a service record, not a declared GuideView. Filtering selects
+    // the complete row; nested matching leaves do not become a new document.
+    let mut filtered_outputs = Vec::new();
     for selector in ["clusters[].nodes[].disks[].ssd", "clusters.nodes.disks.ssd"] {
         let output = OutputResult::from_rows(Vec::new()).with_document(OutputDocument::new(
-            OutputDocumentKind::Guide,
+            OutputDocumentKind::Json,
             document.clone(),
         ));
         let filtered = apply_output_pipeline(output, &[format!("F {selector}=true")])
             .expect("nested semantic filter should work");
-        filtered_documents.push(
-            filtered
-                .document
-                .expect("semantic document should remain attached")
-                .value,
-        );
+        filtered_outputs.push(filtered);
     }
 
-    assert_eq!(filtered_documents[0], filtered_documents[1]);
-    for filtered in &filtered_documents {
+    assert_eq!(filtered_outputs[0].items, filtered_outputs[1].items);
+    for output in &filtered_outputs {
+        let rows = output.as_rows().expect("canonical row output");
+        assert_eq!(rows.len(), 1);
+        let filtered = &rows[0];
         let clusters = filtered["clusters"]
             .as_array()
             .expect("clusters should remain an array");
@@ -174,9 +174,12 @@ fn nested_array_filter_preserves_every_matching_semantic_branch() {
         assert!(nodes.iter().all(|node| {
             node["disks"]
                 .as_array()
-                .is_some_and(|disks| disks.len() == 1)
+                .is_some_and(|disks| disks.iter().any(|disk| disk["ssd"] == true))
         }));
-        assert_eq!(clusters[1], deep_array_document()["clusters"][1]);
+        assert_eq!(filtered, &row(deep_array_document()));
+        assert_eq!(output.meta.key_index, vec!["clusters".to_string()]);
+        assert!(!output.meta.grouped);
+        assert!(output.document.is_none());
     }
 }
 
@@ -192,7 +195,7 @@ fn semantic_value_selection_flattens_leaves_into_value_rows() {
         "counts": {"current": 2}
     });
     let output = OutputResult::from_rows(Vec::new())
-        .with_document(OutputDocument::new(OutputDocumentKind::Guide, document));
+        .with_document(OutputDocument::new(OutputDocumentKind::Json, document));
 
     let extracted = apply_output_pipeline(output, &["VALUE siteadmins.current.name".to_string()])
         .expect("semantic value selection should work");
@@ -202,20 +205,13 @@ fn semantic_value_selection_flattens_leaves_into_value_rows() {
     ];
 
     assert_eq!(extracted.items, OutputItems::Rows(expected));
-    assert_eq!(
-        extracted
-            .document
-            .expect("transformed semantic value should remain attached")
-            .value,
-        json!([
-            {"value": "drift-team"},
-            {"value": "web-team"}
-        ])
-    );
+    assert_eq!(extracted.meta.key_index, vec!["value".to_string()]);
+    assert!(!extracted.meta.grouped);
+    assert!(extracted.document.is_none());
 }
 
 #[test]
-fn addressed_filter_keeps_complete_owning_members_and_sibling_branches() {
+fn addressed_filter_keeps_complete_rows_and_sibling_branches() {
     let document = json!({
         "siteadmins": {
             "current": [
@@ -230,20 +226,18 @@ fn addressed_filter_keeps_complete_owning_members_and_sibling_branches() {
         "counts": {"current": 2, "pending": 1}
     });
     let output = OutputResult::from_rows(Vec::new())
-        .with_document(OutputDocument::new(OutputDocumentKind::Guide, document));
+        .with_document(OutputDocument::new(OutputDocumentKind::Json, document));
 
     let filtered = apply_output_pipeline(output, &["F siteadmins.current[].hosts>10".to_string()])
         .expect("addressed semantic filter should work");
 
     assert_eq!(
-        filtered
-            .document
-            .expect("filtered semantic document should remain attached")
-            .value,
-        json!({
+        filtered.items,
+        OutputItems::Rows(vec![row(json!({
             "siteadmins": {
                 "current": [
-                    {"name": "drift-team", "role": "primary", "hosts": 42}
+                    {"name": "drift-team", "role": "primary", "hosts": 42},
+                    {"name": "web-team", "role": "secondary", "hosts": 7}
                 ],
                 "pending": [
                     {"name": "new-team", "role": "primary", "hosts": 0}
@@ -251,8 +245,18 @@ fn addressed_filter_keeps_complete_owning_members_and_sibling_branches() {
             },
             "netgroup": "uio-drift",
             "counts": {"current": 2, "pending": 1}
-        })
+        }))])
     );
+    assert_eq!(
+        filtered.meta.key_index,
+        vec![
+            "siteadmins".to_string(),
+            "netgroup".to_string(),
+            "counts".to_string()
+        ]
+    );
+    assert!(!filtered.meta.grouped);
+    assert!(filtered.document.is_none());
 }
 
 #[test]

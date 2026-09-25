@@ -9,7 +9,8 @@
 //! - high-level verb flow belongs in `dsl::engine` and `dsl::verbs`
 //! - evaluator helpers should stay focused on data selection semantics
 
-pub mod context;
+#[cfg(test)]
+mod context;
 pub mod flatten;
 pub mod matchers;
 pub mod resolve;

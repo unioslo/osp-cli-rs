@@ -70,7 +70,11 @@ fn top_level_help_supports_all_explicit_output_formats_contract() {
     let table = run_cli_stdout(&["--no-env", "--no-config-file", "--table", "--help"]);
     assert!(table.contains("preamble"));
     assert!(table.contains("usage"));
-    assert!(table.contains("commands"));
+    assert!(
+        table
+            .lines()
+            .all(|line| unicode_width::UnicodeWidthStr::width(line) <= 80)
+    );
 
     let mreg = run_cli_stdout(&["--no-env", "--no-config-file", "--mreg", "--help"]);
     assert!(mreg.contains("preamble:"));

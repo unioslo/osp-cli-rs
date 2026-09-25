@@ -1,22 +1,23 @@
-use crate::core::{
-    output_model::{Group, OutputItems},
-    row::Row,
-};
+#[cfg(test)]
+use crate::core::output_model::OutputItems;
+use crate::core::{output_model::Group, row::Row};
 use anyhow::{Result, anyhow};
-
-use super::json;
 
 /// Collapses grouped output into summary rows of group headers and aggregates.
 ///
 /// Returns an error when called on flat rows.
-pub fn apply(items: OutputItems) -> Result<OutputItems> {
-    match items {
-        OutputItems::Rows(_) => Err(anyhow!("Z requires grouped output; use G before Z")),
-        OutputItems::Groups(groups) => {
-            let collapsed = groups.into_iter().map(collapse_group).collect();
-            Ok(OutputItems::Rows(collapsed))
-        }
+pub(crate) fn apply_set(set: crate::dsl::model::RowSet) -> Result<crate::dsl::model::RowSet> {
+    if !set.grouped {
+        return Err(anyhow!("Z requires grouped output; use G before Z"));
     }
+    Ok(crate::dsl::model::RowSet::rows(
+        set.partitions.into_iter().map(collapse_group).collect(),
+    ))
+}
+
+#[cfg(test)]
+fn apply(items: OutputItems) -> Result<OutputItems> {
+    apply_set(items.into()).map(Into::into)
 }
 
 fn collapse_group(group: Group) -> Row {
@@ -24,10 +25,6 @@ fn collapse_group(group: Group) -> Row {
     summary.extend(group.groups);
     summary.extend(group.aggregates);
     summary
-}
-
-pub(crate) fn apply_value(value: serde_json::Value) -> Result<serde_json::Value> {
-    json::traverse_collections(value, apply)
 }
 
 #[cfg(test)]

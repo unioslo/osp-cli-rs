@@ -1,7 +1,6 @@
-use crate::core::{
-    output_model::{Group, OutputItems, rows_from_value},
-    row::Row,
-};
+#[cfg(test)]
+use crate::core::output_model::OutputItems;
+use crate::core::output_model::{Group, rows_from_value};
 use anyhow::Result;
 use jaq_core::{
     Ctx, Vars, data,
@@ -61,52 +60,42 @@ pub(crate) fn compile(spec: &str) -> std::result::Result<String, JqError> {
     Ok(expr)
 }
 
-pub(crate) fn apply_with_expr(items: OutputItems, expr: &str) -> Result<OutputItems> {
+pub(crate) fn apply_set(
+    mut set: crate::dsl::model::RowSet,
+    expr: &str,
+) -> Result<crate::dsl::model::RowSet> {
     let program = compile_program(expr)?;
-    match items {
-        OutputItems::Rows(rows) => Ok(OutputItems::Rows(apply_rows(rows, &program)?)),
-        OutputItems::Groups(groups) => Ok(OutputItems::Groups(apply_groups(groups, &program)?)),
-    }
-}
-
-pub(crate) fn apply_value_with_expr(value: Value, expr: &str) -> Result<Value> {
-    let program = compile_program(expr)?;
-    Ok(run_jaq(&program, &value)?.unwrap_or(Value::Array(Vec::new())))
-}
-
-fn apply_rows(rows: Vec<Row>, program: &JaqProgram) -> Result<Vec<Row>> {
-    let payload = Value::Array(rows.into_iter().map(Value::Object).collect());
-    match run_jaq(program, &payload)? {
-        None => Ok(Vec::new()),
-        Some(value) => Ok(rows_from_value(value)),
-    }
-}
-
-fn apply_groups(groups: Vec<Group>, program: &JaqProgram) -> Result<Vec<Group>> {
-    let mut out = Vec::with_capacity(groups.len());
-    for group in groups {
-        let payload = group_to_value(&group);
-        match run_jaq(program, &payload)? {
-            None => out.push(Group {
-                groups: group.groups,
-                aggregates: group.aggregates,
-                rows: Vec::new(),
-            }),
-            Some(value) => {
-                if let Some(replacement) = value_to_group(&value, &group) {
-                    out.push(replacement);
-                } else {
-                    let rows = rows_from_value(value);
-                    out.push(Group {
-                        groups: group.groups,
-                        aggregates: group.aggregates,
-                        rows,
-                    });
-                }
-            }
+    for partition in &mut set.partitions {
+        let payload = if set.grouped {
+            group_to_value(partition)
+        } else {
+            Value::Array(partition.rows.iter().cloned().map(Value::Object).collect())
+        };
+        let value = run_jaq(&program, &payload)?;
+        if set.grouped
+            && let Some(replacement) = value
+                .as_ref()
+                .and_then(|value| value_to_group(value, partition))
+        {
+            *partition = replacement;
+        } else {
+            partition.rows = value.map(rows_from_value).unwrap_or_default();
         }
     }
-    Ok(out)
+    Ok(set)
+}
+
+#[cfg(test)]
+fn apply_with_expr(items: OutputItems, expr: &str) -> Result<OutputItems> {
+    apply_set(items.into(), expr).map(Into::into)
+}
+
+#[cfg(test)]
+fn apply_value_with_expr(value: Value, expr: &str) -> Result<Value> {
+    crate::dsl::value::apply_stage(
+        value,
+        &crate::dsl::compiled::CompiledStage::Jq(expr.to_string()),
+    )
 }
 
 fn group_to_value(group: &Group) -> Value {

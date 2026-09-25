@@ -26,11 +26,14 @@ pub(crate) fn run_cli_builtin_command_parts(
     clients: &AppClients,
     invocation: &ResolvedInvocation,
     command: Commands,
+    stages: &[String],
     sink: &mut dyn UiSink,
 ) -> Result<i32> {
+    ensure_command_supports_dsl(&repl::repl_command_spec(&command), stages)?;
     let result = BuiltinExecutor::new(runtime, session, clients)
         .dispatch(BuiltinSurface::Cli(&invocation.ui), command)?
         .ok_or_else(|| miette!("expected builtin command"))?;
+    let result = super::command_output::apply_stages_to_cli_result(result, stages)?;
     run_cli_command_with_ui(runtime.config.resolved(), &invocation.ui, result, sink)
 }
 

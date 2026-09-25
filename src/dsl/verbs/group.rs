@@ -25,8 +25,6 @@ use crate::dsl::{
     verbs::common::{parse_optional_alias_after_key, parse_stage_words},
 };
 
-use super::json;
-
 #[derive(Debug, Clone)]
 struct GroupKeyPlan {
     key_spec: KeySpec,
@@ -201,7 +199,8 @@ fn resolve_group_pairs(row: &Row, key_plan: &GroupKeyPlan) -> Result<Vec<(String
 
     reject_structured_container_token(row, key_plan, &keys)?;
 
-    if !key_plan.allow_multiple && keys.len() > 1 {
+    // Existence reduces all matching leaves to one boolean dimension.
+    if !key_plan.key_spec.existence && !key_plan.allow_multiple && keys.len() > 1 {
         return Err(anyhow!(
             "G: token '{}' matched multiple keys: {}",
             key_plan.key_spec.token,
@@ -299,14 +298,21 @@ impl GroupBuckets {
         self.groups
     }
 }
-
-pub(crate) fn apply_value_with_plan(value: Value, plan: &GroupPlan) -> Result<Value> {
-    json::traverse_collections(value, |items| match items {
-        crate::core::output_model::OutputItems::Rows(rows) => Ok(
-            crate::core::output_model::OutputItems::Groups(group_rows_with_plan(rows, plan)?),
-        ),
-        crate::core::output_model::OutputItems::Groups(groups) => Ok(
-            crate::core::output_model::OutputItems::Groups(regroup_groups_with_plan(groups, plan)?),
-        ),
-    })
+pub(crate) fn apply_set(
+    mut set: crate::dsl::model::RowSet,
+    plan: &GroupPlan,
+) -> Result<crate::dsl::model::RowSet> {
+    set.partitions = if set.grouped {
+        regroup_groups_with_plan(set.partitions, plan)?
+    } else {
+        group_rows_with_plan(
+            set.partitions
+                .into_iter()
+                .flat_map(|part| part.rows)
+                .collect(),
+            plan,
+        )?
+    };
+    set.grouped = true;
+    Ok(set)
 }

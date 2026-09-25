@@ -20,6 +20,7 @@ fn plugin_dispatch_propagates_runtime_hints_contract() {
     let dir = make_temp_dir("osp-cli-plugin-runtime-hints");
     let _plugin_path = write_hints_plugin(&dir);
     let home = make_temp_dir("osp-cli-plugin-runtime-home");
+    write_config(&home, "[profile.tsd]\n");
 
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     let output = cmd

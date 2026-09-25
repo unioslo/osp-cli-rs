@@ -192,6 +192,8 @@ impl NativeCommand for TestNativeCommand {
                 column_align: Vec::new(),
                 column_labels: Vec::new(),
                 row_path: None,
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: false,
             },
         })))

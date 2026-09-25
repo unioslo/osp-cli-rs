@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::completion::model::{
-    ArgNode, CompletionNode, CompletionTree, FlagHints, FlagNode, SuggestionEntry,
+    ArgNode, CompletionNode, CompletionTree, FlagHints, FlagNode, PlanningHints, SuggestionEntry,
 };
 use crate::core::command_def::{ArgDef, CommandDef, FlagDef, ValueChoice, ValueKind};
 use thiserror::Error;
@@ -67,6 +67,8 @@ pub struct CommandSpec {
     pub flags: BTreeMap<String, FlagNode>,
     /// Provider-aware flag visibility and requiredness hints.
     pub flag_hints: Option<FlagHints>,
+    /// Optional advisory relational facts used to narrow explicit flag values.
+    pub planning: Option<PlanningHints>,
     /// Nested subcommands below this command.
     pub subcommands: Vec<CommandSpec>,
 }
@@ -131,6 +133,12 @@ impl CommandSpec {
     /// Attaches provider-aware flag visibility and requiredness hints.
     pub fn flag_hints(mut self, hints: FlagHints) -> Self {
         self.flag_hints = Some(hints);
+        self
+    }
+
+    /// Attaches optional advisory relational facts to this command.
+    pub fn planning(mut self, planning: PlanningHints) -> Self {
+        self.planning = Some(planning);
         self
     }
 
@@ -288,6 +296,7 @@ impl CompletionTreeBuilder {
             args: spec.args.clone(),
             flags: spec.flags.clone(),
             flag_hints: spec.flag_hints.clone(),
+            planning: spec.planning.clone(),
             ..CompletionNode::default()
         };
 
@@ -322,6 +331,7 @@ pub(crate) fn command_spec_from_command_def(def: &CommandDef) -> CommandSpec {
             required_common,
             ..FlagHints::default()
         }),
+        planning: None,
         subcommands: def
             .subcommands
             .iter()

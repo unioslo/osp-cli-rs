@@ -52,3 +52,64 @@ pub struct ParsedPipeline {
     pub raw: String,
     pub stages: Vec<ParsedStage>,
 }
+
+/// The sole execution substrate. Ungrouped data has one partition (even when
+/// empty); G creates named partitions. Keys and aggregates are partition
+/// metadata, never synthetic fields inserted into member rows.
+pub(crate) struct RowSet {
+    pub partitions: Vec<crate::core::output_model::Group>,
+    pub grouped: bool,
+}
+
+impl RowSet {
+    pub fn rows(rows: Vec<crate::core::row::Row>) -> Self {
+        Self {
+            partitions: vec![crate::core::output_model::Group {
+                groups: Default::default(),
+                aggregates: Default::default(),
+                rows,
+            }],
+            grouped: false,
+        }
+    }
+
+    pub fn map_rows(
+        mut self,
+        mut transform: impl FnMut(
+            Vec<crate::core::row::Row>,
+        ) -> anyhow::Result<Vec<crate::core::row::Row>>,
+    ) -> anyhow::Result<Self> {
+        for partition in &mut self.partitions {
+            partition.rows = transform(std::mem::take(&mut partition.rows))?;
+        }
+        Ok(self)
+    }
+}
+
+impl From<crate::core::output_model::OutputItems> for RowSet {
+    fn from(items: crate::core::output_model::OutputItems) -> Self {
+        use crate::core::output_model::OutputItems;
+        match items {
+            OutputItems::Rows(rows) => Self::rows(rows),
+            OutputItems::Groups(partitions) => Self {
+                partitions,
+                grouped: true,
+            },
+        }
+    }
+}
+
+impl From<RowSet> for crate::core::output_model::OutputItems {
+    fn from(set: RowSet) -> Self {
+        if set.grouped {
+            Self::Groups(set.partitions)
+        } else {
+            Self::Rows(
+                set.partitions
+                    .into_iter()
+                    .flat_map(|partition| partition.rows)
+                    .collect(),
+            )
+        }
+    }
+}

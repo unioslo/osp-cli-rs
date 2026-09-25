@@ -10,10 +10,13 @@
 //! - this layer may depend on fuzzy matching and provider context helpers
 //! - it should not own shell parsing or terminal rendering
 
-use crate::completion::context::{ProviderSelection, TreeResolver};
+use crate::completion::context::{
+    ProviderSelection, TreeResolver, matching_scoped_planning_rows, planning_column_for_flag,
+    planning_row_value, planning_scope_is_known,
+};
 use crate::completion::model::{
-    CommandLine, CompletionAnalysis, CompletionNode, CompletionRequest, CompletionTree, Suggestion,
-    SuggestionEntry, SuggestionOutput, ValueType,
+    CommandLine, CompletionAnalysis, CompletionNode, CompletionRequest, CompletionTree,
+    PlanningValue, Suggestion, SuggestionEntry, SuggestionOutput, ValueType,
 };
 use crate::core::fuzzy::{completion_fuzzy_matcher, fold_case};
 use std::collections::BTreeSet;
@@ -110,7 +113,11 @@ impl SuggestionEngine {
         let stub = analysis.cursor.token_stub.as_str();
         let resolver = TreeResolver::new(&self.tree);
         let nodes = resolver.resolved_nodes(&analysis.context);
-        let provider = ProviderSelection::from_command(cmd, nodes.flag_scope_node);
+        let planning_cmd = match request {
+            CompletionRequest::FlagValues { flag, .. } => command_without_current_value(cmd, flag),
+            _ => cmd.clone(),
+        };
+        let provider = ProviderSelection::from_command(&planning_cmd, nodes.flag_scope_node);
 
         let mut out = match request {
             CompletionRequest::Pipe => self.pipe_suggestions(stub),
@@ -119,9 +126,13 @@ impl SuggestionEngine {
                 .into_iter()
                 .map(SuggestionOutput::Item)
                 .collect(),
-            CompletionRequest::FlagValues { flag, .. } => {
-                self.flag_value_suggestions(nodes.flag_scope_node, flag, stub, &provider)
-            }
+            CompletionRequest::FlagValues { flag, .. } => self.flag_value_suggestions(
+                nodes.flag_scope_node,
+                flag,
+                stub,
+                &planning_cmd,
+                &provider,
+            ),
             CompletionRequest::Positionals {
                 arg_index,
                 show_subcommands,
@@ -280,6 +291,7 @@ impl SuggestionEngine {
         node: &CompletionNode,
         flag: &str,
         stub: &str,
+        cmd: &CommandLine,
         provider: &ProviderSelection<'_>,
     ) -> Vec<SuggestionOutput> {
         let Some(flag_node) = node.flags.get(flag) else {
@@ -294,13 +306,31 @@ impl SuggestionEngine {
             return vec![SuggestionOutput::PathSentinel];
         }
 
-        if let Some(output) =
-            self.provider_specific_flag_value_suggestions(flag_node, stub, provider)
+        let static_entries = self
+            .provider_specific_flag_value_entries(flag_node, provider)
+            .unwrap_or_else(|| flag_node.suggestions.clone());
+
+        if let Some((planning_entries, exhaustive)) =
+            self.planning_flag_value_entries(node, flag, cmd, provider)
         {
-            return output;
+            if exhaustive {
+                return self.entry_suggestions(&planning_entries, stub);
+            }
+
+            let mut entries = planning_entries;
+            let mut seen = entries
+                .iter()
+                .map(|entry| entry.value.clone())
+                .collect::<BTreeSet<_>>();
+            entries.extend(
+                static_entries
+                    .into_iter()
+                    .filter(|entry| seen.insert(entry.value.clone())),
+            );
+            return self.entry_suggestions(&entries, stub);
         }
 
-        self.entry_suggestions(&flag_node.suggestions, stub)
+        self.entry_suggestions(&static_entries, stub)
     }
 
     fn arg_value_suggestions(
@@ -336,17 +366,16 @@ impl SuggestionEngine {
             })
             .collect()
     }
-    fn provider_specific_flag_value_suggestions(
+    fn provider_specific_flag_value_entries(
         &self,
         flag_node: &crate::completion::model::FlagNode,
-        stub: &str,
         provider: &ProviderSelection<'_>,
-    ) -> Option<Vec<SuggestionOutput>> {
+    ) -> Option<Vec<SuggestionEntry>> {
         if let Some(provider_values) = provider
             .name()
             .and_then(|name| flag_node.suggestions_by_provider.get(name))
         {
-            return Some(self.entry_suggestions(provider_values, stub));
+            return Some(provider_values.clone());
         }
 
         let mut seen = BTreeSet::new();
@@ -357,7 +386,57 @@ impl SuggestionEngine {
             .filter(|entry| seen.insert(entry.value.clone()))
             .cloned()
             .collect::<Vec<_>>();
-        (!provider_values.is_empty()).then(|| self.entry_suggestions(&provider_values, stub))
+        (!provider_values.is_empty()).then_some(provider_values)
+    }
+
+    fn planning_flag_value_entries(
+        &self,
+        node: &CompletionNode,
+        flag: &str,
+        cmd: &CommandLine,
+        provider: &ProviderSelection<'_>,
+    ) -> Option<(Vec<SuggestionEntry>, bool)> {
+        let hints = node.planning.as_ref()?;
+        let mut has_target_table = false;
+        let mut exhaustive = false;
+        let mut seen = BTreeSet::new();
+        let mut entries = Vec::new();
+
+        for table in &hints.tables {
+            let Some(column) = planning_column_for_flag(table, flag) else {
+                continue;
+            };
+            let scoped_rows = matching_scoped_planning_rows(hints, table, cmd);
+            if scoped_rows.is_empty()
+                && !(table.exhaustive
+                    && provider.planning_table_applies_to_selected_provider(hints, table, cmd))
+            {
+                continue;
+            }
+            has_target_table = true;
+            let table_applies = table.exhaustive
+                && planning_scope_is_known(hints, table, cmd)
+                && provider.planning_table_applies_to_selected_provider(hints, table, cmd);
+            let scoped_values_are_known = scoped_rows.iter().all(|row| {
+                !provider.allows_planning_row(hints, row)
+                    || planning_suggestion_value(planning_row_value(row, column)).is_some()
+            });
+            exhaustive |= table_applies && scoped_values_are_known;
+
+            for row in scoped_rows {
+                if !provider.allows_planning_row(hints, row) {
+                    continue;
+                }
+                let Some(value) = planning_suggestion_value_for_column(hints, row, column) else {
+                    continue;
+                };
+                if seen.insert(value.clone()) {
+                    entries.push(SuggestionEntry::value(value));
+                }
+            }
+        }
+
+        has_target_table.then_some((entries, exhaustive))
     }
 
     fn entry_suggestions(&self, entries: &[SuggestionEntry], stub: &str) -> Vec<SuggestionOutput> {
@@ -461,6 +540,20 @@ impl SuggestionEngine {
     }
 }
 
+fn command_without_current_value(cmd: &CommandLine, flag: &str) -> CommandLine {
+    let mut planning = cmd.clone();
+    match planning.flag_values.get_mut(flag) {
+        Some(values) if values.len() > 1 => {
+            values.pop();
+        }
+        Some(_) => {
+            planning.flag_values.remove(flag);
+        }
+        None => {}
+    }
+    planning
+}
+
 fn child_completion_meta(child: &CompletionNode) -> Option<String> {
     let summary = child_subcommand_summary(child);
     match (child.tooltip.as_deref(), summary) {
@@ -469,6 +562,43 @@ fn child_completion_meta(child: &CompletionNode) -> Option<String> {
         (None, Some(summary)) => Some(summary),
         (None, None) => None,
     }
+}
+
+fn planning_suggestion_value(value: Option<&PlanningValue>) -> Option<String> {
+    match value {
+        Some(PlanningValue::Text(value)) if !value.trim().is_empty() => Some(value.clone()),
+        Some(PlanningValue::Text(_)) => None,
+        Some(PlanningValue::Number(value)) => Some(value.to_string()),
+        Some(PlanningValue::Unknown) | None => None,
+    }
+}
+
+fn planning_suggestion_value_for_column(
+    hints: &crate::completion::model::PlanningHints,
+    row: &crate::completion::model::PlanningRow,
+    column: &str,
+) -> Option<String> {
+    let value = planning_suggestion_value(planning_row_value(row, column))?;
+    let Some(provider_column) = hints.provider_column.as_deref() else {
+        return Some(value);
+    };
+    if provider_column != column
+        && provider_column.trim_start_matches('-') != column.trim_start_matches('-')
+    {
+        return Some(value);
+    }
+
+    let mut selector = value;
+    for identity in hints.identity_columns.iter().filter(|identity| {
+        provider_column.trim_start_matches('-') != identity.trim_start_matches('-')
+    }) {
+        let Some(value) = planning_suggestion_value(planning_row_value(row, identity)) else {
+            break;
+        };
+        selector.push(':');
+        selector.push_str(&value);
+    }
+    Some(selector)
 }
 
 fn child_subcommand_summary(child: &CompletionNode) -> Option<String> {

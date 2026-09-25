@@ -218,6 +218,7 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
     let table = PreparedTable::for_terminal(block);
     let widths = fitted_table_widths(
         &table.widths,
+        &table.headers,
         settings
             .width
             .map(|width| width.saturating_sub(settings.margin)),
@@ -306,6 +307,7 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
 
 fn fitted_table_widths(
     natural: &[usize],
+    headers: &[PreparedCell],
     available_width: Option<usize>,
     overflow: TableOverflow,
 ) -> Vec<usize> {
@@ -316,40 +318,35 @@ fn fitted_table_widths(
         return natural.to_vec();
     }
 
-    // Each column has two spaces and one separator, plus the final separator.
-    let cell_budget = available_width.saturating_sub(natural.len() * 3 + 1);
-    if natural.iter().sum::<usize>() <= cell_budget {
-        return natural.to_vec();
-    }
-
-    let minimum = if cell_budget >= natural.len() * 3 {
-        3
-    } else {
-        1
-    };
-    let mut widths = natural
+    let mut widths = natural.to_vec();
+    let minimum = headers
         .iter()
-        .map(|width| (*width).min(minimum))
+        .map(|cell| cell.width.max(1))
         .collect::<Vec<_>>();
-    let mut remaining = cell_budget.saturating_sub(widths.iter().sum::<usize>());
-
-    while remaining > 0 {
-        let mut changed = false;
-        for (width, natural_width) in widths.iter_mut().zip(natural) {
-            if *width < *natural_width {
-                *width += 1;
-                remaining -= 1;
-                changed = true;
-                if remaining == 0 {
-                    break;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
+    // Column order expresses product priority. Drop secondary columns only
+    // when their headers cannot fit; long values can use the wrapping emitter.
+    while widths.len() > 1
+        && minimum[..widths.len()].iter().sum::<usize>() + widths.len() * 3 + 1 > available_width
+    {
+        widths.pop();
     }
-
+    let budget = available_width.saturating_sub(widths.len() * 3 + 1);
+    while widths.iter().sum::<usize>() > budget {
+        let Some(index) = (0..widths.len())
+            .filter(|index| widths[*index] > minimum[*index])
+            .max_by_key(|index| widths[*index])
+        else {
+            break;
+        };
+        let excess = widths.iter().sum::<usize>() - budget;
+        let reduction = excess
+            .div_ceil(widths.len())
+            .min(widths[index] - minimum[index]);
+        widths[index] -= reduction;
+    }
+    if widths.len() == 1 {
+        widths[0] = widths[0].min(budget.max(1));
+    }
     widths
 }
 

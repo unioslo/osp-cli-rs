@@ -39,6 +39,7 @@ pub struct Token {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LexerError {
+    UnquotedRegexPipe,
     UnterminatedSingleQuote { start: usize },
     UnterminatedDoubleQuote { start: usize },
     TrailingEscape { index: usize },
@@ -47,6 +48,10 @@ pub enum LexerError {
 impl fmt::Display for LexerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnquotedRegexPipe => write!(
+                f,
+                "quote regex alternation: F field ~ 'foo|bar'; after a regex use an explicit pipeline verb"
+            ),
             Self::UnterminatedSingleQuote { start } => {
                 write!(f, "unterminated single quote starting at byte {start}")
             }
@@ -291,102 +296,49 @@ fn split_word_token(token: Token, segment: &StageSegment, out: &mut Vec<Token>) 
         return;
     }
 
-    let mut state = State::Normal;
+    let mut scanner = QuoteScanner::new(token.span.start);
     let mut split_happened = false;
     let mut current_text = String::new();
-    let mut current_raw_start: Option<usize> = None;
-    let mut cursor = 0usize;
-
+    let mut current_raw_start = None;
+    let prefix = protected_prefix_len(raw);
+    let mut cursor = 0;
+    if prefix > 0 && prefix < raw.len() {
+        current_raw_start = Some(0);
+        current_text.push_str(&raw[..prefix]);
+        cursor = prefix;
+    }
     while cursor < raw.len() {
-        let tail = &raw[cursor..];
-        let Some(ch) = tail.chars().next() else {
-            break;
-        };
-        let width = ch.len_utf8();
-
-        match state {
-            State::Normal => {
-                if current_raw_start.is_none()
-                    && current_text.is_empty()
-                    && cursor == 0
-                    && !raw.is_empty()
-                {
-                    let protected_prefix_len = protected_prefix_len(raw);
-                    if protected_prefix_len > 0 && protected_prefix_len < raw.len() {
-                        current_raw_start = Some(0);
-                        current_text.push_str(&raw[..protected_prefix_len]);
-                        cursor += protected_prefix_len;
-                        continue;
-                    }
-                }
-
-                match ch {
-                    '\\' => {
-                        current_raw_start.get_or_insert(cursor);
-                        state = State::EscapeNormal;
-                    }
-                    '\'' => {
-                        current_raw_start.get_or_insert(cursor);
-                        state = State::SingleQuote;
-                    }
-                    '"' => {
-                        current_raw_start.get_or_insert(cursor);
-                        state = State::DoubleQuote;
-                    }
-                    _ => {
-                        if let Some((op, op_width)) = parse_operator_at(raw, cursor) {
-                            push_split_word(
-                                out,
-                                token.span.start,
-                                current_raw_start.take(),
-                                cursor,
-                                &mut current_text,
-                            );
-                            out.push(Token {
-                                kind: TokenKind::Op(op),
-                                span: Span {
-                                    start: token.span.start + cursor,
-                                    end: token.span.start + cursor + op_width,
-                                },
-                                text: raw[cursor..cursor + op_width].to_string(),
-                            });
-                            split_happened = true;
-                            cursor += op_width;
-                            continue;
-                        }
-
-                        current_raw_start.get_or_insert(cursor);
-                        current_text.push(ch);
-                    }
-                }
-            }
-            State::SingleQuote => {
-                if ch == '\'' {
-                    state = State::Normal;
-                } else {
-                    current_text.push(ch);
-                }
-            }
-            State::DoubleQuote => {
-                if ch == '"' {
-                    state = State::Normal;
-                } else if ch == '\\' {
-                    state = State::EscapeDouble;
-                } else {
-                    current_text.push(ch);
-                }
-            }
-            State::EscapeNormal => {
-                current_text.push(ch);
-                state = State::Normal;
-            }
-            State::EscapeDouble => {
-                current_text.push(ch);
-                state = State::DoubleQuote;
-            }
+        if scanner.is_normal()
+            && let Some((op, width)) = parse_operator_at(raw, cursor)
+        {
+            push_split_word(
+                out,
+                token.span.start,
+                current_raw_start.take(),
+                cursor,
+                &mut current_text,
+            );
+            out.push(Token {
+                kind: TokenKind::Op(op),
+                span: Span {
+                    start: token.span.start + cursor,
+                    end: token.span.start + cursor + width,
+                },
+                text: raw[cursor..cursor + width].to_string(),
+            });
+            split_happened = true;
+            cursor += width;
+            continue;
         }
-
-        cursor += width;
+        let ch = raw[cursor..].chars().next().unwrap();
+        current_raw_start.get_or_insert(cursor);
+        match scanner.advance(cursor, ch) {
+            ScanTransition::NormalChar(ch)
+            | ScanTransition::QuotedChar(ch)
+            | ScanTransition::EscapedChar(ch) => current_text.push(ch),
+            ScanTransition::Structural => {}
+        }
+        cursor += ch.len_utf8();
     }
 
     if !split_happened {

@@ -22,7 +22,7 @@ use crate::ui::theme_catalog::ThemeCatalog;
 use super::{
     AppSession, LaunchContext, RuntimeContext, UiState, build_logging_config, build_render_runtime,
     debug_verbosity_from_config, message_verbosity_from_config, plugin_path_discovery_enabled,
-    plugin_process_timeout, resolve_default_render_width, resolve_known_theme_name,
+    plugin_process_timeout, resolve_known_theme_name,
 };
 
 /// Render-settings baseline to use when deriving host-facing UI state.
@@ -168,7 +168,6 @@ fn derive_base_render_settings(
 ) -> RenderSettings {
     let mut render_settings = render_seed.into_settings(context);
     crate::ui::settings::apply_render_config_overrides(&mut render_settings, config);
-    render_settings.width = Some(resolve_default_render_width(config));
     render_settings
 }
 

@@ -10,7 +10,6 @@ use crate::core::output_model::{
 };
 use crate::core::plugin::{ColumnAlignmentV1, ResponseMetaV1};
 use crate::core::row::Row;
-use serde_json::{Map, Value};
 
 pub(crate) fn rows_to_output_result(rows: Vec<Row>) -> OutputResult {
     OutputResult::from_rows(rows)
@@ -32,34 +31,22 @@ pub(crate) fn plugin_data_to_output_result(
         .and_then(|row_path| data.get(row_path))
         .cloned()
         .unwrap_or(data);
-    let row_data = match meta.filter(|meta| {
-        meta.row_path.is_some()
-            || (meta.preserve_json_document
-                && meta
-                    .columns
-                    .as_ref()
-                    .is_some_and(|columns| !columns.is_empty())
-                && row_data.is_object())
-    }) {
-        Some(meta) => project_display_value(row_data, meta),
-        None => row_data,
-    };
     // Service JSON has no implicit knowledge of the engine's group envelope.
     let items = OutputItems::Rows(rows_from_value(row_data));
     let rows = output_items_to_rows(&items);
-    let key_index = meta
-        .and_then(|value| {
-            (!value.column_labels.is_empty())
-                .then(|| value.column_labels.clone())
-                .or_else(|| value.columns.clone())
-        })
-        .filter(|columns| !columns.is_empty())
-        .unwrap_or_else(|| compute_key_index(&rows));
+    let key_index = compute_key_index(&rows);
     OutputResult {
         items,
         document,
         meta: OutputMeta {
             key_index,
+            display_columns: meta.and_then(|meta| meta.columns.clone()),
+            display_rules: meta
+                .map(|meta| meta.display_rules.clone())
+                .unwrap_or_default(),
+            unix_timestamp_columns: meta
+                .map(|meta| meta.unix_timestamp_columns.clone())
+                .unwrap_or_default(),
             column_align: meta
                 .map(|value| {
                     value
@@ -75,43 +62,6 @@ pub(crate) fn plugin_data_to_output_result(
             render_recommendation: None,
         },
     }
-}
-
-fn project_display_value(data: Value, meta: &ResponseMetaV1) -> Value {
-    let Some(columns) = meta.columns.as_ref().filter(|columns| !columns.is_empty()) else {
-        return data;
-    };
-    let labels = if meta.column_labels.is_empty() {
-        columns
-    } else {
-        &meta.column_labels
-    };
-    let project = |item: &Value, keep_missing: bool| {
-        let mut row = Map::new();
-        for (path, label) in columns.iter().zip(labels) {
-            match value_at_path(item, path) {
-                Some(value) if keep_missing || !value.is_null() => {
-                    row.insert(label.clone(), value.clone());
-                }
-                None if keep_missing => {
-                    row.insert(label.clone(), Value::Null);
-                }
-                Some(_) | None => {}
-            }
-        }
-        Value::Object(row)
-    };
-    match data {
-        Value::Array(items) => Value::Array(items.iter().map(|item| project(item, true)).collect()),
-        Value::Object(map) => project(&Value::Object(map), false),
-        other => other,
-    }
-}
-
-fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-    path.split('.')
-        .filter(|segment| !segment.is_empty())
-        .try_fold(value, |current, segment| current.get(segment))
 }
 
 fn column_alignment_from_plugin(value: ColumnAlignmentV1) -> ColumnAlignment {
@@ -146,6 +96,8 @@ mod tests {
                 column_align: vec![ColumnAlignmentV1::Left, ColumnAlignmentV1::Right],
                 column_labels: Vec::new(),
                 row_path: None,
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: false,
             }),
         );
@@ -177,6 +129,8 @@ mod tests {
                 ],
                 column_labels: Vec::new(),
                 row_path: None,
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: false,
             }),
         );
@@ -225,6 +179,8 @@ mod tests {
         let output = plugin_data_to_output_result(
             data.clone(),
             Some(&ResponseMetaV1 {
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: true,
                 ..ResponseMetaV1::default()
             }),
@@ -272,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_row_path_projects_nested_columns_with_display_labels_unit() {
+    fn plugin_row_path_keeps_raw_fields_and_separate_display_columns_unit() {
         let output = plugin_data_to_output_result(
             json!({
                 "items": [{
@@ -300,9 +256,9 @@ mod tests {
         assert_eq!(
             output_to_rows(&output),
             vec![crate::row! {
-                "NAME" => "db01.uio.no",
-                "PROVIDER" => "vmware",
-                "COMPUTE" => "4 CPU / 8 GiB"
+                "name" => "db01.uio.no",
+                "provider" => json!({"name": "vmware"}),
+                "compute" => json!({"display": "4 CPU / 8 GiB"})
             }]
         );
     }
@@ -333,6 +289,8 @@ mod tests {
                     "Status".to_string(),
                     "Approval".to_string(),
                 ],
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: true,
                 ..ResponseMetaV1::default()
             }),
@@ -340,26 +298,23 @@ mod tests {
 
         assert_eq!(
             output_to_rows(&output),
-            vec![crate::row! {
-                "Task" => 1855,
-                "Action" => "reboot",
-                "Target" => "db02.uio.no",
-                "Status" => "waiting_approval"
-            }]
+            vec![data.as_object().unwrap().clone()]
         );
         assert_eq!(
             output.document.as_ref().map(|document| &document.value),
             Some(&data)
         );
         let rendered = render_output(&output, &RenderSettings::test_plain(OutputFormat::Mreg));
-        assert!(rendered.contains("Task:   1855"));
-        assert!(rendered.contains("Target: db02.uio.no"));
-        assert!(!rendered.contains("Approval"));
+        assert!(rendered.contains("task_id:"));
+        assert!(rendered.contains("1855"));
+        assert!(rendered.contains("target.display:"));
+        assert!(rendered.contains("db02.uio.no"));
+        assert!(rendered.contains("approval.progress:"));
         assert!(!rendered.contains("force"));
     }
 
     #[test]
-    fn plugin_row_path_dsl_starts_from_the_canonical_document_unit() {
+    fn plugin_row_path_dsl_starts_from_canonical_rows_without_page_metadata_unit() {
         let output = plugin_data_to_output_result(
             json!({
                 "items": [{"name": "db01.uio.no"}],
@@ -371,15 +326,19 @@ mod tests {
             }),
         );
 
-        let projected = apply_output_pipeline(output, &["P page.next_cursor".to_string()])
-            .expect("pipeline should see canonical page metadata");
+        let projected = apply_output_pipeline(output, &["P name".to_string()])
+            .expect("pipeline should see canonical collection rows");
+        assert_eq!(
+            output_to_rows(&projected),
+            vec![crate::row! {"name" => "db01.uio.no"}]
+        );
 
         assert_eq!(
             projected
                 .document
                 .as_ref()
                 .map(|document| document.value.clone()),
-            Some(json!({"page": {"next_cursor": "cursor-2"}}))
+            None
         );
     }
 
@@ -417,6 +376,9 @@ mod tests {
             document: None,
             meta: OutputMeta {
                 key_index: vec!["team".to_string(), "count".to_string(), "user".to_string()],
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
+                display_columns: None,
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: true,

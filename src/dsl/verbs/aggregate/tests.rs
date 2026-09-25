@@ -133,13 +133,7 @@ fn apply_value_with_plan_traverses_nested_collections_unit() {
 
     let aggregated = apply_value_with_plan(value, &compile("avg(score) AS average").unwrap())
         .expect("aggregate value traversal should work");
-    assert_eq!(
-        aggregated,
-        json!({
-            "teams": [{ "average": 2.75 }],
-            "name": "ops"
-        })
-    );
+    assert_eq!(aggregated, json!([{ "average": 2.75 }]));
 }
 
 #[test]

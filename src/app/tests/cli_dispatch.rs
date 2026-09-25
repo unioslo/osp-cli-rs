@@ -112,11 +112,14 @@ fn cli_presentation_flags_map_to_session_overrides_unit() {
 
 #[test]
 fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit() {
-    let plan = dispatch_plan_for(&["osp", "tsd"], &["uio", "tsd"]);
+    let plan = dispatch_plan_for(&["osp", "--profile", "tsd"], &["uio", "tsd"]);
     assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
     assert!(matches!(plan.action, RunAction::Repl));
 
-    let plan = dispatch_plan_for(&["osp", "tsd", "plugins", "list"], &["uio", "tsd"]);
+    let plan = dispatch_plan_for(
+        &["osp", "--profile", "tsd", "plugins", "list"],
+        &["uio", "tsd"],
+    );
     assert_eq!(plan.profile_override.as_deref(), Some("tsd"));
     assert!(matches!(
         plan.action,
@@ -130,10 +133,11 @@ fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit()
         &["osp", "--profile", "tsd", "plugins", "list"],
         &["uio", "tsd"],
     );
-    assert_eq!(positional.profile_override, explicit.profile_override);
+    assert!(positional.profile_override.is_none());
+    assert_eq!(explicit.profile_override.as_deref(), Some("tsd"));
     assert!(matches!(
         positional.action,
-        RunAction::Builtin(Commands::Plugins(_))
+        RunAction::External(tokens) if tokens == vec!["tsd", "plugins", "list"]
     ));
     assert!(matches!(
         explicit.action,
@@ -155,7 +159,7 @@ fn dispatch_plan_keeps_structured_builtin_shape_and_profile_normalization_unit()
     ));
     assert!(matches!(cli.command, None | Some(Commands::Plugins(_))));
 
-    let mut cli = Cli::parse_from(["osp", "tsd", "config", "show", "--sources"]);
+    let mut cli = Cli::parse_from(["osp", "--profile", "tsd", "config", "show", "--sources"]);
     let plan = build_dispatch_plan(&mut cli, &profiles(&["uio", "tsd"]))
         .expect("dispatch plan should parse");
     assert_eq!(plan.profile_override.as_deref(), Some("tsd"));

@@ -5,7 +5,7 @@ use predicates::prelude::*;
 
 #[cfg(unix)]
 #[test]
-fn positional_profile_routes_to_plugin_command_contract() {
+fn explicit_profile_routes_to_plugin_command_contract() {
     let home = make_temp_dir("osp-cli-profile-home");
     write_config(
         &home,
@@ -28,7 +28,7 @@ ui.format = "json"
     cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .env("OSP_PLUGIN_PATH", &plugin_dir)
-        .args(["tsd", "hello"]);
+        .args(["--profile", "tsd", "hello"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("hello-from-plugin"));
@@ -36,7 +36,7 @@ ui.format = "json"
 
 #[cfg(unix)]
 #[test]
-fn positional_profile_routes_to_builtin_plugins_command_contract() {
+fn explicit_profile_routes_to_builtin_plugins_command_contract() {
     let home = make_temp_dir("osp-cli-profile-home-builtins");
     write_config(
         &home,
@@ -55,7 +55,7 @@ ui.format = "json"
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["tsd", "plugins", "list"]);
+        .args(["--profile", "tsd", "plugins", "list"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("No plugins discovered."));
@@ -90,7 +90,7 @@ ui.format = "json"
 
 #[cfg(unix)]
 #[test]
-fn explicit_profile_overrides_positional_profile_contract() {
+fn explicit_profile_preserves_command_token_contract() {
     let home = make_temp_dir("osp-cli-profile-home-explicit");
     write_config(
         &home,

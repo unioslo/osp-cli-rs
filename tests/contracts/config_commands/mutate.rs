@@ -51,6 +51,8 @@ fn config_set_rejects_profile_scoped_default_profile_contract() {
         r#"
 [default]
 profile.default = "uio"
+
+[profile.work]
 "#,
     );
 
@@ -80,6 +82,8 @@ fn config_set_rejects_profile_terminal_scoped_default_profile_contract() {
         r#"
 [default]
 profile.default = "uio"
+
+[profile.work]
 "#,
     );
 

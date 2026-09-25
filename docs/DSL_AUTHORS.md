@@ -1,187 +1,80 @@
-# DSL Author Notes
+# DSL author notes
 
-This file is for people changing the DSL implementation, not just using it.
+The execution model is `RowSet`: partitions of rows with group keys and
+aggregates kept separately. Ungrouped data has one partition even when empty.
+The public `OutputItems::Rows/Groups` variants are presentation boundaries;
+they are converted once on entry and once on exit. They must not select
+parallel implementations of verbs.
 
-The short version is simple:
+## Ownership and normalization
 
-- Keep syntax meaning stable.
-- Keep selector verbs and collection verbs separate.
-- Preserve document envelopes first, compact later.
-- Treat surprising shape changes as bugs unless the verb is explicitly
-  transforming.
+- `cli/rows/output.rs` unwraps producer-declared collections once. Human column
+  hints never rename, remove or convert canonical values. A raw document can
+  survive unstaged JSON rendering, but no staged service result retains its
+  stale pagination/total envelope.
+- `GuideView` owns guide-to-row normalization and reconstruction. Explicitly
+  declared guides expose entries/text as rows and keep section/layout metadata
+  outside execution. Ordinary service fields never implicitly identify guides.
+- `dsl/engine.rs` compiles and dispatches each stage once over `RowSet`.
+- Verbs own algorithms over rows/partitions. Group keys and aggregates are
+  deliberately metadata, not duplicate fields inserted into members.
+- `ui/lower.rs` applies human-only producer field projection and timestamp
+  hints. `unix_timestamp_columns` identifies Unix seconds without knowing
+  product field names. `display_rules` supports literal string suffixes gated
+  by a true boolean (`SuffixWhenTrue`) and blanking gated by another field's
+  non-null presence (`BlankWhenPresent`). Conditions always read the original
+  row; missing target fields are not synthesized. JSON rendering preserves raw
+  values, and filters use canonical values before these display changes.
 
-## Selector Law
+A stage that changes shape clears curated columns, alignment, numeric timestamp
+hints, conditional display rules and renderer recommendations. Guide layout
+survives only row-preserving stages; cleanup (`?`), projection, aggregation and
+JQ expose their resulting row shape.
 
-The DSL is easiest to reason about when these rules hold:
+## Selector contract
 
-- Bare token syntax means permissive descendant matching.
-- Path syntax means structural path semantics.
-- Named path segments implicitly descend arrays: `commands.name` and
-  `commands[].name` resolve the same addresses.
-- Explicit indexes and slices still select specific array members.
-- Matches are distinct by address, so equal values on separate branches are
-  not deduplicated.
-- The same selector should resolve the same addresses across `P`, `F`, quick,
-  `?`, and `VALUE`.
-- Selector verbs preserve and rebuild structure whenever possible.
-- Collection verbs reshape rows or groups on purpose.
+All inputs use the same selector resolver. Bare keys search descendants;
+structural paths use addressed traversal. Named segments descend through arrays,
+so `a.b` and `a[].b` resolve equivalent leaves. Indexed/sliced selectors retain
+original addresses until projection is complete. Missing branches contribute
+nothing; selected null and duplicate values are retained.
 
-Concrete examples:
+Filtering retains complete canonical rows. It does not switch to recursive
+member pruning when an object has a raw JSON sidecar. Callers that want to
+filter members first expose them as rows with a declared collection boundary,
+`P collection[]`, or `U collection`.
 
-- `name` is permissive.
-- `commands.name` and `commands[].name` both traverse every command in
-  document order.
-- `commands[0].name` is exact indexed traversal.
-- `metadata.owner` must not silently fall back to a descendant flat-key match.
+`P` resolves all keepers/droppers against original addresses, then rebuilds and
+compacts sparse arrays. Dynamic projection labels must be unambiguous. `VALUE`
+extracts leaves as flat value rows and never reconstructs service envelopes.
 
-If a change makes one of those rules fuzzy again, assume it is a regression
-until proven otherwise.
+## Group semantics
 
-## Verb Families
+- `G` partitions rows; regrouping operates on existing partitions.
+- Row stages map the same algorithm over partitions and preserve metadata.
+- `F` tests group headers when its selector resolves there, otherwise filters
+  member rows and drops empty groups.
+- `S` and `L` operate on group headers/partitions.
+- `A` stores aggregate results separately; existing aggregates are snapshots,
+  not silently recomputed when later member filters run.
+- `C` emits key/count summaries and `Z` emits keys/aggregates.
+- Empty `C` and empty `A count` produce one zero summary even after all groups
+  have disappeared. They do not invent a group key. Empty `G` remains empty.
+- JQ receives the row array, or each explicit group envelope. There is one jaq
+  evaluator; its result is normalized at that explicit boundary.
 
-Selector-engine verbs:
+## Parsing and verification
 
-- bare quick
-- `F`
-- `P`
-- `V`
-- `K`
-- `?`
-- `VALUE`
-- `VAL`
-- `U`
+The lexer shares one quote/escape scanner for stage splitting and tokenization.
+Quote regex/JQ pipes. One-shot argv separates literal pipe tokens before command
+parsing so built-ins and product/plugin commands share operand handling.
 
-Collection-engine verbs:
+Use the existing library, contract, integration and end-to-end suites. Existing
+JSON fixtures must enter through the actual command adapter and renderer;
+fixture helpers must not reintroduce the removed document executor. Preserve
+all existing test functions/coverage when updating intended contracts. Do not
+add regression tests. Compile and run checks on the internal builder.
 
-- `S`
-- `G`
-- `A`
-- `C`
-- `Z`
-- `L`
-- `JQ`
-
-Meta or side-effect verbs:
-
-- `H`
-- `Y`
-
-The architectural seam matters. Selector verbs are about addressed matches and
-structural rebuild. Collection verbs are about row/group operations. Mixing the
-two models inside every verb is how semantic drift comes back.
-
-## Intentional Divergences
-
-See [DSL_REVIEW.md](DSL_REVIEW.md) for the remaining disagreements between these
-principles and existing tested behavior, and the proposed v2 decisions.
-
-Not every verb returns the same shape, but the differences should be deliberate.
-
-- Bare quick always behaves like a row/member filter and retains complete
-  matches regardless of input cardinality.
-- `V` and `K` only narrow the quick-search scope. They do not change selector
-  resolution rules.
-- `VALUE` is transforming and intentionally discards semantic envelopes. Every
-  substrate produces flat `{value: ...}` rows.
-- Addressed `F` retains complete members from the deepest array on the path and
-  leaves sibling branches unchanged. A filter must not also project.
-- `U` duplicates the nearest owning record once per array member. It is not a
-  disguised projection.
-- Group-preserving row verbs operate on each group's member rows and leave group
-  headers and aggregates intact.
-
-If a divergence is user-visible but not documented here or in the user guide,
-it probably is not intentional enough yet.
-
-## Structural Rebuild Rules
-
-These rules are the high-risk area.
-
-- Preserve first, compact after.
-- Real `null` is user data and must survive.
-- Sparse holes are an internal rebuild detail and must never leak.
-- Mixed keepers and droppers must be resolved against original addresses, not
-  against already-compacted output.
-- Overlapping keepers must merge by address, not by post-compaction position.
-- Relative addressed selectors must rebuild the branch they actually matched.
-
-When these rules break, users get wrong-subtree bugs, dropped `null` values, or
-surprising aliasing in rebuilt output.
-
-## Row And Value Contracts
-
-Row and semantic execution do not always look identical, but the selector
-surface still has to stay coherent.
-
-- Path selectors must mean the same path in `F`, `P`, `VALUE`, and path quick.
-- Quoted term parsing must stay shared across `P`, `VAL`, and `VALUE`.
-- Row-mode fanout projection must not silently alias colliding labels.
-- Multiple `VALUE` selectors emit flat rows in selector order; matches within
-  each selector retain document order and address-distinct duplicates.
-- Grouped pipelines must preserve group metadata when applying row-oriented
-  stages.
-
-## Code Map
-
-Start here when changing semantics:
-
-- `src/dsl/parse/path.rs`
-  Path parsing and the structural-token classification rule.
-- `src/dsl/verbs/selector.rs`
-  Selector-engine split between structural path matching and permissive
-  descendant matching.
-- `src/dsl/eval/resolve.rs`
-  Addressed resolution, path traversal, descendant matching, flat-key hints,
-  negative indexes, and slices.
-- `src/dsl/verbs/json.rs`
-  Structural rebuild, sparse array handling, compaction, and envelope
-  preservation.
-- `src/dsl/verbs/project.rs`
-  Mixed keepers/droppers, row projection, dynamic column behavior, and fanout
-  label handling.
-- `src/dsl/verbs/values.rs`
-  `VALUE` transform rules and shape stability.
-- `src/dsl/engine.rs`
-  Substrate transitions: row stream, materialized rows/groups, semantic JSON.
-- `src/dsl/verb_info.rs`
-  Registered verb metadata and help-facing descriptions.
-
-## Regression Matrix
-
-When changing selector semantics, cover at least these cases:
-
-- The same selector in `P`, `F`, quick, `?`, and `VALUE`, including implicit
-  and explicit array descent.
-- Bare token versus dotted path versus indexed path.
-- Relative paths on nested semantic documents.
-- Fanout, slices, negative indexes, and overlapping keepers.
-- Literal `null` in arrays and objects.
-- Mixed keepers and droppers on the same path family.
-- Grouped row stages preserving `groups` and `aggregates`.
-- `VALUE` flattening sibling leaves and semantic-document selections.
-- Addressed `F` preserving complete owning members and untouched siblings.
-- Row fanout label collisions.
-- Collapse and count behavior after grouped pipelines.
-
-Useful existing test files:
-
-- `src/dsl/contract_tests.rs`
-- `src/dsl/value.rs`
-- `tests/integration/dsl_ported.rs`
-
-If you fix a semantic bug, write the failing regression first and keep it near
-the behavior it protects.
-
-## Author Checklist
-
-Before merging a DSL change, ask:
-
-- Did this make a selector surface stricter or fuzzier?
-- If it became fuzzier, is that really intended?
-- Does the same selector still mean the same thing across selector verbs?
-- Did we preserve real `null` and avoid leaking sparse rebuild details?
-- Did grouped row stages keep their metadata?
-- Did we document the user-visible behavior in `docs/DSL.md`?
-- Did we update tests at a stable boundary instead of only the smallest helper?
-
-If the answer to the last two is no, the change is not finished.
+See [DSL.md](DSL.md) for the user contract and [CONFIG.md](CONFIG.md) for explicit
+profile selection. Product command vocabulary and server-owned facts belong to
+the product/API owner, not to DSL aliases or renderer inference.

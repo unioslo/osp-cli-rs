@@ -65,6 +65,19 @@ impl<'a> GuideSectionRef<'a> {
 pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
     let guide = GuideView::try_from_output_result(output);
 
+    // Human projection is deliberately downstream of filtering and JSON output.
+    let display;
+    let output = if plan.format != OutputFormat::Json
+        && (output.meta.display_columns.is_some()
+            || !output.meta.unix_timestamp_columns.is_empty()
+            || !output.meta.display_rules.is_empty())
+    {
+        display = display_output(output);
+        &display
+    } else {
+        output
+    };
+
     match plan.format {
         OutputFormat::Guide => {
             if let Some(guide) = guide.as_ref() {
@@ -77,7 +90,12 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
                 )
             } else {
                 Doc {
-                    blocks: lower_value_blocks(&canonical_value(output)),
+                    blocks: match &output.items {
+                        OutputItems::Rows(rows) if rows.len() == 1 => {
+                            lower_value_blocks(&Value::Object(rows[0].clone()))
+                        }
+                        _ => lower_value_blocks(&output_items_to_value(&output.items)),
+                    },
                 }
             }
         }
@@ -120,6 +138,76 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
     }
 }
 
+fn display_output(output: &OutputResult) -> OutputResult {
+    let mut display = output.clone();
+    if let OutputItems::Rows(rows) = &mut display.items {
+        for row in rows.iter_mut() {
+            let mut original = Value::Object(std::mem::take(row));
+            let raw = original.clone();
+            for rule in &output.meta.display_rules {
+                use crate::core::output_model::DisplayRule;
+                match rule {
+                    DisplayRule::SuffixWhenTrue {
+                        field,
+                        when,
+                        suffix,
+                    } if display_path(&raw, when).and_then(Value::as_bool) == Some(true) => {
+                        if let Some(Value::String(text)) = display_path_mut(&mut original, field) {
+                            text.push_str(suffix);
+                        }
+                    }
+                    DisplayRule::BlankWhenPresent { field, when }
+                        if display_path(&raw, when).is_some_and(|value| !value.is_null()) =>
+                    {
+                        if let Some(value) = display_path_mut(&mut original, field) {
+                            *value = Value::Null;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for path in &output.meta.unix_timestamp_columns {
+                if let Some(value) = display_path_mut(&mut original, path)
+                    && let Some(seconds) = value.as_i64()
+                    && let Some(time) = chrono::DateTime::from_timestamp(seconds, 0)
+                {
+                    *value = Value::String(time.to_rfc3339());
+                }
+            }
+            *row = if let Some(columns) = &output.meta.display_columns {
+                columns
+                    .iter()
+                    .map(|path| {
+                        let value = display_path(&original, path);
+                        (path.clone(), value.cloned().unwrap_or(Value::Null))
+                    })
+                    .collect()
+            } else {
+                original.as_object().cloned().unwrap_or_default()
+            };
+        }
+        if let Some(columns) = &output.meta.display_columns {
+            display.meta.key_index = columns.clone();
+        }
+    }
+    display
+}
+
+fn display_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    value
+        .get(path)
+        .or_else(|| path.split('.').try_fold(value, |value, key| value.get(key)))
+}
+
+fn display_path_mut<'a>(value: &'a mut Value, path: &str) -> Option<&'a mut Value> {
+    if value.get(path).is_some() {
+        value.get_mut(path)
+    } else {
+        path.split('.')
+            .try_fold(value, |value, key| value.get_mut(key))
+    }
+}
+
 fn lower_value_doc(output: &OutputResult) -> Doc {
     let values = output_items_to_rows(&output.items)
         .iter()
@@ -157,14 +245,6 @@ pub(crate) fn lower_guide_help_layout(
         GuidePresentation::HelpLayout(layout, show_footer_rule),
         Some(&plan.settings.help_chrome),
     )
-}
-
-pub fn canonical_value(output: &OutputResult) -> Value {
-    output
-        .document
-        .as_ref()
-        .map(|document| document.value.clone())
-        .unwrap_or_else(|| output_items_to_value(&output.items))
 }
 
 pub(crate) fn json_value(output: &OutputResult) -> Value {
@@ -245,9 +325,7 @@ fn json_group_value(group: &Group) -> Value {
 }
 
 fn lower_mreg_doc(output: &OutputResult) -> Doc {
-    if let Some(guide) = GuideView::try_from_output_result(output)
-        .or_else(|| GuideView::try_from_row_projection(output))
-    {
+    if let Some(guide) = GuideView::try_from_output_result(output) {
         return Doc {
             blocks: lower_mreg_guide_blocks(&guide.to_json_value(), 0),
         };
@@ -1040,13 +1118,22 @@ fn normalize_table_alignment(
 
 fn display_value(value: &Value) -> String {
     match value {
-        Value::Null => "null".to_string(),
+        Value::Null => String::new(),
         Value::Bool(flag) => flag.to_string(),
         Value::Number(number) => number.to_string(),
-        Value::String(text) => text.clone(),
-        Value::Array(_) | Value::Object(_) => {
-            serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
-        }
+        Value::String(text) => chrono::DateTime::parse_from_rfc3339(text)
+            .map(|time| {
+                time.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S %:z")
+                    .to_string()
+            })
+            .unwrap_or_else(|_| text.clone()),
+        Value::Array(items) => items
+            .iter()
+            .map(display_value)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Value::Object(_) => serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
     }
 }
 

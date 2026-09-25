@@ -269,7 +269,7 @@ ui.mode = "rich"
     let output = cmd
         .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "tsd", "config", "explain", "profile.default"])
+        .args(["--json", "--profile=tsd", "config", "explain", "profile.default"])
         .assert()
         .success()
         .get_output()

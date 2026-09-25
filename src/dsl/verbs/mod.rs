@@ -1,18 +1,10 @@
-//! Canonical DSL verb surface.
-//!
-//! Architecture rule:
-//! - selector verbs preserve/rewrite semantic document structure via addressed
-//!   matches
-//! - collection verbs operate on row/group collections via the bridge helpers
-//!
-//! Do not let each verb invent its own hybrid traversal again. If a new verb is
-//! structurally selecting or rewriting descendants, it belongs on the selector
-//! substrate. If it is sorting/grouping/aggregating row-like collections, it
-//! belongs on the collection bridge.
+//! Row operators for the single partitioned RowSet execution substrate.
+//! Nested selectors address row values; group keys and aggregates are metadata.
 
 pub(crate) mod aggregate;
 pub(crate) mod collapse;
 pub(crate) mod common;
+#[cfg(test)]
 pub(crate) mod copy;
 pub(crate) mod filter;
 pub(crate) mod group;

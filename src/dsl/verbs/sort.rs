@@ -1,19 +1,14 @@
+#[cfg(test)]
+use crate::core::output_model::OutputItems;
 use std::{cmp::Ordering, net::IpAddr};
 
-use crate::core::{
-    output_model::{Group, OutputItems},
-    row::Row,
-};
+use crate::core::{output_model::Group, row::Row};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::dsl::{
-    eval::resolve::resolve_first_value,
-    parse::key_spec::KeySpec,
-    verbs::common::{parse_optional_alias_after_key, parse_stage_words},
+    eval::resolve::resolve_first_value, parse::key_spec::KeySpec, verbs::common::parse_stage_words,
 };
-
-use super::json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SortCast {
@@ -41,17 +36,57 @@ pub(crate) fn compile(spec: &str) -> Result<SortPlan> {
     })
 }
 
-pub(crate) fn apply_with_plan(items: OutputItems, plan: &SortPlan) -> Result<OutputItems> {
-    match items {
-        OutputItems::Rows(mut rows) => {
+pub(crate) fn apply_set(
+    mut set: crate::dsl::model::RowSet,
+    plan: &SortPlan,
+) -> Result<crate::dsl::model::RowSet> {
+    if set.grouped {
+        validate_keys(
+            &set.partitions
+                .iter()
+                .map(merged_group_row)
+                .collect::<Vec<_>>(),
+            plan,
+        )?;
+        set.partitions
+            .sort_by(|left, right| compare_groups(left, right, &plan.keys));
+        Ok(set)
+    } else {
+        set.map_rows(|mut rows| {
+            validate_keys(&rows, plan)?;
             rows.sort_by(|left, right| compare_rows(left, right, &plan.keys));
-            Ok(OutputItems::Rows(rows))
-        }
-        OutputItems::Groups(mut groups) => {
-            groups.sort_by(|left, right| compare_groups(left, right, &plan.keys));
-            Ok(OutputItems::Groups(groups))
+            Ok(rows)
+        })
+    }
+}
+
+#[cfg(test)]
+fn apply_with_plan(items: OutputItems, plan: &SortPlan) -> Result<OutputItems> {
+    apply_set(items.into(), plan).map(Into::into)
+}
+
+#[cfg(test)]
+fn apply_value_with_plan(value: Value, plan: &SortPlan) -> Result<Value> {
+    crate::dsl::value::apply_stage(
+        value,
+        &crate::dsl::compiled::CompiledStage::Sort(plan.clone()),
+    )
+}
+
+fn validate_keys(rows: &[Row], plan: &SortPlan) -> Result<()> {
+    for key in &plan.keys {
+        if !rows.is_empty()
+            && !rows.iter().any(|row| {
+                resolve_first_value(row, &key.key_spec.token, key.key_spec.exact).is_some()
+            })
+        {
+            return Err(anyhow!(
+                "S: field '{}' is absent from all rows",
+                key.key_spec.token
+            ));
         }
     }
+    Ok(())
 }
 
 fn parse_sort_spec(spec: &str) -> Result<Vec<SortKeySpec>> {
@@ -65,21 +100,46 @@ fn parse_sort_spec(spec: &str) -> Result<Vec<SortKeySpec>> {
     let mut index = 0usize;
     while index < words.len() {
         let token = &words[index];
-        let (alias, consumed) = parse_optional_alias_after_key(&words, index, "S")?;
-
-        let descending = token.starts_with('!');
+        let descending = token.starts_with(['!', '-']);
         let raw_key = if descending { &token[1..] } else { token };
+        if raw_key.is_empty() || matches!(raw_key.to_ascii_lowercase().as_str(), "asc" | "desc") {
+            return Err(anyhow!(
+                "S: expected a field; use `S -field` or `S field desc`"
+            ));
+        }
         let mut key = SortKeySpec {
             key_spec: KeySpec::parse(raw_key),
             descending,
             cast: SortCast::Auto,
         };
 
-        if let Some(alias) = alias.as_deref() {
-            key.cast = parse_sort_cast(alias)?;
+        index += 1;
+        let mut has_direction = false;
+        let mut has_cast = false;
+        while let Some(modifier) = words.get(index) {
+            if modifier.eq_ignore_ascii_case("asc") || modifier.eq_ignore_ascii_case("desc") {
+                if has_direction || (descending && modifier.eq_ignore_ascii_case("asc")) {
+                    return Err(anyhow!(
+                        "S: conflicting or repeated sort direction for {raw_key}"
+                    ));
+                }
+                key.descending = modifier.eq_ignore_ascii_case("desc");
+                has_direction = true;
+                index += 1;
+            } else if modifier.eq_ignore_ascii_case("AS") {
+                if has_cast {
+                    return Err(anyhow!("S: repeated cast for {raw_key}"));
+                }
+                let cast = words
+                    .get(index + 1)
+                    .ok_or_else(|| anyhow!("S: AS requires a cast"))?;
+                key.cast = parse_sort_cast(cast)?;
+                has_cast = true;
+                index += 2;
+            } else {
+                break;
+            }
         }
-        index += consumed;
-
         keys.push(key);
     }
 
@@ -199,35 +259,6 @@ fn to_string_normalized(value: &Value) -> String {
     match value {
         Value::String(text) => text.to_ascii_lowercase(),
         _ => value.to_string().to_ascii_lowercase(),
-    }
-}
-
-pub(crate) fn apply_value_with_plan(value: Value, plan: &SortPlan) -> Result<Value> {
-    match value {
-        Value::Array(items) if json::is_collection_array(&items) => {
-            json::apply_collection_stage(Value::Array(items), |items| apply_with_plan(items, plan))
-        }
-        Value::Array(mut items) => {
-            if let Some(key) = plan.keys.first() {
-                items.sort_by(|left, right| {
-                    let order = compare_values(left, right, key.cast);
-                    if key.descending {
-                        order.reverse()
-                    } else {
-                        order
-                    }
-                });
-            }
-            Ok(Value::Array(items))
-        }
-        Value::Object(map) => {
-            let mut out = serde_json::Map::new();
-            for (key, child) in map {
-                out.insert(key, apply_value_with_plan(child, plan)?);
-            }
-            Ok(Value::Object(out))
-        }
-        scalar => Ok(scalar),
     }
 }
 

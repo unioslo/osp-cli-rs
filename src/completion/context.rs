@@ -7,7 +7,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::completion::model::{CommandLine, CompletionContext, CompletionNode, CompletionTree};
+use crate::completion::model::{
+    CommandLine, CompletionContext, CompletionNode, CompletionTree, PlanningHints,
+    PlanningNumericColumn, PlanningRow, PlanningTable, PlanningValue,
+};
 use crate::core::fuzzy::fold_case;
 
 pub(crate) struct ResolvedNodes<'a> {
@@ -98,41 +101,493 @@ impl<'a> TreeResolver<'a> {
     }
 }
 
+/// Returns rows whose declared identity values are compatible with the command.
+///
+/// This separates runtime-lane scope from the row's other planning facts. A
+/// table with no represented identity lane is therefore unknown for the
+/// request instead of excluding a different provider or runtime.
+pub(crate) fn planning_scope_rows<'a>(
+    hints: &PlanningHints,
+    table: &'a PlanningTable,
+    cmd: &CommandLine,
+) -> Vec<&'a PlanningRow> {
+    table
+        .rows
+        .iter()
+        .filter(|row| planning_row_in_scope(hints, row, cmd))
+        .collect()
+}
+
+pub(crate) fn matching_scoped_planning_rows<'a>(
+    hints: &PlanningHints,
+    table: &'a PlanningTable,
+    cmd: &CommandLine,
+) -> Vec<&'a PlanningRow> {
+    planning_scope_rows(hints, table, cmd)
+        .into_iter()
+        .filter(|row| planning_row_has_known_requested_identity(hints, row, cmd))
+        .filter(|row| planning_row_fits(hints, table, row, cmd))
+        .collect()
+}
+
+pub(crate) fn planning_scope_is_known(
+    hints: &PlanningHints,
+    table: &PlanningTable,
+    cmd: &CommandLine,
+) -> bool {
+    planning_scope_rows(hints, table, cmd)
+        .into_iter()
+        .all(|row| planning_row_has_known_requested_identity(hints, row, cmd))
+}
+
+pub(crate) fn planning_column_for_flag<'a>(
+    table: &'a PlanningTable,
+    flag: &str,
+) -> Option<&'a str> {
+    planning_column(table, flag)
+}
+
+pub(crate) fn planning_row_value<'a>(
+    row: &'a PlanningRow,
+    column: &str,
+) -> Option<&'a PlanningValue> {
+    row.values.get(column).or_else(|| {
+        row.values
+            .iter()
+            .find(|(candidate, _)| column_matches_flag(candidate, column))
+            .map(|(_, value)| value)
+    })
+}
+
+fn planning_row_fits(
+    hints: &PlanningHints,
+    table: &PlanningTable,
+    row: &PlanningRow,
+    cmd: &CommandLine,
+) -> bool {
+    cmd.flag_values_map().iter().all(|(flag, _values)| {
+        let Some(column) = planning_column_for_flag(table, flag) else {
+            return true;
+        };
+        let requested = planning_requested_values(hints, cmd, column);
+        if requested.is_empty() {
+            return true;
+        }
+        requested
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .all(|value| {
+                let cell = planning_row_value(row, column);
+                if let Some(numeric) = table.minimum_columns.get(column) {
+                    planning_minimum_matches(cell, value, numeric)
+                } else {
+                    planning_exact_matches(cell, value)
+                }
+            })
+    })
+}
+
+fn planning_column<'a>(table: &'a PlanningTable, flag: &str) -> Option<&'a str> {
+    table
+        .minimum_columns
+        .keys()
+        .chain(table.columns.iter())
+        .find(|column| column_matches_flag(column, flag))
+        .map(String::as_str)
+}
+
+fn column_matches_flag(column: &str, flag: &str) -> bool {
+    column == flag || column.trim_start_matches('-') == flag.trim_start_matches('-')
+}
+
+fn planning_requested_values<'a>(
+    hints: &PlanningHints,
+    cmd: &'a CommandLine,
+    column: &str,
+) -> Vec<&'a str> {
+    let provider_column = hints.provider_column.as_deref();
+    let provider_flag = provider_column
+        .filter(|provider| column_matches_flag(provider, column))
+        .and_then(|_| {
+            cmd.flag_values_map().keys().find(|flag| {
+                provider_column.is_some_and(|provider| column_matches_flag(provider, flag))
+            })
+        });
+
+    let mut requested = Vec::new();
+    for (flag, values) in cmd.flag_values_map() {
+        if !column_matches_flag(column, flag) {
+            continue;
+        }
+        if provider_flag == Some(flag) {
+            requested.extend(
+                values
+                    .iter()
+                    .filter_map(|value| provider_selector_part(hints, value, column)),
+            );
+        } else {
+            requested.extend(values.iter().map(String::as_str));
+        }
+    }
+
+    if provider_column.is_some_and(|provider| !column_matches_flag(provider, column)) {
+        let identity_index = hints
+            .identity_columns
+            .iter()
+            .filter(|identity| {
+                !provider_column.is_some_and(|provider| column_matches_flag(provider, identity))
+            })
+            .position(|identity| column_matches_flag(identity, column));
+        if let Some(identity_index) = identity_index
+            && let Some(provider_flag) = provider_column.and_then(|provider| {
+                cmd.flag_values_map()
+                    .keys()
+                    .find(|flag| column_matches_flag(provider, flag))
+            })
+        {
+            requested.extend(
+                cmd.flag_values(provider_flag)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| provider_selector_part_at(value, identity_index + 1)),
+            );
+        }
+    }
+
+    requested
+}
+
+fn provider_selector_part<'a>(
+    hints: &PlanningHints,
+    value: &'a str,
+    column: &str,
+) -> Option<&'a str> {
+    let provider = hints.provider_column.as_deref()?;
+    if column_matches_flag(provider, column) {
+        return provider_selector_part_at(value, 0);
+    }
+    let identity_index = hints
+        .identity_columns
+        .iter()
+        .filter(|identity| !column_matches_flag(provider, identity))
+        .position(|identity| column_matches_flag(identity, column))?;
+    provider_selector_part_at(value, identity_index + 1)
+}
+
+fn provider_selector_part_at(value: &str, index: usize) -> Option<&str> {
+    let part = value.split(':').nth(index)?.trim();
+    (!part.is_empty()).then_some(part)
+}
+
+fn planning_exact_matches(cell: Option<&PlanningValue>, typed: &str) -> bool {
+    let Some(cell) = cell else {
+        return true;
+    };
+    match cell {
+        PlanningValue::Text(value) if value.trim().is_empty() => true,
+        PlanningValue::Text(value) => fold_case(value) == fold_case(typed),
+        PlanningValue::Number(value) => typed
+            .trim()
+            .parse::<i64>()
+            .map_or(true, |typed| typed == *value),
+        PlanningValue::Unknown => true,
+    }
+}
+
+fn planning_minimum_matches(
+    cell: Option<&PlanningValue>,
+    typed: &str,
+    numeric: &PlanningNumericColumn,
+) -> bool {
+    let Some(requested) = parse_scaled_integer(typed, numeric) else {
+        return true;
+    };
+    let Some(cell) = cell else {
+        return true;
+    };
+    let Some(available) = planning_integer(cell, numeric) else {
+        return true;
+    };
+    available >= requested
+}
+
+fn planning_integer(value: &PlanningValue, numeric: &PlanningNumericColumn) -> Option<i64> {
+    match value {
+        PlanningValue::Number(value) => Some(*value),
+        PlanningValue::Text(value) => parse_scaled_integer(value, numeric),
+        PlanningValue::Unknown => None,
+    }
+}
+
+fn parse_scaled_integer(raw: &str, numeric: &PlanningNumericColumn) -> Option<i64> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let bytes = raw.as_bytes();
+    let mut number_end = 0;
+    if matches!(bytes.first(), Some(b'-' | b'+')) {
+        number_end = 1;
+    }
+    while bytes
+        .get(number_end)
+        .is_some_and(|byte| byte.is_ascii_digit())
+    {
+        number_end += 1;
+    }
+    if number_end == 0
+        || (number_end == 1
+            && bytes
+                .first()
+                .is_some_and(|byte| *byte == b'-' || *byte == b'+'))
+    {
+        return None;
+    }
+
+    let value = raw[..number_end].parse::<i64>().ok()?;
+    let suffix = raw[number_end..].trim();
+    let scale = if suffix.is_empty() {
+        1
+    } else {
+        numeric
+            .unit_scales
+            .iter()
+            .find(|(unit, _)| unit.eq_ignore_ascii_case(suffix))
+            .map(|(_, scale)| *scale)?
+    };
+    if scale <= 0 {
+        return None;
+    }
+    value.checked_mul(scale)
+}
+
+fn table_has_explicit_filter(table: &PlanningTable, cmd: &CommandLine) -> bool {
+    cmd.flag_values_map()
+        .keys()
+        .any(|flag| planning_column_for_flag(table, flag).is_some())
+}
+
+fn planning_row_in_scope(hints: &PlanningHints, row: &PlanningRow, cmd: &CommandLine) -> bool {
+    let identity_matches = |column: &str| {
+        planning_requested_values(hints, cmd, column)
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .all(|value| planning_exact_matches(planning_row_value(row, column), value))
+    };
+
+    if !hints
+        .identity_columns
+        .iter()
+        .all(|column| identity_matches(column))
+    {
+        return false;
+    }
+
+    hints.provider_column.as_deref().is_none_or(|column| {
+        hints
+            .identity_columns
+            .iter()
+            .any(|identity| column_matches_flag(identity, column))
+            || identity_matches(column)
+    })
+}
+
+fn planning_row_has_known_requested_identity(
+    hints: &PlanningHints,
+    row: &PlanningRow,
+    cmd: &CommandLine,
+) -> bool {
+    hints
+        .identity_columns
+        .iter()
+        .filter(|column| {
+            !hints
+                .provider_column
+                .as_deref()
+                .is_some_and(|provider| column_matches_flag(column, provider))
+        })
+        .all(|column| {
+            planning_requested_values(hints, cmd, column)
+                .into_iter()
+                .filter(|value| !value.trim().is_empty())
+                .all(|_| planning_value_is_known(planning_row_value(row, column)))
+        })
+}
+
+fn planning_row_has_unknown_requested_identity(
+    hints: &PlanningHints,
+    row: &PlanningRow,
+    cmd: &CommandLine,
+) -> bool {
+    hints
+        .identity_columns
+        .iter()
+        .filter(|column| {
+            !hints
+                .provider_column
+                .as_deref()
+                .is_some_and(|provider| column_matches_flag(column, provider))
+        })
+        .any(|column| {
+            planning_requested_values(hints, cmd, column)
+                .into_iter()
+                .filter(|value| !value.trim().is_empty())
+                .any(|_| !planning_value_is_known(planning_row_value(row, column)))
+        })
+}
+
+fn planning_value_is_known(value: Option<&PlanningValue>) -> bool {
+    match value {
+        Some(PlanningValue::Text(value)) => !value.trim().is_empty(),
+        Some(PlanningValue::Number(_)) => true,
+        Some(PlanningValue::Unknown) | None => false,
+    }
+}
+
+fn planning_provider_value<'a>(hints: &'a PlanningHints, row: &'a PlanningRow) -> Option<&'a str> {
+    let column = hints.provider_column.as_deref()?;
+    match planning_row_value(row, column) {
+        Some(PlanningValue::Text(value)) if !value.trim().is_empty() => Some(value),
+        _ => None,
+    }
+}
+
+fn planning_provider_values(node: &CompletionNode) -> BTreeSet<&str> {
+    let Some(hints) = node.planning.as_ref() else {
+        return BTreeSet::new();
+    };
+    hints
+        .tables
+        .iter()
+        .flat_map(|table| table.rows.iter())
+        .filter_map(|row| planning_provider_value(hints, row))
+        .collect()
+}
+
+fn planning_provider_candidates<'a>(
+    node: &'a CompletionNode,
+    cmd: &CommandLine,
+    all: &BTreeSet<&'a str>,
+) -> Option<BTreeSet<&'a str>> {
+    let hints = node.planning.as_ref()?;
+    if hints.provider_column.is_none() || all.is_empty() {
+        return None;
+    }
+
+    let mut represented = BTreeSet::new();
+    let mut matching = BTreeSet::new();
+    for table in &hints.tables {
+        if !table.exhaustive || !table_has_explicit_filter(table, cmd) {
+            continue;
+        }
+        let scoped_rows = planning_scope_rows(hints, table, cmd);
+        let known_scope = scoped_rows
+            .iter()
+            .filter_map(|row| planning_provider_value(hints, row))
+            .filter_map(|provider| known_provider(all, provider));
+        let scoped_providers = known_scope.collect::<BTreeSet<_>>();
+        if scoped_providers.is_empty() {
+            continue;
+        }
+        represented.extend(scoped_providers.iter().copied());
+
+        for row in scoped_rows {
+            let Some(provider) = planning_provider_value(hints, row) else {
+                return Some(all.clone());
+            };
+            if let Some(known) = known_provider(all, provider)
+                && (planning_row_has_unknown_requested_identity(hints, row, cmd)
+                    || planning_row_fits(hints, table, row, cmd))
+            {
+                matching.insert(known);
+            }
+        }
+    }
+
+    if represented.is_empty() {
+        return None;
+    }
+
+    let mut allowed = all
+        .difference(&represented)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    allowed.extend(matching);
+    Some(allowed)
+}
+
+fn known_provider<'a>(all: &BTreeSet<&'a str>, value: &str) -> Option<&'a str> {
+    all.iter()
+        .copied()
+        .find(|known| fold_case(known) == fold_case(value))
+}
+
 pub(crate) struct ProviderSelection<'a> {
     explicit: Option<&'a str>,
     candidates: BTreeSet<&'a str>,
+    all: BTreeSet<&'a str>,
 }
 
 impl<'a> ProviderSelection<'a> {
     pub(crate) fn from_command(cmd: &'a CommandLine, node: &'a CompletionNode) -> Self {
+        let hints = node.planning.as_ref();
         let explicit = cmd
             .flag_values("--provider")
             .and_then(|values| values.first())
             .map(String::as_str)
+            .map(|value| {
+                hints
+                    .filter(|hints| hints.provider_column.is_some())
+                    .and_then(|_| provider_selector_part_at(value, 0))
+                    .unwrap_or(value)
+            })
             .filter(|value| !value.trim().is_empty());
 
-        let Some(hints) = node.flag_hints.as_ref() else {
+        let flag_hints = node.flag_hints.as_ref();
+        let planning_providers = planning_provider_values(node);
+        let all = flag_hints
+            .into_iter()
+            .flat_map(|hints| {
+                hints
+                    .by_provider
+                    .keys()
+                    .chain(hints.required_by_provider.keys())
+                    .map(String::as_str)
+            })
+            .chain(planning_providers)
+            .collect::<BTreeSet<_>>();
+
+        let mut candidates = explicit.map_or_else(
+            || all.clone(),
+            |provider| {
+                if let Some(known) = known_provider(&all, provider) {
+                    BTreeSet::from([known])
+                } else {
+                    all.clone()
+                }
+            },
+        );
+
+        let Some(hints) = flag_hints else {
+            if let Some(planning) = planning_provider_candidates(node, cmd, &all) {
+                candidates = candidates.intersection(&planning).copied().collect();
+            }
             return Self {
                 explicit,
-                candidates: BTreeSet::new(),
+                candidates,
+                all,
             };
         };
 
-        let all = hints
-            .by_provider
-            .keys()
-            .chain(hints.required_by_provider.keys())
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-
-        if let Some(provider) = explicit {
+        if explicit.is_some() {
+            if let Some(planning) = planning_provider_candidates(node, cmd, &all) {
+                candidates = candidates.intersection(&planning).copied().collect();
+            }
             return Self {
                 explicit,
-                candidates: if all.contains(provider) {
-                    BTreeSet::from([provider])
-                } else {
-                    all
-                },
+                candidates,
+                all,
             };
         }
 
@@ -222,19 +677,28 @@ impl<'a> ProviderSelection<'a> {
         }
 
         if constrained && candidates.is_empty() {
-            candidates = all;
+            candidates = all.clone();
+        }
+
+        if let Some(planning) = planning_provider_candidates(node, cmd, &all) {
+            candidates = candidates.intersection(&planning).copied().collect();
         }
 
         Self {
             explicit,
             candidates,
+            all,
         }
     }
 
     pub(crate) fn name(&self) -> Option<&'a str> {
         if let Some(provider) = self.explicit {
-            return (self.candidates.is_empty() || self.candidates.contains(provider))
-                .then_some(provider);
+            return (self.candidates.is_empty()
+                || self
+                    .candidates
+                    .iter()
+                    .any(|known| fold_case(known) == fold_case(provider)))
+            .then_some(provider);
         }
         (self.candidates.len() == 1)
             .then(|| self.candidates.first().copied())
@@ -247,6 +711,103 @@ impl<'a> ProviderSelection<'a> {
 
     pub(crate) fn hides_selector(&self) -> bool {
         self.explicit.is_some() || self.candidates.len() == 1
+    }
+
+    pub(crate) fn planning_table_applies_to_selected_provider(
+        &self,
+        hints: &PlanningHints,
+        table: &PlanningTable,
+        cmd: &CommandLine,
+    ) -> bool {
+        let scoped_rows = planning_scope_rows(hints, table, cmd)
+            .into_iter()
+            .filter(|row| planning_row_has_known_requested_identity(hints, row, cmd))
+            .collect::<Vec<_>>();
+        if scoped_rows.is_empty() {
+            return false;
+        }
+        if hints.provider_column.is_none() {
+            return true;
+        }
+        let Some(selected) = self.name() else {
+            return false;
+        };
+        scoped_rows
+            .iter()
+            .all(|row| planning_provider_value(hints, row).is_some())
+            && scoped_rows.iter().any(|row| {
+                planning_provider_value(hints, row)
+                    .is_some_and(|provider| fold_case(provider) == fold_case(selected))
+            })
+    }
+
+    pub(crate) fn allows_planning_row(&self, hints: &PlanningHints, row: &PlanningRow) -> bool {
+        let Some(provider) = planning_provider_value(hints, row) else {
+            return true;
+        };
+        if self.all.is_empty() {
+            return true;
+        }
+        if let Some(explicit) = self.explicit {
+            if !self
+                .all
+                .iter()
+                .any(|known| fold_case(known) == fold_case(explicit))
+            {
+                return true;
+            }
+            return self
+                .candidates
+                .iter()
+                .any(|known| fold_case(known) == fold_case(provider));
+        }
+        self.candidates
+            .iter()
+            .any(|known| fold_case(known) == fold_case(provider))
+    }
+}
+
+/// Result of the shared provider-narrowing pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderNarrowing {
+    explicit: Option<String>,
+    candidates: BTreeSet<String>,
+    all: BTreeSet<String>,
+}
+
+impl ProviderNarrowing {
+    /// Returns the provider value explicitly present in the command, if any.
+    pub fn explicit(&self) -> Option<&str> {
+        self.explicit.as_deref()
+    }
+
+    /// Returns providers still compatible with the command.
+    pub fn candidates(&self) -> impl Iterator<Item = &str> {
+        self.candidates.iter().map(String::as_str)
+    }
+
+    /// Returns all provider values known to the completion metadata.
+    pub fn all(&self) -> impl Iterator<Item = &str> {
+        self.all.iter().map(String::as_str)
+    }
+
+    /// Whether known exhaustive facts ruled out every known provider.
+    pub fn is_contradictory(&self) -> bool {
+        !self.all.is_empty() && self.candidates.is_empty()
+    }
+}
+
+/// Narrows provider candidates with the same advisory rules used for suggestions.
+pub fn narrow_provider_candidates(cmd: &CommandLine, node: &CompletionNode) -> ProviderNarrowing {
+    let selection = ProviderSelection::from_command(cmd, node);
+    ProviderNarrowing {
+        explicit: selection.explicit.map(ToOwned::to_owned),
+        candidates: selection.candidates().map(ToOwned::to_owned).collect(),
+        all: selection
+            .all
+            .iter()
+            .map(|provider| (*provider).to_string())
+            .collect(),
     }
 }
 

@@ -1,11 +1,11 @@
-use crate::core::{output_model::Group, row::Row};
+use crate::core::row::Row;
+
 use anyhow::{Result, anyhow};
 use serde_json::{Map, Value};
 
 use crate::dsl::{
     eval::resolve::{AddressStep, AddressedValue, enumerate_path_matches},
     parse::path::{PathExpression, parse_path},
-    verbs::common::map_group_rows,
 };
 
 use super::json;
@@ -59,12 +59,6 @@ pub(crate) fn apply_with_plan(rows: Vec<Row>, plan: &UnrollPlan) -> Result<Vec<R
     for row in rows {
         out.extend(plan.expand_row(&row)?);
     }
-    Ok(out)
-}
-
-pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &UnrollPlan) -> Result<Vec<Group>> {
-    let mut out = map_group_rows(groups, |rows| apply_with_plan(rows, plan))?;
-    out.retain(|group| !group.rows.is_empty() || !group.aggregates.is_empty());
     Ok(out)
 }
 

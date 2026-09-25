@@ -281,7 +281,7 @@ fn startup_hook_receives_parent_owned_profile_and_terminal_resolution_unit() {
             assert_eq!(exit, 0, "startup probe command should succeed");
         };
 
-        run(&["osp", "production", "intro"]);
+        run(&["osp", "--profile=production", "intro"]);
         run(&["osp", "--profile", "production", "intro"]);
         run(&[
             "osp",
@@ -561,7 +561,11 @@ fn capability_denial_and_doctor_last_add_progressive_detail_unit() {
         "ldap user",
     )
     .expect_err("missing capability should deny the command");
-    let immediate = error.to_string();
+    let immediate = error
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(immediate.contains("command `ldap user`"));
     assert!(immediate.contains("capability `ldap.user.read`"));
     assert!(immediate.contains("Try: authenticate"));
@@ -1094,6 +1098,8 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
             column_align: Vec::new(),
             column_labels: Vec::new(),
             row_path: None,
+            unix_timestamp_columns: Vec::new(),
+            display_rules: Vec::new(),
             preserve_json_document: false,
         },
     };

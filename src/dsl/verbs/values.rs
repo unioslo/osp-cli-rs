@@ -11,13 +11,14 @@
 //! - multiple selectors emit in selector order; each selector retains
 //!   depth-first document order and duplicate values at distinct addresses
 
-use crate::core::{output_model::Group, row::Row};
+use crate::core::row::Row;
+
 use anyhow::Result;
 use serde_json::{Map, Value};
 
-use crate::dsl::verbs::common::{map_group_rows, parse_terms};
+use crate::dsl::verbs::common::parse_terms;
 
-use super::{json, selector};
+use super::selector;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ValuesPlan {
@@ -71,10 +72,6 @@ pub(crate) fn apply_with_plan(rows: Vec<Row>, plan: &ValuesPlan) -> Result<Vec<R
     Ok(out)
 }
 
-pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &ValuesPlan) -> Result<Vec<Group>> {
-    map_group_rows(groups, |rows| apply_with_plan(rows, plan))
-}
-
 fn emit_value_rows(out: &mut Vec<Row>, value: &Value) {
     match value {
         Value::Array(values) => {
@@ -89,41 +86,6 @@ fn emit_value_rows(out: &mut Vec<Row>, value: &Value) {
             row.insert("value".to_string(), value.clone());
             out.push(row);
         }
-    }
-}
-
-pub(crate) fn apply_value_with_plan(value: Value, plan: &ValuesPlan) -> Result<Value> {
-    if !plan.selectors.is_empty() {
-        return Ok(extract_semantic_values(&value, plan));
-    }
-
-    match value {
-        Value::Object(row) => Ok(Value::Array(
-            extract_all_row_values(&row)
-                .into_iter()
-                .map(Value::Object)
-                .collect(),
-        )),
-        Value::Array(items) if items.iter().all(json::is_scalar_like) => Ok(Value::Array(
-            items
-                .into_iter()
-                .map(|item| {
-                    let mut row = Map::new();
-                    row.insert("value".to_string(), item);
-                    Value::Object(row)
-                })
-                .collect(),
-        )),
-        other => json::traverse_collections(other, |items| match items {
-            crate::core::output_model::OutputItems::Rows(rows) => Ok(
-                crate::core::output_model::OutputItems::Rows(apply_with_plan(rows, plan)?),
-            ),
-            crate::core::output_model::OutputItems::Groups(groups) => {
-                Ok(crate::core::output_model::OutputItems::Groups(
-                    apply_groups_with_plan(groups, plan)?,
-                ))
-            }
-        }),
     }
 }
 
@@ -143,6 +105,14 @@ fn wrap_value_row(value: &Value) -> Value {
     let mut row = Map::new();
     row.insert("value".to_string(), value.clone());
     Value::Object(row)
+}
+
+#[cfg(test)]
+fn apply_value_with_plan(value: Value, plan: &ValuesPlan) -> Result<Value> {
+    crate::dsl::value::apply_stage(
+        value,
+        &crate::dsl::compiled::CompiledStage::Values(plan.clone()),
+    )
 }
 
 #[cfg(test)]

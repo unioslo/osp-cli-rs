@@ -124,6 +124,7 @@ fn optional_file_and_env_layers_resolve_without_a_persisted_config_file() {
 fn config_store_round_trips_terminal_profile_scope_and_list_values_through_reload() {
     let temp = make_temp_dir("osp-cli-config-integration-store");
     let path = temp.path().join("config.toml");
+    std::fs::write(&path, "[profile.tsd]\nui.presentation = \"austere\"\n").unwrap();
 
     let formats = ConfigValue::List(vec![
         ConfigValue::String("json".to_string()),

@@ -29,6 +29,21 @@ pub struct Pipeline {
 /// leading command before applying any DSL transformations.
 pub fn parse_pipeline(line: &str) -> Result<Pipeline, LexerError> {
     let segments = split_pipeline(line)?;
+    for pair in segments.get(1..).unwrap_or_default().windows(2) {
+        let previous = tokenize_stage(&pair[0])?;
+        let regex = previous.iter().any(|token| {
+            matches!(
+                token.kind,
+                super::lexer::TokenKind::Op(super::lexer::Op::Regex)
+            ) && !pair[0].raw[token.span.end - pair[0].span.start..]
+                .trim_start()
+                .starts_with(['\'', '"'])
+        });
+        let next = parse_stage(&pair[1].raw)?;
+        if regex && next.kind != ParsedStageKind::Explicit && next.verb != "H" {
+            return Err(LexerError::UnquotedRegexPipe);
+        }
+    }
 
     let command = segments
         .first()

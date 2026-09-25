@@ -16,8 +16,8 @@ use crate::cli::pipeline::parse_command_tokens_with_aliases;
 use crate::cli::{Commands, parse_inline_command_tokens};
 use crate::guide::GuideView;
 use crate::native::{
-    NativeCommandContext, NativeCommandOutcome, NativeProgressEvent, NativeProgressSink,
-    NativeSessionContext,
+    InvocationElevation, NativeCommandContext, NativeCommandOutcome, NativeProgressEvent,
+    NativeProgressSink, NativeSessionContext,
 };
 use crate::plugin::PluginManager;
 use crate::repl::ReplViewContext;
@@ -60,6 +60,7 @@ struct ParsedExternalInvocation {
     tokens: Vec<String>,
     stages: Vec<String>,
     inline_command: Option<Commands>,
+    elevation: InvocationElevation,
 }
 
 enum ExternalParse {
@@ -123,6 +124,16 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
         ExternalParse::Invocation(parsed) => parsed,
     };
 
+    if parsed.elevation.is_elevated()
+        && parsed
+            .inline_command
+            .as_ref()
+            .is_some_and(|command| !matches!(command, Commands::External(_)))
+    {
+        return Err(miette!(
+            "elevation prefix is unsupported for built-in commands"
+        ));
+    }
     if let Some(command) = parsed.inline_command.take()
         && let Some(result) = run_inline_builtin_command(
             runtime,
@@ -156,6 +167,18 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                 .native_commands()
                 .command(&command)
                 .ok_or_else(|| miette!("no native command provides `{command}`"))?;
+            if parsed.elevation.is_elevated() && !native_command.supports_invocation_elevation() {
+                return Err(miette!(
+                    "elevation prefix is unsupported for native command `{command}`"
+                ));
+            }
+            let canonical_args = native_command.normalize_args(args).map_err(|err| {
+                crate::app::report_anyhow_with_context(
+                    err,
+                    "failed to normalize native command arguments",
+                )
+            })?;
+            let args = canonical_args.as_slice();
             let description = native_command.describe();
             let native_parse = native_command
                 .command()
@@ -213,14 +236,22 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                     args,
                     stages: &parsed.stages,
                     invocation,
+                    elevation: parsed.elevation,
                     progress_sink,
                 },
                 guide_help,
             )
         }
-        ExternalCommandSource::Plugin => run_external_plugin_command(
-            runtime, session, clients, &command, &parsed, invocation, guide_help,
-        ),
+        ExternalCommandSource::Plugin => {
+            if parsed.elevation.is_elevated() {
+                return Err(miette!(
+                    "elevation prefix is unsupported for plugin command `{command}`"
+                ));
+            }
+            run_external_plugin_command(
+                runtime, session, clients, &command, &parsed, invocation, guide_help,
+            )
+        }
     }
 }
 
@@ -288,6 +319,7 @@ struct NativeRunInput<'args, 'stages, 'invocation, 'sink> {
     args: &'args [String],
     stages: &'stages [String],
     invocation: &'invocation ResolvedInvocation,
+    elevation: InvocationElevation,
     progress_sink: Option<&'sink mut dyn UiSink>,
 }
 
@@ -308,6 +340,7 @@ fn run_native_command(
         runtime.config.resolved(),
         runtime_hints_for_invocation(runtime, input.invocation),
     )
+    .with_invocation_elevation(input.elevation)
     .with_session_context(session.native_context.clone());
     if let Some(renderer) = progress_renderer.as_ref() {
         context = context.with_progress_sink(renderer);
@@ -437,7 +470,8 @@ fn parse_external_invocation(
     tokens: &[String],
     invocation: &ResolvedInvocation,
 ) -> Result<ExternalParse> {
-    let parsed = parse_command_tokens_with_aliases(tokens, runtime.config.resolved())?;
+    let (command_tokens, elevation) = parse_invocation_elevation(tokens)?;
+    let parsed = parse_command_tokens_with_aliases(&command_tokens, runtime.config.resolved())?;
     if parsed.tokens.is_empty() {
         return Err(miette!("missing external command"));
     }
@@ -480,7 +514,21 @@ fn parse_external_invocation(
         ),
         stages: parsed.stages,
         inline_command,
+        elevation,
     }))
+}
+
+fn parse_invocation_elevation(tokens: &[String]) -> Result<(Vec<String>, InvocationElevation)> {
+    if tokens.first().map(String::as_str) != Some("sudo") {
+        return Ok((tokens.to_vec(), InvocationElevation::Ordinary));
+    }
+    if tokens.get(1).is_none() {
+        return Err(miette!("sudo prefix must be followed by a command"));
+    }
+
+    let mut command_tokens = tokens.to_vec();
+    command_tokens.remove(0);
+    Ok((command_tokens, InvocationElevation::Elevated))
 }
 
 fn rewrite_shellable_root_help_tokens(
@@ -665,6 +713,8 @@ mod tests {
                             column_align: Vec::new(),
                             column_labels: Vec::new(),
                             row_path: None,
+                            unix_timestamp_columns: Vec::new(),
+                            display_rules: Vec::new(),
                             preserve_json_document: false,
                         },
                     }))
@@ -678,6 +728,8 @@ mod tests {
                         messages: Vec::new(),
                         meta: ResponseMetaV1 {
                             format_hint: Some("json".to_string()),
+                            unix_timestamp_columns: Vec::new(),
+                            display_rules: Vec::new(),
                             preserve_json_document: true,
                             ..ResponseMetaV1::default()
                         },
@@ -714,6 +766,8 @@ mod tests {
                 }))
                 .with_meta(ResponseMetaV1 {
                     format_hint: Some("json".to_string()),
+                    unix_timestamp_columns: Vec::new(),
+                    display_rules: Vec::new(),
                     preserve_json_document: true,
                     ..ResponseMetaV1::default()
                 }),
@@ -726,6 +780,8 @@ mod tests {
                 messages: Vec::new(),
                 meta: ResponseMetaV1 {
                     format_hint: Some("json".to_string()),
+                    unix_timestamp_columns: Vec::new(),
+                    display_rules: Vec::new(),
                     preserve_json_document: true,
                     ..ResponseMetaV1::default()
                 },
@@ -766,6 +822,8 @@ mod tests {
                     column_align: Vec::new(),
                     column_labels: Vec::new(),
                     row_path: None,
+                    unix_timestamp_columns: Vec::new(),
+                    display_rules: Vec::new(),
                     preserve_json_document: false,
                 },
             })))
@@ -988,6 +1046,8 @@ JSON
                 column_align: Vec::new(),
                 column_labels: Vec::new(),
                 row_path: None,
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: false,
             },
         };

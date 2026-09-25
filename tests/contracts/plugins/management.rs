@@ -91,7 +91,7 @@ fn plugins_refresh_reports_success_contract() {
 
 #[test]
 #[cfg(unix)]
-fn profile_override_can_select_unscoped_profile_contract() {
+fn profile_override_reports_unknown_profile_contract() {
     let home = make_temp_dir("osp-cli-profile-override-home");
     write_config(
         &home,
@@ -112,8 +112,8 @@ ui.format = "json"
         .env("PATH", "/usr/bin:/bin")
         .args(["--profile", "prod", "plugins", "list"]);
     cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("No plugins discovered."));
+        .failure()
+        .stderr(predicate::str::contains("unknown profile 'prod'"));
 
 }
 

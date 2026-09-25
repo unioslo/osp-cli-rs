@@ -1,13 +1,13 @@
-use crate::core::{output_model::Group, row::Row};
+#[cfg(test)]
+use crate::core::output_model::Group;
+use crate::core::row::Row;
 use anyhow::{Result, anyhow};
 use regex::Regex;
-use serde_json::Value;
-use std::collections::{HashMap, HashSet};
 
 use crate::dsl::{
     eval::{
         matchers::{contains_case_insensitive, eq_case_insensitive, render_value},
-        resolve::{AddressStep, AddressedValue, is_truthy, resolve_values, resolve_values_truthy},
+        resolve::{resolve_values, resolve_values_truthy},
     },
     parse::key_spec::{ExactMode, KeySpec},
     verbs::common::parse_stage_words,
@@ -49,6 +49,7 @@ pub fn apply_groups(groups: Vec<Group>, spec: &str) -> Result<Vec<Group>> {
     apply_groups_with_plan(groups, &plan)
 }
 
+#[cfg(test)]
 pub(crate) fn apply_with_plan(rows: Vec<Row>, plan: &FilterPlan) -> Result<Vec<Row>> {
     let mut out = Vec::new();
 
@@ -61,34 +62,35 @@ pub(crate) fn apply_with_plan(rows: Vec<Row>, plan: &FilterPlan) -> Result<Vec<R
     Ok(out)
 }
 
-pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &FilterPlan) -> Result<Vec<Group>> {
-    let mut out = Vec::new();
-
-    for mut group in groups {
-        let mut header = group.groups.clone();
-        header.extend(group.aggregates.clone());
-        let selector = &plan.parsed.column.key_spec;
-        if !resolve_values(&header, &selector.token, selector.exact).is_empty() {
-            if plan.matches(&header) {
-                out.push(group);
+pub(crate) fn apply_set(
+    mut set: crate::dsl::model::RowSet,
+    plan: &FilterPlan,
+) -> Result<crate::dsl::model::RowSet> {
+    let grouped = set.grouped;
+    set.partitions.retain_mut(|partition| {
+        if grouped {
+            let header = crate::core::output_model::group_header_row(partition);
+            let selector = &plan.parsed.column.key_spec;
+            if !resolve_values(&header, &selector.token, selector.exact).is_empty() {
+                return plan.matches(&header);
             }
-            continue;
         }
-
-        group.rows.retain(|row| plan.matches(row));
-        if !group.rows.is_empty() {
-            out.push(group);
-        }
-    }
-
-    Ok(out)
+        partition.rows.retain(|row| plan.matches(row));
+        !grouped || !partition.rows.is_empty()
+    });
+    Ok(set)
 }
 
-pub(crate) fn apply_value_with_plan(value: Value, plan: &FilterPlan) -> Result<Value> {
-    if let Some(filtered) = try_apply_addressed_filter(&value, &plan.parsed) {
-        return Ok(filtered);
-    }
-    selector::filter_descendants_preserving_matching_rows(value, |row| plan.matches(row))
+#[cfg(test)]
+pub(crate) fn apply_groups_with_plan(groups: Vec<Group>, plan: &FilterPlan) -> Result<Vec<Group>> {
+    Ok(apply_set(
+        crate::dsl::model::RowSet {
+            partitions: groups,
+            grouped: true,
+        },
+        plan,
+    )?
+    .partitions)
 }
 
 #[derive(Debug, Clone)]
@@ -174,7 +176,7 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
     // Consume both explicitly rather than silently treating it as midnight.
     if index + 1 == words.len() && parse_date(&value.text).is_some() {
         let timestamp = format!("{} {}", value.text, words[index]);
-        if parse_timestamp(&timestamp).is_some() {
+        if words[index].contains(':') {
             value.text = timestamp;
             index += 1;
         }
@@ -182,6 +184,17 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
     if index < words.len() {
         return Err(anyhow!(
             "F: unexpected trailing predicate text; chain predicates with `| F ...`"
+        ));
+    }
+
+    if matches!(
+        operator,
+        Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le
+    ) && value.text.get(..10).and_then(parse_date).is_some()
+        && parse_timestamp(&value.text).is_none()
+    {
+        return Err(anyhow!(
+            "F: invalid or ambiguous local timestamp; specify an RFC3339 time with Z or an explicit UTC offset"
         ));
     }
 
@@ -207,111 +220,6 @@ fn parse_filter_spec(spec: &str) -> Result<ParsedFilterSpec> {
         negated,
         existence_check,
     })
-}
-
-fn try_apply_addressed_filter(root: &Value, spec: &ParsedFilterSpec) -> Option<Value> {
-    if !spec.column.is_structural() {
-        return None;
-    }
-
-    let matches = spec.column.resolve_matches(root);
-    if matches.is_empty() {
-        return Some(if spec.negated {
-            root.clone()
-        } else {
-            Value::Null
-        });
-    }
-
-    let value_spec = spec.value.as_ref();
-    let survivors = matches
-        .iter()
-        .filter(|entry| {
-            let positive = if spec.existence_check {
-                is_truthy(&entry.value)
-            } else {
-                let Some(value_spec) = value_spec else {
-                    return false;
-                };
-                matches_value(&entry.value, spec.operator, value_spec)
-            };
-            if spec.negated { !positive } else { positive }
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    Some(retain_owning_array_members(root, &matches, &survivors))
-}
-
-fn retain_owning_array_members(
-    root: &Value,
-    candidates: &[AddressedValue],
-    survivors: &[AddressedValue],
-) -> Value {
-    // Candidate groups are recorded even when no leaf survives, so the owning
-    // array becomes empty rather than collapsing the entire semantic document.
-    // Only those arrays are edited; every sibling branch remains byte-for-byte
-    // equivalent JSON from the cloned root.
-    let mut selected_by_array: HashMap<Vec<AddressStep>, HashSet<usize>> = HashMap::new();
-
-    for candidate in candidates {
-        if let Some((array_address, _)) = deepest_array_member(&candidate.address) {
-            selected_by_array.entry(array_address).or_default();
-        }
-    }
-    for survivor in survivors {
-        if let Some((array_address, index)) = deepest_array_member(&survivor.address) {
-            selected_by_array
-                .entry(array_address)
-                .or_default()
-                .insert(index);
-        }
-    }
-
-    if selected_by_array.is_empty() {
-        return if survivors.is_empty() {
-            Value::Null
-        } else {
-            root.clone()
-        };
-    }
-
-    let mut filtered = root.clone();
-    for (array_address, selected) in selected_by_array {
-        let Some(Value::Array(items)) = value_at_address_mut(&mut filtered, &array_address) else {
-            continue;
-        };
-        let mut index = 0;
-        items.retain(|_| {
-            let keep = selected.contains(&index);
-            index += 1;
-            keep
-        });
-    }
-    filtered
-}
-
-fn deepest_array_member(address: &[AddressStep]) -> Option<(Vec<AddressStep>, usize)> {
-    let position = address
-        .iter()
-        .rposition(|step| matches!(step, AddressStep::Index(_)))?;
-    let AddressStep::Index(index) = address[position] else {
-        return None;
-    };
-    Some((address[..position].to_vec(), index))
-}
-
-fn value_at_address_mut<'a>(
-    mut value: &'a mut Value,
-    address: &[AddressStep],
-) -> Option<&'a mut Value> {
-    for step in address {
-        value = match step {
-            AddressStep::Field(name) => value.as_object_mut()?.get_mut(name)?,
-            AddressStep::Index(index) => value.as_array_mut()?.get_mut(*index)?,
-        };
-    }
-    Some(value)
 }
 
 fn parse_operator_token(token: &str) -> Option<Operator> {
@@ -440,141 +348,34 @@ fn value_to_f64(value: &serde_json::Value) -> Option<f64> {
 fn value_to_timestamp(value: &serde_json::Value) -> Option<i64> {
     match value {
         serde_json::Value::String(text) => parse_timestamp(text),
+        serde_json::Value::Number(number) => number.as_i64(),
         _ => None,
     }
 }
 
 pub(crate) fn parse_timestamp(input: &str) -> Option<i64> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
+    use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+    let text = input.trim();
+    if let Ok(time) = DateTime::parse_from_rfc3339(text) {
+        return Some(time.timestamp());
     }
-
-    let (date_part, time_part) = if let Some((date, time)) = trimmed.split_once('T') {
-        (date, Some(time))
-    } else if let Some((date, time)) = trimmed.split_once(' ') {
-        (date, Some(time))
-    } else {
-        (trimmed, None)
-    };
-
-    let (year, month, day) = parse_date(date_part)?;
-    let (hour, minute, second, offset_minutes) = match time_part {
-        Some(time) => parse_time(time)?,
-        None => (0, 0, 0, 0),
-    };
-
-    let days = days_from_civil(year, month, day);
-    let seconds = days
-        .checked_mul(86_400)?
-        .checked_add(i64::from(hour) * 3_600)?
-        .checked_add(i64::from(minute) * 60)?
-        .checked_add(i64::from(second))?;
-    seconds.checked_sub(i64::from(offset_minutes) * 60)
+    let naive = [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M",
+    ]
+    .iter()
+    .find_map(|format| NaiveDateTime::parse_from_str(text, format).ok())
+    .or_else(|| parse_date(text)?.and_hms_opt(0, 0, 0))?;
+    Local
+        .from_local_datetime(&naive)
+        .single()
+        .map(|time| time.timestamp())
 }
 
-fn parse_date(input: &str) -> Option<(i32, u32, u32)> {
-    let mut parts = input.split('-');
-    let year = parts.next()?.parse::<i32>().ok()?;
-    let month = parts.next()?.parse::<u32>().ok()?;
-    let day = parts.next()?.parse::<u32>().ok()?;
-    let days_in_month = match month {
-        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        _ => return None,
-    };
-    if parts.next().is_some() || !(1..=days_in_month).contains(&day) {
-        return None;
-    }
-    Some((year, month, day))
-}
-
-fn parse_time(input: &str) -> Option<(u32, u32, u32, i32)> {
-    let mut clock = input.trim();
-    let mut offset_minutes = 0i32;
-
-    if let Some(stripped) = clock.strip_suffix('Z') {
-        clock = stripped;
-    } else if let Some((time_part, offset_part)) = split_tz_offset(clock) {
-        clock = time_part;
-        offset_minutes = parse_offset_minutes(offset_part)?;
-    }
-
-    let mut parts = clock.split(':');
-    let hour = parts.next()?.parse::<u32>().ok()?;
-    let minute = parts.next()?.parse::<u32>().ok()?;
-    let second = match parts.next() {
-        Some(second) => parse_second_component(second)?,
-        None => 0,
-    };
-    if parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
-        return None;
-    }
-
-    Some((hour, minute, second, offset_minutes))
-}
-
-fn split_tz_offset(input: &str) -> Option<(&str, &str)> {
-    let bytes = input.as_bytes();
-    for index in (1..bytes.len()).rev() {
-        let ch = bytes[index] as char;
-        if matches!(ch, '+' | '-') {
-            return Some((&input[..index], &input[index..]));
-        }
-    }
-    None
-}
-
-fn parse_offset_minutes(input: &str) -> Option<i32> {
-    let sign = match input.as_bytes().first().copied()? as char {
-        '+' => 1,
-        '-' => -1,
-        _ => return None,
-    };
-    let rest = &input[1..];
-    let (hours, minutes) = if let Some((hours, minutes)) = rest.split_once(':') {
-        (hours, minutes)
-    } else if rest.len() == 4 {
-        (&rest[..2], &rest[2..])
-    } else {
-        return None;
-    };
-
-    let hours = hours.parse::<i32>().ok()?;
-    let minutes = minutes.parse::<i32>().ok()?;
-    if !(0..=23).contains(&hours) || !(0..=59).contains(&minutes) {
-        return None;
-    }
-
-    Some(sign * (hours * 60 + minutes))
-}
-
-fn parse_second_component(input: &str) -> Option<u32> {
-    let whole = match input.split_once('.') {
-        Some((whole, fraction)) => {
-            if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
-                return None;
-            }
-            whole
-        }
-        None => input,
-    };
-    whole.parse::<u32>().ok()
-}
-
-fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
-    // Howard Hinnant's civil-from-days algorithm:
-    // https://howardhinnant.github.io/date_algorithms.html
-    let year = i64::from(year) - i64::from(month <= 2);
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let yoe = year - era * 400;
-    let month = i64::from(month);
-    let day = i64::from(day);
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+fn parse_date(input: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(input, "%Y-%m-%d").ok()
 }
 
 #[cfg(test)]

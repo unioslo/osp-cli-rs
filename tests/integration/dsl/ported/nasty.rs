@@ -11,33 +11,21 @@ fn nasty_semantic_quick_sort_limit_preserves_guide_shape() {
 
 #[test]
 fn nasty_semantic_project_of_entry_field_preserves_guide_shape_with_narrowed_entries() {
-    let output = run_guide_pipeline(sample_guide(), "P commands[].name");
-    let rebuilt = GuideView::try_from_output_result(&output).expect("guide should restore");
-
-    assert_eq!(rebuilt.commands.len(), 3);
-    assert_eq!(rebuilt.commands[0].name, "help");
-    assert_eq!(rebuilt.commands[1].name, "config");
-    assert_eq!(rebuilt.commands[2].name, "exit");
-    assert!(
-        rebuilt
-            .commands
-            .iter()
-            .all(|entry| entry.short_help.is_empty())
-    );
+    let output = run_guide_pipeline(sample_guide(), "P name");
+    assert!(output.document.is_none());
+    assert_eq!(output.as_rows().unwrap(), &[
+        row(json!({"name":"help"})),row(json!({"name":"config"})),row(json!({"name":"exit"}))
+    ]);
 }
 
 #[test]
 fn nasty_semantic_group_breaks_restore_but_keeps_grouped_payload() {
-    let output = run_guide_pipeline(sample_guide(), "G name");
-
+    let output = run_guide_pipeline(sample_guide(), "?name | G name");
     assert!(GuideView::try_from_output_result(&output).is_none());
-    let OutputItems::Rows(rows) = output.items else {
-        panic!("expected semantic projection to remain row-based");
-    };
-    let commands = rows[0]["commands"].as_array().expect("commands array");
-    assert_eq!(commands.len(), 3);
-    assert!(commands[0].get("groups").is_some());
-    assert!(commands[0].get("rows").is_some());
+    let OutputItems::Groups(groups) = output.items else { panic!("expected grouped content rows"); };
+    assert_eq!(groups.len(), 3);
+    assert_eq!(groups[0].groups["name"], "help");
+    assert_eq!(groups[0].rows[0]["short_help"], "Show overview");
 }
 
 #[test]

@@ -93,10 +93,12 @@ fn apply_with_plan_sorts_rows_and_groups_using_requested_casts_unit() {
 
 #[test]
 fn apply_value_with_plan_sorts_scalars_and_nested_collection_rows_unit() {
-    let sorted_scalars =
-        apply_value_with_plan(json!(["b", "a", "c"]), &compile("ignored").unwrap())
-            .expect("scalar arrays sort lexically");
-    assert_eq!(sorted_scalars, json!(["a", "b", "c"]));
+    let sorted_scalars = apply_value_with_plan(json!(["b", "a", "c"]), &compile("value").unwrap())
+        .expect("scalar arrays sort lexically");
+    assert_eq!(
+        sorted_scalars,
+        json!([{"value":"a"}, {"value":"b"}, {"value":"c"}])
+    );
 
     let nested = json!({
         "hosts": [
@@ -104,15 +106,14 @@ fn apply_value_with_plan_sorts_scalars_and_nested_collection_rows_unit() {
             {"host": "10.0.0.2"}
         ]
     });
-    let sorted_nested = apply_value_with_plan(nested, &compile("host AS ip").unwrap())
-        .expect("nested collection sort should work");
+    let sorted_nested =
+        apply_value_with_plan(nested["hosts"].clone(), &compile("host AS ip").unwrap())
+            .expect("nested collection sort should work");
     assert_eq!(
         sorted_nested,
-        json!({
-            "hosts": [
-                {"host": "10.0.0.2"},
-                {"host": "10.0.0.10"}
-            ]
-        })
+        json!([
+            {"host": "10.0.0.2"},
+            {"host": "10.0.0.10"}
+        ])
     );
 }

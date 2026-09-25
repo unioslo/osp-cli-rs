@@ -118,6 +118,8 @@ impl NativeCommand for NativeProbeCommand {
                 column_labels: Vec::new(),
                 column_align: Vec::new(),
                 row_path: None,
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: false,
             },
         })))
@@ -189,6 +191,8 @@ impl NativeCommand for CuratedOrchRowsCommand {
                 ],
                 column_align: Vec::new(),
                 row_path: Some("items".to_string()),
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: true,
             },
         })))
@@ -220,6 +224,8 @@ impl NativeCommand for SiteStatusCommand {
                 column_labels: Vec::new(),
                 column_align: Vec::new(),
                 row_path: None,
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
                 preserve_json_document: false,
             },
         })))
@@ -248,8 +254,8 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
         )
         .expect("curated human output should render");
     assert_eq!(exit, 0);
-    assert!(human.stdout.contains("NAME"));
-    assert!(human.stdout.contains("PROVIDER"));
+    assert!(human.stdout.contains("name"));
+    assert!(human.stdout.contains("provider.name"));
     assert!(human.stdout.contains("4 CPU / 8 GiB"));
     assert!(!human.stdout.contains("next_cursor"));
     assert!(human.stderr.contains("Results are incomplete"));
@@ -279,11 +285,11 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
         "orch-view",
         "|",
         "P",
-        "page.next_cursor",
+        "provider.name",
     ];
     let exit = app
         .run_with_sink(pipe_args, &mut piped)
-        .expect("DSL should receive the canonical document");
+        .expect("DSL should receive canonical collection rows");
     assert_eq!(exit, 0);
     let projected = parse_json_output(
         "app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows/pipeline",
@@ -291,7 +297,7 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
         &piped.stdout,
         &piped.stderr,
     );
-    assert_eq!(projected, json!({"page": {"next_cursor": "cursor-2"}}));
+    assert_eq!(projected, json!([{"provider":{"name":"vmware"}}]));
 
     let mut verbose = BufferedUiSink::default();
     app.run_with_sink(["osp", "--defaults-only", "-v", "orch-view"], &mut verbose)
@@ -509,11 +515,11 @@ theme.name = "dracula"
             assert_eq!(rows[0]["active_profile"], "tsd");
             assert_eq!(rows[0]["theme"], "dracula");
 
-            let positional_args = ["osp", "--no-env", "tsd", "--json", "native-probe"];
+            let positional_args = ["osp", "--no-env", "--profile=tsd", "--json", "native-probe"];
             let mut positional_sink = BufferedUiSink::default();
             let exit = app
                 .run_with_sink(positional_args, &mut positional_sink)
-                .expect("positional profile command should run");
+                .expect("attached profile flag command should run");
             assert_eq!(exit, 0);
             let payload = parse_json_output(
                 "app_host_passes_default_and_selected_profiles_into_native_context/positional",
@@ -566,7 +572,7 @@ fn app_host_projects_native_commands_into_repl_completion_surface() {
 
 #[cfg(unix)]
 #[test]
-fn app_host_routes_explicit_and_positional_profiles_the_same_for_external_commands() {
+fn app_host_routes_attached_and_separate_profile_flags_the_same_for_external_commands() {
     with_config_path(
         r#"[default]
 profile.default = "uio"
@@ -603,24 +609,24 @@ theme.name = "dracula"
                 "--no-env",
                 "--plugin-dir",
                 plugin_dir,
-                "tsd",
+                "--profile=tsd",
                 "route-probe",
                 "hello",
             ];
             let mut positional_sink = BufferedUiSink::default();
             let exit = app
                 .run_with_sink(positional_args, &mut positional_sink)
-                .expect("positional profile command should run");
+                .expect("attached profile flag command should run");
             assert_eq!(exit, 0);
 
             let explicit = parse_json_output(
-                "app_host_routes_explicit_and_positional_profiles_the_same_for_external_commands/explicit",
+                "app_host_routes_attached_and_separate_profile_flags_the_same_for_external_commands/explicit",
                 &explicit_args,
                 &explicit_sink.stdout,
                 &explicit_sink.stderr,
             );
             let positional = parse_json_output(
-                "app_host_routes_explicit_and_positional_profiles_the_same_for_external_commands/positional",
+                "app_host_routes_attached_and_separate_profile_flags_the_same_for_external_commands/positional",
                 &positional_args,
                 &positional_sink.stdout,
                 &positional_sink.stderr,

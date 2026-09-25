@@ -1,10 +1,10 @@
-//! Canonical document-first pipeline DSL.
+//! Canonical row pipeline DSL.
 //!
 //! A pipeline is a command followed by zero or more transformation stages
 //! separated by `|`. The stages transform the rows returned by the command:
 //!
 //! ```text
-//! "orch task list | F status=running | S created | L 10"
+//! "orch task list | F status.name=running | S created_at | L 10"
 //!  ─────────────────  ─────────────────────────────────
 //!     command              pipeline stages
 //! ```
@@ -16,7 +16,7 @@
 //!   │
 //!   ▼  parse_pipeline(line)
 //!   Pipeline { command: "orch task list",
-//!              stages:  ["F status=running", "S created", "L 10"] }
+//!              stages:  ["F status.name=running", "S created_at", "L 10"] }
 //!   │
 //!   │  caller dispatches the command and gets rows back
 //!   │
@@ -41,7 +41,7 @@
 //!   its verb/spec shape, use [`crate::dsl::parse_stage`]
 //! - if your command already produced `Vec<Row>`, use [`crate::dsl::apply_pipeline`]
 //! - if you already have an [`crate::core::output_model::OutputResult`] and want
-//!   to preserve its semantic document or render metadata, use
+//!   to retain applicable group or render metadata, use
 //!   [`crate::dsl::apply_output_pipeline`]
 //!
 //! Common verbs: `F` (filter), `P` (project), `S` (sort), `G` (group),
@@ -56,6 +56,7 @@ pub(crate) mod parse;
 pub(crate) mod verb_info;
 
 mod engine;
+#[cfg(test)]
 mod value;
 mod verbs;
 

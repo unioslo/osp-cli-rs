@@ -90,7 +90,7 @@ fn help_like_payload_quick_prunes_unmatched_root_fields_for_partial_match() {
 fn help_like_payload_does_not_restore_after_value_extraction_pipeline() {
     let output = run_guide_pipeline(
         help_like_guide(),
-        "P commands[].name | VALUE name | S value | L 2",
+        "F name ~ ^[a-z] | P name | VALUE name | S value | L 2",
     );
 
     assert!(GuideView::try_from_output_result(&output).is_none());
@@ -111,7 +111,7 @@ fn help_like_payload_does_not_restore_after_value_extraction_pipeline() {
 // array row.
 #[test]
 fn help_like_payload_jq_fans_out_scalar_results() {
-    let output = run_guide_pipeline(help_like_guide(), "JQ '.commands[].name'");
+    let output = run_guide_pipeline(help_like_guide(), "F name ~ ^[a-z] | JQ '.[].name'");
 
     assert!(GuideView::try_from_output_result(&output).is_none());
     let OutputItems::Rows(rows) = output.items else {
@@ -144,14 +144,13 @@ fn help_like_payload_jq_empty_yields_no_rows() {
 // row-like fragments.
 #[test]
 fn help_like_payload_unroll_preserves_parent_section_shell() {
-    let output = run_guide_pipeline(help_like_guide(), "U entries");
+    let output = run_document_pipeline(help_like_guide(), "U entries");
 
     assert!(GuideView::try_from_output_result(&output).is_none());
-    let document = output
-        .document
-        .expect("semantic document should remain attached");
+    assert!(output.document.is_none());
+    let value = result_rows(&output)[0].clone();
     assert_eq!(
-        document.value,
+        value,
         json!({
             "preamble": ["Deploy commands"],
             "usage": ["osp deploy <COMMAND>"],
@@ -208,7 +207,7 @@ fn help_like_payload_unroll_preserves_parent_section_shell() {
 // survivor.
 #[test]
 fn help_like_payload_fuzzy_quick_restores_typo_matched_command() {
-    let output = run_guide_pipeline(help_like_guide(), "%docter | ? | L 1");
+    let output = run_guide_pipeline(help_like_guide(), "K name | %docter | ? | L 1");
 
     let rebuilt = GuideView::try_from_output_result(&output).expect("guide should still restore");
     assert!(
@@ -219,7 +218,7 @@ fn help_like_payload_fuzzy_quick_restores_typo_matched_command() {
         rebuilt.commands.iter().all(|entry| entry.name != "apply"),
         "unrelated commands should not survive the narrowed guide"
     );
-    assert_eq!(rebuilt.preamble, vec!["Deploy commands"]);
+    assert!(rebuilt.preamble.is_empty());
     assert_eq!(rebuilt.options.len(), 0);
 }
 

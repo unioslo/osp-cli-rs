@@ -41,11 +41,13 @@ pub mod suggest;
 /// Declarative completion-tree builders derived from command and config metadata.
 pub mod tree;
 
+pub use context::{ProviderNarrowing, narrow_provider_candidates};
 pub use engine::CompletionEngine;
 pub use model::{
     ArgNode, CommandLine, CompletionAnalysis, CompletionContext, CompletionNode, CompletionRequest,
     CompletionTree, ContextScope, CursorState, FlagHints, FlagNode, FlagOccurrence, MatchKind,
-    OsVersions, ParsedLine, QuoteStyle, RequestHintSet, RequestHints, Suggestion, SuggestionEntry,
+    OsVersions, ParsedLine, PlanningHints, PlanningNumericColumn, PlanningRow, PlanningTable,
+    PlanningValue, QuoteStyle, RequestHintSet, RequestHints, Suggestion, SuggestionEntry,
     SuggestionOutput, TailItem, ValueType,
 };
 pub use parse::{CommandLineParser, ParsedCursorLine, TokenSpan};

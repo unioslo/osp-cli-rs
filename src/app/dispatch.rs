@@ -7,17 +7,17 @@
 
 use std::collections::BTreeSet;
 
-use miette::{IntoDiagnostic, Result, WrapErr, miette};
+use miette::{Result, miette};
 
 use crate::app::access_recovery::{
     AccessRecoveryOutcome, AccessRecoveryRequest, CommandAccessKind,
 };
 use crate::app::{AppClients, AuthState, TerminalKind};
-use crate::cli::{Cli, Commands, parse_inline_command_tokens};
+use crate::cli::{Cli, Commands};
 use crate::core::command_policy::{
     AccessReason, CommandAccess, CommandPath, CommandPolicyRegistry,
 };
-use crate::normalize::{normalize_identifier, normalize_optional_identifier};
+use crate::normalize::normalize_optional_identifier;
 use crate::plugin::CommandCatalogEntry;
 
 #[cfg(test)]
@@ -86,34 +86,20 @@ impl DispatchPlan {
 
 pub(crate) fn build_dispatch_plan(
     cli: &mut Cli,
-    known_profiles: &BTreeSet<String>,
+    _known_profiles: &BTreeSet<String>,
 ) -> Result<DispatchPlan> {
     let explicit_profile = normalize_cli_profile(cli);
     let command = cli.command.take();
-    let normalized_profiles = known_profiles
-        .iter()
-        .map(|profile| normalize_identifier(profile))
-        .collect::<BTreeSet<_>>();
 
     match command {
         None => Ok(DispatchPlan::repl(explicit_profile)),
         Some(Commands::Completions(_)) => Err(miette!(
             "`completions` is available only as a one-shot CLI command"
         )),
-        Some(Commands::External(tokens)) => {
-            if let Some(plan) = profile_prefixed_external_plan(
-                &tokens,
-                explicit_profile.clone(),
-                &normalized_profiles,
-            )? {
-                return Ok(plan);
-            }
-
-            Ok(DispatchPlan::new(
-                RunAction::External(tokens),
-                explicit_profile,
-            ))
-        }
+        Some(Commands::External(tokens)) => Ok(DispatchPlan::new(
+            RunAction::External(tokens),
+            explicit_profile,
+        )),
         Some(command) => Ok(DispatchPlan::new(
             RunAction::Builtin(command),
             explicit_profile,
@@ -369,63 +355,6 @@ pub(crate) fn normalize_profile_override(value: Option<String>) -> Option<String
     normalize_optional_identifier(value)
 }
 
-// `osp <profile> <command>` is a supported shorthand for
-// `osp --profile <profile> <command>`. Keep the rule here so the
-// positional-profile grammar is discoverable in one place.
-fn profile_prefixed_external_plan(
-    tokens: &[String],
-    explicit_profile: Option<String>,
-    normalized_profiles: &BTreeSet<String>,
-) -> Result<Option<DispatchPlan>> {
-    let Some(first) = tokens.first() else {
-        return Ok(Some(DispatchPlan::repl(explicit_profile)));
-    };
-    if explicit_profile.is_some() {
-        return Ok(None);
-    }
-
-    let normalized = normalize_identifier(first);
-    if !normalized_profiles.contains(&normalized) {
-        return Ok(None);
-    }
-
-    let remaining = tokens[1..].to_vec();
-    if remaining.is_empty() {
-        tracing::debug!(profile = %normalized, "profile shorthand: no command, entering REPL");
-        return Ok(Some(DispatchPlan::repl(Some(normalized))));
-    }
-
-    let parsed = parse_inline_command_tokens(&remaining)
-        .into_diagnostic()
-        .wrap_err_with(|| {
-            format!("failed to parse command after profile shorthand `{normalized}`")
-        })?;
-    let action = inline_run_action(parsed)?;
-    tracing::debug!(
-        profile = %normalized,
-        action = %action.name(),
-        command = %remaining
-            .first()
-            .map(String::as_str)
-            .unwrap_or("repl"),
-        "profile shorthand: routing to command"
-    );
-    Ok(Some(DispatchPlan::new(action, Some(normalized))))
-}
-
-fn inline_run_action(parsed: Option<Commands>) -> Result<RunAction> {
-    Ok(match parsed {
-        Some(Commands::Completions(_)) => {
-            return Err(miette!(
-                "`completions` is available only as a top-level one-shot command"
-            ));
-        }
-        Some(Commands::External(external)) => RunAction::External(external),
-        Some(command) => RunAction::Builtin(command),
-        None => RunAction::Repl,
-    })
-}
-
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
 #[error(
     "{kind} `{command}` requires {required}. Try: authenticate with an identity granted {required}, then retry"
@@ -669,20 +598,21 @@ mod tests {
     fn build_dispatch_plan_routes_profiles_builtins_external_and_errors_unit() {
         let profiles = BTreeSet::from(["dev".to_string(), "prod".to_string()]);
 
-        let mut repl_cli = parse_cli(&["osp", "dev"]);
+        let mut repl_cli = parse_cli(&["osp", "--profile", "dev"]);
         let DispatchPlan {
             action,
             profile_override,
-        } = build_dispatch_plan(&mut repl_cli, &profiles).expect("profile-only repl should work");
+        } = build_dispatch_plan(&mut repl_cli, &profiles)
+            .expect("explicit profile repl should work");
         assert!(matches!(action, RunAction::Repl));
         assert_eq!(profile_override.as_deref(), Some("dev"));
 
-        let mut config_cli = parse_cli(&["osp", "dev", "config", "show"]);
+        let mut config_cli = parse_cli(&["osp", "--profile", "dev", "config", "show"]);
         let DispatchPlan {
             action,
             profile_override,
         } = build_dispatch_plan(&mut config_cli, &profiles)
-            .expect("profile-prefixed config command should work");
+            .expect("explicit profile config command should work");
         assert!(matches!(action, RunAction::Builtin(Commands::Config(_))));
         assert_eq!(profile_override.as_deref(), Some("dev"));
 
@@ -692,7 +622,7 @@ mod tests {
             action,
             profile_override,
         } = build_dispatch_plan(&mut explicit_profile_cli, &profiles)
-            .expect("explicit profile should bypass shorthand");
+            .expect("explicit profile should leave command tokens untouched");
         assert!(
             matches!(action, RunAction::External(tokens) if tokens == vec!["dev", "config", "show"])
         );
@@ -718,13 +648,11 @@ mod tests {
         assert!(profile_override.is_none());
 
         let mut bad_shorthand_cli = parse_cli(&["osp", "dev", "config", "set", "ui.format"]);
-        let err = build_dispatch_plan(&mut bad_shorthand_cli, &profiles)
-            .err()
-            .expect("invalid shorthand command should fail");
-        assert!(
-            err.to_string()
-                .contains("failed to parse command after profile shorthand `dev`")
-        );
+        let plan = build_dispatch_plan(&mut bad_shorthand_cli, &profiles)
+            .expect("command arguments belong to the external command");
+        assert!(matches!(plan.action, RunAction::External(tokens)
+            if tokens == vec!["dev", "config", "set", "ui.format"]));
+        assert!(plan.profile_override.is_none());
     }
 
     #[test]

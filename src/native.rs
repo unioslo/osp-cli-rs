@@ -45,6 +45,27 @@ use crate::core::plugin::{
 use crate::core::runtime::RuntimeHints;
 use crate::plugin::catalog::register_describe_command_policies;
 
+/// Elevation requested for one native-command execution.
+///
+/// The host only transports this intent. Product wrappers own credential
+/// acquisition and decide which server request, if any, uses the elevated
+/// credential.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InvocationElevation {
+    /// Use the ordinary session credential.
+    #[default]
+    Ordinary,
+    /// Use the product-owned elevated credential for this invocation.
+    Elevated,
+}
+
+impl InvocationElevation {
+    /// Returns whether this invocation explicitly requested elevation.
+    pub fn is_elevated(self) -> bool {
+        matches!(self, Self::Elevated)
+    }
+}
+
 /// Public metadata snapshot for one registered native command.
 ///
 /// This is the describe-time surface projected into help, completion, and
@@ -74,6 +95,8 @@ pub struct NativeCommandContext<'a> {
     pub config: &'a ResolvedConfig,
     /// Runtime hints that should be propagated to child processes and adapters.
     pub runtime_hints: RuntimeHints,
+    /// Explicit elevation intent for this execution.
+    pub invocation_elevation: InvocationElevation,
     /// Session-scoped native context that may be surfaced by the host REPL.
     pub session_context: NativeSessionContext,
     progress: Option<&'a dyn NativeProgressSink>,
@@ -85,9 +108,16 @@ impl<'a> NativeCommandContext<'a> {
         Self {
             config,
             runtime_hints,
+            invocation_elevation: InvocationElevation::Ordinary,
             session_context: NativeSessionContext::default(),
             progress: None,
         }
+    }
+
+    /// Attaches explicit elevation intent to this execution only.
+    pub fn with_invocation_elevation(mut self, elevation: InvocationElevation) -> Self {
+        self.invocation_elevation = elevation;
+        self
     }
 
     /// Attaches session-scoped native context to this execution.
@@ -330,9 +360,35 @@ pub trait NativeCommand: Send + Sync {
     /// Returns the clap command definition for this command.
     fn command(&self) -> Command;
 
+    /// Converts supplied arguments to the canonical command grammar.
+    ///
+    /// The host calls this once before native clap parsing and command-path
+    /// authorization, then passes the same arguments to [`Self::execute`].
+    /// Arguments exclude the registered command name and any DSL pipeline.
+    /// The default leaves them unchanged.
+    ///
+    /// Implementations may expand command shorthand or map advertised dynamic
+    /// flags. Preserve explicit help/version requests and user-supplied values;
+    /// do not add inferred request constraints. This runs before authorization:
+    /// use only local configuration or cached metadata, without network calls
+    /// or execution side effects. Return an error for ambiguous normalization.
+    fn normalize_args(&self, args: &[String]) -> Result<Vec<String>> {
+        Ok(args.to_vec())
+    }
+
     /// Returns optional auth/visibility metadata for the command.
     fn auth(&self) -> Option<DescribeCommandAuthV1> {
         None
+    }
+
+    /// Returns whether this native command accepts explicit invocation
+    /// elevation metadata.
+    ///
+    /// Product wrappers may opt in when they own the elevated credential and
+    /// server-side authorization flow. The host never acquires or persists
+    /// that credential.
+    fn supports_invocation_elevation(&self) -> bool {
+        false
     }
 
     /// Builds the plugin-protocol style description for this command.

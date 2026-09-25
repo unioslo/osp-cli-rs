@@ -241,7 +241,6 @@ pub(crate) fn render_structured_output_with_guide_options(
         .source_guide
         .cloned()
         .or_else(|| GuideView::try_from_output_result(output))
-        .or_else(|| GuideView::try_from_row_projection(output))
     else {
         return render_output(output, settings);
     };

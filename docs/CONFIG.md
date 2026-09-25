@@ -55,34 +55,20 @@ Rule of thumb:
 
 ## Profile Selection On The Command Line
 
-`osp` supports both an explicit profile flag and a positional profile
-shorthand.
+Select a configured profile explicitly:
 
-Supported forms:
+```bash
+osp --profile tsd plugins list
+```
 
-- `osp`
-  - start the REPL in the default profile
-- `osp --profile tsd`
-  - start the REPL in profile `tsd`
-- `osp tsd`
-  - shorthand for starting the REPL in profile `tsd`
-- `osp tsd plugins list`
-  - shorthand for `osp --profile tsd plugins list`
-- `osp plugins list`
-  - run a one-shot command in the default profile
+Without `--profile`, configuration selects `profile.default`. A profile name
+is never a positional prefix: `osp tsd` invokes a command named `tsd`.
+Profiles cannot shadow commands.
 
-The rule is intentionally simple:
-
-1. if `--profile` is present, it wins
-2. otherwise, if the first positional token matches a known profile, it is
-   treated as a profile shorthand
-3. otherwise the first positional token is treated as command input
-
-Known profiles come from config/bootstrap state, not from network calls.
-
-This means a profile name only wins over a command name if that profile is
-actually defined. If `dev` is not a known profile, `osp dev` is treated as a
-command invocation, not as profile selection.
+Known profiles come from configured profile scopes and defaults. Unknown
+explicit profiles and unknown environment-selected defaults fail with
+`UnknownProfile` during configuration resolution, before command/network work.
+They never silently fall back to another environment.
 
 ## Data Model
 
@@ -334,6 +320,12 @@ These keys currently drive user-visible rendering and REPL presentation:
 - `ui.color.mode`
 - `ui.unicode.mode`
 - `ui.width`
+  - Optional upper width preference; the actual narrower terminal wins, and
+    the 72-column hint is used when no terminal width is available.
+- `ui.width-max`
+  - Maximum rendered terminal width; defaults to `120`, and `0` disables the
+    maximum. A measured terminal narrower than the configured limit is always
+    respected.
 - `ui.chrome.frame`
   - `none | top | bottom | top-bottom | square | round`
 - `ui.chrome.rule_policy`

@@ -29,10 +29,15 @@ pub(crate) fn prepare_resolution(
     let profile_override = options
         .profile_override
         .map(|value| normalize_identifier(&value));
-    let mut known_profiles = collect_known_profiles(layers);
+    let known_profiles = collect_known_profiles(layers);
     let profile_selection =
         resolve_active_profile(layers, profile_override.as_deref(), terminal.as_deref())?;
-    known_profiles.insert(profile_selection.profile.clone());
+    if !known_profiles.contains(&profile_selection.profile) {
+        return Err(ConfigError::UnknownProfile {
+            profile: profile_selection.profile.clone(),
+            known: known_profiles.into_iter().collect(),
+        });
+    }
 
     tracing::debug!(
         active_profile = %profile_selection.profile,
@@ -120,13 +125,28 @@ fn collect_known_profiles(layers: [LayerRef<'_>; 7]) -> BTreeSet<String> {
     let mut known = BTreeSet::new();
 
     for layer in layers {
+        known.extend(layer.layer.declared_profiles.iter().cloned());
         for entry in &layer.layer.entries {
+            // Environment/CLI selectors choose profiles; persistent config and
+            // product defaults may also declare an otherwise unscoped default.
+            if entry.key == "profile.default"
+                && matches!(
+                    layer.source,
+                    ConfigSource::BuiltinDefaults | ConfigSource::ConfigFile
+                )
+                && let ConfigValue::String(profile) = &entry.value
+            {
+                known.insert(normalize_identifier(profile));
+            }
             if let Some(profile) = entry.scope.profile.as_deref() {
                 known.insert(profile.to_string());
             }
         }
     }
 
+    if known.is_empty() {
+        known.insert("default".to_string());
+    }
     known
 }
 

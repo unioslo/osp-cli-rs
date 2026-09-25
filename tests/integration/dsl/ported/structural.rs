@@ -73,12 +73,7 @@ fn structural_semantic_limit_trims_top_level_collections_per_array() {
     let guide = GuideView::try_from_output_result(&output).expect("document must survive limit");
 
     assert_eq!(guide.commands.len(), 2, "commands trimmed to 2");
-    assert_eq!(guide.sections.len(), 2, "sections also trimmed to 2");
-    assert_eq!(
-        guide.sections[0].entries.len(),
-        3,
-        "entries within surviving sections are not re-trimmed"
-    );
+    assert!(guide.sections.is_empty(), "L limits the common content row stream");
 }
 
 // Regex filter selects rows whose field value matches a pattern.

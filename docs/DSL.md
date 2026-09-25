@@ -1,1056 +1,198 @@
-# DSL Guide
+# DSL guide
 
-`osp` commands can be followed by a small pipe DSL for filtering, reshaping,
-grouping, and extracting structured output.
+The pipe DSL transforms command output before rendering. Every stage operates
+on canonical rows. Human headings use the same field paths as filters; JSON
+shows all available fields. The command vocabulary remains owned by each
+product; DSL stages do not rename commands or infer service facts.
 
-This document is about practical use, not parser internals. The implementation
-supports more verbs than this page teaches; most users only need bare quick
-search plus `F`, `P`, `S`, `G`, `L`, and `VALUE` at first.
+## One-shot commands
 
-The DSL is most useful when the command already gives you roughly the right
-data and you just need to ask a smaller question:
-
-- keep only matching rows
-- keep only the fields you care about
-- sort or limit the result
-- extract one field as plain values
-- inspect help/guide output without writing a special command
-
-The point is to move small, local output shaping to the client side instead of
-adding another command flag for every little reporting need.
-
-## Broad-Strokes Flow
-
-```text
-command output
-  ↓
-optional DSL pipeline
-  ↓
-smaller / reordered / reshaped structured output
-  ↓
-normal format selection and rendering
-```
-
-The last line matters: the DSL runs before rendering. You can use the same
-pipeline and still ask for `json`, `table`, `md`, `mreg`, or `value` output.
-
-## Five-IQ Recipes
-
-Keep matching rows:
-
-```text
-| F active=true
-```
-
-Keep only a few fields:
-
-```text
-| P uid mail
-```
-
-Sort rows:
-
-```text
-| S uid
-```
-
-Take the first few:
-
-```text
-| L 10
-```
-
-Turn one field into a simple value list:
-
-```text
-| VALUE uid
-```
-
-If you only remember five things about the DSL, remember those. You can ignore
-the rest until you actually need a more specialized transform.
-
-## Basic Shape
-
-```text
-command ... | STAGE ... | STAGE ...
-```
-
-Examples:
+Quote shell pipes so your shell passes them to `osp`:
 
 ```bash
-osp plugins commands | P name about
-osp plugins commands | P name provider about | S name | L 10
-osp help | VALUE commands[].name
+osp theme list '|' F id=nord '|' C
+osp --json theme list '|' P id '|' S id desc
+osp 'theme list | F id=nord | C'
+osp theme list '|' H F
+osp theme list '|' 'F id=nord' '|' C
 ```
 
-## Mental Model
+The same explicit `|` syntax works on built-in, native product and external
+plugin commands that support structured output. In the REPL, write ordinary
+pipes. `H` displays DSL help before running the command.
+CLI help output also accepts stages, for example `osp --help '|' C`.
+Shell-completion scripts and version text are not structured command output;
+they reject pipe stages explicitly.
 
-- Row-shaped commands return similar objects, such as users, hosts, or plugin
-  command rows.
-- Document-shaped commands return semantic structures, such as help and intro
-  output.
-- Selector-style stages try to preserve structure when they can.
-- Collection-style stages intentionally reshape row/group data.
-- Bare text like `doctor` is quick search over keys and values.
-- Path-shaped selectors like `commands.name` use structural path lookup and
-  implicitly descend arrays.
-- Quick search always acts as keep/drop selection and retains complete matching
-  rows or collection members, regardless of how many rows the input has.
-- Use `P` or `VALUE` when you want to reshape the result.
-- The DSL runs before final rendering, so the same pipeline can be shown as a
-  table, JSON, markdown, or plain values afterward.
-
-In practice:
-
-- `name` is permissive.
-- `metadata.owner` selects that structural path.
-- `members.uid` and `members[].uid` both fan out the `members` array and read
-  each `uid`.
-- If a dotted/indexed quick token does not resolve as a path, quick search can
-  still fall back to matching visible row text.
-
-## Choosing The Smallest Useful Stage
-
-Use the dumbest stage that answers your question:
-
-| Need | Stage |
-|---|---|
-| "show me rows/documents mentioning this thing" | bare quick search |
-| "keep only rows matching a condition" | `F` |
-| "keep only these fields" | `P` |
-| "sort the result" | `S` |
-| "show fewer rows" | `L` |
-| "group before rendering" | `G` |
-| "I only want the values of one field" | `VALUE` |
-
-That keeps pipelines readable. If a pipeline becomes clever, it usually becomes
-hard to trust.
-
-## Example Inputs
-
-The examples below reuse two small inputs so you can compare stages directly.
-
-Row-shaped input:
-
-```json
-[
-  {
-    "uid": "alice",
-    "dept": "ops",
-    "active": true,
-    "amount": 120,
-    "roles": ["eng", "ops"],
-    "interfaces": [
-      {"mac": "aa:bb", "speed": 1000},
-      {"mac": "cc:dd", "speed": 100}
-    ]
-  },
-  {
-    "uid": "bob",
-    "dept": "eng",
-    "active": false,
-    "amount": 80,
-    "roles": ["eng"],
-    "interfaces": [
-      {"mac": "aa:bb", "speed": 1000}
-    ]
-  },
-  {
-    "uid": "carol",
-    "dept": "ops",
-    "active": true,
-    "amount": 90,
-    "roles": ["ops"],
-    "interfaces": []
-  }
-]
-```
-
-Guide-shaped input:
-
-```json
-{
-  "usage": ["osp help [topic]"],
-  "commands": [
-    {"name": "help", "short_help": "Show command overview"},
-    {"name": "doctor", "short_help": "Run diagnostics"},
-    {"name": "theme", "short_help": "Manage themes"}
-  ]
-}
-```
-
-## Chaining With Pipes
-
-Pipelines are read left to right.
-
-Example on the row-shaped input above:
-
-```text
-| F active=true | P uid dept amount | S !amount | L 2
-```
-
-Using the row input above, the result is:
-
-```json
-[
-  {"uid": "alice", "dept": "ops", "amount": 120},
-  {"uid": "carol", "dept": "ops", "amount": 90}
-]
-```
-
-Another example on structured help output:
+For a product task list whose JSON exposes `id` and `status`:
 
 ```bash
-osp help | P commands[].name | VALUE name
+osp --json orch task list '|' F status=running '|' C
+osp orch task list '|' P id,status,created_at '|' S -created_at
 ```
 
-Result:
+Use the actual raw field path returned by your command. `status` is not an
+alias for `status.name`: use the nested path only when it exists in raw JSON.
+A human-only `STALE` suffix does not change the canonical status or imply a
+terminal state. Filter the raw `stale` boolean to select stale tasks.
 
-```json
-[
-  {"value": "help"},
-  {"value": "doctor"},
-  {"value": "theme"}
-]
+## The row boundary
+
+- An array supplies one row per element. Object elements retain their fields;
+  scalar elements become `{value: ...}` rows.
+- An object supplies one row, with nested objects and lists intact.
+- A command can declare a collection field such as `items` through `row_path`.
+  Its elements become rows once, before the pipeline. Filters do not see the
+  wrapper's pagination fields.
+- Unstaged JSON preserves an explicitly supplied raw document. Applying a
+  pipeline produces a JSON array of the resulting rows, including `[]` and
+  singleton arrays. Wrapper totals and cursors are discarded; they no longer
+  describe the transformed result.
+- Structured help declares itself as a guide. Its entries and text lines
+  become rows for a pipeline; section headings remain presentation metadata.
+  Filtering and limiting operate on those entries, not on a singleton help
+  envelope. Human guide rendering restores surviving content into its sections.
+  Shape-changing stages, including field cleanup (`?`), instead display the
+  resulting rows without retaining the original guide layout.
+
+`F`, bare search, `K`, `V`, and existence searches retain complete matching
+rows. They do not recursively remove members from arrays inside a row. For
+example, filtering a row by `members[].uid=alice` retains that whole row.
+To work on individual members, explicitly extract/unroll them first:
+
+```text
+P members[] | F uid=alice | C
+U members | F members.uid=alice
 ```
 
-## Row Data Vs Structured Documents
+`P members[]` emits member fields as rows; `U members` keeps parent fields
+and replaces the list field with one member per row. `VALUE members[].uid`
+emits plain `{value: ...}` rows in document order, preserving duplicates from
+distinct addresses.
 
-Many commands produce ordinary row sets. Those behave like a table even before
-you render them.
+## Syntax and verbs
 
-Some commands, especially help/guide surfaces, produce structured documents.
-The DSL still works on those, but selector-style stages are more important
-because the useful thing is often nested.
+| Stage | Syntax and meaning | Example |
+| --- | --- | --- |
+| Bare search | Case-insensitive text search across keys and values; retains rows | `running` |
+| `F` | `F field OP value`; operators `=`, `==`, `!=`, `>`, `>=`, `<`, `<=`, `~` | `F status=running` |
+| `P` | `P field[,field...] [!field...]`; keep/drop fields | `P id,status` |
+| `S` | `S field [asc\|desc] [AS num\|str\|ip] ...` | `S created_at desc id` |
+| `G` | `G field [AS alias] [field ...]`; partition by group keys | `G provider` |
+| `A` | `A count\|sum\|avg\|min\|max [field] [AS alias]` | `A sum memory AS total` |
+| `L` | `L count [offset]`; negative count selects the tail | `L 10 20`, `L -5` |
+| `Z` | Collapse group headers/aggregates into summary rows | `G provider \| A count \| Z` |
+| `C` | Count the current selection | `F stale=true \| C` |
+| `Y` | Mark output for copying | `P id \| Y` |
+| `H` | `H [verb]`; show syntax and examples | `H S` |
+| `V` | Value-only quick search | `V running` |
+| `K` | Key-only quick search | `K requester` |
+| `?` | No operand: remove null, empty string and empty array fields | `?` |
+| `?field` | Keep rows with a truthy field; `!?field` selects absence | `?requester` |
+| `U` | `U field`; unroll a list while retaining parent data | `U contacts` |
+| `JQ` | Run a quoted jq expression | `JQ '.[] \| .id'` |
+| `VALUE` / `VAL` | Extract selected fields as value rows; no operand extracts all | `VALUE status.name` |
 
-That is why these both make sense:
+The existing `VAL` spelling remains supported. No new verb synonyms are added.
+Verbs are case-insensitive. An unknown single-letter verb is an error;
+ordinary unregistered words are quick-search text.
+
+## Matching and selectors
+
+Quick search supports these prefixes, with or without intervening spaces:
+
+| Prefix | Meaning |
+| --- | --- |
+| `!text` | Exclude matching rows |
+| `=text` | Case-insensitive equality |
+| `==text` | Case-sensitive equality |
+| `!=text` | Negated case-insensitive equality |
+| `%text` | Fuzzy text matching |
+| `?field` / `!?field` | Truthy presence / absence |
+
+`K` and `V` restrict the search to keys or values. `K !=field` selects rows
+having a key unequal to that name. All whitespace variants of `!=` have the
+same interpretation; predicate `F field != value` also permits attached forms.
+`F field text` means a contains comparison; `F field=value` means equality.
+Array-valued fields match if an element satisfies the predicate.
+
+A bare field selector can match descendant keys. Dotted paths navigate nested
+objects; when a named segment reaches an array it visits each member. Thus
+`members.uid` and `members[].uid` select the same leaves. Use `[0]`, `[-1]`,
+`[1:3]` or `[]` for indexed, tail, sliced or full traversal. Missing branches
+contribute no values. Structural paths do not match a literal dotted key inside
+an unrelated nested object.
+
+Projection keepers and droppers resolve against original addresses before
+compaction. A selected null remains null. Fanout columns use their leaf name;
+selecting two fanouts with the same name is an ambiguity error. Static parent
+fields repeat alongside projected member rows.
+
+## Sorting, dates and quoting
+
+`S -created_at` and `S created_at desc` mean descending order; the existing
+`!created_at` spelling also works. Cast and direction may appear in either
+order, for example `S size desc AS num`. A missing sort field in a nonempty
+selection is an error. Empty input sorts successfully. Missing values sort
+last; numeric-looking values sort numerically under automatic casting.
+
+Ordered filters recognize RFC3339 timestamps and timezone-naive dates/times.
+Naive values use the machine's local timezone. Ambiguous or nonexistent local
+DST times are rejected with guidance to supply an offset. Prefer explicit
+RFC3339 offsets in scripts:
+
+```text
+F created_at >= 2026-09-25T10:00:00+02:00
+F created_at >= '2026-09-25 10:00:00'
+```
+
+Human output formats RFC3339 timestamps in local time with an explicit UTC
+offset. Numeric timestamps are formatted only when the producer declares that
+field as Unix seconds; arbitrary numbers are not guessed to be dates. Raw JSON
+keeps the original values. Shape-changing stages clear producer formatting
+hints so an alias cannot inherit an unrelated timestamp format.
+
+Quote regex alternation inside a textual pipeline:
 
 ```bash
-osp plugins commands | P name provider
-osp help | P commands[].name | VALUE name
-```
-
-Same pipeline language, different output shape, same idea: keep only the part
-you actually need.
-
-## Verb Examples
-
-### Bare Quick Search
-
-Pipeline:
-
-```text
-| ops
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "bob", "dept": "eng"},
-  {"uid": "carol", "dept": "ops"}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "carol", "dept": "ops"}
-]
-```
-
-On a structured document, bare quick keeps the matching parent object instead
-of flattening everything:
-
-Pipeline:
-
-```text
-| doctor
-```
-
-Input:
-
-```json
-{
-  "commands": [
-    {"name": "help", "short_help": "Show command overview"},
-    {"name": "doctor", "short_help": "Run diagnostics"}
-  ]
-}
-```
-
-Output:
-
-```json
-{
-  "commands": [
-    {"name": "doctor", "short_help": "Run diagnostics"}
-  ]
-}
-```
-
-### `F` Filter Rows Or Structure
-
-Pipeline:
-
-```text
-| F active=true
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "active": true},
-  {"uid": "bob", "active": false},
-  {"uid": "carol", "active": true}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice", "active": true},
-  {"uid": "carol", "active": true}
-]
-```
-
-Path filters work on structured documents too:
-
-Pipeline:
-
-```text
-| F commands[].name=doctor
-```
-
-Input:
-
-```json
-{
-  "commands": [
-    {"name": "help", "short_help": "Show command overview"},
-    {"name": "doctor", "short_help": "Run diagnostics"}
-  ]
-}
-```
-
-Output:
-
-```json
-{
-  "commands": [
-    {"name": "doctor", "short_help": "Run diagnostics"}
-  ]
-}
-```
-
-The deepest array member addressed by the predicate is the filtering unit. The
-surviving member stays complete; `F commands.name=doctor` keeps both `name` and
-`short_help`. Fields and collections outside that addressed array are left
-unchanged.
-
-Supported comparison operators:
-
-- `=` or `==`
-- `!=`
-- `>`
-- `>=`
-- `<`
-- `<=`
-- `~` for regex
-
-Examples:
-
-```text
-| F uid=alice
-| F amount>=100
-| F uid ~ ^a
-| F ?mail
-```
-
-### `P` Project Fields
-
-Pipeline:
-
-```text
-| P uid dept
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops", "amount": 120},
-  {"uid": "bob", "dept": "eng", "amount": 80}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "bob", "dept": "eng"}
-]
-```
-
-Exact path projection:
-
-Pipeline:
-
-```text
-| P commands[].name
-```
-
-Input:
-
-```json
-{
-  "usage": ["osp help [topic]"],
-  "commands": [
-    {"name": "help", "short_help": "Show command overview"},
-    {"name": "doctor", "short_help": "Run diagnostics"}
-  ]
-}
-```
-
-Output:
-
-```json
-{
-  "commands": [
-    {"name": "help"},
-    {"name": "doctor"}
-  ]
-}
-```
-
-Droppers can remove fields from the kept result:
-
-```text
-| P uid dept amount !amount
-```
-
-### `S` Sort
-
-Pipeline:
-
-```text
-| S !amount AS num
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "amount": 120},
-  {"uid": "bob", "amount": 80},
-  {"uid": "carol", "amount": 90}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice", "amount": 120},
-  {"uid": "carol", "amount": 90},
-  {"uid": "bob", "amount": 80}
-]
-```
-
-Notes:
-
-- Prefix a key with `!` for descending order.
-- `AS num`, `AS str`, and `AS ip` force a cast.
-- Missing values sort last.
-- In ascending auto order, numeric values precede IP addresses, which precede
-  remaining text. Values that cannot use an explicit numeric/IP cast sort as
-  text after valid values. Descending reverses present values, not missingness.
-- On scalar arrays, the first sort key's direction and cast apply to each value.
-
-### `G` Group
-
-Pipeline:
-
-```text
-| G dept
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "bob", "dept": "eng"},
-  {"uid": "carol", "dept": "ops"}
-]
-```
-
-Output, shown in the grouped JSON shape:
-
-```json
-[
-  {
-    "groups": {"dept": "ops"},
-    "aggregates": {},
-    "rows": [
-      {"uid": "alice", "dept": "ops"},
-      {"uid": "carol", "dept": "ops"}
-    ]
-  },
-  {
-    "groups": {"dept": "eng"},
-    "aggregates": {},
-    "rows": [
-      {"uid": "bob", "dept": "eng"}
-    ]
-  }
-]
-```
-
-Fanout grouping is allowed:
-
-```text
-| G roles[]
-```
-
-Aliasing is allowed:
-
-```text
-| G dept AS department
-```
-
-### `A` Aggregate
-
-Pipeline:
-
-```text
-| G dept | A sum(amount) AS total
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops", "amount": 120},
-  {"uid": "bob", "dept": "eng", "amount": 80},
-  {"uid": "carol", "dept": "ops", "amount": 90}
-]
-```
-
-Output, again shown in grouped JSON shape:
-
-```json
-[
-  {
-    "groups": {"dept": "ops"},
-    "aggregates": {"total": 210.0},
-    "rows": [
-      {"uid": "alice", "dept": "ops", "amount": 120},
-      {"uid": "carol", "dept": "ops", "amount": 90}
-    ]
-  },
-  {
-    "groups": {"dept": "eng"},
-    "aggregates": {"total": 80.0},
-    "rows": [
-      {"uid": "bob", "dept": "eng", "amount": 80}
-    ]
-  }
-]
-```
-
-Supported aggregate functions:
-
-- `count`
-- `sum(field)`
-- `avg(field)`
-- `min(field)`
-- `max(field)`
-
-### `L` Limit
-
-Pipeline:
-
-```text
-| L 2
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice"},
-  {"uid": "bob"},
-  {"uid": "carol"}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice"},
-  {"uid": "bob"}
-]
-```
-
-Offset form:
-
-```text
-| L 2 1
-```
-
-Result:
-
-```json
-[
-  {"uid": "bob"},
-  {"uid": "carol"}
-]
-```
-
-### `Z` Collapse Grouped Output
-
-Pipeline:
-
-```text
-| G dept | A count AS count | Z
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "bob", "dept": "eng"},
-  {"uid": "carol", "dept": "ops"}
-]
-```
-
-Output:
-
-```json
-[
-  {"dept": "ops", "count": 2},
-  {"dept": "eng", "count": 1}
-]
-```
-
-`Z` only works after grouped output exists.
-
-### `C` Count
-
-Pipeline:
-
-```text
-| C
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice"},
-  {"uid": "bob"},
-  {"uid": "carol"}
-]
-```
-
-Output:
-
-```json
-[
-  {"count": 3}
-]
-```
-
-On grouped input, `C` produces one summary row per group:
-
-Pipeline:
-
-```text
-| G dept | C
-```
-
-Output:
-
-```json
-[
-  {"dept": "ops", "count": 2},
-  {"dept": "eng", "count": 1}
-]
-```
-
-### `Y` Mark Output For Copy
-
-Pipeline:
-
-```text
-| Y
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice"},
-  {"uid": "bob"}
-]
-```
-
-Visible output:
-
-```json
-[
-  {"uid": "alice"},
-  {"uid": "bob"}
-]
-```
-
-`Y` does not change the data. It marks the final rendered output for clipboard
-copy when the current environment supports it.
-
-### `H` Show DSL Help
-
-`H` is a help stage rather than a data stage.
-
-Pipeline:
-
-```text
-| H
-```
-
-Example output:
-
-```text
-F       Filter rows
-P       Project columns
-S       Sort rows
-G       Group rows
-...
-```
-
-Per-verb help:
-
-```text
-| H F
-| H VALUE
-```
-
-### `V` Value-Only Quick Search
-
-Pipeline:
-
-```text
-| V ops
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "bob", "dept": "eng"},
-  {"uid": "carol", "dept": "ops"}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "carol", "dept": "ops"}
-]
-```
-
-`V` only searches values, not keys.
-
-Prefix any quick search with `!` to keep rows that do not match:
-
-```text
-| ! ops
-```
-
-### `K` Key-Only Quick Search
-
-Pipeline:
-
-```text
-| K uid
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"name": "bob", "dept": "eng"}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"}
-]
-```
-
-`K` only searches keys, not values, and retains the complete matching row.
-
-### `?` Clean Or Truthy Filter
-
-With no argument, `?` removes empty values and drops empty rows.
-
-Pipeline:
-
-```text
-| ?
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "mail": "", "tags": [], "note": null},
-  {"mail": "", "tags": [], "note": null}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice"}
-]
-```
-
-With a selector, `?` keeps rows where the resolved value is truthy:
-
-Pipeline:
-
-```text
-| ? uid
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice"},
-  {"mail": "bob@example.org"}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice"}
-]
-```
-
-For this check, `null`, `false`, `0`, `""`, `[]`, and `{}` all count as
-missing.
-
-### `U` Unroll A List Field
-
-Pipeline:
-
-```text
-| U interfaces
-```
-
-Input:
-
-```json
-[
-  {
-    "uid": "alice",
-    "interfaces": [
-      {"mac": "aa:bb", "speed": 1000},
-      {"mac": "cc:dd", "speed": 100}
-    ]
-  },
-  {
-    "uid": "bob",
-    "interfaces": [
-      {"mac": "aa:bb", "speed": 1000}
-    ]
-  }
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice", "interfaces": {"mac": "aa:bb", "speed": 1000}},
-  {"uid": "alice", "interfaces": {"mac": "cc:dd", "speed": 100}},
-  {"uid": "bob", "interfaces": {"mac": "aa:bb", "speed": 1000}}
-]
-```
-
-Common follow-up:
-
-```text
-| U interfaces | P uid mac speed | G mac | A count AS count
-```
-
-### `JQ` Run A jq Expression
-
-Pipeline:
-
-```text
-| JQ 'map({uid, dept})'
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops", "amount": 120},
-  {"uid": "bob", "dept": "eng", "amount": 80}
-]
-```
-
-Output:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "bob", "dept": "eng"}
-]
-```
-
-`JQ` sees the full current payload, not one row at a time.
-It is implemented in-process with
-[jaq](https://github.com/01mf02/jaq), so treat it as jq-like rather than a
-bit-for-bit promise of external `jq`.
-
-### `VAL` / `VALUE` Extract Values
-
-`VAL` and `VALUE` are aliases.
-
-`VALUE` is an extractor: row-shaped and document-shaped inputs both produce
-flat `{value: ...}` rows. It does not preserve a document envelope. Multiple
-selectors emit in selector order, while matches within each selector retain
-depth-first document order and duplicates from distinct addresses.
-
-Pipeline:
-
-```text
-| VALUE uid
-```
-
-Input:
-
-```json
-[
-  {"uid": "alice", "dept": "ops"},
-  {"uid": "bob", "dept": "eng"}
-]
-```
-
-Output:
-
-```json
-[
-  {"value": "alice"},
-  {"value": "bob"}
-]
-```
-
-Path extraction:
-
-Pipeline:
-
-```text
-| VALUE commands[].name
-```
-
-Input:
-
-```json
-{
-  "commands": [
-    {"name": "help", "short_help": "Show command overview"},
-    {"name": "doctor", "short_help": "Run diagnostics"}
-  ]
-}
-```
-
-Output:
-
-```json
-[
-  {"value": "help"},
-  {"value": "doctor"}
-]
-```
-
-## Selectors And Paths
-
-Quoted term lists behave the same in `P`, `VAL`, and `VALUE`:
-
-```text
-| P "display,name" "team ops"
-| VALUE "display,name"
-```
-
-Path syntax supports:
-
-- dotted fields like `metadata.owner`
-- implicit array descent like `members.name`
-- explicit fanout like `members[].name`
-- indexes like `members[0]`
-- negative indexes like `members[-1]`
-- slices like `members[:2]`
-
-Important rule:
-
-- Bare tokens are permissive descendant selectors.
-- Dotted or indexed selectors use structural path lookup.
-- When a named segment reaches an array, it visits every member in document
-  order. `members.name` and `members[].name` are therefore equivalent.
-- Use indexes or slices when only particular members should participate.
-- Equal values at different addresses remain separate results.
-
-That means `owner` and `metadata.owner` are intentionally different surfaces.
-
-For example, both of these select every interface name:
-
-```text
-| VALUE ifaces.name
-| VALUE ifaces[].name
-```
-
-Use `VALUE ifaces[0].name` for only the first interface on each input row, or
-`VALUE ifaces[1:].name` for every interface after the first.
-
-## Parsing Rules
-
-- `|` starts a new stage
-- commas and whitespace both separate terms in `P` and `VALUE`
-- quotes keep embedded commas or spaces together
-- malformed quoting is an error
-- unknown single-letter alphabetic verbs are errors
-- longer unknown stages still fall through to quick search
-
-Examples:
-
-```text
-| P uid,mail
-| P "display,name" 'team ops'
-| F note="a=b>=c"
-```
-
-Use `| H` in the REPL to see the current verb list and `| H <verb>` for
-a concise description of one verb.
+osp "theme list | F id ~ 'nord|dracula' | P id"
+osp theme list '|' F id '~' 'nord|dracula' '|' P id
+```
+
+An unquoted `|` is always a pipeline boundary. Ambiguous regex-to-text-search
+transitions fail with quoting guidance; use an explicit verb after an unquoted
+regex, or quote the regex. Quote whole jq expressions too:
+
+```bash
+osp theme list '|' JQ '.[] | .id'
+```
+
+JQ receives an array of canonical rows, including singleton objects. Use
+`.[0].field` or `.[] | .field`. Scalar results become `value` rows. For grouped
+input, JQ receives each `{groups, aggregates, rows}` envelope; `.rows` accesses
+members. Returning a replacement envelope updates that group; other results
+replace its member rows.
+
+## Groups and empty selections
+
+`G` keeps group keys, aggregate values and member rows distinct. Row operations
+such as `P`, `U`, `VALUE`, quick search and clean run within each partition.
+`F` tests matching header/aggregate fields first; otherwise it filters members
+and removes empty groups. `S` and `L` order/limit groups. `A` adds one aggregate
+per group; `Z` emits keys and aggregates as ordinary rows. Previously computed
+aggregates remain snapshots until explicitly recomputed.
+
+`C` emits one `{count: N}` row for ungrouped input and one key/count summary per
+surviving group. If no groups survive, it emits `{count: 0}` without invented
+group keys. `A count` follows the same empty-selection rule. Empty numeric
+sum/average are zero; minimum/maximum are null. `G` alone over empty input
+produces no groups.
+
+## Human tables
+
+Null and empty arrays render blank; lists render as readable comma-separated
+values. Producer column order expresses priority. Narrow terminal tables omit
+trailing low-priority columns before clipping the first remaining column.
+Declared columns remain stable for zero, one or many rows. Use `--json` for
+complete machine data, or `P` to choose the fields needed for your task.
+The explicit `table_overflow=none` setting disables width fitting.

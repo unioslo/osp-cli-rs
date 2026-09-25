@@ -113,14 +113,9 @@ osp --profile tsd plugins list
 osp config explain profile.default
 ```
 
-Remember:
-
-- `--profile` wins when present
-- otherwise `osp <profile> ...` only acts as profile shorthand if that profile
-  is actually known from config/bootstrap state
-
-If you are unsure, prefer `--profile` while debugging so the command line is
-unambiguous.
+`--profile` selects a configured profile; positional words always name commands.
+An unknown explicit profile or environment-selected default fails before command
+execution. Inspect the configured profile names instead of expecting fallback.
 
 ## Symptom: REPL Startup Or Editing Is Bad In A Weak Terminal
 

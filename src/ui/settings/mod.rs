@@ -10,7 +10,9 @@
 //! module derive the richer [`ResolvedRenderSettings`] view consumed by the
 //! rest of the UI pipeline.
 
-use crate::config::{ConfigSource, ConfigValue, ResolvedConfig, Scope};
+use crate::config::{
+    ConfigSource, ConfigValue, DEFAULT_UI_WIDTH, DEFAULT_UI_WIDTH_MAX, ResolvedConfig, Scope,
+};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::output_model::{
     OutputItems, OutputResult, RenderRecommendation, output_items_to_rows,
@@ -259,6 +261,8 @@ pub struct RenderSettings {
     pub theme_name: String,
     pub(crate) theme: Option<ThemeDefinition>,
     pub width: Option<usize>,
+    /// Maximum width for rendered output; zero leaves the measured width uncapped.
+    pub width_max: usize,
     pub margin: usize,
     pub indent_size: usize,
     pub medium_list_max: usize,
@@ -283,6 +287,7 @@ impl Default for RenderSettings {
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: None,
             width: None,
+            width_max: DEFAULT_UI_WIDTH_MAX as usize,
             margin: 0,
             indent_size: 2,
             medium_list_max: 5,
@@ -436,20 +441,16 @@ pub(crate) fn apply_render_config_overrides(
         settings.guide_default_format = parsed;
     }
 
-    if settings.width.is_none() {
-        match config.get("ui.width").map(ConfigValue::reveal) {
-            Some(ConfigValue::Integer(width)) if *width > 0 => {
-                settings.width = Some(*width as usize);
-            }
-            Some(ConfigValue::String(raw)) => {
-                if let Ok(width) = raw.trim().parse::<usize>()
-                    && width > 0
-                {
-                    settings.width = Some(width);
-                }
-            }
-            _ => {}
-        }
+    if settings.width.is_none()
+        && config
+            .get_value_entry("ui.width")
+            .is_some_and(|entry| entry.source != ConfigSource::BuiltinDefaults)
+    {
+        settings.width = config_usize_override(config, "ui.width").filter(|width| *width > 0);
+    }
+
+    if let Some(width_max) = config_usize_override(config, "ui.width-max") {
+        settings.width_max = width_max;
     }
 
     sync_render_config_overrides(settings, config);
@@ -638,6 +639,11 @@ impl RenderSettingsBuilder {
         self
     }
 
+    pub fn with_width_max(mut self, width_max: usize) -> Self {
+        self.settings.width_max = width_max;
+        self
+    }
+
     pub fn with_margin(mut self, margin: usize) -> Self {
         self.settings.margin = margin;
         self
@@ -761,10 +767,20 @@ impl RenderSettings {
     }
 
     fn resolve_width(&self) -> Option<usize> {
-        if let Some(width) = self.width {
-            return (width > 0).then_some(width);
-        }
-        self.runtime.width.filter(|width| *width > 0)
+        let configured = self.width.filter(|width| *width > 0);
+        let measured = self.runtime.width.filter(|width| *width > 0);
+        let width = match (configured, measured) {
+            (Some(configured), Some(measured)) => configured.min(measured),
+            (Some(configured), None) => configured,
+            (None, Some(measured)) => measured,
+            (None, None) => DEFAULT_UI_WIDTH as usize,
+        };
+
+        Some(if self.width_max == 0 {
+            width
+        } else {
+            width.min(self.width_max)
+        })
     }
 
     pub fn resolve_render_settings(&self) -> ResolvedRenderSettings {
@@ -845,6 +861,7 @@ impl RenderSettings {
             color: ColorMode::Never,
             unicode: UnicodeMode::Never,
             width: self.width,
+            width_max: self.width_max,
             margin: self.margin,
             indent_size: self.indent_size,
             medium_list_max: self.medium_list_max,
@@ -1032,8 +1049,9 @@ mod tests {
     #[test]
     fn render_config_overrides_use_presentation_defaults_and_explicit_overrides_unit() {
         let config = resolved_config_with_session(
-            &[("ui.width", "88")],
+            &[],
             &[
+                ("ui.width", "88"),
                 ("ui.chrome.frame", "round"),
                 ("ui.chrome.rule_policy", "stacked"),
                 ("ui.table.border", "square"),
@@ -1175,6 +1193,9 @@ mod tests {
             document: None,
             meta: OutputMeta {
                 key_index: vec!["team".to_string(), "count".to_string(), "uid".to_string()],
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
+                display_columns: None,
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: true,

@@ -207,6 +207,7 @@ pub fn enumerate_path_matches(root: &Value, path: &PathExpression) -> Vec<Addres
 /// internal sparse-hole sentinel so callers can preserve real selected `null`
 /// values. Call [`compact_sparse_arrays`] after any intermediate envelope
 /// restoration/merge work to strip those holes from the final payload.
+#[cfg(test)]
 pub fn materialize_path_matches(matches: &[AddressedValue]) -> Value {
     let mut out = Value::Null;
     for entry in matches {
@@ -613,6 +614,7 @@ fn flatten_addressed_value(
     }
 }
 
+#[cfg(test)]
 fn insert_addressed_value(target: &mut Value, address: &[AddressStep], value: Value) {
     if address.is_empty() {
         *target = value;

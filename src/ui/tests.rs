@@ -52,8 +52,8 @@ fn ui2_renders_generic_rows_as_markdown_table_unit() {
 #[test]
 fn ui2_terminal_tables_honor_width_for_clip_ellipsis_and_wrap_unit() {
     let output = OutputResult::from_rows(vec![row! {
+        "message" => "Not authorized for vcenter vcsa-test03.uio.no; request access or choose another value",
         "provider" => "vmware",
-        "message" => "Not authorized for vcenter vcsa-test03.uio.no",
         "next" => "Request access or choose another value",
     }]);
 
@@ -279,6 +279,8 @@ fn ui2_mreg_renders_nested_object_arrays_as_tables_unit() {
     }]);
     output.meta.key_index = vec!["name".to_string(), "siteadmins".to_string()];
     let mut settings = RenderSettings::test_plain(OutputFormat::Mreg);
+    settings.width = Some(240);
+    settings.width_max = 0;
     settings.format_explicit = true;
 
     let rendered = render_output(&output, &settings);
@@ -366,6 +368,9 @@ fn ui2_terminal_table_honors_column_alignment_metadata_unit() {
         document: None,
         meta: OutputMeta {
             key_index: vec!["name".to_string(), "count".to_string(), "state".to_string()],
+            unix_timestamp_columns: Vec::new(),
+            display_rules: Vec::new(),
+            display_columns: None,
             column_align: vec![
                 ColumnAlignment::Left,
                 ColumnAlignment::Right,
@@ -396,6 +401,9 @@ fn ui2_markdown_table_honors_column_alignment_metadata_unit() {
         document: None,
         meta: OutputMeta {
             key_index: vec!["name".to_string(), "count".to_string(), "state".to_string()],
+            unix_timestamp_columns: Vec::new(),
+            display_rules: Vec::new(),
+            display_columns: None,
             column_align: vec![
                 ColumnAlignment::Left,
                 ColumnAlignment::Right,
@@ -440,8 +448,10 @@ fn ui2_json_block_uses_row_payload_shape_even_with_semantic_document_unit() {
     let Some(Block::Json(json)) = doc.blocks.first() else {
         panic!("expected json block");
     };
-    assert!(json.text.contains("\"uid\": \"alice\""));
-    assert!(!json.text.contains("\"usage\""));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&json.text).unwrap(),
+        json!([{"usage": ["osp history"]}])
+    );
 }
 
 #[test]
@@ -711,6 +721,9 @@ fn ui_grouped_outputs_lower_and_render_with_one_group_owner_unit() {
         document: None,
         meta: OutputMeta {
             key_index: vec!["team".to_string(), "count".to_string(), "uid".to_string()],
+            unix_timestamp_columns: Vec::new(),
+            display_rules: Vec::new(),
+            display_columns: None,
             column_align: Vec::new(),
             wants_copy: false,
             grouped: true,

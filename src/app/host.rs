@@ -259,23 +259,45 @@ where
 {
     let argv = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
     init_developer_logging(bootstrap_logging_config(&argv));
-    let scanned = scan_cli_argv(&argv)?;
+    let pipe = argv.iter().position(|arg| arg == "|").unwrap_or(argv.len());
+    let suffix = argv[pipe..]
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let scanned = scan_cli_argv(&argv[..pipe])?;
+    let mut stage_tokens = vec!["command".to_string()];
+    stage_tokens.extend(suffix.iter().cloned());
+    let stages = crate::cli::pipeline::split_command_tokens(&stage_tokens).stages;
+    crate::cli::validate_cli_dsl_stages(&stages)?;
     match Cli::try_parse_from(scanned.argv.iter().cloned()) {
         Ok(Cli {
             command: Some(Commands::Completions(args)),
             ..
         }) => {
+            if !stages.is_empty() {
+                return Err(miette!(
+                    "shell completion scripts do not support DSL pipeline stages"
+                ));
+            }
             sink.write_stdout(&crate::cli::render_shell_completions(args));
             Ok(0)
         }
-        Ok(cli) => run(cli, scanned.invocation, sink, app),
-        Err(err) => handle_clap_parse_error(&argv, err, sink, app),
+        Ok(mut cli) => {
+            if let Some(Commands::External(tokens)) = cli.command.as_mut() {
+                tokens.extend(suffix);
+                run(cli, scanned.invocation, &[], sink, app)
+            } else {
+                run(cli, scanned.invocation, &stages, sink, app)
+            }
+        }
+        Err(err) => handle_clap_parse_error(&argv[..pipe], err, &stages, sink, app),
     }
 }
 
 fn handle_clap_parse_error(
     args: &[OsString],
     err: clap::Error,
+    stages: &[String],
     sink: &mut dyn UiSink,
     app: &super::AppDefinition,
 ) -> Result<i32> {
@@ -296,10 +318,42 @@ fn handle_clap_parse_error(
                 add_product_option_help(&mut body, &app.product_help_options);
                 add_native_command_help(&mut body, &app.native_commands);
             }
-            let filtered = body.filtered_for_help_level(help_context.help_level);
+            let mut filtered = body.filtered_for_help_level(help_context.help_level);
+            let dsl_help = stages.iter().find_map(|raw| {
+                let parsed = crate::dsl::parse::pipeline::parse_stage(raw).ok()?;
+                crate::cli::is_cli_help_stage(&parsed).then_some(parsed.spec)
+            });
+            if let Some(spec) = &dsl_help {
+                let target = spec.split_whitespace().next().unwrap_or("");
+                let verbs = if target.is_empty() {
+                    crate::dsl::verb_info::registered_verbs()
+                        .iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![
+                        crate::dsl::verb_info::verb_info(target)
+                            .ok_or_else(|| miette!("Unknown DSL verb: {target}"))?,
+                    ]
+                };
+                filtered = GuideView {
+                    commands: verbs
+                        .into_iter()
+                        .map(|info| crate::guide::GuideEntry {
+                            name: info.verb.to_string(),
+                            short_help: info.help.to_string(),
+                            display_indent: None,
+                            display_gap: None,
+                        })
+                        .collect(),
+                    ..GuideView::default()
+                };
+            }
+            let stages = if dsl_help.is_some() { &[][..] } else { stages };
+            let output = crate::dsl::apply_output_pipeline(filtered.to_output_result(), stages)
+                .map_err(|error| miette!("failed to transform help output: {error}"))?;
             let rendered = crate::ui::render_structured_output_with_source_guide(
-                &filtered.to_output_result(),
-                Some(&filtered),
+                &output,
+                stages.is_empty().then_some(&filtered),
                 &help_context.settings,
                 help_context.layout,
             );
@@ -307,6 +361,9 @@ fn handle_clap_parse_error(
             Ok(0)
         }
         clap::error::ErrorKind::DisplayVersion => {
+            if !stages.is_empty() {
+                return Err(miette!("version text does not support DSL pipeline stages"));
+            }
             sink.write_stdout(&err.to_string());
             Ok(0)
         }
@@ -322,6 +379,7 @@ fn handle_clap_parse_error(
 fn run(
     mut cli: Cli,
     invocation: InvocationOptions,
+    stages: &[String],
     sink: &mut dyn UiSink,
     app: &super::AppDefinition,
 ) -> Result<i32> {
@@ -331,6 +389,17 @@ fn run(
         dispatch,
         invocation_ui,
     } = prepare_host_run(&mut cli, &invocation, app, run_started)?;
+
+    if let Some(help) = crate::repl::completion::maybe_render_dsl_help(
+        crate::repl::ReplViewContext::from_parts(&state.runtime, &state.session),
+        stages,
+    ) {
+        sink.write_stdout(&help);
+        return Ok(0);
+    }
+    if !stages.is_empty() && matches!(dispatch.action, RunAction::Repl) {
+        return Err(miette!("a pipeline requires a command"));
+    }
 
     let action_started = Instant::now();
     let is_repl = matches!(dispatch.action, RunAction::Repl);
@@ -362,6 +431,7 @@ fn run(
             &state.clients,
             &invocation_ui,
             command,
+            stages,
             sink,
         ),
     };

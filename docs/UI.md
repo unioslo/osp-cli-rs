@@ -85,10 +85,15 @@ Useful persistent config keys:
 - `ui.color.mode`
 - `ui.unicode.mode`
 - `ui.width`
+- `ui.width-max`
 
-`ui.width` overrides detected terminal width. This mainly matters for tables,
-MREG-style layouts, and guide/help rendering where line wrapping and column
-packing change visibly.
+The measured terminal width is used when it is available. `ui.width` is an
+optional upper preference and falls back to 72 columns when no measurement is
+available; a narrower terminal always wins. `ui.width-max` caps the result at
+120 columns by default. Raise it to use more of a wide terminal, or set it to
+`0` to disable the cap. These settings mainly matter for tables, MREG-style
+layouts, and guide/help rendering where line wrapping and column packing
+change visibly.
 
 ## Tables and MREG Layout
 

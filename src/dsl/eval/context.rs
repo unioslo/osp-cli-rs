@@ -1,29 +1,8 @@
-use crate::core::{output_model::compute_key_index, row::Row};
-
-#[derive(Debug, Clone, Default)]
-pub struct RowContext {
-    key_index: Vec<String>,
-}
-
-impl RowContext {
-    /// Builds row-level context from the key ordering observed across `rows`.
-    pub fn from_rows(rows: &[Row]) -> Self {
-        Self {
-            key_index: compute_key_index(rows),
-        }
-    }
-
-    /// Returns the cached key index in first-seen order.
-    pub fn key_index(&self) -> &[String] {
-        &self.key_index
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::RowContext;
+    use crate::core::output_model::compute_key_index;
 
     #[test]
     fn keeps_first_seen_key_order() {
@@ -38,7 +17,7 @@ mod tests {
                 .expect("object"),
         ];
 
-        let context = RowContext::from_rows(&rows);
-        assert_eq!(context.key_index(), &["uid", "cn", "mail"]);
+        let key_index = compute_key_index(&rows);
+        assert_eq!(key_index.as_slice(), &["uid", "cn", "mail"]);
     }
 }

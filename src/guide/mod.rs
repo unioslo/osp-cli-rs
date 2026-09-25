@@ -25,6 +25,7 @@
 //! - rendering/layout policy stays outside this module so the guide model
 //!   remains reusable
 
+pub(crate) mod pipeline;
 pub(crate) mod template;
 
 use crate::core::command_def::{ArgDef, CommandDef, FlagDef};
@@ -262,16 +263,6 @@ impl GuideView {
             return Self::try_from_output_document(document);
         }
 
-        let rows = match &output.items {
-            OutputItems::Rows(rows) if rows.len() == 1 => rows,
-            _ => return None,
-        };
-        Self::try_from_row(&rows[0])
-    }
-
-    /// Attempts to recover a guide from the row projection even when a carried
-    /// semantic document is no longer restorable after DSL narrowing.
-    pub(crate) fn try_from_row_projection(output: &OutputResult) -> Option<Self> {
         let rows = match &output.items {
             OutputItems::Rows(rows) if rows.len() == 1 => rows,
             _ => return None,

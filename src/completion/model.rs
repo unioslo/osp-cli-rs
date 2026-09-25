@@ -173,6 +173,170 @@ impl From<&str> for SuggestionEntry {
     }
 }
 
+/// A provider-supplied value used by advisory planning data.
+///
+/// `Unknown` is distinct from an absent map entry so callers can preserve
+/// incomplete facts without turning them into a rejection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanningValue {
+    /// A value compared case-insensitively for exact columns.
+    Text(String),
+    /// An integer in the column's canonical unit.
+    Number(i64),
+    /// A present but unusable value.
+    Unknown,
+}
+
+impl PlanningValue {
+    /// Creates a textual planning value.
+    pub fn text(value: impl Into<String>) -> Self {
+        Self::Text(value.into())
+    }
+
+    /// Creates a numeric planning value in the column's canonical unit.
+    pub fn number(value: i64) -> Self {
+        Self::Number(value)
+    }
+
+    /// Creates an explicitly unknown planning value.
+    pub const fn unknown() -> Self {
+        Self::Unknown
+    }
+}
+
+impl From<&str> for PlanningValue {
+    fn from(value: &str) -> Self {
+        Self::text(value)
+    }
+}
+
+impl From<String> for PlanningValue {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<i64> for PlanningValue {
+    fn from(value: i64) -> Self {
+        Self::Number(value)
+    }
+}
+
+/// Numeric matching metadata for one minimum column.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanningNumericColumn {
+    /// Case-insensitive suffix scales applied to typed values.
+    ///
+    /// An empty map accepts plain integer input with scale one. The row's
+    /// [`PlanningValue::Number`] is expected to use the canonical unit.
+    pub unit_scales: BTreeMap<String, i64>,
+}
+
+impl PlanningNumericColumn {
+    /// Adds a suffix scale for typed values in this column.
+    pub fn unit_scale(mut self, suffix: impl Into<String>, scale: i64) -> Self {
+        self.unit_scales.insert(suffix.into(), scale);
+        self
+    }
+}
+
+/// One advisory planning row.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanningRow {
+    /// Caller-defined columns and identity fields for this row.
+    pub values: BTreeMap<String, PlanningValue>,
+}
+
+impl PlanningRow {
+    /// Creates an empty planning row.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds or replaces one caller-defined column value.
+    pub fn value(mut self, column: impl Into<String>, value: impl Into<PlanningValue>) -> Self {
+        self.values.insert(column.into(), value.into());
+        self
+    }
+}
+
+/// One advisory relational table used to narrow completion locally.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanningTable {
+    /// Columns that must equal explicit flag values when known.
+    pub columns: BTreeSet<String>,
+    /// Numeric columns whose row values must be at least explicit values.
+    pub minimum_columns: BTreeMap<String, PlanningNumericColumn>,
+    /// Candidate rows. Missing or unknown cells remain unconstrained.
+    pub rows: Vec<PlanningRow>,
+    /// Whether a known mismatch may narrow away a provider or value.
+    pub exhaustive: bool,
+}
+
+impl PlanningTable {
+    /// Creates an empty planning table.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds one exact-match column.
+    pub fn exact_column(mut self, column: impl Into<String>) -> Self {
+        self.columns.insert(column.into());
+        self
+    }
+
+    /// Adds one minimum numeric column with its typed-value scales.
+    pub fn minimum_column(
+        mut self,
+        column: impl Into<String>,
+        numeric: PlanningNumericColumn,
+    ) -> Self {
+        self.minimum_columns.insert(column.into(), numeric);
+        self
+    }
+
+    /// Replaces the candidate rows in this table.
+    pub fn rows(mut self, rows: impl IntoIterator<Item = PlanningRow>) -> Self {
+        self.rows = rows.into_iter().collect();
+        self
+    }
+}
+
+/// Optional provider-supplied relational facts for completion.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanningHints {
+    /// Optional candidate column containing the user-visible provider value.
+    /// Other identity fields remain ordinary caller-defined candidate values.
+    pub provider_column: Option<String>,
+    /// Caller-defined identity columns used to scope separate runtime lanes.
+    ///
+    /// A table only constrains an explicit request when one of its rows is in
+    /// scope for these values. Missing or unknown identity cells are wildcards.
+    pub identity_columns: BTreeSet<String>,
+    /// Advisory tables evaluated locally for each completion request.
+    pub tables: Vec<PlanningTable>,
+}
+
+impl PlanningHints {
+    /// Adds one advisory planning table.
+    pub fn table(mut self, table: PlanningTable) -> Self {
+        self.tables.push(table);
+        self
+    }
+
+    /// Sets the caller-defined provider identity column.
+    pub fn provider_column(mut self, column: impl Into<String>) -> Self {
+        self.provider_column = Some(column.into());
+        self
+    }
+
+    /// Adds one caller-defined identity column used for lane scoping.
+    pub fn identity_column(mut self, column: impl Into<String>) -> Self {
+        self.identity_columns.insert(column.into());
+        self
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// OS version suggestions shared globally or scoped by provider.
 pub struct OsVersions {
@@ -434,6 +598,8 @@ pub struct CompletionNode {
     pub args: Vec<ArgNode>,
     /// Extra flag-name hints contributed by this node.
     pub flag_hints: Option<FlagHints>,
+    /// Optional advisory relational facts used to narrow explicit flag values.
+    pub planning: Option<PlanningHints>,
 }
 
 impl CompletionNode {
@@ -484,6 +650,12 @@ impl CompletionNode {
     /// Adds a flag node keyed by its spelling.
     pub fn with_flag(mut self, name: impl Into<String>, node: FlagNode) -> Self {
         self.flags.insert(name.into(), node);
+        self
+    }
+
+    /// Attaches optional advisory relational facts to this node.
+    pub fn with_planning(mut self, planning: PlanningHints) -> Self {
+        self.planning = Some(planning);
         self
     }
 }

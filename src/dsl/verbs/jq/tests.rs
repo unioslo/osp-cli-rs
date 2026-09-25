@@ -119,7 +119,7 @@ fn apply_with_expr_uses_real_jaq_for_rows_groups_and_values_unit() {
 
     let value = apply_value_with_expr(json!([{"uid": "alice"}, {"uid": "bob"}]), "map(.uid)")
         .expect("value jq should work");
-    assert_eq!(value, json!(["alice", "bob"]));
+    assert_eq!(value, json!([{"value": "alice"}, {"value": "bob"}]));
 }
 
 #[test]

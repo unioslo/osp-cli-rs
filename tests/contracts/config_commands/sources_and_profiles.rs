@@ -1,6 +1,6 @@
 #[cfg(unix)]
 #[test]
-fn positional_profile_with_config_get_contract() {
+fn explicit_profile_with_config_get_contract() {
     let home = make_temp_dir("osp-cli-config-profile");
     write_config(
         &home,
@@ -20,7 +20,7 @@ ui.format = "json"
     let output = cmd
         .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "tsd", "config", "get", "ui.format"])
+        .args(["--json", "--profile=tsd", "config", "get", "ui.format"])
         .assert()
         .success()
         .get_output()
@@ -40,7 +40,7 @@ ui.format = "json"
 
 #[cfg(unix)]
 #[test]
-fn positional_profile_with_config_explain_contract() {
+fn explicit_profile_with_config_explain_contract() {
     let home = make_temp_dir("osp-cli-config-profile-explain");
     write_config(
         &home,
@@ -60,7 +60,7 @@ ui.format = "json"
     let output = cmd
         .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "tsd", "config", "explain", "ui.format"])
+        .args(["--json", "--profile=tsd", "config", "explain", "ui.format"])
         .assert()
         .success()
         .get_output()
@@ -176,7 +176,7 @@ theme.name = "dracula"
 
 #[cfg(unix)]
 #[test]
-fn positional_and_explicit_profile_resolve_equivalent_config_contract() {
+fn attached_and_separate_profile_flags_resolve_equivalent_config_contract() {
     let home = make_temp_dir("osp-cli-config-profile-equivalent");
     write_config(
         &home,
@@ -199,7 +199,7 @@ ui.mode = "plain"
     let positional_out = positional
         .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "tsd", "config", "get", "ui.mode"])
+        .args(["--json", "--profile=tsd", "config", "get", "ui.mode"])
         .assert()
         .success()
         .get_output()

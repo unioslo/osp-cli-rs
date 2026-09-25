@@ -1,6 +1,8 @@
 use std::{cmp::Ordering, fmt::Display};
 
-use crate::core::{output_model::OutputItems, row::Row};
+#[cfg(test)]
+use crate::core::output_model::OutputItems;
+use crate::core::row::Row;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
@@ -9,8 +11,6 @@ use crate::dsl::{
     parse::key_spec::KeySpec,
     verbs::common::{parse_alias_after_as, parse_stage_words},
 };
-
-use super::json;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AggregateFn {
@@ -39,55 +39,72 @@ pub(crate) fn compile(spec: &str) -> Result<AggregatePlan> {
     })
 }
 
-pub(crate) fn apply_with_plan(items: OutputItems, plan: &AggregatePlan) -> Result<OutputItems> {
-    match items {
-        OutputItems::Rows(rows) => {
-            let value = aggregate_rows(&rows, &plan.spec);
-            let mut row = Row::new();
-            row.insert(plan.spec.alias.clone(), value);
-            Ok(OutputItems::Rows(vec![row]))
-        }
-        OutputItems::Groups(groups) => {
-            let enriched = groups
-                .into_iter()
-                .map(|mut group| {
-                    let value = aggregate_rows(&group.rows, &plan.spec);
-                    group.aggregates.insert(plan.spec.alias.clone(), value);
-                    group
-                })
-                .collect::<Vec<_>>();
-            Ok(OutputItems::Groups(enriched))
+pub(crate) fn apply_set(
+    mut set: crate::dsl::model::RowSet,
+    plan: &AggregatePlan,
+) -> Result<crate::dsl::model::RowSet> {
+    // No surviving groups means an aggregate over the empty selection, not a
+    // fabricated group with invented keys.
+    if set.partitions.is_empty() {
+        set = crate::dsl::model::RowSet::rows(Vec::new());
+    }
+    for partition in &mut set.partitions {
+        let value = aggregate_rows(&partition.rows, &plan.spec);
+        if set.grouped {
+            partition.aggregates.insert(plan.spec.alias.clone(), value);
+        } else {
+            partition.rows = vec![Row::from_iter([(plan.spec.alias.clone(), value)])];
         }
     }
+    Ok(set)
 }
 
-/// Implements the `C` count macro.
-///
-/// Flat rows become a single `{count}` row. Grouped input becomes one summary
-/// row per group with the original group headers plus `count`.
-pub fn count_macro(items: OutputItems, spec: &str) -> Result<OutputItems> {
+pub(crate) fn count_set(set: crate::dsl::model::RowSet) -> Result<crate::dsl::model::RowSet> {
+    if set.partitions.is_empty() {
+        return Ok(crate::dsl::model::RowSet::rows(vec![Row::from_iter([(
+            "count".to_string(),
+            Value::from(0),
+        )])]));
+    }
+    let summaries = set
+        .partitions
+        .into_iter()
+        .map(|partition| {
+            let mut row = partition.groups;
+            row.insert("count".to_string(), Value::from(partition.rows.len()));
+            row
+        })
+        .collect();
+    Ok(crate::dsl::model::RowSet::rows(summaries))
+}
+
+#[cfg(test)]
+fn apply_with_plan(items: OutputItems, plan: &AggregatePlan) -> Result<OutputItems> {
+    apply_set(items.into(), plan).map(Into::into)
+}
+
+#[cfg(test)]
+fn count_macro(items: OutputItems, spec: &str) -> Result<OutputItems> {
     if !spec.trim().is_empty() {
         return Err(anyhow!("C takes no arguments"));
     }
+    count_set(items.into()).map(Into::into)
+}
 
-    match items {
-        OutputItems::Rows(rows) => {
-            let mut row = Row::new();
-            row.insert("count".to_string(), Value::from(rows.len() as i64));
-            Ok(OutputItems::Rows(vec![row]))
-        }
-        OutputItems::Groups(groups) => {
-            let rows = groups
-                .into_iter()
-                .map(|group| {
-                    let mut row = group.groups;
-                    row.insert("count".to_string(), Value::from(group.rows.len() as i64));
-                    row
-                })
-                .collect::<Vec<_>>();
-            Ok(OutputItems::Rows(rows))
-        }
+#[cfg(test)]
+fn apply_value_with_plan(value: Value, plan: &AggregatePlan) -> Result<Value> {
+    crate::dsl::value::apply_stage(
+        value,
+        &crate::dsl::compiled::CompiledStage::Aggregate(plan.clone()),
+    )
+}
+
+#[cfg(test)]
+fn count_macro_value(value: Value, spec: &str) -> Result<Value> {
+    if !spec.trim().is_empty() {
+        return Err(anyhow!("C takes no arguments"));
     }
+    crate::dsl::value::apply_stage(value, &crate::dsl::compiled::CompiledStage::CountMacro)
 }
 
 fn parse_aggregate_spec(spec: &str) -> Result<AggregateSpec> {
@@ -298,14 +315,6 @@ impl Display for AggregateFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-pub(crate) fn apply_value_with_plan(value: Value, plan: &AggregatePlan) -> Result<Value> {
-    json::traverse_collections(value, |items| apply_with_plan(items, plan))
-}
-
-pub(crate) fn count_macro_value(value: Value, spec: &str) -> Result<Value> {
-    json::traverse_collections(value, |items| count_macro(items, spec))
 }
 
 #[cfg(test)]

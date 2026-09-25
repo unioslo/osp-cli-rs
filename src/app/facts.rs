@@ -6,7 +6,7 @@
 //! here lets `app::host` stay focused on orchestration instead of becoming a
 //! grab bag of reusable derivation helpers.
 
-use crate::config::{ConfigValue, DEFAULT_UI_WIDTH, ResolvedConfig};
+use crate::config::{ConfigValue, ResolvedConfig};
 use crate::core::runtime::{RuntimeHints, RuntimeTerminalKind, UiVerbosity};
 use crate::plugin::config::config_value_to_plugin_env;
 use crate::plugin::{DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS, PluginDispatchContext};
@@ -58,17 +58,6 @@ pub(crate) fn plugin_path_discovery_enabled(config: &ResolvedConfig) -> bool {
     config
         .get_bool("extensions.plugins.discovery.path")
         .unwrap_or(false)
-}
-
-pub(crate) fn resolve_default_render_width(config: &ResolvedConfig) -> usize {
-    let configured = config_usize(config, "ui.width", DEFAULT_UI_WIDTH as usize);
-    if configured != DEFAULT_UI_WIDTH as usize {
-        return configured;
-    }
-
-    detect_terminal_width()
-        .or_else(detect_columns_env)
-        .unwrap_or(configured)
 }
 
 pub(crate) fn build_render_runtime(terminal_env: Option<&str>) -> RenderRuntime {

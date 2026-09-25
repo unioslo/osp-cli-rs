@@ -34,6 +34,8 @@ pub const DEFAULT_LOG_FILE_ENABLED: bool = false;
 pub const DEFAULT_LOG_FILE_LEVEL: &str = "warn";
 /// Default render width hint.
 pub const DEFAULT_UI_WIDTH: i64 = 72;
+/// Default maximum terminal width used for rendered output.
+pub const DEFAULT_UI_WIDTH_MAX: i64 = 120;
 /// Default left margin for rendered output.
 pub const DEFAULT_UI_MARGIN: i64 = 0;
 /// Default indentation width for nested output.
@@ -86,6 +88,7 @@ const LITERAL_DEFAULTS: &[LiteralDefault] = &[
     LiteralDefault::bool("log.file.enabled", DEFAULT_LOG_FILE_ENABLED),
     LiteralDefault::string("log.file.level", DEFAULT_LOG_FILE_LEVEL),
     LiteralDefault::int("ui.width", DEFAULT_UI_WIDTH),
+    LiteralDefault::int("ui.width-max", DEFAULT_UI_WIDTH_MAX),
     LiteralDefault::int("ui.margin", DEFAULT_UI_MARGIN),
     LiteralDefault::int("ui.indent", DEFAULT_UI_INDENT),
     LiteralDefault::string("ui.presentation", DEFAULT_UI_PRESENTATION),

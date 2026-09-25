@@ -22,7 +22,7 @@ fn collection_operations_preserve_unrelated_nulls_and_empty_containers() {
         vec!["L 1"],
         vec!["L 0"],
         vec!["S name"],
-        vec!["G team"],
+        vec!["G ?hosts"],
         vec!["A count()"],
     ] {
         let output = pipeline(
@@ -30,14 +30,21 @@ fn collection_operations_preserve_unrelated_nulls_and_empty_containers() {
                 .with_document(OutputDocument::new(OutputDocumentKind::Json, input.clone())),
             &stages,
         );
-        let value = output.document.unwrap().value;
-        for key in ["note", "empty_map", "empty_list", "metadata"] {
-            assert_eq!(value.get(key), input.get(key), "{stages:?}: {key}");
+        assert!(output.document.is_none());
+        match stages[0] {
+            "L 0" => assert!(output.as_rows().unwrap().is_empty()),
+            "A count()" => assert_eq!(output.as_rows().unwrap(), &[row! {"count" => 1}]),
+            "G ?hosts" => {
+                let OutputItems::Groups(groups) = output.items else {
+                    panic!("groups");
+                };
+                assert_eq!(groups[0].rows, vec![input.as_object().unwrap().clone()]);
+            }
+            _ => assert_eq!(
+                output.as_rows().unwrap(),
+                &[input.as_object().unwrap().clone()]
+            ),
         }
-        assert!(
-            value.get("hosts").is_some(),
-            "even a zero limit retains the collection"
-        );
     }
 }
 
@@ -50,7 +57,10 @@ fn group_shaped_service_records_do_not_lose_extra_fields() {
         json!([record.clone()]),
     ));
     let output = pipeline(input, &["S name"]);
-    assert_eq!(output.document.unwrap().value, json!([record]));
+    assert_eq!(
+        serde_json::to_value(output.as_rows().unwrap()).unwrap(),
+        json!([record])
+    );
 }
 
 #[test]
@@ -67,12 +77,12 @@ fn only_explicit_grouping_creates_groups_and_continuations_keep_them() {
     ));
     let sorted = pipeline(input.clone(), &["S groups"]);
     assert!(matches!(sorted.items, OutputItems::Rows(_)));
-    assert_eq!(sorted.document.unwrap().value, json!([record]));
     assert_eq!(
-        pipeline(input, &["A count() AS total"])
-            .document
-            .unwrap()
-            .value,
+        serde_json::to_value(sorted.as_rows().unwrap()).unwrap(),
+        json!([record])
+    );
+    assert_eq!(
+        serde_json::to_value(pipeline(input, &["A count() AS total"]).as_rows().unwrap()).unwrap(),
         json!([{"total": 1}])
     );
 
@@ -85,20 +95,20 @@ fn only_explicit_grouping_creates_groups_and_continuations_keep_them() {
         };
         let input = OutputResult::from_rows(vec![])
             .with_document(OutputDocument::new(OutputDocumentKind::Json, value));
+        let input = if nested {
+            pipeline(input, &["P hosts[]"])
+        } else {
+            input
+        };
         let grouped = pipeline(input.clone(), &["G team"]);
         let counted = pipeline(grouped, &["A count() AS members"]);
         let collapsed = pipeline(counted, &["Z"]);
         let together = pipeline(input, &["G team", "A count() AS members", "Z"]);
         assert_eq!(collapsed, together);
         let expected = json!([{"team": "ops", "members": 2}]);
-        let expected = if nested {
-            json!({"hosts": expected, "note": null})
-        } else {
-            expected
-        };
         assert_eq!(
             serde_json::to_value(collapsed.as_rows().unwrap()).unwrap(),
-            if nested { json!([expected]) } else { expected }
+            expected
         );
     }
 }
@@ -205,11 +215,8 @@ fn scalar_document_sort_uses_the_requested_direction_and_cast() {
         json!(["2", "10", "1"]),
     ));
     assert_eq!(
-        pipeline(input, &["S !value AS num"])
-            .document
-            .unwrap()
-            .value,
-        json!(["10", "2", "1"])
+        serde_json::to_value(pipeline(input, &["S !value AS num"]).as_rows().unwrap()).unwrap(),
+        json!([{"value":"10"},{"value":"2"},{"value":"1"}])
     );
 }
 
@@ -268,8 +275,8 @@ fn scoped_quick_search_keeps_complete_matching_document_members() {
         ));
         let output = pipeline(input, &[stage]);
         assert_eq!(
-            output.document.unwrap().value,
-            json!({"commands":[{"name":"doctor", "about":"diagnostics"}]})
+            serde_json::to_value(output.as_rows().unwrap()).unwrap(),
+            json!([document])
         );
     }
 }

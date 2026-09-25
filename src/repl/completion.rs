@@ -510,6 +510,7 @@ fn render_dsl_help(view: ReplViewContext<'_>, spec: &str) -> String {
         let lookup = target.to_ascii_uppercase();
         if let Some(info) = verb_info(&lookup) {
             lines.push(format!("  {}  {}", info.verb, info.summary));
+            lines.push(format!("  {}", info.help));
         } else {
             lines.push(format!("  Unknown DSL verb: {target}"));
             lines.push("  Use | H to list available verbs.".to_string());

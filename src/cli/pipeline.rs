@@ -246,12 +246,12 @@ pub fn is_cli_help_stage(parsed: &ParsedStage) -> bool {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct SplitCommandTokens {
-    command_tokens: Vec<String>,
-    stages: Vec<String>,
+pub(crate) struct SplitCommandTokens {
+    pub(crate) command_tokens: Vec<String>,
+    pub(crate) stages: Vec<String>,
 }
 
-fn split_command_tokens(tokens: &[String]) -> SplitCommandTokens {
+pub(crate) fn split_command_tokens(tokens: &[String]) -> SplitCommandTokens {
     let mut segments = Vec::new();
     let mut current = Vec::new();
 
@@ -273,6 +273,14 @@ fn split_command_tokens(tokens: &[String]) -> SplitCommandTokens {
     let command_tokens = iter.next().unwrap_or_default();
     let stages = iter
         .map(|segment| {
+            // A whole explicit stage may be passed as one shell argument,
+            // just as a whole command line may be. Keep its DSL quotes intact.
+            if segment.len() == 1
+                && let Ok(stage) = parse_stage(&segment[0])
+                && (stage.kind == ParsedStageKind::Explicit || is_cli_help_stage(&stage))
+            {
+                return segment[0].clone();
+            }
             segment
                 .into_iter()
                 .map(|token| quote_token(&token))

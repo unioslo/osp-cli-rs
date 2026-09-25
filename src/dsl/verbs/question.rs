@@ -1,51 +1,23 @@
-use crate::core::{
-    output_model::{Group, OutputItems},
-    row::Row,
-};
-use anyhow::Result;
+use crate::core::row::Row;
 use serde_json::Value;
 
-use super::quick;
-
 #[cfg(test)]
-/// Applies the `?` stage to flat or grouped output.
-///
-/// With an empty spec, empty values are removed from rows. Otherwise the stage
-/// reuses DSL quick-search semantics with `?`-prefixed matching.
-pub fn apply(items: OutputItems, spec: &str) -> Result<OutputItems> {
-    let trimmed = spec.trim();
-    if trimmed.is_empty() {
-        return Ok(clean_items(items));
-    }
-
-    let raw = format!("?{trimmed}");
-    let plan = quick::compile(&raw)?;
-    let out = match items {
-        OutputItems::Rows(rows) => OutputItems::Rows(quick::apply_with_plan(rows, &plan)?),
-        OutputItems::Groups(groups) => {
-            OutputItems::Groups(quick::apply_groups_with_plan(groups, &plan)?)
-        }
+pub fn apply(
+    items: crate::core::output_model::OutputItems,
+    spec: &str,
+) -> anyhow::Result<crate::core::output_model::OutputItems> {
+    let stage = if spec.trim().is_empty() {
+        crate::dsl::compiled::CompiledStage::Clean
+    } else {
+        crate::dsl::compiled::CompiledStage::Question(super::quick::compile(&format!(
+            "?{}",
+            spec.trim()
+        ))?)
     };
-    Ok(out)
+    crate::dsl::engine::apply_stage(items.into(), &stage).map(Into::into)
 }
 
-pub(crate) fn clean_items(items: OutputItems) -> OutputItems {
-    match items {
-        OutputItems::Rows(rows) => OutputItems::Rows(clean_rows(rows)),
-        OutputItems::Groups(groups) => OutputItems::Groups(
-            groups
-                .into_iter()
-                .map(|group| Group {
-                    groups: group.groups,
-                    aggregates: group.aggregates,
-                    rows: clean_rows(group.rows),
-                })
-                .collect(),
-        ),
-    }
-}
-
-fn clean_rows(rows: Vec<Row>) -> Vec<Row> {
+pub(crate) fn clean_rows(rows: Vec<Row>) -> Vec<Row> {
     rows.into_iter().filter_map(clean_row).collect()
 }
 
@@ -61,21 +33,13 @@ pub(crate) fn clean_row(row: Row) -> Option<Row> {
     }
 }
 
-fn is_empty_value(value: &Value) -> bool {
+pub(crate) fn is_empty_value(value: &Value) -> bool {
     match value {
         Value::Null => true,
         Value::String(text) => text.is_empty(),
         Value::Array(items) => items.is_empty(),
         _ => false,
     }
-}
-
-pub(crate) fn apply_value(value: Value, spec: &str) -> Result<Value> {
-    let trimmed = spec.trim();
-    if trimmed.is_empty() {
-        return Ok(super::json::clean_value(value).unwrap_or(Value::Null));
-    }
-    quick::apply_value(value, &format!("?{trimmed}"))
 }
 
 #[cfg(test)]

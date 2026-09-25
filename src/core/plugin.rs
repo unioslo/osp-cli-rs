@@ -560,15 +560,22 @@ pub struct ResponseMetaV1 {
     /// Preferred alignment hints for displayed columns.
     #[serde(default)]
     pub column_align: Vec<ColumnAlignmentV1>,
-    /// Optional display labels aligned with `columns`.
+    /// Numeric field paths representing Unix seconds; formatted only for humans.
+    #[serde(default)]
+    pub unix_timestamp_columns: Vec<String>,
+    /// Human-only field decorations; canonical JSON and DSL values stay unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display_rules: Vec<crate::core::output_model::DisplayRule>,
+    /// Producer labels retained in the response metadata. Human headings use the
+    /// canonical `columns` paths so display and filter keys stay discoverable.
     #[serde(default)]
     pub column_labels: Vec<String>,
-    /// Top-level `data` field whose array supplies rows for unstaged human output.
+    /// Top-level `data` field whose array supplies canonical rows for display and DSL.
     ///
-    /// The full `data` document remains authoritative for JSON and DSL stages.
+    /// The full `data` document is retained only for unstaged JSON output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_path: Option<String>,
-    /// Preserve `data` as the canonical value for JSON rendering and DSL use.
+    /// Preserve raw `data` for unstaged JSON rendering.
     ///
     /// The default row projection remains appropriate for list-oriented
     /// commands. Document-oriented commands opt in when an object or scalar is

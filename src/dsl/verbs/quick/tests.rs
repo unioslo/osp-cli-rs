@@ -131,12 +131,8 @@ fn value_quick_filters_matching_document_members_without_projecting_fields_unit(
         ]
     });
     assert_eq!(
-        apply_value(source, "doctor").unwrap(),
-        json!({
-            "commands": [
-                {"name": "doctor", "short_help": "Run diagnostics"}
-            ]
-        })
+        apply_value(source.clone(), "doctor").unwrap(),
+        json!([source])
     );
 
     let addressed = json!({
@@ -148,7 +144,7 @@ fn value_quick_filters_matching_document_members_without_projecting_fields_unit(
     });
     assert_eq!(
         apply_value_with_plan(addressed.clone(), &compile("users[1]").unwrap()).unwrap(),
-        addressed
+        json!([addressed])
     );
 }
 

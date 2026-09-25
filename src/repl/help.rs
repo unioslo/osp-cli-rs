@@ -126,6 +126,8 @@ fn canonical_help_settings(resolved: &ResolvedRenderSettings) -> crate::ui::Rend
         theme_name: resolved.theme_name.clone(),
         theme: None,
         width: resolved.width,
+        // The supplied width has already been capped by its original settings.
+        width_max: 0,
         margin: resolved.margin,
         indent_size: resolved.indent_size,
         medium_list_max: resolved.medium_list_max,
@@ -395,7 +397,7 @@ mod tests {
             },
         );
         assert!(rendered.trim_start().starts_with('['));
-        assert!(rendered.contains("\"commands\""));
+        assert!(rendered.contains("\"name\""));
         assert!(rendered.contains("\"short_help\""));
 
         let mut markdown = RenderSettings::test_plain(OutputFormat::Markdown);

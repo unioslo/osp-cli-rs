@@ -181,7 +181,7 @@ fn output_pipeline_filters_nested_single_record_documents_unit() {
             .expect("nested document filter should pass");
         let value = output_items_to_value(&filtered.items);
 
-        assert_eq!(value["siteadmins"]["current"].as_array().unwrap().len(), 1);
+        assert_eq!(value["siteadmins"]["current"].as_array().unwrap().len(), 2);
         assert_eq!(
             value["siteadmins"]["current"][0]["contact"],
             json!("iti-ops@usit.uio.no")
@@ -191,8 +191,9 @@ fn output_pipeline_filters_nested_single_record_documents_unit() {
             value["siteadmins"]["expired"][0]["contact"],
             json!("iti-ssd@usit.uio.no")
         );
-        assert!(!value.to_string().contains("unix-drift@usit.uio.no"));
-        assert!(value.get("status_counts").is_none());
+        assert!(value.to_string().contains("unix-drift@usit.uio.no"));
+        assert_eq!(value["status_counts"], json!({"current": 2, "expired": 1}));
+        assert!(filtered.document.is_none());
     }
 }
 
@@ -438,9 +439,12 @@ fn semantic_document_rebuilds_from_document_source_unit() {
             .cloned()
             .expect("object"),
     ]);
-    output.document = GuideView::from_text("Commands:\n  list  Show\n")
-        .to_output_result()
-        .document;
+    output = output.with_document(
+        GuideView::from_text("Commands:\n  list  Show\n")
+            .to_output_result()
+            .document
+            .expect("guide document"),
+    );
     output.meta.render_recommendation = Some(RenderRecommendation::Guide);
 
     let rebuilt = apply_output_pipeline(output, &[]).expect("pipeline should succeed");

@@ -120,14 +120,13 @@ impl CompiledStage {
             Self::Quick(_)
             | Self::Filter(_)
             | Self::Copy
-            | Self::Clean
             | Self::Question(_)
             | Self::ValueQuick(_)
             | Self::KeyQuick(_) => StageBehavior {
                 preserves_render_recommendation: true,
                 semantic_effect: SemanticEffect::Preserve,
             },
-            Self::Project(_) | Self::Unroll(_) | Self::Values(_) => StageBehavior {
+            Self::Project(_) | Self::Unroll(_) | Self::Values(_) | Self::Clean => StageBehavior {
                 preserves_render_recommendation: false,
                 semantic_effect: SemanticEffect::Transform,
             },

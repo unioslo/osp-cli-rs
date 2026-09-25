@@ -294,6 +294,7 @@ pub struct SchemaEntry {
     writable: bool,
     allowed_values: Option<Vec<String>>,
     positive_integer: bool,
+    non_negative_integer: bool,
     runtime_visible: bool,
     bootstrap_phase: Option<BootstrapPhase>,
     bootstrap_scope_rule: Option<BootstrapScopeRule>,
@@ -321,6 +322,7 @@ impl SchemaEntry {
             writable: true,
             allowed_values: None,
             positive_integer: false,
+            non_negative_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -338,6 +340,7 @@ impl SchemaEntry {
             writable: true,
             allowed_values: None,
             positive_integer: false,
+            non_negative_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -355,6 +358,7 @@ impl SchemaEntry {
             writable: true,
             allowed_values: None,
             positive_integer: false,
+            non_negative_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -372,6 +376,7 @@ impl SchemaEntry {
             writable: true,
             allowed_values: None,
             positive_integer: false,
+            non_negative_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -389,6 +394,7 @@ impl SchemaEntry {
             writable: true,
             allowed_values: None,
             positive_integer: false,
+            non_negative_integer: false,
             runtime_visible: true,
             bootstrap_phase: None,
             bootstrap_scope_rule: None,
@@ -454,6 +460,13 @@ impl SchemaEntry {
     pub fn positive_integer() -> Self {
         let mut entry = Self::integer();
         entry.positive_integer = true;
+        entry
+    }
+
+    /// Starts a schema entry for integer values greater than or equal to zero.
+    pub fn non_negative_integer() -> Self {
+        let mut entry = Self::integer();
+        entry.non_negative_integer = true;
         entry
     }
 
@@ -669,6 +682,12 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
         "ui.width",
         SchemaEntry::positive_integer(),
         "Default render width hint",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "ui.width-max",
+        SchemaEntry::non_negative_integer(),
+        "Maximum render width; zero disables the maximum",
     );
     insert_builtin_schema_key(
         schema,
@@ -1366,6 +1385,8 @@ pub struct LayerEntry {
 #[derive(Debug, Clone, Default)]
 pub struct ConfigLayer {
     pub(crate) entries: Vec<LayerEntry>,
+    // Empty profile tables still declare valid profile names.
+    pub(crate) declared_profiles: BTreeSet<String>,
 }
 
 impl ConfigLayer {
@@ -1399,6 +1420,8 @@ impl ConfigLayer {
     /// ```
     pub fn extend_from_layer(&mut self, other: &ConfigLayer) {
         self.entries.extend(other.entries().iter().cloned());
+        self.declared_profiles
+            .extend(other.declared_profiles.iter().cloned());
     }
 
     /// Inserts a global entry.
@@ -1572,6 +1595,9 @@ impl ConfigLayer {
                                 expected: "table".to_string(),
                             }
                         })?;
+                        layer
+                            .declared_profiles
+                            .insert(normalize_identifier(profile));
                         flatten_table(&mut layer, profile_table, "", &Scope::profile(profile))?;
                     }
                 }
@@ -1615,6 +1641,9 @@ impl ConfigLayer {
 
                             for (profile_key, profile_value) in profile_tables {
                                 if let Some(profile_table) = profile_value.as_table() {
+                                    layer
+                                        .declared_profiles
+                                        .insert(normalize_identifier(profile_key));
                                     flatten_table(
                                         &mut layer,
                                         profile_table,
@@ -2312,6 +2341,14 @@ fn validate_value_constraints(
         return Err(ConfigError::InvalidConfigValue {
             key: key.to_string(),
             reason: "expected a positive integer".to_string(),
+        });
+    }
+    if schema.non_negative_integer
+        && !matches!(value.reveal(), ConfigValue::Integer(current) if *current >= 0)
+    {
+        return Err(ConfigError::InvalidConfigValue {
+            key: key.to_string(),
+            reason: "expected a non-negative integer".to_string(),
         });
     }
     Ok(())

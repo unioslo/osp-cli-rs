@@ -21,6 +21,29 @@ use crate::core::row::Row;
 use serde_json::Value;
 use std::collections::HashSet;
 
+/// Producer-declared human display changes. Conditions use original row values;
+/// rules never change canonical data or DSL field values.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DisplayRule {
+    /// Append a literal suffix to a string when a boolean field is true.
+    SuffixWhenTrue {
+        /// Canonical field path to decorate.
+        field: String,
+        /// Canonical boolean field path controlling the decoration.
+        when: String,
+        /// Literal suffix, including any desired spacing or punctuation.
+        suffix: String,
+    },
+    /// Display a field as blank when another field exists and is not null.
+    BlankWhenPresent {
+        /// Canonical field path to blank.
+        field: String,
+        /// Canonical field path whose non-null presence blanks the field.
+        when: String,
+    },
+}
+
 /// Alignment hint for a rendered output column.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColumnAlignment {
@@ -51,6 +74,12 @@ pub struct Group {
 pub struct OutputMeta {
     /// Stable first-seen column order for row rendering.
     pub key_index: Vec<String>,
+    /// Optional curated field paths for human display, in priority order.
+    pub display_columns: Option<Vec<String>>,
+    /// Producer-declared numeric timestamp paths, measured in Unix seconds.
+    pub unix_timestamp_columns: Vec<String>,
+    /// Human-only conditional field formatting, evaluated against raw rows.
+    pub display_rules: Vec<DisplayRule>,
     /// Per-column alignment hints.
     pub column_align: Vec<ColumnAlignment>,
     /// Whether the result should be easy to copy as plain text.
@@ -181,6 +210,9 @@ impl OutputResult {
             document: None,
             meta: OutputMeta {
                 key_index,
+                unix_timestamp_columns: Vec::new(),
+                display_rules: Vec::new(),
+                display_columns: None,
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: false,
@@ -206,6 +238,8 @@ impl OutputResult {
     /// ```
     #[must_use]
     pub fn with_document(mut self, document: OutputDocument) -> Self {
+        self.items = OutputItems::Rows(rows_from_value(document.value.clone()));
+        self.meta.key_index = compute_key_index(self.as_rows().unwrap_or_default());
         self.document = Some(document);
         self
     }
