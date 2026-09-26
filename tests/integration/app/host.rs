@@ -2,7 +2,7 @@ use crate::temp_support::make_temp_dir;
 use anyhow::Result;
 use clap::Command;
 use osp_cli::App;
-use osp_cli::app::BufferedUiSink;
+use osp_cli::app::{BufferedUiSink, StdIoUiSink, UiSink};
 use osp_cli::config::ConfigLayer;
 use osp_cli::core::command_policy::{
     CommandPath, CommandPolicy, CommandPolicyContext, CommandPolicyRegistry, VisibilityMode,
@@ -10,7 +10,10 @@ use osp_cli::core::command_policy::{
 use osp_cli::core::plugin::{
     PLUGIN_PROTOCOL_V1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
 };
-use osp_cli::{NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry};
+use osp_cli::{
+    NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
+    NativeProgressEvent,
+};
 use serde_json::json;
 
 use super::support::{env_lock, parse_json_output, write_executable_script};
@@ -170,8 +173,23 @@ impl NativeCommand for CuratedOrchRowsCommand {
     fn execute(
         &self,
         _args: &[String],
-        _context: &NativeCommandContext<'_>,
+        context: &NativeCommandContext<'_>,
     ) -> Result<NativeCommandOutcome> {
+        for state in ["running", "completed"] {
+            context.emit_progress(
+                NativeProgressEvent::new(json!({"state": state, "name": "db01.uio.no"}))
+                    .with_meta(ResponseMetaV1 {
+                        presentation_lines: vec![
+                            format!("{state}: db01.uio.no"),
+                            "└─ Resource preparation with a description long enough to wrap on a narrow terminal".into(),
+                        ],
+                        progress_append: if state == "running" { vec![format!("{state}: db01.uio.no")] } else { Vec::new() },
+                        progress_replace: true,
+                        preserve_json_document: true,
+                        ..ResponseMetaV1::default()
+                    }),
+            )?;
+        }
         Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
             protocol_version: PLUGIN_PROTOCOL_V1,
             ok: true,
@@ -274,11 +292,52 @@ fn curated_orch_rows_registry() -> NativeCommandRegistry {
     NativeCommandRegistry::new().with_command(CuratedOrchRowsCommand)
 }
 
+struct TerminalCapture {
+    output: BufferedUiSink,
+    width: usize,
+    height: usize,
+    resize_height: Option<usize>,
+}
+
+impl UiSink for TerminalCapture {
+    fn write_stdout(&mut self, text: &str) {
+        self.output.stdout.push_str(text);
+    }
+    fn write_stderr(&mut self, text: &str) {
+        self.output.stderr.push_str(text);
+        if let Some(height) = self.resize_height.take() {
+            self.height = height;
+        }
+    }
+    fn stderr_is_terminal(&self) -> bool {
+        true
+    }
+    fn stderr_width(&self) -> Option<usize> {
+        Some(self.width)
+    }
+    fn stderr_height(&self) -> Option<usize> {
+        Some(self.height)
+    }
+}
+
 #[test]
 fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
     let app = App::builder()
         .with_native_commands(curated_orch_rows_registry())
         .build();
+
+    if std::env::var_os("OSP_LIVE_OUTPUT_CONTRACT_CHILD").is_some() {
+        if !StdIoUiSink.stderr_is_terminal() {
+            assert_eq!(StdIoUiSink.stderr_width(), Some(80));
+            assert_eq!(StdIoUiSink.stderr_height(), Some(24));
+        }
+        app.run_with_sink(
+            ["osp", "--defaults-only", "--plain", "orch-view"],
+            &mut StdIoUiSink,
+        )
+        .expect("the real terminal should receive progress and the final result");
+        return;
+    }
 
     let mut human = BufferedUiSink::default();
     let exit = app
@@ -343,6 +402,116 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
     app.run_with_sink(["osp", "--defaults-only", "-vv", "orch-view"], &mut trace)
         .expect("diagnostic evidence should render at -vv");
     assert!(trace.stderr.contains("runtime target vmware:prod"));
+
+    // Live output and the final document share filtering, but occupy separate
+    // channels so consuming the final JSON never consumes transient progress.
+    assert!(json_sink.stderr.contains("running: db01.uio.no"));
+    assert!(json_sink.stderr.contains("completed"));
+    assert!(!json_sink.stderr.contains('\x1b'));
+    for (width, height, resize_height) in [
+        (80, 24, None),
+        (120, 24, None),
+        (80, 2, None),
+        (80, 24, Some(2)),
+    ] {
+        let mut terminal = TerminalCapture {
+            output: BufferedUiSink::default(),
+            width,
+            height,
+            resize_height,
+        };
+        app.run_with_sink(
+            ["osp", "--defaults-only", "--plain", "orch-view"],
+            &mut terminal,
+        )
+        .expect("live presentations should fit the terminal or append safely");
+        assert!(terminal.output.stderr.contains("running: db01.uio.no"));
+        assert!(terminal.output.stderr.contains("completed: db01.uio.no"));
+        assert_eq!(
+            terminal.output.stderr.contains("\x1b[2K"),
+            height > 2 && resize_height.is_none()
+        );
+        assert!(terminal.output.stdout.contains("db01.uio.no"));
+    }
+    let mut filtered = BufferedUiSink::default();
+    app.run_with_sink(
+        [
+            "osp",
+            "--defaults-only",
+            "--json",
+            "orch-view",
+            "|",
+            "completed",
+        ],
+        &mut filtered,
+    )
+    .expect("live events should obey the invocation filter");
+    assert!(filtered.stderr.contains("completed"));
+    assert!(!filtered.stderr.contains("running"));
+    assert!(!filtered.stderr.contains('\x1b'));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&filtered.stdout).unwrap(),
+        json!([])
+    );
+
+    // Exercise actual terminal dimensions and paging, not just a sink that
+    // claims to be a terminal. Even a failed pager must deliver the result.
+    #[cfg(unix)]
+    {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::io::Read;
+        let redirected = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "app::host::app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows",
+                "--nocapture",
+            ])
+            .env("OSP_LIVE_OUTPUT_CONTRACT_CHILD", "1")
+            .env("COLUMNS", "80")
+            .env("LINES", "24")
+            .output()
+            .expect("capture redirected host output");
+        assert!(redirected.status.success());
+        let stdout = String::from_utf8(redirected.stdout).unwrap();
+        let stderr = String::from_utf8(redirected.stderr).unwrap();
+        assert!(stdout.contains("4 CPU / 8 GiB"));
+        assert!(stderr.contains("running: db01.uio.no"));
+        assert!(stderr.contains("completed"));
+        assert!(!stderr.contains('\x1b'));
+
+        for (height, pager) in [(24, "cat"), (2, "cat"), (2, "exit 1")] {
+            let pair = native_pty_system()
+                .openpty(PtySize {
+                    rows: height,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .expect("open terminal for the host output contract");
+            let mut command = CommandBuilder::new(std::env::current_exe().unwrap());
+            command.args([
+                "--exact",
+                "app::host::app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows",
+                "--nocapture",
+            ]);
+            command.env("OSP_LIVE_OUTPUT_CONTRACT_CHILD", "1");
+            command.env("PAGER", pager);
+            let mut child = pair
+                .slave
+                .spawn_command(command)
+                .expect("start terminal host");
+            drop(pair.slave);
+            let mut reader = pair.master.try_clone_reader().unwrap();
+            let mut captured = String::new();
+            reader
+                .read_to_string(&mut captured)
+                .expect("read terminal output");
+            assert!(child.wait().unwrap().success(), "{captured}");
+            assert!(captured.contains("running: db01.uio.no"));
+            assert!(captured.contains("completed: db01.uio.no"));
+            assert!(captured.contains("4 CPU / 8 GiB"), "{captured}");
+        }
+    }
 }
 
 #[cfg(unix)]
