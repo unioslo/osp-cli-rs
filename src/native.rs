@@ -132,6 +132,14 @@ impl<'a> NativeCommandContext<'a> {
         self
     }
 
+    /// Gives the host an opportunity to display coalesced terminal progress.
+    pub fn flush_progress(&self) -> Result<()> {
+        if let Some(progress) = self.progress {
+            progress.flush()?;
+        }
+        Ok(())
+    }
+
     /// Emits one structured transient progress document immediately.
     ///
     /// A context created outside the host has no sink, in which case emission
@@ -154,6 +162,8 @@ pub struct NativeProgressEvent {
     pub messages: Vec<ResponseMessageV1>,
     /// Rendering hints interpreted by the same host pipeline as final output.
     pub meta: ResponseMetaV1,
+    /// Historical input: retain it in event streams without animating a terminal replay.
+    pub replay: bool,
 }
 
 impl NativeProgressEvent {
@@ -163,6 +173,7 @@ impl NativeProgressEvent {
             data: data.into(),
             messages: Vec::new(),
             meta: ResponseMetaV1::default(),
+            replay: false,
         }
     }
 
@@ -183,6 +194,11 @@ impl NativeProgressEvent {
 pub trait NativeProgressSink {
     /// Renders or records one progress document before command execution resumes.
     fn emit(&self, event: NativeProgressEvent) -> Result<()>;
+
+    /// Flushes coalesced terminal progress when the command is waiting for input.
+    fn flush(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// One prompt-visible session context value owned by a native command.

@@ -190,6 +190,7 @@ impl NativeCommand for CuratedOrchRowsCommand {
                     }),
             )?;
         }
+        context.flush_progress()?;
         Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
             protocol_version: PLUGIN_PROTOCOL_V1,
             ok: true,

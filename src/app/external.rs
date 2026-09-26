@@ -336,6 +336,8 @@ fn run_native_command(
         ui: &input.invocation.ui,
         stages: input.stages,
         sink: RefCell::new(ProgressUiSink::new(sink)),
+        pending: RefCell::new(None),
+        last_draw: std::cell::Cell::new(None),
     });
     let mut context = NativeCommandContext::new(
         runtime.config.resolved(),
@@ -394,16 +396,17 @@ struct NativeProgressRenderer<'config, 'sink> {
     ui: &'config UiState,
     stages: &'config [String],
     sink: RefCell<ProgressUiSink<'sink>>,
+    pending: RefCell<Option<NativeProgressEvent>>,
+    last_draw: std::cell::Cell<Option<std::time::Instant>>,
 }
 
 impl NativeProgressRenderer<'_, '_> {
     fn clear(&self) {
+        self.pending.borrow_mut().take();
         self.sink.borrow_mut().clear_progress();
     }
-}
 
-impl NativeProgressSink for NativeProgressRenderer<'_, '_> {
-    fn emit(&self, event: NativeProgressEvent) -> anyhow::Result<()> {
+    fn draw(&self, event: NativeProgressEvent) -> anyhow::Result<()> {
         let result = cli_result_from_plugin_response(
             crate::core::plugin::ResponseV1 {
                 protocol_version: crate::core::plugin::PLUGIN_PROTOCOL_V1,
@@ -419,6 +422,46 @@ impl NativeProgressSink for NativeProgressRenderer<'_, '_> {
         let mut sink = self.sink.borrow_mut();
         run_progress_command_with_ui(self.config, self.ui, result, &mut *sink)
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+        Ok(())
+    }
+}
+
+impl NativeProgressSink for NativeProgressRenderer<'_, '_> {
+    fn emit(&self, event: NativeProgressEvent) -> anyhow::Result<()> {
+        let tree = event.meta.progress_replace
+            && self.stages.is_empty()
+            && self.sink.borrow().stderr_is_terminal()
+            && self.ui.render_settings.format != crate::core::output::OutputFormat::Json;
+        if !tree {
+            return self.draw(event);
+        }
+        let replay = event.replay;
+        *self.pending.borrow_mut() = Some(event);
+        if replay {
+            return Ok(());
+        }
+        if self
+            .last_draw
+            .get()
+            .is_none_or(|last| last.elapsed() >= std::time::Duration::from_millis(250))
+        {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush(&self) -> anyhow::Result<()> {
+        if let Some(event) = self.pending.borrow_mut().take() {
+            if let Some(delay) = self
+                .last_draw
+                .get()
+                .and_then(|last| std::time::Duration::from_millis(250).checked_sub(last.elapsed()))
+            {
+                std::thread::sleep(delay);
+            }
+            self.draw(event)?;
+            self.last_draw.set(Some(std::time::Instant::now()));
+        }
         Ok(())
     }
 }

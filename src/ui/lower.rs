@@ -204,12 +204,18 @@ fn wrap_presentation_line(line: &str, width: Option<usize>) -> Vec<String> {
 
     let mut remaining = line.to_string();
     let mut wrapped = Vec::new();
+    let tree_prefix = presentation_tree_continuation_prefix(line);
     let mut first = true;
     while !remaining.is_empty() {
-        let continuation = if first || width < 5 {
+        let continuation = if first {
             String::new()
         } else {
-            "    ".into()
+            let prefix = tree_prefix.as_deref().unwrap_or("    ");
+            if width > display_width(prefix) {
+                prefix.to_string()
+            } else {
+                String::new()
+            }
         };
         let available = width.saturating_sub(display_width(&continuation));
         let (chunk, rest) = take_presentation_chunk(&remaining, available.max(1));
@@ -225,6 +231,33 @@ fn wrap_presentation_line(line: &str, width: Option<usize>) -> Vec<String> {
     } else {
         wrapped
     }
+}
+
+fn presentation_tree_continuation_prefix(line: &str) -> Option<String> {
+    let prefix_end = line
+        .char_indices()
+        .find(|(_, ch)| !matches!(ch, ' ' | '│' | '├' | '└' | '─'))
+        .map_or(line.len(), |(index, _)| index);
+    let prefix = &line[..prefix_end];
+    if !prefix.chars().any(|ch| matches!(ch, '│' | '├' | '└')) {
+        return None;
+    }
+
+    let Some((branch_index, branch)) = prefix
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| matches!(ch, '├' | '└'))
+    else {
+        return Some(prefix.to_string());
+    };
+    let mut continuation = prefix[..branch_index].to_string();
+    continuation.push(if branch == '├' { '│' } else { ' ' });
+    continuation.extend(
+        prefix[branch_index + branch.len_utf8()..]
+            .chars()
+            .map(|_| ' '),
+    );
+    Some(continuation)
 }
 
 fn take_presentation_chunk(text: &str, width: usize) -> (String, String) {
