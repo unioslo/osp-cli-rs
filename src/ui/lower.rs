@@ -33,6 +33,7 @@ use super::doc::{
 };
 use super::plan::RenderPlan;
 use super::settings::{HelpLayout, ResolvedHelpChromeSettings};
+use super::text::display_width;
 use super::visible_inline_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +64,10 @@ impl<'a> GuideSectionRef<'a> {
 }
 
 pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
+    if plan.format != OutputFormat::Json && !output.meta.presentation_lines.is_empty() {
+        return lower_presentation_lines(&output.meta.presentation_lines, plan.settings.width);
+    }
+
     let guide = GuideView::try_from_output_result(output);
 
     // Human projection is deliberately downstream of filtering and JSON output.
@@ -136,6 +141,125 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
         OutputFormat::Mreg => lower_mreg_doc(output),
         OutputFormat::Auto => Doc::default(),
     }
+}
+
+fn lower_presentation_lines(lines: &[String], width: Option<usize>) -> Doc {
+    let lines = lines
+        .iter()
+        .map(|line| sanitize_presentation_line(&visible_inline_text(line)))
+        .flat_map(|line| wrap_presentation_line(&line, width))
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return Doc::default();
+    }
+    Doc {
+        blocks: vec![Block::Paragraph(ParagraphBlock {
+            text: lines.join("\n"),
+            indent: 0,
+            inline_markup: false,
+        })],
+    }
+}
+
+fn sanitize_presentation_line(line: &str) -> String {
+    let mut output = String::new();
+    let mut chars = line.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    for next in chars.by_ref() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    let mut previous = None;
+                    for next in chars.by_ref() {
+                        if next == '\x07' || (previous == Some('\x1b') && next == '\\') {
+                            break;
+                        }
+                        previous = Some(next);
+                    }
+                }
+                Some(_) | None => {}
+            }
+            continue;
+        }
+        if !ch.is_control() {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+fn wrap_presentation_line(line: &str, width: Option<usize>) -> Vec<String> {
+    let Some(width) = width.filter(|width| *width > 0) else {
+        return vec![line.to_string()];
+    };
+    if display_width(line) <= width {
+        return vec![line.to_string()];
+    }
+
+    let mut remaining = line.to_string();
+    let mut wrapped = Vec::new();
+    let mut first = true;
+    while !remaining.is_empty() {
+        let continuation = if first || width < 5 {
+            String::new()
+        } else {
+            "    ".into()
+        };
+        let available = width.saturating_sub(display_width(&continuation));
+        let (chunk, rest) = take_presentation_chunk(&remaining, available.max(1));
+        if chunk.is_empty() && rest == remaining {
+            break;
+        }
+        wrapped.push(format!("{continuation}{chunk}"));
+        remaining = rest;
+        first = false;
+    }
+    if wrapped.is_empty() {
+        vec![String::new()]
+    } else {
+        wrapped
+    }
+}
+
+fn take_presentation_chunk(text: &str, width: usize) -> (String, String) {
+    if display_width(text) <= width {
+        return (text.trim_end().to_string(), String::new());
+    }
+
+    let mut used = 0;
+    let mut end = 0;
+    let mut last_break = None;
+    for (index, ch) in text.char_indices() {
+        let next = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + next > width {
+            break;
+        }
+        used += next;
+        end = index + ch.len_utf8();
+        if ch.is_whitespace() {
+            last_break = Some(end);
+        }
+    }
+    let split = last_break
+        .filter(|split| *split > 0 && !text[..*split].trim().is_empty())
+        .unwrap_or(end);
+    if split == 0 {
+        let end = text
+            .char_indices()
+            .nth(1)
+            .map_or(text.len(), |(index, _)| index);
+        return (text[..end].to_string(), text[end..].to_string());
+    }
+    (
+        text[..split].trim_end().to_string(),
+        text[split..].trim_start().to_string(),
+    )
 }
 
 fn display_output(output: &OutputResult) -> OutputResult {

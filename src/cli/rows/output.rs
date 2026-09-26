@@ -60,6 +60,13 @@ pub(crate) fn plugin_data_to_output_result(
             wants_copy: false,
             grouped: false,
             render_recommendation: None,
+            presentation_lines: meta
+                .map(|meta| meta.presentation_lines.clone())
+                .unwrap_or_default(),
+            progress_append: meta
+                .map(|meta| meta.progress_append.clone())
+                .unwrap_or_default(),
+            progress_replace: meta.is_some_and(|meta| meta.progress_replace),
         },
     }
 }
@@ -99,6 +106,9 @@ mod tests {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 preserve_json_document: false,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             }),
         );
 
@@ -132,6 +142,9 @@ mod tests {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 preserve_json_document: false,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             }),
         );
 
@@ -383,6 +396,9 @@ mod tests {
                 wants_copy: false,
                 grouped: true,
                 render_recommendation: None,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             },
         };
 

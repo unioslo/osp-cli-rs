@@ -582,6 +582,21 @@ pub struct ResponseMetaV1 {
     /// itself their stable machine contract.
     #[serde(default)]
     pub preserve_json_document: bool,
+    /// Human-only complete lines for a presentation override. The host may
+    /// replace the ordinary structured rendering with these lines when the
+    /// output is human-facing; canonical JSON and pipeline rows stay in data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presentation_lines: Vec<String>,
+    /// Human-only lines to append when a progress block cannot be replaced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progress_append: Vec<String>,
+    /// Replace the previous progress block when stderr is a terminal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub progress_replace: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Column alignment hint used in plugin response metadata.

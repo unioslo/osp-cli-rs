@@ -394,6 +394,9 @@ fn ui2_terminal_table_honors_column_alignment_metadata_unit() {
             wants_copy: false,
             grouped: false,
             render_recommendation: None,
+            presentation_lines: Vec::new(),
+            progress_append: Vec::new(),
+            progress_replace: false,
         },
     };
     let mut settings = RenderSettings::test_plain(OutputFormat::Table);
@@ -427,6 +430,9 @@ fn ui2_markdown_table_honors_column_alignment_metadata_unit() {
             wants_copy: false,
             grouped: false,
             render_recommendation: None,
+            presentation_lines: Vec::new(),
+            progress_append: Vec::new(),
+            progress_replace: false,
         },
     };
     let mut settings = RenderSettings::test_plain(OutputFormat::Markdown);
@@ -743,6 +749,9 @@ fn ui_grouped_outputs_lower_and_render_with_one_group_owner_unit() {
             wants_copy: false,
             grouped: true,
             render_recommendation: None,
+            presentation_lines: Vec::new(),
+            progress_append: Vec::new(),
+            progress_replace: false,
         },
     };
 

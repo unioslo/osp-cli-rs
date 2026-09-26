@@ -195,6 +195,9 @@ impl NativeCommand for TestNativeCommand {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 preserve_json_document: false,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             },
         })))
     }

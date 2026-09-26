@@ -145,6 +145,10 @@ pub(crate) fn run_compiled(
         {
             continue;
         }
+        // Presentation overrides describe the producer's untransformed view.
+        // Once a real stage runs, only the transformed rows may be shown.
+        output.meta.presentation_lines.clear();
+        output.meta.progress_append.clear();
         output.meta.wants_copy |= matches!(stage, CompiledStage::Copy);
         if !stage.behavior().preserves_render_recommendation {
             output.meta.render_recommendation = None;

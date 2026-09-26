@@ -90,6 +90,13 @@ pub struct OutputMeta {
     pub grouped: bool,
     /// Preferred renderer for this result, when known.
     pub render_recommendation: Option<RenderRecommendation>,
+    /// Human-only complete lines supplied by a producer for presentation.
+    /// Pipeline stages clear this override before rendering transformed rows.
+    pub presentation_lines: Vec<String>,
+    /// Human-only progress lines used when a progress block is appended.
+    pub progress_append: Vec<String>,
+    /// Whether a transient progress block should replace the previous block.
+    pub progress_replace: bool,
 }
 
 /// Suggested render target for a command result.
@@ -217,6 +224,9 @@ impl OutputResult {
                 wants_copy: false,
                 grouped: false,
                 render_recommendation: None,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             },
         }
     }

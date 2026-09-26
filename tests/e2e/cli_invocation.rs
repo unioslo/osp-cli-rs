@@ -34,7 +34,7 @@ theme.name = "dracula"
     assert_eq!(default_row["value"], "nord");
 
     let selected_output = osp_command(home.path())
-        .args(["--json", "tsd", "config", "get", "theme.name"])
+        .args(["--json", "--profile", "tsd", "config", "get", "theme.name"])
         .assert()
         .success()
         .get_output()

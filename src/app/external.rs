@@ -29,10 +29,10 @@ use super::dispatch::{
     ensure_external_path_access, ensure_external_path_access_with_policy,
     resolve_external_command_source,
 };
-use super::sink::UiSink;
+use super::sink::{ProgressUiSink, UiSink};
 use super::{
     CliCommandResult, ResolvedInvocation, cli_result_from_plugin_response, enrich_dispatch_error,
-    plugin_dispatch_context_for, run_cli_command_with_ui, run_inline_builtin_command,
+    plugin_dispatch_context_for, run_inline_builtin_command, run_progress_command_with_ui,
     runtime_hints_for_invocation,
 };
 
@@ -334,7 +334,8 @@ fn run_native_command(
     let progress_renderer = input.progress_sink.map(|sink| NativeProgressRenderer {
         config: runtime.config.resolved(),
         ui: &input.invocation.ui,
-        sink: RefCell::new(sink),
+        stages: input.stages,
+        sink: RefCell::new(ProgressUiSink::new(sink)),
     });
     let mut context = NativeCommandContext::new(
         runtime.config.resolved(),
@@ -346,16 +347,24 @@ fn run_native_command(
         context = context.with_progress_sink(renderer);
     }
 
-    match command.execute(input.args, &context).map_err(|err| {
-        match err.downcast::<clap::Error>() {
-            Ok(err) => {
-                crate::app::report_std_error_with_context(err, "native command execution failed")
-            }
-            Err(err) => {
-                crate::app::report_anyhow_with_context(err, "native command execution failed")
-            }
-        }
-    })? {
+    let execution =
+        command
+            .execute(input.args, &context)
+            .map_err(|err| match err.downcast::<clap::Error>() {
+                Ok(err) => crate::app::report_std_error_with_context(
+                    err,
+                    "native command execution failed",
+                ),
+                Err(err) => {
+                    crate::app::report_anyhow_with_context(err, "native command execution failed")
+                }
+            });
+    drop(context);
+    if let Some(renderer) = progress_renderer.as_ref() {
+        renderer.clear();
+    }
+
+    match execution? {
         NativeCommandOutcome::Help(text) => Ok(CliCommandResult::guide(guide_help(&text))),
         NativeCommandOutcome::Exit(code) => Ok(CliCommandResult::exit(code)),
         NativeCommandOutcome::Response(response) => render_native_response_with_context(
@@ -380,13 +389,20 @@ fn run_native_command(
     }
 }
 
-struct NativeProgressRenderer<'a> {
-    config: &'a crate::config::ResolvedConfig,
-    ui: &'a UiState,
-    sink: RefCell<&'a mut dyn UiSink>,
+struct NativeProgressRenderer<'config, 'sink> {
+    config: &'config crate::config::ResolvedConfig,
+    ui: &'config UiState,
+    stages: &'config [String],
+    sink: RefCell<ProgressUiSink<'sink>>,
 }
 
-impl NativeProgressSink for NativeProgressRenderer<'_> {
+impl NativeProgressRenderer<'_, '_> {
+    fn clear(&self) {
+        self.sink.borrow_mut().clear_progress();
+    }
+}
+
+impl NativeProgressSink for NativeProgressRenderer<'_, '_> {
     fn emit(&self, event: NativeProgressEvent) -> anyhow::Result<()> {
         let result = cli_result_from_plugin_response(
             crate::core::plugin::ResponseV1 {
@@ -397,29 +413,13 @@ impl NativeProgressSink for NativeProgressRenderer<'_> {
                 messages: event.messages,
                 meta: event.meta,
             },
-            &[],
+            self.stages,
         )
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         let mut sink = self.sink.borrow_mut();
-        let mut progress_sink = ProgressStderrSink { inner: &mut **sink };
-        run_cli_command_with_ui(self.config, self.ui, result, &mut progress_sink)
+        run_progress_command_with_ui(self.config, self.ui, result, &mut *sink)
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         Ok(())
-    }
-}
-
-/// Transient progress must not corrupt the stable final stdout document.
-struct ProgressStderrSink<'a> {
-    inner: &'a mut dyn UiSink,
-}
-
-impl UiSink for ProgressStderrSink<'_> {
-    fn write_stdout(&mut self, text: &str) {
-        self.inner.write_stderr(text);
-    }
-
-    fn write_stderr(&mut self, text: &str) {
-        self.inner.write_stderr(text);
     }
 }
 
@@ -716,6 +716,9 @@ mod tests {
                             unix_timestamp_columns: Vec::new(),
                             display_rules: Vec::new(),
                             preserve_json_document: false,
+                            presentation_lines: Vec::new(),
+                            progress_append: Vec::new(),
+                            progress_replace: false,
                         },
                     }))
                 }
@@ -825,6 +828,9 @@ mod tests {
                     unix_timestamp_columns: Vec::new(),
                     display_rules: Vec::new(),
                     preserve_json_document: false,
+                    presentation_lines: Vec::new(),
+                    progress_append: Vec::new(),
+                    progress_replace: false,
                 },
             })))
         }
@@ -1049,6 +1055,9 @@ JSON
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 preserve_json_document: false,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             },
         };
 

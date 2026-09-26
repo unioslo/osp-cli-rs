@@ -121,6 +121,9 @@ impl NativeCommand for NativeProbeCommand {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 preserve_json_document: false,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             },
         })))
     }
@@ -219,6 +222,9 @@ impl NativeCommand for CuratedOrchRowsCommand {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 preserve_json_document: true,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             },
         })))
     }
@@ -252,6 +258,9 @@ impl NativeCommand for SiteStatusCommand {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 preserve_json_document: false,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             },
         })))
     }

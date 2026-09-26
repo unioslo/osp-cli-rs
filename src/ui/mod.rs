@@ -76,7 +76,7 @@ pub use settings::{
 };
 pub(crate) use settings::{build_presentation_defaults_layer, explain_presentation_effect};
 pub use style::{StyleOverrides, StyleToken, ThemeStyler};
-pub(crate) use text::visible_inline_text;
+pub(crate) use text::{display_width, visible_inline_text};
 pub use theme::DEFAULT_THEME_NAME;
 pub use theme_catalog as theme_loader;
 
@@ -138,6 +138,12 @@ pub fn render_rows(rows: &[crate::core::row::Row], settings: &RenderSettings) ->
 /// ```
 pub fn render_output(output: &OutputResult, settings: &RenderSettings) -> String {
     render_output_with_profile(output, settings, RenderProfile::Normal)
+}
+
+pub(crate) fn render_presentation_lines(lines: &[String], settings: &RenderSettings) -> String {
+    let mut output = OutputResult::from_rows(Vec::new());
+    output.meta.presentation_lines = lines.to_vec();
+    render_output(&output, settings)
 }
 
 /// Renders output using the copy-safe profile.

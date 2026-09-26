@@ -1101,6 +1101,9 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
             unix_timestamp_columns: Vec::new(),
             display_rules: Vec::new(),
             preserve_json_document: false,
+            presentation_lines: Vec::new(),
+            progress_append: Vec::new(),
+            progress_replace: false,
         },
     };
     let prepared = super::command_output::prepare_plugin_response(response, &["P uid".to_string()])

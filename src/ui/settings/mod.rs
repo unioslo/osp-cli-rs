@@ -1200,6 +1200,9 @@ mod tests {
                 wants_copy: false,
                 grouped: true,
                 render_recommendation: None,
+                presentation_lines: Vec::new(),
+                progress_append: Vec::new(),
+                progress_replace: false,
             },
         };
         assert_eq!(

@@ -7,7 +7,7 @@
 
 use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
-use crate::core::output_model::{OutputResult, RenderRecommendation, rows_from_value};
+use crate::core::output_model::{OutputItems, OutputResult, RenderRecommendation, rows_from_value};
 use crate::core::plugin::{ResponseMessageLevelV1, ResponseV1};
 use crate::dsl::apply_output_pipeline;
 use crate::guide::GuideView;
@@ -309,6 +309,141 @@ pub(crate) fn run_cli_command_with_ui(
     run_cli_command(&CommandRenderRuntime::new(config, ui), result, sink)
 }
 
+/// Renders one native progress event through stderr without touching stdout.
+///
+/// The result has already passed through the invocation pipeline. Empty
+/// transformed results are intentionally silent so a filter does not produce
+/// a per-event "no results" message.
+pub(crate) fn run_progress_command_with_ui(
+    config: &ResolvedConfig,
+    ui: &UiState,
+    result: CliCommandResult,
+    sink: &mut dyn UiSink,
+) -> Result<i32> {
+    let CliCommandResult {
+        exit_code,
+        messages,
+        output,
+        stderr_text,
+        ..
+    } = result;
+    let Some(output) = output else {
+        return Ok(exit_code);
+    };
+    if progress_output_is_empty(&output) {
+        return Ok(exit_code);
+    }
+
+    let runtime = CommandRenderRuntime::new(config, ui);
+    if !messages.is_empty() {
+        emit_messages_with_runtime(&runtime, &messages, ui.message_verbosity, sink);
+    }
+
+    let json_output = output_uses_json(&runtime, &output);
+    let append_lines = !sink.stderr_is_terminal() || json_output;
+    let rendered = if append_lines
+        && let ReplCommandOutput::Output(structured) = &output
+        && !structured.output.meta.progress_append.is_empty()
+    {
+        render_progress_lines_with_runtime(&runtime, &structured.output.meta.progress_append, sink)
+    } else {
+        render_progress_output_with_runtime(&runtime, &output, json_output, sink)
+    };
+    if !rendered.is_empty() {
+        let replace = matches!(
+            &output,
+            ReplCommandOutput::Output(structured)
+                if structured.output.meta.progress_replace
+        ) && !json_output;
+        sink.write_progress(&rendered, replace);
+    }
+    if let Some(stderr_text) = stderr_text
+        && !stderr_text.is_empty()
+    {
+        sink.write_stderr(&stderr_text);
+    }
+    Ok(exit_code)
+}
+
+fn render_progress_lines_with_runtime(
+    runtime: &CommandRenderRuntime<'_>,
+    lines: &[String],
+    sink: &dyn UiSink,
+) -> String {
+    let mut settings = runtime.ui().render_settings.clone();
+    settings.format = OutputFormat::Value;
+    settings.format_explicit = true;
+    settings.mode = crate::core::output::RenderMode::Plain;
+    settings.color = crate::core::output::ColorMode::Never;
+    settings.unicode = crate::core::output::UnicodeMode::Never;
+    if let Some(width) = sink.stderr_width() {
+        settings.width = Some(width);
+        settings.runtime.width = Some(width);
+    }
+    crate::ui::render_presentation_lines(lines, &settings)
+}
+
+fn progress_output_is_empty(output: &ReplCommandOutput) -> bool {
+    match output {
+        ReplCommandOutput::Output(structured) => match &structured.output.items {
+            OutputItems::Rows(rows) => {
+                rows.is_empty()
+                    || rows.iter().all(|row| {
+                        row.len() == 1 && row.get("value").is_some_and(serde_json::Value::is_null)
+                    })
+            }
+            OutputItems::Groups(groups) => groups.is_empty(),
+        },
+        ReplCommandOutput::Json(value) => {
+            value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+        }
+        ReplCommandOutput::Text(text) => text.trim().is_empty(),
+    }
+}
+
+fn render_progress_output_with_runtime(
+    runtime: &CommandRenderRuntime<'_>,
+    output: &ReplCommandOutput,
+    json_output: bool,
+    sink: &dyn UiSink,
+) -> String {
+    let mut settings = runtime.ui().render_settings.clone();
+    if let Some(width) = sink.stderr_width() {
+        settings.width = Some(width);
+        settings.runtime.width = Some(width);
+    }
+    if !json_output && sink.stderr_is_terminal() {
+        return match output {
+            ReplCommandOutput::Output(structured) => render_structured_repl_output(
+                runtime.config(),
+                &settings,
+                &structured.output,
+                structured.format_hint,
+                structured.source_guide.as_ref(),
+            ),
+            ReplCommandOutput::Json(payload) => render_json_value(payload, &settings),
+            ReplCommandOutput::Text(text) => text.clone(),
+        };
+    }
+
+    settings.format = OutputFormat::Value;
+    settings.format_explicit = true;
+    settings.mode = crate::core::output::RenderMode::Plain;
+    settings.color = crate::core::output::ColorMode::Never;
+    settings.unicode = crate::core::output::UnicodeMode::Never;
+    match output {
+        ReplCommandOutput::Output(structured) => render_structured_repl_output(
+            runtime.config(),
+            &settings,
+            &structured.output,
+            None,
+            None,
+        ),
+        ReplCommandOutput::Json(payload) => render_json_value(payload, &settings),
+        ReplCommandOutput::Text(text) => text.clone(),
+    }
+}
+
 pub(crate) fn cli_result_from_plugin_response(
     response: ResponseV1,
     stages: &[String],
@@ -510,6 +645,9 @@ pub(crate) fn apply_output_stages(
         output = apply_output_pipeline(output, stages).map_err(|err| {
             crate::app::report_anyhow_with_context(err, "failed to apply DSL output pipeline")
         })?;
+        output.meta.presentation_lines.clear();
+        output.meta.progress_append.clear();
+        output.meta.progress_replace = false;
         // Once a DSL pipeline runs, producer-side format hints stop being an
         // out-of-band override. Any surviving recommendation now lives on the
         // transformed output metadata itself.
