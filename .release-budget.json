@@ -1,0 +1,14 @@
+{
+  "startup_ms": 3.1884369673207402,
+  "size_bytes": 21720000,
+  "profile": "release",
+  "warmups": 3,
+  "samples": 11,
+  "measured_at": "2026-09-30T12:54:28.955043+00:00",
+  "platform": "Linux-5.14.0-687.49.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "version": "osp 1.5.1",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "source_revision": "2c6120981429a44319a5f857f4a073ab02461439",
+  "source_dirty": true,
+  "binary_sha256": "d8edd6051657d44dd825a80594d9a4f10e739ed1ff51c877de8fddbd3263c479"
+}

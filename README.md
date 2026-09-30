@@ -40,13 +40,13 @@ start with:
 From crates.io:
 
 ```bash
-cargo install osp-cli
+cargo install osp-cli --locked
 ```
 
 From source:
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 ```
 
 Run it:
@@ -164,11 +164,8 @@ If you are working on the repo itself, read:
 Useful commands:
 
 ```bash
-python3 scripts/confidence.py static
+python3 scripts/confidence.py --list
 python3 scripts/confidence.py local
-python3 scripts/confidence.py pre-push
-cargo test --all-features --locked
-python3 scripts/coverage.py gate --fast
 ```
 
 See:

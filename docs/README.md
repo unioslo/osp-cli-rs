@@ -103,12 +103,14 @@ with plugin-provided commands, or writing plugins.
 
 - contributing workflow:
   [../CONTRIBUTING.md](../CONTRIBUTING.md)
-- testing strategy and confidence lanes:
+- testing and verification boundaries:
   [TESTING.md](TESTING.md)
+- release evidence limits:
+  [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md)
+- current DSL execution contract and limits:
+  [DSL_REVIEW.md](DSL_REVIEW.md)
 - DSL implementation notes:
   [DSL_AUTHORS.md](DSL_AUTHORS.md)
-- planning/review scratch area:
-  `docs/plans/`
 
 ## Architecture And Module Docs
 

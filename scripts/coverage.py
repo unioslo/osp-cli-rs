@@ -6,7 +6,7 @@ Behavior-first tests at the contract, integration, and carefully limited `e2e`
 layers carry most of the confidence. This script exists to provide a backstop:
 
 - a full gate that prevents the checked-in overall floor from regressing
-- a changed-file rule that catches obviously under-tested source changes
+- changed-file review warnings that identify under-exercised source files
 - a fast local approximation that is cheap enough for pre-push use
 
 The design bias here is practical rather than theoretically perfect. The fast
@@ -20,8 +20,8 @@ There are a few policy edges that are easy to "simplify" incorrectly:
   an auto-refreshed artifact
 - fast mode should remain an approximation and should not silently grow into a
   second full CI lane
-- declaration-only and tiny-file exemptions are pragmatic exceptions for files
-  that do not produce useful llvm-cov output; do not broaden them casually
+- tiny-file exemptions apply only to valid llvm-cov entries; absent entries
+  fail unless an explicitly reviewed non-executable file still has its pinned bytes
 - coverage runs use an isolated temporary workspace on purpose to avoid crosstalk
   between local runs, hooks, and CI jobs
 
@@ -35,8 +35,11 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import json
+import math
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -45,6 +48,11 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
+
+
+hermetic_env = runpy.run_path(
+    str(Path(__file__).with_name("run-hermetic-cargo.py"))
+)["hermetic_env"]
 
 
 RUNS_TO_KEEP = 4
@@ -228,7 +236,9 @@ def prepare_workspace(prefix: str) -> tuple[Path, dict[str, str]]:
     run_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=runs_root))
     _prune_oldest(runs_root, RUNS_TO_KEEP)
 
-    env = os.environ.copy()
+    home = run_dir / "home"
+    home.mkdir()
+    env = hermetic_env(home)
     for key in ("TMPDIR", "TMP", "TEMP", "TEMPDIR"):
         env[key] = str(tmp_root)
     return run_dir, env
@@ -263,16 +273,32 @@ def ensure_coverage_tooling(*, purpose: str) -> None:
         )
 
 
-def load_baseline(path: Path) -> dict[str, float]:
+def load_baseline(path: Path) -> dict[str, Any]:
     """Load only the numeric policy values needed by the gate."""
 
     with path.open() as handle:
         payload = json.load(handle)
-    return {
+    baseline = {
         "overall_line_percent": float(payload["overall_line_percent"]),
-        "changed_file_min_line_percent": float(payload["changed_file_min_line_percent"]),
+        "changed_file_review_line_percent": float(payload["changed_file_review_line_percent"]),
         "min_executable_lines": float(payload.get("min_executable_lines", 0)),
     }
+    for key, value in baseline.items():
+        if not math.isfinite(value) or value < 0:
+            fail(f"Invalid coverage baseline {key}: {value}")
+        if key.endswith("percent") and value > 100:
+            fail(f"Invalid coverage baseline {key}: {value}")
+    exemptions = payload.get("non_executable_files", {})
+    if not isinstance(exemptions, dict) or any(
+        not isinstance(name, str)
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(char not in "0123456789abcdef" for char in digest)
+        for name, digest in exemptions.items()
+    ):
+        fail("Invalid non-executable file digest policy")
+    baseline["non_executable_files"] = exemptions
+    return baseline
 
 
 def load_baseline_payload(path: Path) -> dict[str, Any]:
@@ -290,13 +316,37 @@ def write_baseline_payload(path: Path, payload: dict[str, Any]) -> None:
         handle.write("\n")
 
 
-def resolve_branch_diff_args(repo_root: Path) -> tuple[list[str], str]:
+def resolve_branch_diff_args(
+    repo_root: Path, base: str | None = None
+) -> tuple[list[str], str]:
     """Pick the branch comparison basis for local and hook-driven runs.
 
-    The upstream branch is the most useful default for pre-push semantics. When
-    no upstream exists, comparing against the root commit keeps the script usable
-    in fresh or detached repos.
+    CI supplies an explicit comparison base. Local runs prefer the upstream,
+    then origin/main's merge base, then the empty tree for fresh repositories.
     """
+
+    run("git", "rev-parse", "--verify", "HEAD", cwd=repo_root)
+    if base is not None:
+        if not base.strip():
+            fail("Coverage base must not be empty; use 'empty' for the empty tree.")
+        if base == "empty":
+            empty_tree = subprocess.run(
+                ["git", "hash-object", "-w", "-t", "tree", "--stdin"],
+                input="",
+                cwd=repo_root,
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            return [empty_tree, "HEAD"], f"empty tree {empty_tree}..HEAD"
+        resolved = maybe_run(
+            "git", "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}",
+            cwd=repo_root,
+        )
+        if not resolved or not resolved.strip():
+            fail(f"Coverage base does not resolve to a local commit: {base}")
+        diff_range = f"{resolved.strip()}..HEAD"
+        return [diff_range], diff_range
 
     upstream = maybe_run(
         "git",
@@ -307,9 +357,17 @@ def resolve_branch_diff_args(repo_root: Path) -> tuple[list[str], str]:
         cwd=repo_root,
     )
     if upstream and upstream.strip():
-        diff_range = f"{upstream.strip()}..HEAD"
-        return [diff_range], diff_range
-    return ["--root", "HEAD"], "--root HEAD"
+        return resolve_branch_diff_args(repo_root, upstream.strip())
+    default_branch = maybe_run(
+        "git", "rev-parse", "--verify", "--quiet", "origin/main^{commit}", cwd=repo_root
+    )
+    merge_base = (
+        run("git", "merge-base", "origin/main", "HEAD", cwd=repo_root)
+        if default_branch else None
+    )
+    return resolve_branch_diff_args(
+        repo_root, merge_base.strip() if merge_base else "empty"
+    )
 
 
 def is_internal_test_module(path: str) -> bool:
@@ -321,18 +379,12 @@ def is_internal_test_module(path: str) -> bool:
 
 
 def parse_path_output(output: str | None) -> list[str]:
-    """Normalize newline-delimited git path output into a stable unique list."""
+    """Normalize NUL-delimited git paths without stripping filename characters."""
 
     if not output:
         return []
 
-    paths = []
-    for raw in output.splitlines():
-        path = raw.strip()
-        if not path:
-            continue
-        paths.append(path)
-    return sorted(set(paths))
+    return sorted({path for path in output.split("\0") if path})
 
 
 def collect_changed_paths(repo_root: Path, diff_args: list[str]) -> list[str]:
@@ -343,6 +395,7 @@ def collect_changed_paths(repo_root: Path, diff_args: list[str]) -> list[str]:
             "git",
             "diff",
             "--name-only",
+            "-z",
             "--diff-filter=ACMR",
             *diff_args,
             cwd=repo_root,
@@ -354,9 +407,10 @@ def collect_untracked_paths(repo_root: Path) -> list[str]:
     """Include untracked files so manual local runs see new source files too."""
 
     return parse_path_output(
-        maybe_run(
+        run(
             "git",
             "ls-files",
+            "-z",
             "--others",
             "--exclude-standard",
             cwd=repo_root,
@@ -364,7 +418,9 @@ def collect_untracked_paths(repo_root: Path) -> list[str]:
     )
 
 
-def collect_candidate_paths(repo_root: Path) -> tuple[list[str], str]:
+def collect_candidate_paths(
+    repo_root: Path, base: str | None = None
+) -> tuple[list[str], str]:
     """Combine branch, index, worktree, and untracked changes.
 
     This is intentionally broader than strict pre-push semantics because manual
@@ -372,7 +428,7 @@ def collect_candidate_paths(repo_root: Path) -> tuple[list[str], str]:
     The printed basis string exists to make that broadened scope obvious.
     """
 
-    branch_diff_args, branch_basis = resolve_branch_diff_args(repo_root)
+    branch_diff_args, branch_basis = resolve_branch_diff_args(repo_root, base)
     branch_paths = collect_changed_paths(repo_root, branch_diff_args)
     staged_paths = collect_changed_paths(repo_root, ["--cached"])
     worktree_paths = collect_changed_paths(repo_root, [])
@@ -420,103 +476,58 @@ def changed_source_files(repo_root: Path, changed_paths: list[str]) -> list[str]
 def line_coverage(summary: dict[str, Any]) -> FileCoverage:
     """Normalize llvm-cov line summaries that may or may not include `percent`."""
 
-    count = float(summary.get("count", 0))
+    if not isinstance(summary, dict):
+        raise ValueError("line summary must be an object")
+    for key in ("count", "covered"):
+        value = summary.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+            or value != int(value)
+        ):
+            raise ValueError(f"line summary requires a nonnegative integer {key}")
+    count = float(summary["count"])
+    covered = float(summary["covered"])
+    if covered > count:
+        raise ValueError("covered lines exceed executable lines")
+    calculated = 0.0 if count == 0 else (100.0 * covered / count)
     if "percent" in summary:
-        percent = float(summary["percent"])
+        percent = summary["percent"]
+        if (
+            isinstance(percent, bool)
+            or not isinstance(percent, (int, float))
+            or not math.isfinite(percent)
+            or not 0 <= percent <= 100
+            or (count > 0 and abs(percent - calculated) > 0.01)
+        ):
+            raise ValueError("line percentage is invalid or disagrees with counts")
     else:
-        covered = float(summary.get("covered", count))
-        percent = 100.0 if count == 0 else (100.0 * covered / count)
+        percent = calculated
     return FileCoverage(percent=percent, count=count)
 
 
 def relative_report_path(filename: str, repo_root: Path) -> str:
     """Map llvm-cov filenames back into repo-relative paths when possible."""
 
-    resolved = Path(filename).resolve()
+    resolved = (repo_root / filename).resolve()
     try:
         return resolved.relative_to(repo_root).as_posix()
     except ValueError:
         return os.path.normpath(filename)
 
 
-def is_coverage_exempt_module(path: Path) -> bool:
-    """Detect declaration-only modules that are poor per-file gate candidates.
-
-    This is intentionally heuristic rather than a Rust parser. The goal is to
-    avoid false failures for files that legitimately do not emit meaningful
-    executable coverage entries, not to classify every Rust construct perfectly.
-    """
-
-    try:
-        text = path.read_text()
-        lines = text.splitlines()
-    except OSError:
-        return False
-
-    def is_non_code_line(line: str) -> bool:
-        stripped = line.strip()
-        if not stripped:
-            return True
-        return stripped.startswith(("//", "///", "//!", "#!", "#[", "/*", "*", "*/"))
-
-    code_lines = [line for line in lines if not is_non_code_line(line)]
-
-    # This early exit covers the common "types and re-exports only" case and
-    # keeps the later line-by-line heuristic focused on edge cases.
-    if not any("fn " in line or "impl " in line for line in code_lines):
-        return True
-
-    allowed_prefixes = (
-        "pub mod ",
-        "pub(crate) mod ",
-        "pub(super) mod ",
-        "mod ",
-        "pub use ",
-        "pub(crate) use ",
-        "pub(super) use ",
-        "use ",
-        "extern crate ",
-        "pub type ",
-        "pub(crate) type ",
-        "pub(super) type ",
-        "type ",
-        "pub struct ",
-        "pub(crate) struct ",
-        "pub(super) struct ",
-        "struct ",
-        "pub enum ",
-        "pub(crate) enum ",
-        "pub(super) enum ",
-        "enum ",
-    )
-    in_use_block = False
-
-    for raw in lines:
-        line = raw.strip()
-        if is_non_code_line(raw):
-            continue
-        if in_use_block:
-            if line.endswith(";"):
-                in_use_block = False
-            continue
-        if line in {"{", "}", "};"}:
-            continue
-        if line.startswith(allowed_prefixes):
-            in_use_block = not line.endswith(";")
-            continue
-        return False
-
-    return True
-
-
-def choose_coverage_plan(repo_root: Path, *, fast: bool) -> CoveragePlan:
+def choose_coverage_plan(
+    repo_root: Path, *, fast: bool, base: str | None = None
+) -> CoveragePlan:
     """Choose the explicit coverage target set for this invocation.
 
     Fast mode is kept aligned with the non-PTY local confidence lane on purpose.
     Full mode is the authoritative release/CI gate.
     """
 
-    changed_paths, diff_basis = collect_candidate_paths(repo_root)
+    changed_paths, diff_basis = collect_candidate_paths(repo_root, base)
     changed_files = changed_source_files(repo_root, changed_paths)
 
     if not fast:
@@ -552,19 +563,27 @@ def choose_coverage_plan(repo_root: Path, *, fast: bool) -> CoveragePlan:
 def parse_report(report_path: Path, repo_root: Path) -> CoverageReport:
     """Parse the llvm-cov JSON export into the smaller shape the gate needs."""
 
-    with report_path.open() as handle:
-        report = json.load(handle)
+    try:
+        with report_path.open() as handle:
+            report = json.load(handle)
+        if len(report["data"]) != 1:
+            raise ValueError("expected exactly one LLVM coverage data set")
+        data = report["data"][0]
+        total = line_coverage(data["totals"]["lines"])
+        if total.count == 0:
+            raise ValueError("coverage report contains no executable lines")
+        files: dict[str, FileCoverage] = {}
+        for entry in data["files"]:
+            rel = relative_report_path(entry["filename"], repo_root)
+            if rel in files:
+                raise ValueError(f"duplicate source coverage entry: {rel}")
+            files[rel] = line_coverage(entry["summary"]["lines"])
+        if not files:
+            raise ValueError("coverage report contains no source files")
+    except (KeyError, TypeError, ValueError, OverflowError) as error:
+        fail(f"Unsupported LLVM coverage report {report_path}: {error}")
 
-    data = report["data"][0]
-    overall = line_coverage(data["totals"]["lines"]).percent
-
-    files: dict[str, FileCoverage] = {}
-    for entry in data.get("files", []):
-        rel = relative_report_path(entry["filename"], repo_root)
-        lines = entry.get("summary", {}).get("lines", {})
-        files[rel] = line_coverage(lines)
-
-    return CoverageReport(overall=overall, files=files)
+    return CoverageReport(overall=total.percent, files=files)
 
 
 def normalize_llvm_cov_args(args: list[str]) -> list[str]:
@@ -633,6 +652,11 @@ def run_coverage_plan(repo_root: Path, plan: CoveragePlan) -> CoverageReport | N
     if plan.mode != "skip":
         print(f"Coverage targets: {plan.target_label}", flush=True)
     print(f"Coverage reason: {plan.reason}", flush=True)
+    print("Changed source files:", flush=True)
+    for path in plan.changed_files:
+        print(f"  {path}", flush=True)
+    if not plan.changed_files:
+        print("  (none)", flush=True)
 
     if plan.mode == "skip":
         return None
@@ -648,15 +672,15 @@ def evaluate_gate(
     repo_root: Path,
     *,
     plan: CoveragePlan,
-    baseline: dict[str, float],
+    baseline: dict[str, Any],
     report: CoverageReport | None,
     fast: bool,
 ) -> GateResult:
     """Apply repository coverage policy to the collected report.
 
     The overall baseline floor is reserved for full runs. Fast runs are there to
-    catch obviously under-covered changed files without pretending to be as
-    authoritative as the full CI gate.
+    surface under-covered changed files for review without turning unrelated
+    whole-file gaps into mandatory local tests.
     """
 
     errors: list[str] = []
@@ -667,6 +691,8 @@ def evaluate_gate(
 
     overall = report.overall if report is not None else None
     files = report.files if report is not None else {}
+    if plan.mode != "skip" and report is None:
+        errors.append("coverage run produced no report")
 
     baseline_overall = baseline["overall_line_percent"]
     if overall is not None and not fast and overall + 1e-9 < baseline_overall:
@@ -674,16 +700,14 @@ def evaluate_gate(
             f"overall line coverage regressed: baseline={baseline_overall:.2f}% current={overall:.2f}%"
         )
 
-    min_file_percent = baseline["changed_file_min_line_percent"]
+    min_file_percent = baseline["changed_file_review_line_percent"]
     min_executable_lines = baseline["min_executable_lines"]
     for path in plan.changed_files:
         entry = files.get(path)
         if entry is None:
-            source_path = repo_root / path
-            if is_coverage_exempt_module(source_path):
-                policy_notes.append(
-                    f"skipping declaration-only module coverage gate for {path}"
-                )
+            digest = baseline.get("non_executable_files", {}).get(path)
+            if digest and hashlib.sha256((repo_root / path).read_bytes()).hexdigest() == digest:
+                policy_notes.append(f"reviewed non-executable facade: {path} (file digest verified)")
                 files_skipped_by_policy += 1
                 continue
             errors.append(f"no coverage entry found for changed source file: {path}")
@@ -697,8 +721,8 @@ def evaluate_gate(
 
         files_checked += 1
         if entry.percent + 1e-9 < min_file_percent:
-            errors.append(
-                f"changed file below {min_file_percent:.1f}%: {path} ({entry.percent:.2f}%)"
+            policy_notes.append(
+                f"REVIEW: changed file below {min_file_percent:.1f}%: {path} ({entry.percent:.2f}%)"
             )
 
     return GateResult(
@@ -715,12 +739,12 @@ def render_gate_result(
     plan: CoveragePlan,
     result: GateResult,
     *,
-    baseline: dict[str, float],
+    baseline: dict[str, Any],
     fast: bool,
 ) -> None:
     """Render success or failure in terms of policy, not raw tool output."""
 
-    min_file_percent = baseline["changed_file_min_line_percent"]
+    min_file_percent = baseline["changed_file_review_line_percent"]
     if result.errors:
         print("\nCoverage gate failed:\n", file=sys.stderr)
         for error in result.errors:
@@ -728,7 +752,7 @@ def render_gate_result(
         if plan.changed_files:
             print(
                 "\nChanged source files considered: "
-                f"{result.files_considered}; checked against {min_file_percent:.1f}% minimum: "
+                f"{result.files_considered}; reviewed against {min_file_percent:.1f}% warning level: "
                 f"{result.files_checked}; skipped by policy: {result.files_skipped_by_policy}",
                 file=sys.stderr,
             )
@@ -744,14 +768,14 @@ def render_gate_result(
             f"Coverage OK: overall {result.overall:.2f}% (baseline {baseline_overall:.2f}%)"
         )
     elif fast:
-        print("Coverage OK: fast gate passed")
+        print("Coverage OK: fast report validated (no overall floor evaluated)")
     else:
         print("Coverage OK")
 
     if plan.changed_files:
         print(
             "Changed source files considered: "
-            f"{result.files_considered}; checked against {min_file_percent:.1f}% minimum: "
+            f"{result.files_considered}; reviewed against {min_file_percent:.1f}% warning level: "
             f"{result.files_checked}; skipped by policy: {result.files_skipped_by_policy}"
         )
     elif fast and plan.mode == "skip":
@@ -776,7 +800,6 @@ def command_gate(args: argparse.Namespace) -> None:
     """Handle the repository coverage gate entry point."""
 
     root = repo_root()
-    ensure_coverage_tooling(purpose="run the coverage gate")
     baseline_path = root / ".coverage-baseline.json"
     if not baseline_path.exists():
         fail(
@@ -784,7 +807,9 @@ def command_gate(args: argparse.Namespace) -> None:
         )
 
     baseline = load_baseline(baseline_path)
-    plan = choose_coverage_plan(root, fast=args.fast)
+    plan = choose_coverage_plan(root, fast=args.fast, base=args.base)
+    if plan.mode != "skip":
+        ensure_coverage_tooling(purpose="run the coverage gate")
     report = run_coverage_plan(root, plan)
     result = evaluate_gate(
         root,
@@ -847,6 +872,11 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser = subparsers.add_parser(
         "gate",
         help="Run the repository coverage gate.",
+    )
+    gate_parser.add_argument(
+        "--base",
+        default=os.environ.get("COVERAGE_BASE"),
+        help="Commit to compare with HEAD, or 'empty'; defaults to COVERAGE_BASE, then local Git context.",
     )
     gate_parser.add_argument(
         "--fast",

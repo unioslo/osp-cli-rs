@@ -63,15 +63,7 @@ CFG_FEATURE_RE = re.compile(
 def repo_root() -> pathlib.Path:
     """Anchor git operations to the repository that owns this script."""
 
-    return pathlib.Path(
-        subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        .stdout.strip()
-    )
+    return pathlib.Path(__file__).resolve().parent.parent
 
 
 def is_internal_test_module(path: pathlib.Path) -> bool:
@@ -260,28 +252,21 @@ def feature_gate_phrase(feature: str) -> str:
     return f"Only available with the `{feature}` cargo feature"
 
 
-def merged_rustflags(current: str | None, extra: str) -> str:
-    """Append one rustflag while preserving any existing caller-provided flags."""
-
-    if not current:
-        return extra
-    return f"{current} {extra}"
-
-
 def compiler_missing_docs_failures(root: pathlib.Path, cwd: pathlib.Path) -> list[str]:
     """Return compiler-backed missing-docs failures for the library crate."""
 
     env = os.environ.copy()
-    env["RUSTFLAGS"] = merged_rustflags(env.get("RUSTFLAGS"), "-Dmissing-docs")
     env.setdefault("CARGO_TARGET_DIR", str(root / "target" / "public-docs"))
     result = subprocess.run(
         [
             "cargo",
-            "check",
+            "rustc",
             "--lib",
             "--locked",
             "--message-format",
             "short",
+            "--",
+            "-Dmissing-docs",
         ],
         cwd=cwd,
         env=env,
@@ -298,7 +283,7 @@ def compiler_missing_docs_failures(root: pathlib.Path, cwd: pathlib.Path) -> lis
         if line.strip()
     ]
     if not diagnostics:
-        diagnostics = ["`cargo check --lib --locked` failed without diagnostics."]
+        diagnostics = ["`cargo rustc --lib --locked -- -Dmissing-docs` failed without diagnostics."]
     return [
         "compiler-backed public Rustdoc coverage check failed:",
         *[f"  {line}" for line in diagnostics],

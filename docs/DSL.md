@@ -116,7 +116,9 @@ same interpretation; predicate `F field != value` also permits attached forms.
 `F field text` means a contains comparison; `F field=value` means equality.
 Array-valued fields match if an element satisfies the predicate.
 
-A bare field selector can match descendant keys. Dotted paths navigate nested
+A bare literal field selector prefers the root field and its leaves, falling
+back to descendant keys only when that root field is absent. Opt-in fuzzy key
+search retains broader descendant matching. Dotted paths navigate nested
 objects; when a named segment reaches an array it visits each member. Thus
 `members.uid` and `members[].uid` select the same leaves. Use `[0]`, `[-1]`,
 `[1:3]` or `[]` for indexed, tail, sliced or full traversal. Missing branches

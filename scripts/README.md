@@ -15,6 +15,13 @@ The folder is intentionally flat for now. The current rule is simple:
   Runs the named local confidence lanes used by hooks, humans, and CI.
 - `coverage.py`
   Owns the repository coverage gate and coverage utility commands.
+- `release-budget.py`
+  Measures the already-built release binary's startup and size against an
+  intentionally reviewed baseline.
+- `run-hermetic-cargo.py`
+  Isolates runtime roots and ambient settings for behavior and coverage checks.
+- `public-api-examples.py`
+  Checks selected public entrypoints for complete, nonempty runnable examples.
 - `public-docs.py`
   Enforces public Rustdoc coverage and feature-gate wording in staged or
   repo-wide mode.
@@ -37,6 +44,9 @@ The folder is intentionally flat for now. The current rule is simple:
 
 - `install-git-hooks.sh`
   Configures the repository git hook path and commit template.
+
+Exact lane commands live in `confidence.py`; contributor setup and release
+procedures live in [../CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Notes
 

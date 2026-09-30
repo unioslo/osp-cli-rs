@@ -4,17 +4,25 @@ default:
     @just --list
 
 fmt:
-    cargo fmt --all --check
+    python3 ./scripts/confidence.py --check fmt
 
 fmt-fix:
-    cargo fmt --all
+    python3 ./scripts/confidence.py --check fmt-fix
 
 clippy:
-    cargo clippy --all-features --all-targets -- -D clippy::collapsible_else_if -D clippy::collapsible_if -D clippy::derivable_impls -D clippy::get_first -D clippy::io_other_error -D clippy::lines_filter_map_ok -D clippy::manual_pattern_char_comparison -D clippy::match_like_matches_macro -D clippy::needless_as_bytes -D clippy::needless_borrow -D clippy::question_mark -D clippy::redundant_closure -D clippy::unnecessary_lazy_evaluations
+    python3 ./scripts/confidence.py --check clippy
 
 test:
-    cargo audit
-    cargo test --all-features --locked
+    python3 ./scripts/confidence.py --check test
+
+audit:
+    python3 ./scripts/confidence.py --check audit
+
+build:
+    python3 ./scripts/confidence.py --check build
+
+install-tools lane='full':
+    python3 ./scripts/confidence.py --install-tools {{lane}}
 
 confidence lane='local':
     python3 ./scripts/confidence.py {{lane}}
@@ -35,16 +43,22 @@ confidence-pre-push:
     python3 ./scripts/confidence.py pre-push
 
 cov:
-    python3 ./scripts/coverage.py run --all-features --summary-only
+    python3 ./scripts/confidence.py --check coverage-summary
 
 cov-gate:
-    python3 ./scripts/coverage.py gate
+    python3 ./scripts/confidence.py --check coverage
 
 cov-gate-fast:
-    python3 ./scripts/coverage.py gate --fast
+    python3 ./scripts/confidence.py --check coverage-fast
 
 cov-baseline:
-    python3 ./scripts/coverage.py baseline
+    python3 ./scripts/confidence.py --check coverage-baseline
+
+startup-gate:
+    python3 ./scripts/confidence.py --check startup-budget
+
+startup-baseline:
+    python3 ./scripts/confidence.py --check startup-baseline
 
 check:
     python3 ./scripts/confidence.py local
@@ -91,4 +105,4 @@ verify-full:
 release-check:
     python3 ./scripts/release.py check
     python3 ./scripts/confidence.py full
-    cargo publish --dry-run --locked
+    python3 ./scripts/confidence.py --check publish-dry-run

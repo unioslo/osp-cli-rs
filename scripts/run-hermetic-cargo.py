@@ -31,6 +31,7 @@ def hermetic_env(home: Path) -> dict[str, str]:
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",
         "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
         "NO_COLOR",
         "COLORTERM",
         "CLICOLOR",
@@ -39,6 +40,11 @@ def hermetic_env(home: Path) -> dict[str, str]:
         "GREP_COLOR",
         "GREP_COLORS",
         "TERM",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LANGUAGE",
+        "COLUMNS",
+        "LINES",
     }
 
     for key in list(env):
@@ -51,9 +57,11 @@ def hermetic_env(home: Path) -> dict[str, str]:
             "XDG_CONFIG_HOME": str(home / ".config"),
             "XDG_CACHE_HOME": str(home / ".cache"),
             "XDG_STATE_HOME": str(home / ".local" / "state"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
             "CARGO_HOME": env.get("CARGO_HOME", str(original_home / ".cargo")),
             "RUSTUP_HOME": env.get("RUSTUP_HOME", str(original_home / ".rustup")),
             "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
             "TERM": "dumb",
             "NO_COLOR": "1",
         }
@@ -64,6 +72,12 @@ def hermetic_env(home: Path) -> dict[str, str]:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run a cargo command under a hermetic osp runtime env."
+    )
+    parser.add_argument(
+        "--cwd",
+        type=Path,
+        default=repo_root(),
+        help="Repository to run in; defaults to the framework repository.",
     )
     parser.add_argument(
         "command",
@@ -80,7 +94,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="osp-cli-hermetic-home-") as home:
         env = hermetic_env(Path(home))
-        completed = subprocess.run(command, cwd=repo_root(), env=env)
+        completed = subprocess.run(command, cwd=args.cwd, env=env)
         return completed.returncode
 
 
