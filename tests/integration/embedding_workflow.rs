@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use clap::Command;
 use osp_cli::app::{BufferedUiSink, UiSink};
-use osp_cli::core::plugin::{PLUGIN_PROTOCOL_V1, ResponseMetaV1, ResponseV1};
+use osp_cli::config::ConfigLayer;
+use osp_cli::core::plugin::{
+    PLUGIN_PROTOCOL_V1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
+};
 use osp_cli::{
     App, NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
     NativeProgressEvent,
@@ -36,7 +39,11 @@ impl NativeCommand for ApprovalWorkflow {
             presentation_lines: vec!["Task assessed".into()],
             progress_replace: true,
             ..ResponseMetaV1::default()
-        });
+        })
+        .with_messages(vec![ResponseMessageV1 {
+            level: ResponseMessageLevelV1::Success,
+            text: "Plan validated for task-42".into(),
+        }]);
         // Historical progress may be coalesced until the operator interaction.
         progress.replay = true;
         context.emit_progress(progress)?;
@@ -153,6 +160,92 @@ fn embedded_approval_workflow_preserves_notices_progress_and_typed_results() {
             serde_json::from_str::<Value>(&sink.stdout).unwrap(),
             expected
         );
-        assert_eq!(sink.stderr, format!("task-42\nassessed\n{notice}\n"));
+        let mut messages = serde_json::Deserializer::from_str(&sink.stderr).into_iter::<Value>();
+        assert_eq!(
+            messages.next().unwrap().unwrap(),
+            json!({
+                "messages": [{"level": "success", "text": "Plan validated for task-42"}]
+            })
+        );
+        assert_eq!(
+            sink.stderr[messages.byte_offset()..].trim_start_matches('\n'),
+            format!("task-42\nassessed\n{notice}\n")
+        );
     }
+}
+
+#[test]
+fn embedded_product_bootstrap_options_feed_config_and_remain_visible_in_help() {
+    let wrapper = Command::new("product")
+        .arg(clap::Arg::new("site").long("site").required(true))
+        .try_get_matches_from(["product", "--site", "uio"])
+        .unwrap();
+    let mut defaults = ConfigLayer::default();
+    defaults.set(
+        "extensions.site.name",
+        wrapper.get_one::<String>("site").unwrap().clone(),
+    );
+    let app = App::builder()
+        .with_product_defaults(defaults)
+        .with_product_help_option("--site <NAME>", "Select the product site")
+        .with_native_commands(
+            NativeCommandRegistry::new()
+                .with_command(ApprovalWorkflow(Arc::new(AtomicBool::new(true)))),
+        )
+        .build();
+
+    let mut help = BufferedUiSink::default();
+    assert_eq!(
+        app.run_with_sink(["osp", "--defaults-only", "--json", "--help"], &mut help)
+            .unwrap(),
+        0
+    );
+    let guide: Value = serde_json::from_str(&help.stdout).unwrap();
+    let sections = guide[0]["sections"].as_array().unwrap();
+    let options = sections
+        .iter()
+        .find(|section| section["title"] == "Product options")
+        .unwrap();
+    assert_eq!(options["kind"], "options");
+    let option = options["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "--site <NAME>")
+        .unwrap();
+    assert_eq!(option["short_help"], "Select the product site");
+    let commands = sections
+        .iter()
+        .find(|section| section["kind"] == "commands")
+        .unwrap();
+    assert!(
+        commands["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == "provision"
+                && entry["short_help"] == "Follow a product-owned approval workflow")
+    );
+
+    let mut config = BufferedUiSink::default();
+    assert_eq!(
+        app.run_with_sink(
+            [
+                "osp",
+                "--defaults-only",
+                "--json",
+                "config",
+                "get",
+                "extensions.site.name",
+                "--sources"
+            ],
+            &mut config
+        )
+        .unwrap(),
+        0
+    );
+    let values: Value = serde_json::from_str(&config.stdout).unwrap();
+    assert_eq!(values[0]["key"], "extensions.site.name");
+    assert_eq!(values[0]["value"], "uio");
+    assert_eq!(values[0]["source"], "defaults");
 }

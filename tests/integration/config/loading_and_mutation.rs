@@ -211,6 +211,7 @@ extensions.site.retry_ratio = 1.5
 extensions.site.targets = ["alice", "bob"]
 extensions.site.enabled = true
 extensions.site.endpoint = "https://api.example/${extensions.site.tenant}/${profile.active}"
+extensions.site.health_probe = "https://api.example/health?enabled=${extensions.site.enabled}&ratio=${extensions.site.retry_ratio}"
 
 [profile.tsd]
 ui.presentation = "compact"
@@ -249,6 +250,7 @@ ui.presentation = "compact"
     );
     schema.insert("extensions.site.enabled", SchemaEntry::boolean());
     schema.insert("extensions.site.endpoint", SchemaEntry::string());
+    schema.insert("extensions.site.health_probe", SchemaEntry::string());
     schema.insert("extensions.site.tenant", SchemaEntry::string());
     schema.insert("extensions.site.token", SchemaEntry::string().required());
     assert_eq!(
@@ -295,6 +297,10 @@ ui.presentation = "compact"
     assert_eq!(
         resolved.get_string("extensions.site.endpoint"),
         Some("https://api.example/uio/tsd")
+    );
+    assert_eq!(
+        resolved.get_string("extensions.site.health_probe"),
+        Some("https://api.example/health?enabled=true&ratio=0.75")
     );
     let credential = resolved.get_value_entry("extensions.site.token").unwrap();
     assert_eq!(credential.source, ConfigSource::Secrets);
@@ -399,6 +405,12 @@ ui.presentation = "compact"
     assert_eq!(batch_size.scope, Scope::global());
     assert_eq!(reloaded.get_string("ui.presentation"), Some("compact"));
 
+    assert_eq!(
+        resolver
+            .schema_mut()
+            .expected_type("extensions.site.retry_ratio"),
+        Some(osp_cli::config::SchemaValueType::Float)
+    );
     let ratio_edit = resolver
         .schema_mut()
         .parse_input_value("extensions.site.retry_ratio", "2.25")
