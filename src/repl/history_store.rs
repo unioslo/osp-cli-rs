@@ -754,10 +754,6 @@ impl OspHistoryStore {
         is_excluded_command(command, &self.config.exclude_patterns)
     }
 
-    fn command_list_for_expansion(&self) -> Vec<String> {
-        self.recent_commands()
-    }
-
     fn finalize_pending(&mut self, command_line: &str, keep: bool) -> Result<()> {
         let Some(pending) = self.pending_record.as_ref() else {
             return Ok(());
@@ -784,14 +780,6 @@ impl OspHistoryStore {
             return Ok(());
         }
         self.remove_records(&[pending.index]).map(|_| ())
-    }
-
-    fn expand_if_needed(&self, command: &str, shell_prefix: Option<&str>) -> Option<String> {
-        if !command.starts_with('!') {
-            return Some(command.to_string());
-        }
-        let history = self.command_list_for_expansion();
-        expand_history(command, &history, shell_prefix, false)
     }
 
     fn record_matches_filter(
@@ -929,14 +917,13 @@ impl History for OspHistoryStore {
             return Ok(h);
         }
 
-        let shell_prefix = self.shell_prefix();
-        let Some(expanded) = self.expand_if_needed(raw, shell_prefix.as_deref()) else {
-            return Ok(h);
-        };
-        if self.should_skip_command(&expanded) {
+        // Recall belongs to dispatch: the editor saves before resolving it,
+        // and recording that preview would change relative history indices.
+        if self.should_skip_command(raw) {
             return Ok(h);
         }
-        let expanded_full = apply_shell_prefix(&expanded, shell_prefix.as_deref());
+        let shell_prefix = self.shell_prefix();
+        let expanded_full = apply_shell_prefix(raw, shell_prefix.as_deref());
 
         if self.config.dedupe {
             let last_match = self.records.iter().rev().find(|record| {

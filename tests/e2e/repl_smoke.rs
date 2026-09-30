@@ -14,6 +14,47 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[cfg(unix)]
+fn assert_editor_command(session: &ReplPtySession, start: usize, command: &str) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let output = session.output_since(start);
+        if let Some((_, frame)) = output.rsplit_once("\x1b[?25l")
+            && frame.contains("\x1b[?25h")
+            && crate::support::strip_ansi_preserve_newlines(frame).contains(command)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "editor should finish painting {command:?}; output:\n{}",
+            session.output_snapshot(8000)
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+fn assert_theme_result(session: &ReplPtySession, start: usize, id: &str, name: &str) {
+    assert!(
+        session.wait_for_plain_output_since(start, "} ]", Duration::from_secs(3)),
+        "selected or retained input should produce the theme result; output:\n{}",
+        session.output_snapshot(8000),
+    );
+    let output = crate::support::strip_ansi_preserve_newlines(&session.output_since(start));
+    let json_start = output
+        .find("[\n")
+        .expect("theme result should be a JSON array");
+    let result = serde_json::Deserializer::from_str(&output[json_start..])
+        .into_iter::<serde_json::Value>()
+        .next()
+        .expect("theme result should exist")
+        .expect("theme result should parse");
+    assert_eq!(result[0]["id"], id);
+    assert_eq!(result[0]["name"], name);
+    assert!(session.wait_for_plain_output_since(start, "default>", Duration::from_secs(3)));
+}
+
+#[cfg(unix)]
 #[test]
 fn repl_starts_runs_help_and_exits_end_to_end() {
     let mut session = ReplPtySession::spawn(ReplPtyConfig::default());
@@ -89,24 +130,61 @@ fn repl_starts_runs_help_and_exits_end_to_end() {
         }
         let start = session.output_len();
         session.write_bytes(b"\r");
+        assert_theme_result(&session, start, expected_id, expected_name);
+    }
+
+    // Navigate the editor's durable-history backend in both directions.
+    for (keys, selected) in [
+        (b"\x1b[A".as_slice(), "theme show rose-pine-moon --json"),
+        (b"\x1b[A".as_slice(), "theme show dracula --json"),
+        (b"\x1b[B".as_slice(), "theme show rose-pine-moon --json"),
+    ] {
+        let start = session.output_len();
+        session.write_bytes(keys);
         assert!(
-            session.wait_for_plain_output_since(start, "} ]", Duration::from_secs(3)),
-            "selected or retained input should produce the theme result; output:\n{}",
+            session.wait_for_plain_output_since(start, selected, Duration::from_secs(3)),
+            "history navigation should recall {selected:?}; output:\n{}",
             session.output_snapshot(8000),
         );
-        let output = crate::support::strip_ansi_preserve_newlines(&session.output_since(start));
-        let json_start = output
-            .find("[\n")
-            .expect("theme result should be a JSON array");
-        let result = serde_json::Deserializer::from_str(&output[json_start..])
-            .into_iter::<serde_json::Value>()
-            .next()
-            .expect("theme result should exist")
-            .expect("theme result should parse");
-        assert_eq!(result[0]["id"], expected_id);
-        assert_eq!(result[0]["name"], expected_name);
-        assert!(session.wait_for_plain_output_since(start, "default>", Duration::from_secs(3)));
     }
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    assert_theme_result(&session, start, "rose-pine-moon", "Rose Pine Moon");
+
+    session.type_text("!!");
+    let expanded = session.output_len();
+    session.write_bytes(b"\t");
+    assert!(
+        session.wait_for_plain_output_since(
+            expanded,
+            "theme show rose-pine-moon --json",
+            Duration::from_secs(3)
+        ),
+        "Tab should expand the last accepted command; output:\n{}",
+        session.output_snapshot(8000)
+    );
+    let selected = session.output_len();
+    session.write_bytes(b"\t");
+    assert_editor_command(&session, selected, "theme show rose-pine-moon --json");
+    let accepted = session.output_len();
+    session.write_bytes(b"\r");
+    assert_editor_command(&session, accepted, "theme show rose-pine-moon --json");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    assert_theme_result(&session, start, "rose-pine-moon", "Rose Pine Moon");
+
+    session.type_text("theme show nord --json");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    assert_theme_result(&session, start, "nord", "Nord");
+
+    session.type_text("!-2");
+    let expanded = session.output_len();
+    session.write_bytes(b"\r");
+    assert_editor_command(&session, expanded, "theme show rose-pine-moon --json");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    assert_theme_result(&session, start, "rose-pine-moon", "Rose Pine Moon");
 
     session.write_bytes(b"exit\r");
     assert!(
