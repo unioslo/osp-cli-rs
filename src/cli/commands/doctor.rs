@@ -17,11 +17,13 @@ use crate::app::{
 use crate::cli::rows::output::rows_to_output_result;
 use crate::cli::{DoctorArgs, DoctorCommands, InlineCommandCli, PluginsArgs, PluginsCommands};
 use crate::core::command_def::CommandDef;
+use crate::core::command_policy::CredentialState;
 use crate::core::output::OutputFormat;
 use crate::core::output_model::OutputResult;
 use crate::core::row::Row;
 use crate::guide::{GuideSection, GuideSectionKind, GuideView};
 use crate::ui::theme_catalog::ThemeCatalog;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::{config as config_cmd, plugins as plugins_cmd};
@@ -107,8 +109,33 @@ pub(crate) fn doctor_command_def(sort_key: impl Into<String>) -> Option<CommandD
     Some(definition)
 }
 
+#[derive(Serialize)]
+struct CredentialDiagnostics<'a> {
+    service: &'a str,
+    #[serde(flatten)]
+    state: &'a CredentialState,
+}
+
+impl CredentialDiagnostics<'_> {
+    fn label(&self) -> String {
+        let state = if self.state.valid { "valid" } else { "invalid" };
+        self.state.ttl_seconds.map_or_else(
+            || format!("{}: {state}", self.service),
+            |ttl| format!("{}: {state} ({ttl}s remaining)", self.service),
+        )
+    }
+}
+
 fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult> {
-    let mut sections: Vec<(&str, Vec<Row>)> = vec![("session", session_doctor_rows(context.auth))];
+    let credentials = context
+        .auth
+        .policy_context()
+        .credentials
+        .iter()
+        .map(|(service, state)| CredentialDiagnostics { service, state })
+        .collect::<Vec<_>>();
+    let mut sections: Vec<(&str, Vec<Row>)> =
+        vec![("session", session_doctor_rows(context.auth, &credentials))];
 
     if context.auth.is_builtin_visible(CMD_CONFIG) {
         sections.push((
@@ -132,6 +159,16 @@ fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult>
         return Ok(CliCommandResult::text(String::new()));
     }
 
+    sections[0].1[0].insert(
+        "credentials".to_string(),
+        serde_json::json!(
+            credentials
+                .iter()
+                .map(CredentialDiagnostics::label)
+                .collect::<Vec<_>>()
+        ),
+    );
+
     Ok(CliCommandResult::guide_with_output(
         doctor_report_guide(&sections),
         doctor_report_output(&sections),
@@ -139,19 +176,8 @@ fn run_doctor_all(context: DoctorCommandContext<'_>) -> Result<CliCommandResult>
     ))
 }
 
-fn session_doctor_rows(auth: &AuthState) -> Vec<Row> {
+fn session_doctor_rows(auth: &AuthState, credentials: &[CredentialDiagnostics<'_>]) -> Vec<Row> {
     let context = auth.policy_context();
-    let credentials = context
-        .credentials
-        .iter()
-        .map(|(name, credential)| {
-            let state = if credential.valid { "valid" } else { "invalid" };
-            credential.ttl_seconds.map_or_else(
-                || format!("{name}: {state}"),
-                |ttl| format!("{name}: {state} ({ttl}s remaining)"),
-            )
-        })
-        .collect::<Vec<_>>();
     let invalid_credentials = context
         .credentials
         .values()
@@ -169,7 +195,7 @@ fn session_doctor_rows(auth: &AuthState) -> Vec<Row> {
         "authenticated" => context.authenticated,
         "auth_strength" => context.auth_strength.map(|strength| strength.as_label()),
         "profile" => context.active_profile.clone(),
-        "credentials" => credentials,
+        "credentials" => serde_json::json!(credentials),
         "capability_count" => context.capabilities.len() as i64,
         "enabled_features" => context.enabled_features.iter().cloned().collect::<Vec<_>>(),
     };

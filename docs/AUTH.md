@@ -65,6 +65,21 @@ decisions.
 This keeps credential acquisition, authorization normalization, and command UX
 policy as separate concerns.
 
+## Session Diagnostics
+
+`osp --json doctor` reports the session's observed credential facts in
+`session[0].credentials`. Each record contains the service name, a boolean
+`valid`, and `ttl_seconds` (a nonnegative integer, or `null` when unknown):
+
+```json
+[{"service": "product", "valid": true, "ttl_seconds": 1800}]
+```
+
+The configured `CommandAccessRecovery` refreshes policy facts before doctor
+runs. The report uses the supplied remaining lifetime; doctor does not fetch
+or age credentials itself. Human output derives readable labels from the same
+facts, while JSON consumers can inspect validity and lifetime directly.
+
 ## What Users Actually Experience
 
 The user-facing effect is simple:

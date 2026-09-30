@@ -106,8 +106,38 @@ fn embedded_access_recovery_refreshes_current_facts_and_retries_canonical_comman
             requests: Arc::clone(&requests),
         });
 
+    let session_diagnostics = || {
+        let mut sink = BufferedUiSink::default();
+        assert_eq!(
+            app.run_with_sink(["osp", "--defaults-only", "--json", "doctor"], &mut sink)
+                .unwrap(),
+            0
+        );
+        let report: Value = serde_json::from_str(&sink.stdout).unwrap();
+        report["session"][0].clone()
+    };
+
     for ttl in [1800, 60] {
         *credential.lock().unwrap() = CredentialState::valid_for(ttl);
+        // Doctor refreshes the product-owned facts before reporting them. It
+        // does not require the protected command's credential upgrade.
+        let current = session_diagnostics();
+        assert_eq!(current["status"], "ok");
+        assert_eq!(current["authenticated"], true);
+        assert_eq!(current["auth_strength"], "strong");
+        assert_eq!(
+            current["credentials"],
+            json!([{"service": "product", "valid": true, "ttl_seconds": ttl}])
+        );
+        assert_eq!(*credential.lock().unwrap(), CredentialState::valid_for(ttl));
+        let mut doctor_sink = BufferedUiSink::default();
+        assert_eq!(
+            app.run_with_sink(["osp", "--defaults-only", "doctor"], &mut doctor_sink)
+                .unwrap(),
+            0
+        );
+        assert!(doctor_sink.stdout.contains("product"));
+        assert!(doctor_sink.stdout.contains(&ttl.to_string()));
         let mut sink = BufferedUiSink::default();
         assert_eq!(
             app.run_with_sink(
@@ -130,6 +160,10 @@ fn embedded_access_recovery_refreshes_current_facts_and_retries_canonical_comman
         assert_eq!(
             *credential.lock().unwrap(),
             CredentialState::valid_for(1800)
+        );
+        assert_eq!(
+            session_diagnostics()["credentials"],
+            json!([{"service": "product", "valid": true, "ttl_seconds": 1800}])
         );
     }
     assert_eq!(
