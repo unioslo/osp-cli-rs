@@ -133,6 +133,10 @@ impl<'a> NativeCommandContext<'a> {
     }
 
     /// Gives the host an opportunity to display coalesced terminal progress.
+    ///
+    /// Call before a blocking interaction that must follow pending progress.
+    /// May wait for rendering and return a deferred render error. Without a
+    /// progress sink, this is a no-op.
     pub fn flush_progress(&self) -> Result<()> {
         if let Some(progress) = self.progress {
             progress.flush()?;
@@ -141,6 +145,8 @@ impl<'a> NativeCommandContext<'a> {
     }
 
     /// Display a notice or confirmation through the host renderer, outside stream filters.
+    ///
+    /// Without a progress sink, this is a no-op.
     pub fn present(&self, document: NativeProgressEvent) -> Result<()> {
         match self.progress {
             Some(progress) => progress.present(document),
@@ -148,8 +154,9 @@ impl<'a> NativeCommandContext<'a> {
         }
     }
 
-    /// Emits one structured transient progress document immediately.
+    /// Submits one structured transient progress document to the host.
     ///
+    /// The host may coalesce terminal replacement updates before displaying them.
     /// A context created outside the host has no sink, in which case emission
     /// is a no-op. Native commands should still return the stable final
     /// document through [`NativeCommandOutcome`].
@@ -164,7 +171,7 @@ impl<'a> NativeCommandContext<'a> {
 /// One transient structured document emitted while a native command runs.
 #[derive(Debug, Clone)]
 pub struct NativeProgressEvent {
-    /// Canonical progress data to render immediately.
+    /// Canonical progress data submitted to the host for rendering.
     pub data: serde_json::Value,
     /// Structured messages attached to this progress document.
     pub messages: Vec<ResponseMessageV1>,

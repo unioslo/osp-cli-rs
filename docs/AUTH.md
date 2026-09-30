@@ -34,7 +34,7 @@ Those belong in downstream distributions such as `osp-cli-uio`.
 
 ## Why This Exists
 
-Upstream needs one boring, reusable way to answer two product questions:
+The host evaluates two questions for each command:
 
 - should this command be shown to the user?
 - should this command be runnable right now?
@@ -46,14 +46,14 @@ That answer must work consistently across:
 - completion
 - REPL overviews
 
-The point is not to define your site's auth model. The point is to keep command
-UX from inventing five different visibility rules in five different places.
+A shared policy evaluation keeps command visibility consistent across these
+features. The product supplies its own authentication model.
 
 ## Core Model
 
 The upstream split is:
 
-- `AuthState`: host-owned runtime auth surface
+- `AuthState`: the host's runtime authentication state
 - `CommandPolicyContext`: policy-facing projection of host auth state
 - `CommandPolicyRegistry`: command-path keyed policy registry
 - `CommandAccess`: evaluated result with visibility and runnability
@@ -149,6 +149,3 @@ A downstream distribution should:
 3. populate `CommandPolicyContext`
 4. register or augment builtin and plugin command policies
 5. rely on upstream evaluation for visibility and runnability
-
-That keeps the core reusable while still letting downstream products make auth
-first-class.

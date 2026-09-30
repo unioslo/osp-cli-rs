@@ -229,9 +229,7 @@ fn command_metadata_builders_flow_into_generated_guide_and_rendering_contracts()
 
     let output = guide.to_output_result();
     let restored = GuideView::try_from_output_result(&output).expect("guide should restore");
-    assert_eq!(restored.usage, guide.usage);
-    assert_eq!(restored.commands.len(), 2);
-    assert_eq!(restored.options.len(), 2);
+    assert_eq!(restored.to_json_value(), guide.to_json_value());
 
     let markdown = render_output(&output, &RenderSettings::test_plain(OutputFormat::Markdown));
     assert!(markdown.contains("Usage"));

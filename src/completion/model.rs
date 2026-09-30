@@ -475,6 +475,8 @@ impl ArgNode {
 /// A large, locally refreshed value catalogue shared by completion tree clones.
 /// Values are sorted once on replacement; each lookup copies at most `limit`
 /// prefix matches. Refresh outside the editing path, without network I/O here.
+/// Clones observe the same replacements. Equality compares shared catalogue
+/// identity, not the current entries.
 #[derive(Debug, Clone, Default)]
 pub struct PrefixValues(std::sync::Arc<std::sync::RwLock<Vec<String>>>);
 

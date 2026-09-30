@@ -1,16 +1,9 @@
 # Completion and History
 
-This document covers the REPL features that help you type less and repeat
-yourself less.
+In the REPL, completion suggests commands and arguments as you type. History
+lets you recall and repeat previous commands. Both use local data.
 
-The short version:
-
-- completion helps you discover what can be typed next
-- history helps you reuse what you already typed
-
-Both are local features. They should feel fast and predictable, not magical.
-
-## Broad-Strokes Model
+## How completion works
 
 Completion works from already-known local information:
 
@@ -163,7 +156,7 @@ If your install never exposes shellable roots, you can ignore this section.
 
 ## If Completion Looks Wrong
 
-Start with the boring checks first:
+Check the command catalog and configuration first:
 
 1. confirm the command exists in the current catalog:
    `plugins commands`

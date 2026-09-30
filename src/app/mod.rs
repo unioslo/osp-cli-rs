@@ -1,4 +1,4 @@
-//! The app module exists to turn the library pieces into a running program.
+//! CLI and REPL startup through the public [`App`] entrypoints.
 //!
 //! This is the process-facing layer of the crate. It wires together CLI
 //! parsing, config loading, plugin/catalog setup, rendering, and REPL startup
@@ -20,7 +20,7 @@
 //!   construction path still flows through a small number of builders and
 //!   constructors here such as [`crate::app::AppStateBuilder`]
 //! - lower-level semantic payloads live in modules like [`crate::guide`] and
-//!   [`crate::completion`]; this module owns the heavier host machinery
+//!   [`crate::completion`]; this module assembles the host
 //!
 //! Use this module when you want:
 //!
@@ -51,7 +51,8 @@
 //! - [`App::run_process`] when they want process-style exit code conversion
 //! - [`App::with_sink`] or [`App::builder`] plus
 //!   [`AppBuilder::build_with_sink`] when a test or outer host wants captured
-//!   stdout/stderr instead of touching process stdio
+//!   host-rendered one-shot stdout/stderr; REPL input and prompts still use the
+//!   process terminal
 //! Downstream product-wrapper pattern:
 //!
 //! - keep site-specific auth, policy, and integration state in the wrapper
@@ -347,8 +348,9 @@ impl App {
     /// Binds the application to a specific UI sink for repeated invocations.
     ///
     /// Prefer this in tests, editor integrations, or foreign hosts that need
-    /// the same host behavior as `osp` but want the rendered text captured in a
-    /// buffer instead of written to process stdio.
+    /// the same host behavior as `osp` but want host-rendered one-shot output
+    /// captured in a buffer. REPL input and prompts still use the process
+    /// terminal. Each invocation creates fresh runtime and session state.
     ///
     /// # Examples
     ///
@@ -374,6 +376,7 @@ impl App {
     /// Prefer this over [`App::with_sink`] when the caller only needs one
     /// invocation. Use [`App::with_sink`] and [`AppRunner`] when the same sink
     /// should be reused across multiple calls.
+    /// REPL input and prompts still use the process terminal.
     ///
     /// # Examples
     ///
@@ -425,9 +428,10 @@ impl App {
     /// Runs the application with the provided sink and returns a process exit
     /// code.
     ///
-    /// This mirrors [`App::run_process`] but writes all rendered output and
-    /// user-facing errors through the supplied sink instead of touching process
-    /// stdio.
+    /// This mirrors [`App::run_process`] and sends host-rendered one-shot output
+    /// and user-facing errors through the supplied sink. Interactive REPL input
+    /// and prompts still use the process terminal; native commands may also
+    /// manage their own I/O.
     ///
     /// # Examples
     ///
@@ -473,6 +477,8 @@ impl App {
 ///
 /// Prefer [`App::run_with_sink`] for one-shot calls. This type exists for
 /// scoped reuse when the same sink should back multiple invocations.
+/// Each invocation creates fresh runtime and session state; the runner does
+/// not retain an interactive session between calls.
 ///
 /// # Lifetime
 ///

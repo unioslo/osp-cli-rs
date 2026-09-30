@@ -8,10 +8,8 @@ root rustdoc in [`../src/lib.rs`](../src/lib.rs). If you want the copyable
 starting point, use [`../examples/product-wrapper/src/lib.rs`](../examples/product-wrapper/src/lib.rs)
 and [`../examples/product-wrapper/src/main.rs`](../examples/product-wrapper/src/main.rs).
 
-This folder mixes operator docs, customization docs, plugin/extender docs, and
-contributor notes. If you are new, stay in `First Stops` and `Using osp` first.
-You can ignore `Extending osp`, `Contributor Docs`, and `Architecture And
-Module Docs` until you actually need them.
+For everyday use, start with `First Stops` and `Using osp`. The later sections
+cover customization, plugins, embedding, and development.
 
 ## First Stops
 
@@ -19,7 +17,7 @@ Module Docs` until you actually need them.
   [GETTING_STARTED.md](GETTING_STARTED.md)
 - want copy-pasteable patterns:
   [COOKBOOK.md](COOKBOOK.md)
-- something is already weird:
+- troubleshooting a problem:
   [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
 ## Common Jobs
@@ -32,10 +30,10 @@ Module Docs` until you actually need them.
 - understand `-v/-vv/-vvv` versus `-d/-dd/-ddd`:
   [FORMATTING.md](FORMATTING.md), [LOGGING.md](LOGGING.md), and
   [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
-- set sane daily defaults for output and presentation:
+- set defaults for output and presentation:
   [COOKBOOK.md](COOKBOOK.md), [CONFIG.md](CONFIG.md), and [UI.md](UI.md)
 
-## Broad-Strokes Mental Model
+## How a command runs
 
 ```text
 command line
@@ -48,9 +46,6 @@ optional DSL pipeline
   ↓
 UI/rendering or REPL presentation
 ```
-
-Most questions about `osp` fit one of those stages. The best doc is usually
-the one that owns that stage.
 
 ## Using osp
 
@@ -81,9 +76,6 @@ the one that owns that stage.
   [LOGGING.md](LOGGING.md)
 
 ## Extending osp
-
-Skip this whole section unless you are building on top of `osp-cli`, working
-with plugin-provided commands, or writing plugins.
 
 - building a site-specific product crate on top of `osp-cli`:
   [EMBEDDING.md](EMBEDDING.md)

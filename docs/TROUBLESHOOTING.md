@@ -1,17 +1,10 @@
 # Troubleshooting
 
-This file is for the boring first-pass checks that solve most operator
-problems.
+Start here when commands, configuration, or terminal output behave unexpectedly.
 
 Examples that use `inventory ...` below are illustrative provider-backed
-command shapes. Replace them with a real plugin command from
+commands. Replace them with a real plugin command from
 `osp plugins commands`.
-
-The pattern is:
-
-1. identify which stage is failing
-2. run the smallest diagnostic that explains that stage
-3. only then start guessing
 
 ## Start Here
 
@@ -26,7 +19,7 @@ These commands usually tell you the most with the least effort:
 - `osp plugins list`
 - `osp plugins commands`
 
-Use them before changing config or blaming the terminal.
+Use these to identify the problem before changing settings.
 
 Error-detail ladder:
 
@@ -100,8 +93,8 @@ osp -vv plugins doctor
 osp config get extensions.plugins.timeout_ms
 ```
 
-If the backend is genuinely slow, increase the timeout. If not, treat timeouts
-as plugin health problems first, not as rendering problems.
+Increase the timeout if the backend needs more time. Otherwise, inspect the
+plugin diagnostics for a connection or process failure.
 
 ## Symptom: The Wrong Profile Seems Active
 
@@ -141,8 +134,6 @@ If a script sees invalid JSON:
 2. check whether a plugin is printing data to the wrong stream
 3. retry with `-v` or `-vv`
 
-Example:
-
 Illustrative provider-backed example:
 
 ```bash
@@ -154,15 +145,17 @@ mixing rather than JSON formatting.
 
 ## Symptom: A Config Change Did Not Stick
 
-In the REPL, `config set` defaults to session scope. Use `--save` when you
-want the change written to persistent config.
+Without a configured `config.default-target` or explicit scope/store flags,
+REPL writes use session storage. Use `--session` to force a temporary change or
+`--permanent` to request persistence. See
+[config write destinations](CONFIG.md#repl-config-writes).
 
 ```text
 config set ui.format json
-config set ui.format json --save
+config set ui.format json --permanent
 ```
 
-If you are still confused, inspect the winner directly:
+To see which setting takes precedence, run:
 
 ```bash
 osp config explain ui.format

@@ -96,7 +96,13 @@ theme.name = "dracula"
 fn closed_stdout_pipe_is_a_normal_process_exit() {
     use std::process::{Command, Stdio};
 
+    let home = make_temp_dir("osp-e2e-cli-closed-pipe-home");
     let mut child = Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+        .env_clear()
+        .envs(crate::test_env::isolated_env(home.path()))
+        .env("PATH", "/usr/bin:/bin")
+        .env("TERM", "dumb")
+        .env("LANG", "C.UTF-8")
         .arg("--help")
         .stdout(Stdio::piped())
         .spawn()

@@ -1,20 +1,20 @@
 # Testing and verification
 
-Start from the behavior being changed and choose the smallest existing check
-that crosses its real ownership boundary. One observable promise has one primary
-owner; running every tier is not a prerequisite for every edit.
+Choose the smallest existing check that exercises the changed behavior.
+Run broader checks when the change affects several components or a focused
+check leaves an interaction unverified.
 
 Do not add regression tests, including for bug fixes, or remove existing tests
 unless explicitly requested. Verify with existing integration, contract,
 end-to-end and architecture checks, static checks, and focused manual execution.
-A test adjustment should describe a changed stable contract, not pin a rejected
-implementation or add another copy of a promise already owned elsewhere.
+Adjust existing tests when the public contract changes. Avoid assertions about
+implementation details or behavior already covered by another test.
 
-## Choose a boundary
+## Choose a test target
 
-| Existing target | Owns |
+| Existing target | Covers |
 | --- | --- |
-| `contracts` | Spawned CLI behavior, help, output, exit codes and configuration surfaces |
+| `contracts` | Spawned CLI behavior, help, output, exit codes and configuration |
 | `integration` | In-process flows across configuration, dispatch, plugins, guides and DSL evaluation |
 | `e2e` | Real process/PTY behavior, prompts, completion and multi-command REPL state |
 | `architecture` | Active stable/Miri workflow and toolchain alignment |
@@ -30,11 +30,15 @@ isolate HOME/XDG roots and ambient `OSP_*` values. Live service requests,
 authentication and writes need separate scoped execution evidence; local
 fixtures do not establish those effects.
 
+When checking saved configuration or machine-readable output, parse it and
+assert meaningful values; counts or field presence alone can pass even when
+the content is wrong.
+
 ## Run existing checks
 
-The confidence runner owns command lists, environment isolation and lane
-omissions. [CONTRIBUTING.md](../CONTRIBUTING.md#verification) owns tooling,
-hooks, CI, coverage and release procedures.
+The confidence runner defines command lists, environment isolation and which
+checks each lane includes. See [CONTRIBUTING.md](../CONTRIBUTING.md#verification)
+for tooling, hooks, CI, coverage and release procedures.
 
 ```bash
 python3 scripts/confidence.py --list
@@ -59,7 +63,7 @@ test counts alone do not establish readiness.
 ## Snapshots and public examples
 
 Use `cargo insta review` to review intentional output changes. Keep snapshots
-at the boundary that owns the behavior: spawned stdout/stderr in contracts,
+with the tests that exercise the behavior: spawned stdout/stderr in contracts,
 terminal flows in e2e, local layout invariants in existing unit checks.
 
 Doctests teach small, stable public entrypoints and copyable usage. The curated
@@ -67,10 +71,8 @@ Doctests teach small, stable public entrypoints and copyable usage. The curated
 blocks; the existing doctest target verifies they compile and execute. Do not
 inflate examples with private fixtures or state assertions to raise coverage.
 
-## Completion evidence
+## Reporting results
 
-A change is complete when its owning existing checks pass and the requested
-behavior has been executed at the appropriate boundary. Preserve existing
-tests, avoid overlapping promises, and record any verification limit. Full CI
-is the merge check; a local hook is a convenience and does not establish which
-revision or ref was pushed.
+Report which existing checks passed, how you exercised the requested behavior,
+and what remains unverified. Full CI checks the revision submitted for merge;
+a local hook checks the working tree and may not match the revision pushed.

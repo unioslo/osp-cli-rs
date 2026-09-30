@@ -1,8 +1,10 @@
 //! Helpers for editing TOML-backed config stores on disk.
 //!
 //! This module exists to keep config-file mutation logic separate from config
-//! resolution. Callers provide a validated key, typed value, and scope; this
-//! layer applies the edit atomically to the right TOML table structure.
+//! resolution. Callers provide a key, typed value, and scope; this layer validates
+//! them against the built-in schema and applies the edit atomically to the right
+//! TOML table structure. Custom resolver schemas are not consulted, and writes
+//! do not refresh an existing resolved config or runtime.
 //!
 //! Contract:
 //!
@@ -100,8 +102,10 @@ pub enum TomlSecretPermissions {
 
 /// Writes one scoped key into a TOML-backed config store.
 ///
-/// The edit runs through normal schema and scope validation first and returns
+/// The edit runs through built-in schema and scope validation first and returns
 /// the previously stored typed value when the key already existed.
+/// Custom resolver schemas are not consulted, and the caller must reload any
+/// resolved config that should reflect the persisted edit.
 ///
 /// `options` controls whether the edit is a dry run and whether the atomic
 /// write path should request owner-only temp-file permissions for secrets

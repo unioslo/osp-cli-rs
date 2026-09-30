@@ -209,7 +209,8 @@ impl<'a> ReplPtyConfig<'a> {
 pub(crate) struct ReplPtySession {
     child: Box<dyn portable_pty::Child + Send>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    output: Arc<Mutex<String>>,
+    // PTY reads can split UTF-8 characters; retain bytes until taking a view.
+    output: Arc<Mutex<Vec<u8>>>,
     _home: TestTempDir,
     _plugins: Option<TestTempDir>,
 }
@@ -336,7 +337,7 @@ impl ReplPtySession {
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("take writer")));
 
-        let output = Arc::new(Mutex::new(String::new()));
+        let output = Arc::new(Mutex::new(Vec::new()));
         let output_clone = Arc::clone(&output);
         let writer_clone = Arc::clone(&writer);
         let cursor_position_reports = config.cursor_position_reports;
@@ -364,8 +365,10 @@ impl ReplPtySession {
                                 }
                             }
                         }
-                        let chunk = String::from_utf8_lossy(&buf[..n]);
-                        output_clone.lock().expect("output lock").push_str(&chunk);
+                        output_clone
+                            .lock()
+                            .expect("output lock")
+                            .extend_from_slice(&buf[..n]);
                     }
                     Err(_) => break,
                 }
@@ -390,14 +393,15 @@ impl ReplPtySession {
         if start >= buf.len() {
             String::new()
         } else {
-            buf[start..].to_string()
+            String::from_utf8_lossy(&buf[start..]).into_owned()
         }
     }
 
     pub(crate) fn output_snapshot(&self, max_len: usize) -> String {
         let buf = self.output.lock().expect("output lock");
+        let buf = String::from_utf8_lossy(&buf);
         if buf.len() <= max_len {
-            buf.clone()
+            buf.into_owned()
         } else {
             let mut start = buf.len().saturating_sub(max_len);
             while start < buf.len() && !buf.is_char_boundary(start) {
@@ -437,7 +441,7 @@ impl ReplPtySession {
         loop {
             {
                 let buf = self.output.lock().expect("output lock");
-                if start < buf.len() && buf[start..].contains(needle) {
+                if start < buf.len() && String::from_utf8_lossy(&buf[start..]).contains(needle) {
                     return true;
                 }
             }
@@ -453,7 +457,7 @@ impl ReplPtySession {
         loop {
             {
                 let buf = self.output.lock().expect("output lock");
-                if strip_terminal_noise(&buf).contains(needle) {
+                if strip_terminal_noise(&String::from_utf8_lossy(&buf)).contains(needle) {
                     return true;
                 }
             }
@@ -474,7 +478,10 @@ impl ReplPtySession {
         loop {
             {
                 let buf = self.output.lock().expect("output lock");
-                if start < buf.len() && strip_terminal_noise(&buf[start..]).contains(needle) {
+                if start < buf.len()
+                    && strip_terminal_noise(&String::from_utf8_lossy(&buf[start..]))
+                        .contains(needle)
+                {
                     return true;
                 }
             }

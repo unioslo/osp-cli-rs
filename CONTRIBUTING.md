@@ -1,50 +1,20 @@
 # Contributing
 
-## Engineering Philosophy
+## Engineering approach
 
-This repo is trying to stay simple to reason about, not merely easy to extend
-with one more layer.
+Keep rules, mappings, and invariants in one place. Other code should use them
+there instead of making the same decision independently. Similar-looking code
+can remain separate when it represents different rules.
 
-In practice that means a few things.
+Choose the simplest design that handles current needs. Add an abstraction when
+it removes repeated decisions or supports a real variation. File size alone is
+not a reason to split a module: a split should make a likely behavior change
+easier to understand and implement. Prefer small, behavior-preserving refactors
+to broad rewrites.
 
-We want one clear owner for each important piece of knowledge. If a rule,
-mapping, or invariant matters, it should live in one place and other code
-should call into that owner instead of quietly rebuilding the same decision.
-That is what we mean by:
-
-- centralize facts
-- localize effects
-- constrain reachability
-- remove duplicate decisions
-
-This is also why some files in this repo are intentionally large. A large file
-is fine when it is the one place that owns a concept. Splitting code just to
-make files smaller is usually a loss if it scatters the truth across multiple
-modules.
-
-We try hard to separate "looks easy" from "is actually simple." Hiding
-complexity behind a helper, abstraction, trait, or layer can make one callsite
-feel nicer while making the system harder to understand and change. We are not
-against abstractions, but we want them to earn their keep.
-
-The default bias is:
-
-- choose the boring design over the clever one
-- start with the simplest working shape
-- add abstractions only for real, current duplication or variation
-- prefer duplicated code over duplicated truth
-- do small, behavior-preserving refactors instead of big rewrites
-
-A useful rule of thumb for reviews and refactors:
-
-- merge code when the same knowledge is defined twice
-- do not merge code just because it looks similar
-
-Said another way: do not DRY out the shape, DRY out the knowledge.
-
-Tests follow the same philosophy. We prefer tests at stable boundaries, keep
-the end-to-end suite small and high-signal, and avoid stacks of local tests
-that all prove the same thing with slightly different setup.
+Test stable behavior through integration and contract checks. Keep the
+end-to-end suite focused, and retain local tests for invariants and failure
+paths that broader checks do not exercise.
 
 ## Local Tooling
 
@@ -148,7 +118,7 @@ CI on the submitted revision remains authoritative.
 
 ## Verification
 
-Start with the smallest existing check that crosses the changed boundary; see
+Start with the smallest existing check that exercises the changed behavior; see
 [docs/TESTING.md](docs/TESTING.md). Do not add regression tests or remove existing
 tests. Run the local lane before a coordinated change is handed off:
 
@@ -189,7 +159,7 @@ updates to manifests and lockfiles belong in a separate reviewed change.
 Coverage is a diagnostic backstop, not a request to accumulate tests or raise
 a number after every change. `scripts/coverage.py` owns enforcement and
 `.coverage-baseline.json` owns the numeric policy. Review uncovered behavior
-against its primary contract before changing tests or policy.
+and the existing tests before changing tests or policy.
 
 ```bash
 just cov-gate
@@ -201,12 +171,11 @@ submitted revision with its intended base even in detached checkouts. A local
 fast report is an approximation and prints its comparison basis. An unavailable
 base must not silently turn a changed-file check into a successful empty check.
 
-The overall hard floor is 92%. Changed files below 85% produce explicit review
+The overall hard floor is 85%. Changed files below 85% produce explicit review
 warnings, not whole-file blockers: unchanged paths and downstream-only APIs can
-otherwise force overlapping local tests. Review the missed public behavior at
-its owning boundary. A fresh corrected full pass measured 92.41%; a saved
-September report already fell below the old 92.95% floor. This is an intentional
-policy change, not an automatic coverage ratchet.
+otherwise force overlapping local tests. Review which public behavior is untested.
+Aim for higher coverage through useful contract and integration workflows;
+the floor is a minimum, not a target. Keep it fixed unless explicitly reviewed.
 
 Missing entries still fail. The non-executable `src/lib.rs` facade has one
 explicit digest-pinned exemption; any byte change requires renewed review.

@@ -7,8 +7,6 @@ use crate::temp_support::make_temp_dir;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
-use std::path::PathBuf;
-#[cfg(unix)]
 use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::time::Duration;
@@ -133,13 +131,12 @@ fn repl_without_cursor_position_reports_falls_back_without_blocking() {
 fn repl_basic_mode_runs_help_and_exit_without_a_tty_end_to_end() {
     let home = make_temp_dir("osp-cli-basic-home");
     let plugins = make_temp_dir("osp-cli-basic-plugins");
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_osp"));
 
-    let output = Command::new(bin)
-        .env("HOME", &home)
-        .env("XDG_CONFIG_HOME", home.join(".config"))
-        .env("XDG_CACHE_HOME", home.join(".cache"))
-        .env("XDG_STATE_HOME", home.join(".local/state"))
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+        .env_clear()
+        .envs(crate::test_env::isolated_env(home.path()))
+        .env("PATH", "/usr/bin:/bin")
+        .env("LANG", "C.UTF-8")
         .env("TERM", "dumb")
         .env("NO_COLOR", "1")
         .env("OSP__REPL__INTRO", "none")

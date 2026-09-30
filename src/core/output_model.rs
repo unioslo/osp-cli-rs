@@ -233,6 +233,9 @@ impl OutputResult {
 
     /// Attaches a semantic document to the result and returns the updated value.
     ///
+    /// Replaces existing payload rows with rows derived from the document and
+    /// rebuilds the key index. This is a payload replacement, not an annotation.
+    ///
     /// # Examples
     ///
     /// ```

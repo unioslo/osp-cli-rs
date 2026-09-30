@@ -79,9 +79,8 @@ Current built-ins:
 - `catppuccin`
 - `rose-pine-moon` (default)
 
-`plain` is the boring fallback. It is useful when you want a predictable
-low-chrome color story or when you are testing presentation behavior without a
-strong palette.
+Use `plain` for a restrained palette or when testing layout without strong
+colors.
 
 ## Themes And Presentation
 

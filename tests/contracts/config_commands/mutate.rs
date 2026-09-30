@@ -147,10 +147,15 @@ profile.default = "uio"
 
     let payload = std::fs::read_to_string(home.join(".config").join("osp").join("config.toml"))
         .expect("config should be readable");
-    assert!(payload.contains("terminal"));
-    assert!(payload.contains("repl"));
-    assert!(payload.contains("profile"));
-    assert!(payload.contains("default = \"tsd\""));
+    let stored: toml::Value = toml::from_str(&payload).expect("stored config should parse");
+    assert_eq!(
+        stored["terminal"]["repl"]["profile"]["default"].as_str(),
+        Some("tsd")
+    );
+    assert_eq!(
+        stored["default"]["profile"]["default"].as_str(),
+        Some("uio")
+    );
 
 }
 
@@ -196,6 +201,18 @@ profile.default = "tsd"
 
     let payload = std::fs::read_to_string(home.join(".config").join("osp").join("config.toml"))
         .expect("config should be readable");
-    assert!(!payload.contains("profile.default = \"tsd\""));
+    let stored: toml::Value = toml::from_str(&payload).expect("stored config should parse");
+    assert!(
+        stored
+            .get("terminal")
+            .and_then(|terminal| terminal.get("repl"))
+            .and_then(|repl| repl.get("profile"))
+            .and_then(|profile| profile.get("default"))
+            .is_none()
+    );
+    assert_eq!(
+        stored["default"]["profile"]["default"].as_str(),
+        Some("uio")
+    );
 
 }

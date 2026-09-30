@@ -1,20 +1,17 @@
 # REPL
 
-This document is about why the REPL is useful in practice.
-
-The short version is: the REPL does not invent a second command system. It
-reuses the same command path as one-shot `osp`, but keeps shell scope, history,
-last-result state, and session config alive between commands.
+The REPL runs the same commands as one-shot `osp` and keeps shell scope,
+history, the last result, and session configuration between commands.
 
 Use the REPL when you are exploring, iterating, or repeatedly looking at the
 same backend data with different pipes and output formats. Use one-shot CLI
 commands when you are scripting, automating, or just need one answer.
 
 Examples that use `inventory ...` below are illustrative provider-backed
-command shapes. Replace them with a real plugin command from
+commands. Replace them with a real plugin command from
 `plugins commands`.
 
-## Broad-Strokes Flow
+## How a line is processed
 
 ```text
 typed line
@@ -29,9 +26,6 @@ render output
   ↓
 keep session state for the next prompt
 ```
-
-The important part is the last step. The command path is shared; the session is
-what changes.
 
 ## Start the REPL
 
@@ -55,12 +49,9 @@ plugins commands --json -v
 That includes:
 
 - DSL pipes
-- `--format` and legacy format shorthands like `--json`
+- `--format` and format shorthands like `--json`
 - `-v/-q/-d`
 - `--plugin-provider`
-
-This is the main promise of the REPL: interactive shell on top, same command
-language underneath.
 
 For failures, the same detail ladder applies inside the REPL:
 
@@ -83,9 +74,6 @@ Practical failure workflow:
 3. rerun the command with `-v`, `-vv`, or `-vvv`, or inspect the recorded
    failure with `doctor last -v`, `doctor last -vv`, or `doctor last -vvv`
 
-The REPL should teach that escalation path instead of expecting you to predict
-the failure upfront.
-
 For successful results, the REPL also keeps the last replayable output:
 
 - `last`
@@ -105,12 +93,9 @@ The REPL is useful because it keeps a few things alive across commands:
 - the last successful result for local replay and inspection
 - session-scoped config overrides
 
-That is the whole point. If you do not need those, a one-shot command is
-simpler.
-
 ## Shell Scope
 
-Shell scope is intentionally narrow. `repl.shellable_commands` selects eligible
+`repl.shellable_commands` selects eligible
 top-level roots; its defaults are `nh`, `mreg`, `ldap`, `vm`, and `orch`.
 Built-in namespaces such as `plugins`, `config`, `theme`, and `help` do not
 become shells.
@@ -137,8 +122,8 @@ ldap
 
 The second `ldap` is interpreted as `ldap --help`.
 
-Hidden `cd <root>` still exists only as an escape hatch for rare same-name
-nested-shell cases. It is not the primary user-facing model.
+The hidden `cd <root>` command handles the rare case where a nested shell has
+the same name as its parent.
 
 Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned. They
 manage the shell rather than dispatching a normal command.
@@ -178,10 +163,11 @@ Templates are checked by the same placeholder, command, and DSL parsers used
 when an alias runs. Positional placeholders such as `${1}` and `${@}` remain
 unresolved until invocation.
 
-Aliases follow config scope and storage rules. A one-shot CLI write persists
-by default, while a REPL write lasts for the current session unless you add
-`--permanent`. `--profile`, `--global`, and `--terminal` select the same scopes as
-`config set` and `config unset`.
+Aliases follow config scope and storage rules. Without a configured
+`config.default-target` or explicit scope/store flags, a one-shot CLI write
+persists, while a REPL write lasts for the current session. `--permanent`
+requests persistence; `--profile`, `--global`, and `--terminal` select the same
+scopes as `config set` and `config unset`.
 
 The root REPL is silent on exit by default. Set `repl.exit_message` when a
 product or profile wants a sign-off:
@@ -195,9 +181,11 @@ nested command shell keeps its existing `Leaving … shell` message instead.
 
 ## Config Writes Inside The REPL
 
-Inside the REPL, `config set` defaults to session scope. That means the change
-affects the current session immediately, but is not written to disk unless you
-ask for it.
+Inside the REPL, `config set` defaults to session storage unless
+`config.default-target` or explicit scope/store flags select another
+destination. Use `--session` to force a temporary change and `--permanent` to
+request persistence. [CONFIG.md](CONFIG.md#repl-config-writes) explains store
+and scope selection.
 
 ```text
 config set ui.format json
@@ -273,8 +261,6 @@ last --format json
 ```
 
 ## When Not To Use The REPL
-
-Do not use the REPL just because it exists.
 
 Prefer one-shot commands when:
 

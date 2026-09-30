@@ -47,12 +47,6 @@ Useful switches:
 - `--permanent`
   - persist the change when running inside the REPL
 
-Rule of thumb:
-
-- if you only need the current winner, use `get`
-- if you are confused, use `explain`
-- if you want the broad picture, use `show`
-
 ## Profile Selection On The Command Line
 
 Select a configured profile explicitly:
@@ -122,8 +116,8 @@ For UI keys, there is one more rule inside the resolved config:
 
 ## Loader Abstraction
 
-`osp-config` exposes a generic loader interface so each source can be wired
-without custom code in `osp-cli`:
+`osp_cli::config` exposes a generic loader interface so each source can be wired
+without custom host loading code:
 
 - `ConfigLoader` trait (`load() -> ConfigLayer`)
 - `StaticLayerLoader` for in-memory defaults/session layers
@@ -136,7 +130,7 @@ without custom code in `osp-cli`:
 
 ## Typed Schema and Validation
 
-`osp-config` validates resolved keys against a typed schema (`ConfigSchema`):
+`osp_cli::config` validates resolved keys against a typed schema (`ConfigSchema`):
 
 - Unknown keys are rejected by default.
 - `extensions.*` is the only open namespace for unknown keys.
@@ -196,7 +190,7 @@ profile.default = "uio"
 ui.format = "table"
 
 [profile.uio]
-osp.url = "https://osp-orchestrator.uio.no"
+extensions.plugins.env.api.url = "https://api.example.org"
 
 [profile.tsd]
 ui.format = "json"
@@ -221,7 +215,7 @@ Notes:
 
 ## Environment Variable Mapping
 
-Keep the mapping explicit and predictable:
+Environment names map to configuration keys as follows:
 
 - `OSP__UI__FORMAT` -> `ui.format`
 - `OSP__PROFILE__TSD__UI__FORMAT` -> `ui.format` scoped to profile `tsd`
@@ -347,8 +341,8 @@ These keys currently drive user-visible rendering and REPL presentation:
 - `repl.intro`
   - `none | minimal | compact | full`
 - `ui.messages.layout`
-  - `grouped | plain | minimal`
-  - `grouped | minimal`
+  - `full | compact | austere | plain | none`
+  - `grouped` and `minimal` are aliases for `full` and `austere`
 
 ## UI Examples
 
@@ -377,7 +371,8 @@ Compatibility note:
 
 ## REPL Config Writes
 
-Store choice depends on where you run the command:
+Without a configured `config.default-target` or explicit scope/store flags,
+store choice depends on where you run the command:
 
 - in one-shot CLI, `config set` defaults to the persistent config store
 - in the REPL, `config set` defaults to the session store

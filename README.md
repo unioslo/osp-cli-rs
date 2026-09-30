@@ -6,15 +6,16 @@
 # osp-cli
 
 <img src="docs/assets/osp-cli.png" alt="osp-cli screenshot" width="960" />
-`osp-cli` is a batteries-included Rust CLI and interactive REPL for
-structured operational workflows.
 
-It is also a library for teams that want to embed the upstream host, add
-site-specific native commands, and wrap it in a product-specific crate.
+`osp-cli` is a Rust command-line tool and interactive REPL for working with
+structured data.
+
+You can also use it as a library to build a CLI with your own commands,
+defaults, and integrations.
 
 It combines:
 - command execution
-- interactive shell ergonomics
+- interactive history, completion, and help
 - layered configuration
 - multiple render modes and output formats
 - a small pipeline DSL
@@ -24,12 +25,11 @@ Use it as:
 - a normal command-line tool
 - a long-running REPL with history, completion, inline help, and cached
   results
-- a library/runtime foundation for a downstream product wrapper
+- a library for a site-specific CLI
 
 ## As A Library
 
-If you are evaluating `osp-cli` as an embedder or wrapper-crate dependency,
-start with:
+To build your own CLI with `osp-cli`, start with:
 
 - [docs/EMBEDDING.md](docs/EMBEDDING.md)
 - [docs/README.md](docs/README.md)

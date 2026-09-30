@@ -35,10 +35,28 @@ fn guide_view_from_command_def_builds_usage_arguments_and_options_unit() {
             .subcommand(CommandDef::new("list").about("List themes")),
     );
 
-    assert_eq!(view.usage.len(), 1);
-    assert_eq!(view.commands.len(), 1);
-    assert_eq!(view.arguments.len(), 1);
-    assert_eq!(view.options.len(), 1);
+    assert_eq!(view.usage, vec!["theme [OPTIONS] [name] <COMMAND>"]);
+    assert_eq!(
+        view.commands
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.short_help.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("list", "List themes")]
+    );
+    assert_eq!(
+        view.arguments
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["name"]
+    );
+    assert_eq!(
+        view.options
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.short_help.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("--raw", "Show raw values")]
+    );
 }
 
 #[test]

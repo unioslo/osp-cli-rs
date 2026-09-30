@@ -1,10 +1,10 @@
 {
   "generated_at": "2026-09-30",
-  "overall_line_percent": 92.0,
+  "overall_line_percent": 85.0,
   "changed_file_review_line_percent": 85.0,
   "min_executable_lines": 20,
   "non_executable_files": {
     "src/lib.rs": "6317427a4faa5c2c74ea0b52dd21594a062474e9ea01b7421b774f90366ef65d"
   },
-  "notes": "Deliberately reviewed 92% overall floor after the corrected full pass measured 92.41%. The historical 92.95% floor was already unmet in September. Whole-file 85% is a review warning, not a requirement to add overlapping tests. The pinned src/lib.rs contains only docs, module declarations and reexports; any byte change requires renewed review."
+  "notes": "The user selected an 85% overall floor; the aim remains higher coverage through useful contract and integration workflows. Whole-file 85% is a review warning, not a requirement to add overlapping tests. The pinned src/lib.rs contains only docs, module declarations and reexports; any byte change requires renewed review."
 }
