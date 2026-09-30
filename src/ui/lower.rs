@@ -28,8 +28,7 @@ use crate::guide::{
 
 use super::doc::{
     Block, Doc, GuideEntriesBlock, GuideEntryRow, JsonBlock, KeyValueBlock, KeyValueRow,
-    KeyValueStyle, KeyValueValue, ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome,
-    TableBlock,
+    KeyValueValue, ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
 };
 use super::plan::RenderPlan;
 use super::settings::{HelpLayout, ResolvedHelpChromeSettings};
@@ -777,7 +776,7 @@ fn direct_guide_blocks(
     };
     let trailing_newline = matches!(format, OutputFormat::Guide);
     for section in sections {
-        let section_blocks = direct_section_blocks(*section, format);
+        let section_blocks = direct_section_blocks(*section);
         if section_blocks.is_empty() {
             continue;
         }
@@ -797,9 +796,9 @@ fn direct_guide_blocks(
     blocks
 }
 
-fn direct_section_blocks(section: GuideSectionRef<'_>, format: OutputFormat) -> Vec<Block> {
+fn direct_section_blocks(section: GuideSectionRef<'_>) -> Vec<Block> {
     let mut section_blocks = guide_paragraph_blocks(section.paragraphs);
-    let entry_blocks = entry_blocks(section.entries, format);
+    let entry_blocks = entry_blocks(section.entries);
     extend_with_blank_between(&mut section_blocks, entry_blocks);
 
     if let Some(data) = section.data {
@@ -832,18 +831,11 @@ fn guide_paragraph_blocks(paragraphs: &[String]) -> Vec<Block> {
         .collect()
 }
 
-fn entry_blocks(entries: &[GuideEntry], format: OutputFormat) -> Vec<Block> {
+fn entry_blocks(entries: &[GuideEntry]) -> Vec<Block> {
     if entries.is_empty() {
         return Vec::new();
     }
-    if matches!(format, OutputFormat::Guide) {
-        vec![Block::GuideEntries(guide_entries_block(entries))]
-    } else {
-        vec![Block::KeyValue(KeyValueBlock {
-            style: KeyValueStyle::Bulleted,
-            rows: guide_entry_key_value_rows(entries),
-        })]
-    }
+    vec![Block::GuideEntries(guide_entries_block(entries))]
 }
 
 fn help_layout_blocks(
@@ -933,7 +925,6 @@ fn help_layout_blocks_from_value(
             vec![Block::KeyValue(key_value_from_guide_data_map(map))]
         }
         Value::Object(map) => vec![Block::KeyValue(KeyValueBlock {
-            style: KeyValueStyle::Plain,
             rows: key_value_from_map(map, None).rows,
         })],
         Value::Array(items) if items.is_empty() => Vec::new(),
@@ -1026,10 +1017,7 @@ fn key_value_from_map(
         }
     }
 
-    KeyValueBlock {
-        style: KeyValueStyle::Plain,
-        rows,
-    }
+    KeyValueBlock { rows }
 }
 
 #[derive(Debug, Default)]
@@ -1070,7 +1058,6 @@ impl MregRecordBuilder {
             return;
         }
         self.blocks.push(Block::KeyValue(KeyValueBlock {
-            style: KeyValueStyle::Plain,
             rows: std::mem::take(&mut self.pending_rows),
         }));
     }
@@ -1296,7 +1283,6 @@ fn display_value(value: &Value) -> String {
 
 fn key_value_from_guide_data_map(map: &Map<String, Value>) -> KeyValueBlock {
     KeyValueBlock {
-        style: KeyValueStyle::Plain,
         rows: map
             .iter()
             .map(|(key, value)| KeyValueRow {
@@ -1339,18 +1325,6 @@ fn help_layout_title_chrome(layout: HelpLayout) -> SectionTitleChrome {
         HelpLayout::Full => SectionTitleChrome::Ruled,
         HelpLayout::Compact | HelpLayout::Minimal => SectionTitleChrome::Plain,
     }
-}
-
-fn guide_entry_key_value_rows(entries: &[GuideEntry]) -> Vec<KeyValueRow> {
-    entries
-        .iter()
-        .map(|entry| KeyValueRow {
-            key: entry.name.clone(),
-            value: KeyValueValue::Scalar(entry.short_help.clone()),
-            indent: None,
-            gap: None,
-        })
-        .collect()
 }
 
 fn guide_entry_row(entry: &GuideEntry) -> GuideEntryRow {

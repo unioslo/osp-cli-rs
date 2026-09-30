@@ -63,6 +63,10 @@ pub struct TableBlock {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Named guide text and its presentation hints, shared by every emitter.
+///
+/// Keeping guide rows typed gives Markdown and terminal rendering one owner
+/// for help labels and descriptions as the guide model evolves.
 pub struct GuideEntriesBlock {
     pub default_indent: String,
     pub default_gap: Option<String>,
@@ -79,14 +83,7 @@ pub struct GuideEntryRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyValueBlock {
-    pub style: KeyValueStyle,
     pub rows: Vec<KeyValueRow>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyValueStyle {
-    Plain,
-    Bulleted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

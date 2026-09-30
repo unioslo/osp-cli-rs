@@ -22,6 +22,9 @@ mod dsl;
 #[path = "integration/guide_ui.rs"]
 mod guide_ui;
 
+#[path = "integration/ui.rs"]
+mod ui;
+
 #[path = "integration/plugin_manager.rs"]
 mod plugin_manager;
 

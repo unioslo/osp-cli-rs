@@ -1,7 +1,7 @@
 use crate::core::output_model::ColumnAlignment;
 use crate::ui::doc::{
-    Block, Doc, GuideEntriesBlock, JsonBlock, KeyValueBlock, KeyValueRow, KeyValueStyle,
-    KeyValueValue, ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
+    Block, Doc, GuideEntriesBlock, JsonBlock, KeyValueBlock, KeyValueRow, KeyValueValue, ListBlock,
+    ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
 };
 
 use super::key_value::display_key;
@@ -64,10 +64,7 @@ fn emit_section(block: &SectionBlock) -> String {
 }
 
 fn emit_key_value(block: &KeyValueBlock) -> String {
-    match block.style {
-        KeyValueStyle::Plain => emit_plain_rows(&block.rows, 0),
-        KeyValueStyle::Bulleted => emit_bulleted_rows(&block.rows, 0),
-    }
+    emit_plain_rows(&block.rows, 0)
 }
 
 fn emit_guide_entries(block: &GuideEntriesBlock) -> String {
@@ -183,13 +180,6 @@ fn emit_plain_rows(rows: &[KeyValueRow], indent: usize) -> String {
         .join("\n")
 }
 
-fn emit_bulleted_rows(rows: &[KeyValueRow], indent: usize) -> String {
-    rows.iter()
-        .flat_map(|row| emit_bulleted_row_lines(row, indent))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn emit_plain_row_lines(row: &KeyValueRow, indent: usize) -> Vec<String> {
     let prefix = format!("{}- ", " ".repeat(indent));
     let child_indent = indent + 2;
@@ -207,28 +197,6 @@ fn emit_plain_row_lines(row: &KeyValueRow, indent: usize) -> Vec<String> {
         }
         KeyValueValue::Array(items) => {
             emit_markdown_array_lines(items, &prefix, &label, child_indent)
-        }
-    }
-}
-
-fn emit_bulleted_row_lines(row: &KeyValueRow, indent: usize) -> Vec<String> {
-    let prefix = format!("{}- ", " ".repeat(indent));
-    let child_indent = indent + 2;
-    match &row.value {
-        KeyValueValue::Empty => vec![format!("{prefix}`{}`", row.key)],
-        KeyValueValue::Scalar(text) if text.is_empty() => vec![format!("{prefix}`{}`", row.key)],
-        KeyValueValue::Scalar(text) => vec![format!("{prefix}`{}` {text}", row.key)],
-        KeyValueValue::Object(rows) => {
-            let mut lines = vec![format!("{prefix}`{}`:", row.key)];
-            if !rows.is_empty() {
-                lines.push(emit_plain_rows(rows, child_indent));
-            }
-            lines
-        }
-        KeyValueValue::Array(items) => {
-            let mut lines = vec![format!("{prefix}`{}`:", display_key(row))];
-            lines.extend(emit_markdown_nested_items(items, child_indent));
-            lines
         }
     }
 }

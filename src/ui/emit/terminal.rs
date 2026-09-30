@@ -5,8 +5,8 @@ use crate::ui::chrome::{
     FULL_HELP_LAYOUT_CHROME, GUIDE_SECTION_CHROME, PLAIN_SECTION_CHROME, RenderedTitle,
 };
 use crate::ui::doc::{
-    Block, Doc, GuideEntriesBlock, KeyValueBlock, KeyValueRow, KeyValueStyle, KeyValueValue,
-    ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
+    Block, Doc, GuideEntriesBlock, KeyValueBlock, KeyValueRow, KeyValueValue, ListBlock,
+    ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
 };
 use crate::ui::settings::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 use crate::ui::style::{StyleToken, ThemeStyler};
@@ -114,10 +114,7 @@ fn section_chrome(title_chrome: SectionTitleChrome) -> crate::ui::chrome::Sectio
 
 fn emit_key_value(block: &KeyValueBlock, settings: &ResolvedRenderSettings) -> String {
     let styler = ThemeStyler::new(settings.color, &settings.theme, &settings.style_overrides);
-    let rendered = match block.style {
-        KeyValueStyle::Plain => emit_plain_rows(&block.rows, "", settings, &styler),
-        KeyValueStyle::Bulleted => emit_bulleted_rows(&block.rows, "", settings, &styler),
-    };
+    let rendered = emit_plain_rows(&block.rows, "", settings, &styler);
     indent_lines(&rendered, settings.margin)
 }
 
@@ -601,61 +598,6 @@ fn emit_plain_array_item_lines(
                 settings,
                 styler,
             ));
-            lines
-        }
-    }
-}
-
-fn emit_bulleted_rows(
-    rows: &[KeyValueRow],
-    base_indent: &str,
-    settings: &ResolvedRenderSettings,
-    styler: &ThemeStyler<'_>,
-) -> String {
-    rows.iter()
-        .flat_map(|row| emit_bulleted_row_lines(row, base_indent, settings, styler))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn emit_bulleted_row_lines(
-    row: &KeyValueRow,
-    base_indent: &str,
-    settings: &ResolvedRenderSettings,
-    styler: &ThemeStyler<'_>,
-) -> Vec<String> {
-    let effective_indent = format!("{base_indent}{}", row.indent.as_deref().unwrap_or_default());
-    let bullet = styler.paint("-", StyleToken::Punctuation);
-    let key = styler.paint(&display_key(row), StyleToken::Key);
-    let child_indent = format!("{effective_indent}{}", " ".repeat(settings.indent_size));
-
-    match &row.value {
-        KeyValueValue::Empty => vec![format!("{effective_indent}{bullet} {key}")],
-        KeyValueValue::Scalar(text) if text.is_empty() => {
-            vec![format!("{effective_indent}{bullet} {key}")]
-        }
-        KeyValueValue::Scalar(text) => vec![format!(
-            "{effective_indent}{bullet} {key}  {}",
-            styler.paint_value(text)
-        )],
-        KeyValueValue::Object(rows) => {
-            let mut lines = vec![format!(
-                "{effective_indent}{bullet} {key}{}",
-                styler.paint(":", StyleToken::Punctuation)
-            )];
-            if !rows.is_empty() {
-                lines.push(emit_plain_rows(rows, &child_indent, settings, styler));
-            }
-            lines
-        }
-        KeyValueValue::Array(items) => {
-            let mut lines = vec![format!(
-                "{effective_indent}{bullet} {key}{}",
-                styler.paint(":", StyleToken::Punctuation)
-            )];
-            lines.extend(items.iter().enumerate().flat_map(|(index, item)| {
-                emit_plain_array_item_lines(item, index, &child_indent, settings, styler)
-            }));
             lines
         }
     }
