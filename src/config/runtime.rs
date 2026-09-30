@@ -27,7 +27,7 @@
 //! - loader-pipeline assembly stays centralized here so callers do not invent
 //!   incompatible bootstrap rules
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 
 use directories::{BaseDirs, ProjectDirs};
 
@@ -508,14 +508,33 @@ pub fn default_home_dir() -> Option<PathBuf> {
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct RuntimeEnvironment {
-    vars: BTreeMap<String, String>,
+    vars: BTreeMap<String, OsString>,
     prefer_platform_dirs: bool,
 }
 
 impl RuntimeEnvironment {
     fn capture() -> Self {
         Self {
-            vars: std::env::vars().collect(),
+            vars: std::env::vars_os()
+                .filter_map(|(name, value)| {
+                    let name = name.into_string().ok()?;
+                    matches!(
+                        name.as_str(),
+                        "OSP_CONFIG_FILE"
+                            | "OSP_SECRETS_FILE"
+                            | "OSP_SECRETS_INDEX_FILE"
+                            | "XDG_CONFIG_HOME"
+                            | "XDG_CACHE_HOME"
+                            | "XDG_STATE_HOME"
+                            | "HOME"
+                            | "USER"
+                            | "USERNAME"
+                            | "HOSTNAME"
+                            | "COMPUTERNAME"
+                    )
+                    .then_some((name, value))
+                })
+                .collect(),
             prefer_platform_dirs: true,
         }
     }
@@ -537,7 +556,7 @@ impl RuntimeEnvironment {
         Self {
             vars: vars
                 .into_iter()
-                .map(|(key, value)| (key.as_ref().to_string(), value.as_ref().to_string()))
+                .map(|(key, value)| (key.as_ref().to_string(), OsString::from(value.as_ref())))
                 .collect(),
             prefer_platform_dirs: false,
         }
@@ -552,8 +571,8 @@ impl RuntimeEnvironment {
     }
 
     fn state_root_dir(&self) -> Option<PathBuf> {
-        if let Some(path) = self.get_nonempty("XDG_STATE_HOME") {
-            return Some(join_path(PathBuf::from(path), &[PROJECT_APPLICATION_NAME]));
+        if let Some(path) = self.path_override("XDG_STATE_HOME") {
+            return Some(join_path(path, &[PROJECT_APPLICATION_NAME]));
         }
 
         if self.prefer_platform_dirs {
@@ -611,7 +630,14 @@ impl RuntimeEnvironment {
     }
 
     fn path_override(&self, key: &str) -> Option<PathBuf> {
-        self.get_nonempty(key).map(PathBuf::from)
+        let value = self.vars.get(key)?;
+        match value.to_str() {
+            Some(value) => {
+                let value = value.trim();
+                (!value.is_empty()).then(|| PathBuf::from(value))
+            }
+            None => Some(PathBuf::from(value)),
+        }
     }
 
     fn state_root_dir_or_temp(&self) -> PathBuf {
@@ -623,8 +649,8 @@ impl RuntimeEnvironment {
     }
 
     fn xdg_root_dir(&self, xdg_var: &str, home_suffix: &[&str]) -> Option<PathBuf> {
-        if let Some(path) = self.get_nonempty(xdg_var) {
-            return Some(join_path(PathBuf::from(path), &[PROJECT_APPLICATION_NAME]));
+        if let Some(path) = self.path_override(xdg_var) {
+            return Some(join_path(path, &[PROJECT_APPLICATION_NAME]));
         }
 
         if self.prefer_platform_dirs {
@@ -639,14 +665,14 @@ impl RuntimeEnvironment {
     }
 
     fn home_root_dir(&self, home_suffix: &[&str]) -> Option<PathBuf> {
-        let home = self.get_nonempty("HOME")?;
-        Some(join_path(PathBuf::from(home), home_suffix).join(PROJECT_APPLICATION_NAME))
+        let home = self.path_override("HOME")?;
+        Some(join_path(home, home_suffix).join(PROJECT_APPLICATION_NAME))
     }
 
     fn get_nonempty(&self, key: &str) -> Option<&str> {
         self.vars
             .get(key)
-            .map(String::as_str)
+            .and_then(|value| value.to_str())
             .map(str::trim)
             .filter(|value| !value.is_empty())
     }

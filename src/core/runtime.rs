@@ -225,7 +225,20 @@ impl RuntimeHints {
 
     /// Reads runtime hints from the current process environment.
     pub fn from_env() -> Self {
-        Self::from_env_iter(std::env::vars())
+        Self::from_env_iter(
+            [
+                ENV_OSP_UI_VERBOSITY,
+                ENV_OSP_DEBUG_LEVEL,
+                ENV_OSP_FORMAT,
+                ENV_OSP_COLOR,
+                ENV_OSP_UNICODE,
+                ENV_OSP_PROFILE,
+                ENV_OSP_TERMINAL,
+                ENV_OSP_TERMINAL_KIND,
+            ]
+            .into_iter()
+            .filter_map(|name| std::env::var(name).ok().map(|value| (name, value))),
+        )
     }
 
     /// Replaces the optional active-profile label.
