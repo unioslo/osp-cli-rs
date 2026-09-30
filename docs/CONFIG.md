@@ -44,7 +44,7 @@ Useful switches:
   - show pre-interpolation values
 - `--session`
   - force an in-memory change
-- `--save`
+- `--permanent`
   - persist the change when running inside the REPL
 
 Rule of thumb:
@@ -109,7 +109,7 @@ Notes:
 - REPL `config set --session ...` writes into the in-memory session layer.
 - Launch-time bootstrap flags like `--theme` and `-u` may still affect startup
   state or session defaults.
-- Invocation flags like `--json`, `--format`, `--mode`, `--color`, `--ascii`,
+- Invocation flags like `--json`, `--format`, `--render-mode`, `--color`, `--ascii`,
   `-v/-q`, `-d`, and `--plugin-provider` do not write into config state.
 - `config get --sources` therefore reflects stored defaults, not one-shot
   invocation overrides.
@@ -381,5 +381,22 @@ Store choice depends on where you run the command:
 
 - in one-shot CLI, `config set` defaults to the persistent config store
 - in the REPL, `config set` defaults to the session store
-- use `--save`, `--config`, or `--secrets` for persistence
+- use `--permanent`, `--config`, or `--secrets` for persistence
 - use `--session` to force in-memory session behavior
+
+`config.default-target` chooses the default destination for future writes:
+`session` is temporary, `global` is saved for all profiles, and any other value
+names a saved profile. Explicit `--session`, `--profile`, `--global`, or
+`--permanent` flags override the corresponding default. `--terminal repl` or
+`--terminal cli` further narrows applicability. Without a configured default,
+REPL writes are temporary and one-shot writes persist for the active profile.
+
+```text
+config set config.default-target uio --permanent --global
+config set ui.margin 2
+config set ui.margin 4 --session
+```
+
+The first command saves the default destination for all profiles. Subsequent
+plain writes go to profile `uio`; the last command remains temporary. Successful
+temporary writes show a concrete `--permanent` command with the resolved scope.

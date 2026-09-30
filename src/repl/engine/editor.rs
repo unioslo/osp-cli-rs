@@ -12,71 +12,72 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use reedline::{
-    EditCommand, EditMode, Emacs, Prompt, PromptEditMode, PromptHistorySearch,
+    EditCommand, EditMode, Emacs, Menu, MenuEvent, Prompt, PromptEditMode, PromptHistorySearch,
     PromptHistorySearchStatus, ReedlineEvent, ReedlineRawEvent,
 };
 
 use super::{PromptRightRenderer, ReplInputMode};
+use crate::repl::menu::SharedCompletionMenu;
 
 pub(crate) struct AutoCompleteEmacs {
     inner: Emacs,
-    menu_name: String,
+    menu: SharedCompletionMenu,
 }
 
 impl AutoCompleteEmacs {
-    pub(crate) fn new(inner: Emacs, menu_name: impl Into<String>) -> Self {
-        Self {
-            inner,
-            menu_name: menu_name.into(),
-        }
+    pub(crate) fn new(inner: Emacs, menu: SharedCompletionMenu) -> Self {
+        Self { inner, menu }
     }
 
-    pub(crate) fn should_reopen_menu(commands: &[EditCommand]) -> bool {
-        // reedline closes menus on ordinary edits. Reopen after text-changing
-        // edits so completion keeps behaving like an interactive shell menu
-        // instead of forcing the user to press Tab again after every keystroke.
-        commands.iter().any(|cmd| {
-            matches!(
-                cmd,
-                EditCommand::InsertChar(_)
-                    | EditCommand::InsertString(_)
-                    | EditCommand::ReplaceChar(_)
-                    | EditCommand::ReplaceChars(_, _)
-                    | EditCommand::Backspace
-                    | EditCommand::Delete
-                    | EditCommand::CutChar
-                    | EditCommand::BackspaceWord
-                    | EditCommand::DeleteWord
-                    | EditCommand::Clear
-                    | EditCommand::ClearToLineEnd
-                    | EditCommand::CutCurrentLine
-                    | EditCommand::CutFromStart
-                    | EditCommand::CutFromLineStart
-                    | EditCommand::CutToEnd
-                    | EditCommand::CutToLineEnd
-                    | EditCommand::CutWordLeft
-                    | EditCommand::CutBigWordLeft
-                    | EditCommand::CutWordRight
-                    | EditCommand::CutBigWordRight
-                    | EditCommand::CutWordRightToNext
-                    | EditCommand::CutBigWordRightToNext
-                    | EditCommand::PasteCutBufferBefore
-                    | EditCommand::PasteCutBufferAfter
-                    | EditCommand::Undo
-                    | EditCommand::Redo
-            )
-        })
+    pub(crate) fn opens_menu(commands: &[EditCommand]) -> bool {
+        // Only Tab (bound separately) or starting a flag opens the menu.
+        // Opening on every keystroke made the first Tab select instead of open
+        // and popped the next token's candidates on each space.
+        commands.contains(&EditCommand::InsertChar('-'))
+    }
+}
+
+/// The menu move a key binding asks for once the completion menu is open.
+///
+/// With the menu open, reedline resolves `UntilFound` to its first menu move:
+/// `Menu(name)` only applies to a closed menu, and the REPL has no hinter for
+/// `HistoryHintComplete` ahead of `MenuRight`.
+pub(crate) fn menu_navigation(event: &ReedlineEvent) -> Option<MenuEvent> {
+    match event {
+        ReedlineEvent::MenuNext => Some(MenuEvent::NextElement),
+        ReedlineEvent::MenuPrevious => Some(MenuEvent::PreviousElement),
+        ReedlineEvent::MenuUp => Some(MenuEvent::MoveUp),
+        ReedlineEvent::MenuDown => Some(MenuEvent::MoveDown),
+        ReedlineEvent::MenuLeft => Some(MenuEvent::MoveLeft),
+        ReedlineEvent::MenuRight => Some(MenuEvent::MoveRight),
+        ReedlineEvent::MenuPageNext => Some(MenuEvent::NextPage),
+        ReedlineEvent::MenuPagePrevious => Some(MenuEvent::PreviousPage),
+        ReedlineEvent::UntilFound(events) => events.iter().find_map(menu_navigation),
+        _ => None,
     }
 }
 
 impl EditMode for AutoCompleteEmacs {
     fn parse_event(&mut self, event: ReedlineRawEvent) -> ReedlineEvent {
         let parsed = self.inner.parse_event(event);
+        // Selection moves become buffer edits here, before reedline paints;
+        // see `OspCompletionMenu::navigate`.
+        if let Some(commands) =
+            menu_navigation(&parsed).and_then(|nav| self.menu.navigate_painted_line(nav))
+        {
+            return ReedlineEvent::Edit(commands);
+        }
         match parsed {
-            ReedlineEvent::Edit(commands) if Self::should_reopen_menu(&commands) => {
+            ReedlineEvent::Edit(commands) if commands == [EditCommand::InsertChar(' ')] => {
+                // Space commits the token: close the menu, keeping any cycled
+                // selection already in the buffer, instead of letting reedline
+                // refresh it with the next token's candidates.
+                ReedlineEvent::Multiple(vec![ReedlineEvent::Esc, ReedlineEvent::Edit(commands)])
+            }
+            ReedlineEvent::Edit(commands) if Self::opens_menu(&commands) => {
                 ReedlineEvent::Multiple(vec![
                     ReedlineEvent::Edit(commands),
-                    ReedlineEvent::Menu(self.menu_name.clone()),
+                    ReedlineEvent::Menu(self.menu.name().to_string()),
                 ])
             }
             other => other,
@@ -225,27 +226,7 @@ pub(crate) fn contains_cursor_position_report(bytes: &[u8]) -> bool {
     })
 }
 
-pub(crate) fn parse_cursor_position_report(bytes: &[u8]) -> Option<(u16, u16)> {
-    let rest = bytes.strip_prefix(b"\x1b[")?;
-    let row_end = rest.iter().position(|byte| !byte.is_ascii_digit())?;
-    if row_end == 0 || *rest.get(row_end)? != b';' {
-        return None;
-    }
-    let row = std::str::from_utf8(&rest[..row_end])
-        .ok()?
-        .parse::<u16>()
-        .ok()?;
-    let col_rest = &rest[row_end + 1..];
-    let col_end = col_rest.iter().position(|byte| !byte.is_ascii_digit())?;
-    if col_end == 0 || *col_rest.get(col_end)? != b'R' {
-        return None;
-    }
-    let col = std::str::from_utf8(&col_rest[..col_end])
-        .ok()?
-        .parse::<u16>()
-        .ok()?;
-    Some((col, row))
-}
+pub(crate) use crate::ui::prompt::parse_cursor_position_report;
 
 pub(crate) struct OspPrompt {
     left: String,

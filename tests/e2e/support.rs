@@ -232,10 +232,9 @@ fn osp_pty_command_builder(
     cmd.env_clear();
     cmd.env("PATH", "/usr/bin:/bin");
     cmd.env("LANG", "C.UTF-8");
-    cmd.env("HOME", home);
-    cmd.env("XDG_CONFIG_HOME", home.join(".config"));
-    cmd.env("XDG_CACHE_HOME", home.join(".cache"));
-    cmd.env("XDG_STATE_HOME", home.join(".local/state"));
+    for (key, value) in crate::test_env::isolated_env(home) {
+        cmd.env(key, value);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLUMNS", "80");
     cmd.env("LINES", "24");
@@ -344,18 +343,26 @@ impl ReplPtySession {
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let cpr_request = [0x1b, 0x5b, 0x36, 0x6e];
+            let mut cpr_prefix = 0;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if cursor_position_reports
-                            && buf[..n]
-                                .windows(cpr_request.len())
-                                .any(|window| window == cpr_request)
-                            && let Ok(mut writer) = writer_clone.lock()
-                        {
-                            let _ = writer.write_all(b"\x1b[1;1R");
-                            let _ = writer.flush();
+                        if cursor_position_reports {
+                            // Requests may share a read or cross its boundary.
+                            for byte in &buf[..n] {
+                                cpr_prefix = if *byte == cpr_request[cpr_prefix] {
+                                    cpr_prefix + 1
+                                } else {
+                                    usize::from(*byte == cpr_request[0])
+                                };
+                                if cpr_prefix == cpr_request.len() {
+                                    let mut writer = writer_clone.lock().expect("writer lock");
+                                    let _ = writer.write_all(b"\x1b[1;1R");
+                                    let _ = writer.flush();
+                                    cpr_prefix = 0;
+                                }
+                            }
                         }
                         let chunk = String::from_utf8_lossy(&buf[..n]);
                         output_clone.lock().expect("output lock").push_str(&chunk);
@@ -408,6 +415,16 @@ impl ReplPtySession {
         let mut writer = self.writer.lock().expect("writer lock");
         writer.write_all(bytes).expect("write to pty");
         writer.flush().expect("flush pty");
+    }
+
+    pub(crate) fn type_text(&mut self, text: &str) {
+        let start = self.output_len();
+        self.write_bytes(text.as_bytes());
+        assert!(
+            self.wait_for_plain_output_since(start, text.trim(), Duration::from_secs(3)),
+            "expected editor to display typed text {text:?}; output:\n{}",
+            self.output_snapshot(8000),
+        );
     }
 
     pub(crate) fn wait_for_output_since(
@@ -486,6 +503,13 @@ impl ReplPtySession {
     pub(crate) fn kill(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReplPtySession {
+    fn drop(&mut self) {
+        self.kill();
     }
 }
 

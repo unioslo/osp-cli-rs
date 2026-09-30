@@ -475,7 +475,7 @@ pub struct ConfigStoreArgs {
     pub secrets: bool,
 
     /// Persist the change immediately after validation.
-    #[arg(long = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
+    #[arg(long = "permanent", alias = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
     pub save: bool,
 }
 

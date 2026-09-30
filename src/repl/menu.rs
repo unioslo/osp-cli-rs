@@ -4,8 +4,11 @@
 //! translates reedline events and painter state into the menu-core layout and
 //! selection model used by OSP-specific completion rendering.
 
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
 use reedline::{
-    Completer, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
+    Completer, EditCommand, Editor, Menu, MenuEvent, MenuTextStyle, Painter, Span, Suggestion,
+    UndoBehavior,
     menu_functions::{can_partially_complete, replace_in_buffer},
 };
 use unicode_width::UnicodeWidthStr;
@@ -38,6 +41,12 @@ pub struct OspCompletionMenu {
     // Queue menu events until reedline supplies the live editor in its normal
     // update pass.
     event: Option<MenuEvent>,
+    // Buffer and cursor as last painted; key-time navigation edits this line.
+    painted_line: String,
+    painted_cursor: usize,
+    // Set when navigation emitted a buffer edit, so the menu refresh reedline
+    // sends for that edit does not reset the selection it just made.
+    skip_own_edit: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +69,9 @@ impl Default for OspCompletionMenu {
             cursor_col: 0,
             last_available_lines: 0,
             event: None,
+            painted_line: String::new(),
+            painted_cursor: 0,
+            skip_own_edit: false,
         }
     }
 }
@@ -144,15 +156,51 @@ impl OspCompletionMenu {
     }
 
     pub(crate) fn apply_event(&mut self, editor: &mut Editor, completer: &mut dyn Completer) {
-        if let Some(event) = self.event.take() {
-            let action = self.core.handle_event(event);
-            if matches!(action, MenuAction::UpdateValues) {
-                self.update_values(editor, completer);
-            }
-            if matches!(action, MenuAction::ApplySelection) {
-                self.apply_selection_in_buffer(editor, ApplyMode::Cycle);
-            }
+        if let Some(event) = self.event.take()
+            && matches!(self.core.handle_event(event), MenuAction::UpdateValues)
+        {
+            self.update_values(editor, completer);
         }
+    }
+
+    /// Moves the selection and writes the newly selected value into `editor`.
+    ///
+    /// Selection moves must change the buffer before reedline paints: reedline
+    /// renders the prompt line before it hands a menu the editor, so a
+    /// selection applied while painting shows up one frame late and the line
+    /// disagrees with the highlight. Live input reaches this through
+    /// [`SharedCompletionMenu::navigate_painted_line`].
+    pub(crate) fn navigate(&mut self, event: MenuEvent, editor: &mut Editor) {
+        if self.core.is_active()
+            && matches!(self.core.handle_event(event), MenuAction::ApplySelection)
+        {
+            self.apply_selection_in_buffer(editor, ApplyMode::Cycle);
+        }
+    }
+
+    fn navigate_painted_line(&mut self, event: MenuEvent) -> Option<Vec<EditCommand>> {
+        if !self.core.is_active() {
+            return None;
+        }
+        let mut editor = Editor::default();
+        let (line, cursor) = (self.painted_line.clone(), self.painted_cursor);
+        editor.edit_buffer(
+            |buf| {
+                buf.set_buffer(line);
+                buf.set_insertion_point(cursor);
+            },
+            UndoBehavior::CreateUndoPoint,
+        );
+        self.navigate(event, &mut editor);
+        self.skip_own_edit = true;
+        Some(vec![
+            EditCommand::Clear,
+            EditCommand::InsertString(editor.get_buffer().to_string()),
+            EditCommand::MoveToPosition {
+                position: editor.line_buffer().insertion_point(),
+                select: false,
+            },
+        ])
     }
 
     fn stable_menu_indent(&mut self, editor: &Editor, screen_width: u16) -> u16 {
@@ -288,6 +336,8 @@ impl OspCompletionMenu {
         available_lines: u16,
     ) {
         self.apply_event(editor, completer);
+        self.painted_line = editor.get_buffer().to_string();
+        self.painted_cursor = editor.line_buffer().insertion_point();
         self.last_available_lines = available_lines;
         let indent = self.stable_menu_indent(editor, screen_width);
         self.core.update_layout(screen_width, indent);
@@ -335,6 +385,10 @@ impl Menu for OspCompletionMenu {
     }
 
     fn menu_event(&mut self, event: MenuEvent) {
+        if matches!(event, MenuEvent::Edit(_)) && std::mem::take(&mut self.skip_own_edit) {
+            return;
+        }
+        self.skip_own_edit = false;
         self.core.pre_event(&event);
         if matches!(event, MenuEvent::Activate(_) | MenuEvent::Deactivate) {
             self.replace_span = None;
@@ -374,6 +428,11 @@ impl Menu for OspCompletionMenu {
     }
 
     fn replace_in_buffer(&self, editor: &mut Editor) {
+        // A freshly opened menu has nothing selected; accepting must not
+        // insert the first candidate.
+        if self.core.just_activated() {
+            return;
+        }
         self.apply_selection(editor, ApplyMode::Accept);
     }
 
@@ -396,6 +455,128 @@ impl Menu for OspCompletionMenu {
 
     fn set_cursor_pos(&mut self, pos: (u16, u16)) {
         self.cursor_col = pos.0;
+    }
+}
+
+/// Completion menu shared by reedline, which paints it, and the edit mode,
+/// which navigates it at key time.
+///
+/// reedline owns its menus behind `Box<dyn Menu>` and only lends them the
+/// editor while painting, after the prompt line is already rendered. The edit
+/// mode keeps a clone of this handle so selection moves become ordinary buffer
+/// edits instead; see [`OspCompletionMenu::navigate`].
+#[derive(Clone)]
+pub(crate) struct SharedCompletionMenu {
+    menu: Arc<Mutex<OspCompletionMenu>>,
+    // `Menu` hands out borrows, which cannot outlive a lock guard, so reedline
+    // reads these copies; `sync` refreshes them after every mutation.
+    name: String,
+    indicator: String,
+    values: Vec<Suggestion>,
+}
+
+impl SharedCompletionMenu {
+    pub(crate) fn new(menu: OspCompletionMenu) -> Self {
+        let mut shared = Self {
+            name: menu.name.clone(),
+            menu: Arc::new(Mutex::new(menu)),
+            indicator: String::new(),
+            values: Vec::new(),
+        };
+        shared.sync();
+        shared
+    }
+
+    fn lock(&self) -> MutexGuard<'_, OspCompletionMenu> {
+        self.menu.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn sync(&mut self) {
+        let menu = self.menu.lock().unwrap_or_else(PoisonError::into_inner);
+        self.indicator = menu.indicator().to_string();
+        self.values = menu.core.values().to_vec();
+    }
+
+    /// Moves the selection of an open menu and returns the edit that puts the
+    /// new selection into the live buffer, or `None` when the menu is closed.
+    pub(crate) fn navigate_painted_line(&self, event: MenuEvent) -> Option<Vec<EditCommand>> {
+        self.lock().navigate_painted_line(event)
+    }
+}
+
+impl Menu for SharedCompletionMenu {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn indicator(&self) -> &str {
+        &self.indicator
+    }
+
+    fn is_active(&self) -> bool {
+        self.lock().is_active()
+    }
+
+    fn can_quick_complete(&self) -> bool {
+        self.lock().can_quick_complete()
+    }
+
+    fn can_partially_complete(
+        &mut self,
+        values_updated: bool,
+        editor: &mut Editor,
+        completer: &mut dyn Completer,
+    ) -> bool {
+        let result = self
+            .lock()
+            .can_partially_complete(values_updated, editor, completer);
+        self.sync();
+        result
+    }
+
+    fn menu_event(&mut self, event: MenuEvent) {
+        self.lock().menu_event(event);
+        self.sync();
+    }
+
+    fn update_values(&mut self, editor: &mut Editor, completer: &mut dyn Completer) {
+        self.lock().update_values(editor, completer);
+        self.sync();
+    }
+
+    fn update_working_details(
+        &mut self,
+        editor: &mut Editor,
+        completer: &mut dyn Completer,
+        painter: &Painter,
+    ) {
+        self.lock()
+            .update_working_details(editor, completer, painter);
+        self.sync();
+    }
+
+    fn replace_in_buffer(&self, editor: &mut Editor) {
+        self.lock().replace_in_buffer(editor);
+    }
+
+    fn menu_required_lines(&self, terminal_columns: u16) -> u16 {
+        self.lock().menu_required_lines(terminal_columns)
+    }
+
+    fn menu_string(&self, available_lines: u16, use_ansi_coloring: bool) -> String {
+        self.lock().menu_string(available_lines, use_ansi_coloring)
+    }
+
+    fn min_rows(&self) -> u16 {
+        self.lock().min_rows()
+    }
+
+    fn get_values(&self) -> &[Suggestion] {
+        &self.values
+    }
+
+    fn set_cursor_pos(&mut self, pos: (u16, u16)) {
+        self.lock().set_cursor_pos(pos);
     }
 }
 

@@ -29,6 +29,7 @@ use crate::config::{
 };
 use crate::core::output::OutputFormat;
 use crate::core::row::Row;
+use crate::core::shell_words::escape_for_shell;
 use crate::ui::messages::MessageBuffer;
 use crate::ui::theme_catalog::ThemeCatalog;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -515,8 +516,8 @@ fn run_config_set(
     validate_bootstrap_value(&key, &value)
         .into_diagnostic()
         .wrap_err("invalid bootstrap value")?;
-    let target = ConfigWriteTarget::from_set_args(&args);
     let read = context.read();
+    let target = ConfigWriteTarget::from_set_args(&args).with_default(read);
     let store = resolve_config_store(read, &target);
     validate_store_key(store, &key)?;
     let scopes = resolve_config_scopes(read, &target)
@@ -662,15 +663,38 @@ fn run_config_set(
         }))
     };
 
-    messages.success(format!(
-        "{} value for {} at {} scope",
+    let persistence = if matches!(store, ConfigStore::Session) {
+        "for this session only"
+    } else {
+        "permanently"
+    };
+    let mut success = format!(
+        "{} value for {key} {persistence} at {} scope",
         if args.dry_run { "would set" } else { "set" },
-        key,
         scopes
             .first()
             .map(format_scope)
             .unwrap_or_else(|| "global".to_string())
-    ));
+    );
+    if matches!(store, ConfigStore::Session) && !args.dry_run && !is_sensitive_key(&key) {
+        for scope in &scopes {
+            let mut command = format!(
+                "config set {} {} --permanent",
+                escape_for_shell(&key),
+                escape_for_shell(&args.value)
+            );
+            if let Some(profile) = &scope.profile {
+                command.push_str(&format!(" --profile {}", escape_for_shell(profile)));
+            } else {
+                command.push_str(" --global");
+            }
+            if let Some(terminal) = &scope.terminal {
+                command.push_str(&format!(" --terminal {}", escape_for_shell(terminal)));
+            }
+            success.push_str(&format!("\nTo save this setting: {command}"));
+        }
+    }
+    messages.success(success);
     Ok(CliCommandResult {
         exit_code: 0,
         messages,
@@ -688,8 +712,8 @@ fn run_config_unset(
     ConfigSchema::default()
         .validate_writable_key(&key)
         .into_diagnostic()?;
-    let target = ConfigWriteTarget::from_unset_args(&args);
     let read = context.read();
+    let target = ConfigWriteTarget::from_unset_args(&args).with_default(read);
     let store = resolve_config_store(read, &target);
     validate_store_key(store, &key)?;
     let scopes = resolve_config_scopes(read, &target)
@@ -919,6 +943,41 @@ enum ConfigStoreTarget {
 }
 
 impl ConfigWriteTarget {
+    fn with_default(mut self, context: ConfigReadContext<'_>) -> Self {
+        if self.store == ConfigStoreTarget::Session {
+            return self;
+        }
+        if self.scope != ConfigScopeTarget::ActiveProfile {
+            if self.store == ConfigStoreTarget::Default {
+                self.store = ConfigStoreTarget::Config;
+            }
+            return self;
+        }
+        match context
+            .config
+            .get_string("config.default-target")
+            .map(str::trim)
+        {
+            Some("session") => {
+                if self.store == ConfigStoreTarget::Default {
+                    self.store = ConfigStoreTarget::Session;
+                }
+            }
+            Some(target) if !target.is_empty() => {
+                self.scope = if target == "global" {
+                    ConfigScopeTarget::Global
+                } else {
+                    ConfigScopeTarget::Profile(target.to_string())
+                };
+                if self.store == ConfigStoreTarget::Default {
+                    self.store = ConfigStoreTarget::Config;
+                }
+            }
+            _ => {}
+        }
+        self
+    }
+
     fn from_set_args(args: &ConfigSetArgs) -> Self {
         Self {
             scope: resolve_scope_target(

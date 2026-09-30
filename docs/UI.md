@@ -72,7 +72,7 @@ even if the terminal could support them.
 Useful one-shot flags:
 
 - `--format`
-- `--mode`
+- `--render-mode`
 - `--color {auto,always,never}`
 - `--no-color`
 - `--unicode {auto,always,never}`
@@ -225,5 +225,5 @@ osp --format md plugins commands
 Force plain JSON for scripting:
 
 ```bash
-osp --format json --mode plain plugins list
+osp --format json --render-mode plain plugins list
 ```

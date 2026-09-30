@@ -160,7 +160,7 @@
 //! - [`completion`] exists to rank suggestions without depending on terminal
 //!   state or editor code.
 //! - [`repl`] exists to own the interactive shell boundary.
-//! - [`dsl`] exists to provide the canonical document-first pipeline language.
+//! - [`dsl`] exists to transform canonical rows and explicit group metadata.
 //! - [`ui`] exists to lower structured output into terminal-facing text.
 //! - [`plugin`] exists to treat external command providers as part of the same
 //!   command surface.
@@ -172,10 +172,16 @@
 //!      │
 //!      ▼ [ cli ]     parse grammar and flags
 //!      ▼ [ config ]  resolve layered settings (builtin → file → env → cli)
-//!      ▼ [ app ]     dispatch to plugin or native command  ──►  Vec<Row>
-//!      ▼ [ dsl ]     apply pipeline stages to rows         ──►  OutputResult
+//!      ▼ [ app ]     dispatch to plugin or native command  ──►  OutputResult
+//!      ▼ [ dsl ]     transform rows and explicit groups   ──►  OutputResult
 //!      ▼ [ ui ]      render structured output to terminal or UiSink
 //! ```
+//!
+//! Commands normalize service collections into rows before DSL execution.
+//! Raw response documents are available for unstaged rendering; a staged result
+//! describes the selected rows rather than stale service totals or cursors.
+//! Guide output retains its layout only through stages that preserve its shape.
+//! Group keys and aggregates are explicit metadata, not inferred from row fields.
 //!
 //! Architecture contracts worth keeping stable:
 //!

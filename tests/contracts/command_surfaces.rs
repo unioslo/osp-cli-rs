@@ -313,7 +313,7 @@ repl.intro = "full"
         ),
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",
@@ -331,7 +331,7 @@ repl.intro = "full"
         ),
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",
@@ -465,7 +465,7 @@ repl.simple_prompt = true
         &[
             "--no-env",
             "--guide",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",
@@ -479,7 +479,7 @@ repl.simple_prompt = true
         &[
             "--no-env",
             "--guide",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",

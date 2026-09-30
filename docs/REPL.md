@@ -110,8 +110,8 @@ simpler.
 
 ## Shell Scope
 
-Shell scope is intentionally narrow. Only a fixed set of top-level command
-roots are shellable by the host: `nh`, `mreg`, `ldap`, `vm`, and `orch`.
+Shell scope is intentionally narrow. `repl.shellable_commands` selects eligible
+top-level roots; its defaults are `nh`, `mreg`, `ldap`, `vm`, and `orch`.
 Built-in namespaces such as `plugins`, `config`, `theme`, and `help` do not
 become shells.
 
@@ -151,7 +151,11 @@ The REPL provides:
 - command and flag completion
 - scoped completion inside shells
 - history navigation
-- history expansion such as `!!`, `!123`, `!-2`, and `!prefix`
+- `!!` repeats the last accepted command, including one that failed during
+  execution; `sudo !!` repeats it with elevation. Tab expands these into the
+  editor without running; Enter expands and runs them. Unknown commands and
+  invalid syntax are excluded from saved history.
+- saved-history expansion such as `!123`, `!-2`, and `!prefix`
 
 Completion does not call remote services while you are typing. It works from
 the known command catalog, config vocabulary, and already-available runtime
@@ -176,14 +180,14 @@ unresolved until invocation.
 
 Aliases follow config scope and storage rules. A one-shot CLI write persists
 by default, while a REPL write lasts for the current session unless you add
-`--save`. `--profile`, `--global`, and `--terminal` select the same scopes as
+`--permanent`. `--profile`, `--global`, and `--terminal` select the same scopes as
 `config set` and `config unset`.
 
 The root REPL is silent on exit by default. Set `repl.exit_message` when a
 product or profile wants a sign-off:
 
 ```text
-config set repl.exit_message 'So long, and thanks for all the fish!' --save
+config set repl.exit_message 'So long, and thanks for all the fish!' --permanent
 ```
 
 The message is printed for root `exit`, `quit`, or end-of-input. Leaving a
@@ -197,10 +201,10 @@ ask for it.
 
 ```text
 config set ui.format json
-config set ui.format json --save
+config set ui.format json --permanent
 ```
 
-Use the first form when you want to experiment. Use `--save` when you have
+Use the first form when you want to experiment. Use `--permanent` when you have
 decided the setting should become part of your stored config.
 
 Theme, presentation, and prompt-related changes rebuild the REPL on the next
@@ -281,5 +285,5 @@ Prefer one-shot commands when:
 In those cases, use ordinary CLI commands with explicit render flags such as:
 
 ```bash
-osp --format json --mode plain plugins list
+osp --format json --render-mode plain plugins list
 ```

@@ -7,6 +7,7 @@ use super::editor::{
 use super::overlay::{build_completion_menu, launch_history_picker};
 use super::{COMPLETION_MENU_NAME, HOST_COMMAND_HISTORY_PICKER, SharedHistory};
 use crate::completion::CompletionTree;
+use crate::repl::menu::SharedCompletionMenu;
 use anyhow::Result;
 use reedline::{
     EditCommand, Emacs, KeyCode, KeyModifiers, Reedline, ReedlineEvent, ReedlineMenu, Signal,
@@ -102,17 +103,20 @@ pub(super) fn build_interactive_editor(
     history_store: SharedHistory,
 ) -> Reedline {
     let tree = completion_tree;
-    let completer = Box::new(ReplCompleter::new(tree.clone(), line_projector.clone()));
-    let completion_menu = Box::new(build_completion_menu(appearance));
+    let completer = Box::new(
+        ReplCompleter::new(tree.clone(), line_projector.clone())
+            .with_history(history_store.clone()),
+    );
+    let completion_menu = SharedCompletionMenu::new(build_completion_menu(appearance));
     let highlighter = build_repl_highlighter(&tree, appearance, line_projector);
     let edit_mode = Box::new(AutoCompleteEmacs::new(
         Emacs::new(build_repl_keybindings()),
-        COMPLETION_MENU_NAME,
+        completion_menu.clone(),
     ));
 
     let mut editor = Reedline::create()
         .with_completer(completer)
-        .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
+        .with_menu(ReedlineMenu::EngineCompleter(Box::new(completion_menu)))
         .with_edit_mode(edit_mode);
     if let Some(highlighter) = highlighter {
         editor = editor.with_highlighter(Box::new(highlighter));
@@ -185,7 +189,9 @@ fn build_repl_keybindings() -> reedline::Keybindings {
     keybindings.add_binding(
         KeyModifiers::NONE,
         KeyCode::Enter,
-        ReedlineEvent::Multiple(vec![ReedlineEvent::Esc, ReedlineEvent::Submit]),
+        // With a menu open reedline accepts the selection and closes the menu
+        // instead of submitting; otherwise this submits the line.
+        ReedlineEvent::Submit,
     );
     keybindings.add_binding(
         KeyModifiers::NONE,
@@ -334,7 +340,7 @@ mod tests {
 
         assert!(matches!(
             keybindings.find_binding(KeyModifiers::NONE, KeyCode::Enter),
-            Some(ReedlineEvent::Multiple(_))
+            Some(ReedlineEvent::Submit)
         ));
         assert!(matches!(
             keybindings.find_binding(KeyModifiers::NONE, KeyCode::Tab),

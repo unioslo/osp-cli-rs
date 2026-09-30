@@ -298,10 +298,9 @@ fn parse_last_builtin(raw: &str) -> Result<Option<bool>> {
 }
 
 pub(super) fn parse_bang_command(raw: &str) -> Result<Option<BangCommand>> {
-    let raw = raw.trim();
-    if !raw.starts_with('!') {
+    let Some((_, raw)) = split_bang_request(raw) else {
         return Ok(None);
-    }
+    };
     if raw == "!" {
         return Ok(Some(BangCommand::Prefix(String::new())));
     }
@@ -352,11 +351,11 @@ pub(super) fn execute_bang_command(
     raw: &str,
     command: BangCommand,
 ) -> Result<ReplLineResult> {
+    let elevated = split_bang_request(raw).is_some_and(|(elevated, _)| elevated);
     let scope = current_history_scope(session);
     let recent = history.recent_commands_for(scope.as_deref());
-
     let expanded = match command {
-        BangCommand::Last => expand_history("!!", &recent, scope.as_deref(), true),
+        BangCommand::Last => history.expand_last_command(raw),
         BangCommand::Relative(offset) => {
             expand_history(&format!("!-{offset}"), &recent, scope.as_deref(), true)
         }
@@ -393,7 +392,15 @@ pub(super) fn execute_bang_command(
         )));
     };
 
-    Ok(ReplLineResult::ReplaceInput(expanded))
+    Ok(ReplLineResult::ReplaceInput(if elevated {
+        if expanded.split_whitespace().next() == Some("sudo") {
+            expanded
+        } else {
+            format!("sudo {expanded}")
+        }
+    } else {
+        expanded
+    }))
 }
 
 pub(super) fn current_history_scope(session: &AppSession) -> Option<String> {
@@ -417,7 +424,7 @@ fn render_bang_help() -> String {
     out.push_str("  last     replay the last successful result\n");
     out.push_str("  last --raw  show the pre-pipeline result\n\n");
     out.push_str("Bang history shortcuts:\n");
-    out.push_str("  !!       last visible command\n");
+    out.push_str("  !!       repeat the last command\n");
     out.push_str("  !-N      Nth previous visible command\n");
     out.push_str("  !N [args]  visible history entry by id, with optional appended arguments\n");
     out.push_str("  !prefix  latest visible command starting with prefix\n");
@@ -445,7 +452,21 @@ fn execute_last_result_builtin(
 }
 
 pub(super) fn is_repl_bang_request(raw: &str) -> bool {
-    raw.trim_start().starts_with('!')
+    split_bang_request(raw).is_some()
+}
+
+fn split_bang_request(raw: &str) -> Option<(bool, &str)> {
+    let raw = raw.trim();
+    if raw.starts_with('!') {
+        return Some((false, raw));
+    }
+
+    let rest = raw.strip_prefix("sudo")?;
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    let bang = rest.trim_start();
+    bang.starts_with('!').then_some((true, bang))
 }
 
 #[cfg(test)]

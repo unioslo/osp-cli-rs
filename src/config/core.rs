@@ -691,6 +691,12 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     );
     insert_builtin_schema_key(
         schema,
+        "config.default-target",
+        SchemaEntry::string(),
+        "Default config write destination: session, global, or a profile name",
+    );
+    insert_builtin_schema_key(
+        schema,
         "ui.margin",
         SchemaEntry::integer(),
         "Left margin used when rendering output",
@@ -889,6 +895,12 @@ fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
         "repl.intro_template.full",
         SchemaEntry::string(),
         "Template for the full REPL intro",
+    );
+    insert_builtin_schema_key(
+        schema,
+        "repl.intro_tips",
+        SchemaEntry::string_list(),
+        "Tips for the intro's {{tip}} placeholder; one is shown per day",
     );
     insert_builtin_schema_key(
         schema,

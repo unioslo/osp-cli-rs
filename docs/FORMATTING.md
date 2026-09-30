@@ -65,7 +65,7 @@ shape is not what you need.
 
 Rendering flags:
 
-- `--mode {plain,rich,auto}`
+- `--render-mode {plain,rich,auto}`
 - `--color {auto,always,never}`
 - `--no-color`
 - `--unicode {auto,always,never}`
@@ -177,7 +177,7 @@ Which only affects that invocation.
 Force plain JSON for shell scripts:
 
 ```bash
-osp --format json --mode plain plugins commands
+osp --format json --render-mode plain plugins commands
 ```
 
 Keep the normal format but suppress color:

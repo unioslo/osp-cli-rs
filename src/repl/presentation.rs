@@ -364,6 +364,21 @@ fn repl_intro_body_paragraphs(paragraphs: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Picks one entry from `repl.intro_tips`, the same one all day (UTC).
+fn tip_of_the_day(config: &crate::config::ResolvedConfig) -> String {
+    let tips = config
+        .get_string_list("repl.intro_tips")
+        .unwrap_or_default();
+    if tips.is_empty() {
+        return String::new();
+    }
+    let day = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() / 86_400)
+        .unwrap_or(0);
+    tips[(day % tips.len() as u64) as usize].clone()
+}
+
 fn expand_intro_template<'a>(
     view: ReplViewContext<'_>,
     intro_commands: &[String],
@@ -473,6 +488,7 @@ fn resolve_intro_placeholder(
                 .unwrap_or_else(|| theme_display_name(&view.ui.render_settings.theme_name));
         }
         "version" => return env!("CARGO_PKG_VERSION").to_string(),
+        "tip" => return tip_of_the_day(view.config),
         "intro.commands" => {
             return intro_commands
                 .iter()

@@ -227,7 +227,7 @@ profile.default = "uio"
     cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "never",
@@ -266,7 +266,7 @@ profile.default = "uio"
     cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",
@@ -301,7 +301,7 @@ ui.format = "json"
     cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "never",

@@ -10,7 +10,7 @@ fn cli_scan_and_runtime_load_options_strip_invocation_flags_unit() {
     let argv = [
         OsString::from("osp"),
         OsString::from("--json"),
-        OsString::from("--mode"),
+        OsString::from("--render-mode"),
         OsString::from("plain"),
         OsString::from("--color=never"),
         OsString::from("--ascii"),

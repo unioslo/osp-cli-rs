@@ -140,6 +140,14 @@ impl<'a> NativeCommandContext<'a> {
         Ok(())
     }
 
+    /// Display a notice or confirmation through the host renderer, outside stream filters.
+    pub fn present(&self, document: NativeProgressEvent) -> Result<()> {
+        match self.progress {
+            Some(progress) => progress.present(document),
+            None => Ok(()),
+        }
+    }
+
     /// Emits one structured transient progress document immediately.
     ///
     /// A context created outside the host has no sink, in which case emission
@@ -194,6 +202,11 @@ impl NativeProgressEvent {
 pub trait NativeProgressSink {
     /// Renders or records one progress document before command execution resumes.
     fn emit(&self, event: NativeProgressEvent) -> Result<()>;
+
+    /// Render a notice or confirmation without applying result-stream filters.
+    fn present(&self, document: NativeProgressEvent) -> Result<()> {
+        self.emit(document)
+    }
 
     /// Flushes coalesced terminal progress when the command is waiting for input.
     fn flush(&self) -> Result<()> {

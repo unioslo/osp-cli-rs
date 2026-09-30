@@ -153,7 +153,7 @@ fn rebuild_repl_state_preserves_last_failure_unit() {
 
 #[cfg_attr(miri, ignore = "plugin filesystem/process integration test")]
 #[test]
-fn repl_bang_expands_last_visible_command_unit() {
+fn repl_bang_executes_last_command_unit() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = make_temp_dir("osp-cli-repl-bang-plugin");
@@ -202,8 +202,8 @@ printf '{"protocol_version":1,"ok":true,"data":{"message":"ok","arg":"%s"},"erro
     )
     .expect("bang expansion should succeed");
     match expanded {
-        crate::repl::ReplLineResult::ReplaceInput(text) => {
-            assert_eq!(text, "cache first");
+        crate::repl::ReplLineResult::Continue(text) => {
+            assert!(text.contains("first"), "repeated command output: {text}");
         }
         other => panic!("unexpected repl result: {other:?}"),
     }

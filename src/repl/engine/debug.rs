@@ -406,36 +406,36 @@ fn apply_debug_step(
     match step {
         DebugStep::Tab => {
             if menu.is_active() {
-                dispatch_menu_event(menu, editor, completer, MenuEvent::NextElement);
+                menu.navigate(MenuEvent::NextElement, editor);
             } else {
                 dispatch_menu_event(menu, editor, completer, MenuEvent::Activate(false));
             }
         }
         DebugStep::BackTab => {
             if menu.is_active() {
-                dispatch_menu_event(menu, editor, completer, MenuEvent::PreviousElement);
+                menu.navigate(MenuEvent::PreviousElement, editor);
             } else {
                 dispatch_menu_event(menu, editor, completer, MenuEvent::Activate(false));
             }
         }
         DebugStep::Up => {
             if menu.is_active() {
-                dispatch_menu_event(menu, editor, completer, MenuEvent::MoveUp);
+                menu.navigate(MenuEvent::MoveUp, editor);
             }
         }
         DebugStep::Down => {
             if menu.is_active() {
-                dispatch_menu_event(menu, editor, completer, MenuEvent::MoveDown);
+                menu.navigate(MenuEvent::MoveDown, editor);
             }
         }
         DebugStep::Left => {
             if menu.is_active() {
-                dispatch_menu_event(menu, editor, completer, MenuEvent::MoveLeft);
+                menu.navigate(MenuEvent::MoveLeft, editor);
             }
         }
         DebugStep::Right => {
             if menu.is_active() {
-                dispatch_menu_event(menu, editor, completer, MenuEvent::MoveRight);
+                menu.navigate(MenuEvent::MoveRight, editor);
             }
         }
         DebugStep::Accept => {

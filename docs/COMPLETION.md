@@ -100,6 +100,12 @@ The REPL keeps history for two different jobs:
 - navigation through previous commands
 - history expansion when you want to replay or adapt an earlier command
 
+An accepted command stays in navigation and persistent history when execution
+fails. Unknown commands and invalid syntax are removed after dispatch. The
+entered `!!` form expands in the editor on Tab; Enter executes the expanded
+command and keeps it as the last command when it is accepted, including after
+an execution failure.
+
 Supported expansions:
 
 - `!!`

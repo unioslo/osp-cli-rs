@@ -472,6 +472,49 @@ impl ArgNode {
     }
 }
 
+/// A large, locally refreshed value catalogue shared by completion tree clones.
+/// Values are sorted once on replacement; each lookup copies at most `limit`
+/// prefix matches. Refresh outside the editing path, without network I/O here.
+#[derive(Debug, Clone, Default)]
+pub struct PrefixValues(std::sync::Arc<std::sync::RwLock<Vec<String>>>);
+
+impl PartialEq for PrefixValues {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for PrefixValues {}
+
+impl PrefixValues {
+    /// Atomically replaces the catalogue, sorting and removing duplicate values.
+    pub fn replace(&self, mut values: Vec<String>) {
+        values.sort_unstable();
+        values.dedup();
+        *self.0.write().unwrap_or_else(|err| err.into_inner()) = values;
+    }
+
+    /// Returns lexicographically ordered prefix matches, bounded before cloning.
+    pub fn matching(&self, prefix: &str, limit: usize) -> Vec<String> {
+        let values = self.0.read().unwrap_or_else(|err| err.into_inner());
+        let start = values.partition_point(|value| value.as_str() < prefix);
+        values[start..]
+            .iter()
+            .take_while(|value| value.starts_with(prefix))
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    /// Reports exact membership without copying the catalogue.
+    pub fn contains(&self, value: &str) -> bool {
+        self.0
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .binary_search_by(|candidate| candidate.as_str().cmp(value))
+            .is_ok()
+    }
+}
+
 /// Completion metadata for a flag spelling.
 ///
 /// Flags can contribute both direct value suggestions and context that affects
@@ -480,6 +523,8 @@ impl ArgNode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
 pub struct FlagNode {
+    /// Optional shared catalogue: three-character minimum, at most 25 prefix matches.
+    pub prefix_values: Option<PrefixValues>,
     /// Optional description shown alongside the flag.
     pub tooltip: Option<String>,
     /// Whether the flag does not accept a value.

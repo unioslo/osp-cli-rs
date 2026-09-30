@@ -342,3 +342,5 @@ fn apply_title_prefix(view: &GuideView, title_prefix: Option<&str>) -> GuideView
 
 #[cfg(test)]
 mod tests;
+
+pub mod prompt;

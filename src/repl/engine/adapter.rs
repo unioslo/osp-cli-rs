@@ -24,6 +24,7 @@ use super::{HistoryEntry, LineProjection, LineProjector, ReplAppearance, SharedH
 pub(crate) struct ReplCompleter {
     engine: CompletionEngine,
     line_projector: Option<LineProjector>,
+    history: Option<SharedHistory>,
 }
 
 impl ReplCompleter {
@@ -31,7 +32,15 @@ impl ReplCompleter {
         Self {
             engine: CompletionEngine::new(tree),
             line_projector,
+            history: None,
         }
+    }
+}
+
+impl ReplCompleter {
+    pub(crate) fn with_history(mut self, history: SharedHistory) -> Self {
+        self.history = Some(history);
+        self
     }
 }
 
@@ -42,6 +51,19 @@ impl Completer for ReplCompleter {
             "completer received pos {pos} beyond line length {}",
             line.len()
         );
+        if pos == line.len()
+            && let Some(expanded) = self
+                .history
+                .as_ref()
+                .and_then(|history| history.expand_last_command(line))
+        {
+            return vec![Suggestion {
+                value: expanded,
+                span: Span { start: 0, end: pos },
+                append_whitespace: false,
+                ..Suggestion::default()
+            }];
+        }
         let projected = self
             .line_projector
             .as_ref()

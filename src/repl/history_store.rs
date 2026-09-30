@@ -265,6 +265,11 @@ struct HistoryRecord {
     terminal: Option<String>,
 }
 
+struct PendingHistoryRecord {
+    index: usize,
+    command_line: String,
+}
+
 /// Visible history entry returned by listing operations after scope filtering.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
@@ -409,6 +414,49 @@ impl SharedHistory {
         guard.clear_for(shell_prefix)
     }
 
+    /// Remember the last submitted command independently of persisted history.
+    pub(crate) fn remember_command(&self, command_line: &str) {
+        if !command_line.trim().is_empty()
+            && let Ok(mut store) = self.inner.lock()
+        {
+            store.last_command = Some(command_line.trim().to_string());
+        }
+    }
+
+    pub(crate) fn last_command(&self) -> Option<String> {
+        let store = self.inner.lock().ok()?;
+        store
+            .last_command
+            .clone()
+            .or_else(|| store.recent_commands().last().cloned())
+    }
+
+    /// The same expansion is used by Tab completion and Enter dispatch.
+    pub(crate) fn expand_last_command(&self, raw: &str) -> Option<String> {
+        let mut words = raw.split_whitespace();
+        let elevated = match (words.next(), words.next(), words.next()) {
+            (Some("!!"), None, None) => false,
+            (Some("sudo"), Some("!!"), None) => true,
+            _ => return None,
+        };
+        let command = self.last_command()?;
+        Some(
+            if elevated && command.split_whitespace().next() != Some("sudo") {
+                format!("sudo {command}")
+            } else {
+                command
+            },
+        )
+    }
+
+    pub(crate) fn finalize_pending(&self, command_line: &str, keep: bool) -> Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("history lock poisoned"))?;
+        guard.finalize_pending(command_line, keep)
+    }
+
     /// Saves one command line through the underlying `reedline::History`
     /// implementation.
     ///
@@ -423,6 +471,7 @@ impl SharedHistory {
             .map_err(|_| anyhow::anyhow!("history lock poisoned"))?;
         let item = HistoryItem::from_command_line(command_line);
         History::save(&mut *guard, item).map(|_| ())?;
+        guard.finalize_pending(command_line, true)?;
         Ok(())
     }
 }
@@ -435,6 +484,8 @@ impl SharedHistory {
 pub(crate) struct OspHistoryStore {
     config: HistoryConfig,
     records: Vec<HistoryRecord>,
+    pending_record: Option<PendingHistoryRecord>,
+    last_command: Option<String>,
 }
 
 impl OspHistoryStore {
@@ -448,7 +499,12 @@ impl OspHistoryStore {
         {
             records = load_records(path);
         }
-        let mut store = Self { config, records };
+        let mut store = Self {
+            config,
+            records,
+            pending_record: None,
+            last_command: None,
+        };
         store.trim_to_capacity();
         store
     }
@@ -691,6 +747,34 @@ impl OspHistoryStore {
         self.recent_commands()
     }
 
+    fn finalize_pending(&mut self, command_line: &str, keep: bool) -> Result<()> {
+        let Some(pending) = self.pending_record.as_ref() else {
+            return Ok(());
+        };
+        let expected = apply_shell_prefix(command_line, self.shell_prefix().as_deref());
+        if pending.command_line != expected {
+            return Ok(());
+        }
+
+        if keep {
+            self.write_all()?;
+            self.pending_record = None;
+            return Ok(());
+        }
+
+        let Some(pending) = self.pending_record.take() else {
+            return Ok(());
+        };
+        if self
+            .records
+            .get(pending.index)
+            .is_none_or(|record| record.command_line != pending.command_line)
+        {
+            return Ok(());
+        }
+        self.remove_records(&[pending.index]).map(|_| ())
+    }
+
     fn expand_if_needed(&self, command: &str, shell_prefix: Option<&str>) -> Option<String> {
         if !command.starts_with('!') {
             return Some(command.to_string());
@@ -824,6 +908,7 @@ impl OspHistoryStore {
 
 impl History for OspHistoryStore {
     fn save(&mut self, h: HistoryItem) -> ReedlineResult<HistoryItem> {
+        self.pending_record = None;
         if !self.config.enabled || self.config.max_entries == 0 {
             return Ok(h);
         }
@@ -858,10 +943,10 @@ impl History for OspHistoryStore {
             record.timestamp_ms = Some(now_ms());
         }
         let id = self.append_record(record);
-
-        if let Err(err) = self.write_all() {
-            return Err(ReedlineError(ReedlineErrorVariants::IOError(err)));
-        }
+        self.pending_record = Some(PendingHistoryRecord {
+            index: id.0 as usize,
+            command_line: self.records[id.0 as usize].command_line.clone(),
+        });
 
         Ok(HistoryItem {
             id: Some(id),
@@ -1263,22 +1348,48 @@ fn is_excluded_command(command: &str, exclude_patterns: &[String]) -> bool {
     if trimmed.is_empty() {
         return true;
     }
-    if trimmed.starts_with('!') {
+    if trimmed.starts_with('!') || is_sudo_bang_command(trimmed) {
         return true;
     }
     if trimmed.contains("--help") {
         return true;
     }
-    if trimmed
-        .split_whitespace()
-        .zip(trimmed.split_whitespace().skip(1))
-        .any(|words| words == ("config", "set"))
-    {
+    // Keep ordinary config writes, while using the existing command grammar and
+    // sensitivity policy to avoid retaining inline credentials.
+    if is_sensitive_config_set_command(trimmed) {
         return true;
     }
     exclude_patterns
         .iter()
         .any(|pattern| matches_pattern(pattern, trimmed))
+}
+
+fn is_sensitive_config_set_command(command: &str) -> bool {
+    let Ok(words) = shell_words::split(command) else {
+        return false;
+    };
+    let Some(config_set) = words
+        .windows(2)
+        .position(|pair| pair[0] == "config" && pair[1] == "set")
+    else {
+        return false;
+    };
+    let Ok(Some(crate::cli::Commands::Config(args))) =
+        crate::cli::parse_inline_command_tokens(&words[config_set..])
+    else {
+        return false;
+    };
+    let crate::cli::ConfigCommands::Set(set) = args.command else {
+        return false;
+    };
+    set.store.secrets || crate::config::is_sensitive_key(&set.key)
+}
+
+fn is_sudo_bang_command(command: &str) -> bool {
+    let Some(rest) = command.strip_prefix("sudo") else {
+        return false;
+    };
+    rest.chars().next().is_some_and(char::is_whitespace) && rest.trim_start().starts_with('!')
 }
 
 fn matches_pattern(pattern: &str, command: &str) -> bool {

@@ -57,7 +57,24 @@ fn completion_tree(context_scope: ContextScope) -> osp_cli::completion::Completi
 
 #[test]
 fn completion_engine_merges_global_context_flags_from_later_tokens() {
-    let engine = CompletionEngine::new(completion_tree(ContextScope::Global));
+    let catalogue = osp_cli::completion::model::PrefixValues::default();
+    let mut tree = completion_tree(ContextScope::Global);
+    tree.root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap()
+        .flags
+        .insert(
+            "--hostname".into(),
+            FlagNode {
+                prefix_values: Some(catalogue.clone()),
+                ..FlagNode::default()
+            },
+        );
+    let engine = CompletionEngine::new(tree.clone());
     let line = "service deploy --image  --provider alpha";
     let cursor = provider_cursor(line);
 
@@ -76,6 +93,28 @@ fn completion_engine_merges_global_context_flags_from_later_tokens() {
             .flag_values("--provider")
             .expect("provider should merge into cursor context"),
         &vec!["alpha".to_string()][..]
+    );
+
+    // A refreshed catalogue reaches an existing engine through its cloned tree.
+    catalogue.replace(
+        (0..30)
+            .rev()
+            .map(|index| format!("node-{index:02}"))
+            .chain(["node-00".into(), "other-host".into()])
+            .collect(),
+    );
+    let line = "service deploy --hostname node-";
+    assert_eq!(
+        suggestion_values(engine.complete(line, line.len()).1),
+        (0..25)
+            .map(|index| format!("node-{index:02}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(catalogue.contains("node-29"));
+    catalogue.replace(vec!["node-refreshed".into()]);
+    assert_eq!(
+        suggestion_values(engine.complete(line, line.len()).1),
+        vec!["node-refreshed"]
     );
 }
 

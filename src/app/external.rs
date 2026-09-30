@@ -113,6 +113,50 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
     guide_help: impl Fn(&str) -> GuideView,
     progress_sink: Option<&mut dyn UiSink>,
 ) -> Result<CliCommandResult> {
+    run_external_command_with_help_renderer_and_progress_inner(
+        runtime,
+        session,
+        clients,
+        tokens,
+        invocation,
+        guide_help,
+        progress_sink,
+        None,
+    )
+}
+
+pub(crate) fn run_external_command_with_help_renderer_and_progress_for_repl(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    tokens: &[String],
+    invocation: &ResolvedInvocation,
+    guide_help: impl Fn(&str) -> GuideView,
+    progress_sink: Option<&mut dyn UiSink>,
+    accepted: &mut bool,
+) -> Result<CliCommandResult> {
+    run_external_command_with_help_renderer_and_progress_inner(
+        runtime,
+        session,
+        clients,
+        tokens,
+        invocation,
+        guide_help,
+        progress_sink,
+        Some(accepted),
+    )
+}
+
+fn run_external_command_with_help_renderer_and_progress_inner(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    tokens: &[String],
+    invocation: &ResolvedInvocation,
+    guide_help: impl Fn(&str) -> GuideView,
+    progress_sink: Option<&mut dyn UiSink>,
+    mut accepted: Option<&mut bool>,
+) -> Result<CliCommandResult> {
     let mut parsed = match parse_external_invocation(runtime, session, tokens, invocation)
         .wrap_err_with(|| {
             format!(
@@ -120,7 +164,10 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                 tokens.first().map(String::as_str).unwrap_or("external")
             )
         })? {
-        ExternalParse::Handled(result) => return Ok(*result),
+        ExternalParse::Handled(result) => {
+            mark_repl_command_accepted(&mut accepted);
+            return Ok(*result);
+        }
         ExternalParse::Invocation(parsed) => parsed,
     };
 
@@ -134,17 +181,20 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
             "elevation prefix is unsupported for built-in commands"
         ));
     }
-    if let Some(command) = parsed.inline_command.take()
-        && let Some(result) = run_inline_builtin_command(
+    if let Some(command) = parsed.inline_command.take() {
+        if !matches!(&command, Commands::External(_)) {
+            mark_repl_command_accepted(&mut accepted);
+        }
+        if let Some(result) = run_inline_builtin_command(
             runtime,
             session,
             clients,
             Some(invocation),
             command,
             &parsed.stages,
-        )?
-    {
-        return crate::app::command_output::apply_stages_to_cli_result(result, &parsed.stages);
+        )? {
+            return crate::app::command_output::apply_stages_to_cli_result(result, &parsed.stages);
+        }
     }
     if !parsed.stages.is_empty() {
         completion::validate_dsl_stages(&parsed.stages)
@@ -202,6 +252,7 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
             let invocation_ends_at_command = args.len() + 1 == path.as_slice().len();
             if let Err(err) = native_parse {
                 if is_native_help_error(err.kind()) {
+                    mark_repl_command_accepted(&mut accepted);
                     ensure_external_path_access(
                         runtime,
                         session,
@@ -221,6 +272,7 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                     ));
                 }
             }
+            mark_repl_command_accepted(&mut accepted);
             ensure_external_path_access(
                 runtime,
                 session,
@@ -240,6 +292,7 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                     progress_sink,
                 },
                 guide_help,
+                &mut accepted,
             )
         }
         ExternalCommandSource::Plugin => {
@@ -249,9 +302,28 @@ pub(crate) fn run_external_command_with_help_renderer_and_progress(
                 ));
             }
             run_external_plugin_command(
-                runtime, session, clients, &command, &parsed, invocation, guide_help,
+                runtime,
+                session,
+                clients,
+                &command,
+                &parsed,
+                invocation,
+                guide_help,
+                &mut accepted,
             )
         }
+    }
+}
+
+fn mark_repl_command_accepted(accepted: &mut Option<&mut bool>) {
+    if let Some(accepted) = accepted.as_mut() {
+        **accepted = true;
+    }
+}
+
+fn mark_repl_command_rejected(accepted: &mut Option<&mut bool>) {
+    if let Some(accepted) = accepted.as_mut() {
+        **accepted = false;
     }
 }
 
@@ -329,6 +401,7 @@ fn run_native_command(
     session: &mut AppSession,
     input: NativeRunInput<'_, '_, '_, '_>,
     guide_help: impl Fn(&str) -> GuideView,
+    accepted: &mut Option<&mut bool>,
 ) -> Result<CliCommandResult> {
     session.native_context.clear_pagination();
     let progress_renderer = input.progress_sink.map(|sink| NativeProgressRenderer {
@@ -353,10 +426,13 @@ fn run_native_command(
         command
             .execute(input.args, &context)
             .map_err(|err| match err.downcast::<clap::Error>() {
-                Ok(err) => crate::app::report_std_error_with_context(
-                    err,
-                    "native command execution failed",
-                ),
+                Ok(err) => {
+                    mark_repl_command_rejected(accepted);
+                    crate::app::report_std_error_with_context(
+                        err,
+                        "native command execution failed",
+                    )
+                }
                 Err(err) => {
                     crate::app::report_anyhow_with_context(err, "native command execution failed")
                 }
@@ -406,7 +482,7 @@ impl NativeProgressRenderer<'_, '_> {
         self.sink.borrow_mut().clear_progress();
     }
 
-    fn draw(&self, event: NativeProgressEvent) -> anyhow::Result<()> {
+    fn draw(&self, event: NativeProgressEvent, stages: &[String]) -> anyhow::Result<()> {
         let result = cli_result_from_plugin_response(
             crate::core::plugin::ResponseV1 {
                 protocol_version: crate::core::plugin::PLUGIN_PROTOCOL_V1,
@@ -416,24 +492,29 @@ impl NativeProgressRenderer<'_, '_> {
                 messages: event.messages,
                 meta: event.meta,
             },
-            self.stages,
+            stages,
         )
-        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+        .map_err(|err| anyhow::Error::from_boxed(err.into()))?;
         let mut sink = self.sink.borrow_mut();
         run_progress_command_with_ui(self.config, self.ui, result, &mut *sink)
-            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+            .map_err(|err| anyhow::Error::from_boxed(err.into()))?;
         Ok(())
     }
 }
 
 impl NativeProgressSink for NativeProgressRenderer<'_, '_> {
+    fn present(&self, document: NativeProgressEvent) -> anyhow::Result<()> {
+        self.flush()?;
+        self.draw(document, &[])
+    }
+
     fn emit(&self, event: NativeProgressEvent) -> anyhow::Result<()> {
         let tree = event.meta.progress_replace
             && self.stages.is_empty()
             && self.sink.borrow().stderr_is_terminal()
             && self.ui.render_settings.format != crate::core::output::OutputFormat::Json;
         if !tree {
-            return self.draw(event);
+            return self.draw(event, self.stages);
         }
         let replay = event.replay;
         *self.pending.borrow_mut() = Some(event);
@@ -459,7 +540,7 @@ impl NativeProgressSink for NativeProgressRenderer<'_, '_> {
             {
                 std::thread::sleep(delay);
             }
-            self.draw(event)?;
+            self.draw(event, self.stages)?;
             self.last_draw.set(Some(std::time::Instant::now()));
         }
         Ok(())
@@ -600,6 +681,7 @@ fn run_external_plugin_command(
     parsed: &ParsedExternalInvocation,
     invocation: &ResolvedInvocation,
     guide_help: impl Fn(&str) -> GuideView,
+    accepted: &mut Option<&mut bool>,
 ) -> Result<CliCommandResult> {
     let (_, args) = parsed
         .tokens
@@ -609,6 +691,7 @@ fn run_external_plugin_command(
         .plugins()
         .resolved_command_path_and_policy(command, args, invocation.plugin_provider.as_deref())
         .map_err(|error| miette!(error.to_string()))?;
+    mark_repl_command_accepted(accepted);
     let access_requirement = if help_requested {
         ExternalPathAccessRequirement::Visible
     } else {

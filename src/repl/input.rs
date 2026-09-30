@@ -206,15 +206,27 @@ pub(crate) fn project_repl_ui_line(line: &str, config: &ResolvedConfig) -> Resul
         blank_bytes(&mut projected, span.start, span.end);
     }
 
-    if scanned.tokens.first().map(String::as_str) == Some(CMD_HELP)
-        && scanned.tokens.len() > 1
-        && let Some(help_index) = scanned.kept_indices.first().copied()
+    // Elevation wraps the command already represented by the active tree.
+    // Mask its bytes rather than copying that tree beneath another node.
+    let mut command_index = 0;
+    if scanned.tokens.first().map(String::as_str) == Some("sudo")
+        && let Some(index) = scanned.kept_indices.first()
+        && let Some(span) = spans.get(*index)
+        && line[span.end..].starts_with(char::is_whitespace)
+    {
+        blank_bytes(&mut projected, span.start, span.end);
+        command_index = 1;
+    }
+    if scanned.tokens.get(command_index).map(String::as_str) == Some(CMD_HELP)
+        && scanned.tokens.len() > command_index + 1
+        && let Some(help_index) = scanned.kept_indices.get(command_index).copied()
         && let Some(span) = spans.get(help_index)
     {
         blank_bytes(&mut projected, span.start, span.end);
     }
 
-    let hidden_suggestions = projection_hidden_suggestions(&scanned.tokens, &scanned.invocation);
+    let hidden_suggestions =
+        projection_hidden_suggestions(&scanned.tokens[command_index..], &scanned.invocation);
 
     Ok(LineProjection::passthrough(
         String::from_utf8(projected).unwrap_or_else(|_| line.to_string()),

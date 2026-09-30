@@ -36,7 +36,8 @@ use super::{ReplViewContext, completion, input};
 
 use builtins::{ReplBuiltin, execute_repl_builtin, is_repl_bang_request, parse_repl_builtin};
 use command::{
-    ExecutedReplCommand, ParsedReplDispatch, execute_repl_command_dispatch, parse_repl_invocation,
+    ExecutedReplCommand, ParsedReplDispatch, execute_repl_command_dispatch_with_acceptance,
+    parse_repl_invocation,
 };
 use shell::{ReplShortcutPlan, classify_repl_shortcut, execute_repl_shortcut};
 
@@ -154,6 +155,7 @@ struct ReplExecutionContext<'a, 'sink> {
     clients: &'a AppClients,
     history: &'a SharedHistory,
     sink: &'sink mut dyn UiSink,
+    accepted: &'a mut bool,
 }
 
 #[cfg(test)]
@@ -203,14 +205,47 @@ fn execute_repl_plugin_line_with_sink(
     line: &str,
     sink: &mut dyn UiSink,
 ) -> Result<ExecutedReplLine> {
+    let mut accepted = false;
+    execute_repl_plugin_line_with_acceptance(
+        runtime,
+        session,
+        clients,
+        history,
+        line,
+        sink,
+        &mut accepted,
+    )
+}
+
+fn execute_repl_plugin_line_with_acceptance(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    line: &str,
+    sink: &mut dyn UiSink,
+    accepted: &mut bool,
+) -> Result<ExecutedReplLine> {
     let started = Instant::now();
-    match execute_repl_plugin_line_inner(runtime, session, clients, history, line, sink) {
+    match execute_repl_plugin_line_inner(runtime, session, clients, history, line, sink, accepted) {
         Ok(executed) => {
+            history
+                .finalize_pending(line, *accepted)
+                .map_err(|err| miette!("failed to update REPL history: {err}"))?;
+            if *accepted && !is_repl_bang_request(line) {
+                history.remember_command(line);
+            }
             session.finish_repl_line();
             record_repl_timing(session, started, executed.timing);
             Ok(executed)
         }
         Err(err) => {
+            history
+                .finalize_pending(line, *accepted)
+                .map_err(|history_err| miette!("failed to update REPL history: {history_err}"))?;
+            if *accepted && !is_repl_bang_request(line) {
+                history.remember_command(line);
+            }
             session.finish_repl_line();
             if runtime.ui.debug_verbosity > 0 {
                 session.record_prompt_timing(
@@ -268,7 +303,37 @@ fn execute_repl_plugin_line_inner(
     history: &SharedHistory,
     line: &str,
     sink: &mut dyn UiSink,
+    accepted: &mut bool,
 ) -> Result<ExecutedReplLine> {
+    if let Some(command @ builtins::BangCommand::Last) = builtins::parse_bang_command(line)? {
+        match builtins::execute_bang_command(session, history, line, command)? {
+            ReplLineResult::ReplaceInput(expanded) => {
+                sink.write_stderr(&format!("{expanded}\n"));
+                let executed = match execute_repl_plugin_line_with_acceptance(
+                    runtime, session, clients, history, &expanded, sink, accepted,
+                ) {
+                    Ok(executed) => executed,
+                    Err(err) => {
+                        if *accepted {
+                            history
+                                .save_command_line(&expanded)
+                                .map_err(|history_err| {
+                                    miette!("failed to save REPL history: {history_err}")
+                                })?;
+                        }
+                        return Err(err);
+                    }
+                };
+                if *accepted {
+                    history
+                        .save_command_line(&expanded)
+                        .map_err(|err| miette!("failed to save REPL history: {err}"))?;
+                }
+                return Ok(executed);
+            }
+            result => return Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity)),
+        }
+    }
     if !matches!(line.trim(), "next" | "prev") {
         session.native_context.clear_pagination();
     }
@@ -281,6 +346,7 @@ fn execute_repl_plugin_line_inner(
             clients,
             history,
             sink,
+            accepted,
         },
         line,
         plan,
@@ -380,9 +446,11 @@ fn execute_repl_line_plan(
         clients,
         history,
         sink,
+        accepted,
     } = context;
     match plan {
         ReplLinePlan::Builtin { raw, builtin } => {
+            *accepted = true;
             let result =
                 execute_repl_builtin(runtime, session, clients, history, &raw, builtin, sink)?;
             Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity))
@@ -391,17 +459,21 @@ fn execute_repl_line_plan(
             ReplLineResult::Continue(String::new()),
             runtime.ui.debug_verbosity,
         )),
-        ReplLinePlan::DslHelp { help } => Ok(ExecutedReplLine::flat(
-            ReplLineResult::Continue(help),
-            runtime.ui.debug_verbosity,
-        )),
+        ReplLinePlan::DslHelp { help } => {
+            *accepted = true;
+            Ok(ExecutedReplLine::flat(
+                ReplLineResult::Continue(help),
+                runtime.ui.debug_verbosity,
+            ))
+        }
         ReplLinePlan::Shortcut { parsed, shortcut } => {
+            *accepted = true;
             let result =
                 execute_repl_shortcut(runtime, session, clients, &parsed, *shortcut, line, sink)?;
             Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity))
         }
         ReplLinePlan::Command(dispatch) => {
-            let executed = execute_repl_command_dispatch(
+            let executed = execute_repl_command_dispatch_with_acceptance(
                 runtime,
                 session,
                 clients,
@@ -409,6 +481,7 @@ fn execute_repl_line_plan(
                 line,
                 *dispatch,
                 sink,
+                accepted,
             )?;
             Ok(ExecutedReplLine::command(parse_finished, executed))
         }

@@ -333,18 +333,15 @@ fn debug_completion_and_steps_surface_menu_state_unit() {
 #[cfg_attr(miri, ignore = "filesystem-backed path completion integration test")]
 #[test]
 fn autocomplete_policy_and_path_helpers_cover_editing_and_lookup_edges_unit() {
-    assert!(AutoCompleteEmacs::should_reopen_menu(&[
-        EditCommand::InsertChar('x')
-    ]));
-    assert!(AutoCompleteEmacs::should_reopen_menu(&[
-        EditCommand::BackspaceWord
-    ]));
-    assert!(!AutoCompleteEmacs::should_reopen_menu(&[
-        EditCommand::MoveToStart { select: false }
-    ]));
-    assert!(!AutoCompleteEmacs::should_reopen_menu(&[
-        EditCommand::MoveToLineEnd { select: false }
-    ]));
+    assert!(AutoCompleteEmacs::opens_menu(&[EditCommand::InsertChar(
+        '-'
+    )]));
+    assert!(!AutoCompleteEmacs::opens_menu(&[EditCommand::InsertChar(
+        'x'
+    )]));
+    assert!(!AutoCompleteEmacs::opens_menu(&[EditCommand::InsertChar(
+        ' '
+    )]));
 
     let missing = path_suggestions(
         "/definitely/not/a/real/dir/",

@@ -306,6 +306,18 @@ impl SuggestionEngine {
             return vec![SuggestionOutput::PathSentinel];
         }
 
+        if let Some(values) = &flag_node.prefix_values {
+            if stub.chars().count() < 3 {
+                return Vec::new();
+            }
+            let entries = values
+                .matching(stub, 25)
+                .into_iter()
+                .map(SuggestionEntry::value)
+                .collect::<Vec<_>>();
+            return self.entry_suggestions(&entries, stub);
+        }
+
         let static_entries = self
             .provider_specific_flag_value_entries(flag_node, provider)
             .unwrap_or_else(|| flag_node.suggestions.clone());

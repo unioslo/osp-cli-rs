@@ -31,7 +31,15 @@ fn run_basic_repl(input: &[u8]) -> Output {
 
 #[test]
 fn repl_basic_mode_runs_help_and_exit_without_tty() {
-    let output = run_basic_repl(b"help\nexit\n");
+    let files = make_temp_dir("osp-cli-repl-source");
+    let commands = files.path().join("session commands.osp");
+    std::fs::write(
+        &commands,
+        "# Read config through the same session\n\nconfig get theme.name\n",
+    )
+    .expect("command file should write");
+    let input = format!("help\nsource '{}'\nexit\n", commands.display());
+    let output = run_basic_repl(input.as_bytes());
     assert!(
         output.status.success(),
         "basic repl should exit successfully; stderr:\n{}",
@@ -44,6 +52,10 @@ fn repl_basic_mode_runs_help_and_exit_without_tty() {
     assert!(stdout.contains("Commands"));
     assert!(stdout.contains("help"));
     assert!(stdout.contains("exit"));
+    assert!(
+        stdout.contains("rose-pine-moon"),
+        "sourced config command should return its resolved value; stdout:\n{stdout}"
+    );
     assert!(stderr.contains("Warning: input is not a terminal"));
 }
 

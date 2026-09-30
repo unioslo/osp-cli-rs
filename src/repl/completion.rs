@@ -257,7 +257,7 @@ fn invocation_prefilled_flags(
         out.insert("--format".to_string(), vec![format.as_str().to_string()]);
     }
     if let Some(mode) = invocation.mode {
-        out.insert("--mode".to_string(), vec![mode.as_str().to_string()]);
+        out.insert("--render-mode".to_string(), vec![mode.as_str().to_string()]);
     }
     if let Some(color) = invocation.color {
         out.insert("--color".to_string(), vec![color.as_str().to_string()]);
@@ -408,7 +408,7 @@ fn invocation_flag_nodes() -> Vec<(String, FlagNode)> {
             FlagNode::new().flag_only().tooltip("Alias for --format md"),
         ),
         (
-            "--mode".to_string(),
+            "--render-mode".to_string(),
             FlagNode::new()
                 .tooltip("Render mode for this invocation")
                 .suggestions(mode_values),
@@ -417,11 +417,13 @@ fn invocation_flag_nodes() -> Vec<(String, FlagNode)> {
             "--plain".to_string(),
             FlagNode::new()
                 .flag_only()
-                .tooltip("Alias for --mode plain"),
+                .tooltip("Alias for --render-mode plain"),
         ),
         (
             "--rich".to_string(),
-            FlagNode::new().flag_only().tooltip("Alias for --mode rich"),
+            FlagNode::new()
+                .flag_only()
+                .tooltip("Alias for --render-mode rich"),
         ),
         (
             "--color".to_string(),
