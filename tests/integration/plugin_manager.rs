@@ -3,7 +3,7 @@ use crate::temp_support::make_temp_dir;
 #[cfg(unix)]
 use osp_cli::core::command_policy::{CommandPath, VisibilityMode};
 #[cfg(unix)]
-use osp_cli::plugin::{PluginManager, PluginSource};
+use osp_cli::plugin::{PluginDispatchContext, PluginManager, PluginSource};
 
 #[cfg(unix)]
 fn write_executable_script(path: &std::path::Path, script: &str) {
@@ -31,7 +31,7 @@ JSON
 fi
 
 cat <<'JSON'
-{{"protocol_version":1,"ok":true,"data":{{"message":"ok"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
+{{"protocol_version":1,"ok":true,"data":{{"message":"ok","provider":"{plugin_id}"}},"error":null,"meta":{{"format_hint":"table","columns":["message"]}}}}
 JSON
 "#,
         plugin_id = plugin_id,
@@ -93,7 +93,7 @@ fn plugin_manager_surfaces_provider_selection_across_catalog_help_and_completion
 
     write_provider_plugin(&plugins_dir, "alpha", "shared");
     write_provider_plugin(&plugins_dir, "beta", "shared");
-    let manager = PluginManager::new(vec![plugins_dir]);
+    let manager = PluginManager::new(vec![plugins_dir.clone()]);
 
     let mut providers = manager.command_providers("shared");
     providers.sort();
@@ -159,6 +159,67 @@ fn plugin_manager_surfaces_provider_selection_across_catalog_help_and_completion
     assert!(selected_help.contains("shared - beta plugin"));
     assert!(selected_help.contains("(beta/explicit)"));
     assert!(selected_help.contains("conflicts: alpha (explicit), beta (explicit)"));
+
+    let dispatch_context = PluginDispatchContext::default();
+    let selected_response = manager
+        .dispatch("shared", &[], &dispatch_context)
+        .expect("selected provider should execute");
+    assert_eq!(
+        selected_response.data,
+        serde_json::json!({ "message": "ok", "provider": "beta" })
+    );
+    assert_eq!(selected_response.protocol_version, 1);
+    assert!(selected_response.ok);
+    assert_eq!(
+        selected_response.meta.columns,
+        Some(vec!["message".to_string()])
+    );
+
+    let beta_path = plugins_dir.join("osp-beta");
+    let upgraded_beta = std::fs::read_to_string(&beta_path)
+        .expect("provider script should be readable")
+        .replace("beta plugin", "upgraded beta plugin")
+        .replace("\"message\":\"ok\"", "\"message\":\"upgraded\"");
+    write_executable_script(&beta_path, &upgraded_beta);
+    manager.refresh();
+
+    let refreshed_catalog = manager.command_catalog();
+    let refreshed_entry = refreshed_catalog
+        .iter()
+        .find(|entry| entry.name == "shared")
+        .expect("shared command should remain available after refresh");
+    assert_eq!(refreshed_entry.about, "upgraded beta plugin");
+    assert_eq!(refreshed_entry.provider.as_deref(), Some("beta"));
+    assert!(refreshed_entry.selected_explicitly);
+    assert!(!refreshed_entry.requires_selection);
+    assert!(
+        manager
+            .repl_help_text()
+            .contains("shared - upgraded beta plugin")
+    );
+    let upgraded_response = manager
+        .dispatch("shared", &[], &dispatch_context)
+        .expect("selected provider should execute after refresh");
+    assert_eq!(
+        upgraded_response.data,
+        serde_json::json!({ "message": "upgraded", "provider": "beta" })
+    );
+
+    let overridden_response = manager
+        .dispatch(
+            "shared",
+            &[],
+            &dispatch_context.with_provider_override(Some("alpha".to_string())),
+        )
+        .expect("one-shot provider override should execute");
+    assert_eq!(
+        overridden_response.data,
+        serde_json::json!({ "message": "ok", "provider": "alpha" })
+    );
+    assert_eq!(
+        manager.selected_provider_label("shared").as_deref(),
+        Some("beta (explicit)")
+    );
 
     assert!(
         manager

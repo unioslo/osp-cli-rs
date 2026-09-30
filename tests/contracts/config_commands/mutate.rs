@@ -115,6 +115,10 @@ fn config_set_allows_terminal_scoped_default_profile_contract() {
         r#"
 [default]
 profile.default = "uio"
+repl.history.exclude = []
+
+[profile.uio]
+[profile.tsd]
 "#,
     );
 
@@ -156,6 +160,83 @@ profile.default = "uio"
         stored["default"]["profile"]["default"].as_str(),
         Some("uio")
     );
+
+    let run = |args: &[&str]| {
+        Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+            .envs(crate::test_env::isolated_env(&home))
+            .env("PATH", "/usr/bin:/bin")
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    let config_path = home.join(".config/osp/config.toml");
+    let exclusions = serde_json::json!(["help", "config show"]);
+    for preview in [true, false] {
+        let mut args = vec![
+            "--json", "config", "set", "--profile-all", "--terminal", "cli",
+            "repl.history.exclude", "['help', 'config show']",
+        ];
+        if preview {
+            args.push("--dry-run");
+        }
+        let output = run(&args);
+        let payload = parse_json_stdout(&output.stdout);
+        let rows = payload.as_array().expect("each profile should have a write result");
+        assert_eq!(
+            rows.iter().map(|row| row["scope"].as_str().unwrap()).collect::<Vec<_>>(),
+            vec!["profile:default terminal:cli", "profile:tsd terminal:cli", "profile:uio terminal:cli"],
+        );
+        for row in rows {
+            assert_eq!(row["key"], "repl.history.exclude");
+            assert_eq!(row["value"], exclusions);
+            assert_eq!(row["store"], "config");
+            assert_eq!(row["dry_run"], preview);
+            assert_eq!(row["changed"], true);
+            assert_eq!(row["previous"], serde_json::Value::Null);
+            assert_eq!(row["path"], config_path.to_str().unwrap());
+        }
+        let persisted: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        if preview {
+            assert_eq!(persisted, stored);
+        } else {
+            for profile in ["default", "uio", "tsd"] {
+                assert_eq!(
+                    persisted["terminal"]["cli"]["profile"][profile]["repl"]["history"]["exclude"].as_array().unwrap(),
+                    &vec![toml::Value::String("help".into()), toml::Value::String("config show".into())],
+                );
+            }
+        }
+    }
+    for profile in ["default", "uio", "tsd"] {
+        let output = run(&["--json", "--profile", profile, "config", "explain", "repl.history.exclude"]);
+        let explain = parse_json_stdout(&output.stdout);
+        assert_eq!(explain["value"], exclusions);
+        assert_eq!(explain["value_type"], "list");
+        assert_eq!(explain["source"], "file");
+        assert_eq!(explain["scope"], format!("profile:{profile} terminal:cli"));
+    }
+    let preview = run(&["--plain", "config", "set", "repl.history.exclude", "[]", "--profile-all", "--terminal", "cli", "--dry-run", "--explain"]);
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("value: [\"help\",\"config show\"] (list)"));
+    assert!(String::from_utf8_lossy(&preview.stderr).contains("would set"));
+
+    for preview in [true, false] {
+        let mut args = vec!["--json", "config", "unset", "repl.history.exclude", "--profile-all", "--terminal", "cli"];
+        if preview {
+            args.push("--dry-run");
+        }
+        let output = run(&args);
+        let payload = parse_json_stdout(&output.stdout);
+        for row in payload.as_array().unwrap() {
+            assert_eq!(row["previous"], exclusions);
+            assert_eq!(row["changed"], true);
+            assert_eq!(row["dry_run"], preview);
+        }
+        let output = run(&["--json", "config", "get", "repl.history.exclude"]);
+        let payload = parse_json_stdout(&output.stdout);
+        assert_eq!(first_json_row(&payload, "history exclusion reload")["value"], if preview { exclusions.clone() } else { serde_json::json!([]) });
+    }
 
 }
 

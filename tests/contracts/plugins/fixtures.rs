@@ -274,13 +274,13 @@ fn write_multi_command_plugin(dir: &std::path::Path) -> std::path::PathBuf {
 PATH=/usr/bin:/bin:$PATH
 if [ "$1" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"multi","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"alpha","about":"alpha command","args":[],"flags":{},"subcommands":[]},{"name":"beta","about":"beta command","args":[],"flags":{},"subcommands":[]}]}
+{"protocol_version":1,"plugin_id":"multi","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"alpha","about":"alpha command","args":[],"flags":{},"subcommands":[]},{"name":"beta","about":"beta command","args":[],"flags":{},"subcommands":[{"name":"run","about":"run a batch","args":[{"name":"recipient","required":true,"multi":true}],"flags":{"--label":{"about":"batch label"}},"subcommands":[]}]}]}
 JSON
   exit 0
 fi
 
 cat <<JSON
-{"protocol_version":1,"ok":true,"data":{"selected_command":"${OSP_COMMAND:-}","arg0":"${1:-}","arg1":"${2:-}"},"error":null,"meta":{"format_hint":"json"}}
+{"protocol_version":1,"ok":true,"data":{"selected_command":"${OSP_COMMAND:-}","arg0":"${1:-}","arg1":"${2:-}","arg2":"${3:-}","arg3":"${4:-}","arg4":"${5:-}","arg5":"${6:-}","arg6":"${7:-}"},"error":null,"meta":{"format_hint":"json"}}
 JSON
 "#;
 

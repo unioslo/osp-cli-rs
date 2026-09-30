@@ -282,6 +282,33 @@ fn multi_command_plugin_receives_selected_command_contract() {
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let mut batch = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let batch_output = batch
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args([
+            "--json", "beta", "run", "alice", "bob", "carol", "--label", "batch",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let batch_payload = parse_json_stdout(&batch_output.stdout);
+    assert_eq!(
+        first_json_row(&batch_payload, "nested variadic plugin dispatch"),
+        &serde_json::json!({
+            "selected_command": "beta",
+            "arg0": "beta",
+            "arg1": "run",
+            "arg2": "alice",
+            "arg3": "bob",
+            "arg4": "carol",
+            "arg5": "--label",
+            "arg6": "batch",
+        })
+    );
+    assert!(batch_output.stderr.is_empty());
+
 }
 
 #[cfg(unix)]
@@ -375,7 +402,9 @@ fn describe_cache_is_reused_and_invalidated_contract() {
 
     let mut script =
         std::fs::read_to_string(&plugin_path).expect("plugin script should be readable");
-    script.push_str("\n# cache invalidation\n");
+    script = script
+        .replace("describe counter plugin", "upgraded describe counter plugin")
+        .replace("\"message\":\"ok\"", "\"message\":\"upgraded\"");
     std::fs::write(&plugin_path, script).expect("plugin script should be updated");
 
     let mut third = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -400,6 +429,46 @@ fn describe_cache_is_reused_and_invalidated_contract() {
     assert_eq!(
         std::fs::read_to_string(&describe_count_path)
             .expect("describe count should reflect invalidation")
+            .trim(),
+        "2"
+    );
+
+    let mut catalog = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let catalog_output = catalog
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "plugins", "commands"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let catalog_payload = parse_json_stdout(&catalog_output.stdout);
+    let command = first_json_row(&catalog_payload, "upgraded plugin catalog");
+    assert_eq!(command["name"], "describe-counter");
+    assert_eq!(command["provider"], "describe-counter");
+    assert_eq!(command["about"], "upgraded describe counter plugin");
+    assert_eq!(command["source"], "env");
+
+    let mut execute = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let execution_output = execute
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "describe-counter"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        first_json_row(
+            &parse_json_stdout(&execution_output.stdout),
+            "upgraded plugin execution",
+        ),
+        &serde_json::json!({ "message": "upgraded" })
+    );
+    assert!(execution_output.stderr.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&describe_count_path)
+            .expect("upgraded metadata should stay cached across catalog and execution")
             .trim(),
         "2"
     );

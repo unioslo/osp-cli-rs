@@ -422,6 +422,14 @@ fn mixed_guide_section_data_renders_through_canonical_pipeline_end_to_end() {
                 {"uid": "alice", "state": "ok"},
                 {"uid": "bob", "state": "warn"}
             ])),
+            GuideSection::new("Reservation", GuideSectionKind::Custom).data(json!({
+                "approved": true,
+                "limits": {"cpu_cores": 4, "memory_mib": 8192},
+                "owners": ["alice", "bob"],
+                "networks": [{"name": "prod", "ipv4": "192.0.2.8"}]
+            })),
+            GuideSection::new("Ready", GuideSectionKind::Custom).data(json!(true)),
+            GuideSection::new("Capacity", GuideSectionKind::Custom).data(json!(4)),
         ],
         ..Default::default()
     };
@@ -443,4 +451,92 @@ fn mixed_guide_section_data_renders_through_canonical_pipeline_end_to_end() {
     assert!(markdown.contains("| name"));
     assert!(markdown.contains("List history"));
     assert!(markdown.contains("| uid"));
+
+    let restored = GuideView::try_from_output_result(&output).expect("mixed guide should restore");
+    assert_eq!(restored.to_json_value(), guide.to_json_value());
+    let mut json_settings = RenderSettings::test_plain(OutputFormat::Json);
+    json_settings.format_explicit = true;
+    let json_output = render_output(&output, &json_settings);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&json_output).unwrap(),
+        json!([guide.to_json_value()]),
+    );
+    let mut value_settings = RenderSettings::test_plain(OutputFormat::Value);
+    value_settings.format_explicit = true;
+    let values = render_output(&output, &value_settings);
+    for expected in [
+        "prod",
+        "rose-pine-moon",
+        "List history",
+        "Clear history",
+        "true",
+        "4",
+        "alice, bob",
+    ] {
+        assert!(
+            values.lines().any(|line| line.trim() == expected),
+            "missing value {expected:?}:\n{values}"
+        );
+    }
+
+    let mut styled = RenderSettings::test_plain(OutputFormat::Guide);
+    styled.mode = osp_cli::core::output::RenderMode::Rich;
+    styled.color = osp_cli::core::output::ColorMode::Always;
+    styled.unicode = osp_cli::core::output::UnicodeMode::Always;
+    styled.width = Some(60);
+    let rich = render_output(&output, &styled);
+    assert!(
+        rich.contains('\x1b'),
+        "explicit color should style the guide: {rich}"
+    );
+    let copied = osp_cli::ui::render_output_for_copy(&output, &styled);
+    assert!(
+        !copied.contains('\x1b'),
+        "copied output must remain plain: {copied}"
+    );
+    for expected in [
+        "Reservation",
+        "cpu_cores",
+        "memory_mib",
+        "8192",
+        "192.0.2.8",
+        "Ready",
+        "Capacity",
+    ] {
+        assert!(
+            copied.contains(expected),
+            "missing {expected:?} in copy-safe guide:\n{copied}"
+        );
+    }
+
+    let mut mreg_settings = RenderSettings::test_plain(OutputFormat::Mreg);
+    mreg_settings.format_explicit = true;
+    let mreg = render_output(&output, &mreg_settings);
+    for entry in [
+        "title: Session",
+        "profile: prod",
+        "theme: rose-pine-moon",
+        "title: Examples",
+        "osp history list",
+        "osp history clear",
+        "osp history last",
+        "osp history search",
+        "osp history export",
+        "osp history import",
+        "title: Shortcuts",
+        "name: list",
+        "short_help: List history",
+        "name: clear",
+        "short_help: Clear history",
+        "title: Matrix",
+        "uid: alice",
+        "state: ok",
+        "uid: bob",
+        "state: warn",
+    ] {
+        assert!(
+            mreg.contains(entry),
+            "missing {entry:?} in Mreg guide:\n{mreg}"
+        );
+    }
 }

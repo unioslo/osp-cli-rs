@@ -424,11 +424,24 @@ impl ReplPtySession {
     pub(crate) fn type_text(&mut self, text: &str) {
         let start = self.output_len();
         self.write_bytes(text.as_bytes());
-        assert!(
-            self.wait_for_plain_output_since(start, text.trim(), Duration::from_secs(3)),
-            "expected editor to display typed text {text:?}; output:\n{}",
-            self.output_snapshot(8000),
-        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let output = self.output_since(start);
+            // Cooked terminal echo can precede editor startup after a reload.
+            // Wait for the latest completed editor paint before sending Enter.
+            if let Some((_, frame)) = output.rsplit_once("\x1b[?25l")
+                && frame.contains("\x1b[?25h")
+                && strip_terminal_noise(frame).contains(text.trim())
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected editor to display typed text {text:?}; output:\n{}",
+                self.output_snapshot(8000),
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     pub(crate) fn wait_for_output_since(

@@ -33,6 +33,7 @@ Warnings for future edits:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -60,7 +61,7 @@ CLIPPY_DENIES = (
 
 MIRI_TOOLCHAIN = "nightly-2026-03-24"
 TOOL_VERSIONS = {"cargo-audit": "0.22.2", "cargo-llvm-cov": "0.8.4"}
-GENERIC_CHECKS = {"fmt", "fmt-fix", "clippy", "test", "build", "audit", "metadata"}
+GENERIC_CHECKS = {"fmt", "fmt-fix", "clippy", "test", "build", "audit", "metadata", "coverage-crate"}
 
 
 @dataclass(frozen=True)
@@ -240,6 +241,8 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
         name="coverage",
         description="Full coverage gate.",
         command=[python, str(root / "scripts" / "coverage.py"), "gate"],
+        # Parallel instrumented PTY starts timed out; ordinary lanes stay parallel.
+        env={"RUST_TEST_THREADS": "1"},
     )
     build = ConfidenceCheck(
         name="build",
@@ -417,6 +420,13 @@ def check_catalog(root: Path, cwd: Path | None = None) -> dict[str, ConfidenceCh
         ("test", "Run existing tests under isolated runtime settings.", [
             python, str(root / "scripts" / "run-hermetic-cargo.py"),
             "--cwd", str(cwd or root), "--", *cargo_test_command("--all-features"),
+        ]),
+        ("coverage-crate", "Instrument this crate's tests and enforce the shared line floor.", [
+            python, str(root / "scripts" / "run-hermetic-cargo.py"),
+            "--cwd", str(cwd or root), "--", "cargo", "llvm-cov",
+            "--locked", "--all-features", "--all-targets", "--no-fail-fast", "--json",
+            "--output-path", "target/coverage.json", "--fail-under-lines",
+            str(json.loads((root / ".coverage-baseline.json").read_text())["overall_line_percent"]),
         ]),
         ("coverage-summary", "Show the full instrumented coverage summary.", [
             python, str(root / "scripts" / "coverage.py"), "run",

@@ -7,6 +7,7 @@ use osp_cli::config::ConfigLayer;
 use osp_cli::core::command_policy::{
     CommandPath, CommandPolicy, CommandPolicyContext, CommandPolicyRegistry, VisibilityMode,
 };
+use osp_cli::core::output_model::DisplayRule;
 use osp_cli::core::plugin::{
     PLUGIN_PROTOCOL_V1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
 };
@@ -197,6 +198,9 @@ impl NativeCommand for CuratedOrchRowsCommand {
             data: json!({
                 "items": [{
                     "name": "db01.uio.no",
+                    "is_stale": true,
+                    "lookup_error": "provider unavailable",
+                    "created_at": 1700000000,
                     "provider": {"name": "vmware"},
                     "state": {"name": "powered_on"},
                     "compute": {"display": "4 CPU / 8 GiB"},
@@ -228,6 +232,7 @@ impl NativeCommand for CuratedOrchRowsCommand {
                     "state.name".to_string(),
                     "compute.display".to_string(),
                     "location.display".to_string(),
+                    "created_at".to_string(),
                 ]),
                 column_labels: vec![
                     "NAME".to_string(),
@@ -235,11 +240,22 @@ impl NativeCommand for CuratedOrchRowsCommand {
                     "STATE".to_string(),
                     "COMPUTE".to_string(),
                     "LOCATION".to_string(),
+                    "CREATED".to_string(),
                 ],
                 column_align: Vec::new(),
                 row_path: Some("items".to_string()),
-                unix_timestamp_columns: Vec::new(),
-                display_rules: Vec::new(),
+                unix_timestamp_columns: vec!["created_at".to_string()],
+                display_rules: vec![
+                    DisplayRule::SuffixWhenTrue {
+                        field: "name".to_string(),
+                        when: "is_stale".to_string(),
+                        suffix: " (stale)".to_string(),
+                    },
+                    DisplayRule::BlankWhenPresent {
+                        field: "state.name".to_string(),
+                        when: "lookup_error".to_string(),
+                    },
+                ],
                 preserve_json_document: true,
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
@@ -351,10 +367,35 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
     assert!(human.stdout.contains("name"));
     assert!(human.stdout.contains("provider.name"));
     assert!(human.stdout.contains("4 CPU / 8 GiB"));
+    assert!(human.stdout.contains("db01.uio.no (stale)"));
+    assert!(!human.stdout.contains("powered_on"));
     assert!(!human.stdout.contains("next_cursor"));
     assert!(human.stderr.contains("Results are incomplete"));
     assert!(!human.stderr.contains("provider evidence"));
     assert!(!human.stderr.contains("runtime target vmware:prod"));
+
+    let mut values = BufferedUiSink::default();
+    assert_eq!(
+        app.run_with_sink(
+            ["osp", "--defaults-only", "--plain", "--value", "orch-view"],
+            &mut values,
+        )
+        .expect("human value output should retain columns omitted by a narrow table"),
+        0,
+    );
+    let local_created_at = chrono::DateTime::parse_from_rfc3339("2023-11-14T22:13:20+00:00")
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S %:z")
+        .to_string();
+    assert!(
+        values
+            .stdout
+            .lines()
+            .any(|line| line.trim() == local_created_at),
+        "{}",
+        values.stdout,
+    );
 
     let mut json_sink = BufferedUiSink::default();
     let json_args = ["osp", "--defaults-only", "--json", "orch-view"];
@@ -370,6 +411,39 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
     );
     assert_eq!(document["page"]["next_cursor"], "cursor-2");
     assert_eq!(document["items"][0]["provider"]["name"], "vmware");
+    assert_eq!(document["items"][0]["name"], "db01.uio.no");
+    assert_eq!(document["items"][0]["state"]["name"], "powered_on");
+    assert_eq!(document["items"][0]["created_at"], 1700000000);
+
+    let mut raw = BufferedUiSink::default();
+    app.run_with_sink(
+        [
+            "osp",
+            "--defaults-only",
+            "--json",
+            "orch-view",
+            "|",
+            "F",
+            "created_at",
+            ">=",
+            "2023-11-14T22:13:20+00:00",
+            "|",
+            "P",
+            "name",
+            "state.name",
+            "created_at",
+        ],
+        &mut raw,
+    )
+    .expect("DSL filtering and projection should receive raw display fields");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&raw.stdout).unwrap(),
+        json!([{
+            "name": "db01.uio.no",
+            "state": {"name": "powered_on"},
+            "created_at": 1700000000,
+        }]),
+    );
 
     let mut piped = BufferedUiSink::default();
     let pipe_args = [
@@ -392,6 +466,114 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
         &piped.stderr,
     );
     assert_eq!(projected, json!([{"provider":{"name":"vmware"}}]));
+
+    for format in ["--guide", "--md", "--mreg"] {
+        let mut rendered = BufferedUiSink::default();
+        assert_eq!(
+            app.run_with_sink(
+                ["osp", "--defaults-only", "--plain", format, "orch-view"],
+                &mut rendered,
+            )
+            .expect("explicit human formats should preserve the curated collection"),
+            0,
+        );
+        assert!(
+            rendered.stdout.contains("db01.uio.no (stale)"),
+            "{format}: {}",
+            rendered.stdout
+        );
+        assert!(
+            rendered.stdout.contains("4 CPU / 8 GiB"),
+            "{format}: {}",
+            rendered.stdout
+        );
+        assert!(
+            rendered.stdout.contains("vcsa-prod"),
+            "{format}: {}",
+            rendered.stdout
+        );
+        assert!(rendered.stderr.contains("Results are incomplete"));
+    }
+
+    // Grouping must retain canonical member rows, even when human projections
+    // blank an unavailable state or add a stale marker to its display name.
+    for format in ["--json", "--table", "--md", "--mreg", "--value"] {
+        let mut grouped = BufferedUiSink::default();
+        assert_eq!(
+            app.run_with_sink(
+                [
+                    "osp",
+                    "--defaults-only",
+                    "--plain",
+                    format,
+                    "orch-view",
+                    "|",
+                    "P",
+                    "name",
+                    "provider.name",
+                    "state.name",
+                    "|",
+                    "G",
+                    "provider.name",
+                    "AS",
+                    "provider",
+                    "|",
+                    "A",
+                    "count()",
+                    "AS",
+                    "total",
+                ],
+                &mut grouped,
+            )
+            .expect("provider grouping should pass through the host and renderer"),
+            0,
+        );
+        if format == "--json" {
+            let payload: serde_json::Value = serde_json::from_str(&grouped.stdout).unwrap();
+            assert_eq!(
+                payload,
+                json!([{
+                    "groups": {"provider": "vmware"},
+                    "aggregates": {"total": 1},
+                    "rows": [{"name": "db01.uio.no", "provider": {"name": "vmware"}, "state": {"name": "powered_on"}}],
+                }])
+            );
+        } else {
+            assert!(
+                grouped.stdout.contains("vmware"),
+                "{format}: {}",
+                grouped.stdout
+            );
+            assert!(
+                grouped.stdout.contains("db01.uio.no"),
+                "{format}: {}",
+                grouped.stdout
+            );
+            assert!(
+                grouped.stdout.contains("powered_on"),
+                "{format}: {}",
+                grouped.stdout
+            );
+            if format == "--value" {
+                assert!(
+                    grouped.stdout.lines().any(|line| line.trim() == "1"),
+                    "{}",
+                    grouped.stdout
+                );
+            } else {
+                assert!(
+                    grouped.stdout.contains("total"),
+                    "{format}: {}",
+                    grouped.stdout
+                );
+                assert!(
+                    grouped.stdout.split_whitespace().any(|token| token == "1"),
+                    "{format}: {}",
+                    grouped.stdout
+                );
+            }
+        }
+    }
 
     let mut verbose = BufferedUiSink::default();
     app.run_with_sink(["osp", "--defaults-only", "-v", "orch-view"], &mut verbose)

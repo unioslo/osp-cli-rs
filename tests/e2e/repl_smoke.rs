@@ -38,6 +38,76 @@ fn repl_starts_runs_help_and_exits_end_to_end() {
         session.output_snapshot(2000),
     );
 
+    let start = session.output_len();
+    session.write_bytes(b"config set --session repl.history.enabled true\r");
+    assert!(
+        session.wait_for_plain_output_since(start, "for this session only", Duration::from_secs(3)),
+        "history capture should be enabled for this session; output:\n{}",
+        session.output_snapshot(4000),
+    );
+    assert!(session.wait_for_plain_output_since(start, "default>", Duration::from_secs(3)));
+
+    // Recall executes the selected command; cancelling keeps the unfinished input.
+    for (query, command, expected_id, expected_name) in [
+        (None, "theme show dracula --json", "dracula", "Dracula"),
+        (Some("dracula"), "", "dracula", "Dracula"),
+        (
+            Some("theme show "),
+            "rose-pine-moon --json",
+            "rose-pine-moon",
+            "Rose Pine Moon",
+        ),
+    ] {
+        if let Some(query) = query {
+            session.type_text(query);
+            let start = session.output_len();
+            session.write_bytes(b"\x12");
+            assert!(
+                session.wait_for_plain_output_since(
+                    start,
+                    "(reverse-i-search)>",
+                    Duration::from_secs(3)
+                ),
+                "history picker should display the current query; output:\n{}",
+                session.output_snapshot(8000),
+            );
+            assert!(
+                session.wait_for_plain_output_since(start, "--json", Duration::from_secs(3)),
+                "history entry should be visible; output:\n{}",
+                session.output_snapshot(12000)
+            );
+            let start = session.output_len();
+            session.write_bytes(if command.is_empty() { b"\r" } else { b"\x03" });
+            assert!(
+                session.wait_for_output_since(start, "\x1b[?25h", Duration::from_secs(3)),
+                "editor should resume after the history picker; output:\n{}",
+                session.output_snapshot(8000),
+            );
+        }
+        if !command.is_empty() {
+            session.type_text(command);
+        }
+        let start = session.output_len();
+        session.write_bytes(b"\r");
+        assert!(
+            session.wait_for_plain_output_since(start, "} ]", Duration::from_secs(3)),
+            "selected or retained input should produce the theme result; output:\n{}",
+            session.output_snapshot(8000),
+        );
+        let output = crate::support::strip_ansi_preserve_newlines(&session.output_since(start));
+        let json_start = output
+            .find("[\n")
+            .expect("theme result should be a JSON array");
+        let result = serde_json::Deserializer::from_str(&output[json_start..])
+            .into_iter::<serde_json::Value>()
+            .next()
+            .expect("theme result should exist")
+            .expect("theme result should parse");
+        assert_eq!(result[0]["id"], expected_id);
+        assert_eq!(result[0]["name"], expected_name);
+        assert!(session.wait_for_plain_output_since(start, "default>", Duration::from_secs(3)));
+    }
+
     session.write_bytes(b"exit\r");
     assert!(
         session.wait_for_exit(Duration::from_secs(3)),

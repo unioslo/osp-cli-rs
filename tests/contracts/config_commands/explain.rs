@@ -423,6 +423,37 @@ extensions.uio.ldap.bind_password = "file-secret"
     let clear_payload = parse_json_stdout(&clear_output.stdout);
     assert_eq!(clear_payload["value"], "file-secret");
 
+    let mut write = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    write.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "config", "set", "extensions.uio.ldap.bind_password", "saved-secret",
+            "--secrets", "--global",
+        ])
+        .assert()
+        .success();
+    let path = home.join(".config/osp/secrets.toml");
+    let stored: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(stored["default"]["extensions"]["uio"]["ldap"]["bind_password"].as_str(), Some("saved-secret"));
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+
+    let persisted = clear.assert().success().get_output().clone();
+    assert_eq!(parse_json_stdout(&persisted.stdout)["value"], "saved-secret");
+    let redacted = redacted.assert().success().get_output().clone();
+    assert_eq!(parse_json_stdout(&redacted.stdout)["value"], "[REDACTED]");
+
+    let mut unset = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    unset.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "config", "unset", "extensions.uio.ldap.bind_password", "--secrets", "--global",
+        ])
+        .assert()
+        .success();
+    let restored = clear.assert().success().get_output().clone();
+    assert_eq!(parse_json_stdout(&restored.stdout)["value"], "file-secret");
+
 }
 
 #[cfg(unix)]
@@ -441,6 +472,10 @@ profile.default = "uio"
         r#"
 [default]
 extensions.demo.potato = "sekrit"
+repl.history.exclude = ["private:*"]
+
+[terminal.cli.profile.uio]
+repl.history.exclude = ["confidential:*", "login *"]
 "#,
     );
 
@@ -487,6 +522,74 @@ extensions.demo.potato = "sekrit"
     let row = first_json_row(&get_redacted_payload, "config get redacted secret");
     assert_eq!(row["key"], "extensions.demo.potato");
     assert_eq!(row["value"], "[REDACTED]");
+
+    let run = |args: &[&str]| {
+        Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+            .envs(crate::test_env::isolated_env(&home))
+            .env("PATH", "/usr/bin:/bin")
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    let rotated = serde_json::json!(["confidential:*", "sudo *"]);
+    let output = run(&[
+        "--json", "config", "set", "repl.history.exclude", "['confidential:*', 'sudo *']",
+        "--secrets", "--profile", "uio", "--terminal", "cli",
+    ]);
+    let payload = parse_json_stdout(&output.stdout);
+    let row = first_json_row(&payload, "rotate scoped secret list");
+    assert_eq!(row["scope"], "profile:uio terminal:cli");
+    assert_eq!(row["backend"], "toml");
+    assert_eq!(row["value"], "[REDACTED]");
+    assert_eq!(row["previous"], "[REDACTED]");
+    assert_eq!(row["changed"], true);
+    let path = home.join(".config/osp/secrets.toml");
+    let persisted: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        persisted["terminal"]["cli"]["profile"]["uio"]["repl"]["history"]["exclude"].as_array().unwrap(),
+        &vec![toml::Value::String("confidential:*".into()), toml::Value::String("sudo *".into())],
+    );
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    for expose in [false, true] {
+        let mut args = vec!["--json", "config", "explain", "repl.history.exclude"];
+        if expose {
+            args.push("--show-secrets");
+        }
+        let output = run(&args);
+        let explain = parse_json_stdout(&output.stdout);
+        assert_eq!(explain["value"], if expose { rotated.clone() } else { serde_json::json!("[REDACTED]") });
+        assert_eq!(explain["value_type"], "list");
+        assert_eq!(explain["source"], "secrets");
+        assert_eq!(explain["scope"], "profile:uio terminal:cli");
+        let mut args = vec!["--plain", "config", "explain", "repl.history.exclude"];
+        if expose {
+            args.push("--show-secrets");
+        }
+        let output = run(&args);
+        assert!(String::from_utf8_lossy(&output.stdout).contains(if expose {
+            "value: [\"confidential:*\",\"sudo *\"] (list)"
+        } else {
+            "value: [REDACTED] (list)"
+        }));
+    }
+    for preview in [true, false] {
+        let mut args = vec!["--json", "config", "unset", "repl.history.exclude", "--secrets", "--profile", "uio", "--terminal", "cli"];
+        if preview {
+            args.push("--dry-run");
+        }
+        let output = run(&args);
+        let payload = parse_json_stdout(&output.stdout);
+        let row = first_json_row(&payload, "remove scoped secret list");
+        assert_eq!(row["previous"], "[REDACTED]");
+        assert_eq!(row["changed"], true);
+        assert_eq!(row["dry_run"], preview);
+        let output = run(&["--json", "config", "explain", "repl.history.exclude", "--show-secrets"]);
+        let explain = parse_json_stdout(&output.stdout);
+        assert_eq!(explain["value"], if preview { rotated.clone() } else { serde_json::json!(["private:*"]) });
+        assert_eq!(explain["scope"], if preview { "profile:uio terminal:cli" } else { "global" });
+    }
 
 }
 
