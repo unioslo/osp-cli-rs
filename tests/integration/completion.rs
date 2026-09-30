@@ -131,8 +131,9 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
         .children
         .get_mut("deploy")
         .unwrap();
-    deploy.flags.insert("--memory".into(), FlagNode::new());
-    deploy.flags.insert("--provider".into(), FlagNode::new());
+    for flag in ["--memory", "--provider", "--instance", "--instance_id"] {
+        deploy.flags.insert(flag.into(), FlagNode::new());
+    }
     let mut table = PlanningTable::new()
         .exact_column("provider")
         .exact_column("image")
@@ -181,6 +182,26 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
             vec!["green"],
         ),
         (
+            "service deploy --instance west --image  --provider alpha",
+            vec!["green"],
+        ),
+        (
+            "service deploy --instance_id two --image  --provider alpha",
+            vec!["green"],
+        ),
+        (
+            "service deploy --instance west --image  --provider alpha:west:two",
+            vec!["green"],
+        ),
+        (
+            "service deploy --image  --provider alpha::two",
+            vec!["green"],
+        ),
+        (
+            "service deploy --image  --provider ' alpha : west : two '",
+            vec!["green"],
+        ),
+        (
             "service deploy --memory 8GiB --image  --provider alpha",
             vec!["green"],
         ),
@@ -207,6 +228,19 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
         assert_eq!(narrowed.candidates().collect::<Vec<_>>(), expected);
         assert_eq!(narrowed.all().collect::<Vec<_>>(), vec!["alpha", "beta"]);
         assert_eq!(narrowed.is_contradictory(), memory == "32GiB");
+    }
+    // Editing capacity uses the lane's available values instead of treating
+    // the value being replaced as another request constraint.
+    for (selector, expected) in [
+        ("alpha:east:one", vec!["4096"]),
+        ("alpha:west:two", vec!["16GiB"]),
+    ] {
+        let line = format!("service deploy --memory  --provider {selector}");
+        let cursor = line.find("--memory").unwrap() + "--memory ".len();
+        assert_eq!(
+            suggestion_values(engine.complete(&line, cursor).1),
+            expected
+        );
     }
     let line = "service deploy --memory 16GiB --provider ";
     assert_eq!(
@@ -322,12 +356,70 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
             "alpha".into(),
             vec![SuggestionEntry::from("amber"), SuggestionEntry::from("red")],
         );
-    let engine = CompletionEngine::new(tree);
+    let engine = CompletionEngine::new(tree.clone());
     let line = "service deploy --revision 2 --image  --provider alpha:north:4";
     let cursor = line.find("--image").unwrap() + "--image ".len();
     assert_eq!(
         suggestion_values(engine.complete(line, cursor).1),
         vec!["amber", "red"]
+    );
+
+    // Catalogues can carry useful facts before their provider identity is
+    // known, and can also describe choices with no provider dimension.
+    let planning = tree
+        .root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap()
+        .planning
+        .as_mut()
+        .unwrap();
+    planning.tables[0].exhaustive = true;
+    planning.tables[0].rows.push(
+        PlanningRow::new()
+            .value("instance", "south")
+            .value("instance_id", "five")
+            .value("revision", 2)
+            .value("image", "gold")
+            .value("memory", 8192),
+    );
+    let engine = CompletionEngine::new(tree.clone());
+    let line = "service deploy --revision 2 --image  --provider alpha";
+    let cursor = line.find("--image").unwrap() + "--image ".len();
+    assert_eq!(
+        suggestion_values(engine.complete(line, cursor).1),
+        vec!["amber", "gold", "red"]
+    );
+    let line = "service deploy --memory 32GiB ";
+    let analysis = engine.analyze(line, line.len());
+    let narrowed = narrow_provider_candidates(
+        &analysis.parsed.cursor_cmd,
+        &tree.root.children["service"].children["deploy"],
+    );
+    assert_eq!(
+        narrowed.candidates().collect::<Vec<_>>(),
+        vec!["alpha", "beta"]
+    );
+
+    tree.root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap()
+        .planning
+        .as_mut()
+        .unwrap()
+        .provider_column = None;
+    let engine = CompletionEngine::new(tree);
+    let line = "service deploy --revision 2 --image ";
+    assert_eq!(
+        suggestion_values(engine.complete(line, line.len()).1),
+        vec!["amber", "gold"]
     );
 }
 
