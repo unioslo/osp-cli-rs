@@ -151,20 +151,6 @@ impl RuntimeLoadOptions {
         self
     }
 
-    /// Sets whether bootstrap may consult ambient environment and
-    /// platform-derived paths before the loader pipeline runs.
-    ///
-    /// Switching to [`RuntimeBootstrapMode::DefaultsOnly`] also disables the
-    /// env and config-file loader layers.
-    pub fn with_bootstrap_mode(mut self, bootstrap_mode: RuntimeBootstrapMode) -> Self {
-        self.bootstrap_mode = bootstrap_mode;
-        if matches!(bootstrap_mode, RuntimeBootstrapMode::DefaultsOnly) {
-            self.include_env = false;
-            self.include_config_file = false;
-        }
-        self
-    }
-
     /// Returns whether the load options seal bootstrap against ambient process
     /// and home-directory state.
     pub fn is_defaults_only(self) -> bool {

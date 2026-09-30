@@ -106,14 +106,6 @@ impl CommandSpec {
         self
     }
 
-    /// Extends the command with positional argument definitions.
-    ///
-    /// If omitted, the command contributes no positional completion metadata.
-    pub fn args(mut self, args: impl IntoIterator<Item = ArgNode>) -> Self {
-        self.args.extend(args);
-        self
-    }
-
     /// Adds one flag definition keyed by its spelling.
     ///
     /// If omitted, the command contributes no flag completion metadata.
@@ -127,18 +119,6 @@ impl CommandSpec {
     /// If omitted, the command contributes no flag completion metadata.
     pub fn flags(mut self, flags: impl IntoIterator<Item = (String, FlagNode)>) -> Self {
         self.flags.extend(flags);
-        self
-    }
-
-    /// Attaches provider-aware flag visibility and requiredness hints.
-    pub fn flag_hints(mut self, hints: FlagHints) -> Self {
-        self.flag_hints = Some(hints);
-        self
-    }
-
-    /// Attaches optional advisory relational facts to this command.
-    pub fn planning(mut self, planning: PlanningHints) -> Self {
-        self.planning = Some(planning);
         self
     }
 

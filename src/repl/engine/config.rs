@@ -212,15 +212,6 @@ impl ReplRunConfigBuilder {
         self
     }
 
-    /// Replaces the history configuration.
-    ///
-    /// If omitted, the builder keeps the history configuration passed to
-    /// [`ReplRunConfigBuilder::new`].
-    pub fn with_history_config(mut self, history_config: HistoryConfig) -> Self {
-        self.config.history_config = history_config;
-        self
-    }
-
     /// Replaces the input-mode policy.
     ///
     /// If omitted, the config keeps [`ReplInputMode::Auto`].

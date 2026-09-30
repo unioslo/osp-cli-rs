@@ -501,24 +501,6 @@ impl CommandPolicyOverride {
         self
     }
 
-    /// Replaces the visible-session requirements.
-    pub fn with_visible_session_requirements(
-        mut self,
-        visible_session_requirements: Option<SessionRequirements>,
-    ) -> Self {
-        self.visible_session_requirements = visible_session_requirements;
-        self
-    }
-
-    /// Replaces the run-session requirements.
-    pub fn with_run_session_requirements(
-        mut self,
-        run_session_requirements: Option<SessionRequirements>,
-    ) -> Self {
-        self.run_session_requirements = run_session_requirements;
-        self
-    }
-
     /// Replaces the optional hidden-reason metadata.
     pub fn with_hidden_reason(mut self, hidden_reason: Option<String>) -> Self {
         self.hidden_reason = hidden_reason

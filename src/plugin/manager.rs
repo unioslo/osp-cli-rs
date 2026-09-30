@@ -841,11 +841,6 @@ impl PluginManager {
         self
     }
 
-    /// Returns whether platform config/cache root fallback is enabled.
-    pub fn default_roots_enabled(&self) -> bool {
-        self.allow_default_roots
-    }
-
     /// Enables or disables discovery through the CLI's bundled plugin roots.
     ///
     /// The default is `true`. Disable this when the caller wants discovery to
@@ -854,11 +849,6 @@ impl PluginManager {
     pub fn with_bundled_roots(mut self, allow_bundled_roots: bool) -> Self {
         self.allow_bundled_roots = allow_bundled_roots;
         self
-    }
-
-    /// Returns whether bundled plugin-root discovery is enabled.
-    pub fn bundled_roots_enabled(&self) -> bool {
-        self.allow_bundled_roots
     }
 
     /// Sets the subprocess timeout used for plugin describe and dispatch calls.

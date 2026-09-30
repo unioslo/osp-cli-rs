@@ -303,27 +303,9 @@ impl UiState {
         }
     }
 
-    /// Replaces the render-settings baseline used by this UI state.
-    pub fn with_render_settings(mut self, render_settings: RenderSettings) -> Self {
-        self.render_settings = render_settings;
-        self
-    }
-
-    /// Replaces the message verbosity used for buffered UI messages.
-    pub fn with_message_verbosity(mut self, message_verbosity: MessageLevel) -> Self {
-        self.message_verbosity = message_verbosity;
-        self
-    }
-
     /// Replaces the process-facing error detail ladder for this UI state.
     pub fn with_error_detail(mut self, error_detail: ErrorDetail) -> Self {
         self.error_detail = error_detail;
-        self
-    }
-
-    /// Replaces the numeric debug verbosity.
-    pub fn with_debug_verbosity(mut self, debug_verbosity: u8) -> Self {
-        self.debug_verbosity = debug_verbosity;
         self
     }
 }
