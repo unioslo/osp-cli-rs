@@ -218,12 +218,24 @@ fn grouped_report_exports_restore_aggregates_and_member_rows() {
 fn operational_guide_exports_keep_authored_entries_and_nested_policy_data() {
     let guide = GuideView {
         sections: vec![
+            GuideSection::new("Usage", GuideSectionKind::Usage)
+                .paragraph("osp site host apply HOST [OPTIONS]"),
             GuideSection::new("Operations", GuideSectionKind::Custom)
                 .paragraph("Use `site host show` after **approval**.")
                 .entry("site host show", "Read the `canonical` host record")
                 .entry("site host apply", "Apply an approved change")
                 .entry("site whoami", "")
                 .entry("site host show | P uid", "Copy the `uid` field"),
+            GuideSection::new("Arguments", GuideSectionKind::Arguments)
+                .entry("HOST", "Canonical host name"),
+            GuideSection::new("Options", GuideSectionKind::Options)
+                .entry("--dry-run", "Preview the approved change"),
+            GuideSection::new(
+                "Common Invocation Options",
+                GuideSectionKind::CommonInvocationOptions,
+            )
+            .entry("--profile", "Select the service profile")
+            .entry("--json", "Export typed results"),
             GuideSection::new("Policy", GuideSectionKind::Custom).data(json!({
                 "owner": "alice",
                 "enabled": true,
@@ -240,14 +252,63 @@ fn operational_guide_exports_keep_authored_entries_and_nested_policy_data() {
         ..Default::default()
     };
     let output = guide.to_output_result();
+    let exported = render_output(&output, &export_settings(OutputFormat::Json));
     assert_eq!(
-        serde_json::from_str::<Value>(&render_output(
-            &output,
-            &export_settings(OutputFormat::Json)
-        ),)
-        .unwrap(),
+        serde_json::from_str::<Value>(&exported).unwrap(),
         json!([guide.to_json_value()])
     );
+
+    // An offline consumer restores the exported row payload without a live sidecar document.
+    let imported = OutputResult {
+        items: output_items_from_value(serde_json::from_str(&exported).unwrap()),
+        document: None,
+        meta: OutputMeta::default(),
+    };
+    let restored = GuideView::try_from_output_result(&imported).unwrap();
+    assert_eq!(restored.to_json_value(), guide.to_json_value());
+    assert_eq!(restored.usage, ["osp site host apply HOST [OPTIONS]"]);
+    assert_eq!(restored.arguments[0].name, "HOST");
+    assert_eq!(restored.options[0].name, "--dry-run");
+    assert_eq!(
+        restored
+            .common_invocation_options
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["--profile", "--json"]
+    );
+    assert_eq!(
+        restored
+            .sections
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Usage",
+            "Operations",
+            "Arguments",
+            "Options",
+            "Common Invocation Options",
+            "Policy"
+        ]
+    );
+
+    let reference = parse_pipeline("runbook | F name ~ ^--").unwrap();
+    let flags = apply_output_pipeline(restored.to_output_result(), &reference.stages).unwrap();
+    let flag_guide = GuideView::try_from_output_result(&flags).unwrap();
+    assert_eq!(flag_guide.options[0].name, "--dry-run");
+    assert_eq!(
+        flag_guide
+            .common_invocation_options
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["--profile", "--json"]
+    );
+    let flag_markdown = render_output(&flags, &export_settings(OutputFormat::Markdown));
+    for flag in ["--dry-run", "--profile", "--json"] {
+        assert!(flag_markdown.contains(flag), "{flag_markdown}");
+    }
 
     let terminal = render_output(&output, &export_settings(OutputFormat::Guide));
     let visible_words = terminal.split_whitespace().collect::<Vec<_>>().join(" ");
