@@ -1047,6 +1047,7 @@ impl ConfigSchema {
     /// accepted by [`Self::parse_input_value`]. This method applies the same
     /// schema, dynamic-key, enum, and bootstrap rules used during runtime
     /// resolution so a successful write cannot create an unloadable config.
+    /// Explicit schema entries override dynamic-key defaults.
     pub fn validate_write_value(
         &self,
         key: &str,
@@ -1060,15 +1061,7 @@ impl ConfigSchema {
         }
         self.validate_writable_key(&normalized)?;
 
-        let adapted = if let Some(kind) = dynamic_schema_key_kind(&normalized) {
-            adapt_dynamic_value_for_schema(&normalized, value, kind)?
-        } else if let Some(entry) = self.entries.get(&normalized) {
-            adapt_value_for_schema(&normalized, value, entry)?
-        } else {
-            // Extension and alias namespaces intentionally accept product-owned
-            // values that are not described by the host schema.
-            value.clone()
-        };
+        let adapted = self.adapt_value(&normalized, value)?;
         self.validate_bootstrap_value(&normalized, &adapted)?;
         Ok(adapted)
     }
@@ -1131,13 +1124,19 @@ impl ConfigSchema {
         }
         self.validate_writable_key(key)?;
 
-        let value = ConfigValue::String(raw.to_string());
+        self.adapt_value(key, &ConfigValue::String(raw.to_string()))
+    }
+
+    // Registered entries override namespace defaults on every input path.
+    fn adapt_value(&self, key: &str, value: &ConfigValue) -> Result<ConfigValue, ConfigError> {
         if let Some(entry) = self.entries.get(key) {
-            adapt_value_for_schema(key, &value, entry)
+            adapt_value_for_schema(key, value, entry)
         } else if let Some(kind) = dynamic_schema_key_kind(key) {
-            adapt_dynamic_value_for_schema(key, &value, kind)
+            adapt_dynamic_value_for_schema(key, value, kind)
         } else {
-            Ok(value)
+            // Extension and alias namespaces retain product-owned types when
+            // the schema has no explicit entry or dynamic default.
+            Ok(value.clone())
         }
     }
 
@@ -1164,17 +1163,14 @@ impl ConfigSchema {
         }
 
         for (key, resolved) in values.iter_mut() {
-            if let Some(kind) = dynamic_schema_key_kind(key) {
-                resolved.value = adapt_dynamic_value_for_schema(key, &resolved.value, kind)?;
+            if self
+                .entries
+                .get(key)
+                .is_some_and(|entry| !entry.runtime_visible)
+            {
                 continue;
             }
-            let Some(schema_entry) = self.entries.get(key) else {
-                continue;
-            };
-            if !schema_entry.runtime_visible {
-                continue;
-            }
-            resolved.value = adapt_value_for_schema(key, &resolved.value, schema_entry)?;
+            resolved.value = self.adapt_value(key, &resolved.value)?;
         }
 
         Ok(())
