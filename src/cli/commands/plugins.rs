@@ -8,7 +8,7 @@ use super::resolve_terminal_selector;
 use crate::app::{AppClients, AppRuntime, AuthState, ConfigState, RuntimeContext};
 use crate::app::{CliCommandResult, PluginConfigScope, plugin_config_entries};
 use crate::cli::rows::output::rows_to_output_result;
-use crate::cli::{PluginConfigArgs, PluginsArgs, PluginsCommands};
+use crate::cli::{PluginCommandStateArgs, PluginConfigArgs, PluginsArgs, PluginsCommands};
 use crate::config::{
     ConfigLayer, ConfigValue, ResolvedConfig, RuntimeConfigPaths, Scope, TomlStoreEditOptions,
     set_scoped_value_in_toml, unset_scoped_value_in_toml,
@@ -96,55 +96,13 @@ pub(crate) fn run_plugins_command(
             ))
         }
         PluginsCommands::Enable(args) => {
-            let command = normalize_command_name(&args.target.command)?;
-            plugin_manager.validate_command(&command).map_err(|err| {
-                crate::app::report_anyhow_with_context(
-                    err,
-                    "failed to validate plugin command state change",
-                )
-            })?;
-            persist_command_state(
-                context,
-                command.as_str(),
-                PluginCommandState::Enabled,
-                plugin_scope(context, &args.target.scope),
-            )?;
-            sync_current_command_preferences(context)?;
-            let mut result = CliCommandResult::exit(0);
-            result
-                .messages
-                .success(format!("enabled command: {command}"));
-            Ok(result)
+            set_command_state(context, &args, PluginCommandState::Enabled, "enabled")
         }
         PluginsCommands::Disable(args) => {
-            let command = normalize_command_name(&args.target.command)?;
-            plugin_manager.validate_command(&command).map_err(|err| {
-                crate::app::report_anyhow_with_context(
-                    err,
-                    "failed to validate plugin command state change",
-                )
-            })?;
-            persist_command_state(
-                context,
-                command.as_str(),
-                PluginCommandState::Disabled,
-                plugin_scope(context, &args.target.scope),
-            )?;
-            sync_current_command_preferences(context)?;
-            let mut result = CliCommandResult::exit(0);
-            result
-                .messages
-                .success(format!("disabled command: {command}"));
-            Ok(result)
+            set_command_state(context, &args, PluginCommandState::Disabled, "disabled")
         }
         PluginsCommands::ClearState(args) => {
-            let command = normalize_command_name(&args.target.command)?;
-            plugin_manager.validate_command(&command).map_err(|err| {
-                crate::app::report_anyhow_with_context(
-                    err,
-                    "failed to validate plugin command state change",
-                )
-            })?;
+            let command = validated_state_command(context, &args.target.command)?;
             let removed = clear_command_state(
                 context,
                 command.as_str(),
@@ -208,6 +166,41 @@ pub(crate) fn run_plugins_command(
             Ok(result)
         }
     }
+}
+
+fn validated_state_command(context: PluginsCommandContext<'_>, command: &str) -> Result<String> {
+    let command = normalize_command_name(command)?;
+    context
+        .plugin_manager
+        .validate_command(&command)
+        .map_err(|err| {
+            crate::app::report_anyhow_with_context(
+                err,
+                "failed to validate plugin command state change",
+            )
+        })?;
+    Ok(command)
+}
+
+fn set_command_state(
+    context: PluginsCommandContext<'_>,
+    args: &PluginCommandStateArgs,
+    state: PluginCommandState,
+    verb: &str,
+) -> Result<CliCommandResult> {
+    let command = validated_state_command(context, &args.target.command)?;
+    persist_command_state(
+        context,
+        command.as_str(),
+        state,
+        plugin_scope(context, &args.target.scope),
+    )?;
+    sync_current_command_preferences(context)?;
+    let mut result = CliCommandResult::exit(0);
+    result
+        .messages
+        .success(format!("{verb} command: {command}"));
+    Ok(result)
 }
 
 fn persist_command_state(

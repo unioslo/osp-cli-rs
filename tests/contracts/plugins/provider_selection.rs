@@ -239,6 +239,7 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         "beta-from-plugin"
     );
     run(&["plugins", "clear-provider", "shared", "--global"]);
+    run(&["plugins", "clear-provider", "shared", "--global"]);
 }
 
 #[cfg(unix)]
