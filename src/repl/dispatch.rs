@@ -228,6 +228,7 @@ fn execute_repl_plugin_line_with_acceptance(
 ) -> Result<ExecutedReplLine> {
     let started = Instant::now();
     let mut resolved = line.to_string();
+    let mut keep_history = false;
     let execution = (|| {
         if let Some(command @ builtins::BangCommand::Last) = builtins::parse_bang_command(line)? {
             match builtins::execute_bang_command(session, history, line, command)? {
@@ -238,12 +239,18 @@ fn execute_repl_plugin_line_with_acceptance(
                 result => return Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity)),
             }
         }
+        // Alias expansion needs the live execution config, which the generic
+        // history backend does not own. Classify before a command can edit it.
+        keep_history = input::ReplParsedLine::parse(&resolved, runtime.config.resolved())
+            .is_ok_and(|parsed| {
+                !super::history_store::is_sensitive_config_set_tokens(&parsed.dispatch_tokens)
+            });
         execute_repl_plugin_line_inner(
             runtime, session, clients, history, &resolved, sink, accepted,
         )
     })();
     history
-        .finalize_execution(line, &resolved, *accepted)
+        .finalize_execution(line, &resolved, *accepted && keep_history)
         .map_err(|err| miette!("failed to update REPL history: {err}"))?;
     if *accepted && !is_repl_bang_request(&resolved) {
         history.remember_command(&resolved);

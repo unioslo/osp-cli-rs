@@ -1363,9 +1363,22 @@ fn is_excluded_command(command: &str, exclude_patterns: &[String]) -> bool {
 }
 
 fn is_sensitive_config_set_command(command: &str) -> bool {
-    let Ok(words) = shell_words::split(command) else {
-        return false;
+    // Use the execution lexer so quoted pipes remain values and actual stages
+    // cannot make a sensitive command fail open at the built-in parser.
+    let Ok(pipeline) = crate::dsl::parse_pipeline(command) else {
+        return true;
     };
+    let Ok(words) = shell_words::split(&pipeline.command) else {
+        return true;
+    };
+    is_sensitive_config_set_tokens(&words)
+}
+
+pub(super) fn is_sensitive_config_set_tokens(tokens: &[String]) -> bool {
+    let Ok(scanned) = crate::cli::invocation::scan_command_tokens(tokens) else {
+        return true;
+    };
+    let words = scanned.tokens;
     let Some(config_set) = words
         .windows(2)
         .position(|pair| pair[0] == "config" && pair[1] == "set")
@@ -1375,7 +1388,8 @@ fn is_sensitive_config_set_command(command: &str) -> bool {
     let Ok(Some(crate::cli::Commands::Config(args))) =
         crate::cli::parse_inline_command_tokens(&words[config_set..])
     else {
-        return false;
+        // A config write that cannot be classified is unsafe to persist.
+        return true;
     };
     let crate::cli::ConfigCommands::Set(set) = args.command else {
         return false;
