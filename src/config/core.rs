@@ -1104,6 +1104,10 @@ impl ConfigSchema {
 
     /// Parses a raw string into the schema's typed config representation.
     ///
+    /// Raw edits use the same adaptation rules as typed writes and runtime
+    /// resolution. Explicit schema entries take precedence over dynamic-key
+    /// defaults; extension and alias values without an entry remain strings.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1127,61 +1131,14 @@ impl ConfigSchema {
         }
         self.validate_writable_key(key)?;
 
-        let value = match self.expected_type(key) {
-            Some(SchemaValueType::String) | None => ConfigValue::String(raw.to_string()),
-            Some(SchemaValueType::Bool) => {
-                ConfigValue::Bool(
-                    parse_bool(raw).ok_or_else(|| ConfigError::InvalidValueType {
-                        key: key.to_string(),
-                        expected: SchemaValueType::Bool,
-                        actual: "string".to_string(),
-                    })?,
-                )
-            }
-            Some(SchemaValueType::Integer) => {
-                let parsed =
-                    raw.trim()
-                        .parse::<i64>()
-                        .map_err(|_| ConfigError::InvalidValueType {
-                            key: key.to_string(),
-                            expected: SchemaValueType::Integer,
-                            actual: "string".to_string(),
-                        })?;
-                ConfigValue::Integer(parsed)
-            }
-            Some(SchemaValueType::Float) => {
-                let parsed =
-                    raw.trim()
-                        .parse::<f64>()
-                        .map_err(|_| ConfigError::InvalidValueType {
-                            key: key.to_string(),
-                            expected: SchemaValueType::Float,
-                            actual: "string".to_string(),
-                        })?;
-                ConfigValue::Float(parsed)
-            }
-            Some(SchemaValueType::StringList) => {
-                let items = parse_string_list(raw);
-                ConfigValue::List(items.into_iter().map(ConfigValue::String).collect())
-            }
-        };
-
+        let value = ConfigValue::String(raw.to_string());
         if let Some(entry) = self.entries.get(key) {
-            validate_allowed_values(
-                key,
-                &value,
-                entry
-                    .allowed_values()
-                    .map(|values| values.iter().map(String::as_str).collect::<Vec<_>>())
-                    .as_deref(),
-            )?;
-            validate_value_constraints(key, &value, entry)?;
-        } else if let Some(DynamicSchemaKeyKind::PluginCommandState) = dynamic_schema_key_kind(key)
-        {
-            validate_allowed_values(key, &value, Some(&["enabled", "disabled"]))?;
+            adapt_value_for_schema(key, &value, entry)
+        } else if let Some(kind) = dynamic_schema_key_kind(key) {
+            adapt_dynamic_value_for_schema(key, &value, kind)
+        } else {
+            Ok(value)
         }
-
-        Ok(value)
     }
 
     pub(crate) fn validate_and_adapt(

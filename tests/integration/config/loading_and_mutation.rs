@@ -381,7 +381,7 @@ ui.presentation = "compact"
         .presentation_mut()
         .set("extensions.site.batch_size", 8_i64);
     let reloaded = resolver
-        .resolve(options)
+        .resolve(options.clone())
         .expect("updated client policy should resolve");
     assert_eq!(
         reloaded.get_string("extensions.site.token"),
@@ -398,6 +398,40 @@ ui.presentation = "compact"
     assert_eq!(batch_size.source, ConfigSource::PresentationDefaults);
     assert_eq!(batch_size.scope, Scope::global());
     assert_eq!(reloaded.get_string("ui.presentation"), Some("compact"));
+
+    let ratio_edit = resolver
+        .schema_mut()
+        .parse_input_value("extensions.site.retry_ratio", "2.25")
+        .expect("the client editor should parse its schema-owned float value");
+    assert_eq!(ratio_edit, ConfigValue::Float(2.25));
+    let ratio_change = set_scoped_value_in_toml(
+        &config_path,
+        "extensions.site.retry_ratio",
+        &ratio_edit,
+        &Scope::global(),
+        TomlStoreEditOptions::new(),
+    )
+    .expect("the typed client edit should persist in its real configuration document");
+    assert_eq!(ratio_change.previous, Some(ConfigValue::Float(1.5)));
+    resolver.set_file(
+        TomlFileLoader::new(config_path.clone())
+            .required()
+            .load()
+            .expect("the persisted client edit should reload"),
+    );
+    let edited = resolver
+        .resolve(options.clone())
+        .expect("the edited client policy should resolve");
+    assert_eq!(edited.get("extensions.site.retry_ratio"), Some(&ratio_edit));
+    let ratio_entry = resolver
+        .explain_key("extensions.site.retry_ratio", options)
+        .expect("the client edit should retain file provenance")
+        .final_entry
+        .unwrap();
+    assert_eq!(ratio_entry.value, ratio_edit);
+    assert_eq!(ratio_entry.source, ConfigSource::ConfigFile);
+    assert_eq!(ratio_entry.scope, Scope::global());
+    assert_eq!(ratio_entry.origin.as_deref(), config_path.to_str());
     #[cfg(unix)]
     assert_eq!(
         osp_cli::config::secret_file_mode(&secrets_path).unwrap(),
