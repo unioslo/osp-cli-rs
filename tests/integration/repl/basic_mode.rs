@@ -99,6 +99,111 @@ fn repl_basic_mode_runs_help_and_exit_without_tty() {
 }
 
 #[test]
+fn repl_sources_config_audits_and_replays_text_and_json_exports() {
+    let files = make_temp_dir("osp-cli-repl-config-audit");
+    for format in ["value", "json"] {
+        let audit = files.path().join(format!("{format} audit.osp"));
+        std::fs::write(&audit, "config explain ui.width\n").unwrap();
+        let mut input = format!(
+            "config set --session repl.simple_prompt true\nconfig set --session ui.width 96\nconfig set --session ui.format {format}\nsource '{}'\nlast\nlast --raw\n",
+            audit.display(),
+        );
+        if format == "json" {
+            input.push_str("config show --sources | F key=ui.width | P key,value,source,scope_profile,scope_terminal\nlast\nlast --raw\n");
+        }
+        input.push_str("exit\n");
+        let output = run_basic_repl(input.as_bytes());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{format}: {stderr}\n{stdout}");
+        let frames = stdout.split("default> ").skip(1).collect::<Vec<_>>();
+        let frame = |index: usize| {
+            frames
+                .get(index)
+                .unwrap_or_else(|| {
+                    panic!("{format}: missing command result {index}:\n{stdout}\n{stderr}")
+                })
+                .trim()
+        };
+        if format == "json" {
+            let document = |index| {
+                serde_json::from_str::<serde_json::Value>(frame(index)).unwrap_or_else(|error| {
+                    panic!("{format}: result {index}: {error}\n{stdout}\n{stderr}")
+                })
+            };
+            let raw = document(3);
+            assert_eq!(raw["key"], "ui.width");
+            assert_eq!(raw["value"], 96);
+            assert_eq!(raw["value_type"], "integer");
+            assert_eq!(raw["source"], "session");
+            assert_eq!(raw["scope"], "profile:default");
+            assert_eq!(raw["active_profile"], "default");
+            assert_eq!(raw["terminal"], "repl");
+            let winner = raw["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|candidate| candidate["winner"] == true)
+                .expect("raw audit should retain the winning candidate");
+            assert_eq!(winner["value"], 96);
+            assert_eq!(winner["source"], "session");
+            assert_eq!(winner["scope"], "profile:default");
+            assert_eq!(
+                document(4),
+                raw,
+                "last should retain the complete JSON audit"
+            );
+            assert_eq!(document(5), raw, "raw JSON audit replay should agree");
+            let projection = serde_json::json!([{
+                "key": "ui.width", "value": 96, "source": "session",
+                "scope_profile": "default", "scope_terminal": null
+            }]);
+            assert_eq!(
+                document(6),
+                projection,
+                "config export should retain typed source metadata"
+            );
+            assert_eq!(
+                document(7),
+                projection,
+                "last should repeat the config export pipeline"
+            );
+            let raw_export = document(8);
+            let exported_width = raw_export
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["key"] == "ui.width")
+                .expect("raw export should retain the selected config value");
+            assert_eq!(exported_width["value"], 96);
+            assert_eq!(exported_width["source"], "session");
+            assert_eq!(exported_width["scope_profile"], "default");
+            assert_eq!(exported_width["scope_terminal"], serde_json::Value::Null);
+        } else {
+            let raw = frame(3);
+            assert!(
+                raw.lines().any(|line| line.trim() == "key: ui.width"),
+                "{raw}"
+            );
+            assert!(
+                raw.lines().any(|line| line.trim() == "value: 96 (integer)"),
+                "{raw}"
+            );
+            assert!(
+                raw.lines().any(|line| line.trim() == "source: session"),
+                "{raw}"
+            );
+            assert!(
+                raw.lines().any(|line| line.trim() == "terminal: repl"),
+                "{raw}"
+            );
+            assert_eq!(frame(4), raw, "last should retain the complete text audit");
+            assert_eq!(frame(5), raw, "raw text audit replay should agree");
+        }
+    }
+}
+
+#[test]
 fn repl_basic_mode_exits_cleanly_on_immediate_eof() {
     let output = run_basic_repl(b"");
     assert!(

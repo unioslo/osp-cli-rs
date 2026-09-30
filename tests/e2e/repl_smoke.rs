@@ -319,3 +319,78 @@ fn repl_basic_mode_runs_help_and_exit_without_a_tty_end_to_end() {
     assert!(stdout.contains("help"));
     assert!(stdout.contains("exit"));
 }
+
+#[cfg(unix)]
+fn wait_for_repl_json(session: &ReplPtySession, start: usize) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let output = crate::support::strip_ansi_preserve_newlines(&session.output_since(start));
+        if let Some(json_start) = output.find(['{', '['])
+            && let Some(Ok(value)) = serde_json::Deserializer::from_str(&output[json_start..])
+                .into_iter::<serde_json::Value>()
+                .next()
+        {
+            return value;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected a complete JSON result: {}",
+            session.output_snapshot(16000)
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_operator_inspects_pipeline_failure_and_recovers_to_typed_output() {
+    let mut session = ReplPtySession::spawn(ReplPtyConfig::default());
+    assert!(session.wait_for_plain_output("default>", Duration::from_secs(10)));
+    let failed_command = "theme show dracula | Z";
+    session.type_text(failed_command);
+    let failed = session.output_len();
+    session.write_bytes(b"\r");
+    assert!(
+        session.wait_for_plain_output_since(failed, "doctor last -v", Duration::from_secs(5)),
+        "the failed output pipeline should leave an inspectable failure: {}",
+        session.output_snapshot(12000)
+    );
+
+    // Inspect the same retained failure at each documented detail level.
+    for detail in ["", "-v", "-vv", "-vvv"] {
+        session.type_text(&format!("doctor last {detail}"));
+        let start = session.output_len();
+        session.write_bytes(b"\r");
+        assert!(
+            session.wait_for_plain_output_since(start, failed_command, Duration::from_secs(5)),
+            "the diagnostic should identify the original command: {}",
+            session.output_snapshot(12000)
+        );
+        assert!(session.wait_for_plain_output_since(start, "default>", Duration::from_secs(5)));
+    }
+
+    session.type_text("doctor last --json");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    let failure = wait_for_repl_json(&session, start);
+    assert_eq!(failure["status"], "error");
+    assert_eq!(failure["command"], failed_command);
+    assert!(
+        failure["summary"]
+            .as_str()
+            .is_some_and(|text| text.contains('Z'))
+    );
+    assert_ne!(failure["detail"], failure["summary"]);
+
+    session.type_text("theme show dracula --json | G id | A count | Z");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    let recovered = wait_for_repl_json(&session, start);
+    assert_eq!(
+        recovered,
+        serde_json::json!([{"id": "dracula", "count": 1}])
+    );
+
+    session.write_bytes(b"exit\r");
+    assert!(session.wait_for_exit(Duration::from_secs(5)));
+}
