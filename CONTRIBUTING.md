@@ -37,6 +37,11 @@ Install the linker before running checks; on Ubuntu/Debian:
 sudo apt-get install lld
 ```
 
+Full Linux framework runtime checks also need D-Bus and GNOME Keyring. See the
+[testing guide](docs/TESTING.md#choose-a-test-target) for the system packages
+and isolated credential-store contract. Product checks and package builds do
+not require those services.
+
 The confidence runner preflights a lane's tooling before builds, including the
 active compiler's `llvm-cov` and `llvm-profdata` binaries for coverage. Its
 installer ensures `llvm-tools-preview` and pinned audit/coverage helpers; CI
@@ -177,8 +182,9 @@ otherwise force overlapping local tests. Review which public behavior is unteste
 Aim for higher coverage through useful contract and integration workflows;
 the floor is a minimum, not a target. Keep it fixed unless explicitly reviewed.
 
-Missing entries still fail. The non-executable `src/lib.rs` facade has one
-explicit digest-pinned exemption; any byte change requires renewed review.
+Missing entries still fail. The non-executable `src/lib.rs` facade and the
+type-only `src/ui/doc.rs` each have a digest-pinned review; any byte change
+requires renewed review.
 Files that appear with executable lines are evaluated normally. `pre-push`
 runs the local checks without repeating instrumented targets; use the full
 lane for authoritative coverage and `cov-gate-fast` for an optional report.
