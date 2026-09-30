@@ -444,7 +444,11 @@ def check_catalog(root: Path, cwd: Path | None = None) -> dict[str, ConfidenceCh
             "--target-dir", str(root / "target" / "publish-dry-run"),
         ]),
     ):
-        checks[name] = ConfidenceCheck(name, description, command)
+        checks[name] = ConfidenceCheck(
+            name, description, command,
+            # Product checks need the same bounded instrumented starts as full.
+            env=checks["coverage"].env if name.startswith("coverage") else None,
+        )
     return checks
 
 

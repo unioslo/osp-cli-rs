@@ -78,6 +78,11 @@ requires it. Confirm tests actually executed and distinguish environment/tooling
 failures from behavior failures. Report commands, results and skipped effects;
 test counts alone do not establish readiness.
 
+Coverage checks execute cases serially, including the generic check used by the
+product. Concurrent instrumented CLI and PTY starts have exceeded the fixtures'
+request deadlines on this machine; ordinary behavior checks remain parallel.
+Cargo still compiles dependencies in parallel.
+
 Publication rehearsal uses `--check publish-dry-run` and its own
 `target/publish-dry-run` directory. Sharing the normal build directory can
 leave Cargo fingerprints pointing at `target/package/...` source, allowing a
