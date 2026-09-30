@@ -145,6 +145,14 @@ fn enabling_one_plugin_does_not_disable_other_default_enabled_plugins_contract()
         .success()
         .stderr(predicate::str::contains("cleared command state for alpha"));
 
+    // Clearing is idempotent: repeating it succeeds without inventing state.
+    let mut clear_again = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    clear_again
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["plugins", "clear-state", "alpha"]);
+    clear_again.assert().success();
+
     let mut beta = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
     beta.envs(crate::test_env::isolated_env(&home))
         .env("OSP_PLUGIN_PATH", &dir)
