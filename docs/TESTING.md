@@ -45,7 +45,12 @@ The runner never installs system packages implicitly.
 The contract starts a private D-Bus session and unlocks a throwaway GNOME
 keyring under isolated HOME/XDG roots. It executes the real CLI to persist,
 reload, redact, reveal, preview, rotate and remove a scoped credential, then
-verifies the ordinary-config fallback and the value-free `0600` index.
+verifies the ordinary-config fallback and the value-free `0600` index. The
+same session makes the readable index parent temporarily unwritable, confirms
+that interrupted replacement/removal restore the native credential, then
+restores write access and completes rotation/removal. Run this contract as an
+unprivileged user so native filesystem permission checks apply. The fixture
+restores the original parent permissions even when a subprocess fails.
 It preserves `LLVM_PROFILE_FILE` for instrumented child processes. This proves
 the Linux Secret Service boundary; it does not verify macOS Keychain, Windows
 Credential Manager or availability of a user's desktop keyring. A denied

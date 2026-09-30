@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Execute CLI operations against a throwaway Linux Secret Service session.
 
-Rust owns the command sequence and contract assertions. This fixture only owns
-the isolated bus/daemon lifetime and captures CLI output plus on-disk evidence.
+Rust owns the full argv sequence, operator permission transitions and contract
+assertions. This fixture owns the isolated bus/daemon lifetime, restores index
+parent permissions on failure and captures output plus on-disk evidence.
 The caller supplies HOME/XDG roots and retains LLVM_PROFILE_FILE for children.
 """
 
@@ -14,7 +15,7 @@ import sys
 import time
 
 
-def run_session(binary, home, commands):
+def run_session(home, commands):
     runtime = home / "runtime"
     runtime.mkdir(mode=0o700)
     control = runtime / "keyring"
@@ -89,7 +90,7 @@ def run_session(binary, home, commands):
             results = []
             for args in commands:
                 output = subprocess.run(
-                    [binary, *args], text=True, capture_output=True, timeout=20
+                    args, text=True, capture_output=True, timeout=20
                 )
                 results.append(
                     {
@@ -101,6 +102,7 @@ def run_session(binary, home, commands):
                         if index.exists()
                         else None,
                         "native_store": native_store.is_file(),
+                        "index_parent_mode": index.parent.stat().st_mode & 0o777,
                     }
                 )
             print(json.dumps(results))
@@ -115,9 +117,9 @@ def run_session(binary, home, commands):
 
 def main():
     if sys.argv[1] == "--session":
-        run_session(sys.argv[2], Path(sys.argv[3]), json.loads(sys.argv[4]))
+        run_session(Path(sys.argv[2]), json.loads(sys.argv[3]))
         return
-    home = Path(sys.argv[2])
+    home = Path(sys.argv[1])
     data = home / ".local/share"
     data.mkdir(parents=True, mode=0o700)
     os.environ["XDG_DATA_HOME"] = str(data)
@@ -132,19 +134,24 @@ def main():
         "WAYLAND_DISPLAY",
     ]:
         os.environ.pop(variable, None)
-    result = subprocess.run(
-        [
-            "dbus-run-session",
-            "--",
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "--session",
-            *sys.argv[1:],
-        ],
-        text=True,
-        capture_output=True,
-        timeout=120,
-    )
+    index_parent = Path(os.environ["XDG_CONFIG_HOME"]) / "osp"
+    index_parent_mode = index_parent.stat().st_mode & 0o777
+    try:
+        result = subprocess.run(
+            [
+                "dbus-run-session",
+                "--",
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--session",
+                *sys.argv[1:],
+            ],
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+    finally:
+        index_parent.chmod(index_parent_mode)
     if result.returncode:
         raise RuntimeError("isolated keyring session failed:\n" + result.stderr)
     sys.stdout.write(result.stdout)
