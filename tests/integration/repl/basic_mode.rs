@@ -42,11 +42,19 @@ fn repl_basic_mode_runs_help_and_exit_without_tty() {
     let second = files.path().join("second result.osp");
     std::fs::write(&first, "theme show dracula | P id,name\n").unwrap();
     std::fs::write(&second, "theme show nord | P id,name\n").unwrap();
+    let recovery = files.path().join("recovery batch.osp");
+    std::fs::write(
+        &recovery,
+        "theme show dracula | P id,name\ntheme show dracula | Z\ntheme show nord | P id,name\n",
+    )
+    .unwrap();
     let input = format!(
-        "help\nsource '{}'\n!!\nconfig set --session ui.format json\nsource -- '{}' '{}'\nlast\nlast --raw\nexit\n",
+        "help\nsource '{}'\n!!\nconfig set --session ui.format json\nsource -- '{}' '{}'\nlast\nlast --raw\nsource '{}'\nlast\nsource --ignore-errors '{}'\nlast\nexit\n",
         commands.display(),
         first.display(),
         second.display(),
+        recovery.display(),
+        recovery.display(),
     );
     let output = run_basic_repl(input.as_bytes());
     assert!(
@@ -95,6 +103,24 @@ fn repl_basic_mode_runs_help_and_exit_without_tty() {
     assert_eq!(
         documents[3][0]["accent"], "#88c0d0",
         "raw replay should retain the theme palette"
+    );
+    let before_failure = serde_json::json!([{"id": "dracula", "name": "Dracula"}]);
+    assert_eq!(documents[4], before_failure);
+    assert_eq!(
+        documents[5], before_failure,
+        "a stopped batch should retain its last completed result for replay"
+    );
+    assert_eq!(documents[6], before_failure);
+    let recovered = serde_json::json!([{"id": "nord", "name": "Nord"}]);
+    assert_eq!(documents[7], recovered);
+    assert_eq!(
+        documents[8], recovered,
+        "continuing after a failed batch operation should commit the final result for replay"
+    );
+    assert_eq!(documents.len(), 9);
+    assert!(
+        stderr.contains(&format!("{}:2", recovery.display())),
+        "{stderr}"
     );
 }
 
