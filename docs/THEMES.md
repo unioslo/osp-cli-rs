@@ -128,7 +128,8 @@ Rules:
 - `base` is optional
   - if present, missing palette keys inherit from that built-in base theme
   - if omitted or set to `"none"`, missing palette keys stay unset
-- color/style specs accept `#RRGGBB` and named colors
+- color/style specs accept named colors, `#RGB`, `#RRGGBB`, `ansiNN`, and
+  `rgb(r,g,b)`
 - style specs may also use prefixes such as `bold`, `dim`, `italic`, or
   `underline`
 

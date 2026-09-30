@@ -242,7 +242,7 @@ pub(crate) fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
 /// ignored when selecting the effective color token.
 pub fn color_from_style_spec(spec: &str) -> Option<Color> {
     let token = extract_color_token(spec)?;
-    parse_color_token(token)
+    crate::ui::style::parse_color_token(&token.to_ascii_lowercase())
 }
 
 fn extract_color_token(spec: &str) -> Option<&str> {
@@ -274,69 +274,6 @@ fn extract_color_token(spec: &str) -> Option<&str> {
         last = Some(token);
     }
     last
-}
-
-fn parse_color_token(token: &str) -> Option<Color> {
-    let normalized = token.trim().to_ascii_lowercase();
-
-    if let Some(value) = normalized.strip_prefix('#') {
-        if value.len() == 6 {
-            let r = u8::from_str_radix(&value[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&value[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&value[4..6], 16).ok()?;
-            return Some(Color::Rgb(r, g, b));
-        }
-        if value.len() == 3 {
-            let r = u8::from_str_radix(&value[0..1], 16).ok()?;
-            let g = u8::from_str_radix(&value[1..2], 16).ok()?;
-            let b = u8::from_str_radix(&value[2..3], 16).ok()?;
-            return Some(Color::Rgb(
-                r.saturating_mul(17),
-                g.saturating_mul(17),
-                b.saturating_mul(17),
-            ));
-        }
-    }
-
-    if let Some(value) = normalized.strip_prefix("ansi")
-        && let Ok(index) = value.parse::<u8>()
-    {
-        return Some(Color::Fixed(index));
-    }
-
-    if let Some(value) = normalized
-        .strip_prefix("rgb(")
-        .and_then(|value| value.strip_suffix(')'))
-    {
-        let mut parts = value.split(',').map(|part| part.trim().parse::<u8>().ok());
-        if let (Some(Some(r)), Some(Some(g)), Some(Some(b))) =
-            (parts.next(), parts.next(), parts.next())
-        {
-            return Some(Color::Rgb(r, g, b));
-        }
-    }
-
-    match normalized.as_str() {
-        "black" => Some(Color::Black),
-        "red" => Some(Color::Red),
-        "green" => Some(Color::Green),
-        "yellow" => Some(Color::Yellow),
-        "blue" => Some(Color::Blue),
-        "magenta" | "purple" => Some(Color::Purple),
-        "cyan" => Some(Color::Cyan),
-        "white" => Some(Color::White),
-        "darkgray" | "dark_gray" | "gray" | "grey" => Some(Color::DarkGray),
-        "lightgray" | "light_gray" | "lightgrey" | "light_grey" => Some(Color::LightGray),
-        "lightred" | "light_red" => Some(Color::LightRed),
-        "lightgreen" | "light_green" => Some(Color::LightGreen),
-        "lightyellow" | "light_yellow" => Some(Color::LightYellow),
-        "lightblue" | "light_blue" => Some(Color::LightBlue),
-        "lightmagenta" | "light_magenta" | "lightpurple" | "light_purple" => {
-            Some(Color::LightPurple)
-        }
-        "lightcyan" | "light_cyan" => Some(Color::LightCyan),
-        _ => None,
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
