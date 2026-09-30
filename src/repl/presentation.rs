@@ -19,9 +19,7 @@ use crate::native::NativeSessionContext;
 use crate::repl::{ReplAppearance, ReplPrompt};
 use crate::ui::messages::MessageLevel;
 use crate::ui::render_structured_output_with_source_guide;
-use crate::ui::style::{
-    StyleToken, apply_style_spec, apply_style_with_theme, apply_style_with_theme_overrides,
-};
+use crate::ui::style::{StyleToken, apply_style_with_theme, apply_style_with_theme_overrides};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -667,29 +665,21 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
     let config = view.config;
     let theme = &resolved.theme;
     let prompt = ReplPromptState::from_view(view);
-    let user_text = style_prompt_fragment(
-        None,
-        &prompt.user,
-        StyleToken::PromptText,
-        resolved.color,
-        theme,
-    );
-    let domain_text = style_prompt_fragment(
-        None,
+    let user_text =
+        apply_style_with_theme(&prompt.user, StyleToken::PromptText, resolved.color, theme);
+    let domain_text = apply_style_with_theme(
         &prompt.domain,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
-    let profile_text = style_prompt_fragment(
-        None,
+    let profile_text = apply_style_with_theme(
         &prompt.profile,
         StyleToken::PromptText,
         resolved.color,
         theme,
     );
-    let indicator_text = style_prompt_fragment(
-        None,
+    let indicator_text = apply_style_with_theme(
         &prompt.indicator,
         StyleToken::PromptText,
         resolved.color,
@@ -697,8 +687,7 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
     );
 
     let prompt = if prompt.simple {
-        let suffix =
-            style_prompt_fragment(None, "> ", StyleToken::PromptText, resolved.color, theme);
+        let suffix = apply_style_with_theme("> ", StyleToken::PromptText, resolved.color, theme);
         if prompt.indicator.trim().is_empty() {
             format!("{profile_text}{suffix}")
         } else {
@@ -717,7 +706,6 @@ pub(crate) fn build_repl_prompt(view: ReplViewContext<'_>) -> ReplPrompt {
             &profile_text,
             &indicator_text,
             PromptTemplateStyleContext {
-                literal_style: None,
                 color: resolved.color,
                 theme,
             },
@@ -907,22 +895,17 @@ pub(crate) fn render_prompt_template(
     profile: &str,
     indicator: &str,
 ) -> String {
-    let mut out = decode_repl_prompt_template(template)
-        .replace("{user}", user)
-        .replace("{domain}", domain)
-        .replace("{profile}", profile)
-        .replace("{context}", profile);
-
-    if out.contains("{indicator}") {
-        out = out.replace("{indicator}", indicator);
-    } else if !indicator.trim().is_empty() {
-        if !out.ends_with(' ') {
-            out.push(' ');
-        }
-        out.push_str(indicator);
-    }
-
-    out
+    render_prompt_template_styled(
+        &decode_repl_prompt_template(template),
+        user,
+        domain,
+        profile,
+        indicator,
+        PromptTemplateStyleContext {
+            color: false,
+            theme: &crate::ui::theme::resolve_theme(crate::ui::theme::DEFAULT_THEME_NAME),
+        },
+    )
 }
 
 fn render_prompt_template_styled(
@@ -936,15 +919,8 @@ fn render_prompt_template_styled(
     let mut out = String::new();
     let mut cursor = 0;
 
-    let style_literal = |text: &str| {
-        style_prompt_fragment(
-            style.literal_style,
-            text,
-            StyleToken::PromptText,
-            style.color,
-            style.theme,
-        )
-    };
+    let style_literal =
+        |text: &str| apply_style_with_theme(text, StyleToken::PromptText, style.color, style.theme);
 
     while cursor < template.len() {
         let remainder = &template[cursor..];
@@ -983,7 +959,6 @@ fn decode_repl_prompt_template(template: &str) -> String {
 }
 
 struct PromptTemplateStyleContext<'a> {
-    literal_style: Option<&'a str>,
     color: bool,
     theme: &'a crate::ui::theme::ThemeDefinition,
 }
@@ -1011,19 +986,6 @@ fn prompt_placeholder_replacement<'a>(
         return Some((indicator, "{indicator}".len()));
     }
     None
-}
-
-fn style_prompt_fragment(
-    config_style: Option<&str>,
-    value: &str,
-    fallback: StyleToken,
-    color: bool,
-    theme: &crate::ui::theme::ThemeDefinition,
-) -> String {
-    match config_style.map(str::trim) {
-        Some(spec) if !spec.is_empty() => apply_style_spec(value, spec, color),
-        _ => apply_style_with_theme(value, fallback, color, theme),
-    }
 }
 
 #[cfg(test)]
