@@ -31,6 +31,7 @@ use super::catalog::{
     selected_provider_label,
 };
 use super::conversion::to_command_spec;
+use super::discovery::DiscoveryCache;
 use super::selection::{ProviderResolution, ProviderResolutionError, provider_labels};
 use super::state::PluginCommandPreferences;
 #[cfg(test)]
@@ -675,8 +676,7 @@ impl StdError for PluginDispatchError {
 #[must_use]
 pub struct PluginManager {
     pub(crate) explicit_dirs: Vec<PathBuf>,
-    pub(crate) discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
-    pub(crate) dispatch_discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
+    pub(super) discovery_cache: RwLock<DiscoveryCache>,
     pub(crate) command_preferences: RwLock<PluginCommandPreferences>,
     pub(crate) config_root: Option<PathBuf>,
     pub(crate) cache_root: Option<PathBuf>,
@@ -775,8 +775,7 @@ impl PluginManager {
     pub fn new(explicit_dirs: Vec<PathBuf>) -> Self {
         Self {
             explicit_dirs,
-            discovered_cache: RwLock::new(None),
-            dispatch_discovered_cache: RwLock::new(None),
+            discovery_cache: RwLock::new(DiscoveryCache::default()),
             command_preferences: RwLock::new(PluginCommandPreferences::default()),
             config_root: None,
             cache_root: None,
