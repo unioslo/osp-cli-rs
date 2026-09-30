@@ -707,7 +707,7 @@ def evaluate_gate(
         if entry is None:
             digest = baseline.get("non_executable_files", {}).get(path)
             if digest and hashlib.sha256((repo_root / path).read_bytes()).hexdigest() == digest:
-                policy_notes.append(f"reviewed non-executable facade: {path} (file digest verified)")
+                policy_notes.append(f"reviewed non-executable source: {path} (file digest verified)")
                 files_skipped_by_policy += 1
                 continue
             errors.append(f"no coverage entry found for changed source file: {path}")

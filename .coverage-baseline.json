@@ -4,7 +4,8 @@
   "changed_file_review_line_percent": 85.0,
   "min_executable_lines": 20,
   "non_executable_files": {
-    "src/lib.rs": "6317427a4faa5c2c74ea0b52dd21594a062474e9ea01b7421b774f90366ef65d"
+    "src/lib.rs": "6317427a4faa5c2c74ea0b52dd21594a062474e9ea01b7421b774f90366ef65d",
+    "src/ui/doc.rs": "3d0cb92923b6e2b0170a8da3c390dec07abb08b106307e59feb439003a73cc1c"
   },
-  "notes": "The user selected an 85% overall floor; the aim remains higher coverage through useful contract and integration workflows. Whole-file 85% is a review warning, not a requirement to add overlapping tests. The pinned src/lib.rs contains only docs, module declarations and reexports; any byte change requires renewed review."
+  "notes": "The user selected an 85% overall floor; the aim remains higher coverage through useful contract and integration workflows. Whole-file 85% is a review warning, not a requirement to add overlapping tests. The pinned src/lib.rs contains only docs, module declarations and reexports; any byte change requires renewed review. The pinned src/ui/doc.rs contains only private document data types and derives; the full LLVM reports emit no executable entry for it. This missing-entry review does not remove any LLVM lines or alter the percentage. Any byte change requires renewed review."
 }
