@@ -34,6 +34,24 @@ When checking saved configuration or machine-readable output, parse it and
 assert meaningful values; counts or field presence alone can pass even when
 the content is wrong.
 
+Linux contracts include one real native-keyring lifecycle. It requires
+`dbus-run-session`, `dbus-daemon`, `gnome-keyring-daemon` and `gdbus`; on
+Debian/Ubuntu these come from `dbus-daemon`, `gnome-keyring` and
+`libglib2.0-bin`. CI installs them explicitly, and confidence test/contract/
+coverage checks fail their prerequisite preflight before compilation when a
+tool is missing. Build and publication checks do not require these services.
+The runner never installs system packages implicitly.
+
+The contract starts a private D-Bus session and unlocks a throwaway GNOME
+keyring under isolated HOME/XDG roots. It executes the real CLI to persist,
+reload, redact, reveal, preview, rotate and remove a scoped credential, then
+verifies the ordinary-config fallback and the value-free `0600` index.
+It preserves `LLVM_PROFILE_FILE` for instrumented child processes. This proves
+the Linux Secret Service boundary; it does not verify macOS Keychain, Windows
+Credential Manager or availability of a user's desktop keyring. A denied
+local socket bind is an environment failure, and missing tools do not skip the
+contract.
+
 ## Run existing checks
 
 The confidence runner defines command lists, environment isolation and which

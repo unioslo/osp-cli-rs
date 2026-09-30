@@ -62,6 +62,7 @@ CLIPPY_DENIES = (
 MIRI_TOOLCHAIN = "nightly-2026-03-24"
 TOOL_VERSIONS = {"cargo-audit": "0.22.2", "cargo-llvm-cov": "0.8.4"}
 GENERIC_CHECKS = {"fmt", "fmt-fix", "clippy", "test", "build", "audit", "metadata", "coverage-crate"}
+LINUX_KEYRING_TOOLS = {"dbus-run-session", "dbus-daemon", "gnome-keyring-daemon", "gdbus"}
 
 
 @dataclass(frozen=True)
@@ -464,6 +465,14 @@ def required_tools(checks: list[ConfidenceCheck], root: Path) -> set[str]:
     tools: set[str] = set()
     for check in checks:
         tools.update(special.get(check.name, {"cargo"}))
+        if (
+            sys.platform.startswith("linux")
+            and root.resolve() == repo_root()
+            and check.name in {
+                "contracts", "test", "coverage", "coverage-fast", "coverage-crate", "coverage-summary"
+            }
+        ):
+            tools.update(LINUX_KEYRING_TOOLS)
         if check.name.startswith("coverage"):
             tools.update({"cargo-llvm-cov", "llvm-tools-preview"})
         if check.name.startswith("miri"):
@@ -526,6 +535,11 @@ def preflight(checks: list[ConfidenceCheck], root: Path) -> None:
             "Missing or unsupported confidence tools: " + ", ".join(missing)
             + ". Install pinned helpers with: python3 scripts/confidence.py --install-tools full. "
             + "Install toolchain components with rustup; GNU/Linux builds require ld.lld (package lld)."
+            + (
+                " Linux contracts require an isolated Secret Service: install dbus-daemon, "
+                "gnome-keyring and libglib2.0-bin on Debian/Ubuntu; see docs/TESTING.md."
+                if set(missing) & LINUX_KEYRING_TOOLS else ""
+            )
         )
 
 

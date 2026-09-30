@@ -97,10 +97,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.94.0
 
-      - name: Install native Linux linker
+      - name: Install native Linux linker and contract services
         run: |
           sudo apt-get update
-          sudo apt-get install --yes lld
+          sudo apt-get install --yes lld dbus-daemon gnome-keyring libglib2.0-bin
           ld.lld --version
 
       - name: Cache Rust build artifacts
