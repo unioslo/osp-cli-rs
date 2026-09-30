@@ -166,13 +166,12 @@ pub(crate) fn run_repl_basic<F>(
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
-    let stdin = io::stdin();
     loop {
         print!("{}{}", prompt.left(), prompt.indicator());
         io::stdout().flush()?;
 
         let mut line = String::new();
-        let read = stdin.read_line(&mut line)?;
+        let read = crate::ui::prompt::read_line(&mut line)?;
         if read == 0 {
             return Ok(ReplRunResult::Exit(0));
         }
