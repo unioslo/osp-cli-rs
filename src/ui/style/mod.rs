@@ -115,24 +115,6 @@ impl<'a> ThemeStyler<'a> {
     }
 }
 
-#[cfg(test)]
-pub fn apply_style(text: &str, token: StyleToken, color: bool, theme_name: &str) -> String {
-    let theme = crate::ui::theme::resolve_theme(theme_name);
-    apply_style_with_theme(text, token, color, &theme)
-}
-
-#[cfg(test)]
-pub fn apply_style_with_overrides(
-    text: &str,
-    token: StyleToken,
-    color: bool,
-    theme_name: &str,
-    overrides: &StyleOverrides,
-) -> String {
-    let theme = crate::ui::theme::resolve_theme(theme_name);
-    apply_style_with_theme_overrides(text, token, color, &theme, overrides)
-}
-
 pub fn apply_style_with_theme(
     text: &str,
     token: StyleToken,

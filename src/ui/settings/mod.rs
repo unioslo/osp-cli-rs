@@ -664,33 +664,8 @@ impl RenderSettingsBuilder {
         self
     }
 
-    pub fn with_help_chrome(mut self, help_chrome: HelpChromeSettings) -> Self {
-        self.settings.help_chrome = help_chrome;
-        self
-    }
-
     pub fn with_theme_name(mut self, theme_name: impl Into<String>) -> Self {
         self.settings.theme_name = theme_name.into();
-        self
-    }
-
-    pub fn with_style_overrides(mut self, style_overrides: style::StyleOverrides) -> Self {
-        self.settings.style_overrides = style_overrides;
-        self
-    }
-
-    pub fn with_chrome_frame(mut self, chrome_frame: SectionFrameStyle) -> Self {
-        self.settings.chrome_frame = chrome_frame;
-        self
-    }
-
-    pub fn with_ruled_section_policy(mut self, ruled_section_policy: RuledSectionPolicy) -> Self {
-        self.settings.ruled_section_policy = ruled_section_policy;
-        self
-    }
-
-    pub fn with_guide_default_format(mut self, guide_default_format: GuideDefaultFormat) -> Self {
-        self.settings.guide_default_format = guide_default_format;
         self
     }
 

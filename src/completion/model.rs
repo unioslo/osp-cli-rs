@@ -699,12 +699,6 @@ impl CompletionNode {
         self.flags.insert(name.into(), node);
         self
     }
-
-    /// Attaches optional advisory relational facts to this node.
-    pub fn with_planning(mut self, planning: PlanningHints) -> Self {
-        self.planning = Some(planning);
-        self
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
