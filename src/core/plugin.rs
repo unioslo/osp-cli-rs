@@ -1533,6 +1533,89 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn protocol_validation_names_the_invalid_field_unit() {
+        let describe = json!({
+            "protocol_version": PLUGIN_PROTOCOL_V1,
+            "plugin_id": "vm",
+            "plugin_version": "1.0.0",
+            "commands": [{
+                "name": "vm",
+                "auth": {"feature_flags": ["beta"], "visible_session": {"credentials": [{"state": "present", "service": "orch"}]}},
+                "flags": {"--size": {"suggestions": [{"value": "small"}]}},
+                "args": [{"suggestions": [{"value": "db01"}]}],
+                "subcommands": [{"name": "list"}]
+            }]
+        });
+        let validate_describe = |value: serde_json::Value| {
+            serde_json::from_value::<DescribeV1>(value)
+                .expect("describe fixture should deserialize")
+                .validate_v1()
+        };
+        assert_eq!(validate_describe(describe.clone()), Ok(()));
+        for (pointer, value, field) in [
+            ("/protocol_version", json!(2), "protocol version"),
+            ("/plugin_id", json!("env"), "reserved"),
+            ("/plugin_id", json!("VM"), "plugin_id"),
+            ("/commands/0/subcommands/0/name", json!(" "), "command name"),
+            ("/commands/0/flags", json!({"size": {}}), "flag `size`"),
+            (
+                "/commands/0/flags/--size/suggestions/0/value",
+                json!(" "),
+                "flag `--size` suggestions",
+            ),
+            (
+                "/commands/0/args/0/suggestions/0/value",
+                json!(""),
+                "argument",
+            ),
+            (
+                "/commands/0/auth/feature_flags",
+                json!([" "]),
+                "feature_flags",
+            ),
+            (
+                "/commands/0/auth/visible_session/credentials/0/service",
+                json!(" "),
+                "visible_session credentials",
+            ),
+        ] {
+            let mut invalid = describe.clone();
+            *invalid.pointer_mut(pointer).expect("fixture path") = value;
+            let error = validate_describe(invalid).expect_err(pointer);
+            assert!(error.contains(field), "{pointer}: {error}");
+        }
+
+        let response = json!({
+            "protocol_version": PLUGIN_PROTOCOL_V1,
+            "ok": true,
+            "data": {"items": []},
+            "error": null,
+            "messages": [{"level": "info", "text": "listed"}],
+            "meta": {"row_path": "items", "columns": ["name"], "column_labels": ["NAME"]}
+        });
+        let validate_response = |value: serde_json::Value| {
+            serde_json::from_value::<ResponseV1>(value)
+                .expect("response fixture should deserialize")
+                .validate_v1()
+        };
+        assert_eq!(validate_response(response.clone()), Ok(()));
+        for (pointer, value, field) in [
+            ("/protocol_version", json!(0), "protocol version"),
+            ("/error", json!({"code": "x", "message": "y"}), "error=null"),
+            ("/ok", json!(false), "error payload"),
+            ("/messages/0/text", json!(" "), "messages"),
+            ("/meta/row_path", json!(" "), "meta.row_path"),
+            ("/meta/columns", json!(null), "requires meta.columns"),
+            ("/meta/column_labels/0", json!(" "), "empty labels"),
+        ] {
+            let mut invalid = response.clone();
+            *invalid.pointer_mut(pointer).expect("fixture path") = value;
+            let error = validate_response(invalid).expect_err(pointer);
+            assert!(error.contains(field), "{pointer}: {error}");
+        }
+    }
+
+    #[test]
     fn response_row_path_requires_a_top_level_array_unit() {
         let response = ResponseV1 {
             protocol_version: PLUGIN_PROTOCOL_V1,
