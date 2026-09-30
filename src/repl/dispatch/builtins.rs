@@ -165,78 +165,65 @@ fn execute_source_command(
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            if shell_words::split(line)
-                .ok()
-                .and_then(|words| words.into_iter().next())
-                .as_deref()
-                == Some("source")
-            {
-                let err = miette!("nested `source` commands are not supported");
-                if command.ignore_errors {
-                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
-                    continue;
-                }
-                return Err(err).wrap_err_with(|| {
-                    format!("command failed at {}:{}", path.display(), index + 1)
-                });
-            }
-            let executed = match super::execute_repl_plugin_line_with_sink(
-                runtime, session, clients, history, line, sink,
-            ) {
-                Ok(executed) => executed,
+            let location = format!("{}:{}", path.display(), index + 1);
+            match execute_source_line(runtime, session, clients, history, line, &location, sink) {
+                Ok(None) => {}
+                Ok(Some(stop)) => return Ok(stop),
                 Err(err) if command.ignore_errors => {
-                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
-                    continue;
+                    sink.write_stderr(&format!("{location}: {err}\n"));
                 }
                 Err(err) => {
-                    return Err(err).wrap_err_with(|| {
-                        format!("command failed at {}:{}", path.display(), index + 1)
-                    });
-                }
-            };
-            let failed = !matches!(executed.exit_code, 0 | EXIT_CODE_WAITING_APPROVAL);
-            match executed.result {
-                ReplLineResult::Continue(rendered) => sink.write_stdout(&rendered),
-                ReplLineResult::Restart {
-                    output: restart_output,
-                    reload,
-                } => {
-                    sink.write_stdout(&restart_output);
-                    sink.write_stderr(&format!(
-                        "{}:{}: command requires a REPL restart; remaining source lines were not run\n",
-                        path.display(),
-                        index + 1
-                    ));
-                    return Ok(ReplLineResult::Restart {
-                        output: String::new(),
-                        reload,
-                    });
-                }
-                ReplLineResult::Exit(code) => return Ok(ReplLineResult::Exit(code)),
-                ReplLineResult::ReplaceInput(_) => {
-                    let err = miette!("history expansion is not supported in sourced files");
-                    if command.ignore_errors {
-                        sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
-                    } else {
-                        return Err(err).wrap_err_with(|| {
-                            format!("command failed at {}:{}", path.display(), index + 1)
-                        });
-                    }
-                }
-            }
-            if failed {
-                let err = miette!("command exited with status {}", executed.exit_code);
-                if command.ignore_errors {
-                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
-                } else {
-                    return Err(err).wrap_err_with(|| {
-                        format!("command failed at {}:{}", path.display(), index + 1)
-                    });
+                    return Err(err).wrap_err_with(|| format!("command failed at {location}"));
                 }
             }
         }
     }
     Ok(ReplLineResult::Continue(String::new()))
+}
+
+/// Runs one sourced line, returning the result that stops the batch, if any.
+fn execute_source_line(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    line: &str,
+    location: &str,
+    sink: &mut dyn UiSink,
+) -> Result<Option<ReplLineResult>> {
+    if shell_words::split(line)
+        .ok()
+        .and_then(|words| words.into_iter().next())
+        .as_deref()
+        == Some("source")
+    {
+        return Err(miette!("nested `source` commands are not supported"));
+    }
+    let executed =
+        super::execute_repl_plugin_line_with_sink(runtime, session, clients, history, line, sink)?;
+    match executed.result {
+        ReplLineResult::Continue(rendered) => sink.write_stdout(&rendered),
+        ReplLineResult::Restart { output, reload } => {
+            sink.write_stdout(&output);
+            sink.write_stderr(&format!(
+                "{location}: command requires a REPL restart; remaining source lines were not run\n"
+            ));
+            return Ok(Some(ReplLineResult::Restart {
+                output: String::new(),
+                reload,
+            }));
+        }
+        ReplLineResult::Exit(code) => return Ok(Some(ReplLineResult::Exit(code))),
+        ReplLineResult::ReplaceInput(_) => {
+            return Err(miette!(
+                "history expansion is not supported in sourced files"
+            ));
+        }
+    }
+    if !matches!(executed.exit_code, 0 | EXIT_CODE_WAITING_APPROVAL) {
+        return Err(miette!("command exited with status {}", executed.exit_code));
+    }
+    Ok(None)
 }
 
 fn execute_pagination_builtin(
