@@ -440,6 +440,7 @@ def check_catalog(root: Path, cwd: Path | None = None) -> dict[str, ConfidenceCh
         ]),
         ("publish-dry-run", "Verify the packaged crate without publication.", [
             "cargo", "publish", "--dry-run", "--locked",
+            "--target-dir", str(root / "target" / "publish-dry-run"),
         ]),
     ):
         checks[name] = ConfidenceCheck(name, description, command)

@@ -60,6 +60,14 @@ requires it. Confirm tests actually executed and distinguish environment/tooling
 failures from behavior failures. Report commands, results and skipped effects;
 test counts alone do not establish readiness.
 
+Publication rehearsal uses `--check publish-dry-run` and its own
+`target/publish-dry-run` directory. Sharing the normal build directory can
+leave Cargo fingerprints pointing at `target/package/...` source, allowing a
+process test to execute an older packaged binary. If a current source edit
+does not rebuild the CLI, inspect the package paths in `target/debug/.fingerprint`.
+Run `cargo clean --package osp-cli`, then rebuild and rerun the affected check.
+This removes the crate's artifacts while retaining dependency builds.
+
 ## Snapshots and public examples
 
 Use `cargo insta review` to review intentional output changes. Keep snapshots
