@@ -708,35 +708,29 @@ impl OspHistoryStore {
         HistoryItemId::new(self.records.len() as i64 - 1)
     }
 
+    /// Removes records by index; callers pass distinct indices of existing records.
     fn remove_records(&mut self, indices: &[usize]) -> Result<usize> {
         if indices.is_empty() {
             return Ok(0);
         }
-        let mut drop_flags = vec![false; self.records.len()];
-        for idx in indices {
-            if *idx < drop_flags.len() {
-                drop_flags[*idx] = true;
-            }
-        }
-        let mut cursor = 0usize;
-        let removed = drop_flags.iter().filter(|flag| **flag).count();
+        let mut index = 0usize;
         self.records.retain(|_| {
-            let keep = !drop_flags.get(cursor).copied().unwrap_or(false);
-            cursor += 1;
+            let keep = !indices.contains(&index);
+            index += 1;
             keep
         });
         self.trim_to_capacity();
-        if let Err(err) = self.write_all() {
-            return Err(err.into());
-        }
-        Ok(removed)
+        self.write_all()?;
+        Ok(indices.len())
     }
 
     fn write_all(&self) -> std::io::Result<()> {
-        if !self.config.persist_enabled() {
-            return Ok(());
-        }
-        let Some(path) = &self.config.path else {
+        let Some(path) = self
+            .config
+            .path
+            .as_ref()
+            .filter(|_| self.config.persist_enabled())
+        else {
             return Ok(());
         };
         if let Some(parent) = path.parent() {
@@ -755,23 +749,21 @@ impl OspHistoryStore {
     }
 
     fn finalize_pending(&mut self, command_line: &str, keep: bool) -> Result<()> {
-        let Some(pending) = self.pending_record.as_ref() else {
+        let expected = apply_shell_prefix(command_line, self.shell_prefix().as_deref());
+        let Some(pending) = self
+            .pending_record
+            .take_if(|pending| pending.command_line == expected)
+        else {
             return Ok(());
         };
-        let expected = apply_shell_prefix(command_line, self.shell_prefix().as_deref());
-        if pending.command_line != expected {
-            return Ok(());
-        }
 
         if keep {
             self.write_all()?;
-            self.pending_record = None;
             return Ok(());
         }
 
-        let Some(pending) = self.pending_record.take() else {
-            return Ok(());
-        };
+        // The command itself may have pruned or cleared history before this
+        // finalization; only remove the record it saved.
         if self
             .records
             .get(pending.index)
@@ -1202,14 +1194,7 @@ fn normalize_exclude_patterns(patterns: Vec<String>) -> Vec<String> {
 
 fn normalize_shell_prefix(value: String) -> Option<String> {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut out = trimmed.to_string();
-    if !out.ends_with(' ') {
-        out.push(' ');
-    }
-    Some(out)
+    (!trimmed.is_empty()).then(|| format!("{trimmed} "))
 }
 
 fn normalize_scope_prefix(shell_prefix: Option<&str>) -> Option<String> {

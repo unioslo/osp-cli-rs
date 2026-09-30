@@ -368,6 +368,135 @@ fn disabled_history_returns_original_item_without_persisting_records() {
     assert!(store.recent_commands().is_empty());
 }
 
+#[test]
+fn history_never_records_recalls_help_or_inline_config_secrets() {
+    let mut history = SharedHistory::new(history_config().build());
+    assert!(matches_pattern("*", "anything"));
+    assert!(!matches_pattern("  ", "anything"));
+    assert!(!matches_pattern("a*b*c", "a c"));
+
+    for command in [
+        "   ",
+        "sudo !!",
+        "config set auth.token hunter2",
+        "config set --secrets extensions.uio.user alice",
+        "config set 'unterminated",
+        "config set --no-such-flag ui.format json",
+        "config set",
+    ] {
+        assert!(is_excluded_command(command, &[]), "{command}");
+    }
+    for command in [
+        "sudox !!",
+        "config get auth.token",
+        "config set ui.format json",
+    ] {
+        assert!(!is_excluded_command(command, &[]), "{command}");
+    }
+
+    for command in [
+        "config set auth.password hunter2",
+        "config set ui.format json",
+    ] {
+        History::save(&mut history, HistoryItem::from_command_line(command))
+            .expect("save should succeed");
+    }
+    assert_eq!(history.recent_commands(), vec!["config set ui.format json"]);
+}
+
+#[cfg_attr(miri, ignore = "history store filesystem integration test")]
+#[test]
+fn profile_scoped_history_keeps_other_profiles_and_drops_rejected_commands() {
+    let temp_dir = make_temp_dir("osp-repl-history-profiles");
+    let path = temp_dir.join("history.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"id\":0,\"command_line\":\"ldap user legacy\"}\n",
+            "{\"id\":1,\"command_line\":\"ldap user ops\",\"profile\":\"ops\"}\n",
+            "{\"id\":2,\"command_line\":\"ldap user alice\",\"profile\":\"dev\",\"cwd\":\"/srv\",\"hostname\":\"ops-a\",\"exit_status\":0}\n",
+        ),
+    )
+    .expect("history fixture should be written");
+    let shell = HistoryShellContext::new("ldap");
+    let mut history = SharedHistory::new(
+        history_config()
+            .with_path(Some(path.clone()))
+            .with_profile_scoped(true)
+            .with_profile(Some(" Dev ".to_string()))
+            .with_terminal(Some("CLI".to_string()))
+            .with_shell_context(shell.clone())
+            .build(),
+    );
+    assert_eq!(history.recent_commands(), vec!["ldap user alice"]);
+
+    history
+        .save_command_line("user bob")
+        .expect("save should succeed");
+    History::save(&mut history, HistoryItem::from_command_line("user typo"))
+        .expect("save should succeed");
+    history
+        .finalize_execution("user other", "user other", false)
+        .expect("an unrelated finalization leaves the pending record alone");
+    history
+        .finalize_execution("user typo", "user typo", false)
+        .expect("a rejected command should be dropped");
+    let visible = history
+        .list_entries()
+        .into_iter()
+        .map(|entry| entry.command)
+        .collect::<Vec<_>>();
+    assert_eq!(visible, vec!["user alice", "user bob"]);
+
+    let count = |filter: SearchFilter| {
+        let mut query = SearchQuery::everything(SearchDirection::Forward, None);
+        query.filter = filter;
+        History::count(&history, query).expect("count should succeed")
+    };
+    let mut exact = SearchFilter::anything(None);
+    exact.command_line = Some(CommandLineSearch::Exact("user bob".to_string()));
+    assert_eq!(count(exact), 1);
+    let mut substring = SearchFilter::anything(None);
+    substring.command_line = Some(CommandLineSearch::Substring("ali".to_string()));
+    assert_eq!(count(substring), 1);
+    let mut cwd = SearchFilter::anything(None);
+    cwd.cwd_exact = Some("/srv".to_string());
+    assert_eq!(count(cwd), 1);
+    let mut cwd_prefix = SearchFilter::anything(None);
+    cwd_prefix.cwd_prefix = Some("/srv".to_string());
+    assert_eq!(count(cwd_prefix), 1);
+    let mut failed = SearchFilter::anything(None);
+    failed.exit_successful = Some(false);
+    assert_eq!(count(failed), 1);
+    let mut host = SearchFilter::anything(None);
+    host.hostname = Some("ops-b".to_string());
+    assert_eq!(count(host), 0);
+
+    assert!(History::update(&mut history, HistoryItemId::new(0), &|item| item).is_err());
+    assert!(History::delete(&mut history, HistoryItemId::new(0)).is_err());
+    assert_eq!(History::session(&history), None);
+
+    history.remember_command("   ");
+    history.remember_command("user bob");
+    assert_eq!(
+        history.expand_last_command("sudo !!").as_deref(),
+        Some("sudo user bob")
+    );
+
+    shell.clear();
+    assert_eq!(history.prune(5).expect("prune should succeed"), 0);
+    assert_eq!(history.clear_scoped().expect("clear should succeed"), 2);
+    assert_eq!(history.clear_scoped().expect("clear should succeed"), 0);
+    let persisted = std::fs::read_to_string(&path).expect("history should persist");
+    assert_eq!(persisted.lines().count(), 2, "{persisted}");
+    assert!(persisted.contains("legacy") && persisted.contains("\"ops\""));
+
+    let disabled = SharedHistory::new(history_config().with_enabled(false).build());
+    assert_eq!(disabled.prune(1).expect("disabled prune is a no-op"), 0);
+    assert_eq!(apply_shell_prefix("  ", Some("ldap ")), "");
+    assert_eq!(strip_shell_prefix("  ", Some("ldap ")), "");
+}
+
 fn make_temp_dir(prefix: &str) -> crate::tests::TestTempDir {
     crate::tests::make_temp_dir(prefix)
 }
