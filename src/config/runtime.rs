@@ -32,9 +32,8 @@ use std::{collections::BTreeMap, ffi::OsString, path::PathBuf};
 use directories::{BaseDirs, ProjectDirs};
 
 use crate::config::{
-    ConfigLayer, DEFAULT_PROFILE_NAME, EnvSecretsLoader, EnvVarLoader, LoaderPipeline,
-    ResolvedConfig, RuntimeSelectedSecretsLoader, StaticLayerLoader, TomlFileLoader,
-    build_builtin_defaults,
+    ConfigLayer, EnvSecretsLoader, EnvVarLoader, LoaderPipeline, ResolvedConfig,
+    RuntimeSelectedSecretsLoader, StaticLayerLoader, TomlFileLoader, build_builtin_defaults,
 };
 
 const PROJECT_APPLICATION_NAME: &str = "osp";
@@ -184,14 +183,6 @@ impl RuntimeLoadOptions {
 pub struct RuntimeConfig {
     /// Active profile name selected for the current invocation.
     pub active_profile: String,
-}
-
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            active_profile: DEFAULT_PROFILE_NAME.to_string(),
-        }
-    }
 }
 
 impl RuntimeConfig {
@@ -681,13 +672,14 @@ mod tests {
     use std::sync::Mutex;
 
     use super::{
-        DEFAULT_PROFILE_NAME, RuntimeBootstrapMode, RuntimeConfigPaths, RuntimeDefaults,
-        RuntimeEnvironment, RuntimeLoadOptions,
+        RuntimeBootstrapMode, RuntimeConfigPaths, RuntimeDefaults, RuntimeEnvironment,
+        RuntimeLoadOptions,
     };
     use crate::config::{
-        ConfigLayer, ConfigValue, DEFAULT_REPL_HISTORY_MAX_ENTRIES, DEFAULT_REPL_HISTORY_MENU_ROWS,
-        DEFAULT_REPL_INTRO, DEFAULT_UI_CHROME_FRAME, DEFAULT_UI_MESSAGES_LAYOUT,
-        DEFAULT_UI_PRESENTATION, DEFAULT_UI_TABLE_BORDER, DEFAULT_UI_WIDTH, Scope,
+        ConfigLayer, ConfigValue, DEFAULT_PROFILE_NAME, DEFAULT_REPL_HISTORY_MAX_ENTRIES,
+        DEFAULT_REPL_HISTORY_MENU_ROWS, DEFAULT_REPL_INTRO, DEFAULT_UI_CHROME_FRAME,
+        DEFAULT_UI_MESSAGES_LAYOUT, DEFAULT_UI_PRESENTATION, DEFAULT_UI_TABLE_BORDER,
+        DEFAULT_UI_WIDTH, Scope,
     };
 
     fn find_value<'a>(layer: &'a ConfigLayer, key: &str) -> Option<&'a ConfigValue> {

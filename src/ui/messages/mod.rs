@@ -25,17 +25,6 @@ pub enum MessageLevel {
 }
 
 impl MessageLevel {
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "error" => Some(MessageLevel::Error),
-            "warning" | "warn" => Some(MessageLevel::Warning),
-            "success" => Some(MessageLevel::Success),
-            "info" => Some(MessageLevel::Info),
-            "trace" => Some(MessageLevel::Trace),
-            _ => None,
-        }
-    }
-
     pub fn title(self) -> &'static str {
         match self {
             MessageLevel::Error => "Errors",
@@ -186,10 +175,6 @@ impl MessageBuffer {
 
     pub fn info<T: Into<String>>(&mut self, text: T) {
         self.push(MessageLevel::Info, text);
-    }
-
-    pub fn trace<T: Into<String>>(&mut self, text: T) {
-        self.push(MessageLevel::Trace, text);
     }
 
     pub fn is_empty(&self) -> bool {

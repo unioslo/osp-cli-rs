@@ -143,35 +143,6 @@ impl OutputDocument {
     pub fn new(kind: OutputDocumentKind, value: Value) -> Self {
         Self { kind, value }
     }
-
-    /// Reprojects the payload over generic output items while keeping identity.
-    ///
-    /// The canonical DSL uses this to preserve payload identity without branching on
-    /// concrete semantic types inside the executor. Whether the projected JSON
-    /// still restores into the original payload kind is decided later by the
-    /// payload codec, not by the pipeline engine itself.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use osp_cli::core::output_model::{OutputDocument, OutputDocumentKind, OutputItems};
-    /// use osp_cli::row;
-    /// use serde_json::json;
-    ///
-    /// let document = OutputDocument::new(OutputDocumentKind::Guide, json!({"usage": ["osp"]}));
-    /// let projected = document.project_over_items(&OutputItems::Rows(vec![
-    ///     row! { "uid" => "alice" },
-    /// ]));
-    ///
-    /// assert_eq!(projected.kind, OutputDocumentKind::Guide);
-    /// assert_eq!(projected.value["uid"], "alice");
-    /// ```
-    pub fn project_over_items(&self, items: &OutputItems) -> Self {
-        Self {
-            kind: self.kind,
-            value: output_items_to_value(items),
-        }
-    }
 }
 
 /// Result payload as either flat rows or grouped rows.

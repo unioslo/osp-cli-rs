@@ -135,11 +135,6 @@ impl CompletionEngine {
         }
     }
 
-    /// Tokenizes a shell-like command line using the parser's permissive rules.
-    pub fn tokenize(&self, line: &str) -> Vec<String> {
-        self.parser.tokenize(line)
-    }
-
     /// Returns how many leading tokens resolve to a command path in the tree.
     pub fn matched_command_len_tokens(&self, tokens: &[String]) -> usize {
         TreeResolver::new(&self.tree).matched_command_len_tokens(tokens)
