@@ -138,6 +138,107 @@ fn provider_selection_can_be_persisted_or_overridden_per_invocation_contract() {
         String::from_utf8(after_clear_output.stderr).expect("stderr should be utf-8"),
     );
 
+    // Global and terminal-global preferences apply to every declared profile;
+    // a profile preference becomes effective when the terminal override clears.
+    write_config(
+        &home,
+        "[profile.default]\nui.format = \"table\"\n[profile.tsd]\nui.format = \"table\"\n",
+    );
+    let run = |args: &[&str]| {
+        Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+            .envs(crate::test_env::isolated_env(&home))
+            .env("OSP_PLUGIN_PATH", &dir)
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    run(&[
+        "plugins",
+        "select-provider",
+        "shared",
+        "beta-provider",
+        "--global",
+    ]);
+    for profile in ["default", "tsd"] {
+        let response = run(&["--profile", profile, "--json", "shared"]);
+        assert_eq!(
+            first_json_row(
+                &parse_json_stdout(&response.stdout),
+                "global provider preference"
+            )["message"],
+            "beta-from-plugin"
+        );
+    }
+    run(&[
+        "plugins",
+        "select-provider",
+        "shared",
+        "alpha-provider",
+        "--global",
+        "--terminal",
+        "cli",
+    ]);
+    let config_path = home.join(".config/osp/config.toml");
+    let preferences = parse_toml_file(&config_path);
+    assert_eq!(
+        preferences["default"]["plugins"]["shared"]["provider"].as_str(),
+        Some("beta-provider")
+    );
+    assert_eq!(
+        preferences["terminal"]["cli"]["plugins"]["shared"]["provider"].as_str(),
+        Some("alpha-provider")
+    );
+    for profile in ["default", "tsd"] {
+        let response = run(&["--profile", profile, "--json", "shared"]);
+        assert_eq!(
+            first_json_row(
+                &parse_json_stdout(&response.stdout),
+                "terminal provider preference"
+            )["message"],
+            "alpha-from-plugin"
+        );
+    }
+    run(&[
+        "plugins",
+        "clear-provider",
+        "shared",
+        "--global",
+        "--terminal",
+        "cli",
+    ]);
+    run(&[
+        "plugins",
+        "select-provider",
+        "shared",
+        "alpha-provider",
+        "--profile",
+        "tsd",
+    ]);
+    for (profile, provider) in [
+        ("default", "beta-from-plugin"),
+        ("tsd", "alpha-from-plugin"),
+    ] {
+        let response = run(&["--profile", profile, "--json", "shared"]);
+        assert_eq!(
+            first_json_row(
+                &parse_json_stdout(&response.stdout),
+                "profile provider preference"
+            )["message"],
+            provider
+        );
+    }
+    run(&["plugins", "clear-provider", "shared", "--profile", "tsd"]);
+    let inherited = run(&["--profile", "tsd", "--json", "shared"]);
+    assert_eq!(
+        first_json_row(
+            &parse_json_stdout(&inherited.stdout),
+            "restored global preference"
+        )["message"],
+        "beta-from-plugin"
+    );
+    run(&["plugins", "clear-provider", "shared", "--global"]);
 }
 
 #[cfg(unix)]

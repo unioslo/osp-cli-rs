@@ -680,5 +680,66 @@ fn describe_cache_is_reused_and_invalidated_contract() {
             .trim(),
         "2"
     );
+    // A cache is an optimization: an interrupted write or unavailable cache
+    // location still permits fresh metadata and useful command execution.
+    let cache_path = home.join(".cache/osp/describe-v1.json");
+    let run = |args: &[&str]| {
+        Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+            .envs(crate::test_env::isolated_env(&home))
+            .env("OSP_PLUGIN_PATH", &dir)
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    let describe_count = || {
+        std::fs::read_to_string(&describe_count_path)
+            .unwrap()
+            .trim()
+            .parse::<usize>()
+            .unwrap()
+    };
+    std::fs::write(&cache_path, "{interrupted cache write").unwrap();
+    let repaired = run(&["-dd", "--json", "plugins", "list"]);
+    let repaired_plugins = parse_json_stdout(&repaired.stdout);
+    let repaired_plugin = first_json_row(&repaired_plugins, "repaired describe cache");
+    assert_eq!(repaired_plugin["plugin_id"], "describe-counter");
+    assert_eq!(repaired_plugin["plugin_version"], "0.1.3");
+    assert_eq!(describe_count(), 3);
+    let diagnostics = String::from_utf8(repaired.stderr).unwrap();
+    assert!(diagnostics.contains("WARN"));
+    assert!(diagnostics.contains(cache_path.to_str().unwrap()));
+    let reused = run(&["--json", "describe-counter"]);
+    assert_eq!(
+        first_json_row(
+            &parse_json_stdout(&reused.stdout),
+            "repaired cache execution"
+        ),
+        &serde_json::json!({"message": "upgraded"})
+    );
+    assert_eq!(describe_count(), 3);
 
+    std::fs::remove_file(&cache_path).unwrap();
+    std::fs::create_dir(&cache_path).unwrap();
+    let uncached = run(&["-dd", "--json", "describe-counter"]);
+    assert_eq!(
+        first_json_row(&parse_json_stdout(&uncached.stdout), "uncached execution"),
+        &serde_json::json!({"message": "upgraded"})
+    );
+    assert!(describe_count() > 3);
+    let diagnostics = String::from_utf8(uncached.stderr).unwrap();
+    assert!(diagnostics.contains("WARN"));
+    assert!(diagnostics.contains(cache_path.to_str().unwrap()));
+
+    std::fs::remove_dir(&cache_path).unwrap();
+    let restored = run(&["--json", "plugins", "commands"]);
+    let restored_commands = parse_json_stdout(&restored.stdout);
+    assert_eq!(
+        first_json_row(&restored_commands, "restored cache catalogue")["about"],
+        "upgraded describe counter plugin"
+    );
+    let restored_count = describe_count();
+    run(&["--json", "describe-counter"]);
+    assert_eq!(describe_count(), restored_count);
 }
