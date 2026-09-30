@@ -35,6 +35,38 @@ pub(crate) enum ReplCommandOutput {
     Text(String),
 }
 
+impl ReplCommandOutput {
+    /// Owns pipeline input conversion and producer hints across host surfaces.
+    fn into_staged(self, stages: &[String]) -> Result<StructuredCommandOutput> {
+        let (output, format_hint, source_guide) = match self {
+            Self::Output(structured) => {
+                let StructuredCommandOutput {
+                    output,
+                    format_hint,
+                    source_guide,
+                } = *structured;
+                (output, format_hint, source_guide)
+            }
+            Self::Text(text) => (text_output_to_rows(&text), Some(OutputFormat::Value), None),
+            Self::Json(payload) => (
+                rows_to_output_result(rows_from_value(payload)),
+                Some(OutputFormat::Value),
+                None,
+            ),
+        };
+        let (output, format_hint) = apply_output_stages(output, stages, format_hint)?;
+        Ok(StructuredCommandOutput {
+            source_guide: if stages.is_empty() {
+                source_guide
+            } else {
+                None
+            },
+            output,
+            format_hint,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct StructuredCommandOutput {
     pub(crate) source_guide: Option<GuideView>,
@@ -469,51 +501,14 @@ pub(crate) fn apply_stages_to_cli_result(
     let Some(output) = result.output.take() else {
         return Ok(result);
     };
-    let staged = match output {
-        ReplCommandOutput::Output(structured) => {
-            let StructuredCommandOutput {
-                source_guide: _,
-                output,
-                format_hint,
-            } = *structured;
-            let (output, format_hint) = apply_output_stages(output, stages, format_hint)
-                .wrap_err("failed to apply DSL stages to builtin command output")?;
-            // A guide recommendation describes the pre-pipeline document; the
-            // transformed output must render as ordinary structured data.
-            ReplCommandOutput::Output(Box::new(StructuredCommandOutput {
-                source_guide: None,
-                output,
-                format_hint,
-            }))
-        }
-        ReplCommandOutput::Text(text) => {
-            let (output, format_hint) = apply_output_stages(
-                text_output_to_rows(&text),
-                stages,
-                Some(OutputFormat::Value),
-            )
-            .wrap_err("failed to apply DSL stages to textual command output")?;
-            ReplCommandOutput::Output(Box::new(StructuredCommandOutput {
-                source_guide: None,
-                output,
-                format_hint,
-            }))
-        }
-        ReplCommandOutput::Json(payload) => {
-            let (output, format_hint) = apply_output_stages(
-                rows_to_output_result(rows_from_value(payload)),
-                stages,
-                Some(OutputFormat::Value),
-            )
-            .wrap_err("failed to apply DSL stages to JSON command output")?;
-            ReplCommandOutput::Output(Box::new(StructuredCommandOutput {
-                source_guide: None,
-                output,
-                format_hint,
-            }))
-        }
+    let context = match &output {
+        ReplCommandOutput::Output(_) => "failed to apply DSL stages to builtin command output",
+        ReplCommandOutput::Text(_) => "failed to apply DSL stages to textual command output",
+        ReplCommandOutput::Json(_) => "failed to apply DSL stages to JSON command output",
     };
-    result.output = Some(staged);
+    result.output = Some(ReplCommandOutput::Output(Box::new(
+        output.into_staged(stages).wrap_err(context)?,
+    )));
     Ok(result)
 }
 
@@ -776,13 +771,14 @@ pub(crate) fn render_saved_repl_output_with_runtime(
     stages: &[String],
 ) -> Result<String> {
     match output {
-        ReplCommandOutput::Output(structured) => {
+        ReplCommandOutput::Output(_) => {
             let StructuredCommandOutput {
                 source_guide,
                 output,
                 format_hint,
-            } = structured.as_ref().clone();
-            let (output, format_hint) = apply_output_stages(output, stages, format_hint)
+            } = output
+                .clone()
+                .into_staged(stages)
                 .wrap_err("failed to replay staged structured output")?;
             let render_settings =
                 resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
@@ -798,35 +794,21 @@ pub(crate) fn render_saved_repl_output_with_runtime(
                 render_structured_output(runtime.config(), &render_settings, &output)
             })
         }
-        ReplCommandOutput::Text(text) => {
+        ReplCommandOutput::Text(_) | ReplCommandOutput::Json(_) => {
             if stages.is_empty() {
-                Ok(text.clone())
-            } else {
-                let (output, format_hint) = apply_output_stages(
-                    text_output_to_rows(text),
-                    stages,
-                    Some(OutputFormat::Value),
-                )
-                .wrap_err("failed to replay staged textual output")?;
-                let render_settings =
-                    resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
-                Ok(render_output(&output, &render_settings))
+                return Ok(render_repl_output_with_runtime(runtime, output));
             }
-        }
-        ReplCommandOutput::Json(payload) => {
-            if stages.is_empty() {
-                Ok(render_repl_output_with_runtime(runtime, output))
+            let context = if matches!(output, ReplCommandOutput::Text(_)) {
+                "failed to replay staged textual output"
             } else {
-                let (output, format_hint) = apply_output_stages(
-                    rows_to_output_result(rows_from_value(payload.clone())),
-                    stages,
-                    Some(OutputFormat::Value),
-                )
-                .wrap_err("failed to replay staged JSON output")?;
-                let render_settings =
-                    resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
-                Ok(render_output(&output, &render_settings))
-            }
+                "failed to replay staged JSON output"
+            };
+            let staged = output.clone().into_staged(stages).wrap_err(context)?;
+            let render_settings = resolve_render_settings_with_hint(
+                &runtime.ui().render_settings,
+                staged.format_hint,
+            );
+            Ok(render_output(&staged.output, &render_settings))
         }
     }
 }
@@ -862,30 +844,25 @@ pub(crate) fn render_repl_command_with_runtime(
 
     let rendered = match output {
         Some(ReplCommandOutput::Output(structured)) => {
-            render_repl_structured_command(runtime, session, line, stages, *structured, sink)?
+            render_repl_structured_command(runtime, session, line, stages, structured, sink)?
         }
-        Some(ReplCommandOutput::Text(text)) => {
+        Some(raw @ (ReplCommandOutput::Text(_) | ReplCommandOutput::Json(_))) => {
             if stages.is_empty() {
-                text
+                render_repl_output_with_runtime(runtime, &raw)
             } else {
-                render_staged_textual_command(runtime, session, line, stages, text, sink)?
-            }
-        }
-        Some(ReplCommandOutput::Json(payload)) => {
-            if stages.is_empty() {
-                render_repl_output_with_runtime(runtime, &ReplCommandOutput::Json(payload))
-            } else {
-                let (output, format_hint) = apply_output_stages(
-                    rows_to_output_result(rows_from_value(payload)),
-                    stages,
-                    Some(OutputFormat::Value),
-                )
-                .wrap_err("failed to apply staged JSON output pipeline")?;
-                let render_settings =
-                    resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
-                let rendered = render_output(&output, &render_settings);
-                session.record_result(line, output_to_rows(&output));
-                maybe_copy_output_with_runtime(runtime, &output, sink);
+                let context = if matches!(&raw, ReplCommandOutput::Text(_)) {
+                    "failed to apply staged textual output pipeline"
+                } else {
+                    "failed to apply staged JSON output pipeline"
+                };
+                let staged = raw.into_staged(stages).wrap_err(context)?;
+                let render_settings = resolve_render_settings_with_hint(
+                    &runtime.ui().render_settings,
+                    staged.format_hint,
+                );
+                let rendered = render_output(&staged.output, &render_settings);
+                session.record_result(line, output_to_rows(&staged.output));
+                maybe_copy_output_with_runtime(runtime, &staged.output, sink);
                 rendered
             }
         }
@@ -926,15 +903,15 @@ fn render_repl_structured_command(
     session: &mut AppSession,
     line: &str,
     stages: &[String],
-    structured: StructuredCommandOutput,
+    structured: Box<StructuredCommandOutput>,
     sink: &mut dyn UiSink,
 ) -> Result<String> {
     let StructuredCommandOutput {
         source_guide,
         output,
         format_hint,
-    } = structured;
-    let (output, format_hint) = apply_output_stages(output, stages, format_hint)
+    } = ReplCommandOutput::Output(structured)
+        .into_staged(stages)
         .wrap_err("failed to apply staged structured output pipeline")?;
     let render_settings =
         resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
@@ -949,28 +926,6 @@ fn render_repl_structured_command(
     } else {
         render_structured_output(runtime.config(), &render_settings, &output)
     };
-    session.record_result(line, output_to_rows(&output));
-    maybe_copy_output_with_runtime(runtime, &output, sink);
-    Ok(rendered)
-}
-
-fn render_staged_textual_command(
-    runtime: &CommandRenderRuntime<'_>,
-    session: &mut AppSession,
-    line: &str,
-    stages: &[String],
-    text: String,
-    sink: &mut dyn UiSink,
-) -> Result<String> {
-    let (output, format_hint) = apply_output_stages(
-        text_output_to_rows(&text),
-        stages,
-        Some(OutputFormat::Value),
-    )
-    .wrap_err("failed to apply staged textual output pipeline")?;
-    let render_settings =
-        resolve_render_settings_with_hint(&runtime.ui().render_settings, format_hint);
-    let rendered = render_output(&output, &render_settings);
     session.record_result(line, output_to_rows(&output));
     maybe_copy_output_with_runtime(runtime, &output, sink);
     Ok(rendered)
