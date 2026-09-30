@@ -8,7 +8,7 @@
 use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
 use crate::core::output_model::{OutputItems, OutputResult, RenderRecommendation, rows_from_value};
-use crate::core::plugin::{ResponseMessageLevelV1, ResponseV1};
+use crate::core::plugin::{ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1};
 use crate::dsl::apply_output_pipeline;
 use crate::guide::GuideView;
 use crate::ui::clipboard::ClipboardService;
@@ -87,6 +87,28 @@ pub(crate) struct PreparedPluginOutput {
     pub(crate) messages: MessageBuffer,
     pub(crate) output: OutputResult,
     pub(crate) format_hint: Option<OutputFormat>,
+}
+
+impl PreparedPluginOutput {
+    /// Normalizes producer data and metadata before final or transient rendering.
+    pub(crate) fn from_data(
+        data: Value,
+        meta: &ResponseMetaV1,
+        messages: &[ResponseMessageV1],
+        stages: &[String],
+    ) -> Result<Self> {
+        let (output, format_hint) = apply_output_stages(
+            plugin_data_to_output_result(data, Some(meta)),
+            stages,
+            parse_output_format_hint(meta.format_hint.as_deref()),
+        )
+        .wrap_err("failed to prepare plugin response output")?;
+        Ok(Self {
+            messages: plugin_response_messages(messages),
+            output,
+            format_hint,
+        })
+    }
 }
 
 pub(crate) struct FailedPluginOutput {
@@ -349,21 +371,16 @@ pub(crate) fn run_cli_command_with_ui(
 pub(crate) fn run_progress_command_with_ui(
     config: &ResolvedConfig,
     ui: &UiState,
-    result: CliCommandResult,
+    result: PreparedPluginOutput,
     sink: &mut dyn UiSink,
-) -> Result<i32> {
-    let CliCommandResult {
-        exit_code,
+) -> Result<()> {
+    let PreparedPluginOutput {
         messages,
         output,
-        stderr_text,
-        ..
+        format_hint,
     } = result;
-    let Some(output) = output else {
-        return Ok(exit_code);
-    };
     if progress_output_is_empty(&output) {
-        return Ok(exit_code);
+        return Ok(());
     }
 
     let runtime = CommandRenderRuntime::new(config, ui);
@@ -371,30 +388,19 @@ pub(crate) fn run_progress_command_with_ui(
         emit_messages_with_runtime(&runtime, &messages, ui.message_verbosity, sink);
     }
 
-    let json_output = output_uses_json(&runtime, &output);
+    let json_output = resolve_render_settings_with_hint(&ui.render_settings, format_hint).format
+        == OutputFormat::Json;
     let append_lines = !sink.stderr_is_terminal() || json_output;
-    let rendered = if append_lines
-        && let ReplCommandOutput::Output(structured) = &output
-        && !structured.output.meta.progress_append.is_empty()
-    {
-        render_progress_lines_with_runtime(&runtime, &structured.output.meta.progress_append, sink)
+    let rendered = if append_lines && !output.meta.progress_append.is_empty() {
+        render_progress_lines_with_runtime(&runtime, &output.meta.progress_append, sink)
     } else {
-        render_progress_output_with_runtime(&runtime, &output, json_output, sink)
+        render_progress_output_with_runtime(&runtime, &output, format_hint, json_output, sink)
     };
     if !rendered.is_empty() {
-        let replace = matches!(
-            &output,
-            ReplCommandOutput::Output(structured)
-                if structured.output.meta.progress_replace
-        ) && !json_output;
+        let replace = output.meta.progress_replace && !json_output;
         sink.write_progress(&rendered, replace);
     }
-    if let Some(stderr_text) = stderr_text
-        && !stderr_text.is_empty()
-    {
-        sink.write_stderr(&stderr_text);
-    }
-    Ok(exit_code)
+    Ok(())
 }
 
 fn render_progress_lines_with_runtime(
@@ -415,27 +421,22 @@ fn render_progress_lines_with_runtime(
     crate::ui::render_presentation_lines(lines, &settings)
 }
 
-fn progress_output_is_empty(output: &ReplCommandOutput) -> bool {
-    match output {
-        ReplCommandOutput::Output(structured) => match &structured.output.items {
-            OutputItems::Rows(rows) => {
-                rows.is_empty()
-                    || rows.iter().all(|row| {
-                        row.len() == 1 && row.get("value").is_some_and(serde_json::Value::is_null)
-                    })
-            }
-            OutputItems::Groups(groups) => groups.is_empty(),
-        },
-        ReplCommandOutput::Json(value) => {
-            value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+fn progress_output_is_empty(output: &OutputResult) -> bool {
+    match &output.items {
+        OutputItems::Rows(rows) => {
+            rows.is_empty()
+                || rows.iter().all(|row| {
+                    row.len() == 1 && row.get("value").is_some_and(serde_json::Value::is_null)
+                })
         }
-        ReplCommandOutput::Text(text) => text.trim().is_empty(),
+        OutputItems::Groups(groups) => groups.is_empty(),
     }
 }
 
 fn render_progress_output_with_runtime(
     runtime: &CommandRenderRuntime<'_>,
-    output: &ReplCommandOutput,
+    output: &OutputResult,
+    format_hint: Option<OutputFormat>,
     json_output: bool,
     sink: &dyn UiSink,
 ) -> String {
@@ -445,17 +446,13 @@ fn render_progress_output_with_runtime(
         settings.runtime.width = Some(width);
     }
     if !json_output && sink.stderr_is_terminal() {
-        return match output {
-            ReplCommandOutput::Output(structured) => render_structured_repl_output(
-                runtime.config(),
-                &settings,
-                &structured.output,
-                structured.format_hint,
-                structured.source_guide.as_ref(),
-            ),
-            ReplCommandOutput::Json(payload) => render_json_value(payload, &settings),
-            ReplCommandOutput::Text(text) => text.clone(),
-        };
+        return render_structured_repl_output(
+            runtime.config(),
+            &settings,
+            output,
+            format_hint,
+            None,
+        );
     }
 
     settings.format = OutputFormat::Value;
@@ -463,17 +460,7 @@ fn render_progress_output_with_runtime(
     settings.mode = crate::core::output::RenderMode::Plain;
     settings.color = crate::core::output::ColorMode::Never;
     settings.unicode = crate::core::output::UnicodeMode::Never;
-    match output {
-        ReplCommandOutput::Output(structured) => render_structured_repl_output(
-            runtime.config(),
-            &settings,
-            &structured.output,
-            None,
-            None,
-        ),
-        ReplCommandOutput::Json(payload) => render_json_value(payload, &settings),
-        ReplCommandOutput::Text(text) => text.clone(),
-    }
+    render_structured_repl_output(runtime.config(), &settings, output, None, None)
 }
 
 pub(crate) fn cli_result_from_plugin_response(
@@ -576,13 +563,11 @@ pub(crate) fn prepare_plugin_response(
     response: ResponseV1,
     stages: &[String],
 ) -> Result<PreparedPluginResponse> {
-    let mut messages = plugin_response_messages(&response);
-    let (output, format_hint) = apply_output_stages(
-        plugin_data_to_output_result(response.data, Some(&response.meta)),
-        stages,
-        parse_output_format_hint(response.meta.format_hint.as_deref()),
-    )
-    .wrap_err("failed to prepare plugin response output")?;
+    let PreparedPluginOutput {
+        mut messages,
+        output,
+        format_hint,
+    } = PreparedPluginOutput::from_data(response.data, &response.meta, &response.messages, stages)?;
     if !response.ok {
         let report = if let Some(error) = response.error {
             messages.error(format!("{}: {}", error.code, error.message));
@@ -652,9 +637,9 @@ pub(crate) fn apply_output_stages(
     Ok((output, format_hint))
 }
 
-pub(crate) fn plugin_response_messages(response: &ResponseV1) -> MessageBuffer {
+fn plugin_response_messages(messages: &[ResponseMessageV1]) -> MessageBuffer {
     let mut out = MessageBuffer::default();
-    for message in &response.messages {
+    for message in messages {
         let level = match message.level {
             ResponseMessageLevelV1::Error => MessageLevel::Error,
             ResponseMessageLevelV1::Warning => MessageLevel::Warning,

@@ -24,6 +24,7 @@ use crate::repl::ReplViewContext;
 use crate::repl::completion;
 use crate::repl::is_repl_shellable_command;
 
+use super::command_output::PreparedPluginOutput;
 use super::dispatch::{
     ExternalCommandSource, ExternalPathAccessRequirement, canonical_external_command_name,
     ensure_external_path_access, ensure_external_path_access_with_policy,
@@ -483,18 +484,9 @@ impl NativeProgressRenderer<'_, '_> {
     }
 
     fn draw(&self, event: NativeProgressEvent, stages: &[String]) -> anyhow::Result<()> {
-        let result = cli_result_from_plugin_response(
-            crate::core::plugin::ResponseV1 {
-                protocol_version: crate::core::plugin::PLUGIN_PROTOCOL_V1,
-                ok: true,
-                data: event.data,
-                error: None,
-                messages: event.messages,
-                meta: event.meta,
-            },
-            stages,
-        )
-        .map_err(|err| anyhow::Error::from_boxed(err.into()))?;
+        let result =
+            PreparedPluginOutput::from_data(event.data, &event.meta, &event.messages, stages)
+                .map_err(|err| anyhow::Error::from_boxed(err.into()))?;
         let mut sink = self.sink.borrow_mut();
         run_progress_command_with_ui(self.config, self.ui, result, &mut *sink)
             .map_err(|err| anyhow::Error::from_boxed(err.into()))?;
