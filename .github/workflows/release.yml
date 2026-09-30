@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Tag to package, for example v0.1.0
+        description: Tag to publish, for example v1.5.1
         required: true
         type: string
 
@@ -17,6 +17,10 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.release_tag.outputs.value }}
+      sha: ${{ steps.release_source.outputs.sha }}
 
     steps:
       - name: Resolve release tag
@@ -49,7 +53,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.sha }}
+
+      - name: Record immutable release source and coverage base
+        id: release_source
+        shell: bash
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            coverage_base="$(git describe --tags --match 'v[0-9]*' --abbrev=0 HEAD^ 2>/dev/null || git rev-parse HEAD^)"
+            echo "COVERAGE_BASE=$(git rev-parse "${coverage_base}^{commit}")" >> "${GITHUB_ENV}"
+          else
+            echo "COVERAGE_BASE=empty" >> "${GITHUB_ENV}"
+          fi
 
       - name: Validate tag matches package version
         env:
@@ -81,131 +97,28 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.94.0
 
+      - name: Install native Linux linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lld
+          ld.lld --version
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Install coverage tooling
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install pinned confidence tools
+        run: python3 ./scripts/confidence.py --install-tools full
 
       - name: Run full confidence lane
         run: python3 ./scripts/confidence.py full
 
       - name: Dry-run publish
-        run: cargo publish --dry-run --locked
-
-  build:
-    # Cross-platform packaged binaries are intentionally disabled for now.
-    # Re-enable this job and its matrix entries once optional deps such as
-    # `skim` have a supported release story again on the target platforms.
-    #
-    # Previous matrix:
-    # - ubuntu-latest / x86_64-unknown-linux-gnu / osp
-    # - macos-latest / x86_64-apple-darwin / osp
-    # - windows-latest / x86_64-pc-windows-msvc / osp.exe
-    if: false
-    needs: verify
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
-
-      - name: Resolve release tag
-        id: release_tag
-        shell: bash
-        env:
-          REQUESTED_TAG: ${{ github.event.inputs.tag }}
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            release_tag="${REQUESTED_TAG}"
-          else
-            release_tag="${GITHUB_REF_NAME}"
-          fi
-          [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
-            echo "Invalid release tag" >&2
-            exit 1
-          }
-          echo "value=${release_tag}" >> "${GITHUB_OUTPUT}"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.94.0
-
-      - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release binary
-        run: cargo build --release --locked
-
-      - name: Package Unix artifact
-        if: runner.os != 'Windows'
-        env:
-          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
-          TARGET_TRIPLE: ${{ matrix.triple }}
-          BIN_NAME: ${{ matrix.bin_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          artifact_base="osp-${RELEASE_TAG}-${TARGET_TRIPLE}"
-          stage_dir="dist/${artifact_base}"
-          mkdir -p "${stage_dir}"
-          cp "target/release/${BIN_NAME}" "${stage_dir}/"
-          cp README.md LICENSE "${stage_dir}/"
-          archive_path="dist/${artifact_base}.tar.gz"
-          tar -C dist -czf "${archive_path}" "${artifact_base}"
-          export ARCHIVE_PATH="${archive_path}"
-          python3 - <<'PY'
-          import os
-          import hashlib
-          from pathlib import Path
-          archive = Path(os.environ["ARCHIVE_PATH"])
-          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-          Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n")
-          PY
-
-      - name: Package Windows artifact
-        if: runner.os == 'Windows'
-        env:
-          RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
-          TARGET_TRIPLE: ${{ matrix.triple }}
-          BIN_NAME: ${{ matrix.bin_name }}
-        shell: pwsh
-        run: |
-          $artifactBase = "osp-$env:RELEASE_TAG-$env:TARGET_TRIPLE"
-          $stageDir = Join-Path "dist" $artifactBase
-          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
-          Copy-Item "target/release/$env:BIN_NAME" $stageDir
-          Copy-Item "README.md" $stageDir
-          Copy-Item "LICENSE" $stageDir
-          $archivePath = Join-Path "dist" "$artifactBase.zip"
-          Compress-Archive -Path "$stageDir/*" -DestinationPath $archivePath -Force
-          $pythonScript = @'
-          import os
-          import hashlib
-          from pathlib import Path
-          archive = Path(os.environ["ARCHIVE_PATH"])
-          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-          Path(f"{archive}.sha256").write_text(f"{digest}  {archive.name}\n")
-          '@
-          $env:ARCHIVE_PATH = $archivePath
-          python -c $pythonScript
-
-      - name: Upload packaged artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.triple }}
-          path: dist/*
-          if-no-files-found: error
+        run: python3 ./scripts/confidence.py --check publish-dry-run
 
   publish:
-    needs:
-      - verify
-      # - build
-      # Re-enable the build dependency when packaged release artifacts are
-      # turned back on in the disabled `build` job above.
+    needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: crates-io-release
     permissions:
       contents: write
@@ -216,36 +129,43 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
-
-      - name: Resolve release tag
-        id: release_tag
-        shell: bash
-        env:
-          REQUESTED_TAG: ${{ github.event.inputs.tag }}
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            release_tag="${REQUESTED_TAG}"
-          else
-            release_tag="${GITHUB_REF_NAME}"
-          fi
-          [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
-            echo "Invalid release tag" >&2
-            exit 1
-          }
-          echo "value=${release_tag}" >> "${GITHUB_OUTPUT}"
+          ref: ${{ needs.verify.outputs.sha }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.94.0
 
+      - name: Install native Linux linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lld
+          ld.lld --version
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Check crates.io publish state
+      - name: Confirm release tag still identifies verified source
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          RELEASE_SHA: ${{ needs.verify.outputs.sha }}
+        shell: bash
+        run: |
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}"
+          [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" == "${RELEASE_SHA}" ]] || {
+            echo "Release tag moved after verification" >&2
+            exit 1
+          }
+
+      - name: Check crates.io publish state and source identity
         id: crates_io_state
+        env:
+          RELEASE_SHA: ${{ needs.verify.outputs.sha }}
         shell: bash
         run: |
           python3 - <<'PY' >> "${GITHUB_OUTPUT}"
+          import io
+          import json
+          import os
+          import tarfile
           import tomllib
           import urllib.error
           import urllib.request
@@ -256,13 +176,32 @@ jobs:
           version = package["version"]
           url = f"https://crates.io/api/v1/crates/{name}/{version}"
           try:
-              with urllib.request.urlopen(url) as response:
+              with urllib.request.urlopen(url, timeout=30) as response:
                   published = response.status == 200
           except urllib.error.HTTPError as err:
               if err.code == 404:
                   published = False
               else:
                   raise
+
+          if published:
+              archive_url = f"https://crates.io/api/v1/crates/{name}/{version}/download"
+              with urllib.request.urlopen(archive_url, timeout=30) as response:
+                  archive_bytes = response.read()
+              with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as archive:
+                  try:
+                      vcs_file = archive.extractfile(f"{name}-{version}/.cargo_vcs_info.json")
+                  except KeyError:
+                      raise SystemExit("Published crate has no source identity metadata")
+                  if vcs_file is None:
+                      raise SystemExit("Published crate source identity is not a file")
+                  vcs = json.load(vcs_file)
+              if (
+                  vcs["git"]["sha1"] != os.environ["RELEASE_SHA"]
+                  or vcs["git"].get("dirty", False)
+                  or vcs.get("path_in_vcs") != ""
+              ):
+                  raise SystemExit("Published crate does not match the clean verified source")
 
           print(f"name={name}")
           print(f"version={version}")
@@ -285,24 +224,9 @@ jobs:
         run: |
           echo "${{ steps.crates_io_state.outputs.name }} ${{ steps.crates_io_state.outputs.version }} is already published on crates.io; skipping publish."
 
-      # - name: Download packaged artifacts
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     pattern: release-*
-      #     merge-multiple: true
-      #     path: release-assets
-      #
-      # - name: Copy release notes into publish bundle
-      #   env:
-      #     RELEASE_TAG: ${{ steps.release_tag.outputs.value }}
-      #   run: cp "docs/releases/${RELEASE_TAG}.md" release-assets/release-notes.md
-      #
-      # Re-enable the two steps above, and the `files:` input below, when the
-      # disabled `build` job is restored.
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_tag.outputs.value }}
-          body_path: docs/releases/${{ steps.release_tag.outputs.value }}.md
-          # files: release-assets/*
-          overwrite_files: true
+          tag_name: ${{ needs.verify.outputs.tag }}
+          body_path: docs/releases/${{ needs.verify.outputs.tag }}.md
+          target_commitish: ${{ needs.verify.outputs.sha }}
