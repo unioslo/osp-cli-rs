@@ -125,6 +125,43 @@ fn repl_basic_mode_runs_help_and_exit_without_tty() {
 }
 
 #[test]
+fn repl_basic_mode_recovers_from_ignored_batch_errors() {
+    let files = make_temp_dir("osp-cli-repl-source-errors");
+    let missing = files.path().join("missing.osp");
+    let batch = files.path().join("batch.osp");
+    std::fs::write(&batch, "source other.osp\ntheme show nord | P id,name\n").unwrap();
+    // A terminal cursor report left in the input buffer must not corrupt
+    // the command typed after it.
+    let input = format!(
+        "config set --session ui.format json\nsource --help\nsource --ignore-errors '{}' '{}'\n\x1b[12;1Rlast\nsource '{}'\nexit\n",
+        missing.display(),
+        batch.display(),
+        missing.display(),
+    );
+    let output = run_basic_repl(input.as_bytes());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+
+    let mut documents = Vec::new();
+    let mut remaining = stdout.as_ref();
+    while let Some(start) = remaining.find("[\n") {
+        let mut document = serde_json::Deserializer::from_str(&remaining[start..])
+            .into_iter::<serde_json::Value>();
+        documents.push(document.next().unwrap().unwrap());
+        remaining = &remaining[start + document.byte_offset()..];
+    }
+    let recovered = serde_json::json!([{"id": "nord", "name": "Nord"}]);
+    assert_eq!(documents, vec![recovered.clone(), recovered], "{stdout}");
+    for location in [
+        format!("{}:", missing.display()),
+        format!("{}:1:", batch.display()),
+    ] {
+        assert!(stderr.contains(&location), "{location}: {stderr}");
+    }
+}
+
+#[test]
 fn repl_sources_config_audits_and_replays_text_and_json_exports() {
     let files = make_temp_dir("osp-cli-repl-config-audit");
     for format in ["value", "json"] {
