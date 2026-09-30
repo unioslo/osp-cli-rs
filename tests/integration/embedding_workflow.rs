@@ -1,18 +1,150 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use clap::Command;
-use osp_cli::app::{BufferedUiSink, UiSink};
+use osp_cli::app::{
+    AccessRecoveryOutcome, AccessRecoveryRequest, AppRuntime, AppSession, BufferedUiSink,
+    CommandAccessKind, CommandAccessRecovery, TerminalKind, UiSink,
+};
 use osp_cli::config::ConfigLayer;
+use osp_cli::core::command_policy::{
+    AccessReason, AuthStrength, CommandAccess, CommandPolicyContext, CredentialState,
+};
 use osp_cli::core::plugin::{
-    PLUGIN_PROTOCOL_V1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
+    DescribeAuthStrengthV1, DescribeCommandAuthV1, DescribeCredentialRequirementV1,
+    DescribeSessionRequirementsV1, DescribeVisibilityModeV1, PLUGIN_PROTOCOL_V1,
+    ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
 };
 use osp_cli::{
     App, NativeCommand, NativeCommandContext, NativeCommandOutcome, NativeCommandRegistry,
     NativeProgressEvent,
 };
 use serde_json::{Value, json};
+
+struct CredentialProbe;
+
+impl NativeCommand for CredentialProbe {
+    fn command(&self) -> Command {
+        Command::new("credential-probe")
+            .subcommand_required(true)
+            .subcommand(Command::new("read").alias("get"))
+    }
+
+    fn auth(&self) -> Option<DescribeCommandAuthV1> {
+        Some(DescribeCommandAuthV1 {
+            visibility: Some(DescribeVisibilityModeV1::Public),
+            run_session: Some(DescribeSessionRequirementsV1 {
+                auth_strength: Some(DescribeAuthStrengthV1::Strong),
+                credentials: vec![DescribeCredentialRequirementV1::Fresh {
+                    service: "product".into(),
+                    min_ttl_seconds: 900,
+                }],
+            }),
+            ..DescribeCommandAuthV1::default()
+        })
+    }
+
+    fn execute(
+        &self,
+        _args: &[String],
+        _context: &NativeCommandContext<'_>,
+    ) -> Result<NativeCommandOutcome> {
+        Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
+            protocol_version: PLUGIN_PROTOCOL_V1,
+            ok: true,
+            data: json!([{"resource": "db01", "cpu": 4, "ready": true}]),
+            error: None,
+            messages: Vec::new(),
+            meta: ResponseMetaV1::default(),
+        })))
+    }
+}
+
+struct ProductAccessRecovery {
+    credential: Arc<Mutex<CredentialState>>,
+    requests: Arc<Mutex<Vec<AccessRecoveryRequest>>>,
+}
+
+impl CommandAccessRecovery for ProductAccessRecovery {
+    fn refresh(&self, runtime: &mut AppRuntime) -> miette::Result<()> {
+        let context = runtime
+            .auth()
+            .policy_context()
+            .clone()
+            .with_credential("product", self.credential.lock().unwrap().clone());
+        runtime.set_policy_context(context);
+        Ok(())
+    }
+
+    fn try_recover(
+        &self,
+        request: &AccessRecoveryRequest,
+        runtime: &mut AppRuntime,
+        _session: &mut AppSession,
+    ) -> miette::Result<AccessRecoveryOutcome> {
+        self.requests.lock().unwrap().push(request.clone());
+        *self.credential.lock().unwrap() = CredentialState::valid_for(1800);
+        self.refresh(runtime)?;
+        Ok(AccessRecoveryOutcome::Recovered)
+    }
+}
+
+#[test]
+fn embedded_access_recovery_refreshes_current_facts_and_retries_canonical_command() {
+    let credential = Arc::new(Mutex::new(CredentialState::valid_for(1800)));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let app = App::new()
+        .with_native_commands(NativeCommandRegistry::new().with_command(CredentialProbe))
+        .with_policy_context(
+            CommandPolicyContext::default()
+                .with_auth_strength(AuthStrength::Strong)
+                .with_credential("product", CredentialState::valid_for(1800)),
+        )
+        .with_access_recovery(ProductAccessRecovery {
+            credential: Arc::clone(&credential),
+            requests: Arc::clone(&requests),
+        });
+
+    for ttl in [1800, 60] {
+        *credential.lock().unwrap() = CredentialState::valid_for(ttl);
+        let mut sink = BufferedUiSink::default();
+        assert_eq!(
+            app.run_with_sink(
+                [
+                    "osp",
+                    "--defaults-only",
+                    "--json",
+                    "credential-probe",
+                    "get"
+                ],
+                &mut sink,
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&sink.stdout).unwrap(),
+            json!([{"resource": "db01", "cpu": 4, "ready": true}])
+        );
+        assert_eq!(
+            *credential.lock().unwrap(),
+            CredentialState::valid_for(1800)
+        );
+    }
+    assert_eq!(
+        *requests.lock().unwrap(),
+        vec![AccessRecoveryRequest::new(
+            TerminalKind::Cli,
+            CommandAccessKind::External,
+            "credential-probe read",
+            CommandAccess::visible_denied(AccessReason::InsufficientCredentialTtl {
+                service: "product".into(),
+                required_ttl_seconds: 900,
+            }),
+        )]
+    );
+}
 
 struct ApprovalWorkflow(Arc<AtomicBool>);
 
