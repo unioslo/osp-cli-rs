@@ -223,7 +223,7 @@ fn planning_requested_values<'a>(
             requested.extend(
                 values
                     .iter()
-                    .filter_map(|value| provider_selector_part(hints, value, column)),
+                    .filter_map(|value| provider_selector_part_at(value, 0)),
             );
         } else {
             requested.extend(values.iter().map(String::as_str));
@@ -255,23 +255,6 @@ fn planning_requested_values<'a>(
     }
 
     requested
-}
-
-fn provider_selector_part<'a>(
-    hints: &PlanningHints,
-    value: &'a str,
-    column: &str,
-) -> Option<&'a str> {
-    let provider = hints.provider_column.as_deref()?;
-    if column_matches_flag(provider, column) {
-        return provider_selector_part_at(value, 0);
-    }
-    let identity_index = hints
-        .identity_columns
-        .iter()
-        .filter(|identity| !column_matches_flag(provider, identity))
-        .position(|identity| column_matches_flag(identity, column))?;
-    provider_selector_part_at(value, identity_index + 1)
 }
 
 fn provider_selector_part_at(value: &str, index: usize) -> Option<&str> {

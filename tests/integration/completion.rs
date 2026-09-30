@@ -240,6 +240,95 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
     );
     assert_eq!(narrowed.explicit(), Some("beta"));
     assert_eq!(narrowed.candidates().collect::<Vec<_>>(), vec!["beta"]);
+
+    // Runtime identities and exact constraints can be numeric even though the
+    // editable command line and provider selectors carry textual values.
+    let deploy = tree
+        .root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap();
+    for flag in ["--revision", "--instance_id"] {
+        deploy.flags.insert(flag.into(), FlagNode::new());
+    }
+    let table = &mut deploy.planning.as_mut().unwrap().tables[0];
+    table
+        .columns
+        .extend(["revision".into(), "instance_id".into()]);
+    for row in &mut table.rows {
+        row.values
+            .insert("revision".into(), PlanningValue::number(1));
+    }
+    table.rows.push(
+        PlanningRow::new()
+            .value("provider", "alpha")
+            .value("instance", "north")
+            .value("instance_id", PlanningValue::number(4))
+            .value("revision", PlanningValue::number(2))
+            .value("image", "amber")
+            .value("memory", 4096),
+    );
+    let engine = CompletionEngine::new(tree.clone());
+    for (line, flag, expected) in [
+        (
+            "service deploy --revision 2 --memory +4GiB --image  --provider alpha",
+            "--image",
+            vec!["amber"],
+        ),
+        (
+            "service deploy --image  --provider alpha:north:4",
+            "--image",
+            vec!["amber"],
+        ),
+        (
+            "service deploy --instance_id  --provider alpha:north:4",
+            "--instance_id",
+            vec!["4"],
+        ),
+        (
+            "service deploy --revision 2 --memory +4GiB --provider ",
+            "--provider",
+            vec!["alpha:north:4"],
+        ),
+    ] {
+        let cursor = line.find(flag).unwrap() + flag.len() + 1;
+        assert_eq!(
+            suggestion_values(engine.complete(line, cursor).1),
+            expected,
+            "{line}"
+        );
+    }
+
+    // A partial catalogue augments static choices; overlapping evidence must
+    // produce one selectable value rather than duplicate menu entries.
+    let deploy = tree
+        .root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap();
+    deploy.planning.as_mut().unwrap().tables[0].exhaustive = false;
+    deploy
+        .flags
+        .get_mut("--image")
+        .unwrap()
+        .suggestions_by_provider
+        .insert(
+            "alpha".into(),
+            vec![SuggestionEntry::from("amber"), SuggestionEntry::from("red")],
+        );
+    let engine = CompletionEngine::new(tree);
+    let line = "service deploy --revision 2 --image  --provider alpha:north:4";
+    let cursor = line.find("--image").unwrap() + "--image ".len();
+    assert_eq!(
+        suggestion_values(engine.complete(line, cursor).1),
+        vec!["amber", "red"]
+    );
 }
 
 #[test]
