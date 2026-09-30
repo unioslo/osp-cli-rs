@@ -227,26 +227,34 @@ fn execute_repl_plugin_line_with_acceptance(
     accepted: &mut bool,
 ) -> Result<ExecutedReplLine> {
     let started = Instant::now();
-    match execute_repl_plugin_line_inner(runtime, session, clients, history, line, sink, accepted) {
-        Ok(executed) => {
-            history
-                .finalize_pending(line, *accepted)
-                .map_err(|err| miette!("failed to update REPL history: {err}"))?;
-            if *accepted && !is_repl_bang_request(line) {
-                history.remember_command(line);
+    let mut resolved = line.to_string();
+    let execution = (|| {
+        if let Some(command @ builtins::BangCommand::Last) = builtins::parse_bang_command(line)? {
+            match builtins::execute_bang_command(session, history, line, command)? {
+                ReplLineResult::ReplaceInput(expanded) => {
+                    sink.write_stderr(&format!("{expanded}\n"));
+                    resolved = expanded;
+                }
+                result => return Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity)),
             }
-            session.finish_repl_line();
+        }
+        execute_repl_plugin_line_inner(
+            runtime, session, clients, history, &resolved, sink, accepted,
+        )
+    })();
+    history
+        .finalize_execution(line, &resolved, *accepted)
+        .map_err(|err| miette!("failed to update REPL history: {err}"))?;
+    if *accepted && !is_repl_bang_request(&resolved) {
+        history.remember_command(&resolved);
+    }
+    session.finish_repl_line();
+    match execution {
+        Ok(executed) => {
             record_repl_timing(session, started, executed.timing);
             Ok(executed)
         }
         Err(err) => {
-            history
-                .finalize_pending(line, *accepted)
-                .map_err(|history_err| miette!("failed to update REPL history: {history_err}"))?;
-            if *accepted && !is_repl_bang_request(line) {
-                history.remember_command(line);
-            }
-            session.finish_repl_line();
             if runtime.ui.debug_verbosity > 0 {
                 session.record_prompt_timing(
                     runtime.ui.debug_verbosity,
@@ -259,7 +267,9 @@ fn execute_repl_plugin_line_with_acceptance(
             let plain_settings = runtime.ui.render_settings.plain_copy_settings();
             let summary = render_report_message(&err, ErrorDetail::Terse, &plain_settings);
             let mut doctor_command = None;
-            if !is_repl_bang_request(line) && !is_doctor_request(line, runtime.config.resolved()) {
+            if !is_repl_bang_request(&resolved)
+                && !is_doctor_request(&resolved, runtime.config.resolved())
+            {
                 let diagnostics = LastFailureDiagnostics {
                     normal: render_report_message(&err, ErrorDetail::Normal, &plain_settings),
                     debug: render_report_message(&err, ErrorDetail::Debug, &plain_settings),
@@ -270,7 +280,7 @@ fn execute_repl_plugin_line_with_acceptance(
                 } else {
                     None
                 };
-                session.record_failure_diagnostics(line, summary.clone(), diagnostics);
+                session.record_failure_diagnostics(&resolved, summary.clone(), diagnostics);
             }
             let mut messages = MessageBuffer::default();
             let visible_error = doctor_command
@@ -305,35 +315,6 @@ fn execute_repl_plugin_line_inner(
     sink: &mut dyn UiSink,
     accepted: &mut bool,
 ) -> Result<ExecutedReplLine> {
-    if let Some(command @ builtins::BangCommand::Last) = builtins::parse_bang_command(line)? {
-        match builtins::execute_bang_command(session, history, line, command)? {
-            ReplLineResult::ReplaceInput(expanded) => {
-                sink.write_stderr(&format!("{expanded}\n"));
-                let executed = match execute_repl_plugin_line_with_acceptance(
-                    runtime, session, clients, history, &expanded, sink, accepted,
-                ) {
-                    Ok(executed) => executed,
-                    Err(err) => {
-                        if *accepted {
-                            history
-                                .save_command_line(&expanded)
-                                .map_err(|history_err| {
-                                    miette!("failed to save REPL history: {history_err}")
-                                })?;
-                        }
-                        return Err(err);
-                    }
-                };
-                if *accepted {
-                    history
-                        .save_command_line(&expanded)
-                        .map_err(|err| miette!("failed to save REPL history: {err}"))?;
-                }
-                return Ok(executed);
-            }
-            result => return Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity)),
-        }
-    }
     if !matches!(line.trim(), "next" | "prev") {
         session.native_context.clear_pagination();
     }

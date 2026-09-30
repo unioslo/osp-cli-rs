@@ -449,12 +449,23 @@ impl SharedHistory {
         )
     }
 
-    pub(crate) fn finalize_pending(&self, command_line: &str, keep: bool) -> Result<()> {
+    /// Commit the editor's pending record, or save an accepted basic-mode replay.
+    ///
+    /// A sourced child must leave an unrelated pending parent record alone.
+    pub(crate) fn finalize_execution(
+        &self,
+        input: &str,
+        resolved: &str,
+        accepted: bool,
+    ) -> Result<()> {
         let mut guard = self
             .inner
             .lock()
             .map_err(|_| anyhow::anyhow!("history lock poisoned"))?;
-        guard.finalize_pending(command_line, keep)
+        if guard.pending_record.is_none() && input != resolved && accepted {
+            History::save(&mut *guard, HistoryItem::from_command_line(resolved))?;
+        }
+        guard.finalize_pending(resolved, accepted)
     }
 
     /// Saves one command line through the underlying `reedline::History`

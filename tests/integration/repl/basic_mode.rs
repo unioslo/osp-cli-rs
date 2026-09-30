@@ -38,7 +38,7 @@ fn repl_basic_mode_runs_help_and_exit_without_tty() {
         "# Read config through the same session\n\nconfig get theme.name\n",
     )
     .expect("command file should write");
-    let input = format!("help\nsource '{}'\nexit\n", commands.display());
+    let input = format!("help\nsource '{}'\n!!\nexit\n", commands.display());
     let output = run_basic_repl(input.as_bytes());
     assert!(
         output.status.success(),
@@ -53,8 +53,8 @@ fn repl_basic_mode_runs_help_and_exit_without_tty() {
     assert!(stdout.contains("help"));
     assert!(stdout.contains("exit"));
     assert!(
-        stdout.contains("rose-pine-moon"),
-        "sourced config command should return its resolved value; stdout:\n{stdout}"
+        stdout.matches("rose-pine-moon").count() == 2,
+        "source and recall should each execute the resolved config command; stdout:\n{stdout}"
     );
     assert!(stderr.contains("Warning: input is not a terminal"));
 }
