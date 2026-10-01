@@ -442,15 +442,6 @@ impl AppClients {
     }
 }
 
-impl Default for AppClients {
-    fn default() -> Self {
-        Self::new(
-            PluginManager::new(Vec::new()),
-            NativeCommandRegistry::default(),
-        )
-    }
-}
-
 /// Runtime-scoped application state shared across commands.
 ///
 /// This is the assembled host snapshot that command and REPL code read while

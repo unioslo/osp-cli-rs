@@ -98,12 +98,6 @@ impl CursorState {
     }
 }
 
-impl Default for CursorState {
-    fn default() -> Self {
-        Self::synthetic("")
-    }
-}
-
 /// Scope used when merging context-only flags into the cursor view.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContextScope {
@@ -588,16 +582,6 @@ impl FlagNode {
         self
     }
 
-    /// Marks this flag as context-only within the given scope.
-    ///
-    /// If omitted, later occurrences of the flag are not merged into cursor
-    /// context unless the user is actively editing that flag.
-    pub fn context_only(mut self, scope: ContextScope) -> Self {
-        self.context_only = true;
-        self.context_scope = scope;
-        self
-    }
-
     /// Sets the semantic value type for this flag.
     ///
     /// If omitted, the flag carries no special value-type hint.
@@ -905,18 +889,6 @@ pub enum CompletionRequest {
     },
 }
 
-impl Default for CompletionRequest {
-    fn default() -> Self {
-        Self::Positionals {
-            context_path: Vec::new(),
-            flag_scope_path: Vec::new(),
-            arg_index: 0,
-            show_subcommands: false,
-            show_flag_names: false,
-        }
-    }
-}
-
 impl CompletionRequest {
     /// Returns the stable request-kind label used by tests and debug surfaces.
     pub fn kind(&self) -> &'static str {
@@ -933,7 +905,7 @@ impl CompletionRequest {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Full completion analysis derived from parsing and context resolution.
 pub struct CompletionAnalysis {
     /// Full parser output plus the cursor-local context derived from it.
