@@ -599,6 +599,9 @@ def run_check(root: Path, check: ConfidenceCheck, *, to_stderr: bool = False) ->
 
     stream = sys.stderr if to_stderr else sys.stdout
     print(f"\n==> [{check.name}] {check.description}", file=stream, flush=True)
+    if check.name == "coverage-crate":
+        # The report stays here even when Cargo builds in an external target dir.
+        (root / "target").mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     env = None
     if check.env:
