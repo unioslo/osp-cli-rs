@@ -1,5 +1,43 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+pub(crate) fn sanitize_human_text(raw: &str) -> String {
+    let mut output = String::new();
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x1b' => match chars.next() {
+                Some('[') => consume_csi(&mut chars),
+                Some(']') => consume_osc(&mut chars),
+                Some(_) | None => {}
+            },
+            '\u{009b}' => consume_csi(&mut chars),
+            '\u{009d}' => consume_osc(&mut chars),
+            '\n' => output.push(ch),
+            _ if !ch.is_control() => output.push(ch),
+            _ => {}
+        }
+    }
+    output
+}
+
+fn consume_csi(chars: &mut impl Iterator<Item = char>) {
+    for ch in chars.by_ref() {
+        if ('@'..='~').contains(&ch) {
+            break;
+        }
+    }
+}
+
+fn consume_osc(chars: &mut impl Iterator<Item = char>) {
+    let mut previous = None;
+    for ch in chars.by_ref() {
+        if ch == '\x07' || ch == '\u{009c}' || (previous == Some('\x1b') && ch == '\\') {
+            break;
+        }
+        previous = Some(ch);
+    }
+}
+
 pub(crate) fn display_width(raw: &str) -> usize {
     let mut width = 0;
     let mut chars = raw.chars().peekable();

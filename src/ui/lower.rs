@@ -32,7 +32,7 @@ use super::doc::{
 };
 use super::plan::RenderPlan;
 use super::settings::{HelpLayout, ResolvedHelpChromeSettings};
-use super::text::display_width;
+use super::text::{display_width, sanitize_human_text};
 use super::visible_inline_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +82,7 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
         output
     };
 
-    match plan.format {
+    let mut doc = match plan.format {
         OutputFormat::Guide => {
             if let Some(guide) = guide.as_ref() {
                 lower_guide(
@@ -139,13 +139,17 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
         }
         OutputFormat::Mreg => lower_mreg_doc(output),
         OutputFormat::Auto => Doc::default(),
+    };
+    if plan.format != OutputFormat::Json {
+        sanitize_doc(&mut doc);
     }
+    doc
 }
 
 fn lower_presentation_lines(lines: &[String], width: Option<usize>) -> Doc {
     let lines = lines
         .iter()
-        .map(|line| sanitize_presentation_line(&visible_inline_text(line)))
+        .map(|line| sanitize_human_text(&visible_inline_text(line)))
         .flat_map(|line| wrap_presentation_line(&line, width))
         .collect::<Vec<_>>();
     if lines.is_empty() {
@@ -158,39 +162,6 @@ fn lower_presentation_lines(lines: &[String], width: Option<usize>) -> Doc {
             inline_markup: false,
         })],
     }
-}
-
-fn sanitize_presentation_line(line: &str) -> String {
-    let mut output = String::new();
-    let mut chars = line.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            match chars.next() {
-                Some('[') => {
-                    for next in chars.by_ref() {
-                        if ('@'..='~').contains(&next) {
-                            break;
-                        }
-                    }
-                }
-                Some(']') => {
-                    let mut previous = None;
-                    for next in chars.by_ref() {
-                        if next == '\x07' || (previous == Some('\x1b') && next == '\\') {
-                            break;
-                        }
-                        previous = Some(next);
-                    }
-                }
-                Some(_) | None => {}
-            }
-            continue;
-        }
-        if !ch.is_control() {
-            output.push(ch);
-        }
-    }
-    output
 }
 
 fn wrap_presentation_line(line: &str, width: Option<usize>) -> Vec<String> {
@@ -292,6 +263,97 @@ fn take_presentation_chunk(text: &str, width: usize) -> (String, String) {
         text[..split].trim_end().to_string(),
         text[split..].trim_start().to_string(),
     )
+}
+
+fn sanitize_doc(doc: &mut Doc) {
+    sanitize_blocks(&mut doc.blocks);
+}
+
+fn sanitize_blocks(blocks: &mut [Block]) {
+    for block in blocks {
+        match block {
+            Block::Blank | Block::Rule | Block::Json(_) => {}
+            Block::Paragraph(paragraph) => {
+                paragraph.text = sanitize_human_text(&paragraph.text);
+            }
+            Block::Section(section) => {
+                if let Some(title) = &mut section.title {
+                    *title = sanitize_human_text(title);
+                }
+                if let Some(suffix) = &mut section.inline_title_suffix {
+                    *suffix = sanitize_human_text(suffix);
+                }
+                sanitize_blocks(&mut section.blocks);
+            }
+            Block::Table(table) => {
+                for row in &mut table.summary {
+                    sanitize_key_value_row(row);
+                }
+                for header in &mut table.headers {
+                    *header = sanitize_human_text(header);
+                }
+                for row in &mut table.rows {
+                    for cell in row {
+                        *cell = sanitize_human_text(cell);
+                    }
+                }
+            }
+            Block::GuideEntries(entries) => {
+                entries.default_indent = sanitize_human_text(&entries.default_indent);
+                if let Some(gap) = &mut entries.default_gap {
+                    *gap = sanitize_human_text(gap);
+                }
+                for row in &mut entries.rows {
+                    row.key = sanitize_human_text(&row.key);
+                    row.value = sanitize_human_text(&row.value);
+                    if let Some(indent) = &mut row.indent_hint {
+                        *indent = sanitize_human_text(indent);
+                    }
+                    if let Some(gap) = &mut row.gap_hint {
+                        *gap = sanitize_human_text(gap);
+                    }
+                }
+            }
+            Block::KeyValue(key_value) => {
+                for row in &mut key_value.rows {
+                    sanitize_key_value_row(row);
+                }
+            }
+            Block::List(list) => {
+                for item in &mut list.items {
+                    *item = sanitize_human_text(item);
+                }
+            }
+        }
+    }
+}
+
+fn sanitize_key_value_row(row: &mut KeyValueRow) {
+    row.key = sanitize_human_text(&row.key);
+    if let Some(indent) = &mut row.indent {
+        *indent = sanitize_human_text(indent);
+    }
+    if let Some(gap) = &mut row.gap {
+        *gap = sanitize_human_text(gap);
+    }
+    sanitize_key_value(&mut row.value);
+}
+
+fn sanitize_key_value(value: &mut KeyValueValue) {
+    match value {
+        KeyValueValue::Empty => {}
+        KeyValueValue::Scalar(value) => *value = sanitize_human_text(value),
+        KeyValueValue::Array(values) => {
+            for value in values {
+                sanitize_key_value(value);
+            }
+        }
+        KeyValueValue::Object(rows) => {
+            for row in rows {
+                sanitize_key_value_row(row);
+            }
+        }
+    }
 }
 
 fn display_output(output: &OutputResult) -> OutputResult {
