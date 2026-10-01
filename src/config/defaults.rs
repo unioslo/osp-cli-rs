@@ -59,7 +59,7 @@ pub const DEFAULT_REPL_INTRO: &str = "full";
 /// Default threshold for rendering medium lists before expanding further.
 pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
 /// Default table overflow strategy.
-pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "wrap";
+pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "ellipsis";
 
 const DEFAULT_EXTENSIONS_PLUGINS_TIMEOUT_MS: i64 =
     crate::plugin::DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as i64;

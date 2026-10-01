@@ -395,6 +395,13 @@ fn display_output(output: &OutputResult) -> OutputResult {
                             *value = Value::Null;
                         }
                     }
+                    DisplayRule::Bytes { field } => {
+                        if let Some(value) = display_path_mut(&mut original, field)
+                            && let Some(bytes) = value.as_u64()
+                        {
+                            *value = Value::String(byte_size_display(bytes));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -436,6 +443,24 @@ fn display_output(output: &OutputResult) -> OutputResult {
         }
     }
     display
+}
+
+fn byte_size_display(bytes: u64) -> String {
+    for (unit, divisor) in [
+        ("TiB", 1_u64 << 40),
+        ("GiB", 1_u64 << 30),
+        ("MiB", 1_u64 << 20),
+        ("KiB", 1_u64 << 10),
+    ] {
+        if bytes >= divisor {
+            return if bytes.is_multiple_of(divisor) {
+                format!("{} {unit}", bytes / divisor)
+            } else {
+                format!("{:.1} {unit}", bytes as f64 / divisor as f64)
+            };
+        }
+    }
+    format!("{bytes} B")
 }
 
 fn display_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {

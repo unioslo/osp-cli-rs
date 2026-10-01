@@ -370,7 +370,7 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
     assert!(human.stdout.contains("4 CPU / 8"));
     assert!(human.stdout.contains("GiB"));
     assert!(human.stdout.contains("db01.uio.no"));
-    assert!(human.stdout.contains("(stale)"));
+    assert!(human.stdout.contains("db01.uio.no …"));
     assert!(!human.stdout.contains("powered_on"));
     assert!(!human.stdout.contains("next_cursor"));
     assert!(human.stderr.contains("Results are incomplete"));

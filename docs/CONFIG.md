@@ -327,6 +327,7 @@ These keys currently drive user-visible rendering and REPL presentation:
 - `ui.table.border`
   - `none | square | round`
 - `ui.table.overflow`
+  - `clip | ellipsis | wrap | none`; defaults to `ellipsis`
 - `ui.help.level`
   - `inherit | none | tiny | normal | verbose`
 - `theme.name`

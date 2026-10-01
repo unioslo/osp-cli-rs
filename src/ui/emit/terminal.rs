@@ -322,30 +322,25 @@ fn fitted_table_widths(
         .iter()
         .map(|cell| cell.width.max(1))
         .collect::<Vec<_>>();
-    if matches!(overflow, TableOverflow::Wrap) {
+    if matches!(overflow, TableOverflow::Ellipsis | TableOverflow::Wrap) {
+        // Protect ordinary identifiers without letting one unbroken artifact
+        // name consume the whole table. Column order still decides what drops.
+        let token_width_limit = (available_width / 3).max(1);
         for (column, minimum_width) in minimum.iter_mut().enumerate() {
             for cell in rows.iter().filter_map(|row| row.get(column)) {
-                let tokens = cell.raw.split(", ").collect::<Vec<_>>();
-                if tokens.len() > 1
-                    && tokens
-                        .iter()
-                        .all(|token| !token.is_empty() && !token.chars().any(char::is_whitespace))
-                {
-                    let token_width = tokens
-                        .iter()
-                        .enumerate()
-                        .map(|(index, token)| {
-                            UnicodeWidthStr::width(*token) + usize::from(index + 1 < tokens.len())
-                        })
-                        .max()
-                        .unwrap_or(1);
-                    *minimum_width = (*minimum_width).max(token_width);
-                }
+                let token_width = cell
+                    .raw
+                    .split_whitespace()
+                    .map(UnicodeWidthStr::width)
+                    .max()
+                    .unwrap_or(1)
+                    .min(token_width_limit);
+                *minimum_width = (*minimum_width).max(token_width);
             }
         }
     }
     // Column order expresses product priority. Drop secondary columns when
-    // headings or list tokens cannot fit; other long values can wrap.
+    // headings or useful tokens cannot fit; prose can use the remaining room.
     while widths.len() > 1
         && minimum[..widths.len()].iter().sum::<usize>() + widths.len() * 3 + 1 > available_width
     {

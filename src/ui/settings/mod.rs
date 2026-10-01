@@ -291,7 +291,7 @@ impl Default for RenderSettings {
             margin: 0,
             indent_size: 2,
             medium_list_max: 5,
-            table_overflow: TableOverflow::Wrap,
+            table_overflow: TableOverflow::Ellipsis,
             table_border: TableBorderStyle::Square,
             style_overrides: style::StyleOverrides::default(),
             help_chrome: HelpChromeSettings::default(),
