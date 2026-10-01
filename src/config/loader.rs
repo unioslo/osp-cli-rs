@@ -328,7 +328,7 @@ impl ConfigLoader for SecretsTomlLoader {
             reason: err.to_string(),
         })?;
 
-        let mut layer = ConfigLayer::from_toml_str(&raw)
+        let mut layer = ConfigLayer::from_secret_toml_str(&raw)
             .map_err(|err| with_path_context(self.path.display().to_string(), err))?;
         let origin = self.path.display().to_string();
         for entry in &mut layer.entries {
