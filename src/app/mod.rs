@@ -706,8 +706,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let mut sink = StdIoUiSink;
-    run_process_with_sink(args, &mut sink)
+    App::new().run_process(args)
 }
 
 /// Runs the default application instance with the provided sink.
@@ -732,25 +731,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
-    let error_detail = bootstrap_error_detail(&args);
-    let message_verbosity = bootstrap_message_verbosity(&args);
-    let error_render_settings =
-        help::render_settings_for_help(&args, &AppDefinition::default().product_defaults).settings;
-
-    match host::run_from_with_sink(args, sink) {
-        Ok(code) => code,
-        Err(err) => {
-            let rendered = render_process_error(
-                &err,
-                error_detail,
-                &error_render_settings,
-                message_verbosity,
-            );
-            sink.write_stderr(&rendered);
-            classify_exit_code(&err)
-        }
-    }
+    App::new().run_process_with_sink(args, sink)
 }
 
 fn render_process_error(
