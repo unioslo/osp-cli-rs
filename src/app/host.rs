@@ -1024,7 +1024,7 @@ pub(crate) fn report_report_with_context(
     })
 }
 
-fn find_error_in_chain<E>(err: &miette::Report) -> Option<&E>
+pub(super) fn find_error_in_chain<E>(err: &miette::Report) -> Option<&E>
 where
     E: std::error::Error + 'static,
 {

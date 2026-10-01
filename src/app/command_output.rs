@@ -8,7 +8,9 @@
 use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
 use crate::core::output_model::{OutputItems, OutputResult, RenderRecommendation, rows_from_value};
-use crate::core::plugin::{ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1};
+use crate::core::plugin::{
+    ResponseErrorV1, ResponseMessageLevelV1, ResponseMessageV1, ResponseMetaV1, ResponseV1,
+};
 use crate::dsl::apply_output_pipeline;
 use crate::guide::GuideView;
 use crate::ui::clipboard::ClipboardService;
@@ -125,13 +127,25 @@ pub(crate) enum PreparedPluginResponse {
 
 #[derive(Debug)]
 pub(crate) struct CommandBackendDetails {
-    details: String,
+    error: ResponseErrorV1,
     source: miette::Report,
 }
 
 impl std::fmt::Display for CommandBackendDetails {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "command failed\nBackend details:\n{}", self.details)
+        if self.error.details.is_null()
+            || self
+                .error
+                .details
+                .as_object()
+                .is_some_and(serde_json::Map::is_empty)
+        {
+            write!(f, "{}", self.source)
+        } else {
+            let details = serde_json::to_string_pretty(&self.error.details)
+                .unwrap_or_else(|_| self.error.details.to_string());
+            write!(f, "command failed\nBackend details:\n{details}")
+        }
     }
 }
 
@@ -303,21 +317,30 @@ pub(crate) fn run_cli_command(
             .iter()
             .find(|entry| entry.level == MessageLevel::Error)
             .map(|entry| entry.text.as_str());
-        let (code, message) = primary_error
-            .and_then(|text| text.split_once(": "))
-            .map(|(code, message)| (code.to_string(), message.to_string()))
-            .unwrap_or_else(|| {
-                (
-                    "command_failed".to_string(),
-                    primary_error
-                        .map(str::to_string)
-                        .or_else(|| result.failure_report.as_ref().map(ToString::to_string))
-                        .unwrap_or_else(|| "command failed".to_string()),
-                )
-            });
+        let error = if let Some(backend) = result
+            .failure_report
+            .as_ref()
+            .and_then(super::host::find_error_in_chain::<CommandBackendDetails>)
+        {
+            serde_json::json!(backend.error)
+        } else {
+            let (code, message) = primary_error
+                .and_then(|text| text.split_once(": "))
+                .map(|(code, message)| (code.to_string(), message.to_string()))
+                .unwrap_or_else(|| {
+                    (
+                        "command_failed".to_string(),
+                        primary_error
+                            .map(str::to_string)
+                            .or_else(|| result.failure_report.as_ref().map(ToString::to_string))
+                            .unwrap_or_else(|| "command failed".to_string()),
+                    )
+                });
+            serde_json::json!({"code": code, "message": message})
+        };
         let payload = serde_json::json!({
             "ok": false,
-            "error": {"code": code, "message": message},
+            "error": error,
             "messages": messages,
             "data": data,
         });
@@ -572,21 +595,10 @@ pub(crate) fn prepare_plugin_response(
         let report = if let Some(error) = response.error {
             messages.error(format!("{}: {}", error.code, error.message));
             let report = miette!("{}: {}", error.code, error.message);
-            if error.details.is_null()
-                || error
-                    .details
-                    .as_object()
-                    .is_some_and(serde_json::Map::is_empty)
-            {
-                report
-            } else {
-                let details = serde_json::to_string_pretty(&error.details)
-                    .unwrap_or_else(|_| error.details.to_string());
-                miette::Report::new(CommandBackendDetails {
-                    details,
-                    source: report,
-                })
-            }
+            miette::Report::new(CommandBackendDetails {
+                error,
+                source: report,
+            })
         } else {
             messages.error("command failed");
             miette!("command failed")
