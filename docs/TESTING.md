@@ -25,10 +25,10 @@ when terminal behavior matters; a string-render check cannot prove prompt
 redraw or live progress. Existing unit tests remain useful when they explain
 an invariant the outer contract does not cover.
 
-Read the target fixtures before running a suite. Contract and integration lanes
+Read the target fixtures before running a suite. Contract and integration checks
 isolate HOME/XDG roots and ambient `OSP_*` values. Live service requests,
-authentication and writes need separate scoped execution evidence; local
-fixtures do not establish those effects.
+authentication and writes need a separately verified live run; local fixtures
+do not establish those effects.
 
 When checking saved configuration or machine-readable output, parse it and
 assert meaningful values; counts or field presence alone can pass even when
@@ -37,9 +37,9 @@ the content is wrong.
 Linux contracts include one real native-keyring lifecycle. It requires
 `dbus-run-session`, `dbus-daemon`, `gnome-keyring-daemon` and `gdbus`; on
 Debian/Ubuntu these come from `dbus-daemon`, `gnome-keyring` and
-`libglib2.0-bin`. CI installs them explicitly, and confidence test/contract/
-coverage checks fail their prerequisite preflight before compilation when a
-tool is missing. Build and publication checks do not require these services.
+`libglib2.0-bin`. CI installs them explicitly. The confidence runner checks for
+these tools before compiling tests, contracts or coverage, and fails if one is
+missing. Build and publication checks do not require these services.
 The runner never installs system packages implicitly.
 
 The contract starts a private D-Bus session and unlocks a throwaway GNOME
@@ -80,7 +80,7 @@ python3 scripts/confidence.py --check e2e
 Run the selected check once while code and dependencies remain unchanged.
 Broaden validation when a failure, dependency change or unresolved interaction
 requires it. Confirm tests actually executed and distinguish environment/tooling
-failures from behavior failures. Report commands, results and skipped effects;
+failures from behavior failures. Report commands, results and unverified behavior;
 test counts alone do not establish readiness.
 
 Coverage checks execute cases serially, including the generic check used by the
