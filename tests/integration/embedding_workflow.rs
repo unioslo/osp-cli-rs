@@ -7,7 +7,7 @@ use osp_cli::app::{
     AccessRecoveryOutcome, AccessRecoveryRequest, AppRuntime, AppSession, BufferedUiSink,
     CommandAccessKind, CommandAccessRecovery, TerminalKind, UiSink,
 };
-use osp_cli::config::ConfigLayer;
+use osp_cli::config::{ConfigLayer, ResolvedConfig};
 use osp_cli::core::command_policy::{
     AccessReason, AuthStrength, CommandAccess, CommandPolicyContext, CredentialState,
 };
@@ -22,13 +22,26 @@ use osp_cli::{
 };
 use serde_json::{Value, json};
 
-struct CredentialProbe;
+#[derive(Default)]
+struct CredentialProbe(AtomicBool);
 
 impl NativeCommand for CredentialProbe {
     fn command(&self) -> Command {
-        Command::new("credential-probe")
-            .subcommand_required(true)
-            .subcommand(Command::new("read").alias("get"))
+        let command = Command::new("credential-probe").subcommand_required(true);
+        if self.0.load(Ordering::SeqCst) {
+            command.subcommand(Command::new("read").alias("get"))
+        } else {
+            command
+        }
+    }
+
+    fn prepare_invocation_metadata(
+        &self,
+        args: &[String],
+        _config: &ResolvedConfig,
+    ) -> Result<bool> {
+        assert_eq!(args, &["get"]);
+        Ok(!self.0.swap(true, Ordering::SeqCst))
     }
 
     fn auth(&self) -> Option<DescribeCommandAuthV1> {
@@ -47,9 +60,13 @@ impl NativeCommand for CredentialProbe {
 
     fn execute(
         &self,
-        _args: &[String],
+        args: &[String],
         _context: &NativeCommandContext<'_>,
     ) -> Result<NativeCommandOutcome> {
+        let matches = self.command().try_get_matches_from(
+            std::iter::once("credential-probe".to_owned()).chain(args.iter().cloned()),
+        )?;
+        assert_eq!(matches.subcommand_name(), Some("read"));
         Ok(NativeCommandOutcome::Response(Box::new(ResponseV1 {
             protocol_version: PLUGIN_PROTOCOL_V1,
             ok: true,
@@ -95,7 +112,7 @@ fn embedded_access_recovery_refreshes_current_facts_and_retries_canonical_comman
     let credential = Arc::new(Mutex::new(CredentialState::valid_for(1800)));
     let requests = Arc::new(Mutex::new(Vec::new()));
     let app = App::new()
-        .with_native_commands(NativeCommandRegistry::new().with_command(CredentialProbe))
+        .with_native_commands(NativeCommandRegistry::new().with_command(CredentialProbe::default()))
         .with_policy_context(
             CommandPolicyContext::default()
                 .with_auth_strength(AuthStrength::Strong)

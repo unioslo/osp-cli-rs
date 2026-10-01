@@ -223,17 +223,56 @@ fn run_external_command_with_help_renderer_and_progress_inner(
                     "elevation prefix is unsupported for native command `{command}`"
                 ));
             }
-            let canonical_args = native_command.normalize_args(args).map_err(|err| {
+            let mut canonical_args = native_command.normalize_args(args).map_err(|err| {
                 crate::app::report_anyhow_with_context(
                     err,
                     "failed to normalize native command arguments",
                 )
             })?;
+            let mut description = native_command.describe();
+            let mut native_parse = native_command.command().try_get_matches_from(
+                std::iter::once(command.clone()).chain(canonical_args.iter().cloned()),
+            );
+            let mut refreshed_policy = None;
+            if native_parse
+                .as_ref()
+                .is_err_and(|error| !is_native_help_error(error.kind()))
+                && args.first().is_none_or(|arg| arg != "help")
+                && !args
+                    .iter()
+                    .take_while(|arg| arg.as_str() != "--")
+                    .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "--version" | "-V"))
+            {
+                ensure_external_path_access(
+                    runtime,
+                    session,
+                    &crate::command_policy::CommandPath::new([command.clone()]),
+                    ExternalPathAccessRequirement::Runnable,
+                    "command",
+                )?;
+                if native_command
+                    .prepare_invocation_metadata(args, runtime.config.resolved())
+                    .map_err(|err| {
+                        crate::app::report_anyhow_with_context(
+                            err,
+                            "failed to prepare native invocation metadata",
+                        )
+                    })?
+                {
+                    canonical_args = native_command.normalize_args(args).map_err(|err| {
+                        crate::app::report_anyhow_with_context(
+                            err,
+                            "failed to normalize native command arguments",
+                        )
+                    })?;
+                    description = native_command.describe();
+                    native_parse = native_command.command().try_get_matches_from(
+                        std::iter::once(command.clone()).chain(canonical_args.iter().cloned()),
+                    );
+                    refreshed_policy = Some(clients.native_commands().command_policy_registry());
+                }
+            }
             let args = canonical_args.as_slice();
-            let description = native_command.describe();
-            let native_parse = native_command
-                .command()
-                .try_get_matches_from(std::iter::once(command.clone()).chain(args.iter().cloned()));
             // A successful clap parse is authoritative for aliases, option
             // values, and the selected nested command. The describe payload
             // is only a conservative fallback for non-help errors. Clap does
@@ -261,6 +300,16 @@ fn run_external_command_with_help_renderer_and_progress_inner(
                         ExternalPathAccessRequirement::Visible,
                         "command",
                     )?;
+                    if let Some(policy) = &refreshed_policy {
+                        ensure_external_path_access_with_policy(
+                            runtime,
+                            session,
+                            &path,
+                            ExternalPathAccessRequirement::Visible,
+                            "command",
+                            policy,
+                        )?;
+                    }
                     return Ok(CliCommandResult::guide(guide_help(&err.to_string())));
                 }
                 if path_ambiguous
@@ -281,6 +330,16 @@ fn run_external_command_with_help_renderer_and_progress_inner(
                 ExternalPathAccessRequirement::Runnable,
                 "command",
             )?;
+            if let Some(policy) = &refreshed_policy {
+                ensure_external_path_access_with_policy(
+                    runtime,
+                    session,
+                    &path,
+                    ExternalPathAccessRequirement::Runnable,
+                    "command",
+                    policy,
+                )?;
+            }
             run_native_command(
                 native_command.as_ref(),
                 runtime,
