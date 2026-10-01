@@ -26,9 +26,11 @@ redraw or live progress. Existing unit tests remain useful when they explain
 an invariant the outer contract does not cover.
 
 Read the target fixtures before running a suite. Contract and integration checks
-isolate HOME/XDG roots and ambient `OSP_*` values. Live service requests,
-authentication and writes need a separately verified live run; local fixtures
-do not establish those effects.
+isolate HOME/XDG roots, ambient `OSP_*` values and the Kerberos credential cache.
+An active host ticket must not change a password fixture's authentication flow.
+Fixtures that exercise Kerberos supply their own commands and credentials.
+Live service requests, authentication and writes need a separately verified live
+run; local fixtures do not establish those effects.
 
 When checking saved configuration or machine-readable output, parse it and
 assert meaningful values; counts or field presence alone can pass even when

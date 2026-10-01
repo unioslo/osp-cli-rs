@@ -58,6 +58,7 @@ def hermetic_env(home: Path) -> dict[str, str]:
             "XDG_CACHE_HOME": str(home / ".cache"),
             "XDG_STATE_HOME": str(home / ".local" / "state"),
             "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "KRB5CCNAME": f"FILE:{home / 'krb5cc'}",
             "CARGO_HOME": env.get("CARGO_HOME", str(original_home / ".cargo")),
             "RUSTUP_HOME": env.get("RUSTUP_HOME", str(original_home / ".rustup")),
             "LANG": "C.UTF-8",
