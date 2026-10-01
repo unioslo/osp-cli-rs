@@ -10,7 +10,7 @@ use crate::ui::section_chrome::{
     render_section_block_with_overrides, render_section_divider_with_overrides,
 };
 use crate::ui::style::{StyleToken, ThemeStyler};
-use crate::ui::text::wrap_display_width;
+use crate::ui::text::{sanitize_human_text, wrap_display_width};
 
 use super::{MessageBuffer, MessageLayout, MessageLevel, message_layout_from_config};
 
@@ -134,11 +134,12 @@ fn render_messages_internal(
     styler: &ThemeStyler<'_>,
     chrome: MessageChrome,
 ) -> String {
+    let buffer = sanitize_message_buffer(buffer);
     let rendered = match options.layout {
-        MessageLayout::Minimal => render_austere(buffer, options.max_level, styler),
-        MessageLayout::Plain => render_plain(buffer, options.max_level, styler),
-        MessageLayout::Compact => render_compact(buffer, options.max_level, styler),
-        MessageLayout::Grouped => render_full(buffer, options.max_level, styler, chrome),
+        MessageLayout::Minimal => render_austere(&buffer, options.max_level, styler),
+        MessageLayout::Plain => render_plain(&buffer, options.max_level, styler),
+        MessageLayout::Compact => render_compact(&buffer, options.max_level, styler),
+        MessageLayout::Grouped => render_full(&buffer, options.max_level, styler, chrome),
     };
 
     if rendered.is_empty() || rendered.ends_with('\n') {
@@ -146,6 +147,17 @@ fn render_messages_internal(
     } else {
         format!("{rendered}\n")
     }
+}
+
+fn sanitize_message_buffer(buffer: &MessageBuffer) -> MessageBuffer {
+    let mut buffer = buffer.clone();
+    for entry in &mut buffer.entries {
+        entry.text = sanitize_human_text(&entry.text);
+        if let Some(title) = &mut entry.title {
+            *title = sanitize_human_text(title);
+        }
+    }
+    buffer
 }
 
 #[cfg(test)]
