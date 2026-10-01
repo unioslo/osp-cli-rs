@@ -47,6 +47,11 @@ pub enum DisplayRule {
         /// Canonical numeric field path to format.
         field: String,
     },
+    /// Format an RFC3339 or Unix-seconds timestamp relative to the current time.
+    RelativeTimestamp {
+        /// Canonical timestamp field path to format.
+        field: String,
+    },
 }
 
 /// Alignment hint for a rendered output column.

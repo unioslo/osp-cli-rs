@@ -415,12 +415,15 @@ pub trait NativeCommand: Send + Sync {
         Ok(args.to_vec())
     }
 
-    /// Prepares metadata when an invocation fails strict parsing.
+    /// Prepares metadata when an invocation fails strict parsing or requests help.
     ///
-    /// The host authorizes the command root as runnable before calling this;
-    /// help/version requests bypass it. Arguments are the original supplied
-    /// arguments, without the registered command name or DSL pipeline. Remote
-    /// discovery is permitted, but this must not execute the requested action.
+    /// For ordinary execution, the host authorizes the command root as runnable
+    /// before calling this. For help, it first authorizes the cached command
+    /// path as visible and treats preparation errors as a cache miss so help
+    /// remains available offline and without acquiring credentials. Arguments
+    /// are the original supplied arguments, without the registered command name
+    /// or DSL pipeline. Remote discovery is permitted, but this must not execute
+    /// the requested action.
     /// Return `true` only when the grammar changed: the host then normalizes,
     /// describes, and strictly parses the invocation once more, and authorizes
     /// its full path against both host policy and refreshed native declarations
