@@ -42,6 +42,11 @@ pub enum DisplayRule {
         /// Canonical field path whose non-null presence blanks the field.
         when: String,
     },
+    /// Format a non-negative integer byte count using binary units.
+    Bytes {
+        /// Canonical numeric field path to format.
+        field: String,
+    },
 }
 
 /// Alignment hint for a rendered output column.

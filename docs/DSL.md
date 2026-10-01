@@ -195,7 +195,8 @@ produces no groups.
 
 Null and empty arrays render blank; lists render as readable comma-separated
 values. Producer column order expresses priority. Narrow terminal tables omit
-trailing low-priority columns before clipping the first remaining column.
-Declared columns remain stable for zero, one or many rows. Use `--json` for
-complete machine data, or `P` to choose the fields needed for your task.
-The explicit `table_overflow=none` setting disables width fitting.
+trailing low-priority columns before ellipsizing remaining values. Declared
+columns remain stable for zero, one or many rows. Use `--json` for complete
+machine data, or `P` to choose the fields needed for your task. Set
+`ui.table.overflow=wrap` to preserve complete cell values across lines; the
+explicit `none` setting disables width fitting.
