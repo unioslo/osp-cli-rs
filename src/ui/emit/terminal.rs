@@ -216,6 +216,7 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
     let widths = fitted_table_widths(
         &table.widths,
         &table.headers,
+        &table.rows,
         settings
             .width
             .map(|width| width.saturating_sub(settings.margin)),
@@ -305,6 +306,7 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
 fn fitted_table_widths(
     natural: &[usize],
     headers: &[PreparedCell],
+    rows: &[Vec<PreparedCell>],
     available_width: Option<usize>,
     overflow: TableOverflow,
 ) -> Vec<usize> {
@@ -316,12 +318,34 @@ fn fitted_table_widths(
     }
 
     let mut widths = natural.to_vec();
-    let minimum = headers
+    let mut minimum = headers
         .iter()
         .map(|cell| cell.width.max(1))
         .collect::<Vec<_>>();
-    // Column order expresses product priority. Drop secondary columns only
-    // when their headers cannot fit; long values can use the wrapping emitter.
+    if matches!(overflow, TableOverflow::Wrap) {
+        for (column, minimum_width) in minimum.iter_mut().enumerate() {
+            for cell in rows.iter().filter_map(|row| row.get(column)) {
+                let tokens = cell.raw.split(", ").collect::<Vec<_>>();
+                if tokens.len() > 1
+                    && tokens
+                        .iter()
+                        .all(|token| !token.is_empty() && !token.chars().any(char::is_whitespace))
+                {
+                    let token_width = tokens
+                        .iter()
+                        .enumerate()
+                        .map(|(index, token)| {
+                            UnicodeWidthStr::width(*token) + usize::from(index + 1 < tokens.len())
+                        })
+                        .max()
+                        .unwrap_or(1);
+                    *minimum_width = (*minimum_width).max(token_width);
+                }
+            }
+        }
+    }
+    // Column order expresses product priority. Drop secondary columns when
+    // headings or list tokens cannot fit; other long values can wrap.
     while widths.len() > 1
         && minimum[..widths.len()].iter().sum::<usize>() + widths.len() * 3 + 1 > available_width
     {

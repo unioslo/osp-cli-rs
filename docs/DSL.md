@@ -1,9 +1,10 @@
 # DSL guide
 
 The pipe DSL transforms command output before rendering. Every stage operates
-on canonical rows. Human headings use the same field paths as filters; JSON
-shows all available fields. The command vocabulary remains owned by each
-product; DSL stages do not rename commands or infer service facts.
+on canonical rows. Producers may supply human headings for ordinary output,
+while filters, projections and JSON keep the canonical field paths. The command
+vocabulary remains owned by each product; DSL stages do not rename commands or
+infer service facts.
 
 ## One-shot commands
 

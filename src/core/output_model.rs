@@ -76,6 +76,8 @@ pub struct OutputMeta {
     pub key_index: Vec<String>,
     /// Optional curated field paths for human display, in priority order.
     pub display_columns: Option<Vec<String>>,
+    /// Optional human labels aligned positionally with `display_columns`.
+    pub display_column_labels: Option<Vec<String>>,
     /// Producer-declared numeric timestamp paths, measured in Unix seconds.
     pub unix_timestamp_columns: Vec<String>,
     /// Human-only conditional field formatting, evaluated against raw rows.
@@ -191,6 +193,7 @@ impl OutputResult {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 display_columns: None,
+                display_column_labels: None,
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: false,
