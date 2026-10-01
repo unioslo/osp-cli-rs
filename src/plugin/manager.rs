@@ -902,11 +902,6 @@ impl PluginManager {
         self
     }
 
-    /// Returns whether fallback discovery through the process `PATH` is enabled.
-    pub fn path_discovery_enabled(&self) -> bool {
-        self.allow_path_discovery
-    }
-
     pub(crate) fn with_command_preferences(
         mut self,
         preferences: PluginCommandPreferences,
