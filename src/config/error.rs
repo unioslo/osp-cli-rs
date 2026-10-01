@@ -36,6 +36,27 @@ impl TomlParseDiagnostic {
         self
     }
 
+    /// Records a safe line and column without retaining the source document.
+    pub(crate) fn with_location_from_source(
+        mut self,
+        source_text: &str,
+        span: Option<Range<usize>>,
+    ) -> Self {
+        if let Some(start) = span.map(|span| span.start.min(source_text.len()))
+            && let Some(prefix) = source_text.get(..start)
+        {
+            let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+            let column = prefix
+                .rsplit_once('\n')
+                .map_or(prefix, |(_, tail)| tail)
+                .chars()
+                .count()
+                + 1;
+            self.message = format!("{} at line {line}, column {column}", self.message);
+        }
+        self
+    }
+
     /// Returns the parser message without rendering additional context.
     #[must_use]
     pub fn message(&self) -> &str {

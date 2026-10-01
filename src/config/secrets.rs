@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::{
     ConfigError, ConfigLayer, ConfigLoader, ConfigSchema, ConfigValue, EnvSecretsLoader,
     LoadedLayers, RuntimeConfigPaths, Scope, SecretsTomlLoader, TomlEditResult,
-    TomlStoreEditOptions, normalize_scope, set_scoped_value_in_toml, unset_scoped_value_in_toml,
-    validate_key_scope, write_text_atomic,
+    TomlStoreEditOptions, lock_file_transaction, normalize_scope, set_scoped_value_in_toml,
+    unset_scoped_value_in_toml, validate_key_scope, write_text_atomic,
 };
 
 const KEYRING_INDEX_VERSION: u32 = 1;
@@ -390,6 +390,15 @@ impl KeyringSecretStore {
         }
     }
 
+    fn lock_transaction(&self) -> Result<std::fs::File, ConfigError> {
+        lock_file_transaction(&self.index_path).map_err(|err| {
+            secret_error(
+                "keyring",
+                format!("failed to lock {}: {err}", self.index_path.display()),
+            )
+        })
+    }
+
     fn load_layer(&self) -> Result<ConfigLayer, ConfigError> {
         let index = self.read_index()?;
         let mut layer = ConfigLayer::default();
@@ -419,6 +428,7 @@ impl KeyringSecretStore {
     ) -> Result<SecretStoreEditResult, ConfigError> {
         let entry = KeyringIndexEntry::new(key, scope);
         let username = entry.username()?;
+        let _transaction_lock = (!dry_run).then(|| self.lock_transaction()).transpose()?;
         let previous_raw = self.credentials.get(KEYRING_SERVICE, &username)?;
         let previous = previous_raw.as_deref().map(decode_secret).transpose()?;
         if !dry_run {
@@ -452,6 +462,7 @@ impl KeyringSecretStore {
     ) -> Result<SecretStoreEditResult, ConfigError> {
         let entry = KeyringIndexEntry::new(key, scope);
         let username = entry.username()?;
+        let _transaction_lock = (!dry_run).then(|| self.lock_transaction()).transpose()?;
         let previous_raw = self.credentials.get(KEYRING_SERVICE, &username)?;
         let previous = previous_raw.as_deref().map(decode_secret).transpose()?;
         if !dry_run {

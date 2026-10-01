@@ -1522,14 +1522,21 @@ impl ConfigLayer {
     /// assert_eq!(layer.entries().len(), 2);
     /// ```
     pub fn from_toml_str(raw: &str) -> Result<Self, ConfigError> {
+        Self::from_toml_str_with_source(raw, true)
+    }
+
+    pub(crate) fn from_secret_toml_str(raw: &str) -> Result<Self, ConfigError> {
+        Self::from_toml_str_with_source(raw, false)
+    }
+
+    fn from_toml_str_with_source(raw: &str, include_source: bool) -> Result<Self, ConfigError> {
         let parsed = raw.parse::<toml::Value>().map_err(|err| {
-            ConfigError::TomlParse(
-                crate::config::TomlParseDiagnostic::new(err.message()).with_source(
-                    "config layer",
-                    raw.to_string(),
-                    err.span(),
-                ),
-            )
+            let diagnostic = crate::config::TomlParseDiagnostic::new(err.message());
+            ConfigError::TomlParse(if include_source {
+                diagnostic.with_source("config layer", raw.to_string(), err.span())
+            } else {
+                diagnostic.with_location_from_source(raw, err.span())
+            })
         })?;
 
         let root = parsed.as_table().ok_or(ConfigError::TomlRootMustBeTable)?;
