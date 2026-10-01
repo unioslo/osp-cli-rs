@@ -171,6 +171,11 @@ Backbone behavior:
 }
 ```
 
+For external plugin and native response failures, `osp --json` preserves the
+producer's complete `error` object, including structured `details`, alongside
+the output data and messages. Human diagnostics keep backend details behind
+the normal verbosity gate.
+
 ## Exit Code Guidance
 
 - Inside the plugin process, use exit code `0` for successful protocol
