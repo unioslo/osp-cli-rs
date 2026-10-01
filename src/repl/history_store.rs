@@ -708,14 +708,15 @@ impl OspHistoryStore {
         HistoryItemId::new(self.records.len() as i64 - 1)
     }
 
-    /// Removes records by index; callers pass distinct indices of existing records.
+    /// Removes records by index; callers pass sorted, distinct existing indices.
     fn remove_records(&mut self, indices: &[usize]) -> Result<usize> {
         if indices.is_empty() {
             return Ok(0);
         }
+        let mut removals = indices.iter().copied().peekable();
         let mut index = 0usize;
         self.records.retain(|_| {
-            let keep = !indices.contains(&index);
+            let keep = removals.next_if_eq(&index).is_none();
             index += 1;
             keep
         });
