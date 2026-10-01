@@ -386,6 +386,7 @@ fn ui2_terminal_table_honors_column_alignment_metadata_unit() {
             unix_timestamp_columns: Vec::new(),
             display_rules: Vec::new(),
             display_columns: None,
+            display_column_labels: None,
             column_align: vec![
                 ColumnAlignment::Left,
                 ColumnAlignment::Right,
@@ -422,6 +423,7 @@ fn ui2_markdown_table_honors_column_alignment_metadata_unit() {
             unix_timestamp_columns: Vec::new(),
             display_rules: Vec::new(),
             display_columns: None,
+            display_column_labels: None,
             column_align: vec![
                 ColumnAlignment::Left,
                 ColumnAlignment::Right,
@@ -745,6 +747,7 @@ fn ui_grouped_outputs_lower_and_render_with_one_group_owner_unit() {
             unix_timestamp_columns: Vec::new(),
             display_rules: Vec::new(),
             display_columns: None,
+            display_column_labels: None,
             column_align: Vec::new(),
             wants_copy: false,
             grouped: true,

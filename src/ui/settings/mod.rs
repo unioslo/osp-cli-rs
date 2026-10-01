@@ -1171,6 +1171,7 @@ mod tests {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 display_columns: None,
+                display_column_labels: None,
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: true,

@@ -311,7 +311,7 @@ repl.intro = "none"
         ),
         &["--user", "anonymous", "--no-env", "--value", "intro"],
     );
-    assert!(none.trim().is_empty(), "{none:?}");
+    assert_eq!(none.trim(), "No results.", "{none:?}");
 
     let minimal = run_cli_stdout_with_config(
         Some(

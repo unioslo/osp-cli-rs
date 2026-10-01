@@ -15,7 +15,7 @@ fn history_list_is_available_outside_repl_contract() {
     cmd.assert()
         .success()
         .stderr(predicate::str::is_empty())
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::eq("No results.\n"));
 
     // Empty history remains a usable collection in a one-shot pipeline.
     let output = Command::new(assert_cmd::cargo::cargo_bin!("osp"))

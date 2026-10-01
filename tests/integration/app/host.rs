@@ -364,10 +364,13 @@ fn app_host_keeps_orch_documents_pipeable_while_rendering_curated_rows() {
         )
         .expect("curated human output should render");
     assert_eq!(exit, 0);
-    assert!(human.stdout.contains("name"));
-    assert!(human.stdout.contains("provider.name"));
-    assert!(human.stdout.contains("4 CPU / 8 GiB"));
-    assert!(human.stdout.contains("db01.uio.no (stale)"));
+    assert!(human.stdout.contains("NAME"));
+    assert!(human.stdout.contains("PROVIDER"));
+    assert!(!human.stdout.contains("provider.name"));
+    assert!(human.stdout.contains("4 CPU / 8"));
+    assert!(human.stdout.contains("GiB"));
+    assert!(human.stdout.contains("db01.uio.no"));
+    assert!(human.stdout.contains("(stale)"));
     assert!(!human.stdout.contains("powered_on"));
     assert!(!human.stdout.contains("next_cursor"));
     assert!(human.stderr.contains("Results are incomplete"));

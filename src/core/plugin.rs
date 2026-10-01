@@ -566,8 +566,8 @@ pub struct ResponseMetaV1 {
     /// Human-only field decorations; canonical JSON and DSL values stay unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display_rules: Vec<crate::core::output_model::DisplayRule>,
-    /// Producer labels retained in the response metadata. Human headings use the
-    /// canonical `columns` paths so display and filter keys stay discoverable.
+    /// Optional human headings aligned with `columns`. JSON and DSL keys remain
+    /// the canonical column paths.
     #[serde(default)]
     pub column_labels: Vec<String>,
     /// Top-level `data` field whose array supplies canonical rows for display and DSL.

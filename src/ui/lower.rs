@@ -67,6 +67,20 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
         return lower_presentation_lines(&output.meta.presentation_lines, plan.settings.width);
     }
 
+    let is_empty = match &output.items {
+        OutputItems::Rows(rows) => rows.is_empty() || rows.iter().all(Row::is_empty),
+        OutputItems::Groups(groups) => groups.is_empty(),
+    };
+    if plan.format != OutputFormat::Json && is_empty {
+        return Doc {
+            blocks: vec![Block::Paragraph(ParagraphBlock {
+                text: "No results.".to_string(),
+                indent: 0,
+                inline_markup: false,
+            })],
+        };
+    }
+
     let guide = GuideView::try_from_output_result(output);
 
     // Human projection is deliberately downstream of filtering and JSON output.
@@ -393,11 +407,18 @@ fn display_output(output: &OutputResult) -> OutputResult {
                 }
             }
             *row = if let Some(columns) = &output.meta.display_columns {
+                let labels = output
+                    .meta
+                    .display_column_labels
+                    .as_ref()
+                    .filter(|labels| labels.len() == columns.len());
                 columns
                     .iter()
-                    .map(|path| {
+                    .enumerate()
+                    .map(|(index, path)| {
                         let value = display_path(&original, path);
-                        (path.clone(), value.cloned().unwrap_or(Value::Null))
+                        let label = labels.and_then(|labels| labels.get(index)).unwrap_or(path);
+                        (label.clone(), value.cloned().unwrap_or(Value::Null))
                     })
                     .collect()
             } else {
@@ -405,7 +426,13 @@ fn display_output(output: &OutputResult) -> OutputResult {
             };
         }
         if let Some(columns) = &output.meta.display_columns {
-            display.meta.key_index = columns.clone();
+            display.meta.key_index = output
+                .meta
+                .display_column_labels
+                .as_ref()
+                .filter(|labels| labels.len() == columns.len())
+                .cloned()
+                .unwrap_or_else(|| columns.clone());
         }
     }
     display
@@ -1211,21 +1238,48 @@ fn table_from_rows(
     key_index: &[String],
     column_align: &[ColumnAlignment],
 ) -> TableBlock {
-    let headers = headers_for_rows(rows, key_index);
-    let normalized_align = normalize_table_alignment(headers.len(), column_align);
+    let all_headers = headers_for_rows(rows, key_index);
+    let all_rows = rows
+        .iter()
+        .map(|row| {
+            all_headers
+                .iter()
+                .map(|header| row.get(header).map(display_value).unwrap_or_default())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut visible_columns = (0..all_headers.len())
+        .filter(|index| {
+            all_rows.iter().any(|row| {
+                row.get(*index)
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+        })
+        .collect::<Vec<_>>();
+    if visible_columns.is_empty() && !all_headers.is_empty() {
+        // A nonempty row still represents a result even when every value is blank.
+        visible_columns.push(0);
+    }
+    let all_align = normalize_table_alignment(all_headers.len(), column_align);
     TableBlock {
         summary: Vec::new(),
-        rows: rows
+        headers: visible_columns
             .iter()
+            .map(|index| all_headers[*index].clone())
+            .collect(),
+        rows: all_rows
+            .into_iter()
             .map(|row| {
-                headers
+                visible_columns
                     .iter()
-                    .map(|header| row.get(header).map(display_value).unwrap_or_default())
+                    .map(|index| row[*index].clone())
                     .collect()
             })
             .collect(),
-        headers,
-        column_align: normalized_align,
+        column_align: visible_columns
+            .iter()
+            .map(|index| all_align[*index])
+            .collect(),
     }
 }
 

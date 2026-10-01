@@ -154,6 +154,7 @@ pub(crate) fn run_compiled(
         if !stage.behavior().preserves_render_recommendation {
             output.meta.render_recommendation = None;
             output.meta.display_columns = None;
+            output.meta.display_column_labels = None;
             output.meta.column_align.clear();
             output.meta.unix_timestamp_columns.clear();
             output.meta.display_rules.clear();
