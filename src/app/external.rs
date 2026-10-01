@@ -272,7 +272,7 @@ fn run_external_command_with_help_renderer_and_progress_inner(
                     refreshed_policy = Some(clients.native_commands().command_policy_registry());
                 }
             }
-            let args = canonical_args.as_slice();
+            let parsed_args = canonical_args.as_slice();
             // A successful clap parse is authoritative for aliases, option
             // values, and the selected nested command. The describe payload
             // is only a conservative fallback for non-help errors. Clap does
@@ -281,15 +281,15 @@ fn run_external_command_with_help_renderer_and_progress_inner(
             let (path, path_ambiguous) = match native_parse.as_ref() {
                 Ok(matches) => (native_path_from_matches(&command, matches), false),
                 Err(error) if is_native_help_error(error.kind()) => (
-                    native_help_path(native_command.as_ref(), &command, args, &description),
+                    native_help_path(native_command.as_ref(), &command, parsed_args, &description),
                     false,
                 ),
                 Err(_) => {
-                    let resolved = description.resolve_invocation(args);
+                    let resolved = description.resolve_invocation(parsed_args);
                     (resolved.path, resolved.ambiguous)
                 }
             };
-            let invocation_ends_at_command = args.len() + 1 == path.as_slice().len();
+            let invocation_ends_at_command = parsed_args.len() + 1 == path.as_slice().len();
             if let Err(err) = native_parse {
                 if is_native_help_error(err.kind()) {
                     mark_repl_command_accepted(&mut accepted);
@@ -310,7 +310,54 @@ fn run_external_command_with_help_renderer_and_progress_inner(
                             policy,
                         )?;
                     }
-                    return Ok(CliCommandResult::guide(guide_help(&err.to_string())));
+                    let mut help = err.to_string();
+                    match native_command
+                        .prepare_invocation_metadata(args, runtime.config.resolved())
+                    {
+                        Ok(true) => match native_command.normalize_args(args) {
+                            Ok(refreshed_args) => {
+                                let refreshed_description = native_command.describe();
+                                let refreshed_parse =
+                                    native_command.command().try_get_matches_from(
+                                        std::iter::once(command.clone())
+                                            .chain(refreshed_args.iter().cloned()),
+                                    );
+                                if let Err(refreshed_error) = refreshed_parse
+                                    && is_native_help_error(refreshed_error.kind())
+                                {
+                                    let refreshed_path = native_help_path(
+                                        native_command.as_ref(),
+                                        &command,
+                                        &refreshed_args,
+                                        &refreshed_description,
+                                    );
+                                    let policy =
+                                        clients.native_commands().command_policy_registry();
+                                    ensure_external_path_access_with_policy(
+                                        runtime,
+                                        session,
+                                        &refreshed_path,
+                                        ExternalPathAccessRequirement::Visible,
+                                        "command",
+                                        &policy,
+                                    )?;
+                                    help = refreshed_error.to_string();
+                                }
+                            }
+                            Err(error) => tracing::debug!(
+                                command = %command,
+                                error = %error,
+                                "refreshed native help arguments could not be normalized"
+                            ),
+                        },
+                        Ok(false) => {}
+                        Err(error) => tracing::debug!(
+                            command = %command,
+                            error = %error,
+                            "native help metadata refresh failed; using cached help"
+                        ),
+                    }
+                    return Ok(CliCommandResult::guide(guide_help(&help)));
                 }
                 if path_ambiguous
                     || described_path_has_subcommands(&description, &path)
@@ -345,7 +392,7 @@ fn run_external_command_with_help_renderer_and_progress_inner(
                 runtime,
                 session,
                 NativeRunInput {
-                    args,
+                    args: parsed_args,
                     stages: &parsed.stages,
                     invocation,
                     elevation: parsed.elevation,

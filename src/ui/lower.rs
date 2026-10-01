@@ -399,7 +399,21 @@ fn display_output(output: &OutputResult) -> OutputResult {
                         if let Some(value) = display_path_mut(&mut original, field)
                             && let Some(bytes) = value.as_u64()
                         {
-                            *value = Value::String(byte_size_display(bytes));
+                            *value = Value::String(super::format_binary_bytes(bytes));
+                        }
+                    }
+                    DisplayRule::RelativeTimestamp { field } => {
+                        if let Some(value) = display_path_mut(&mut original, field) {
+                            let formatted = match value {
+                                Value::String(text) => super::format_relative_timestamp(text),
+                                Value::Number(number) => {
+                                    number.as_i64().map(super::format_relative_unix_timestamp)
+                                }
+                                _ => None,
+                            };
+                            if let Some(formatted) = formatted {
+                                *value = Value::String(formatted);
+                            }
                         }
                     }
                     _ => {}
@@ -408,9 +422,9 @@ fn display_output(output: &OutputResult) -> OutputResult {
             for path in &output.meta.unix_timestamp_columns {
                 if let Some(value) = display_path_mut(&mut original, path)
                     && let Some(seconds) = value.as_i64()
-                    && let Some(time) = chrono::DateTime::from_timestamp(seconds, 0)
+                    && let Some(time) = super::format_local_unix_timestamp(seconds)
                 {
-                    *value = Value::String(time.to_rfc3339());
+                    *value = Value::String(time);
                 }
             }
             *row = if let Some(columns) = &output.meta.display_columns {
@@ -443,24 +457,6 @@ fn display_output(output: &OutputResult) -> OutputResult {
         }
     }
     display
-}
-
-fn byte_size_display(bytes: u64) -> String {
-    for (unit, divisor) in [
-        ("TiB", 1_u64 << 40),
-        ("GiB", 1_u64 << 30),
-        ("MiB", 1_u64 << 20),
-        ("KiB", 1_u64 << 10),
-    ] {
-        if bytes >= divisor {
-            return if bytes.is_multiple_of(divisor) {
-                format!("{} {unit}", bytes / divisor)
-            } else {
-                format!("{:.1} {unit}", bytes as f64 / divisor as f64)
-            };
-        }
-    }
-    format!("{bytes} B")
 }
 
 fn display_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
@@ -1406,13 +1402,7 @@ fn display_value(value: &Value) -> String {
         Value::Null => String::new(),
         Value::Bool(flag) => flag.to_string(),
         Value::Number(number) => number.to_string(),
-        Value::String(text) => chrono::DateTime::parse_from_rfc3339(text)
-            .map(|time| {
-                time.with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d %H:%M:%S %:z")
-                    .to_string()
-            })
-            .unwrap_or_else(|_| text.clone()),
+        Value::String(text) => super::format_local_timestamp(text).unwrap_or_else(|| text.clone()),
         Value::Array(items) => items
             .iter()
             .map(display_value)
