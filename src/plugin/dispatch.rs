@@ -405,27 +405,37 @@ fn run_command_with_timeout(
 
     let mut child = DrainedChild::spawn(command).map_err(CommandRunError::Execute)?;
     let deadline = Instant::now() + timeout.max(Duration::from_millis(1));
+    let mut status = None;
 
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let output = child.finish(status).map_err(CommandRunError::Execute)?;
-                return output.into_result();
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(found) => status = found,
+                Err(source) => return Err(CommandRunError::Execute(source)),
             }
-            Ok(None) if Instant::now() < deadline => {
-                thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
-            }
-            Ok(None) => {
-                terminate_timed_out_child(child.child_mut());
-                let status = child.wait().map_err(CommandRunError::Execute)?;
-                let output = child.finish(status).map_err(CommandRunError::Execute)?;
-                return Err(CommandRunError::TimedOut {
-                    timeout,
-                    stderr: output.stderr.bytes,
-                });
-            }
-            Err(source) => return Err(CommandRunError::Execute(source)),
         }
+
+        if let Some(status) = status
+            && child.lifetime_finished()
+        {
+            let output = child.finish(status).map_err(CommandRunError::Execute)?;
+            return output.into_result();
+        }
+
+        if Instant::now() >= deadline {
+            terminate_timed_out_child(child.child_mut());
+            let status = match status {
+                Some(status) => status,
+                None => child.wait().map_err(CommandRunError::Execute)?,
+            };
+            let output = child.finish(status).map_err(CommandRunError::Execute)?;
+            return Err(CommandRunError::TimedOut {
+                timeout,
+                stderr: output.stderr.bytes,
+            });
+        }
+
+        thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
     }
 }
 
@@ -500,6 +510,12 @@ impl DrainedChild {
 
     fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         self.child.wait()
+    }
+
+    fn lifetime_finished(&self) -> bool {
+        self.stdout.is_finished()
+            && self.stderr.is_finished()
+            && process_group_finished(self.child.id())
     }
 
     fn finish(self, status: ExitStatus) -> std::io::Result<DrainedOutput> {
@@ -579,6 +595,16 @@ fn configure_command_process_group(command: &mut Command) {
 fn configure_command_process_group(_command: &mut Command) {}
 
 #[cfg(unix)]
+fn process_group_finished(process_group: u32) -> bool {
+    !process_group_exists(process_group as i32)
+}
+
+#[cfg(not(unix))]
+fn process_group_finished(_process_group: u32) -> bool {
+    true
+}
+
+#[cfg(unix)]
 fn terminate_timed_out_child(child: &mut Child) {
     const SIGTERM: i32 = 15;
     const SIGKILL: i32 = 9;
@@ -587,17 +613,16 @@ fn terminate_timed_out_child(child: &mut Child) {
     let _ = signal_process_group(process_group, SIGTERM);
     let grace_deadline = Instant::now() + Duration::from_millis(50);
 
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) if Instant::now() < grace_deadline => {
-                thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
-            }
-            Ok(None) | Err(_) => break,
+    while Instant::now() < grace_deadline {
+        if !process_group_exists(process_group) {
+            return;
         }
+        thread::sleep(PROCESS_WAIT_POLL_INTERVAL);
     }
 
-    let _ = signal_process_group(process_group, SIGKILL);
+    if process_group_exists(process_group) {
+        let _ = signal_process_group(process_group, SIGKILL);
+    }
 }
 
 #[cfg(not(unix))]
@@ -617,4 +642,11 @@ fn signal_process_group(process_group: i32, signal: i32) -> std::io::Result<()> 
     } else {
         Err(std::io::Error::last_os_error())
     }
+}
+
+#[cfg(unix)]
+fn process_group_exists(process_group: i32) -> bool {
+    signal_process_group(process_group, 0)
+        .map(|()| true)
+        .unwrap_or_else(|err| err.raw_os_error() != Some(libc::ESRCH))
 }
