@@ -327,6 +327,9 @@ When implementing native commands:
 - command implementations should consume a `NativeCommandContext`
 - long-running commands should emit `NativeProgressEvent` values through the
   context rather than writing directly to stdio
+- use `presentation_lines` with `progress_replace: true` for transient status;
+  a single rendered line animates on interactive stderr and clears when the
+  command finishes or presents another document
 - call `context.flush_progress()` before blocking for input, and use
   `context.present(...)` for notices and confirmations that must remain visible
   outside result-stream DSL filters; contexts without a progress sink make

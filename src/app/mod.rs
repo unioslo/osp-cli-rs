@@ -124,7 +124,7 @@ pub use session::{
     AppSession, AppState, AppStateBuilder, DebugTimingBadge, DebugTimingState, LastFailure,
     ReplScopeFrame, ReplScopeStack,
 };
-pub use sink::{BufferedUiSink, StdIoUiSink, UiSink};
+pub use sink::{BufferedUiSink, StdIoUiSink, StderrSpinner, UiSink};
 
 #[derive(Clone, Default)]
 pub(crate) struct AppDefinition {

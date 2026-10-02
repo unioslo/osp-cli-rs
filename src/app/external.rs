@@ -515,7 +515,15 @@ fn run_native_command(
         config: runtime.config.resolved(),
         ui: &input.invocation.ui,
         stages: input.stages,
-        sink: RefCell::new(ProgressUiSink::new(sink)),
+        sink: RefCell::new(ProgressUiSink::new(
+            sink,
+            input
+                .invocation
+                .ui
+                .render_settings
+                .resolve_render_settings()
+                .unicode,
+        )),
         pending: RefCell::new(None),
         last_draw: std::cell::Cell::new(None),
     });
