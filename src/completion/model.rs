@@ -649,13 +649,14 @@ impl CompletionNode {
     ///     CompletionNode, ContextScope, FlagNode, SuggestionEntry, ValueType,
     /// };
     ///
-    /// let flag = FlagNode::new()
+    /// let mut flag = FlagNode::new()
     ///     .tooltip("Provider")
     ///     .flag_only()
     ///     .multi()
-    ///     .context_only(ContextScope::Global)
     ///     .value_type(ValueType::Path)
     ///     .suggestions([SuggestionEntry::from("alpha")]);
+    /// flag.context_only = true;
+    /// flag.context_scope = ContextScope::Global;
     ///
     /// let node = CompletionNode::default()
     ///     .sort("01")
