@@ -253,6 +253,21 @@ Secrets are stored in a separate backend:
   main config store.
 - Secrets are wrapped in a redacted type for diagnostics.
 
+Import a value without putting it in shell history or process arguments:
+
+```bash
+osp config set extensions.example.token --secrets --from-file ~/token
+pass show example | osp config set extensions.example.token --secrets --from-file -
+```
+
+`--from-file PATH` reads a UTF-8 file once; `-` reads stdin until EOF. It is
+mutually exclusive with a positional value. Only trailing CR/LF characters
+are removed; other whitespace is preserved. The normal schema validation,
+scoping and store selection still apply. With `--secrets`, the selected file
+or keyring backend owns the value. Without it, the sensitive-key warning
+still applies. The source file is never consulted again; repeat the import
+to rotate the value.
+
 No secret defaults are allowed in code. Missing secrets must surface as
 clear config errors.
 

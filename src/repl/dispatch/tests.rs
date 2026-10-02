@@ -155,7 +155,8 @@ fn repl_restart_detection_covers_mutating_commands_unit() {
     let config_set = Commands::Config(ConfigArgs {
         command: ConfigCommands::Set(ConfigSetArgs {
             key: "ui.format".to_string(),
-            value: "json".to_string(),
+            value: Some("json".to_string()),
+            from_file: None,
             scope: crate::cli::ConfigScopeArgs::default(),
             store: crate::cli::ConfigStoreArgs::default(),
             dry_run: false,

@@ -195,7 +195,8 @@ fn run_alias_add(
         context,
         ConfigSetArgs {
             key,
-            value: args.template,
+            value: Some(args.template),
+            from_file: None,
             scope: args.scope,
             store: args.store,
             dry_run: args.dry_run,
@@ -509,12 +510,57 @@ fn run_config_set(
     let key = args.key.trim().to_ascii_lowercase();
     let schema = ConfigSchema::default();
     schema.validate_writable_key(&key).into_diagnostic()?;
+    let input = match (&args.value, &args.from_file) {
+        (Some(value), None) => value.clone(),
+        (None, Some(path)) => {
+            let content = if path == std::path::Path::new("-") {
+                use std::io::Read;
+                let mut content = String::new();
+                std::io::stdin()
+                    .lock()
+                    .read_to_string(&mut content)
+                    .into_diagnostic()
+                    .wrap_err("failed to read config value from stdin")?;
+                content
+            } else {
+                let path = path
+                    .to_str()
+                    .and_then(|path| path.strip_prefix("~/"))
+                    .map(|relative| {
+                        crate::config::default_home_dir()
+                            .map(|home| home.join(relative))
+                            .ok_or_else(|| miette!("unable to locate home directory"))
+                    })
+                    .transpose()?
+                    .unwrap_or_else(|| path.clone());
+                std::fs::read_to_string(&path)
+                    .into_diagnostic()
+                    .wrap_err_with(|| {
+                        format!("failed to read config value from {}", path.display())
+                    })?
+            };
+            content.trim_end_matches(['\r', '\n']).to_owned()
+        }
+        _ => return Err(miette!("provide either a value or --from-file PATH")),
+    };
     let value = schema
-        .parse_input_value(&key, &args.value)
-        .into_diagnostic()
+        .parse_input_value(&key, &input)
+        .map_err(|err| {
+            if args.from_file.is_some() {
+                miette!("imported value is invalid for key `{key}`")
+            } else {
+                miette::Report::new(err)
+            }
+        })
         .wrap_err("invalid value for key")?;
     validate_bootstrap_value(&key, &value)
-        .into_diagnostic()
+        .map_err(|err| {
+            if args.from_file.is_some() {
+                miette!("imported bootstrap value is invalid for key `{key}`")
+            } else {
+                miette::Report::new(err)
+            }
+        })
         .wrap_err("invalid bootstrap value")?;
     let read = context.read();
     let target = ConfigWriteTarget::from_set_args(&args).with_default(read);
@@ -681,7 +727,10 @@ fn run_config_set(
             let mut command = format!(
                 "config set {} {} --permanent",
                 escape_for_shell(&key),
-                escape_for_shell(&args.value)
+                args.from_file.as_ref().map_or_else(
+                    || escape_for_shell(&input),
+                    |path| format!("--from-file {}", escape_for_shell(&path.to_string_lossy())),
+                )
             );
             if let Some(profile) = &scope.profile {
                 command.push_str(&format!(" --profile {}", escape_for_shell(profile)));
