@@ -899,11 +899,14 @@ fn terse_clap_error(error: &clap::Error) -> String {
         .unwrap_or(first)
         .trim()
         .to_string();
-    if error.kind() == clap::error::ErrorKind::MissingRequiredArgument
-        && let Some(argument) = lines.find(|line| line.starts_with(['<', '-']))
-    {
-        terse.push(' ');
-        terse.push_str(argument);
+    if error.kind() == clap::error::ErrorKind::MissingRequiredArgument {
+        for argument in lines
+            .take_while(|line| !line.starts_with("Usage:"))
+            .filter(|line| line.starts_with(['<', '-']))
+        {
+            terse.push(' ');
+            terse.push_str(argument);
+        }
     }
     terse
 }
