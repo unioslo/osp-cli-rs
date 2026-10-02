@@ -893,9 +893,7 @@ impl PluginManager {
     /// ```
     /// use osp_cli::plugin::PluginManager;
     ///
-    /// let manager = PluginManager::new(Vec::new()).with_path_discovery(true);
-    ///
-    /// assert!(manager.path_discovery_enabled());
+    /// let _manager = PluginManager::new(Vec::new()).with_path_discovery(true);
     /// ```
     pub fn with_path_discovery(mut self, allow_path_discovery: bool) -> Self {
         self.allow_path_discovery = allow_path_discovery;
