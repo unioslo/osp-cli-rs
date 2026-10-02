@@ -80,7 +80,9 @@ pub use settings::{
 };
 pub(crate) use settings::{build_presentation_defaults_layer, explain_presentation_effect};
 pub use style::{StyleOverrides, StyleToken, ThemeStyler};
-pub(crate) use text::{display_width, visible_inline_text};
+pub(crate) use text::{
+    crop_display_width, display_width, sanitize_human_text, visible_inline_text,
+};
 pub use theme::DEFAULT_THEME_NAME;
 pub use theme_catalog as theme_loader;
 
