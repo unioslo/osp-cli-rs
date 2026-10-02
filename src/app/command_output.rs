@@ -804,7 +804,7 @@ pub(crate) fn render_saved_repl_output_with_runtime(
             })
         }
         ReplCommandOutput::Text(_) | ReplCommandOutput::Json(_) => {
-            if stages.is_empty() {
+            if stages.is_empty() && !runtime.ui().render_settings.format_explicit {
                 return Ok(render_repl_output_with_runtime(runtime, output));
             }
             let context = if matches!(output, ReplCommandOutput::Text(_)) {

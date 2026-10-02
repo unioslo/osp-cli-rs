@@ -361,6 +361,20 @@ fn classify_repl_line(
         return Ok(plan);
     }
 
+    // Invocation flags and aliases may precede last, which remains global even
+    // inside a product shell. Its cached output uses normal parsing/rendering.
+    if scan_command_tokens(&parsed.dispatch_tokens)?
+        .tokens
+        .first()
+        .map(String::as_str)
+        == Some("last")
+    {
+        return Ok(ReplLinePlan::Builtin {
+            raw: line.to_string(),
+            builtin: ReplBuiltin::Last,
+        });
+    }
+
     // 4. Resolve the remaining line as ordinary command/help dispatch.
     classify_repl_command_plan(runtime, session, parsed)
 }
