@@ -14,7 +14,7 @@ use super::shell::{handle_repl_exit_request, render_repl_help_for_scope};
 pub(super) enum ReplBuiltin {
     Help,
     Exit,
-    Last { raw: bool },
+    Last,
     Pagination(PaginationDirection),
     Source(SourceCommand),
     Bang(BangCommand),
@@ -62,7 +62,7 @@ pub(super) fn execute_repl_builtin(
             sink,
         )?)),
         ReplBuiltin::Exit => Ok(handle_repl_exit_request(session)),
-        ReplBuiltin::Last { raw } => execute_last_result_builtin(runtime, session, raw),
+        ReplBuiltin::Last => execute_last_result_builtin(runtime, session, raw),
         ReplBuiltin::Pagination(direction) => {
             execute_pagination_builtin(runtime, session, clients, history, direction, sink)
         }
@@ -90,8 +90,8 @@ pub(super) fn parse_repl_builtin(raw: &str) -> Result<Option<ReplBuiltin>> {
     if raw == "prev" {
         return Ok(Some(ReplBuiltin::Pagination(PaginationDirection::Previous)));
     }
-    if let Some(raw) = parse_last_builtin(raw)? {
-        return Ok(Some(ReplBuiltin::Last { raw }));
+    if raw.split_whitespace().next() == Some("last") {
+        return Ok(Some(ReplBuiltin::Last));
     }
     if let Some(command) = parse_source_builtin(raw)? {
         return Ok(Some(ReplBuiltin::Source(command)));
@@ -271,19 +271,6 @@ fn source_help() -> String {
         .to_string()
 }
 
-fn parse_last_builtin(raw: &str) -> Result<Option<bool>> {
-    let mut parts = raw.split_whitespace();
-    if parts.next() != Some("last") {
-        return Ok(None);
-    }
-
-    match (parts.next(), parts.next()) {
-        (None, None) => Ok(Some(false)),
-        (Some("--raw"), None) => Ok(Some(true)),
-        _ => Err(miette!("`last` only supports the optional `--raw` flag")),
-    }
-}
-
 pub(super) fn parse_bang_command(raw: &str) -> Result<Option<BangCommand>> {
     let Some((_, raw)) = split_bang_request(raw) else {
         return Ok(None);
@@ -422,19 +409,49 @@ fn render_bang_help() -> String {
 fn execute_last_result_builtin(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
-    raw: bool,
+    line: &str,
 ) -> Result<ReplLineResult> {
+    let parsed = crate::repl::input::ReplParsedLine::parse(line, runtime.config.resolved())?;
+    let scanned = crate::cli::invocation::scan_command_tokens(&parsed.dispatch_tokens)?;
+    let command = clap::Command::new("last")
+        .about("Render the last successful result without running its command again")
+        .arg(
+            clap::Arg::new("raw")
+                .long("raw")
+                .action(clap::ArgAction::SetTrue)
+                .help("Start from the saved result before its original pipeline"),
+        )
+        .after_help(crate::cli::invocation::INVOCATION_HELP_SECTION);
+    let matches = match command.try_get_matches_from(scanned.tokens) {
+        Ok(matches) => matches,
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+            return Ok(ReplLineResult::Continue(error.to_string()));
+        }
+        Err(error) => return Err(miette!(error.to_string())),
+    };
     let Some(last) = session.last_success() else {
         return Ok(ReplLineResult::Continue(
             "No recorded successful REPL result in this session.\n".to_string(),
         ));
     };
-    let runtime = crate::app::CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui);
-    let rendered = if raw {
-        crate::app::render_repl_output_with_runtime(&runtime, &last.output)
+    let invocation = crate::app::resolve_invocation_ui(
+        runtime.config.resolved(),
+        &runtime.ui,
+        &scanned.invocation,
+    );
+    // Replay only saved data. New stages follow the original pipeline unless
+    // --raw explicitly selects its pre-pipeline input; neither replaces the cache.
+    let mut stages = if matches.get_flag("raw") {
+        Vec::new()
     } else {
-        crate::app::render_saved_repl_output_with_runtime(&runtime, &last.output, &last.stages)?
+        last.stages.clone()
     };
+    stages.extend(parsed.stages);
+    let rendered = crate::app::render_saved_repl_output_with_runtime(
+        &crate::app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
+        &last.output,
+        &stages,
+    )?;
     Ok(ReplLineResult::Continue(rendered))
 }
 
@@ -547,11 +564,11 @@ mod tests {
         ));
         assert!(matches!(
             parse_repl_builtin("last").expect("last"),
-            Some(super::ReplBuiltin::Last { raw: false })
+            Some(super::ReplBuiltin::Last)
         ));
         assert!(matches!(
             parse_repl_builtin("last --raw").expect("last raw"),
-            Some(super::ReplBuiltin::Last { raw: true })
+            Some(super::ReplBuiltin::Last)
         ));
         assert!(matches!(
             parse_repl_builtin("next").expect("next"),

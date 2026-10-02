@@ -236,11 +236,11 @@ fn repl_builtin_and_bang_parsers_cover_shortcuts_unit() {
     ));
     assert!(matches!(
         parse_repl_builtin("last").expect("last parses"),
-        Some(super::ReplBuiltin::Last { raw: false })
+        Some(super::ReplBuiltin::Last)
     ));
     assert!(matches!(
         parse_repl_builtin("last --raw").expect("last raw parses"),
-        Some(super::ReplBuiltin::Last { raw: true })
+        Some(super::ReplBuiltin::Last)
     ));
     assert!(matches!(
         parse_repl_builtin("!?ops").expect("contains parses"),

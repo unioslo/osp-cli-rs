@@ -80,6 +80,10 @@ For successful results, the REPL also keeps the last replayable output:
   - replay the last successful result with its original pipe stages
 - `last --raw`
   - show the pre-pipeline payload from that same successful command
+- `last | state`, `last --json`, `last --raw | P name`
+  - use normal output formats and DSL stages without another service request
+  - new stages follow the saved pipeline; `--raw` skips that saved pipeline
+  - replay keeps the saved result intact, so later `last` calls start from it
 - `doctor last`
   - stays failure-only
 

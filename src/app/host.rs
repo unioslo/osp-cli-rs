@@ -596,7 +596,9 @@ pub(crate) fn resolve_invocation_ui(
     invocation: &InvocationOptions,
 ) -> ResolvedInvocation {
     let mut render_settings = ui.render_settings.clone();
-    render_settings.format_explicit = invocation.format.is_some();
+    // A process-level format flag remains explicit until this command overrides it.
+    render_settings.format_explicit =
+        ui.render_settings.format_explicit || invocation.format.is_some();
     if let Some(format) = invocation.format {
         render_settings.format = format;
     }
