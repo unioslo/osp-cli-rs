@@ -12,6 +12,7 @@
 
 use nu_ansi_term::Style;
 use reedline::{Completer, Hinter, History, SearchQuery, Suggestion};
+use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
 
 use super::adapter::ReplCompleter;
@@ -79,21 +80,26 @@ impl ReplHinter {
         line: &str,
         pos: usize,
         candidates: &[Suggestion],
-    ) -> Option<(String, bool)> {
+    ) -> Option<(String, bool, Option<Range<usize>>)> {
         if line.trim().is_empty() {
             return None;
         }
         if let Some(problem) = self.highlighter.problem(line, pos) {
-            return Some((self.describe_problem(line, &problem), true));
+            return Some((self.describe_problem(line, &problem), true, None));
         }
 
         let analysis = self.completer.analyze(line, pos);
         let engine = self.completer.engine();
+        if !matches!(analysis.request, CompletionRequest::FlagValues { .. })
+            && let Some((usage, active)) = engine.positional_usage(&analysis)
+        {
+            return Some((usage, false, active));
+        }
         if !analysis.cursor.token_stub.is_empty()
             && let Some(candidate) = only_candidate(line, candidates)
             && let Some(description) = candidate.description.as_deref()
         {
-            return Some((format!("{}  {description}", candidate.value), false));
+            return Some((format!("{}  {description}", candidate.value), false, None));
         }
         if let CompletionRequest::FlagValues {
             flag_scope_path,
@@ -104,7 +110,7 @@ impl ReplHinter {
                 .node_at(flag_scope_path)
                 .and_then(|node| node.flags.get(flag))
                 .and_then(|meta| meta.tooltip.as_deref())?;
-            return Some((format!("{flag}  {tooltip}"), false));
+            return Some((format!("{flag}  {tooltip}"), false, None));
         }
 
         let path = &analysis.context.matched_path;
@@ -124,7 +130,7 @@ impl ReplHinter {
             status.push_str(" · needs ");
             status.push_str(&missing.join(", "));
         }
-        Some((status, false))
+        Some((status, false, None))
     }
 
     fn describe_problem(&mut self, line: &str, problem: &LineProblem) -> String {
@@ -189,14 +195,28 @@ impl Hinter for ReplHinter {
             _ => text.to_string(),
         };
         let mut out = paint(&self.inline, self.style);
-        if let Some((status, is_problem)) = self.status(line, pos, &candidates) {
+        if let Some((status, is_problem, active)) = self.status(line, pos, &candidates) {
             let style = if is_problem {
                 Some(self.error_style)
             } else {
                 self.style
             };
             out.push('\n');
-            out.push_str(&paint(&fit_terminal_width(&status), style));
+            let status = fit_terminal_width(&status);
+            if let Some(active) = active
+                .map(|range| range.start..range.end.min(status.len()))
+                .filter(|range| range.start < range.end && status.get(range.clone()).is_some())
+            {
+                let end = active.end;
+                out.push_str(&paint(&status[..active.start], style));
+                out.push_str(&paint(
+                    &status[active.start..end],
+                    style.map(|style| style.bold()),
+                ));
+                out.push_str(&paint(&status[end..], style));
+            } else {
+                out.push_str(&paint(&status, style));
+            }
         }
         out
     }
@@ -262,7 +282,7 @@ fn fit_terminal_width(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ReplHinter, only_extension};
-    use crate::completion::{CompletionNode, CompletionTree, FlagNode};
+    use crate::completion::{ArgNode, CompletionNode, CompletionTree, FlagNode, SuggestionEntry};
     use crate::repl::engine::adapter::ReplCompleter;
     use crate::repl::engine::editor::PaintedLine;
     use crate::repl::highlight::ReplHighlighter;
@@ -277,7 +297,25 @@ mod tests {
         .with_flag("--name", FlagNode::new().tooltip("VM name"));
         let vm = CompletionNode::default()
             .with_child("create", create)
-            .with_child("find", CompletionNode::default());
+            .with_child("find", CompletionNode::default())
+            .with_child(
+                "power",
+                CompletionNode {
+                    tooltip: Some("Control VM power".to_string()),
+                    args: vec![
+                        ArgNode {
+                            required: true,
+                            ..ArgNode::named("HOSTNAME")
+                        },
+                        ArgNode::named("OPERATION").suggestions([
+                            SuggestionEntry::value("on"),
+                            SuggestionEntry::value("off"),
+                        ]),
+                        ArgNode::named("EXTRA").multi(),
+                    ],
+                    ..CompletionNode::default()
+                },
+            );
         CompletionTree {
             root: CompletionNode::default()
                 .with_child("orch", CompletionNode::default().with_child("vm", vm)),
@@ -307,6 +345,29 @@ mod tests {
         let (inline, out) = paint("orch vm cr");
         assert_eq!(inline, "eate");
         assert_eq!(out, "eate\ncreate  Create a VM");
+        for (line, expected, slot) in [
+            (
+                "orch vm power ",
+                "\norch vm power <HOSTNAME> [OPERATION] [EXTRA]… · Control VM power",
+                "<HOSTNAME>",
+            ),
+            (
+                "orch vm power web01 ",
+                "\norch vm power HOSTNAME [OPERATION] [EXTRA]… · on | off",
+                "[OPERATION]",
+            ),
+            (
+                "orch vm power web01 on ",
+                "\norch vm power HOSTNAME OPERATION [EXTRA]… · Control VM power",
+                "[EXTRA]…",
+            ),
+        ] {
+            let (_, out) = paint(line);
+            assert_eq!(
+                out,
+                expected.replace(slot, &Style::new().bold().paint(slot).to_string())
+            );
+        }
     }
 
     #[test]

@@ -31,8 +31,13 @@ It does not call remote systems while you are pressing tab.
 - **Muted text after the cursor** suggests the rest of the line: the newest
   history entry that extends it, or the only completion for the current word.
   Right or End accepts it; Alt-Right accepts one word.
-- **The line under the prompt** says what the current command, flag, or word
-  means, which required flags are still missing, or why a word is wrong.
+- **The line under the prompt** shows the command's declared positional usage,
+  with the current slot in bold: `<NAME>` is required, `[NAME]` is optional,
+  and `…` permits repeated values. Filled slots use bare names. A `·` separates
+  usage from help or the current slot's choices (`on | off`, for example).
+  Flag values retain their own help. Commands without positional declarations
+  show their usual description and missing required flags. Errors name the
+  invalid word. The status stays on one terminal row.
 - **Red** marks the first word that cannot be valid: an unknown subcommand or
   flag. A word still being typed is not marked while it can grow into a valid
   one.

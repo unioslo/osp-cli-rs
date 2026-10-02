@@ -17,6 +17,7 @@ use crate::completion::{
 };
 use crate::core::fuzzy::fold_case;
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 /// High-level entry point for parsing and completing command lines.
 ///
@@ -163,6 +164,78 @@ impl CompletionEngine {
     /// Returns the tree node at an exact command path.
     pub(crate) fn node_at(&self, path: &[String]) -> Option<&CompletionNode> {
         TreeResolver::new(&self.tree).resolve_exact(path)
+    }
+
+    /// Positional usage and the byte range of the slot at the cursor.
+    ///
+    /// Filled slots use their bare names; remaining slots retain declared
+    /// requiredness and repetition. Commands without named positions fall back
+    /// to the caller's normal status. No flag signature is included.
+    pub(crate) fn positional_usage(
+        &self,
+        analysis: &CompletionAnalysis,
+    ) -> Option<(String, Option<Range<usize>>)> {
+        if matches!(analysis.request, CompletionRequest::Pipe) {
+            return None;
+        }
+        let path = &analysis.context.matched_path;
+        let node = self.node_at(path)?;
+        if path.is_empty() || node.args.is_empty() {
+            return None;
+        }
+        let index = positional_arg_index(
+            &analysis.parsed.cursor_cmd,
+            &analysis.cursor.token_stub,
+            path.len(),
+            node,
+        );
+        let active_index = match &analysis.request {
+            CompletionRequest::Positionals { arg_index, .. } => Some(*arg_index),
+            _ => None,
+        };
+        let mut text = path.join(" ");
+        let mut active = None;
+        for (slot, arg) in node.args.iter().enumerate() {
+            let name = arg.name.as_deref().filter(|name| !name.is_empty())?;
+            text.push(' ');
+            let start = text.len();
+            if slot < index {
+                text.push_str(name);
+            } else if arg.required {
+                text.push_str(&format!("<{name}>"));
+            } else {
+                text.push_str(&format!("[{name}]"));
+            }
+            if arg.multi {
+                text.push('…');
+            }
+            if active_index == Some(slot) {
+                active = Some(start..text.len());
+            }
+        }
+        let arg = active_index.and_then(|index| node.args.get(index));
+        let choices = arg.filter(|arg| !arg.suggestions.is_empty()).map(|arg| {
+            arg.suggestions
+                .iter()
+                .map(|entry| entry.value.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        });
+        let detail = choices.as_deref().or_else(|| {
+            if index > 0 {
+                arg.and_then(|arg| arg.tooltip.as_deref())
+                    .or(node.tooltip.as_deref())
+            } else {
+                node.tooltip
+                    .as_deref()
+                    .or_else(|| arg.and_then(|arg| arg.tooltip.as_deref()))
+            }
+        });
+        if let Some(detail) = detail {
+            text.push_str(" · ");
+            text.push_str(detail);
+        }
+        Some((text, active))
     }
 
     /// Required flags of the command at the cursor that the line still lacks.
