@@ -367,7 +367,19 @@ pub(crate) fn run_cli_command(
     if let Some(output) = result.output
         && (result.failure_report.is_none() || runtime.ui().message_verbosity >= MessageLevel::Info)
     {
-        render_cli_output(runtime, output, sink);
+        if result.failure_report.is_some()
+            || result
+                .messages
+                .entries()
+                .iter()
+                .any(|entry| entry.level == MessageLevel::Error)
+        {
+            // Human failure details must not contaminate redirected command data.
+            // Explicit JSON failures keep their stdout envelope above.
+            sink.write_stderr(&render_repl_output_with_runtime(runtime, &output));
+        } else {
+            render_cli_output(runtime, output, sink);
+        }
     }
     if let Some(stderr_text) = result.stderr_text
         && !stderr_text.is_empty()
