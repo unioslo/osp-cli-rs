@@ -504,6 +504,7 @@ fn flag_suggestions_preserve_meta_and_display_fields() {
                     meta: Some("1 vCPU".to_string()),
                     display: Some("small".to_string()),
                     sort: Some("10".to_string()),
+                    aliases: Vec::new(),
                 },
                 SuggestionEntry::from("m1.medium"),
             ],
@@ -545,12 +546,14 @@ fn arg_suggestions_honor_numeric_sort_after_match_score() {
                     meta: None,
                     display: None,
                     sort: Some("10".to_string()),
+                    aliases: Vec::new(),
                 },
                 SuggestionEntry {
                     value: "v2".to_string(),
                     meta: None,
                     display: None,
                     sort: Some("2".to_string()),
+                    aliases: Vec::new(),
                 },
             ],
             ..ArgNode::default()

@@ -149,8 +149,21 @@ fn plugin_sdk_metadata_flows_through_host_catalog_policy_and_dispatch_contract()
             SuggestionEntry::value("table").meta("Readable table"),
         ]
     );
-    for spelling in ["--fmt", "-f", "-o"] {
-        assert_eq!(&inspect.flags[spelling], format);
+    // The wire lists spellings without a preferred one; the host keeps the
+    // first long spelling and marks the rest as its aliases.
+    assert_eq!(inspect.flags["--fmt"].alias_of, None);
+    for spelling in ["--fmt", "--format", "-f", "-o"] {
+        let node = &inspect.flags[spelling];
+        assert_eq!(
+            &osp_cli::completion::FlagNode {
+                alias_of: format.alias_of.clone(),
+                ..node.clone()
+            },
+            format
+        );
+    }
+    for spelling in ["--format", "-f", "-o"] {
+        assert_eq!(inspect.flags[spelling].alias_of.as_deref(), Some("--fmt"));
     }
 
     let context = CommandPolicyContext::default()

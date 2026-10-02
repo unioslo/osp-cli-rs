@@ -119,6 +119,13 @@ pub(crate) fn repl_input_mode(config: &ResolvedConfig) -> ReplInputMode {
         .unwrap_or(ReplInputMode::Auto)
 }
 
+pub(crate) fn repl_tab_mode(config: &ResolvedConfig) -> crate::repl::ReplTabMode {
+    config
+        .get_string("repl.tab_mode")
+        .and_then(crate::repl::ReplTabMode::parse)
+        .unwrap_or(crate::repl::ReplTabMode::Tab)
+}
+
 const DEFAULT_MINIMAL_INTRO_TEMPLATE: &str =
     "Welcome {{display_name}}. v{{version}}. Commands: {{intro.commands}}. {{help_hint}}";
 const DEFAULT_COMPACT_INTRO_TEMPLATE: &str = "{{ help }}";
@@ -621,6 +628,8 @@ pub(crate) fn build_repl_appearance(view: ReplViewContext<'_>) -> ReplAppearance
         .with_completion_background_style(Some(completion_background_style))
         .with_completion_highlight_style(Some(completion_highlight_style))
         .with_command_highlight_style(Some(command_highlight_style))
+        .with_error_highlight_style(Some(theme.palette.error.to_string()))
+        .with_hint_style(Some(theme.palette.muted.to_string()))
         .with_history_menu_rows(history_menu_rows)
         .build()
 }

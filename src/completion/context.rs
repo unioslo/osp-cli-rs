@@ -563,9 +563,11 @@ impl<'a> ProviderSelection<'a> {
                                 .suggestions_by_provider
                                 .get(*provider)
                                 .is_some_and(|entries| {
-                                    entries
-                                        .iter()
-                                        .any(|entry| fold_case(&entry.value).starts_with(&value))
+                                    entries.iter().any(|entry| {
+                                        std::iter::once(&entry.value)
+                                            .chain(&entry.aliases)
+                                            .any(|spelling| fold_case(spelling).starts_with(&value))
+                                    })
                                 })
                     })
                     .collect::<BTreeSet<_>>();

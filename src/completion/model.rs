@@ -123,6 +123,11 @@ pub struct SuggestionEntry {
     pub display: Option<String>,
     /// Hidden sort key for cases where display order should differ from labels.
     pub sort: Option<String>,
+    /// Other spellings that select this value.
+    ///
+    /// Aliases are matched against typed input but never listed on their
+    /// own; accepting a match inserts `value`.
+    pub aliases: Vec<String>,
 }
 
 impl SuggestionEntry {
@@ -133,6 +138,7 @@ impl SuggestionEntry {
             meta: None,
             display: None,
             sort: None,
+            aliases: Vec::new(),
         }
     }
 
@@ -157,6 +163,12 @@ impl SuggestionEntry {
     /// If omitted, the suggestion carries no explicit sort hint.
     pub fn sort(mut self, sort: impl Into<String>) -> Self {
         self.sort = Some(sort.into());
+        self
+    }
+
+    /// Adds spellings that match this suggestion without being listed.
+    pub fn aliases(mut self, aliases: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.aliases.extend(aliases.into_iter().map(Into::into));
         self
     }
 }
@@ -397,6 +409,8 @@ pub struct ArgNode {
     pub value_type: Option<ValueType>,
     /// Suggested values for the argument.
     pub suggestions: Vec<SuggestionEntry>,
+    /// Optional shared catalogue: three-character minimum, at most 25 prefix matches.
+    pub prefix_values: Option<PrefixValues>,
 }
 
 impl ArgNode {
@@ -549,6 +563,11 @@ pub struct FlagNode {
     pub request_hints: Option<RequestHintSet>,
     /// Extra flag-name hints attached to this flag.
     pub flag_hints: Option<FlagHints>,
+    /// Preferred spelling when this entry is another spelling of one flag.
+    ///
+    /// Menus list the preferred spelling once, labelled with its other
+    /// spellings; an alias is offered on its own only when typed exactly.
+    pub alias_of: Option<String>,
 }
 
 impl FlagNode {

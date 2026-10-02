@@ -16,6 +16,36 @@ Completion works from already-known local information:
 
 It does not call remote systems while you are pressing tab.
 
+## While You Type
+
+- **Tab** completes like a shell first: a single match, or an exact word no
+  other choice extends, is inserted with a trailing space; otherwise the word
+  grows to the choices' shared prefix. When there is nothing to add, Tab opens
+  the menu with nothing selected, and further Tabs (Shift-Tab backwards) put
+  each choice into the line. Space keeps the choice and moves on; Enter keeps
+  it without running the line.
+- **The menu** lists up to 20 choices as one column with their descriptions,
+  and more as a grid. A flag's other spellings share one entry
+  (`--interactive, -i`), required flags come first and are marked `*`, and
+  value aliases match what you type without being listed.
+- **Muted text after the cursor** suggests the rest of the line: the newest
+  history entry that extends it, or the only completion for the current word.
+  Right or End accepts it; Alt-Right accepts one word.
+- **The line under the prompt** says what the current command, flag, or word
+  means, which required flags are still missing, or why a word is wrong.
+- **Red** marks the first word that cannot be valid: an unknown subcommand or
+  flag. A word still being typed is not marked while it can grow into a valid
+  one.
+
+`repl.tab_mode` chooses when typing opens the menu without Tab:
+
+- `tab` (default): only Tab, Ctrl-Space, or starting a flag with `-`
+- `always`: every typed character, including a space
+- `after_<n>_letters`, e.g. `after_1_letter` or `after_3_letters`: once the
+  current word has that many characters
+
+Any positive count is accepted. Unrecognized values fall back to `tab`.
+
 ## Shell Completion Scripts
 
 Generate a static script for your shell with:

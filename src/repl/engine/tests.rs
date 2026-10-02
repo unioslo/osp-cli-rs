@@ -10,6 +10,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use super::editor::PaintedLine;
 use super::{
     AutoCompleteEmacs, BasicInputReason, CompletionDebugOptions, DebugStep, HISTORY_MENU_NAME,
     HistoryConfig, HistoryShellContext, OspPrompt, PromptRightRenderer, ReplAppearance,
@@ -24,6 +25,9 @@ use super::{
 };
 use crate::core::shell_words::QuoteStyle;
 use crate::repl::LineProjection;
+use crate::repl::ReplTabMode;
+use crate::repl::menu::{OspCompletionMenu, SharedCompletionMenu};
+use reedline::Emacs;
 
 fn env_lock() -> &'static Mutex<()> {
     crate::tests::env_lock()
@@ -333,15 +337,29 @@ fn debug_completion_and_steps_surface_menu_state_unit() {
 #[cfg_attr(miri, ignore = "filesystem-backed path completion integration test")]
 #[test]
 fn autocomplete_policy_and_path_helpers_cover_editing_and_lookup_edges_unit() {
-    assert!(AutoCompleteEmacs::opens_menu(&[EditCommand::InsertChar(
-        '-'
-    )]));
-    assert!(!AutoCompleteEmacs::opens_menu(&[EditCommand::InsertChar(
-        'x'
-    )]));
-    assert!(!AutoCompleteEmacs::opens_menu(&[EditCommand::InsertChar(
-        ' '
-    )]));
+    let painted = PaintedLine::default();
+    let edit_mode = |mode| {
+        AutoCompleteEmacs::new(
+            Emacs::default(),
+            SharedCompletionMenu::new(OspCompletionMenu::default()),
+            mode,
+            painted.clone(),
+        )
+    };
+    let insert = |ch| [EditCommand::InsertChar(ch)];
+    let tab = edit_mode(ReplTabMode::Tab);
+    assert!(tab.opens_menu(&insert('-')));
+    painted.set("host db", 7);
+    assert!(!tab.opens_menu(&insert('-')));
+    painted.set("", 0);
+    assert!(!tab.opens_menu(&insert('x')));
+    assert!(!tab.opens_menu(&insert(' ')));
+    assert!(edit_mode(ReplTabMode::Always).opens_menu(&insert('x')));
+    let after_two = edit_mode(ReplTabMode::AfterLetters(2));
+    painted.set("ldap h", 6);
+    assert!(after_two.opens_menu(&insert('o')));
+    painted.set("ldap ", 5);
+    assert!(!after_two.opens_menu(&insert('h')));
 
     let missing = path_suggestions(
         "/definitely/not/a/real/dir/",
@@ -649,6 +667,7 @@ fn run_repl_with_reason_and_basic_input_detection_cover_basic_and_interactive_mo
                 prompt,
                 completion_tree: completion_tree_with_config_show(),
                 appearance: test_appearance(),
+                tab_mode: ReplTabMode::Tab,
                 line_projector: None,
                 history_store: history.clone(),
             },
@@ -727,6 +746,7 @@ fn interactive_editor_builder_and_driver_cover_fallback_and_signal_paths_unit() 
     let mut built_editor = super::session::build_interactive_editor(
         completion_tree_with_root_commands(),
         &appearance,
+        ReplTabMode::Tab,
         None,
         history.clone(),
     );

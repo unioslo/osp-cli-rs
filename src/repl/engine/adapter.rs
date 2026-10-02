@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::completion::{CompletionEngine, CompletionTree, SuggestionOutput};
+use crate::completion::{CompletionAnalysis, CompletionEngine, CompletionTree, SuggestionOutput};
 use crate::core::fuzzy::fold_case;
 use crate::core::shell_words::{QuoteStyle, escape_for_shell, quote_for_shell};
 use crate::dsl::registered_verbs;
@@ -41,6 +41,20 @@ impl ReplCompleter {
     pub(crate) fn with_history(mut self, history: SharedHistory) -> Self {
         self.history = Some(history);
         self
+    }
+
+    pub(crate) fn engine(&self) -> &CompletionEngine {
+        &self.engine
+    }
+
+    /// Analyzes the projected line, as completion itself does.
+    pub(crate) fn analyze(&self, line: &str, pos: usize) -> CompletionAnalysis {
+        let projected = self
+            .line_projector
+            .as_ref()
+            .map(|project| project(line))
+            .unwrap_or_else(|| LineProjection::passthrough(line));
+        self.engine.analyze(&projected.line, pos)
     }
 }
 
@@ -217,9 +231,15 @@ pub(crate) fn build_repl_highlighter(
         .command_highlight_style
         .as_deref()
         .and_then(color_from_style_spec);
+    let error_color = appearance
+        .error_highlight_style
+        .as_deref()
+        .and_then(color_from_style_spec)
+        .unwrap_or(Color::Red);
     Some(ReplHighlighter::new(
         tree.clone(),
         command_color?,
+        error_color,
         line_projector,
     ))
 }

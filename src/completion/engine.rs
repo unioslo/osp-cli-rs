@@ -6,7 +6,7 @@
 //! without knowing about the parser/context/suggester split.
 
 use crate::completion::{
-    context::TreeResolver,
+    context::{ProviderSelection, TreeResolver},
     model::{
         CommandLine, CompletionAnalysis, CompletionContext, CompletionNode, CompletionRequest,
         CompletionTree, ContextScope, CursorState, MatchKind, ParsedLine, SuggestionOutput,
@@ -158,6 +158,34 @@ impl CompletionEngine {
             };
         }
         MatchKind::Value
+    }
+
+    /// Returns the tree node at an exact command path.
+    pub(crate) fn node_at(&self, path: &[String]) -> Option<&CompletionNode> {
+        TreeResolver::new(&self.tree).resolve_exact(path)
+    }
+
+    /// Required flags of the command at the cursor that the line still lacks.
+    ///
+    /// Only flags the tree declares as required are reported, including the
+    /// provider-specific ones once a provider is selected. A flag counts as
+    /// given under any of its spellings.
+    pub(crate) fn missing_required_flags(&self, analysis: &CompletionAnalysis) -> Vec<String> {
+        let resolver = TreeResolver::new(&self.tree);
+        let node = resolver.resolved_nodes(&analysis.context).flag_scope_node;
+        let cmd = &analysis.parsed.full_cmd;
+        let provider = ProviderSelection::from_command(cmd, node);
+        let given = |flag: &str| {
+            cmd.has_flag(flag)
+                || node.flags.iter().any(|(spelling, meta)| {
+                    meta.alias_of.as_deref() == Some(flag) && cmd.has_flag(spelling)
+                })
+        };
+        self.suggester
+            .required_flags(node, &provider)
+            .into_iter()
+            .filter(|flag| !given(flag))
+            .collect()
     }
 
     fn prepare_cursor_command_state(

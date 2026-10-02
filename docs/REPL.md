@@ -212,6 +212,8 @@ Useful REPL config keys:
 - `repl.intro`
   - `none | minimal | compact | full`
 - `repl.input_mode`
+- `repl.tab_mode`
+  - `tab | always | after_<n>_letters`; see [COMPLETION.md](COMPLETION.md)
 
 Presentation presets also affect the REPL:
 

@@ -47,6 +47,10 @@ pub struct OspCompletionMenu {
     // Set when navigation emitted a buffer edit, so the menu refresh reedline
     // sends for that edit does not reset the selection it just made.
     skip_own_edit: bool,
+    // Set when Tab, rather than typing, is about to open the menu; see
+    // `complete_like_shell`. Any other menu event clears it, so a Tab that
+    // ends up navigating an already open menu cannot leak it.
+    tab_open: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +76,7 @@ impl Default for OspCompletionMenu {
             painted_line: String::new(),
             painted_cursor: 0,
             skip_own_edit: false,
+            tab_open: false,
         }
     }
 }
@@ -236,15 +241,85 @@ impl OspCompletionMenu {
         self.apply_selection(editor, ApplyMode::Accept);
     }
 
+    /// Tab on a closed menu completes like a shell before listing anything.
+    ///
+    /// A single candidate, or an exact match no other candidate extends, is
+    /// accepted; otherwise the word grows to the candidates' common prefix.
+    /// Candidates that start with the typed word take part when there are
+    /// any, so fuzzy rescues do not block an obvious completion. Either way
+    /// the menu stays closed and the next Tab lists the choices. Returns
+    /// `false` when there was nothing to complete and the menu should open.
+    fn complete_like_shell(&mut self, editor: &mut Editor) -> bool {
+        let values = self.core.values();
+        let Some(first) = values.first() else {
+            return false;
+        };
+        let stub = editor
+            .get_buffer()
+            .get(first.span.start..first.span.end)
+            .unwrap_or("");
+        let prefixed = values
+            .iter()
+            .filter(|value| value.value.starts_with(stub))
+            .cloned()
+            .collect::<Vec<_>>();
+        let pool = if prefixed.is_empty() {
+            values.to_vec()
+        } else {
+            prefixed
+        };
+        let unique = match pool.as_slice() {
+            [only] => Some(only.clone()),
+            _ => pool
+                .iter()
+                .find(|value| value.value == stub)
+                .cloned()
+                .filter(|_| {
+                    pool.iter()
+                        .filter(|value| value.value.starts_with(stub))
+                        .count()
+                        == 1
+                }),
+        };
+        let completed = match unique {
+            Some(suggestion) => {
+                self.apply_suggestion(editor, suggestion, ApplyMode::Accept);
+                true
+            }
+            None if common_prefix(&pool).len() > stub.len() => {
+                can_partially_complete(&pool, editor)
+            }
+            None => false,
+        };
+        if completed {
+            self.close();
+        }
+        completed
+    }
+
+    fn close(&mut self) {
+        self.core.pre_event(&MenuEvent::Deactivate);
+        self.core.handle_event(MenuEvent::Deactivate);
+        self.event = None;
+        self.replace_span = None;
+        self.indent_anchor = None;
+    }
+
     fn apply_selection(
         &self,
         editor: &mut Editor,
         mode: ApplyMode,
     ) -> Option<(usize, usize, bool)> {
-        let suggestion = match mode {
-            ApplyMode::Accept => self.core.selected_value()?.clone(),
-            ApplyMode::Cycle => self.core.selected_value()?.clone(),
-        };
+        let suggestion = self.core.selected_value()?.clone();
+        Some(self.apply_suggestion(editor, suggestion, mode))
+    }
+
+    fn apply_suggestion(
+        &self,
+        editor: &mut Editor,
+        suggestion: Suggestion,
+        mode: ApplyMode,
+    ) -> (usize, usize, bool) {
         let line_before = editor.get_buffer().to_string();
         let cursor_before = editor.line_buffer().insertion_point();
 
@@ -325,7 +400,7 @@ impl OspCompletionMenu {
             });
         }
 
-        Some((start, suggestion.value.len(), prefixed_space))
+        (start, suggestion.value.len(), prefixed_space)
     }
 
     fn update_working_details_inner(
@@ -375,16 +450,13 @@ impl Menu for OspCompletionMenu {
         if !values_updated {
             self.update_values(editor, completer);
         }
-
-        if can_partially_complete(self.core.values(), editor) {
-            self.update_values(editor, completer);
-            true
-        } else {
-            false
-        }
+        std::mem::take(&mut self.tab_open) && self.complete_like_shell(editor)
     }
 
     fn menu_event(&mut self, event: MenuEvent) {
+        if !matches!(event, MenuEvent::Activate(_)) {
+            self.tab_open = false;
+        }
         if matches!(event, MenuEvent::Edit(_)) && std::mem::take(&mut self.skip_own_edit) {
             return;
         }
@@ -495,6 +567,11 @@ impl SharedCompletionMenu {
         let menu = self.menu.lock().unwrap_or_else(PoisonError::into_inner);
         self.indicator = menu.indicator().to_string();
         self.values = menu.core.values().to_vec();
+    }
+
+    /// Marks the next activation as Tab, which completes like a shell.
+    pub(crate) fn mark_tab_open(&self) {
+        self.lock().tab_open = true;
     }
 
     /// Moves the selection of an open menu and returns the edit that puts the
@@ -650,6 +727,22 @@ fn trace_menu_state_with_available_lines(
     });
 }
 
+fn common_prefix(values: &[Suggestion]) -> &str {
+    let Some((first, rest)) = values.split_first() else {
+        return "";
+    };
+    let mut prefix = first.value.as_str();
+    for value in rest {
+        let shared = prefix
+            .char_indices()
+            .zip(value.value.chars())
+            .find(|((_, left), right)| left != right)
+            .map_or(prefix.len().min(value.value.len()), |((index, _), _)| index);
+        prefix = &prefix[..shared];
+    }
+    prefix
+}
+
 fn needs_space_prefix(line: &str, start: usize, end: usize) -> bool {
     if start != end || start == 0 {
         return false;
@@ -715,6 +808,10 @@ impl OspCompletionMenu {
 
     fn columns_for_test(&self) -> u16 {
         self.core.columns_for_test()
+    }
+
+    fn mark_tab_open_for_test(&mut self) {
+        self.tab_open = true;
     }
 }
 

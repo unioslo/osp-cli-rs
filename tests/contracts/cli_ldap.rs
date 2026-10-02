@@ -130,7 +130,7 @@ fn ldap_plugin_completes_subcommands_and_flags_contract() {
     assert!(
         long_flag_matches
             .iter()
-            .any(|item| item["label"] == "--attributes")
+            .any(|item| item["id"] == "--attributes")
     );
 
     let mut short_flags = fixture.osp();
@@ -140,7 +140,11 @@ fn ldap_plugin_completes_subcommands_and_flags_contract() {
     let short_flag_matches = short_flags_payload["matches"]
         .as_array()
         .expect("short-flag matches should render as an array");
-    assert!(short_flag_matches.iter().any(|item| item["label"] == "-a"));
+    assert!(
+        short_flag_matches
+            .iter()
+            .any(|item| item["id"] == "--attributes" && item["label"] == "--attributes, -a")
+    );
 }
 
 #[cfg(unix)]

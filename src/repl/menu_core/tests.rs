@@ -165,7 +165,7 @@ fn navigation_wraps_and_clamps_on_sparse_last_row() {
 }
 
 #[test]
-fn debug_snapshot_scrolls_descriptions_and_hides_when_inactive() {
+fn debug_snapshot_scrolls_inline_descriptions_and_hides_when_inactive() {
     let mut core = MenuCore::default();
     core.set_columns(1);
     core.set_max_rows(2);
@@ -199,18 +199,18 @@ fn debug_snapshot_scrolls_descriptions_and_hides_when_inactive() {
     );
     assert_eq!(core.selected_index(), Some(2));
 
+    // Short described lists show descriptions inline instead of a footer.
     let colors = MenuTextStyle::default();
     let snapshot = core.debug_snapshot(&colors, 40, 3, 3, false);
     assert_eq!(snapshot.visible_rows, 2);
-    assert_eq!(snapshot.description.as_deref(), Some("charlie description"));
-    assert!(snapshot.description_rendered.is_some());
-    assert_eq!(snapshot.rendered.len(), 3);
+    assert!(snapshot.description.is_none());
+    assert_eq!(snapshot.rendered.len(), 2);
     assert!(snapshot.rendered.iter().any(|line| line.contains("bravo")));
     assert!(
         snapshot
             .rendered
             .iter()
-            .any(|line| line.contains("charlie"))
+            .any(|line| line.contains("charlie  charlie description"))
     );
     assert!(!snapshot.rendered.iter().any(|line| line.contains("alpha")));
 

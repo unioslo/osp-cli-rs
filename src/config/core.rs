@@ -856,6 +856,12 @@ fn insert_repl_schema_keys(schema: &mut ConfigSchema) {
     );
     insert_builtin_schema_key(
         schema,
+        "repl.tab_mode",
+        SchemaEntry::string(),
+        "When typing opens the REPL completion menu: tab, always, or after_<n>_letters",
+    );
+    insert_builtin_schema_key(
+        schema,
         "repl.simple_prompt",
         SchemaEntry::boolean(),
         "Whether the REPL should use the simple prompt",

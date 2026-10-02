@@ -704,6 +704,19 @@ pub(crate) fn config_set_key_specs(
                     .into_iter()
                     .map(SuggestionEntry::value)
                     .collect::<Vec<_>>()
+            } else if key == "repl.tab_mode" {
+                [
+                    "tab",
+                    "always",
+                    "after_1_letter",
+                    "after_2_letters",
+                    "after_3_letters",
+                    "after_4_letters",
+                    "after_5_letters",
+                ]
+                .into_iter()
+                .map(SuggestionEntry::value)
+                .collect()
             } else if let Some(allowed) = entry.allowed_values() {
                 allowed
                     .iter()

@@ -6,8 +6,8 @@
 
 use std::borrow::Cow;
 use std::io::{self, IsTerminal, Write};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
@@ -16,32 +16,102 @@ use reedline::{
     PromptHistorySearchStatus, ReedlineEvent, ReedlineRawEvent,
 };
 
-use super::{PromptRightRenderer, ReplInputMode};
+use super::{PromptRightRenderer, ReplInputMode, ReplTabMode};
 use crate::repl::menu::SharedCompletionMenu;
+
+/// The input line and cursor as reedline last painted them.
+///
+/// An edit mode only sees key events, never the buffer. The hinter runs on
+/// every paint and records the line here, so key handling can measure the
+/// word being typed.
+#[derive(Clone, Default)]
+pub(crate) struct PaintedLine(Arc<Mutex<(String, usize)>>);
+
+impl PaintedLine {
+    pub(crate) fn set(&self, line: &str, cursor: usize) {
+        let mut painted = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        painted.0.clear();
+        painted.0.push_str(line);
+        painted.1 = cursor;
+    }
+
+    /// Characters between the start of the current word and the cursor.
+    fn word_len_before_cursor(&self) -> usize {
+        let painted = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = painted.0.get(..painted.1).unwrap_or(&painted.0);
+        before
+            .chars()
+            .rev()
+            .take_while(|ch| !ch.is_whitespace())
+            .count()
+    }
+}
 
 pub(crate) struct AutoCompleteEmacs {
     inner: Emacs,
     menu: SharedCompletionMenu,
+    tab_mode: ReplTabMode,
+    painted: PaintedLine,
 }
 
 impl AutoCompleteEmacs {
-    pub(crate) fn new(inner: Emacs, menu: SharedCompletionMenu) -> Self {
-        Self { inner, menu }
+    pub(crate) fn new(
+        inner: Emacs,
+        menu: SharedCompletionMenu,
+        tab_mode: ReplTabMode,
+        painted: PaintedLine,
+    ) -> Self {
+        Self {
+            inner,
+            menu,
+            tab_mode,
+            painted,
+        }
     }
 
-    pub(crate) fn opens_menu(commands: &[EditCommand]) -> bool {
-        // Only Tab (bound separately) or starting a flag opens the menu.
-        // Opening on every keystroke made the first Tab select instead of open
-        // and popped the next token's candidates on each space.
-        commands.contains(&EditCommand::InsertChar('-'))
+    /// Whether typing these commands should open a closed menu.
+    ///
+    /// Starting a flag always does; a `-` inside a word such as a hostname
+    /// does not. Otherwise `tab_mode` decides. A space only opens in `Always`
+    /// mode and is handled with the token commit below.
+    pub(crate) fn opens_menu(&self, commands: &[EditCommand]) -> bool {
+        let [EditCommand::InsertChar(ch)] = commands else {
+            return false;
+        };
+        if *ch == '-' && self.painted.word_len_before_cursor() == 0 {
+            return true;
+        }
+        match self.tab_mode {
+            ReplTabMode::Tab => false,
+            ReplTabMode::Always => true,
+            ReplTabMode::AfterLetters(count) => {
+                !ch.is_whitespace() && self.painted.word_len_before_cursor() + 1 >= count
+            }
+        }
+    }
+
+    fn auto_open(&self) -> ReedlineEvent {
+        ReedlineEvent::Menu(self.menu.name().to_string())
+    }
+
+    /// Whether `event` is Tab opening a closed menu.
+    fn is_tab_open(&self, event: &ReedlineEvent) -> bool {
+        matches!(
+            event,
+            ReedlineEvent::UntilFound(events)
+                if matches!(
+                    events.as_slice(),
+                    [ReedlineEvent::Menu(name), ReedlineEvent::MenuNext] if name == self.menu.name()
+                )
+        )
     }
 }
 
 /// The menu move a key binding asks for once the completion menu is open.
 ///
 /// With the menu open, reedline resolves `UntilFound` to its first menu move:
-/// `Menu(name)` only applies to a closed menu, and the REPL has no hinter for
-/// `HistoryHintComplete` ahead of `MenuRight`.
+/// `Menu(name)` only applies to a closed menu. Menu navigation takes precedence
+/// over accepting an inline history hint.
 pub(crate) fn menu_navigation(event: &ReedlineEvent) -> Option<MenuEvent> {
     match event {
         ReedlineEvent::MenuNext => Some(MenuEvent::NextElement),
@@ -67,18 +137,27 @@ impl EditMode for AutoCompleteEmacs {
         {
             return ReedlineEvent::Edit(commands);
         }
+        // Only Tab completes like a shell; menus opened by typing just list.
+        if self.is_tab_open(&parsed) {
+            self.menu.mark_tab_open();
+        }
         match parsed {
             ReedlineEvent::Edit(commands) if commands == [EditCommand::InsertChar(' ')] => {
                 // Space commits the token: close the menu, keeping any cycled
                 // selection already in the buffer, instead of letting reedline
-                // refresh it with the next token's candidates.
-                ReedlineEvent::Multiple(vec![ReedlineEvent::Esc, ReedlineEvent::Edit(commands)])
+                // refresh it with the next token's candidates. `Always` then
+                // opens a fresh menu for the next token.
+                let mut events = vec![ReedlineEvent::Esc, ReedlineEvent::Edit(commands)];
+                if self.tab_mode == ReplTabMode::Always {
+                    events.push(self.auto_open());
+                }
+                ReedlineEvent::Multiple(events)
             }
-            ReedlineEvent::Edit(commands) if Self::opens_menu(&commands) => {
-                ReedlineEvent::Multiple(vec![
-                    ReedlineEvent::Edit(commands),
-                    ReedlineEvent::Menu(self.menu.name().to_string()),
-                ])
+            // An open menu already refilters on every edit.
+            ReedlineEvent::Edit(commands)
+                if !self.menu.is_active() && self.opens_menu(&commands) =>
+            {
+                ReedlineEvent::Multiple(vec![ReedlineEvent::Edit(commands), self.auto_open()])
             }
             other => other,
         }

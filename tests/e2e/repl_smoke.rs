@@ -163,12 +163,8 @@ fn repl_starts_runs_help_and_exits_end_to_end() {
         "Tab should expand the last accepted command; output:\n{}",
         session.output_snapshot(8000)
     );
-    let selected = session.output_len();
-    session.write_bytes(b"\t");
-    assert_editor_command(&session, selected, "theme show rose-pine-moon --json");
-    let accepted = session.output_len();
-    session.write_bytes(b"\r");
-    assert_editor_command(&session, accepted, "theme show rose-pine-moon --json");
+    // A single expansion is filled in place, like shell completion.
+    assert_editor_command(&session, expanded, "theme show rose-pine-moon --json");
     let start = session.output_len();
     session.write_bytes(b"\r");
     assert_theme_result(&session, start, "rose-pine-moon", "Rose Pine Moon");

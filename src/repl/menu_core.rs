@@ -30,10 +30,16 @@ impl Default for DefaultGridDetails {
     }
 }
 
+/// Short candidate lists render as one column with each description inline.
+const LIST_LAYOUT_MAX_VALUES: usize = 20;
+const LIST_DESCRIPTION_GAP: usize = 2;
+
 #[derive(Debug, Clone, Default)]
 struct WorkingGridDetails {
     columns: u16,
     col_widths: Vec<usize>,
+    // Label width when rows carry inline descriptions; `None` in grid layout.
+    list_label_width: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,9 +271,45 @@ impl MenuCore {
         self.input_indent = input_indent.min(max_indent);
         let available_width = screen_width.saturating_sub(self.input_indent).max(1) as usize;
         let marker_width = marker_width_for_layout(available_width);
+        if let Some((label_width, row_width)) = self.list_layout(available_width, marker_width) {
+            self.working_details.columns = 1;
+            self.working_details.col_widths = vec![row_width];
+            self.working_details.list_label_width = Some(label_width);
+            return;
+        }
         let (cols, col_widths) = self.compute_column_layout(available_width, marker_width);
         self.working_details.columns = cols.max(1);
         self.working_details.col_widths = col_widths;
+        self.working_details.list_label_width = None;
+    }
+
+    /// Returns `(label width, row width)` when the values fit the list layout.
+    ///
+    /// The list layout only pays off when there is something to explain and
+    /// few enough rows that one column does not push the prompt off screen.
+    fn list_layout(&self, available_width: usize, marker_width: usize) -> Option<(usize, usize)> {
+        if self.values.len() > LIST_LAYOUT_MAX_VALUES
+            || !self
+                .values
+                .iter()
+                .any(|value| !first_line(value).is_empty())
+        {
+            return None;
+        }
+        let label_width = self
+            .values
+            .iter()
+            .map(|value| display_text(value).width())
+            .max()?;
+        let description_width = self
+            .values
+            .iter()
+            .map(|value| first_line(value).width())
+            .max()
+            .unwrap_or(0);
+        let row_width = (marker_width + label_width + LIST_DESCRIPTION_GAP + description_width)
+            .min(available_width);
+        (row_width > marker_width + label_width).then_some((label_width, row_width))
     }
 
     pub(crate) fn menu_required_lines(&self) -> u16 {
@@ -610,7 +652,7 @@ impl MenuCore {
     }
 
     fn description_line(&self) -> Option<String> {
-        if self.just_activated {
+        if self.just_activated || self.working_details.list_label_width.is_some() {
             return None;
         }
         let description = self
@@ -653,7 +695,20 @@ impl MenuCore {
         use_ansi_coloring: bool,
         colors: &MenuTextStyle,
     ) -> String {
-        let display = display_text(suggestion);
+        let display = match self.working_details.list_label_width {
+            Some(label_width) => {
+                let label = display_text(suggestion);
+                let pad = label_width.saturating_sub(label.width()) + LIST_DESCRIPTION_GAP;
+                let row = format!("{label}{:pad$}{}", "", first_line(suggestion));
+                // Grid cells fit their column by construction; list rows
+                // must truncate a long description themselves.
+                truncate_to_width(&row, self.get_col_width(column))
+                    .trim_end()
+                    .to_string()
+            }
+            None => display_text(suggestion).to_string(),
+        };
+        let display = display.as_str();
         let col_width = self.get_col_width(column);
         let display_width = display.width();
         let selected = index == self.index() && !self.just_activated;
@@ -729,6 +784,15 @@ impl MenuCore {
             format!("{truncated:>pad$}", pad = padding)
         }
     }
+}
+
+fn first_line(suggestion: &Suggestion) -> &str {
+    suggestion
+        .description
+        .as_deref()
+        .and_then(|description| description.lines().next())
+        .unwrap_or("")
+        .trim()
 }
 
 pub(crate) fn display_text(suggestion: &Suggestion) -> &str {

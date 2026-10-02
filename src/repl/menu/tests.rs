@@ -242,18 +242,14 @@ fn menu_rendering_variants_cover_display_description_selection_and_bounds_unit()
         menu.navigate(MenuEvent::NextElement, &mut editor);
         menu.update_for_test(&mut editor, &mut completer, 80);
 
+        // A short described list shows each description beside its value.
         let wide_output = menu.menu_string(10, false);
-        let wide_last = split_lines(&wide_output)
-            .last()
-            .map(|line| line.trim())
-            .unwrap_or_default()
-            .to_string();
-        assert!(!wide_last.is_empty());
-        assert!("Inspect and edit runtime config".starts_with(&wide_last));
+        assert_eq!(split_lines(&wide_output).len(), 1);
+        assert!(wide_output.contains("config  Inspect and edit runtime config"));
 
         menu.update_for_test(&mut editor, &mut completer, 10);
         let narrow_output = menu.menu_string(10, false);
-        assert!(narrow_output.contains("Inspect"));
+        assert!(narrow_output.contains("config"));
         assert!(!narrow_output.contains("runtime config"));
 
         let constrained_output = menu.menu_string(1, false);
@@ -477,32 +473,33 @@ fn menu_state_and_builder_variants_cover_debug_partial_completion_and_reactivati
 
     {
         let mut editor = Editor::default();
-        set_buffer(&mut editor, "config sh");
+        set_buffer(&mut editor, "config s");
         let cursor = editor.line_buffer().len();
-        let mut completer = FixedCompleter {
-            suggestions: vec![
-                suggestion(
-                    "show",
-                    Span {
-                        start: cursor - 2,
-                        end: cursor,
-                    },
-                ),
-                suggestion(
-                    "shell",
-                    Span {
-                        start: cursor - 2,
-                        end: cursor,
-                    },
-                ),
-            ],
+        let candidates = |cursor: usize, typed: usize| FixedCompleter {
+            suggestions: ["show", "shell"]
+                .into_iter()
+                .map(|value| {
+                    suggestion(
+                        value,
+                        Span {
+                            start: cursor - typed,
+                            end: cursor,
+                        },
+                    )
+                })
+                .collect(),
         };
         let mut menu = OspCompletionMenu::default().with_only_buffer_difference(true);
 
+        // Tab grows the word to the shared prefix, then has nothing to add.
+        let mut completer = candidates(cursor, 1);
+        menu.mark_tab_open_for_test();
         assert!(menu.can_partially_complete(false, &mut editor, &mut completer));
-
-        menu.update_values(&mut editor, &mut completer);
-        assert!(menu.can_partially_complete(true, &mut editor, &mut completer));
+        assert_eq!(editor.get_buffer(), "config sh");
+        let mut completer = candidates(cursor + 1, 2);
+        menu.mark_tab_open_for_test();
+        assert!(!menu.can_partially_complete(false, &mut editor, &mut completer));
+        assert_eq!(editor.get_buffer(), "config sh");
 
         menu.indent_anchor = Some(99);
         let mut empty = FixedCompleter {
@@ -524,6 +521,7 @@ fn menu_state_and_builder_variants_cover_debug_partial_completion_and_reactivati
         };
         let mut menu = OspCompletionMenu::default();
 
+        menu.mark_tab_open_for_test();
         assert!(!menu.can_partially_complete(false, &mut editor, &mut completer));
         assert_eq!(editor.line_buffer().get_buffer(), "d");
         assert_eq!(menu.get_values().len(), 2);

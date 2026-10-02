@@ -68,6 +68,7 @@ const LITERAL_DEFAULTS: &[LiteralDefault] = &[
     LiteralDefault::string("secrets.backend", "toml"),
     LiteralDefault::string("profile.default", DEFAULT_PROFILE_NAME),
     LiteralDefault::string("repl.input_mode", "auto"),
+    LiteralDefault::string("repl.tab_mode", "tab"),
     LiteralDefault::string("repl.exit_message", ""),
     LiteralDefault::bool("repl.simple_prompt", false),
     LiteralDefault::string("repl.shell_indicator", "[{shell}]"),
