@@ -75,6 +75,19 @@ osp> config explain ui.format
 osp> help config
 ```
 
+While you type in the REPL:
+
+- Tab completes like a shell: a single match or the shared prefix first, then
+  a menu of choices with their descriptions
+- muted text after the cursor suggests the rest of the line from history or
+  the command tree; Right or End accepts it
+- the line under the prompt explains the current command or flag, lists
+  missing required flags, and names unknown words, which are shown in red
+- `repl.tab_mode` (`tab`, `always`, `after_<n>_letters`) chooses whether
+  typing opens the menu without Tab
+
+See [docs/COMPLETION.md](docs/COMPLETION.md).
+
 Per-invocation flags work the same in the CLI and REPL:
 
 ```bash
@@ -90,7 +103,8 @@ plugins commands --format table -v
 ## Capabilities
 
 - CLI and REPL entrypoints with shared command semantics
-- history, completion, highlighting, and scoped shells in the REPL
+- history, shell-style completion, inline suggestions, a status line, and
+  error highlighting in the REPL, plus scoped shells
 - invocation-local output and debug controls
 - output formats including table, JSON, markdown, mreg, and value
 - a row-oriented pipeline DSL for filtering, projection, grouping,
