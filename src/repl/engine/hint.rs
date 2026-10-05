@@ -201,7 +201,8 @@ impl Hinter for ReplHinter {
             } else {
                 self.style
             };
-            out.push('\n');
+            // Reedline's CRLF normalization drops the text after a leading LF.
+            out.push_str("\r\n");
             let status = fit_terminal_width(&status);
             if let Some(active) = active
                 .map(|range| range.start..range.end.min(status.len()))
@@ -344,21 +345,21 @@ mod tests {
     fn hint_completes_the_only_candidate_and_names_it_unit() {
         let (inline, out) = paint("orch vm cr");
         assert_eq!(inline, "eate");
-        assert_eq!(out, "eate\ncreate  Create a VM");
+        assert_eq!(out, "eate\r\ncreate  Create a VM");
         for (line, expected, slot) in [
             (
                 "orch vm power ",
-                "\norch vm power <HOSTNAME> [OPERATION] [EXTRA]… · Control VM power",
+                "\r\norch vm power <HOSTNAME> [OPERATION] [EXTRA]… · Control VM power",
                 "<HOSTNAME>",
             ),
             (
                 "orch vm power web01 ",
-                "\norch vm power HOSTNAME [OPERATION] [EXTRA]… · on | off",
+                "\r\norch vm power HOSTNAME [OPERATION] [EXTRA]… · on | off",
                 "[OPERATION]",
             ),
             (
                 "orch vm power web01 on ",
-                "\norch vm power HOSTNAME OPERATION [EXTRA]… · Control VM power",
+                "\r\norch vm power HOSTNAME OPERATION [EXTRA]… · Control VM power",
                 "[EXTRA]…",
             ),
         ] {
@@ -376,14 +377,14 @@ mod tests {
         assert_eq!(inline, "");
         assert_eq!(
             out,
-            "\nunknown command 'fnd' for 'orch vm'; did you mean 'find'?"
+            "\r\nunknown command 'fnd' for 'orch vm'; did you mean 'find'?"
         );
     }
 
     #[test]
     fn hint_describes_the_flag_being_given_a_value_unit() {
         let (_, out) = paint("orch vm create --name ");
-        assert_eq!(out, "\n--name  VM name");
+        assert_eq!(out, "\r\n--name  VM name");
     }
 
     #[test]

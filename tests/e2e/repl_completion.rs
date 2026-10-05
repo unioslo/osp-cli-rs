@@ -48,8 +48,8 @@ fn repl_tab_completes_single_match_and_exits() {
     session.write_bytes(b"\t");
     session.write_bytes(b"\t");
     assert!(
-        session.wait_for_plain_output("exit default>", Duration::from_secs(5)),
-        "expected tab completion to render `exit` in the prompt; output:\n{}",
+        session.wait_for_plain_output("exit Exit REPL", Duration::from_secs(5)),
+        "expected tab completion to render `exit` with its status hint; output:\n{}",
         session.plain_output_snapshot(4000),
     );
     session.write_bytes(b"\r");

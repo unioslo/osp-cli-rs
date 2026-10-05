@@ -149,9 +149,8 @@ fn plugin_sdk_metadata_flows_through_host_catalog_policy_and_dispatch_contract()
             SuggestionEntry::value("table").meta("Readable table"),
         ]
     );
-    // The wire lists spellings without a preferred one; the host keeps the
-    // first long spelling and marks the rest as its aliases.
-    assert_eq!(inspect.flags["--fmt"].alias_of, None);
+    // The plugin describes its canonical spelling and points aliases back to it.
+    assert_eq!(inspect.flags["--format"].alias_of, None);
     for spelling in ["--fmt", "--format", "-f", "-o"] {
         let node = &inspect.flags[spelling];
         assert_eq!(
@@ -162,8 +161,8 @@ fn plugin_sdk_metadata_flows_through_host_catalog_policy_and_dispatch_contract()
             format
         );
     }
-    for spelling in ["--format", "-f", "-o"] {
-        assert_eq!(inspect.flags[spelling].alias_of.as_deref(), Some("--fmt"));
+    for spelling in ["--fmt", "-f", "-o"] {
+        assert_eq!(inspect.flags[spelling].alias_of.as_deref(), Some("--format"));
     }
 
     let context = CommandPolicyContext::default()
