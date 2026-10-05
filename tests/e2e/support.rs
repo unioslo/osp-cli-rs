@@ -209,7 +209,8 @@ impl<'a> ReplPtyConfig<'a> {
 pub(crate) struct ReplPtySession {
     child: Box<dyn portable_pty::Child + Send>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    output: Arc<Mutex<String>>,
+    // PTY reads can split UTF-8 characters; retain bytes until taking a view.
+    output: Arc<Mutex<Vec<u8>>>,
     _home: TestTempDir,
     _plugins: Option<TestTempDir>,
 }
@@ -232,10 +233,9 @@ fn osp_pty_command_builder(
     cmd.env_clear();
     cmd.env("PATH", "/usr/bin:/bin");
     cmd.env("LANG", "C.UTF-8");
-    cmd.env("HOME", home);
-    cmd.env("XDG_CONFIG_HOME", home.join(".config"));
-    cmd.env("XDG_CACHE_HOME", home.join(".cache"));
-    cmd.env("XDG_STATE_HOME", home.join(".local/state"));
+    for (key, value) in crate::test_env::isolated_env(home) {
+        cmd.env(key, value);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLUMNS", "80");
     cmd.env("LINES", "24");
@@ -337,28 +337,38 @@ impl ReplPtySession {
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("take writer")));
 
-        let output = Arc::new(Mutex::new(String::new()));
+        let output = Arc::new(Mutex::new(Vec::new()));
         let output_clone = Arc::clone(&output);
         let writer_clone = Arc::clone(&writer);
         let cursor_position_reports = config.cursor_position_reports;
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let cpr_request = [0x1b, 0x5b, 0x36, 0x6e];
+            let mut cpr_prefix = 0;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if cursor_position_reports
-                            && buf[..n]
-                                .windows(cpr_request.len())
-                                .any(|window| window == cpr_request)
-                            && let Ok(mut writer) = writer_clone.lock()
-                        {
-                            let _ = writer.write_all(b"\x1b[1;1R");
-                            let _ = writer.flush();
+                        if cursor_position_reports {
+                            // Requests may share a read or cross its boundary.
+                            for byte in &buf[..n] {
+                                cpr_prefix = if *byte == cpr_request[cpr_prefix] {
+                                    cpr_prefix + 1
+                                } else {
+                                    usize::from(*byte == cpr_request[0])
+                                };
+                                if cpr_prefix == cpr_request.len() {
+                                    let mut writer = writer_clone.lock().expect("writer lock");
+                                    let _ = writer.write_all(b"\x1b[1;1R");
+                                    let _ = writer.flush();
+                                    cpr_prefix = 0;
+                                }
+                            }
                         }
-                        let chunk = String::from_utf8_lossy(&buf[..n]);
-                        output_clone.lock().expect("output lock").push_str(&chunk);
+                        output_clone
+                            .lock()
+                            .expect("output lock")
+                            .extend_from_slice(&buf[..n]);
                     }
                     Err(_) => break,
                 }
@@ -383,14 +393,15 @@ impl ReplPtySession {
         if start >= buf.len() {
             String::new()
         } else {
-            buf[start..].to_string()
+            String::from_utf8_lossy(&buf[start..]).into_owned()
         }
     }
 
     pub(crate) fn output_snapshot(&self, max_len: usize) -> String {
         let buf = self.output.lock().expect("output lock");
+        let buf = String::from_utf8_lossy(&buf);
         if buf.len() <= max_len {
-            buf.clone()
+            buf.into_owned()
         } else {
             let mut start = buf.len().saturating_sub(max_len);
             while start < buf.len() && !buf.is_char_boundary(start) {
@@ -410,6 +421,29 @@ impl ReplPtySession {
         writer.flush().expect("flush pty");
     }
 
+    pub(crate) fn type_text(&mut self, text: &str) {
+        let start = self.output_len();
+        self.write_bytes(text.as_bytes());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let output = self.output_since(start);
+            // Cooked terminal echo can precede editor startup after a reload.
+            // Wait for the latest completed editor paint before sending Enter.
+            if let Some((_, frame)) = output.rsplit_once("\x1b[?25l")
+                && frame.contains("\x1b[?25h")
+                && strip_terminal_noise(frame).contains(text.trim())
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected editor to display typed text {text:?}; output:\n{}",
+                self.output_snapshot(8000),
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
     pub(crate) fn wait_for_output_since(
         &self,
         start: usize,
@@ -420,7 +454,7 @@ impl ReplPtySession {
         loop {
             {
                 let buf = self.output.lock().expect("output lock");
-                if start < buf.len() && buf[start..].contains(needle) {
+                if start < buf.len() && String::from_utf8_lossy(&buf[start..]).contains(needle) {
                     return true;
                 }
             }
@@ -436,7 +470,7 @@ impl ReplPtySession {
         loop {
             {
                 let buf = self.output.lock().expect("output lock");
-                if strip_terminal_noise(&buf).contains(needle) {
+                if strip_terminal_noise(&String::from_utf8_lossy(&buf)).contains(needle) {
                     return true;
                 }
             }
@@ -457,7 +491,10 @@ impl ReplPtySession {
         loop {
             {
                 let buf = self.output.lock().expect("output lock");
-                if start < buf.len() && strip_terminal_noise(&buf[start..]).contains(needle) {
+                if start < buf.len()
+                    && strip_terminal_noise(&String::from_utf8_lossy(&buf[start..]))
+                        .contains(needle)
+                {
                     return true;
                 }
             }
@@ -486,6 +523,13 @@ impl ReplPtySession {
     pub(crate) fn kill(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReplPtySession {
+    fn drop(&mut self) {
+        self.kill();
     }
 }
 

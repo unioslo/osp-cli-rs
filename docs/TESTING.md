@@ -1,253 +1,116 @@
-# Testing Strategy
+# Testing and verification
 
-`osp-cli-rust` uses behavior-first TDD with explicit behavior tiers plus a
-small architecture guardrail suite.
+Choose the smallest existing check that exercises the changed behavior.
+Run broader checks when the change affects several components or a focused
+check leaves an interaction unverified.
 
-The main rule is simple:
+Do not add regression tests, including for bug fixes, or remove existing tests
+unless explicitly requested. Verify with existing integration, contract,
+end-to-end and architecture checks, static checks, and focused manual execution.
+Adjust existing tests when the public contract changes. Avoid assertions about
+implementation details or behavior already covered by another test.
 
-- start from the user-visible behavior
-- choose the highest boundary that can own that behavior cheaply
-- add lower-level tests only when they protect a real invariant or failure mode
+## Choose a test target
 
-Tests should read like promises, not like coverage storage.
+| Existing target | Covers |
+| --- | --- |
+| `contracts` | Spawned CLI behavior, help, output, exit codes and configuration |
+| `integration` | In-process flows across configuration, dispatch, plugins, guides and DSL evaluation |
+| `e2e` | Real process/PTY behavior, prompts, completion and multi-command REPL state |
+| `architecture` | Active stable/Miri workflow and toolchain alignment |
+| `unit` and `src/**/tests*` | Local invariants, parser edges and awkward failure paths |
 
-## Test Layout
+Prefer contracts or integration for stable behavior. Use existing PTY checks
+when terminal behavior matters; a string-render check cannot prove prompt
+redraw or live progress. Existing unit tests remain useful when they explain
+an invariant the outer contract does not cover.
 
-Root package tests are currently anchored in `tests/`:
+Read the target fixtures before running a suite. Contract and integration checks
+isolate HOME/XDG roots, ambient `OSP_*` values and the Kerberos credential cache.
+An active host ticket must not change a password fixture's authentication flow.
+Fixtures that exercise Kerberos supply their own commands and credentials.
+Live service requests, authentication and writes need a separately verified live
+run; local fixtures do not establish those effects.
 
-```text
-tests/
-  architecture.rs
-  unit.rs
-  integration.rs
-  contracts.rs
-  e2e.rs
-  architecture/
-    *.rs
-  unit/
-    *.rs
-  integration/
-    *.rs
-  contracts/
-    *.rs
-  e2e/
-    *.rs
-  fixtures/
-    README.md
+When checking saved configuration or machine-readable output, parse it and
+assert meaningful values; counts or field presence alone can pass even when
+the content is wrong.
+
+Linux contracts include one real native-keyring lifecycle. It requires
+`dbus-run-session`, `dbus-daemon`, `gnome-keyring-daemon` and `gdbus`; on
+Debian/Ubuntu these come from `dbus-daemon`, `gnome-keyring` and
+`libglib2.0-bin`. CI installs them explicitly. The confidence runner checks for
+these tools before compiling tests, contracts or coverage, and fails if one is
+missing. Build and publication checks do not require these services.
+The runner never installs system packages implicitly.
+
+The contract starts a private D-Bus session and unlocks a throwaway GNOME
+keyring under isolated HOME/XDG roots. It executes the real CLI to persist,
+reload, redact, reveal, preview, rotate and remove a scoped credential, then
+verifies the ordinary-config fallback and the value-free `0600` index. The
+same session makes the readable index parent temporarily unwritable, confirms
+that interrupted replacement/removal restore the native credential, then
+restores write access and completes rotation/removal. Run this contract as an
+unprivileged user so native filesystem permission checks apply. The fixture
+restores the original parent permissions even when a subprocess fails.
+It preserves `LLVM_PROFILE_FILE` for instrumented child processes. This proves
+the Linux Secret Service boundary; it does not verify macOS Keychain, Windows
+Credential Manager or availability of a user's desktop keyring. A denied
+local socket bind is an environment failure, and missing tools do not skip the
+contract.
+
+## Run existing checks
+
+The confidence runner defines command lists, environment isolation and which
+checks each lane includes. See [CONTRIBUTING.md](../CONTRIBUTING.md#verification)
+for tooling, hooks, CI, coverage and release procedures.
+
+```bash
+python3 scripts/confidence.py --list
+python3 scripts/confidence.py local
 ```
 
-Internal unit tests also live next to the code they cover in `src/**/tests.rs`
-and `src/**/tests/*.rs`.
+For a focused existing target:
 
-## Tier Definitions
+```bash
+python3 scripts/confidence.py --check architecture
+python3 scripts/confidence.py --check contracts
+python3 scripts/confidence.py --check integration
+python3 scripts/confidence.py --check e2e
+```
 
-- `unit`
-  - Pure logic and edge-case parsing.
-  - No process spawning.
-- `integration`
-  - In-process flow across major subsystems.
-  - Example: host assembly -> native/plugin dispatch -> renderer.
-- `contracts`
-  - Public CLI behavior through spawned binary.
-  - Prefer isolated roots via `tests/contracts/test_env.rs`.
-- `e2e`
-  - Real process and terminal behavior where subprocess or PTY behavior matters.
-  - Includes PTY-driven REPL flows and a few binary-surface smoke checks.
-- `architecture`
-  - Fast structural guardrails.
-  - Example: import boundaries, public facade limits, and toolchain alignment.
+Run the selected check once while code and dependencies remain unchanged.
+Broaden validation when a failure, dependency change or unresolved interaction
+requires it. Confirm tests actually executed and distinguish environment/tooling
+failures from behavior failures. Report commands, results and unverified behavior;
+test counts alone do not establish readiness.
 
-## Ownership Heuristics
+Coverage checks execute cases serially, including the generic check used by the
+product. Concurrent instrumented CLI and PTY starts have exceeded the fixtures'
+request deadlines on this machine; ordinary behavior checks remain parallel.
+Cargo still compiles dependencies in parallel.
 
-- One user-visible promise should have one primary owner tier.
-- Prefer the highest boundary that can express the behavior without excessive
-  setup or flake.
-- When an outer-boundary test already owns a promise, keep inner tests only for
-  local invariants, parser edges, or failure paths that the outer test does not
-  explain well.
-- Do not add many local tests that restate the same visible behavior with
-  slightly different setup.
+Publication rehearsal uses `--check publish-dry-run` and its own
+`target/publish-dry-run` directory. Sharing the normal build directory can
+leave Cargo fingerprints pointing at `target/package/...` source, allowing a
+process test to execute an older packaged binary. If a current source edit
+does not rebuild the CLI, inspect the package paths in `target/debug/.fingerprint`.
+Run `cargo clean --package osp-cli`, then rebuild and rerun the affected check.
+This removes the crate's artifacts while retaining dependency builds.
 
-Default owners:
+## Snapshots and public examples
 
-- `contracts`
-  - visible CLI behavior
-  - stdout and stderr boundaries
-  - help, error, config, plugin, theme, doctor, history, and profile surfaces
-- `integration`
-  - in-process flows across config, app assembly, plugin manager, guide UI, and
-    DSL evaluation seams
-  - multi-step behavior that does not need real PTY semantics
-- `e2e`
-  - real binary, subprocess, PTY, prompt redraw, completion menu, and terminal
-    behavior
-- `unit`
-  - branch-heavy transforms, reducers, parsers, classifiers, and awkward
-    failure handling
-- `architecture`
-  - import rules, facade limits, and structural policies
+Use `cargo insta review` to review intentional output changes. Keep snapshots
+with the tests that exercise the behavior: spawned stdout/stderr in contracts,
+terminal flows in e2e, local layout invariants in existing unit checks.
 
-## Test Selection Heuristics
+Doctests teach small, stable public entrypoints and copyable usage. The curated
+`.public-api-examples.txt` baseline requires complete, nonempty runnable Rust
+blocks; the existing doctest target verifies they compile and execute. Do not
+inflate examples with private fixtures or state assertions to raise coverage.
 
-Ask these questions in order:
+## Reporting results
 
-1. Would a user notice this from the CLI surface?
-   - Start with `contracts`.
-2. Does the behavior cross subsystem seams in process?
-   - Add one `integration` test.
-3. Does the behavior depend on a real process, PTY, or terminal redraw?
-   - Add `e2e`.
-4. Is the real risk inside a parser, reducer, matcher, or failure branch?
-   - Add `unit`.
-5. Did the change introduce or relax a structural dependency rule?
-   - Add `architecture`.
-
-Short version:
-
-- visible promise -> `contracts`
-- cross-subsystem flow -> `integration`
-- real terminal/process semantics -> `e2e`
-- local invariant or branchy logic -> `unit`
-- structural rule -> `architecture`
-
-## TDD Workflow (Required)
-
-1. Add or adjust a failing `contracts` test for user-visible behavior.
-2. Add one `integration` test when the behavior crosses subsystem seams.
-3. Add `unit` tests only for branchy or failure-prone internals.
-4. Add `e2e` only when the behavior depends on real process or PTY semantics.
-5. Add `architecture` coverage when the change introduces or relaxes a structural policy.
-6. Implement minimal code for green.
-7. Refactor without changing behavior.
-
-For bugs:
-
-1. Reproduce the bug at the highest boundary that a user would observe.
-2. Only drop inward if that test would be too slow, too flaky, or too indirect.
-3. If a fix adds an outer-boundary regression test, trim overlapping local tests
-   when they no longer add signal.
-
-## Commands
-
-- Root package: `cargo test`
-- Static confidence lane: `python3 scripts/confidence.py static`
-  - formatting, lint, environment, and architecture checks
-- Local confidence lane: `python3 scripts/confidence.py local`
-  - repo-wide public docs, static checks, contracts, and integration
-- Behavior-focused lane: `python3 scripts/confidence.py behavior`
-  - contracts and integration without PTY-heavy `e2e`
-- Full confidence lane: `python3 scripts/confidence.py full`
-  - repo-wide public docs, static checks, unit, behavior, `e2e`, and full coverage
-- Pre-push approximation: `python3 scripts/confidence.py pre-push`
-  - local lane plus fast changed-file coverage
-- Architecture only: `cargo test --test architecture`
-- CLI contracts only: `cargo test --test contracts`
-- REPL/process e2e only: `cargo test --test e2e`
-- Review snapshots: `cargo insta review`
-- Re-record snapshots during a focused run: `cargo insta test -p osp-cli`
-
-## Snapshot Placement
-
-Keep snapshots close to the behavior they lock:
-
-- use unit-style snapshots for stable single-command rendering, help output, and
-  formatter chrome
-- use contract snapshots for spawned CLI behavior where stdout/stderr boundaries
-  matter
-- use PTY or transcript-style tests for multi-step REPL flows, prompt redraws,
-  and shell-state transitions
-
-The current REPL snapshot coverage should stay mostly in unit tests. Move a case
-to a transcript-style test only when the behavior depends on multiple commands or
-interactive state over time.
-
-## Behavior Over Coverage
-
-Coverage is a backstop, not the main confidence signal.
-
-- `contracts`, `integration`, and a small `e2e` layer provide the main behavior
-  confidence
-- `unit` tests provide speed and precision for risky internals
-- coverage helps catch forgotten testing, but it does not replace behavior
-  ownership
-
-When deciding whether to add a test, prefer:
-
-- one strong contract or integration test
-
-over:
-
-- several local tests that all restate the same observable promise
-
-## Coverage and Hooks
-
-`TESTING.md` describes test shape and workflow. Coverage policy and git hook
-behavior live in [../CONTRIBUTING.md](../CONTRIBUTING.md).
-
-In short:
-
-- install hooks with `./scripts/install-git-hooks.sh`
-- `pre-commit` runs `public-docs.py --staged` and `confidence.py static`
-- `pre-push` runs `confidence.py pre-push`
-- run `just cov` or `just cov-gate` when you need the full coverage check
-- use `cargo insta review` to accept intentional output snapshot changes
-
-## Current Coverage Shape
-
-- `contracts`
-  - plugin discovery, provider selection, and dispatch
-  - config, theme, doctor, help, history, version, and profile command surfaces
-  - stdout/stderr separation and snapshot-backed visible output promises
-- `integration`
-  - app assembly, config load/mutate flows, plugin manager behavior, guide UI
-  - DSL parse/eval flows and service execution with test seams
-- `unit`
-  - parser, completion, config, UI, plugin, and runtime helpers
-- `e2e`
-  - binary surface smoke coverage
-  - PTY-driven REPL help, completion, intro, prompt, highlight, and plugin flows
-- `architecture`
-  - import limits
-  - intent seams
-  - curated root facade and pinned toolchain alignment
-
-## Path-Based Defaults
-
-Use these defaults unless a specific behavior clearly belongs elsewhere:
-
-- `src/config/**`
-  - `contracts` for visible config commands
-  - `integration` for load, mutate, reload, and explain flows
-  - `unit` for schema adaptation and parsing edges
-- `src/plugin/**`
-  - `contracts` for discovery, help, selection, and dispatch surface
-  - `integration` for manager and environment propagation
-  - `e2e` only for real subprocess behavior
-- `src/repl/**`
-  - `integration` for host, session, and transcript-like behavior without PTY
-  - `e2e` for PTY and prompt/completion redraw semantics
-  - `unit` for editor state machine internals
-- `src/ui/**`
-  - `contracts` for visible output promises
-  - `unit` for layout and rendering algorithms
-- `src/dsl/**`
-  - `integration` for end-to-end pipeline behavior
-  - `unit` for parser and verb edge cases
-
-## Avoiding Duplicate Tests
-
-- If a contract test already proves a help or output promise, do not restate the
-  same promise in several local render tests.
-- If an integration test already proves a config or plugin flow, keep only the
-  unit tests that protect the tricky branches inside that flow.
-- Keep `e2e` small. Do not promote a case to PTY coverage just because it is
-  important.
-- Prefer deleting overlap over accumulating parallel assertions at multiple
-  layers.
-
-## Definition Of Done Per Feature
-
-- [ ] Contract test covers user-facing behavior.
-- [ ] Integration test covers cross-crate flow.
-- [ ] Unit tests only where risk justifies them.
-- [ ] `cargo test` passes at repo root.
+Report which existing checks passed, how you exercised the requested behavior,
+and what remains unverified. Full CI checks the revision submitted for merge;
+a local hook checks the working tree and may not match the revision pushed.

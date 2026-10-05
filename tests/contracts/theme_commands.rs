@@ -65,7 +65,7 @@ fn theme_list_human_rich_snapshot_contract() {
     let home = make_temp_dir("osp-cli-theme-list-rich");
     let output = osp_command(&home)
         .args([
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "never",
@@ -123,7 +123,7 @@ fn theme_show_plain_snapshot_contract() {
     let home = make_temp_dir("osp-cli-theme-show-plain");
     let output = osp_command(&home)
         .args([
-            "--mode",
+            "--render-mode",
             "plain",
             "--color",
             "never",

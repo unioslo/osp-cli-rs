@@ -6,15 +6,16 @@
 # osp-cli
 
 <img src="docs/assets/osp-cli.png" alt="osp-cli screenshot" width="960" />
-`osp-cli` is a batteries-included Rust CLI and interactive REPL for
-structured operational workflows.
 
-It is also a library for teams that want to embed the upstream host, add
-site-specific native commands, and wrap it in a product-specific crate.
+`osp-cli` is a Rust command-line tool and interactive REPL for working with
+structured data.
+
+You can also use it as a library to build a CLI with your own commands,
+defaults, and integrations.
 
 It combines:
 - command execution
-- interactive shell ergonomics
+- interactive history, completion, and help
 - layered configuration
 - multiple render modes and output formats
 - a small pipeline DSL
@@ -24,12 +25,11 @@ Use it as:
 - a normal command-line tool
 - a long-running REPL with history, completion, inline help, and cached
   results
-- a library/runtime foundation for a downstream product wrapper
+- a library for a site-specific CLI
 
 ## As A Library
 
-If you are evaluating `osp-cli` as an embedder or wrapper-crate dependency,
-start with:
+To build your own CLI with `osp-cli`, start with:
 
 - [docs/EMBEDDING.md](docs/EMBEDDING.md)
 - [docs/README.md](docs/README.md)
@@ -40,13 +40,13 @@ start with:
 From crates.io:
 
 ```bash
-cargo install osp-cli
+cargo install osp-cli --locked
 ```
 
 From source:
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 ```
 
 Run it:
@@ -75,6 +75,19 @@ osp> config explain ui.format
 osp> help config
 ```
 
+While you type in the REPL:
+
+- Tab completes like a shell: a single match or the shared prefix first, then
+  a menu of choices with their descriptions
+- muted text after the cursor suggests the rest of the line from history or
+  the command tree; Right or End accepts it
+- the line under the prompt explains the current command or flag, lists
+  missing required flags, and names unknown words, which are shown in red
+- `repl.tab_mode` (`tab`, `always`, `after_<n>_letters`) chooses whether
+  typing opens the menu without Tab
+
+See [docs/COMPLETION.md](docs/COMPLETION.md).
+
 Per-invocation flags work the same in the CLI and REPL:
 
 ```bash
@@ -90,7 +103,8 @@ plugins commands --format table -v
 ## Capabilities
 
 - CLI and REPL entrypoints with shared command semantics
-- history, completion, highlighting, and scoped shells in the REPL
+- history, shell-style completion, inline suggestions, a status line, and
+  error highlighting in the REPL, plus scoped shells
 - invocation-local output and debug controls
 - output formats including table, JSON, markdown, mreg, and value
 - a row-oriented pipeline DSL for filtering, projection, grouping,
@@ -164,11 +178,8 @@ If you are working on the repo itself, read:
 Useful commands:
 
 ```bash
-python3 scripts/confidence.py static
+python3 scripts/confidence.py --list
 python3 scripts/confidence.py local
-python3 scripts/confidence.py pre-push
-cargo test --all-features --locked
-python3 scripts/coverage.py gate --fast
 ```
 
 See:

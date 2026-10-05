@@ -56,11 +56,21 @@ pub(crate) fn make_temp_dir(prefix: &str) -> TestTempDir {
 
 #[test]
 fn stable_top_level_surface_exposes_primary_entrypoints_and_types_unit() {
-    let _run_from = |args: Vec<&str>| crate::app::run_from::<Vec<&str>, &str>(args);
-    let _run_process = |args: Vec<&str>| crate::app::run_process::<Vec<&str>, &str>(args);
     let mut sink = crate::app::BufferedUiSink::default();
-    let _builder = crate::app::App::builder().build();
-    let _runner = crate::app::App::builder().build_with_sink(&mut sink);
+    let app = crate::App::builder().build();
+    assert_eq!(app.run_process_with_sink(["osp", "--help"], &mut sink), 0);
+    assert!(sink.stdout.contains("Usage"));
+    assert!(sink.stderr.is_empty());
+    sink.stdout.clear();
+    let mut runner = crate::App::builder().build_with_sink(&mut sink);
+    assert_eq!(
+        runner
+            .run_from(["osp", "--version"])
+            .expect("version should run"),
+        0
+    );
+    assert_eq!(sink.stdout, format!("osp {}\n", env!("CARGO_PKG_VERSION")));
+    assert!(sink.stderr.is_empty());
     let _cli_type: Option<crate::cli::Cli> = None;
     let _row: crate::core::row::Row = Default::default();
     let _resolver: Option<crate::config::ConfigResolver> = None;

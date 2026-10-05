@@ -10,7 +10,7 @@ fn cli_scan_and_runtime_load_options_strip_invocation_flags_unit() {
     let argv = [
         OsString::from("osp"),
         OsString::from("--json"),
-        OsString::from("--mode"),
+        OsString::from("--render-mode"),
         OsString::from("plain"),
         OsString::from("--color=never"),
         OsString::from("--ascii"),
@@ -211,7 +211,8 @@ fn repl_dsl_capability_is_declared_per_command_unit() {
     let config_set = Commands::Config(crate::cli::ConfigArgs {
         command: ConfigCommands::Set(crate::cli::ConfigSetArgs {
             key: "ui.mode".to_string(),
-            value: "plain".to_string(),
+            value: Some("plain".to_string()),
+            from_file: None,
             scope: crate::cli::ConfigScopeArgs::default(),
             store: crate::cli::ConfigStoreArgs::default(),
             dry_run: false,
@@ -242,7 +243,8 @@ fn external_inline_builtin_reuses_repl_dsl_policy_unit() {
     let command = Commands::Config(crate::cli::ConfigArgs {
         command: ConfigCommands::Set(crate::cli::ConfigSetArgs {
             key: "ui.mode".to_string(),
-            value: "plain".to_string(),
+            value: Some("plain".to_string()),
+            from_file: None,
             scope: crate::cli::ConfigScopeArgs::default(),
             store: crate::cli::ConfigStoreArgs::default(),
             dry_run: false,

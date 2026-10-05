@@ -98,12 +98,6 @@ impl CursorState {
     }
 }
 
-impl Default for CursorState {
-    fn default() -> Self {
-        Self::synthetic("")
-    }
-}
-
 /// Scope used when merging context-only flags into the cursor view.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContextScope {
@@ -129,6 +123,11 @@ pub struct SuggestionEntry {
     pub display: Option<String>,
     /// Hidden sort key for cases where display order should differ from labels.
     pub sort: Option<String>,
+    /// Other spellings that select this value.
+    ///
+    /// Aliases are matched against typed input but never listed on their
+    /// own; accepting a match inserts `value`.
+    pub aliases: Vec<String>,
 }
 
 impl SuggestionEntry {
@@ -139,6 +138,7 @@ impl SuggestionEntry {
             meta: None,
             display: None,
             sort: None,
+            aliases: Vec::new(),
         }
     }
 
@@ -163,6 +163,12 @@ impl SuggestionEntry {
     /// If omitted, the suggestion carries no explicit sort hint.
     pub fn sort(mut self, sort: impl Into<String>) -> Self {
         self.sort = Some(sort.into());
+        self
+    }
+
+    /// Adds spellings that match this suggestion without being listed.
+    pub fn aliases(mut self, aliases: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.aliases.extend(aliases.into_iter().map(Into::into));
         self
     }
 }
@@ -403,6 +409,8 @@ pub struct ArgNode {
     pub value_type: Option<ValueType>,
     /// Suggested values for the argument.
     pub suggestions: Vec<SuggestionEntry>,
+    /// Optional shared catalogue: three-character minimum, at most 25 prefix matches.
+    pub prefix_values: Option<PrefixValues>,
 }
 
 impl ArgNode {
@@ -472,6 +480,51 @@ impl ArgNode {
     }
 }
 
+/// A large, locally refreshed value catalogue shared by completion tree clones.
+/// Values are sorted once on replacement; each lookup copies at most `limit`
+/// prefix matches. Refresh outside the editing path, without network I/O here.
+/// Clones observe the same replacements. Equality compares shared catalogue
+/// identity, not the current entries.
+#[derive(Debug, Clone, Default)]
+pub struct PrefixValues(std::sync::Arc<std::sync::RwLock<Vec<String>>>);
+
+impl PartialEq for PrefixValues {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for PrefixValues {}
+
+impl PrefixValues {
+    /// Atomically replaces the catalogue, sorting and removing duplicate values.
+    pub fn replace(&self, mut values: Vec<String>) {
+        values.sort_unstable();
+        values.dedup();
+        *self.0.write().unwrap_or_else(|err| err.into_inner()) = values;
+    }
+
+    /// Returns lexicographically ordered prefix matches, bounded before cloning.
+    pub fn matching(&self, prefix: &str, limit: usize) -> Vec<String> {
+        let values = self.0.read().unwrap_or_else(|err| err.into_inner());
+        let start = values.partition_point(|value| value.as_str() < prefix);
+        values[start..]
+            .iter()
+            .take_while(|value| value.starts_with(prefix))
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    /// Reports exact membership without copying the catalogue.
+    pub fn contains(&self, value: &str) -> bool {
+        self.0
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .binary_search_by(|candidate| candidate.as_str().cmp(value))
+            .is_ok()
+    }
+}
+
 /// Completion metadata for a flag spelling.
 ///
 /// Flags can contribute both direct value suggestions and context that affects
@@ -480,6 +533,8 @@ impl ArgNode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
 pub struct FlagNode {
+    /// Optional shared catalogue: three-character minimum, at most 25 prefix matches.
+    pub prefix_values: Option<PrefixValues>,
     /// Optional description shown alongside the flag.
     pub tooltip: Option<String>,
     /// Whether the flag does not accept a value.
@@ -508,6 +563,11 @@ pub struct FlagNode {
     pub request_hints: Option<RequestHintSet>,
     /// Extra flag-name hints attached to this flag.
     pub flag_hints: Option<FlagHints>,
+    /// Preferred spelling when this entry is another spelling of one flag.
+    ///
+    /// Menus list the preferred spelling once, labelled with its other
+    /// spellings; an alias is offered on its own only when typed exactly.
+    pub alias_of: Option<String>,
 }
 
 impl FlagNode {
@@ -538,16 +598,6 @@ impl FlagNode {
     /// If omitted, the flag is treated as non-repeatable.
     pub fn multi(mut self) -> Self {
         self.multi = true;
-        self
-    }
-
-    /// Marks this flag as context-only within the given scope.
-    ///
-    /// If omitted, later occurrences of the flag are not merged into cursor
-    /// context unless the user is actively editing that flag.
-    pub fn context_only(mut self, scope: ContextScope) -> Self {
-        self.context_only = true;
-        self.context_scope = scope;
         self
     }
 
@@ -618,13 +668,14 @@ impl CompletionNode {
     ///     CompletionNode, ContextScope, FlagNode, SuggestionEntry, ValueType,
     /// };
     ///
-    /// let flag = FlagNode::new()
+    /// let mut flag = FlagNode::new()
     ///     .tooltip("Provider")
     ///     .flag_only()
     ///     .multi()
-    ///     .context_only(ContextScope::Global)
     ///     .value_type(ValueType::Path)
     ///     .suggestions([SuggestionEntry::from("alpha")]);
+    /// flag.context_only = true;
+    /// flag.context_scope = ContextScope::Global;
     ///
     /// let node = CompletionNode::default()
     ///     .sort("01")
@@ -650,12 +701,6 @@ impl CompletionNode {
     /// Adds a flag node keyed by its spelling.
     pub fn with_flag(mut self, name: impl Into<String>, node: FlagNode) -> Self {
         self.flags.insert(name.into(), node);
-        self
-    }
-
-    /// Attaches optional advisory relational facts to this node.
-    pub fn with_planning(mut self, planning: PlanningHints) -> Self {
-        self.planning = Some(planning);
         self
     }
 }
@@ -864,18 +909,6 @@ pub enum CompletionRequest {
     },
 }
 
-impl Default for CompletionRequest {
-    fn default() -> Self {
-        Self::Positionals {
-            context_path: Vec::new(),
-            flag_scope_path: Vec::new(),
-            arg_index: 0,
-            show_subcommands: false,
-            show_flag_names: false,
-        }
-    }
-}
-
 impl CompletionRequest {
     /// Returns the stable request-kind label used by tests and debug surfaces.
     pub fn kind(&self) -> &'static str {
@@ -892,7 +925,7 @@ impl CompletionRequest {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Full completion analysis derived from parsing and context resolution.
 pub struct CompletionAnalysis {
     /// Full parser output plus the cursor-local context derived from it.

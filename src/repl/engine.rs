@@ -43,6 +43,7 @@ mod adapter;
 mod config;
 mod debug;
 mod editor;
+mod hint;
 mod overlay;
 mod session;
 
@@ -58,7 +59,7 @@ pub use adapter::{color_from_style_spec, default_pipe_verbs};
 pub use config::{
     LineProjection, LineProjector, PromptRightRenderer, ReplAppearance, ReplAppearanceBuilder,
     ReplInputMode, ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunConfig, ReplRunConfigBuilder,
-    ReplRunResult,
+    ReplRunResult, ReplTabMode,
 };
 pub use debug::{
     CompletionDebug, CompletionDebugFrame, CompletionDebugMatch, CompletionDebugOptions, DebugStep,
@@ -84,6 +85,7 @@ struct ReplRunContext {
     prompt: OspPrompt,
     completion_tree: CompletionTree,
     appearance: ReplAppearance,
+    tab_mode: ReplTabMode,
     line_projector: Option<LineProjector>,
     history_store: SharedHistory,
 }
@@ -114,6 +116,7 @@ where
         appearance,
         history_config,
         input_mode,
+        tab_mode,
         prompt_right,
         line_projector,
     } = config;
@@ -130,6 +133,7 @@ where
             prompt,
             completion_tree,
             appearance,
+            tab_mode,
             line_projector,
             history_store: history_store.clone(),
         },
@@ -160,6 +164,7 @@ where
         prompt,
         completion_tree,
         appearance,
+        tab_mode,
         line_projector,
         history_store,
     } = context;
@@ -174,6 +179,7 @@ where
             prompt: &prompt,
             completion_tree,
             appearance,
+            tab_mode,
             line_projector,
         },
         history_store,

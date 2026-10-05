@@ -59,10 +59,8 @@ state remain owned by the host.
 
 ## Ownership Split
 
-Keep the split boring:
-
-- `osp-cli` owns generic mechanism
-- your product crate owns site-specific facts
+Keep reusable CLI behavior in `osp-cli` and site-specific behavior in your
+product crate.
 
 Generic mechanism includes:
 
@@ -84,7 +82,7 @@ probably belongs upstream.
 
 ## Recommended Shape
 
-The normal wrapper shape is:
+To build a wrapper:
 
 1. Keep a thin product-level app type that contains `osp_cli::App`.
 2. Expose one wrapper-owned `builder()` that applies your defaults and native
@@ -141,12 +139,11 @@ fn site_native_registry() -> osp_cli::NativeCommandRegistry {
 }
 ```
 
-That shape keeps the generic host untouched while giving the product crate one
-obvious place to add its own commands and state.
+The product crate adds commands and state through its builder.
 
 ## Wrapper Checklist
 
-For a minimal but honest wrapper crate, keep this checklist true:
+A wrapper needs:
 
 - one wrapper app type owns `osp_cli::App`
 - one wrapper `builder()` applies product defaults and native commands
@@ -267,7 +264,7 @@ impl SiteApp {
 }
 ```
 
-`src/main.rs` should usually stay boring:
+Delegate from `src/main.rs` to the wrapper:
 
 ```rust
 fn main() {
@@ -285,8 +282,7 @@ Notes:
 - `site_runtime_config_for(terminal)` is optional and meant for product-owned
   tests, validation, and adjacent tooling that need the same merged defaults
   outside the host
-- `SiteApp::builder()` is the clean downstream seam when your product wants to
-  keep the upstream host but still expose one wrapper-owned construction path
+- `SiteApp::builder()` gives callers one place to construct the configured host
 - if the product does not need its own preflight config step, keep the wrapper
   thinner and only inject the native registry and product defaults
 
@@ -324,14 +320,20 @@ really needs a different contract.
 ## Native Commands
 
 Use native commands when the product wants built-in commands that participate
-in the same help, completion, policy, and dispatch surfaces as the rest of the
-host.
+in the host's help, completion, policy checks, and dispatch.
 
-Keep the boundary small:
+When implementing native commands:
 
 - command implementations should consume a `NativeCommandContext`
 - long-running commands should emit `NativeProgressEvent` values through the
   context rather than writing directly to stdio
+- use `presentation_lines` with `progress_replace: true` for transient status;
+  a single rendered line animates on interactive stderr and clears when the
+  command finishes or presents another document
+- call `context.flush_progress()` before blocking for input, and use
+  `context.present(...)` for notices and confirmations that must remain visible
+  outside result-stream DSL filters; contexts without a progress sink make
+  these calls no-ops
 - use `NativeCommandOutcome::ResponseWithExit` when a stable final document
   must accompany a meaningful non-zero outcome
 - product-specific state should live in the wrapper crate, not in

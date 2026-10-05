@@ -35,6 +35,30 @@ fn normalize_minor_version(version: &str) -> String {
     format!("{major}.{minor}")
 }
 
+fn assert_job_toolchain(source: &str, job: &str, channel: &str) {
+    let job_header = format!("  {job}:");
+    let lines = source
+        .lines()
+        .skip_while(|line| *line != job_header)
+        .skip(1)
+        .take_while(|line| line.is_empty() || line.starts_with("    "))
+        .collect::<Vec<_>>();
+    assert!(!lines.is_empty(), "workflow job {job} should exist");
+    assert!(
+        !lines.contains(&"    if: false"),
+        "toolchain verification job {job} must be enabled",
+    );
+    let workflow_ref = format!("dtolnay/rust-toolchain@{channel}");
+    assert!(
+        lines.iter().any(|line| {
+            line.trim().strip_prefix("uses:").is_some_and(|reference| {
+                reference.split('#').next().unwrap().trim() == workflow_ref
+            })
+        }),
+        "job {job} should install pinned Rust toolchain {channel}",
+    );
+}
+
 #[test]
 fn pinned_rust_toolchain_stays_aligned_across_metadata_and_ci() {
     let cargo_version = cargo_rust_version();
@@ -46,7 +70,6 @@ fn pinned_rust_toolchain_stays_aligned_across_metadata_and_ci() {
         "Cargo.toml rust-version and rust-toolchain.toml channel drifted",
     );
 
-    let workflow_ref = format!("dtolnay/rust-toolchain@{toolchain_channel}");
     for workflow in [
         ".github/workflows/verify.yml",
         ".github/workflows/release.yml",
@@ -54,11 +77,21 @@ fn pinned_rust_toolchain_stays_aligned_across_metadata_and_ci() {
         let path = workspace_root().join(workflow);
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-        assert!(
-            source.contains(&workflow_ref),
-            "{} should install the pinned Rust toolchain {}",
-            path.display(),
-            toolchain_channel
-        );
+        assert_job_toolchain(&source, "verify", &toolchain_channel);
     }
+
+    let confidence = fs::read_to_string(workspace_root().join("scripts/confidence.py"))
+        .expect("confidence lane definitions should be readable");
+    let miri_channel = confidence
+        .lines()
+        .find_map(|line| line.strip_prefix("MIRI_TOOLCHAIN = "))
+        .expect("confidence lanes should pin Miri")
+        .trim_matches('"');
+    assert!(
+        miri_channel.starts_with("nightly-"),
+        "Miri must use a dated nightly"
+    );
+    let verify = fs::read_to_string(workspace_root().join(".github/workflows/verify.yml"))
+        .expect("verification workflow should be readable");
+    assert_job_toolchain(&verify, "miri", miri_channel);
 }

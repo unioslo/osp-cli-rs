@@ -230,7 +230,7 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
                 out.format = OutputFormat::parse(value);
                 continue;
             }
-            if let Some(value) = token.strip_prefix("--mode=") {
+            if let Some(value) = token.strip_prefix("--render-mode=") {
                 out.mode = RenderMode::parse(value);
                 continue;
             }
@@ -296,7 +296,7 @@ pub(crate) fn parse_help_render_overrides(args: &[OsString]) -> HelpRenderOverri
                     iter.next();
                 }
             }
-            "--mode" if fallback_invocation_parse => {
+            "--render-mode" if fallback_invocation_parse => {
                 if let Some(value) = iter.peek().copied()
                     && !value.starts_with('-')
                     && let Some(parsed) = RenderMode::parse(value)
@@ -420,7 +420,7 @@ mod tests {
                     "osp",
                     "--presentation",
                     "compact",
-                    "--mode",
+                    "--render-mode",
                     "rich",
                     "--color",
                     "always",
@@ -472,7 +472,7 @@ mod tests {
             OsString::from("--profile=prod"),
             OsString::from("--theme=nord"),
             OsString::from("--presentation=compact"),
-            OsString::from("--mode=plain"),
+            OsString::from("--render-mode=plain"),
             OsString::from("--color=always"),
             OsString::from("--unicode=never"),
         ]);
@@ -491,7 +491,7 @@ mod tests {
             OsString::from("osp"),
             OsString::from("--presentation"),
             OsString::from("loud"),
-            OsString::from("--mode=LOUD"),
+            OsString::from("--render-mode=LOUD"),
             OsString::from("--color=sideways"),
             OsString::from("--unicode"),
             OsString::from("sometimes"),
@@ -508,7 +508,7 @@ mod tests {
         let parsed = parse_help_render_overrides(&help_args(&[
             "osp",
             "--guide",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",

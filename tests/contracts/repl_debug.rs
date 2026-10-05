@@ -44,16 +44,23 @@ fn repl_debug_highlight_reports_help_alias_projection_contract() {
 
 #[test]
 fn repl_debug_highlight_reports_hex_literal_rgb_contract() {
-    let output = run_repl_debug(&["repl", "debug-highlight", "--line", "#ff00cc"]);
+    let output = run_repl_debug(&[
+        "repl",
+        "debug-highlight",
+        "--line",
+        "config set color.text #ff00cc",
+    ]);
     let payload: Value =
         serde_json::from_slice(&output.stdout).expect("debug-highlight stdout should be json");
     let spans = payload["spans"]
         .as_array()
         .expect("spans should render as an array");
-    assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0]["text"], "#ff00cc");
-    assert_eq!(spans[0]["kind"], "color_literal");
-    assert_eq!(spans[0]["rgb"], serde_json::json!([255, 0, 204]));
+    let literal = spans
+        .iter()
+        .find(|span| span["text"] == "#ff00cc")
+        .expect("hex literal span");
+    assert_eq!(literal["kind"], "color_literal");
+    assert_eq!(literal["rgb"], serde_json::json!([255, 0, 204]));
     assert!(
         output.stderr.is_empty(),
         "unexpected stderr: {}",

@@ -7,13 +7,52 @@ use crate::temp_support::make_temp_dir;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
-use std::path::PathBuf;
-#[cfg(unix)]
 use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
+
+#[cfg(unix)]
+fn assert_editor_command(session: &ReplPtySession, start: usize, command: &str) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let output = session.output_since(start);
+        if let Some((_, frame)) = output.rsplit_once("\x1b[?25l")
+            && frame.contains("\x1b[?25h")
+            && crate::support::strip_ansi_preserve_newlines(frame).contains(command)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "editor should finish painting {command:?}; output:\n{}",
+            session.output_snapshot(8000)
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+fn assert_theme_result(session: &ReplPtySession, start: usize, id: &str, name: &str) {
+    assert!(
+        session.wait_for_plain_output_since(start, "} ]", Duration::from_secs(3)),
+        "selected or retained input should produce the theme result; output:\n{}",
+        session.output_snapshot(8000),
+    );
+    let output = crate::support::strip_ansi_preserve_newlines(&session.output_since(start));
+    let json_start = output
+        .find("[\n")
+        .expect("theme result should be a JSON array");
+    let result = serde_json::Deserializer::from_str(&output[json_start..])
+        .into_iter::<serde_json::Value>()
+        .next()
+        .expect("theme result should exist")
+        .expect("theme result should parse");
+    assert_eq!(result[0]["id"], id);
+    assert_eq!(result[0]["name"], name);
+    assert!(session.wait_for_plain_output_since(start, "default>", Duration::from_secs(3)));
+}
 
 #[cfg(unix)]
 #[test]
@@ -39,6 +78,109 @@ fn repl_starts_runs_help_and_exits_end_to_end() {
         "expected command overview after `help`; output:\n{}",
         session.output_snapshot(2000),
     );
+
+    let start = session.output_len();
+    session.write_bytes(b"config set --session repl.history.enabled true\r");
+    assert!(
+        session.wait_for_plain_output_since(start, "for this session only", Duration::from_secs(3)),
+        "history capture should be enabled for this session; output:\n{}",
+        session.output_snapshot(4000),
+    );
+    assert!(session.wait_for_plain_output_since(start, "default>", Duration::from_secs(3)));
+
+    // Recall executes the selected command; cancelling keeps the unfinished input.
+    for (query, command, expected_id, expected_name) in [
+        (None, "theme show dracula --json", "dracula", "Dracula"),
+        (Some("dracula"), "", "dracula", "Dracula"),
+        (
+            Some("theme show "),
+            "rose-pine-moon --json",
+            "rose-pine-moon",
+            "Rose Pine Moon",
+        ),
+    ] {
+        if let Some(query) = query {
+            session.type_text(query);
+            let start = session.output_len();
+            session.write_bytes(b"\x12");
+            assert!(
+                session.wait_for_plain_output_since(
+                    start,
+                    "(reverse-i-search)>",
+                    Duration::from_secs(3)
+                ),
+                "history picker should display the current query; output:\n{}",
+                session.output_snapshot(8000),
+            );
+            assert!(
+                session.wait_for_plain_output_since(start, "--json", Duration::from_secs(3)),
+                "history entry should be visible; output:\n{}",
+                session.output_snapshot(12000)
+            );
+            let start = session.output_len();
+            session.write_bytes(if command.is_empty() { b"\r" } else { b"\x03" });
+            assert!(
+                session.wait_for_output_since(start, "\x1b[?25h", Duration::from_secs(3)),
+                "editor should resume after the history picker; output:\n{}",
+                session.output_snapshot(8000),
+            );
+        }
+        if !command.is_empty() {
+            session.type_text(command);
+        }
+        let start = session.output_len();
+        session.write_bytes(b"\r");
+        assert_theme_result(&session, start, expected_id, expected_name);
+    }
+
+    // Navigate the editor's durable-history backend in both directions.
+    for (keys, selected) in [
+        (b"\x1b[A".as_slice(), "theme show rose-pine-moon --json"),
+        (b"\x1b[A".as_slice(), "theme show dracula --json"),
+        (b"\x1b[B".as_slice(), "theme show rose-pine-moon --json"),
+    ] {
+        let start = session.output_len();
+        session.write_bytes(keys);
+        assert!(
+            session.wait_for_plain_output_since(start, selected, Duration::from_secs(3)),
+            "history navigation should recall {selected:?}; output:\n{}",
+            session.output_snapshot(8000),
+        );
+    }
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    assert_theme_result(&session, start, "rose-pine-moon", "Rose Pine Moon");
+
+    session.type_text("!!");
+    let expanded = session.output_len();
+    session.write_bytes(b"\t");
+    assert!(
+        session.wait_for_plain_output_since(
+            expanded,
+            "theme show rose-pine-moon --json",
+            Duration::from_secs(3)
+        ),
+        "Tab should expand the last accepted command; output:\n{}",
+        session.output_snapshot(8000)
+    );
+    // A single expansion is filled in place, like shell completion.
+    assert_editor_command(&session, expanded, "theme show rose-pine-moon --json");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    assert_theme_result(&session, start, "rose-pine-moon", "Rose Pine Moon");
+
+    session.type_text("theme show nord --json");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    assert_theme_result(&session, start, "nord", "Nord");
+
+    session.type_text("!-2");
+    let expanded = session.output_len();
+    session.write_bytes(b"\r");
+    assert_editor_command(&session, expanded, "theme show rose-pine-moon --json");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    assert_theme_result(&session, start, "rose-pine-moon", "Rose Pine Moon");
 
     session.write_bytes(b"exit\r");
     assert!(
@@ -133,13 +275,12 @@ fn repl_without_cursor_position_reports_falls_back_without_blocking() {
 fn repl_basic_mode_runs_help_and_exit_without_a_tty_end_to_end() {
     let home = make_temp_dir("osp-cli-basic-home");
     let plugins = make_temp_dir("osp-cli-basic-plugins");
-    let bin = PathBuf::from(env!("CARGO_BIN_EXE_osp"));
 
-    let output = Command::new(bin)
-        .env("HOME", &home)
-        .env("XDG_CONFIG_HOME", home.join(".config"))
-        .env("XDG_CACHE_HOME", home.join(".cache"))
-        .env("XDG_STATE_HOME", home.join(".local/state"))
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+        .env_clear()
+        .envs(crate::test_env::isolated_env(home.path()))
+        .env("PATH", "/usr/bin:/bin")
+        .env("LANG", "C.UTF-8")
         .env("TERM", "dumb")
         .env("NO_COLOR", "1")
         .env("OSP__REPL__INTRO", "none")
@@ -173,4 +314,79 @@ fn repl_basic_mode_runs_help_and_exit_without_a_tty_end_to_end() {
     assert!(stdout.contains("Commands"));
     assert!(stdout.contains("help"));
     assert!(stdout.contains("exit"));
+}
+
+#[cfg(unix)]
+fn wait_for_repl_json(session: &ReplPtySession, start: usize) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let output = crate::support::strip_ansi_preserve_newlines(&session.output_since(start));
+        if let Some(json_start) = output.find(['{', '['])
+            && let Some(Ok(value)) = serde_json::Deserializer::from_str(&output[json_start..])
+                .into_iter::<serde_json::Value>()
+                .next()
+        {
+            return value;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected a complete JSON result: {}",
+            session.output_snapshot(16000)
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_operator_inspects_pipeline_failure_and_recovers_to_typed_output() {
+    let mut session = ReplPtySession::spawn(ReplPtyConfig::default());
+    assert!(session.wait_for_plain_output("default>", Duration::from_secs(10)));
+    let failed_command = "theme show dracula | Z";
+    session.type_text(failed_command);
+    let failed = session.output_len();
+    session.write_bytes(b"\r");
+    assert!(
+        session.wait_for_plain_output_since(failed, "doctor last -v", Duration::from_secs(5)),
+        "the failed output pipeline should leave an inspectable failure: {}",
+        session.output_snapshot(12000)
+    );
+
+    // Inspect the same retained failure at each documented detail level.
+    for detail in ["", "-v", "-vv", "-vvv"] {
+        session.type_text(&format!("doctor last {detail}"));
+        let start = session.output_len();
+        session.write_bytes(b"\r");
+        assert!(
+            session.wait_for_plain_output_since(start, failed_command, Duration::from_secs(5)),
+            "the diagnostic should identify the original command: {}",
+            session.output_snapshot(12000)
+        );
+        assert!(session.wait_for_plain_output_since(start, "default>", Duration::from_secs(5)));
+    }
+
+    session.type_text("doctor last --json");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    let failure = wait_for_repl_json(&session, start);
+    assert_eq!(failure["status"], "error");
+    assert_eq!(failure["command"], failed_command);
+    assert!(
+        failure["summary"]
+            .as_str()
+            .is_some_and(|text| text.contains('Z'))
+    );
+    assert_ne!(failure["detail"], failure["summary"]);
+
+    session.type_text("theme show dracula --json | G id | A count | Z");
+    let start = session.output_len();
+    session.write_bytes(b"\r");
+    let recovered = wait_for_repl_json(&session, start);
+    assert_eq!(
+        recovered,
+        serde_json::json!([{"id": "dracula", "count": 1}])
+    );
+
+    session.write_bytes(b"exit\r");
+    assert!(session.wait_for_exit(Duration::from_secs(5)));
 }

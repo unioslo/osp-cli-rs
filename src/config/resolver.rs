@@ -208,6 +208,9 @@ impl ConfigResolver {
     /// The explanation keeps the raw winning value as well as the final
     /// adapted value so callers can see where interpolation or type coercion
     /// changed the original input.
+    /// Runtime keys are explained through full resolution of the selected
+    /// configuration, so an invalid winning value for another key can fail the
+    /// explanation. `profile.default` uses its dedicated profile-selection path.
     ///
     /// # Examples
     ///

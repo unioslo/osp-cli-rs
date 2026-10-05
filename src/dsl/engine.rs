@@ -55,9 +55,10 @@ pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult>
 /// Unlike `apply_pipeline`, this preserves the incoming `OutputMeta.wants_copy`
 /// bit when continuing an existing output flow.
 ///
-/// Use this when the command already produced an [`OutputResult`] and later
-/// stages should inherit its render/document metadata instead of starting from
-/// scratch.
+/// Use this when the command already produced an [`OutputResult`]. An empty
+/// pipeline returns it unchanged. Transformations invalidate the original
+/// document and presentation metadata; render and guide metadata are retained
+/// or rebuilt only where the stages support them.
 ///
 /// # Examples
 ///
@@ -89,8 +90,8 @@ pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<
 /// Like `apply_pipeline`, it starts with `wants_copy = false`.
 ///
 /// Prefer [`apply_pipeline`] for the common "rows in, output out" path. This
-/// entrypoint is useful when you want the execution wording to distinguish it
-/// from the metadata-preserving [`apply_output_pipeline`] path.
+/// entrypoint starts a new output flow. Use [`apply_output_pipeline`] to continue
+/// an existing flow under its stage-specific metadata rules.
 ///
 /// # Examples
 ///
@@ -153,6 +154,7 @@ pub(crate) fn run_compiled(
         if !stage.behavior().preserves_render_recommendation {
             output.meta.render_recommendation = None;
             output.meta.display_columns = None;
+            output.meta.display_column_labels = None;
             output.meta.column_align.clear();
             output.meta.unix_timestamp_columns.clear();
             output.meta.display_rules.clear();

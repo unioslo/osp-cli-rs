@@ -1,16 +1,9 @@
 # Completion and History
 
-This document covers the REPL features that help you type less and repeat
-yourself less.
+In the REPL, completion suggests commands and arguments as you type. History
+lets you recall and repeat previous commands. Both use local data.
 
-The short version:
-
-- completion helps you discover what can be typed next
-- history helps you reuse what you already typed
-
-Both are local features. They should feel fast and predictable, not magical.
-
-## Broad-Strokes Model
+## How completion works
 
 Completion works from already-known local information:
 
@@ -22,6 +15,41 @@ Completion works from already-known local information:
 - the current cursor position and tokens already on the line
 
 It does not call remote systems while you are pressing tab.
+
+## While You Type
+
+- **Tab** completes like a shell first: a single match, or an exact word no
+  other choice extends, is inserted with a trailing space; otherwise the word
+  grows to the choices' shared prefix. When there is nothing to add, Tab opens
+  the menu with nothing selected, and further Tabs (Shift-Tab backwards) put
+  each choice into the line. Space keeps the choice and moves on; Enter keeps
+  it without running the line.
+- **The menu** lists up to 20 choices as one column with their descriptions,
+  and more as a grid. A flag's other spellings share one entry
+  (`--interactive, -i`), required flags come first and are marked `*`, and
+  value aliases match what you type without being listed.
+- **Muted text after the cursor** suggests the rest of the line: the newest
+  history entry that extends it, or the only completion for the current word.
+  Right or End accepts it; Alt-Right accepts one word.
+- **The line under the prompt** shows the command's declared positional usage,
+  with the current slot in bold: `<NAME>` is required, `[NAME]` is optional,
+  and `…` permits repeated values. Filled slots use bare names. A `·` separates
+  usage from help or the current slot's choices (`on | off`, for example).
+  Flag values retain their own help. Commands without positional declarations
+  show their usual description and missing required flags. Errors name the
+  invalid word. The status stays on one terminal row.
+- **Red** marks the first word that cannot be valid: an unknown subcommand or
+  flag. A word still being typed is not marked while it can grow into a valid
+  one.
+
+`repl.tab_mode` chooses when typing opens the menu without Tab:
+
+- `tab` (default): only Tab, Ctrl-Space, or starting a flag with `-`
+- `always`: every typed character, including a space
+- `after_<n>_letters`, e.g. `after_1_letter` or `after_3_letters`: once the
+  current word has that many characters
+
+Any positive count is accepted. Unrecognized values fall back to `tab`.
 
 ## Shell Completion Scripts
 
@@ -100,6 +128,12 @@ The REPL keeps history for two different jobs:
 - navigation through previous commands
 - history expansion when you want to replay or adapt an earlier command
 
+An accepted command stays in navigation and persistent history when execution
+fails. Unknown commands and invalid syntax are removed after dispatch. The
+entered `!!` form expands in the editor on Tab; Enter executes the expanded
+command and keeps it as the last command when it is accepted, including after
+an execution failure.
+
 Supported expansions:
 
 - `!!`
@@ -157,7 +191,7 @@ If your install never exposes shellable roots, you can ignore this section.
 
 ## If Completion Looks Wrong
 
-Start with the boring checks first:
+Check the command catalog and configuration first:
 
 1. confirm the command exists in the current catalog:
    `plugins commands`

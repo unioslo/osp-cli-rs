@@ -93,33 +93,29 @@ pub(super) fn parse_repl_invocation(
     session: &AppSession,
     parsed: &input::ReplParsedLine,
 ) -> Result<ParsedReplDispatch> {
-    let unscoped = scan_command_tokens(&parsed.dispatch_tokens)?;
-    let absolute_builtin = !session.scope.is_root()
-        && unscoped.tokens.first().is_some_and(|command| {
-            matches!(
-                command.as_str(),
-                "plugins" | "doctor" | "theme" | "config" | "alias" | "history" | "intro"
-            )
-        });
-    let absolute_external = unscoped.tokens.first().map(String::as_str) == Some("sudo");
-    let absolute_command = absolute_builtin || absolute_external;
-    let prefixed_tokens = if absolute_command {
-        parsed.dispatch_tokens.clone()
-    } else {
-        parsed.prefixed_tokens(&session.scope)
-    };
-    let scanned = if absolute_command {
-        unscoped
-    } else {
-        scan_command_tokens(&prefixed_tokens)?
-    };
+    let mut scanned = scan_command_tokens(&parsed.dispatch_tokens)?;
+    let elevated = scanned.tokens.first().map(String::as_str) == Some("sudo");
+    let prefix_len = usize::from(elevated);
+    let command_tokens = &scanned.tokens[prefix_len..];
+    let scope = session.scope.commands();
+    let absolute_command = command_tokens.first().is_some_and(|command| {
+        matches!(
+            command.as_str(),
+            "plugins" | "doctor" | "theme" | "config" | "alias" | "history" | "intro"
+        ) || (elevated
+            && (scope.first() == Some(command)
+                || crate::repl::is_repl_shellable_command(runtime.config.resolved(), command)))
+    });
+    // Elevation wraps the resolved command; it must not discard shell scope.
+    // Keep bare sudo untouched so the ordinary missing-command error applies.
+    let scoped = !absolute_command && !(elevated && command_tokens.is_empty());
+    if scoped {
+        let prefixed = session.scope.prefixed_tokens(command_tokens);
+        scanned.tokens.splice(prefix_len.., prefixed);
+    }
     let effective =
         app::resolve_invocation_ui(runtime.config.resolved(), &runtime.ui, &scanned.invocation);
-    let command_index = if absolute_command {
-        0
-    } else {
-        session.scope.commands().len()
-    };
+    let command_index = prefix_len + if scoped { scope.len() } else { 0 };
     // `help` is a REPL alias layered on top of shell scope. Handle it before
     // clap parsing so `help user` inside `ldap` resolves as scoped inline help
     // instead of a normal `help` subcommand invocation.
@@ -346,12 +342,36 @@ pub(super) fn execute_repl_command_dispatch(
     dispatch: ParsedReplDispatch,
     sink: &mut dyn UiSink,
 ) -> Result<ExecutedReplCommand> {
+    let mut accepted = false;
+    execute_repl_command_dispatch_with_acceptance(
+        runtime,
+        session,
+        clients,
+        history,
+        line,
+        dispatch,
+        sink,
+        &mut accepted,
+    )
+}
+
+pub(super) fn execute_repl_command_dispatch_with_acceptance(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: Option<&SharedHistory>,
+    line: &str,
+    dispatch: ParsedReplDispatch,
+    sink: &mut dyn UiSink,
+    accepted: &mut bool,
+) -> Result<ExecutedReplCommand> {
     match dispatch {
         ParsedReplDispatch::Help {
             result,
             effective,
             stages,
         } => {
+            *accepted = true;
             let rendered = render_repl_command_output(
                 runtime, session, line, &stages, *result, &effective, sink,
             )?;
@@ -379,6 +399,7 @@ pub(super) fn execute_repl_command_dispatch(
                     command,
                     invocation: &effective,
                     progress_sink: Some(sink),
+                    accepted,
                 },
             )?;
             let execute_finished = Instant::now();
@@ -401,10 +422,11 @@ pub(super) fn execute_repl_command_dispatch(
     }
 }
 
-struct ReplRunInput<'invocation, 'sink> {
+struct ReplRunInput<'invocation, 'sink, 'accepted> {
     command: Commands,
     invocation: &'invocation ResolvedInvocation,
     progress_sink: Option<&'sink mut dyn UiSink>,
+    accepted: &'accepted mut bool,
 }
 
 fn run_repl_command_with_progress(
@@ -412,7 +434,7 @@ fn run_repl_command_with_progress(
     session: &mut AppSession,
     clients: &AppClients,
     history: &SharedHistory,
-    input: ReplRunInput<'_, '_>,
+    input: ReplRunInput<'_, '_, '_>,
 ) -> Result<crate::app::CliCommandResult> {
     let result = match input.command {
         Commands::External(tokens) => run_repl_external_command_with_progress(
@@ -422,15 +444,19 @@ fn run_repl_command_with_progress(
             tokens,
             input.invocation,
             input.progress_sink,
+            input.accepted,
         ),
-        builtin => app::run_repl_builtin_command(
-            runtime,
-            session,
-            clients,
-            history,
-            input.invocation,
-            builtin,
-        ),
+        builtin => {
+            *input.accepted = true;
+            app::run_repl_builtin_command(
+                runtime,
+                session,
+                clients,
+                history,
+                input.invocation,
+                builtin,
+            )
+        }
     }?;
 
     Ok(result)
@@ -471,6 +497,7 @@ pub(super) fn run_repl_command(
     invocation: &ResolvedInvocation,
     history: &SharedHistory,
 ) -> Result<crate::app::CliCommandResult> {
+    let mut accepted = false;
     run_repl_command_with_progress(
         runtime,
         session,
@@ -480,6 +507,7 @@ pub(super) fn run_repl_command(
             command,
             invocation,
             progress_sink: None,
+            accepted: &mut accepted,
         },
     )
 }
@@ -508,8 +536,9 @@ fn run_repl_external_command_with_progress(
     tokens: Vec<String>,
     invocation: &ResolvedInvocation,
     progress_sink: Option<&mut dyn UiSink>,
+    accepted: &mut bool,
 ) -> Result<crate::app::CliCommandResult> {
-    app::external::run_external_command_with_help_renderer_and_progress(
+    app::external::run_external_command_with_help_renderer_and_progress_for_repl(
         runtime,
         session,
         clients,
@@ -517,6 +546,7 @@ fn run_repl_external_command_with_progress(
         invocation,
         GuideView::from_text,
         progress_sink,
+        accepted,
     )
 }
 

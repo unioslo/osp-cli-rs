@@ -79,9 +79,8 @@ Current built-ins:
 - `catppuccin`
 - `rose-pine-moon` (default)
 
-`plain` is the boring fallback. It is useful when you want a predictable
-low-chrome color story or when you are testing presentation behavior without a
-strong palette.
+Use `plain` for a restrained palette or when testing layout without strong
+colors.
 
 ## Themes And Presentation
 
@@ -129,7 +128,8 @@ Rules:
 - `base` is optional
   - if present, missing palette keys inherit from that built-in base theme
   - if omitted or set to `"none"`, missing palette keys stay unset
-- color/style specs accept `#RRGGBB` and named colors
+- color/style specs accept named colors, `#RGB`, `#RRGGBB`, `ansiNN`, and
+  `rgb(r,g,b)`
 - style specs may also use prefixes such as `bold`, `dim`, `italic`, or
   `underline`
 

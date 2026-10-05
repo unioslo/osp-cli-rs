@@ -36,7 +36,8 @@ use super::{ReplViewContext, completion, input};
 
 use builtins::{ReplBuiltin, execute_repl_builtin, is_repl_bang_request, parse_repl_builtin};
 use command::{
-    ExecutedReplCommand, ParsedReplDispatch, execute_repl_command_dispatch, parse_repl_invocation,
+    ExecutedReplCommand, ParsedReplDispatch, execute_repl_command_dispatch_with_acceptance,
+    parse_repl_invocation,
 };
 use shell::{ReplShortcutPlan, classify_repl_shortcut, execute_repl_shortcut};
 
@@ -154,6 +155,7 @@ struct ReplExecutionContext<'a, 'sink> {
     clients: &'a AppClients,
     history: &'a SharedHistory,
     sink: &'sink mut dyn UiSink,
+    accepted: &'a mut bool,
 }
 
 #[cfg(test)]
@@ -203,15 +205,63 @@ fn execute_repl_plugin_line_with_sink(
     line: &str,
     sink: &mut dyn UiSink,
 ) -> Result<ExecutedReplLine> {
+    let mut accepted = false;
+    execute_repl_plugin_line_with_acceptance(
+        runtime,
+        session,
+        clients,
+        history,
+        line,
+        sink,
+        &mut accepted,
+    )
+}
+
+fn execute_repl_plugin_line_with_acceptance(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    line: &str,
+    sink: &mut dyn UiSink,
+    accepted: &mut bool,
+) -> Result<ExecutedReplLine> {
     let started = Instant::now();
-    match execute_repl_plugin_line_inner(runtime, session, clients, history, line, sink) {
+    let mut resolved = line.to_string();
+    let mut keep_history = false;
+    let execution = (|| {
+        if let Some(command @ builtins::BangCommand::Last) = builtins::parse_bang_command(line)? {
+            match builtins::execute_bang_command(session, history, line, command)? {
+                ReplLineResult::ReplaceInput(expanded) => {
+                    sink.write_stderr(&format!("{expanded}\n"));
+                    resolved = expanded;
+                }
+                result => return Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity)),
+            }
+        }
+        // Alias expansion needs the live execution config, which the generic
+        // history backend does not own. Classify before a command can edit it.
+        keep_history = input::ReplParsedLine::parse(&resolved, runtime.config.resolved())
+            .is_ok_and(|parsed| {
+                !super::history_store::is_sensitive_config_set_tokens(&parsed.dispatch_tokens)
+            });
+        execute_repl_plugin_line_inner(
+            runtime, session, clients, history, &resolved, sink, accepted,
+        )
+    })();
+    history
+        .finalize_execution(line, &resolved, *accepted && keep_history)
+        .map_err(|err| miette!("failed to update REPL history: {err}"))?;
+    if *accepted && !is_repl_bang_request(&resolved) {
+        history.remember_command(&resolved);
+    }
+    session.finish_repl_line();
+    match execution {
         Ok(executed) => {
-            session.finish_repl_line();
             record_repl_timing(session, started, executed.timing);
             Ok(executed)
         }
         Err(err) => {
-            session.finish_repl_line();
             if runtime.ui.debug_verbosity > 0 {
                 session.record_prompt_timing(
                     runtime.ui.debug_verbosity,
@@ -224,7 +274,9 @@ fn execute_repl_plugin_line_with_sink(
             let plain_settings = runtime.ui.render_settings.plain_copy_settings();
             let summary = render_report_message(&err, ErrorDetail::Terse, &plain_settings);
             let mut doctor_command = None;
-            if !is_repl_bang_request(line) && !is_doctor_request(line, runtime.config.resolved()) {
+            if !is_repl_bang_request(&resolved)
+                && !is_doctor_request(&resolved, runtime.config.resolved())
+            {
                 let diagnostics = LastFailureDiagnostics {
                     normal: render_report_message(&err, ErrorDetail::Normal, &plain_settings),
                     debug: render_report_message(&err, ErrorDetail::Debug, &plain_settings),
@@ -235,7 +287,7 @@ fn execute_repl_plugin_line_with_sink(
                 } else {
                     None
                 };
-                session.record_failure_diagnostics(line, summary.clone(), diagnostics);
+                session.record_failure_diagnostics(&resolved, summary.clone(), diagnostics);
             }
             let mut messages = MessageBuffer::default();
             let visible_error = doctor_command
@@ -268,6 +320,7 @@ fn execute_repl_plugin_line_inner(
     history: &SharedHistory,
     line: &str,
     sink: &mut dyn UiSink,
+    accepted: &mut bool,
 ) -> Result<ExecutedReplLine> {
     if !matches!(line.trim(), "next" | "prev") {
         session.native_context.clear_pagination();
@@ -281,6 +334,7 @@ fn execute_repl_plugin_line_inner(
             clients,
             history,
             sink,
+            accepted,
         },
         line,
         plan,
@@ -305,6 +359,20 @@ fn classify_repl_line(
     // 3. Handle REPL-local affordances before normal command dispatch.
     if let Some(plan) = classify_repl_local_plan(runtime, session, &parsed)? {
         return Ok(plan);
+    }
+
+    // Invocation flags and aliases may precede last, which remains global even
+    // inside a product shell. Its cached output uses normal parsing/rendering.
+    if scan_command_tokens(&parsed.dispatch_tokens)?
+        .tokens
+        .first()
+        .map(String::as_str)
+        == Some("last")
+    {
+        return Ok(ReplLinePlan::Builtin {
+            raw: line.to_string(),
+            builtin: ReplBuiltin::Last,
+        });
     }
 
     // 4. Resolve the remaining line as ordinary command/help dispatch.
@@ -380,9 +448,11 @@ fn execute_repl_line_plan(
         clients,
         history,
         sink,
+        accepted,
     } = context;
     match plan {
         ReplLinePlan::Builtin { raw, builtin } => {
+            *accepted = true;
             let result =
                 execute_repl_builtin(runtime, session, clients, history, &raw, builtin, sink)?;
             Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity))
@@ -391,17 +461,21 @@ fn execute_repl_line_plan(
             ReplLineResult::Continue(String::new()),
             runtime.ui.debug_verbosity,
         )),
-        ReplLinePlan::DslHelp { help } => Ok(ExecutedReplLine::flat(
-            ReplLineResult::Continue(help),
-            runtime.ui.debug_verbosity,
-        )),
+        ReplLinePlan::DslHelp { help } => {
+            *accepted = true;
+            Ok(ExecutedReplLine::flat(
+                ReplLineResult::Continue(help),
+                runtime.ui.debug_verbosity,
+            ))
+        }
         ReplLinePlan::Shortcut { parsed, shortcut } => {
+            *accepted = true;
             let result =
                 execute_repl_shortcut(runtime, session, clients, &parsed, *shortcut, line, sink)?;
             Ok(ExecutedReplLine::flat(result, runtime.ui.debug_verbosity))
         }
         ReplLinePlan::Command(dispatch) => {
-            let executed = execute_repl_command_dispatch(
+            let executed = execute_repl_command_dispatch_with_acceptance(
                 runtime,
                 session,
                 clients,
@@ -409,6 +483,7 @@ fn execute_repl_line_plan(
                 line,
                 *dispatch,
                 sink,
+                accepted,
             )?;
             Ok(ExecutedReplLine::command(parse_finished, executed))
         }

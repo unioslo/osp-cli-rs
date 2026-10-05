@@ -113,7 +113,7 @@ pub(crate) fn build_repl_surface(
     if shows_invocation_options_overview(help_level) {
         overview_entries.push(ReplOverviewEntry {
             name: "options".to_string(),
-            summary: "per invocation: --format/--guide/--json/--table/--value/--md, --mode, --color, --unicode/--ascii, -v/-q/-d, --plugin-provider".to_string(),
+            summary: "per invocation: --format/--guide/--json/--table/--value/--md, --render-mode, --color, --unicode/--ascii, -v/-q/-d, --plugin-provider".to_string(),
         });
     }
 
@@ -704,6 +704,19 @@ pub(crate) fn config_set_key_specs(
                     .into_iter()
                     .map(SuggestionEntry::value)
                     .collect::<Vec<_>>()
+            } else if key == "repl.tab_mode" {
+                [
+                    "tab",
+                    "always",
+                    "after_1_letter",
+                    "after_2_letters",
+                    "after_3_letters",
+                    "after_4_letters",
+                    "after_5_letters",
+                ]
+                .into_iter()
+                .map(SuggestionEntry::value)
+                .collect()
             } else if let Some(allowed) = entry.allowed_values() {
                 allowed
                     .iter()

@@ -133,18 +133,18 @@ impl UiPresentation {
 /// without having to understand the entire theme system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HelpChromeSettings {
-    pub table_chrome: HelpTableChrome,
+    pub table_chrome: TableBorderOverride,
     pub entry_indent: Option<usize>,
     pub entry_gap: Option<usize>,
     pub section_spacing: Option<usize>,
 }
 
-/// Border style override for help tables.
+/// Border style override for one family of tables (help tables, nested tables).
 ///
-/// `Inherit` keeps help tables aligned with the surrounding table style while
-/// the other variants force a specific chrome choice.
+/// `Inherit` follows `ui.table.border`; the other variants force a specific
+/// border for that family only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HelpTableChrome {
+pub enum TableBorderOverride {
     Inherit,
     #[default]
     None,
@@ -152,7 +152,7 @@ pub enum HelpTableChrome {
     Round,
 }
 
-impl HelpTableChrome {
+impl TableBorderOverride {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "inherit" => Some(Self::Inherit),
@@ -268,6 +268,8 @@ pub struct RenderSettings {
     pub medium_list_max: usize,
     pub table_overflow: TableOverflow,
     pub table_border: TableBorderStyle,
+    /// Border for tables nested inside a record, such as `addresses (2):`.
+    pub nested_table_border: TableBorderOverride,
     pub style_overrides: style::StyleOverrides,
     pub help_chrome: HelpChromeSettings,
     pub chrome_frame: SectionFrameStyle,
@@ -291,8 +293,9 @@ impl Default for RenderSettings {
             margin: 0,
             indent_size: 2,
             medium_list_max: 5,
-            table_overflow: TableOverflow::Wrap,
+            table_overflow: TableOverflow::Ellipsis,
             table_border: TableBorderStyle::Square,
+            nested_table_border: TableBorderOverride::None,
             style_overrides: style::StyleOverrides::default(),
             help_chrome: HelpChromeSettings::default(),
             chrome_frame: SectionFrameStyle::Top,
@@ -547,8 +550,14 @@ fn sync_render_config_overrides(settings: &mut RenderSettings, config: &Resolved
         settings.table_border = parsed;
     }
 
+    if let Some(value) = config.get_string("ui.table.nested_border")
+        && let Some(parsed) = TableBorderOverride::parse(value)
+    {
+        settings.nested_table_border = parsed;
+    }
+
     if let Some(value) = config.get_string("ui.help.table_chrome")
-        && let Some(parsed) = HelpTableChrome::parse(value)
+        && let Some(parsed) = TableBorderOverride::parse(value)
     {
         settings.help_chrome.table_chrome = parsed;
     }
@@ -664,33 +673,8 @@ impl RenderSettingsBuilder {
         self
     }
 
-    pub fn with_help_chrome(mut self, help_chrome: HelpChromeSettings) -> Self {
-        self.settings.help_chrome = help_chrome;
-        self
-    }
-
     pub fn with_theme_name(mut self, theme_name: impl Into<String>) -> Self {
         self.settings.theme_name = theme_name.into();
-        self
-    }
-
-    pub fn with_style_overrides(mut self, style_overrides: style::StyleOverrides) -> Self {
-        self.settings.style_overrides = style_overrides;
-        self
-    }
-
-    pub fn with_chrome_frame(mut self, chrome_frame: SectionFrameStyle) -> Self {
-        self.settings.chrome_frame = chrome_frame;
-        self
-    }
-
-    pub fn with_ruled_section_policy(mut self, ruled_section_policy: RuledSectionPolicy) -> Self {
-        self.settings.ruled_section_policy = ruled_section_policy;
-        self
-    }
-
-    pub fn with_guide_default_format(mut self, guide_default_format: GuideDefaultFormat) -> Self {
-        self.settings.guide_default_format = guide_default_format;
         self
     }
 
@@ -728,6 +712,7 @@ pub struct ResolvedRenderSettings {
     pub medium_list_max: usize,
     pub table_overflow: TableOverflow,
     pub table_border: TableBorderStyle,
+    pub nested_table_border: TableBorderStyle,
     pub help_table_border: TableBorderStyle,
     pub theme_name: String,
     pub theme: ThemeDefinition,
@@ -824,6 +809,7 @@ impl RenderSettings {
                 medium_list_max: self.medium_list_max.max(1),
                 table_overflow: self.table_overflow,
                 table_border: self.table_border,
+                nested_table_border: self.nested_table_border.resolve(self.table_border),
                 help_table_border: self.help_chrome.table_chrome.resolve(self.table_border),
                 theme_name,
                 theme: theme.clone(),
@@ -842,6 +828,7 @@ impl RenderSettings {
                 medium_list_max: self.medium_list_max.max(1),
                 table_overflow: self.table_overflow,
                 table_border: self.table_border,
+                nested_table_border: self.nested_table_border.resolve(self.table_border),
                 help_table_border: self.help_chrome.table_chrome.resolve(self.table_border),
                 theme_name,
                 theme,
@@ -867,6 +854,7 @@ impl RenderSettings {
             medium_list_max: self.medium_list_max,
             table_overflow: self.table_overflow,
             table_border: self.table_border,
+            nested_table_border: self.nested_table_border,
             help_chrome: self.help_chrome,
             theme_name: self.theme_name.clone(),
             theme: self.theme.clone(),
@@ -932,8 +920,8 @@ pub fn resolve_settings(
 #[cfg(test)]
 mod tests {
     use super::{
-        GuideDefaultFormat, HelpChromeSettings, HelpLayout, HelpTableChrome, RenderBackend,
-        RenderProfile, RenderRuntime, RenderSettingsBuilder, TableBorderStyle, TableOverflow,
+        GuideDefaultFormat, HelpChromeSettings, HelpLayout, RenderBackend, RenderProfile,
+        RenderRuntime, RenderSettingsBuilder, TableBorderOverride, TableBorderStyle, TableOverflow,
         UiPresentation, apply_render_config_overrides, config_int, config_usize_override,
         explain_presentation_effect, help_layout_from_config,
     };
@@ -1196,6 +1184,7 @@ mod tests {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 display_columns: None,
+                display_column_labels: None,
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: true,
@@ -1230,15 +1219,15 @@ mod tests {
             Some(GuideDefaultFormat::Inherit)
         );
         assert_eq!(
-            HelpTableChrome::parse("boxed"),
-            Some(HelpTableChrome::Square)
+            TableBorderOverride::parse("boxed"),
+            Some(TableBorderOverride::Square)
         );
         assert_eq!(
-            HelpTableChrome::parse("rounded"),
-            Some(HelpTableChrome::Round)
+            TableBorderOverride::parse("rounded"),
+            Some(TableBorderOverride::Round)
         );
         assert_eq!(
-            HelpTableChrome::Square.resolve(TableBorderStyle::None),
+            TableBorderOverride::Square.resolve(TableBorderStyle::None),
             TableBorderStyle::Square
         );
         assert_eq!(TableOverflow::parse("hidden"), Some(TableOverflow::Clip));

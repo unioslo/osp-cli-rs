@@ -31,6 +31,10 @@
 //! - [`crate::ui::RenderSettings`] and
 //!   [`crate::ui::ResolvedRenderSettings`] define the stable caller-facing
 //!   render knobs
+//! - [`crate::ui::format_local_timestamp`],
+//!   [`crate::ui::format_relative_timestamp`], and
+//!   [`crate::ui::format_binary_bytes`] keep product-authored human details
+//!   consistent with structured output
 //! - [`crate::ui::theme`], [`crate::ui::style`], and [`crate::ui::messages`]
 //!   provide the other operator-facing presentation surfaces
 //!
@@ -69,16 +73,85 @@ pub(crate) use plan::plan_output;
 pub use settings::RenderBackend;
 #[allow(unused_imports)]
 pub use settings::{
-    GuideDefaultFormat, HelpChromeSettings, HelpLayout, HelpTableChrome, PresentationEffect,
-    RenderProfile, RenderRuntime, RenderRuntimeBuilder, RenderSettings, RenderSettingsBuilder,
-    ResolvedHelpChromeSettings, ResolvedRenderSettings, TableBorderStyle, TableOverflow,
-    UiPresentation, help_layout_from_config, resolve_settings,
+    GuideDefaultFormat, HelpChromeSettings, HelpLayout, PresentationEffect, RenderProfile,
+    RenderRuntime, RenderRuntimeBuilder, RenderSettings, RenderSettingsBuilder,
+    ResolvedHelpChromeSettings, ResolvedRenderSettings, TableBorderOverride, TableBorderStyle,
+    TableOverflow, UiPresentation, help_layout_from_config, resolve_settings,
 };
 pub(crate) use settings::{build_presentation_defaults_layer, explain_presentation_effect};
 pub use style::{StyleOverrides, StyleToken, ThemeStyler};
-pub(crate) use text::{display_width, visible_inline_text};
+pub(crate) use text::{
+    crop_display_width, display_width, sanitize_human_text, visible_inline_text,
+};
 pub use theme::DEFAULT_THEME_NAME;
 pub use theme_catalog as theme_loader;
+
+const LOCAL_TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S %:z";
+
+/// Formats an RFC3339 timestamp in local time at seconds precision.
+pub fn format_local_timestamp(value: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|time| format_local_utc_timestamp(time.with_timezone(&chrono::Utc)))
+}
+
+/// Formats an RFC3339 timestamp as a compact duration from the current time.
+pub fn format_relative_timestamp(value: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|time| format_relative_unix_timestamp(time.timestamp()))
+}
+
+/// Formats a byte count with the largest useful binary unit.
+pub fn format_binary_bytes(bytes: u64) -> String {
+    for (unit, divisor) in [
+        ("TiB", 1_u64 << 40),
+        ("GiB", 1_u64 << 30),
+        ("MiB", 1_u64 << 20),
+        ("KiB", 1_u64 << 10),
+    ] {
+        if bytes >= divisor {
+            return if bytes.is_multiple_of(divisor) {
+                format!("{} {unit}", bytes / divisor)
+            } else {
+                format!("{:.1} {unit}", bytes as f64 / divisor as f64)
+            };
+        }
+    }
+    format!("{bytes} B")
+}
+
+fn format_local_utc_timestamp(time: chrono::DateTime<chrono::Utc>) -> String {
+    time.with_timezone(&chrono::Local)
+        .format(LOCAL_TIMESTAMP_FORMAT)
+        .to_string()
+}
+
+pub(crate) fn format_local_unix_timestamp(seconds: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp(seconds, 0).map(format_local_utc_timestamp)
+}
+
+pub(crate) fn format_relative_unix_timestamp(seconds: i64) -> String {
+    let delta = seconds.saturating_sub(chrono::Utc::now().timestamp());
+    if delta == 0 {
+        return "now".to_string();
+    }
+    let magnitude = delta.unsigned_abs();
+    let (amount, unit) = if magnitude < 60 {
+        (magnitude, "s")
+    } else if magnitude < 60 * 60 {
+        (magnitude / 60, "m")
+    } else if magnitude < 24 * 60 * 60 {
+        (magnitude / (60 * 60), "h")
+    } else {
+        (magnitude / (24 * 60 * 60), "d")
+    };
+    if delta < 0 {
+        format!("{amount}{unit} ago")
+    } else {
+        format!("in {amount}{unit}")
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StructuredGuideRenderOptions<'a> {
@@ -342,3 +415,5 @@ fn apply_title_prefix(view: &GuideView, title_prefix: Option<&str>) -> GuideView
 
 #[cfg(test)]
 mod tests;
+
+pub mod prompt;

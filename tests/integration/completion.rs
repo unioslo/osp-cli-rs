@@ -57,7 +57,24 @@ fn completion_tree(context_scope: ContextScope) -> osp_cli::completion::Completi
 
 #[test]
 fn completion_engine_merges_global_context_flags_from_later_tokens() {
-    let engine = CompletionEngine::new(completion_tree(ContextScope::Global));
+    let catalogue = osp_cli::completion::model::PrefixValues::default();
+    let mut tree = completion_tree(ContextScope::Global);
+    tree.root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap()
+        .flags
+        .insert(
+            "--hostname".into(),
+            FlagNode {
+                prefix_values: Some(catalogue.clone()),
+                ..FlagNode::default()
+            },
+        );
+    let engine = CompletionEngine::new(tree.clone());
     let line = "service deploy --image  --provider alpha";
     let cursor = provider_cursor(line);
 
@@ -77,6 +94,28 @@ fn completion_engine_merges_global_context_flags_from_later_tokens() {
             .expect("provider should merge into cursor context"),
         &vec!["alpha".to_string()][..]
     );
+
+    // A refreshed catalogue reaches an existing engine through its cloned tree.
+    catalogue.replace(
+        (0..30)
+            .rev()
+            .map(|index| format!("node-{index:02}"))
+            .chain(["node-00".into(), "other-host".into()])
+            .collect(),
+    );
+    let line = "service deploy --hostname node-";
+    assert_eq!(
+        suggestion_values(engine.complete(line, line.len()).1),
+        (0..25)
+            .map(|index| format!("node-{index:02}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(catalogue.contains("node-29"));
+    catalogue.replace(vec!["node-refreshed".into()]);
+    assert_eq!(
+        suggestion_values(engine.complete(line, line.len()).1),
+        vec!["node-refreshed"]
+    );
 }
 
 #[test]
@@ -92,8 +131,9 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
         .children
         .get_mut("deploy")
         .unwrap();
-    deploy.flags.insert("--memory".into(), FlagNode::new());
-    deploy.flags.insert("--provider".into(), FlagNode::new());
+    for flag in ["--memory", "--provider", "--instance", "--instance_id"] {
+        deploy.flags.insert(flag.into(), FlagNode::new());
+    }
     let mut table = PlanningTable::new()
         .exact_column("provider")
         .exact_column("image")
@@ -142,6 +182,26 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
             vec!["green"],
         ),
         (
+            "service deploy --instance west --image  --provider alpha",
+            vec!["green"],
+        ),
+        (
+            "service deploy --instance_id two --image  --provider alpha",
+            vec!["green"],
+        ),
+        (
+            "service deploy --instance west --image  --provider alpha:west:two",
+            vec!["green"],
+        ),
+        (
+            "service deploy --image  --provider alpha::two",
+            vec!["green"],
+        ),
+        (
+            "service deploy --image  --provider ' alpha : west : two '",
+            vec!["green"],
+        ),
+        (
             "service deploy --memory 8GiB --image  --provider alpha",
             vec!["green"],
         ),
@@ -168,6 +228,19 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
         assert_eq!(narrowed.candidates().collect::<Vec<_>>(), expected);
         assert_eq!(narrowed.all().collect::<Vec<_>>(), vec!["alpha", "beta"]);
         assert_eq!(narrowed.is_contradictory(), memory == "32GiB");
+    }
+    // Editing capacity uses the lane's available values instead of treating
+    // the value being replaced as another request constraint.
+    for (selector, expected) in [
+        ("alpha:east:one", vec!["4096"]),
+        ("alpha:west:two", vec!["16GiB"]),
+    ] {
+        let line = format!("service deploy --memory  --provider {selector}");
+        let cursor = line.find("--memory").unwrap() + "--memory ".len();
+        assert_eq!(
+            suggestion_values(engine.complete(&line, cursor).1),
+            expected
+        );
     }
     let line = "service deploy --memory 16GiB --provider ";
     assert_eq!(
@@ -201,6 +274,153 @@ fn completion_planning_narrows_provider_and_runtime_choices() {
     );
     assert_eq!(narrowed.explicit(), Some("beta"));
     assert_eq!(narrowed.candidates().collect::<Vec<_>>(), vec!["beta"]);
+
+    // Runtime identities and exact constraints can be numeric even though the
+    // editable command line and provider selectors carry textual values.
+    let deploy = tree
+        .root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap();
+    for flag in ["--revision", "--instance_id"] {
+        deploy.flags.insert(flag.into(), FlagNode::new());
+    }
+    let table = &mut deploy.planning.as_mut().unwrap().tables[0];
+    table
+        .columns
+        .extend(["revision".into(), "instance_id".into()]);
+    for row in &mut table.rows {
+        row.values
+            .insert("revision".into(), PlanningValue::number(1));
+    }
+    table.rows.push(
+        PlanningRow::new()
+            .value("provider", "alpha")
+            .value("instance", "north")
+            .value("instance_id", PlanningValue::number(4))
+            .value("revision", PlanningValue::number(2))
+            .value("image", "amber")
+            .value("memory", 4096),
+    );
+    let engine = CompletionEngine::new(tree.clone());
+    for (line, flag, expected) in [
+        (
+            "service deploy --revision 2 --memory +4GiB --image  --provider alpha",
+            "--image",
+            vec!["amber"],
+        ),
+        (
+            "service deploy --image  --provider alpha:north:4",
+            "--image",
+            vec!["amber"],
+        ),
+        (
+            "service deploy --instance_id  --provider alpha:north:4",
+            "--instance_id",
+            vec!["4"],
+        ),
+        (
+            "service deploy --revision 2 --memory +4GiB --provider ",
+            "--provider",
+            vec!["alpha:north:4"],
+        ),
+    ] {
+        let cursor = line.find(flag).unwrap() + flag.len() + 1;
+        assert_eq!(
+            suggestion_values(engine.complete(line, cursor).1),
+            expected,
+            "{line}"
+        );
+    }
+
+    // A partial catalogue augments static choices; overlapping evidence must
+    // produce one selectable value rather than duplicate menu entries.
+    let deploy = tree
+        .root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap();
+    deploy.planning.as_mut().unwrap().tables[0].exhaustive = false;
+    deploy
+        .flags
+        .get_mut("--image")
+        .unwrap()
+        .suggestions_by_provider
+        .insert(
+            "alpha".into(),
+            vec![SuggestionEntry::from("amber"), SuggestionEntry::from("red")],
+        );
+    let engine = CompletionEngine::new(tree.clone());
+    let line = "service deploy --revision 2 --image  --provider alpha:north:4";
+    let cursor = line.find("--image").unwrap() + "--image ".len();
+    assert_eq!(
+        suggestion_values(engine.complete(line, cursor).1),
+        vec!["amber", "red"]
+    );
+
+    // Catalogues can carry useful facts before their provider identity is
+    // known, and can also describe choices with no provider dimension.
+    let planning = tree
+        .root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap()
+        .planning
+        .as_mut()
+        .unwrap();
+    planning.tables[0].exhaustive = true;
+    planning.tables[0].rows.push(
+        PlanningRow::new()
+            .value("instance", "south")
+            .value("instance_id", "five")
+            .value("revision", 2)
+            .value("image", "gold")
+            .value("memory", 8192),
+    );
+    let engine = CompletionEngine::new(tree.clone());
+    let line = "service deploy --revision 2 --image  --provider alpha";
+    let cursor = line.find("--image").unwrap() + "--image ".len();
+    assert_eq!(
+        suggestion_values(engine.complete(line, cursor).1),
+        vec!["amber", "gold", "red"]
+    );
+    let line = "service deploy --memory 32GiB ";
+    let analysis = engine.analyze(line, line.len());
+    let narrowed = narrow_provider_candidates(
+        &analysis.parsed.cursor_cmd,
+        &tree.root.children["service"].children["deploy"],
+    );
+    assert_eq!(
+        narrowed.candidates().collect::<Vec<_>>(),
+        vec!["alpha", "beta"]
+    );
+
+    tree.root
+        .children
+        .get_mut("service")
+        .unwrap()
+        .children
+        .get_mut("deploy")
+        .unwrap()
+        .planning
+        .as_mut()
+        .unwrap()
+        .provider_column = None;
+    let engine = CompletionEngine::new(tree);
+    let line = "service deploy --revision 2 --image ";
+    assert_eq!(
+        suggestion_values(engine.complete(line, line.len()).1),
+        vec!["amber", "gold"]
+    );
 }
 
 #[test]

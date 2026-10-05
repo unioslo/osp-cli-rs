@@ -28,12 +28,11 @@ use crate::guide::{
 
 use super::doc::{
     Block, Doc, GuideEntriesBlock, GuideEntryRow, JsonBlock, KeyValueBlock, KeyValueRow,
-    KeyValueStyle, KeyValueValue, ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome,
-    TableBlock,
+    KeyValueValue, ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
 };
 use super::plan::RenderPlan;
 use super::settings::{HelpLayout, ResolvedHelpChromeSettings};
-use super::text::display_width;
+use super::text::{display_width, sanitize_human_text};
 use super::visible_inline_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +67,20 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
         return lower_presentation_lines(&output.meta.presentation_lines, plan.settings.width);
     }
 
+    let is_empty = match &output.items {
+        OutputItems::Rows(rows) => rows.is_empty() || rows.iter().all(Row::is_empty),
+        OutputItems::Groups(groups) => groups.is_empty(),
+    };
+    if plan.format != OutputFormat::Json && is_empty {
+        return Doc {
+            blocks: vec![Block::Paragraph(ParagraphBlock {
+                text: "No results.".to_string(),
+                indent: 0,
+                inline_markup: false,
+            })],
+        };
+    }
+
     let guide = GuideView::try_from_output_result(output);
 
     // Human projection is deliberately downstream of filtering and JSON output.
@@ -83,7 +96,7 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
         output
     };
 
-    match plan.format {
+    let mut doc = match plan.format {
         OutputFormat::Guide => {
             if let Some(guide) = guide.as_ref() {
                 lower_guide(
@@ -140,13 +153,17 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
         }
         OutputFormat::Mreg => lower_mreg_doc(output),
         OutputFormat::Auto => Doc::default(),
+    };
+    if plan.format != OutputFormat::Json {
+        sanitize_doc(&mut doc);
     }
+    doc
 }
 
 fn lower_presentation_lines(lines: &[String], width: Option<usize>) -> Doc {
     let lines = lines
         .iter()
-        .map(|line| sanitize_presentation_line(&visible_inline_text(line)))
+        .map(|line| sanitize_human_text(&visible_inline_text(line)))
         .flat_map(|line| wrap_presentation_line(&line, width))
         .collect::<Vec<_>>();
     if lines.is_empty() {
@@ -159,39 +176,6 @@ fn lower_presentation_lines(lines: &[String], width: Option<usize>) -> Doc {
             inline_markup: false,
         })],
     }
-}
-
-fn sanitize_presentation_line(line: &str) -> String {
-    let mut output = String::new();
-    let mut chars = line.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            match chars.next() {
-                Some('[') => {
-                    for next in chars.by_ref() {
-                        if ('@'..='~').contains(&next) {
-                            break;
-                        }
-                    }
-                }
-                Some(']') => {
-                    let mut previous = None;
-                    for next in chars.by_ref() {
-                        if next == '\x07' || (previous == Some('\x1b') && next == '\\') {
-                            break;
-                        }
-                        previous = Some(next);
-                    }
-                }
-                Some(_) | None => {}
-            }
-            continue;
-        }
-        if !ch.is_control() {
-            output.push(ch);
-        }
-    }
-    output
 }
 
 fn wrap_presentation_line(line: &str, width: Option<usize>) -> Vec<String> {
@@ -295,6 +279,97 @@ fn take_presentation_chunk(text: &str, width: usize) -> (String, String) {
     )
 }
 
+fn sanitize_doc(doc: &mut Doc) {
+    sanitize_blocks(&mut doc.blocks);
+}
+
+fn sanitize_blocks(blocks: &mut [Block]) {
+    for block in blocks {
+        match block {
+            Block::Blank | Block::Rule | Block::Json(_) => {}
+            Block::Paragraph(paragraph) => {
+                paragraph.text = sanitize_human_text(&paragraph.text);
+            }
+            Block::Section(section) => {
+                if let Some(title) = &mut section.title {
+                    *title = sanitize_human_text(title);
+                }
+                if let Some(suffix) = &mut section.inline_title_suffix {
+                    *suffix = sanitize_human_text(suffix);
+                }
+                sanitize_blocks(&mut section.blocks);
+            }
+            Block::Table(table) => {
+                for row in &mut table.summary {
+                    sanitize_key_value_row(row);
+                }
+                for header in &mut table.headers {
+                    *header = sanitize_human_text(header);
+                }
+                for row in &mut table.rows {
+                    for cell in row {
+                        *cell = sanitize_human_text(cell);
+                    }
+                }
+            }
+            Block::GuideEntries(entries) => {
+                entries.default_indent = sanitize_human_text(&entries.default_indent);
+                if let Some(gap) = &mut entries.default_gap {
+                    *gap = sanitize_human_text(gap);
+                }
+                for row in &mut entries.rows {
+                    row.key = sanitize_human_text(&row.key);
+                    row.value = sanitize_human_text(&row.value);
+                    if let Some(indent) = &mut row.indent_hint {
+                        *indent = sanitize_human_text(indent);
+                    }
+                    if let Some(gap) = &mut row.gap_hint {
+                        *gap = sanitize_human_text(gap);
+                    }
+                }
+            }
+            Block::KeyValue(key_value) => {
+                for row in &mut key_value.rows {
+                    sanitize_key_value_row(row);
+                }
+            }
+            Block::List(list) => {
+                for item in &mut list.items {
+                    *item = sanitize_human_text(item);
+                }
+            }
+        }
+    }
+}
+
+fn sanitize_key_value_row(row: &mut KeyValueRow) {
+    row.key = sanitize_human_text(&row.key);
+    if let Some(indent) = &mut row.indent {
+        *indent = sanitize_human_text(indent);
+    }
+    if let Some(gap) = &mut row.gap {
+        *gap = sanitize_human_text(gap);
+    }
+    sanitize_key_value(&mut row.value);
+}
+
+fn sanitize_key_value(value: &mut KeyValueValue) {
+    match value {
+        KeyValueValue::Empty => {}
+        KeyValueValue::Scalar(value) => *value = sanitize_human_text(value),
+        KeyValueValue::Array(values) => {
+            for value in values {
+                sanitize_key_value(value);
+            }
+        }
+        KeyValueValue::Object(rows) => {
+            for row in rows {
+                sanitize_key_value_row(row);
+            }
+        }
+    }
+}
+
 fn display_output(output: &OutputResult) -> OutputResult {
     let mut display = output.clone();
     if let OutputItems::Rows(rows) = &mut display.items {
@@ -320,23 +395,51 @@ fn display_output(output: &OutputResult) -> OutputResult {
                             *value = Value::Null;
                         }
                     }
+                    DisplayRule::Bytes { field } => {
+                        if let Some(value) = display_path_mut(&mut original, field)
+                            && let Some(bytes) = value.as_u64()
+                        {
+                            *value = Value::String(super::format_binary_bytes(bytes));
+                        }
+                    }
+                    DisplayRule::RelativeTimestamp { field } => {
+                        if let Some(value) = display_path_mut(&mut original, field) {
+                            let formatted = match value {
+                                Value::String(text) => super::format_relative_timestamp(text),
+                                Value::Number(number) => {
+                                    number.as_i64().map(super::format_relative_unix_timestamp)
+                                }
+                                _ => None,
+                            };
+                            if let Some(formatted) = formatted {
+                                *value = Value::String(formatted);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
             for path in &output.meta.unix_timestamp_columns {
                 if let Some(value) = display_path_mut(&mut original, path)
                     && let Some(seconds) = value.as_i64()
-                    && let Some(time) = chrono::DateTime::from_timestamp(seconds, 0)
+                    && let Some(time) = super::format_local_unix_timestamp(seconds)
                 {
-                    *value = Value::String(time.to_rfc3339());
+                    *value = Value::String(time);
                 }
             }
             *row = if let Some(columns) = &output.meta.display_columns {
+                let labels = output
+                    .meta
+                    .display_column_labels
+                    .as_ref()
+                    .filter(|labels| labels.len() == columns.len());
                 columns
                     .iter()
-                    .map(|path| {
+                    .enumerate()
+                    .map(|(index, path)| {
                         let value = display_path(&original, path);
-                        (path.clone(), value.cloned().unwrap_or(Value::Null))
+                        let label = labels.and_then(|labels| labels.get(index)).unwrap_or(path);
+                        (label.clone(), value.cloned().unwrap_or(Value::Null))
                     })
                     .collect()
             } else {
@@ -344,7 +447,13 @@ fn display_output(output: &OutputResult) -> OutputResult {
             };
         }
         if let Some(columns) = &output.meta.display_columns {
-            display.meta.key_index = columns.clone();
+            display.meta.key_index = output
+                .meta
+                .display_column_labels
+                .as_ref()
+                .filter(|labels| labels.len() == columns.len())
+                .cloned()
+                .unwrap_or_else(|| columns.clone());
         }
     }
     display
@@ -777,7 +886,7 @@ fn direct_guide_blocks(
     };
     let trailing_newline = matches!(format, OutputFormat::Guide);
     for section in sections {
-        let section_blocks = direct_section_blocks(*section, format);
+        let section_blocks = direct_section_blocks(*section);
         if section_blocks.is_empty() {
             continue;
         }
@@ -797,9 +906,9 @@ fn direct_guide_blocks(
     blocks
 }
 
-fn direct_section_blocks(section: GuideSectionRef<'_>, format: OutputFormat) -> Vec<Block> {
+fn direct_section_blocks(section: GuideSectionRef<'_>) -> Vec<Block> {
     let mut section_blocks = guide_paragraph_blocks(section.paragraphs);
-    let entry_blocks = entry_blocks(section.entries, format);
+    let entry_blocks = entry_blocks(section.entries);
     extend_with_blank_between(&mut section_blocks, entry_blocks);
 
     if let Some(data) = section.data {
@@ -832,18 +941,11 @@ fn guide_paragraph_blocks(paragraphs: &[String]) -> Vec<Block> {
         .collect()
 }
 
-fn entry_blocks(entries: &[GuideEntry], format: OutputFormat) -> Vec<Block> {
+fn entry_blocks(entries: &[GuideEntry]) -> Vec<Block> {
     if entries.is_empty() {
         return Vec::new();
     }
-    if matches!(format, OutputFormat::Guide) {
-        vec![Block::GuideEntries(guide_entries_block(entries))]
-    } else {
-        vec![Block::KeyValue(KeyValueBlock {
-            style: KeyValueStyle::Bulleted,
-            rows: guide_entry_key_value_rows(entries),
-        })]
-    }
+    vec![Block::GuideEntries(guide_entries_block(entries))]
 }
 
 fn help_layout_blocks(
@@ -933,7 +1035,6 @@ fn help_layout_blocks_from_value(
             vec![Block::KeyValue(key_value_from_guide_data_map(map))]
         }
         Value::Object(map) => vec![Block::KeyValue(KeyValueBlock {
-            style: KeyValueStyle::Plain,
             rows: key_value_from_map(map, None).rows,
         })],
         Value::Array(items) if items.is_empty() => Vec::new(),
@@ -1026,10 +1127,7 @@ fn key_value_from_map(
         }
     }
 
-    KeyValueBlock {
-        style: KeyValueStyle::Plain,
-        rows,
-    }
+    KeyValueBlock { rows }
 }
 
 #[derive(Debug, Default)]
@@ -1048,8 +1146,9 @@ impl MregRecordBuilder {
         });
     }
 
-    fn push_table(&mut self, key: &str, item_count: usize, table: TableBlock, depth: usize) {
+    fn push_table(&mut self, key: &str, item_count: usize, mut table: TableBlock, depth: usize) {
         self.flush();
+        table.nested = true;
         self.blocks.push(Block::Paragraph(ParagraphBlock {
             text: format!("{key} ({item_count}):"),
             indent: depth * 2,
@@ -1070,7 +1169,6 @@ impl MregRecordBuilder {
             return;
         }
         self.blocks.push(Block::KeyValue(KeyValueBlock {
-            style: KeyValueStyle::Plain,
             rows: std::mem::take(&mut self.pending_rows),
         }));
     }
@@ -1162,21 +1260,49 @@ fn table_from_rows(
     key_index: &[String],
     column_align: &[ColumnAlignment],
 ) -> TableBlock {
-    let headers = headers_for_rows(rows, key_index);
-    let normalized_align = normalize_table_alignment(headers.len(), column_align);
+    let all_headers = headers_for_rows(rows, key_index);
+    let all_rows = rows
+        .iter()
+        .map(|row| {
+            all_headers
+                .iter()
+                .map(|header| row.get(header).map(display_value).unwrap_or_default())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut visible_columns = (0..all_headers.len())
+        .filter(|index| {
+            all_rows.iter().any(|row| {
+                row.get(*index)
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+        })
+        .collect::<Vec<_>>();
+    if visible_columns.is_empty() && !all_headers.is_empty() {
+        // A nonempty row still represents a result even when every value is blank.
+        visible_columns.push(0);
+    }
+    let all_align = normalize_table_alignment(all_headers.len(), column_align);
     TableBlock {
         summary: Vec::new(),
-        rows: rows
+        headers: visible_columns
             .iter()
+            .map(|index| all_headers[*index].clone())
+            .collect(),
+        rows: all_rows
+            .into_iter()
             .map(|row| {
-                headers
+                visible_columns
                     .iter()
-                    .map(|header| row.get(header).map(display_value).unwrap_or_default())
+                    .map(|index| row[*index].clone())
                     .collect()
             })
             .collect(),
-        headers,
-        column_align: normalized_align,
+        column_align: visible_columns
+            .iter()
+            .map(|index| all_align[*index])
+            .collect(),
+        nested: false,
     }
 }
 
@@ -1278,13 +1404,7 @@ fn display_value(value: &Value) -> String {
         Value::Null => String::new(),
         Value::Bool(flag) => flag.to_string(),
         Value::Number(number) => number.to_string(),
-        Value::String(text) => chrono::DateTime::parse_from_rfc3339(text)
-            .map(|time| {
-                time.with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d %H:%M:%S %:z")
-                    .to_string()
-            })
-            .unwrap_or_else(|_| text.clone()),
+        Value::String(text) => super::format_local_timestamp(text).unwrap_or_else(|| text.clone()),
         Value::Array(items) => items
             .iter()
             .map(display_value)
@@ -1296,7 +1416,6 @@ fn display_value(value: &Value) -> String {
 
 fn key_value_from_guide_data_map(map: &Map<String, Value>) -> KeyValueBlock {
     KeyValueBlock {
-        style: KeyValueStyle::Plain,
         rows: map
             .iter()
             .map(|(key, value)| KeyValueRow {
@@ -1339,18 +1458,6 @@ fn help_layout_title_chrome(layout: HelpLayout) -> SectionTitleChrome {
         HelpLayout::Full => SectionTitleChrome::Ruled,
         HelpLayout::Compact | HelpLayout::Minimal => SectionTitleChrome::Plain,
     }
-}
-
-fn guide_entry_key_value_rows(entries: &[GuideEntry]) -> Vec<KeyValueRow> {
-    entries
-        .iter()
-        .map(|entry| KeyValueRow {
-            key: entry.name.clone(),
-            value: KeyValueValue::Scalar(entry.short_help.clone()),
-            indent: None,
-            gap: None,
-        })
-        .collect()
 }
 
 fn guide_entry_row(entry: &GuideEntry) -> GuideEntryRow {

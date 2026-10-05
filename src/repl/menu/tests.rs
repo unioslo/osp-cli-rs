@@ -90,9 +90,9 @@ fn split_lines(output: &str) -> Vec<&str> {
     output.split_terminator("\r\n").collect()
 }
 
-fn dispatch_tab_like_reedline(menu: &mut OspCompletionMenu) {
+fn dispatch_tab_like_reedline(menu: &mut OspCompletionMenu, editor: &mut Editor) {
     if menu.is_active() {
-        menu.menu_event(MenuEvent::NextElement);
+        menu.navigate(MenuEvent::NextElement, editor);
     } else {
         menu.menu_event(MenuEvent::Activate(false));
     }
@@ -142,14 +142,14 @@ fn tab_cycles_selection_replaces_buffer() {
     assert_eq!(debug.selected_index, 0);
     assert_eq!(editor.line_buffer().get_buffer(), "co");
 
-    menu.menu_event(MenuEvent::NextElement);
+    menu.navigate(MenuEvent::NextElement, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
 
     let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
     assert_eq!(debug.selected_index, 0);
     assert_eq!(editor.line_buffer().get_buffer(), "config");
 
-    menu.menu_event(MenuEvent::NextElement);
+    menu.navigate(MenuEvent::NextElement, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
 
     let debug = super::debug_snapshot(&mut menu, &editor, 80, 5, false);
@@ -192,6 +192,7 @@ fn accept_paths_apply_selected_completion() {
 
         menu.menu_event(MenuEvent::Activate(false));
         menu.update_for_test(&mut editor, &mut completer, 80);
+        menu.navigate(MenuEvent::NextElement, &mut editor);
 
         if use_replace_in_buffer {
             menu.replace_in_buffer(&mut editor);
@@ -238,21 +239,17 @@ fn menu_rendering_variants_cover_display_description_selection_and_bounds_unit()
         };
         menu.menu_event(MenuEvent::Activate(false));
         menu.update_for_test(&mut editor, &mut completer, 80);
-        menu.menu_event(MenuEvent::NextElement);
+        menu.navigate(MenuEvent::NextElement, &mut editor);
         menu.update_for_test(&mut editor, &mut completer, 80);
 
+        // A short described list shows each description beside its value.
         let wide_output = menu.menu_string(10, false);
-        let wide_last = split_lines(&wide_output)
-            .last()
-            .map(|line| line.trim())
-            .unwrap_or_default()
-            .to_string();
-        assert!(!wide_last.is_empty());
-        assert!("Inspect and edit runtime config".starts_with(&wide_last));
+        assert_eq!(split_lines(&wide_output).len(), 1);
+        assert!(wide_output.contains("config  Inspect and edit runtime config"));
 
         menu.update_for_test(&mut editor, &mut completer, 10);
         let narrow_output = menu.menu_string(10, false);
-        assert!(narrow_output.contains("Inspect"));
+        assert!(narrow_output.contains("config"));
         assert!(!narrow_output.contains("runtime config"));
 
         let constrained_output = menu.menu_string(1, false);
@@ -324,7 +321,7 @@ fn menu_rendering_variants_cover_display_description_selection_and_bounds_unit()
         assert!(ansi.contains("\u{1b}["));
         assert!(ansi.contains("\u{1b}[0m"));
 
-        menu.menu_event(MenuEvent::NextElement);
+        menu.navigate(MenuEvent::NextElement, &mut editor);
         menu.update_for_test(&mut editor, &mut completer, 80);
         let plain = menu.menu_string(10, false);
         assert!(plain.contains("> config"));
@@ -385,11 +382,11 @@ fn cycling_completion_keeps_menu_indent_anchored_to_original_span() {
     menu.update_for_test(&mut editor, &mut completer, 120);
     let initial = super::debug_snapshot(&mut menu, &editor, 120, 10, false);
 
-    menu.menu_event(MenuEvent::NextElement);
+    menu.navigate(MenuEvent::NextElement, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 120);
     let first_cycle = super::debug_snapshot(&mut menu, &editor, 120, 10, false);
 
-    menu.menu_event(MenuEvent::NextElement);
+    menu.navigate(MenuEvent::NextElement, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 120);
     let second_cycle = super::debug_snapshot(&mut menu, &editor, 120, 10, false);
 
@@ -476,32 +473,33 @@ fn menu_state_and_builder_variants_cover_debug_partial_completion_and_reactivati
 
     {
         let mut editor = Editor::default();
-        set_buffer(&mut editor, "config sh");
+        set_buffer(&mut editor, "config s");
         let cursor = editor.line_buffer().len();
-        let mut completer = FixedCompleter {
-            suggestions: vec![
-                suggestion(
-                    "show",
-                    Span {
-                        start: cursor - 2,
-                        end: cursor,
-                    },
-                ),
-                suggestion(
-                    "shell",
-                    Span {
-                        start: cursor - 2,
-                        end: cursor,
-                    },
-                ),
-            ],
+        let candidates = |cursor: usize, typed: usize| FixedCompleter {
+            suggestions: ["show", "shell"]
+                .into_iter()
+                .map(|value| {
+                    suggestion(
+                        value,
+                        Span {
+                            start: cursor - typed,
+                            end: cursor,
+                        },
+                    )
+                })
+                .collect(),
         };
         let mut menu = OspCompletionMenu::default().with_only_buffer_difference(true);
 
+        // Tab grows the word to the shared prefix, then has nothing to add.
+        let mut completer = candidates(cursor, 1);
+        menu.mark_tab_open_for_test();
         assert!(menu.can_partially_complete(false, &mut editor, &mut completer));
-
-        menu.update_values(&mut editor, &mut completer);
-        assert!(menu.can_partially_complete(true, &mut editor, &mut completer));
+        assert_eq!(editor.get_buffer(), "config sh");
+        let mut completer = candidates(cursor + 1, 2);
+        menu.mark_tab_open_for_test();
+        assert!(!menu.can_partially_complete(false, &mut editor, &mut completer));
+        assert_eq!(editor.get_buffer(), "config sh");
 
         menu.indent_anchor = Some(99);
         let mut empty = FixedCompleter {
@@ -523,6 +521,7 @@ fn menu_state_and_builder_variants_cover_debug_partial_completion_and_reactivati
         };
         let mut menu = OspCompletionMenu::default();
 
+        menu.mark_tab_open_for_test();
         assert!(!menu.can_partially_complete(false, &mut editor, &mut completer));
         assert_eq!(editor.line_buffer().get_buffer(), "d");
         assert_eq!(menu.get_values().len(), 2);
@@ -544,7 +543,7 @@ fn menu_state_and_builder_variants_cover_debug_partial_completion_and_reactivati
         let mut menu = OspCompletionMenu::default();
         menu.menu_event(MenuEvent::Activate(false));
         menu.update_for_test(&mut editor, &mut completer, 80);
-        menu.menu_event(MenuEvent::NextElement);
+        menu.navigate(MenuEvent::NextElement, &mut editor);
         menu.update_for_test(&mut editor, &mut completer, 80);
         menu.accept_selection_in_buffer(&mut editor);
 
@@ -597,7 +596,7 @@ fn menu_state_and_builder_variants_cover_debug_partial_completion_and_reactivati
 
         menu.menu_event(MenuEvent::Activate(false));
         menu.update_for_test(&mut editor, &mut completer, 120);
-        menu.menu_event(MenuEvent::NextElement);
+        menu.navigate(MenuEvent::NextElement, &mut editor);
         menu.update_for_test(&mut editor, &mut completer, 120);
         let anchored = super::debug_snapshot(&mut menu, &editor, 120, 10, false).indent;
 
@@ -670,11 +669,11 @@ fn second_tab_refreshes_root_and_committed_token_buffers_before_selection_unit()
         };
         let mut menu = OspCompletionMenu::default();
 
-        dispatch_tab_like_reedline(&mut menu);
+        dispatch_tab_like_reedline(&mut menu, &mut editor);
         assert_eq!(editor.line_buffer().get_buffer(), "");
         menu.update_for_test(&mut editor, &mut completer, 80);
 
-        dispatch_tab_like_reedline(&mut menu);
+        dispatch_tab_like_reedline(&mut menu, &mut editor);
         menu.update_for_test(&mut editor, &mut completer, 80);
         assert_eq!(editor.line_buffer().get_buffer(), "help");
         assert_eq!(menu.core.selected_index(), Some(0));
@@ -686,11 +685,11 @@ fn second_tab_refreshes_root_and_committed_token_buffers_before_selection_unit()
         let mut completer = ScopedConfigCompleter;
         let mut menu = OspCompletionMenu::default();
 
-        dispatch_tab_like_reedline(&mut menu);
+        dispatch_tab_like_reedline(&mut menu, &mut editor);
         assert_eq!(editor.line_buffer().get_buffer(), "config ");
         menu.update_for_test(&mut editor, &mut completer, 80);
 
-        dispatch_tab_like_reedline(&mut menu);
+        dispatch_tab_like_reedline(&mut menu, &mut editor);
         menu.update_for_test(&mut editor, &mut completer, 80);
         assert_eq!(editor.line_buffer().get_buffer(), "config show");
         assert_eq!(menu.core.selected_index(), Some(0));
@@ -704,7 +703,7 @@ fn config_scope_navigation_and_child_scope_commit_keep_expected_menu_state_unit(
     let mut completer = ScopedConfigCompleter;
     let mut menu = OspCompletionMenu::default();
 
-    dispatch_tab_like_reedline(&mut menu);
+    dispatch_tab_like_reedline(&mut menu, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
     let values = menu
         .get_values()
@@ -713,17 +712,17 @@ fn config_scope_navigation_and_child_scope_commit_keep_expected_menu_state_unit(
         .collect::<Vec<_>>();
     assert_eq!(values, vec!["show", "get", "explain"]);
 
-    menu.menu_event(MenuEvent::PreviousElement);
+    menu.navigate(MenuEvent::PreviousElement, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
     assert_eq!(editor.line_buffer().get_buffer(), "config explain");
     assert_eq!(menu.core.selected_index(), Some(2));
 
-    dispatch_tab_like_reedline(&mut menu);
+    dispatch_tab_like_reedline(&mut menu, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
     assert_eq!(editor.line_buffer().get_buffer(), "config show");
     assert_eq!(menu.core.selected_index(), Some(0));
 
-    dispatch_tab_like_reedline(&mut menu);
+    dispatch_tab_like_reedline(&mut menu, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
     assert_eq!(editor.line_buffer().get_buffer(), "config get");
     assert_eq!(menu.core.selected_index(), Some(1));
@@ -740,7 +739,7 @@ fn config_scope_navigation_and_child_scope_commit_keep_expected_menu_state_unit(
         .collect::<Vec<_>>();
     assert_eq!(values, vec!["--sources", "--raw"]);
 
-    menu.menu_event(MenuEvent::NextElement);
+    menu.navigate(MenuEvent::NextElement, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
     assert_eq!(editor.line_buffer().get_buffer(), "config show --sources");
 }
@@ -838,10 +837,10 @@ fn contract_root_menu_refresh_keeps_the_inserted_command_visible_and_selected_un
     let mut completer = crate::repl::ReplCompleter::new(tree, Some(projector));
     let mut menu = OspCompletionMenu::default();
 
-    dispatch_tab_like_reedline(&mut menu);
+    dispatch_tab_like_reedline(&mut menu, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
 
-    dispatch_tab_like_reedline(&mut menu);
+    dispatch_tab_like_reedline(&mut menu, &mut editor);
     menu.update_for_test(&mut editor, &mut completer, 80);
     assert_eq!(editor.line_buffer().get_buffer(), "help");
 
@@ -875,7 +874,7 @@ fn trace_paths_record_complete_cycle_and_accept_events() {
 
     menu.menu_event(MenuEvent::Activate(false));
     menu.update_for_test_with_available_lines(&mut editor, &mut completer, 40, 5);
-    menu.menu_event(MenuEvent::NextElement);
+    menu.navigate(MenuEvent::NextElement, &mut editor);
     menu.update_for_test_with_available_lines(&mut editor, &mut completer, 40, 5);
     menu.accept_selection_in_buffer(&mut editor);
 

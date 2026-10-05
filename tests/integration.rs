@@ -16,11 +16,20 @@ mod completion;
 #[path = "integration/config/mod.rs"]
 mod config;
 
+#[path = "integration/diagnostics.rs"]
+mod diagnostics;
+
 #[path = "integration/dsl/mod.rs"]
 mod dsl;
 
+#[path = "integration/embedding_workflow.rs"]
+mod embedding_workflow;
+
 #[path = "integration/guide_ui.rs"]
 mod guide_ui;
+
+#[path = "integration/ui.rs"]
+mod ui;
 
 #[path = "integration/plugin_manager.rs"]
 mod plugin_manager;

@@ -243,7 +243,7 @@ impl HistoryShellContext {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HistoryRecord {
     id: i64,
     command_line: String,
@@ -263,6 +263,12 @@ struct HistoryRecord {
     profile: Option<String>,
     #[serde(default)]
     terminal: Option<String>,
+}
+
+#[derive(Clone)]
+struct PendingHistoryRecord {
+    index: usize,
+    record: HistoryRecord,
 }
 
 /// Visible history entry returned by listing operations after scope filtering.
@@ -409,6 +415,60 @@ impl SharedHistory {
         guard.clear_for(shell_prefix)
     }
 
+    /// Remember the last submitted command independently of persisted history.
+    pub(crate) fn remember_command(&self, command_line: &str) {
+        if !command_line.trim().is_empty()
+            && let Ok(mut store) = self.inner.lock()
+        {
+            store.last_command = Some(command_line.trim().to_string());
+        }
+    }
+
+    pub(crate) fn last_command(&self) -> Option<String> {
+        let store = self.inner.lock().ok()?;
+        store
+            .last_command
+            .clone()
+            .or_else(|| store.recent_commands().last().cloned())
+    }
+
+    /// The same expansion is used by Tab completion and Enter dispatch.
+    pub(crate) fn expand_last_command(&self, raw: &str) -> Option<String> {
+        let mut words = raw.split_whitespace();
+        let elevated = match (words.next(), words.next(), words.next()) {
+            (Some("!!"), None, None) => false,
+            (Some("sudo"), Some("!!"), None) => true,
+            _ => return None,
+        };
+        let command = self.last_command()?;
+        Some(
+            if elevated && command.split_whitespace().next() != Some("sudo") {
+                format!("sudo {command}")
+            } else {
+                command
+            },
+        )
+    }
+
+    /// Commit the editor's pending record, or save an accepted basic-mode replay.
+    ///
+    /// A sourced child must leave an unrelated pending parent record alone.
+    pub(crate) fn finalize_execution(
+        &self,
+        input: &str,
+        resolved: &str,
+        accepted: bool,
+    ) -> Result<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("history lock poisoned"))?;
+        if guard.pending_record.is_none() && input != resolved && accepted {
+            History::save(&mut *guard, HistoryItem::from_command_line(resolved))?;
+        }
+        guard.finalize_pending(resolved, accepted)
+    }
+
     /// Saves one command line through the underlying `reedline::History`
     /// implementation.
     ///
@@ -423,6 +483,7 @@ impl SharedHistory {
             .map_err(|_| anyhow::anyhow!("history lock poisoned"))?;
         let item = HistoryItem::from_command_line(command_line);
         History::save(&mut *guard, item).map(|_| ())?;
+        guard.finalize_pending(command_line, true)?;
         Ok(())
     }
 }
@@ -435,6 +496,8 @@ impl SharedHistory {
 pub(crate) struct OspHistoryStore {
     config: HistoryConfig,
     records: Vec<HistoryRecord>,
+    pending_record: Option<PendingHistoryRecord>,
+    last_command: Option<String>,
 }
 
 impl OspHistoryStore {
@@ -448,7 +511,12 @@ impl OspHistoryStore {
         {
             records = load_records(path);
         }
-        let mut store = Self { config, records };
+        let mut store = Self {
+            config,
+            records,
+            pending_record: None,
+            last_command: None,
+        };
         store.trim_to_capacity();
         store
     }
@@ -522,6 +590,9 @@ impl OspHistoryStore {
         if !self.history_enabled() {
             return Ok(0);
         }
+        if self.config.persist_enabled() {
+            return self.prune_persisted(keep, shell_prefix);
+        }
         let eligible = self.visible_record_indices_for(shell_prefix);
 
         if keep == 0 {
@@ -535,6 +606,50 @@ impl OspHistoryStore {
         let remove_count = eligible.len() - keep;
         let to_remove = eligible.into_iter().take(remove_count).collect::<Vec<_>>();
         self.remove_records(&to_remove)
+    }
+
+    fn prune_persisted(&mut self, keep: usize, shell_prefix: Option<&str>) -> Result<usize> {
+        let Some(path) = self.config.path.clone() else {
+            return Ok(0);
+        };
+        let _transaction_lock = crate::config::lock_file_transaction(&path)?;
+        let mut records = load_records_result(&path)?;
+        trim_records_to_capacity(&mut records, self.config.max_entries);
+
+        let mut pending_index = self.pending_record.as_ref().map(|pending| {
+            let index = records.len();
+            records.push(pending.record.clone());
+            index
+        });
+        let eligible = self.visible_record_indices_in(&records, shell_prefix);
+        let to_remove = if keep == 0 {
+            eligible
+        } else if eligible.len() <= keep {
+            Vec::new()
+        } else {
+            let remove_count = eligible.len() - keep;
+            eligible.into_iter().take(remove_count).collect()
+        };
+
+        if !to_remove.is_empty() {
+            pending_index = pending_index.and_then(|index| shifted_index(index, &to_remove));
+            remove_record_indices(&mut records, &to_remove);
+            let mut persisted = records.clone();
+            if let Some(index) = pending_index {
+                persisted.remove(index);
+            }
+            trim_records_to_capacity(&mut persisted, self.config.max_entries);
+            write_records(&path, &persisted)?;
+        }
+
+        let trimmed = trim_records_to_capacity(&mut records, self.config.max_entries);
+        pending_index = pending_index.and_then(|index| index.checked_sub(trimmed));
+        self.records = records;
+        self.pending_record = pending_index.map(|index| PendingHistoryRecord {
+            index,
+            record: self.records[index].clone(),
+        });
+        Ok(to_remove.len())
     }
 
     /// Clears all entries visible in the current scope.
@@ -598,9 +713,17 @@ impl OspHistoryStore {
     }
 
     fn visible_record_indices_for(&self, shell_prefix: Option<&str>) -> Vec<usize> {
+        self.visible_record_indices_in(&self.records, shell_prefix)
+    }
+
+    fn visible_record_indices_in(
+        &self,
+        records: &[HistoryRecord],
+        shell_prefix: Option<&str>,
+    ) -> Vec<usize> {
         let shell_prefix = normalize_scope_prefix(shell_prefix);
         let mut out = Vec::new();
-        for (record_index, record) in self.records.iter().enumerate() {
+        for (record_index, record) in records.iter().enumerate() {
             if self
                 .record_view_if_allowed(record, shell_prefix.as_deref(), true)
                 .is_none()
@@ -621,17 +744,7 @@ impl OspHistoryStore {
     }
 
     fn trim_to_capacity(&mut self) {
-        if self.config.max_entries == 0 {
-            self.records.clear();
-            return;
-        }
-        if self.records.len() > self.config.max_entries {
-            let start = self.records.len() - self.config.max_entries;
-            self.records = self.records.split_off(start);
-        }
-        for (idx, record) in self.records.iter_mut().enumerate() {
-            record.id = idx as i64;
-        }
+        trim_records_to_capacity(&mut self.records, self.config.max_entries);
     }
 
     fn append_record(&mut self, mut record: HistoryRecord) -> HistoryItemId {
@@ -641,62 +754,83 @@ impl OspHistoryStore {
         HistoryItemId::new(self.records.len() as i64 - 1)
     }
 
+    /// Removes records by index; callers pass sorted, distinct existing indices.
     fn remove_records(&mut self, indices: &[usize]) -> Result<usize> {
         if indices.is_empty() {
             return Ok(0);
         }
-        let mut drop_flags = vec![false; self.records.len()];
-        for idx in indices {
-            if *idx < drop_flags.len() {
-                drop_flags[*idx] = true;
-            }
-        }
-        let mut cursor = 0usize;
-        let removed = drop_flags.iter().filter(|flag| **flag).count();
-        self.records.retain(|_| {
-            let keep = !drop_flags.get(cursor).copied().unwrap_or(false);
-            cursor += 1;
-            keep
-        });
+        let pending_index = self
+            .pending_record
+            .as_ref()
+            .and_then(|pending| shifted_index(pending.index, indices));
+        remove_record_indices(&mut self.records, indices);
         self.trim_to_capacity();
-        if let Err(err) = self.write_all() {
-            return Err(err.into());
-        }
-        Ok(removed)
-    }
-
-    fn write_all(&self) -> std::io::Result<()> {
-        if !self.config.persist_enabled() {
-            return Ok(());
-        }
-        let Some(path) = &self.config.path else {
-            return Ok(());
-        };
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut payload = Vec::new();
-        for record in &self.records {
-            serde_json::to_writer(&mut payload, record).map_err(std::io::Error::other)?;
-            payload.push(b'\n');
-        }
-        crate::config::write_text_atomic(path, &payload, false)
+        self.pending_record = pending_index.map(|index| PendingHistoryRecord {
+            index,
+            record: self.records[index].clone(),
+        });
+        Ok(indices.len())
     }
 
     fn should_skip_command(&self, command: &str) -> bool {
         is_excluded_command(command, &self.config.exclude_patterns)
     }
 
-    fn command_list_for_expansion(&self) -> Vec<String> {
-        self.recent_commands()
+    fn finalize_pending(&mut self, command_line: &str, keep: bool) -> Result<()> {
+        let expected = apply_shell_prefix(command_line, self.shell_prefix().as_deref());
+        let Some(pending) = self
+            .pending_record
+            .take_if(|pending| pending.record.command_line == expected)
+        else {
+            return Ok(());
+        };
+
+        if keep {
+            let restore = pending.clone();
+            if let Err(err) = self.commit_pending(pending) {
+                self.pending_record = Some(restore);
+                return Err(err);
+            }
+            return Ok(());
+        }
+
+        if self.records.get(pending.index) == Some(&pending.record) {
+            self.records.remove(pending.index);
+            self.trim_to_capacity();
+        }
+        Ok(())
     }
 
-    fn expand_if_needed(&self, command: &str, shell_prefix: Option<&str>) -> Option<String> {
-        if !command.starts_with('!') {
-            return Some(command.to_string());
+    fn commit_pending(&mut self, pending: PendingHistoryRecord) -> Result<()> {
+        let Some(path) = self
+            .config
+            .path
+            .as_ref()
+            .filter(|_| self.config.persist_enabled())
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let _transaction_lock = crate::config::lock_file_transaction(&path)?;
+        let mut records = load_records_result(&path)?;
+        trim_records_to_capacity(&mut records, self.config.max_entries);
+        let shell_prefix = self.shell_prefix();
+        let duplicate = self.config.dedupe
+            && records
+                .iter()
+                .rev()
+                .find(|record| {
+                    self.profile_allows(record)
+                        && self.shell_allows(record, shell_prefix.as_deref())
+                })
+                .is_some_and(|record| record.command_line == pending.record.command_line);
+        if !duplicate {
+            records.push(pending.record);
         }
-        let history = self.command_list_for_expansion();
-        expand_history(command, &history, shell_prefix, false)
+        trim_records_to_capacity(&mut records, self.config.max_entries);
+        write_records(&path, &records)?;
+        self.records = records;
+        Ok(())
     }
 
     fn record_matches_filter(
@@ -824,6 +958,7 @@ impl OspHistoryStore {
 
 impl History for OspHistoryStore {
     fn save(&mut self, h: HistoryItem) -> ReedlineResult<HistoryItem> {
+        self.pending_record = None;
         if !self.config.enabled || self.config.max_entries == 0 {
             return Ok(h);
         }
@@ -833,14 +968,13 @@ impl History for OspHistoryStore {
             return Ok(h);
         }
 
-        let shell_prefix = self.shell_prefix();
-        let Some(expanded) = self.expand_if_needed(raw, shell_prefix.as_deref()) else {
-            return Ok(h);
-        };
-        if self.should_skip_command(&expanded) {
+        // Recall belongs to dispatch: the editor saves before resolving it,
+        // and recording that preview would change relative history indices.
+        if self.should_skip_command(raw) {
             return Ok(h);
         }
-        let expanded_full = apply_shell_prefix(&expanded, shell_prefix.as_deref());
+        let shell_prefix = self.shell_prefix();
+        let expanded_full = apply_shell_prefix(raw, shell_prefix.as_deref());
 
         if self.config.dedupe {
             let last_match = self.records.iter().rev().find(|record| {
@@ -858,10 +992,10 @@ impl History for OspHistoryStore {
             record.timestamp_ms = Some(now_ms());
         }
         let id = self.append_record(record);
-
-        if let Err(err) = self.write_all() {
-            return Err(ReedlineError(ReedlineErrorVariants::IOError(err)));
-        }
+        self.pending_record = Some(PendingHistoryRecord {
+            index: id.0 as usize,
+            record: self.records[id.0 as usize].clone(),
+        });
 
         Ok(HistoryItem {
             id: Some(id),
@@ -982,10 +1116,17 @@ impl History for OspHistoryStore {
     }
 
     fn clear(&mut self) -> ReedlineResult<()> {
-        self.records.clear();
-        if let Some(path) = &self.config.path {
-            let _ = std::fs::remove_file(path);
+        if let Some(path) = self.config.path.as_ref() {
+            let _transaction_lock = crate::config::lock_file_transaction(path)
+                .map_err(|err| ReedlineError(ReedlineErrorVariants::IOError(err)))?;
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(ReedlineError(ReedlineErrorVariants::IOError(err))),
+            }
         }
+        self.records.clear();
+        self.pending_record = None;
         Ok(())
     }
 
@@ -999,7 +1140,27 @@ impl History for OspHistoryStore {
     }
 
     fn sync(&mut self) -> std::io::Result<()> {
-        self.write_all()
+        if let Some(pending) = self.pending_record.take() {
+            let restore = pending.clone();
+            if let Err(err) = self.commit_pending(pending) {
+                self.pending_record = Some(restore);
+                return Err(std::io::Error::other(err));
+            }
+            return Ok(());
+        }
+        let Some(path) = self
+            .config
+            .path
+            .as_ref()
+            .filter(|_| self.config.persist_enabled())
+        else {
+            return Ok(());
+        };
+        let _transaction_lock = crate::config::lock_file_transaction(path)?;
+        let mut records = load_records_result(path)?;
+        trim_records_to_capacity(&mut records, self.config.max_entries);
+        self.records = records;
+        Ok(())
     }
 
     fn session(&self) -> Option<HistorySessionId> {
@@ -1083,16 +1244,19 @@ impl History for SharedHistory {
 }
 
 fn load_records(path: &Path) -> Vec<HistoryRecord> {
-    if !path.exists() {
-        return Vec::new();
-    }
+    load_records_result(path).unwrap_or_default()
+}
+
+fn load_records_result(path: &Path) -> std::io::Result<Vec<HistoryRecord>> {
     let file = match File::open(path) {
         Ok(file) => file,
-        Err(_) => return Vec::new(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
     };
     let reader = BufReader::new(file);
     let mut records = Vec::new();
-    for line in reader.lines().map_while(Result::ok) {
+    for line in reader.lines() {
+        let line = line?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -1106,7 +1270,47 @@ fn load_records(path: &Path) -> Vec<HistoryRecord> {
         }
         records.push(record);
     }
-    records
+    Ok(records)
+}
+
+fn write_records(path: &Path, records: &[HistoryRecord]) -> std::io::Result<()> {
+    let mut payload = Vec::new();
+    for record in records {
+        serde_json::to_writer(&mut payload, record).map_err(std::io::Error::other)?;
+        payload.push(b'\n');
+    }
+    crate::config::write_text_atomic(path, &payload, true)
+}
+
+fn trim_records_to_capacity(records: &mut Vec<HistoryRecord>, capacity: usize) -> usize {
+    let trimmed = records.len().saturating_sub(capacity);
+    if capacity == 0 {
+        records.clear();
+    } else if trimmed > 0 {
+        *records = records.split_off(trimmed);
+    }
+    for (index, record) in records.iter_mut().enumerate() {
+        record.id = index as i64;
+    }
+    trimmed
+}
+
+fn shifted_index(index: usize, removed: &[usize]) -> Option<usize> {
+    if removed.binary_search(&index).is_ok() {
+        None
+    } else {
+        Some(index - removed.partition_point(|removed| *removed < index))
+    }
+}
+
+fn remove_record_indices(records: &mut Vec<HistoryRecord>, indices: &[usize]) {
+    let mut removals = indices.iter().copied().peekable();
+    let mut index = 0usize;
+    records.retain(|_| {
+        let keep = removals.next_if_eq(&index).is_none();
+        index += 1;
+        keep
+    });
 }
 
 fn normalize_exclude_patterns(patterns: Vec<String>) -> Vec<String> {
@@ -1119,14 +1323,7 @@ fn normalize_exclude_patterns(patterns: Vec<String>) -> Vec<String> {
 
 fn normalize_shell_prefix(value: String) -> Option<String> {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut out = trimmed.to_string();
-    if !out.ends_with(' ') {
-        out.push(' ');
-    }
-    Some(out)
+    (!trimmed.is_empty()).then(|| format!("{trimmed} "))
 }
 
 fn normalize_scope_prefix(shell_prefix: Option<&str>) -> Option<String> {
@@ -1263,22 +1460,62 @@ fn is_excluded_command(command: &str, exclude_patterns: &[String]) -> bool {
     if trimmed.is_empty() {
         return true;
     }
-    if trimmed.starts_with('!') {
+    if trimmed.starts_with('!') || is_sudo_bang_command(trimmed) {
         return true;
     }
     if trimmed.contains("--help") {
         return true;
     }
-    if trimmed
-        .split_whitespace()
-        .zip(trimmed.split_whitespace().skip(1))
-        .any(|words| words == ("config", "set"))
-    {
+    // Keep ordinary config writes, while using the existing command grammar and
+    // sensitivity policy to avoid retaining inline credentials.
+    if is_sensitive_config_set_command(trimmed) {
         return true;
     }
     exclude_patterns
         .iter()
         .any(|pattern| matches_pattern(pattern, trimmed))
+}
+
+fn is_sensitive_config_set_command(command: &str) -> bool {
+    // Use the execution lexer so quoted pipes remain values and actual stages
+    // cannot make a sensitive command fail open at the built-in parser.
+    let Ok(pipeline) = crate::dsl::parse_pipeline(command) else {
+        return true;
+    };
+    let Ok(words) = shell_words::split(&pipeline.command) else {
+        return true;
+    };
+    is_sensitive_config_set_tokens(&words)
+}
+
+pub(super) fn is_sensitive_config_set_tokens(tokens: &[String]) -> bool {
+    let Ok(scanned) = crate::cli::invocation::scan_command_tokens(tokens) else {
+        return true;
+    };
+    let words = scanned.tokens;
+    let Some(config_set) = words
+        .windows(2)
+        .position(|pair| pair[0] == "config" && pair[1] == "set")
+    else {
+        return false;
+    };
+    let Ok(Some(crate::cli::Commands::Config(args))) =
+        crate::cli::parse_inline_command_tokens(&words[config_set..])
+    else {
+        // A config write that cannot be classified is unsafe to persist.
+        return true;
+    };
+    let crate::cli::ConfigCommands::Set(set) = args.command else {
+        return false;
+    };
+    set.store.secrets || crate::config::is_sensitive_key(&set.key)
+}
+
+fn is_sudo_bang_command(command: &str) -> bool {
+    let Some(rest) = command.strip_prefix("sudo") else {
+        return false;
+    };
+    rest.chars().next().is_some_and(char::is_whitespace) && rest.trim_start().starts_with('!')
 }
 
 fn matches_pattern(pattern: &str, command: &str) -> bool {

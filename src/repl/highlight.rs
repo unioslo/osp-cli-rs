@@ -10,14 +10,32 @@ use crate::repl::LineProjection;
 
 /// Highlighting intentionally stays small and opinionated:
 /// - color only the visible command path the tree can resolve
-/// - keep partial tokens and flags plain
+/// - mark the first word the tree proves wrong, never one still being typed
+/// - keep partial tokens, values, and known flags plain
 /// - preserve `help <command>` as a first-class alias case
 /// - self-highlight hex color literals
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HighlightTokenKind {
     Plain,
     CommandValid,
+    Invalid,
     ColorLiteral(Color),
+}
+
+/// The first word on a line that cannot be valid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LineProblem {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) kind: LineProblemKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LineProblemKind {
+    /// Not a subcommand of `parent`, which takes no free positionals.
+    UnknownCommand { parent: Vec<String> },
+    /// Not a flag of the command path before it.
+    UnknownFlag { command: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +66,7 @@ pub(crate) struct ReplHighlighter {
     tree: CompletionTree,
     parser: CommandLineParser,
     command_color: Color,
+    error_color: Color,
     line_projector: Option<LineProjector>,
 }
 
@@ -55,18 +74,39 @@ impl ReplHighlighter {
     pub(crate) fn new(
         tree: CompletionTree,
         command_color: Color,
+        error_color: Color,
         line_projector: Option<LineProjector>,
     ) -> Self {
         Self {
             tree,
             parser: CommandLineParser,
             command_color,
+            error_color,
             line_projector,
         }
     }
 
-    pub(crate) fn classify(&self, line: &str) -> Vec<HighlightedSpan> {
+    fn walk(&self, line: &str, cursor: usize) -> LineWalk {
+        let projected = self
+            .line_projector
+            .as_ref()
+            .map(|project| project(line))
+            .unwrap_or_else(|| LineProjection::passthrough(line));
+        walk_line(&self.tree.root, &self.parser, &projected.line, cursor)
+    }
+
+    /// Returns the first word on `line` that cannot be valid, if any.
+    pub(crate) fn problem(&self, line: &str, cursor: usize) -> Option<LineProblem> {
+        self.walk(line, cursor).problem
+    }
+
+    pub(crate) fn classify(&self, line: &str, cursor: usize) -> Vec<HighlightedSpan> {
         if line.is_empty() {
+            return Vec::new();
+        }
+
+        let raw_spans = self.parser.tokenize_with_spans(line);
+        if raw_spans.is_empty() {
             return Vec::new();
         }
 
@@ -75,24 +115,24 @@ impl ReplHighlighter {
             .as_ref()
             .map(|project| project(line))
             .unwrap_or_else(|| LineProjection::passthrough(line));
-        let raw_spans = self.parser.tokenize_with_spans(line);
-        if raw_spans.is_empty() {
-            return Vec::new();
-        }
-
-        let mut command_ranges =
-            command_token_ranges(&self.tree.root, &self.parser, &projected.line);
+        let LineWalk {
+            mut commands,
+            problem,
+        } = self.walk(line, cursor);
         if let Some(range) = blanked_help_keyword_range(&raw_spans, &projected.line) {
-            command_ranges.insert(range);
+            commands.insert(range);
         }
+        let invalid = problem.map(|problem| (problem.start, problem.end));
 
         raw_spans
             .into_iter()
             .map(|span| HighlightedSpan {
                 start: span.start,
                 end: span.end,
-                kind: if command_ranges.contains(&(span.start, span.end)) {
+                kind: if commands.contains(&(span.start, span.end)) {
                     HighlightTokenKind::CommandValid
+                } else if invalid == Some((span.start, span.end)) {
+                    HighlightTokenKind::Invalid
                 } else if let Some(color) = parse_hex_color_token(&span.value) {
                     HighlightTokenKind::ColorLiteral(color)
                 } else {
@@ -103,7 +143,7 @@ impl ReplHighlighter {
     }
 
     fn classify_debug(&self, line: &str) -> Vec<HighlightDebugSpan> {
-        self.classify(line)
+        self.classify(line, line.len())
             .into_iter()
             .map(|span| HighlightDebugSpan {
                 start: span.start,
@@ -117,13 +157,13 @@ impl ReplHighlighter {
 }
 
 impl Highlighter for ReplHighlighter {
-    fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
+    fn highlight(&self, line: &str, cursor: usize) -> StyledText {
         let mut styled = StyledText::new();
         if line.is_empty() {
             return styled;
         }
 
-        let spans = self.classify(line);
+        let spans = self.classify(line, cursor);
         if spans.is_empty() {
             styled.push((nu_ansi_term::Style::new(), line.to_string()));
             return styled;
@@ -143,6 +183,7 @@ impl Highlighter for ReplHighlighter {
                 HighlightTokenKind::CommandValid => {
                     nu_ansi_term::Style::new().fg(self.command_color)
                 }
+                HighlightTokenKind::Invalid => nu_ansi_term::Style::new().fg(self.error_color),
                 HighlightTokenKind::ColorLiteral(color) => nu_ansi_term::Style::new().fg(color),
             };
             styled.push((style, line[span.start..span.end].to_string()));
@@ -164,36 +205,113 @@ pub fn debug_highlight(
     command_color: Color,
     line_projector: Option<LineProjector>,
 ) -> Vec<HighlightDebugSpan> {
-    ReplHighlighter::new(tree.clone(), command_color, line_projector).classify_debug(line)
+    ReplHighlighter::new(tree.clone(), command_color, Color::Red, line_projector)
+        .classify_debug(line)
 }
 
-fn command_token_ranges(
+/// Command words to color and the first word that cannot be valid.
+#[derive(Default)]
+struct LineWalk {
+    commands: BTreeSet<(usize, usize)>,
+    problem: Option<LineProblem>,
+}
+
+/// Walks the command path, then checks flags against the commands they
+/// follow.
+///
+/// A word is only wrong when the tree is sure: an unknown subcommand under a
+/// command that takes no free positionals, or a flag no command on the path
+/// declares. A word at the cursor that still prefixes a valid choice is being
+/// typed and is left alone. Pipe stages are the DSL's business.
+fn walk_line(
     root: &CompletionNode,
     parser: &CommandLineParser,
     projected_line: &str,
-) -> BTreeSet<(usize, usize)> {
-    let mut ranges = BTreeSet::new();
-    let spans = parser.tokenize_with_spans(projected_line);
-    if spans.is_empty() {
-        return ranges;
-    }
-
+    cursor: usize,
+) -> LineWalk {
+    let mut walk = LineWalk::default();
+    let mut path = Vec::new();
+    let mut scopes = vec![root];
     let mut node = root;
-    for span in spans {
+    let mut in_path = true;
+    let mut skip_value = false;
+
+    for span in parser.tokenize_with_spans(projected_line) {
         let token = span.value.as_str();
-        if token.is_empty() || token == "|" || token.starts_with('-') {
+        if token == "|" {
             break;
         }
+        if token.is_empty() || std::mem::take(&mut skip_value) {
+            continue;
+        }
+        let typing = span.end == cursor;
 
-        let Some(child) = node.children.get(token) else {
+        if token == "--" {
             break;
-        };
+        }
+        if token.starts_with('-') && token != "-" {
+            let (name, inline_value) = match token.split_once('=') {
+                Some((name, _)) => (name, true),
+                None => (token, false),
+            };
+            match scopes.iter().rev().find_map(|scope| scope.flags.get(name)) {
+                Some(flag) => skip_value = !flag.flag_only && !inline_value,
+                None => {
+                    let prefixes_a_flag = scopes
+                        .iter()
+                        .any(|scope| scope.flags.keys().any(|known| known.starts_with(name)));
+                    if !(typing && prefixes_a_flag) {
+                        walk.problem = Some(LineProblem {
+                            start: span.start,
+                            end: span.end,
+                            kind: LineProblemKind::UnknownFlag {
+                                command: path.clone(),
+                            },
+                        });
+                    }
+                    // Without the flag's arity the rest of the line is guesswork.
+                    break;
+                }
+            }
+            continue;
+        }
 
-        ranges.insert((span.start, span.end));
-        node = child;
+        if !in_path {
+            continue;
+        }
+        if let Some(child) = node.children.get(token) {
+            walk.commands.insert((span.start, span.end));
+            path.push(token.to_string());
+            scopes.push(child);
+            node = child;
+            continue;
+        }
+        in_path = false;
+
+        // The root's positional is the synthetic command list, so any word
+        // there must name a command; elsewhere positionals are free values.
+        let takes_values = !path.is_empty() && !node.args.is_empty();
+        let names_root_word = node
+            .args
+            .iter()
+            .any(|arg| arg.suggestions.iter().any(|entry| entry.value == token));
+        if node.children.is_empty() || node.value_key || takes_values || names_root_word {
+            continue;
+        }
+        let prefixes_a_command = node.children.keys().any(|name| name.starts_with(token));
+        if !(typing && prefixes_a_command) {
+            walk.problem = Some(LineProblem {
+                start: span.start,
+                end: span.end,
+                kind: LineProblemKind::UnknownCommand {
+                    parent: path.clone(),
+                },
+            });
+            break;
+        }
     }
 
-    ranges
+    walk
 }
 
 // `help <command>` is projected to a blanked keyword plus the target path.
@@ -216,6 +334,9 @@ fn blanked_help_keyword_range(
 fn parse_hex_color_token(token: &str) -> Option<Color> {
     let normalized = token.trim();
     let hex = normalized.strip_prefix('#')?;
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     if hex.len() == 6 {
         let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
         let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
@@ -239,6 +360,7 @@ fn debug_kind_name(kind: HighlightTokenKind) -> &'static str {
     match kind {
         HighlightTokenKind::Plain => "plain",
         HighlightTokenKind::CommandValid => "command_valid",
+        HighlightTokenKind::Invalid => "invalid",
         HighlightTokenKind::ColorLiteral(_) => "color_literal",
     }
 }
@@ -314,7 +436,7 @@ mod tests {
     #[test]
     fn colors_full_command_chain_only_unit() {
         let tree = completion_tree_with_config_show();
-        let highlighter = ReplHighlighter::new(tree, Color::Green, None);
+        let highlighter = ReplHighlighter::new(tree, Color::Green, Color::Red, None);
 
         let tokens = token_styles(&highlighter.highlight("config show", 0));
         assert_eq!(
@@ -327,25 +449,30 @@ mod tests {
     }
 
     #[test]
-    fn skips_partial_subcommand_and_flags_unit() {
+    fn marks_wrong_words_but_not_words_being_typed_unit() {
         let tree = completion_tree_with_config_show();
-        let highlighter = ReplHighlighter::new(tree, Color::Green, None);
+        let highlighter = ReplHighlighter::new(tree, Color::Green, Color::Red, None);
+        let styles = |line: &str, cursor: usize| token_styles(&highlighter.highlight(line, cursor));
 
-        let tokens = token_styles(&highlighter.highlight("config sho", 0));
         assert_eq!(
-            tokens,
+            styles("config sho", 10),
             vec![
                 ("config".to_string(), Some(Color::Green)),
                 ("sho".to_string(), None),
             ]
         );
-
-        let tokens = token_styles(&highlighter.highlight("config --flag", 0));
         assert_eq!(
-            tokens,
+            styles("config sho ", 11),
             vec![
                 ("config".to_string(), Some(Color::Green)),
-                ("--flag".to_string(), None),
+                ("sho".to_string(), Some(Color::Red)),
+            ]
+        );
+        assert_eq!(
+            styles("config --flag", 13),
+            vec![
+                ("config".to_string(), Some(Color::Green)),
+                ("--flag".to_string(), Some(Color::Red)),
             ]
         );
     }
@@ -358,7 +485,7 @@ mod tests {
         };
         let projector =
             Arc::new(|line: &str| LineProjection::passthrough(line.replacen("help", "    ", 1)));
-        let highlighter = ReplHighlighter::new(tree, Color::Green, Some(projector));
+        let highlighter = ReplHighlighter::new(tree, Color::Green, Color::Red, Some(projector));
 
         let tokens = token_styles(&highlighter.highlight("help history", 0));
         assert_eq!(
@@ -369,7 +496,7 @@ mod tests {
             ]
         );
 
-        let tokens = token_styles(&highlighter.highlight("help his", 0));
+        let tokens = token_styles(&highlighter.highlight("help his", 8));
         assert_eq!(
             tokens,
             vec![
@@ -381,7 +508,8 @@ mod tests {
 
     #[test]
     fn highlights_hex_color_literals_unit() {
-        let highlighter = ReplHighlighter::new(CompletionTree::default(), Color::Green, None);
+        let highlighter =
+            ReplHighlighter::new(CompletionTree::default(), Color::Green, Color::Red, None);
         let spans = debug_highlight(&CompletionTree::default(), "#ff00cc", Color::Green, None);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].kind, "color_literal");
@@ -418,7 +546,8 @@ mod tests {
         let spans = debug_highlight(&CompletionTree::default(), "#0af", Color::Green, None);
         assert_eq!(spans[0].rgb, Some([0, 170, 255]));
 
-        let highlighter = ReplHighlighter::new(CompletionTree::default(), Color::Green, None);
+        let highlighter =
+            ReplHighlighter::new(CompletionTree::default(), Color::Green, Color::Red, None);
         let tokens = token_styles(&highlighter.highlight("unknown #nope", 0));
         assert_eq!(
             tokens,

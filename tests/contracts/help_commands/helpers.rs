@@ -98,7 +98,7 @@ fn help_output(
         config_path,
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--presentation",
             presentation,
@@ -122,7 +122,7 @@ fn table_output(
         config_path,
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--presentation",
             presentation,
@@ -149,7 +149,7 @@ fn success_info_output(
         true,
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--presentation",
             presentation,
@@ -179,7 +179,7 @@ fn warning_success_output(
         true,
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--presentation",
             presentation,
@@ -209,7 +209,7 @@ fn error_output(
         false,
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--presentation",
             presentation,

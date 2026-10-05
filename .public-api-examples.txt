@@ -1,4 +1,4 @@
-# Curated runnable-doctest baseline for Queue 6.
+# Curated runnable examples for stable public entrypoints.
 # Format: <relative source path> <symbol selector>
 # Use `Type::method` when a file contains multiple public items with the same name.
 
@@ -9,6 +9,6 @@ src/core/plugin.rs from_clap_command
 src/native.rs execute
 src/plugin/manager.rs select_provider
 src/plugin/manager.rs clear_provider_selection
-src/services.rs execute_line
+src/dsl/engine.rs apply_output_pipeline
 src/ui/mod.rs render_output
 src/app/session.rs AppState::from_resolved_config

@@ -15,15 +15,15 @@ fn run_repl_command(command: &str, colored: bool) -> (String, String) {
     };
     let mut session = ReplPtySession::spawn(ReplPtyConfig::default().with_color_mode(color_mode));
 
-    let start = session.output_len();
     assert!(
-        session.wait_for_plain_output_since(start, "default>", Duration::from_secs(3)),
+        session.wait_for_plain_output("default>", Duration::from_secs(3)),
         "expected prompt output after REPL startup; output:\n{}",
         session.output_snapshot(4000),
     );
 
     let start = session.output_len();
-    session.write_bytes(format!("{command}\r").as_bytes());
+    session.type_text(command);
+    session.write_bytes(b"\r");
     let expected = if command == "config sho" {
         "unrecognized subcommand"
     } else if matches!(command, "help help" | "help --help") {
@@ -35,6 +35,13 @@ fn run_repl_command(command: &str, colored: bool) -> (String, String) {
         session.wait_for_plain_output_since(start, expected, Duration::from_secs(3)),
         "expected output from `{command}`; output:\n{}",
         session.output_snapshot(4000),
+    );
+    let response = session.output_since(start);
+    let response_end = start + response.find(expected).expect("response marker") + expected.len();
+    assert!(
+        session.wait_for_plain_output_since(response_end, "default>", Duration::from_secs(3)),
+        "expected prompt after `{command}`; output:\n{}",
+        session.output_snapshot(8000),
     );
     let raw = session.output_since(start);
     let plain = crate::support::strip_terminal_noise(&raw);

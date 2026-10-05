@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::completion::{CompletionEngine, CompletionTree, SuggestionOutput};
+use crate::completion::{CompletionAnalysis, CompletionEngine, CompletionTree, SuggestionOutput};
 use crate::core::fuzzy::fold_case;
 use crate::core::shell_words::{QuoteStyle, escape_for_shell, quote_for_shell};
 use crate::dsl::registered_verbs;
@@ -24,6 +24,7 @@ use super::{HistoryEntry, LineProjection, LineProjector, ReplAppearance, SharedH
 pub(crate) struct ReplCompleter {
     engine: CompletionEngine,
     line_projector: Option<LineProjector>,
+    history: Option<SharedHistory>,
 }
 
 impl ReplCompleter {
@@ -31,7 +32,29 @@ impl ReplCompleter {
         Self {
             engine: CompletionEngine::new(tree),
             line_projector,
+            history: None,
         }
+    }
+}
+
+impl ReplCompleter {
+    pub(crate) fn with_history(mut self, history: SharedHistory) -> Self {
+        self.history = Some(history);
+        self
+    }
+
+    pub(crate) fn engine(&self) -> &CompletionEngine {
+        &self.engine
+    }
+
+    /// Analyzes the projected line, as completion itself does.
+    pub(crate) fn analyze(&self, line: &str, pos: usize) -> CompletionAnalysis {
+        let projected = self
+            .line_projector
+            .as_ref()
+            .map(|project| project(line))
+            .unwrap_or_else(|| LineProjection::passthrough(line));
+        self.engine.analyze(&projected.line, pos)
     }
 }
 
@@ -42,6 +65,19 @@ impl Completer for ReplCompleter {
             "completer received pos {pos} beyond line length {}",
             line.len()
         );
+        if pos == line.len()
+            && let Some(expanded) = self
+                .history
+                .as_ref()
+                .and_then(|history| history.expand_last_command(line))
+        {
+            return vec![Suggestion {
+                value: expanded,
+                span: Span { start: 0, end: pos },
+                append_whitespace: false,
+                ..Suggestion::default()
+            }];
+        }
         let projected = self
             .line_projector
             .as_ref()
@@ -195,9 +231,15 @@ pub(crate) fn build_repl_highlighter(
         .command_highlight_style
         .as_deref()
         .and_then(color_from_style_spec);
+    let error_color = appearance
+        .error_highlight_style
+        .as_deref()
+        .and_then(color_from_style_spec)
+        .unwrap_or(Color::Red);
     Some(ReplHighlighter::new(
         tree.clone(),
         command_color?,
+        error_color,
         line_projector,
     ))
 }
@@ -220,7 +262,7 @@ pub(crate) fn style_with_fg_bg(fg: Option<Color>, bg: Option<Color>) -> Style {
 /// ignored when selecting the effective color token.
 pub fn color_from_style_spec(spec: &str) -> Option<Color> {
     let token = extract_color_token(spec)?;
-    parse_color_token(token)
+    crate::ui::style::parse_color_token(&token.to_ascii_lowercase())
 }
 
 fn extract_color_token(spec: &str) -> Option<&str> {
@@ -252,69 +294,6 @@ fn extract_color_token(spec: &str) -> Option<&str> {
         last = Some(token);
     }
     last
-}
-
-fn parse_color_token(token: &str) -> Option<Color> {
-    let normalized = token.trim().to_ascii_lowercase();
-
-    if let Some(value) = normalized.strip_prefix('#') {
-        if value.len() == 6 {
-            let r = u8::from_str_radix(&value[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&value[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&value[4..6], 16).ok()?;
-            return Some(Color::Rgb(r, g, b));
-        }
-        if value.len() == 3 {
-            let r = u8::from_str_radix(&value[0..1], 16).ok()?;
-            let g = u8::from_str_radix(&value[1..2], 16).ok()?;
-            let b = u8::from_str_radix(&value[2..3], 16).ok()?;
-            return Some(Color::Rgb(
-                r.saturating_mul(17),
-                g.saturating_mul(17),
-                b.saturating_mul(17),
-            ));
-        }
-    }
-
-    if let Some(value) = normalized.strip_prefix("ansi")
-        && let Ok(index) = value.parse::<u8>()
-    {
-        return Some(Color::Fixed(index));
-    }
-
-    if let Some(value) = normalized
-        .strip_prefix("rgb(")
-        .and_then(|value| value.strip_suffix(')'))
-    {
-        let mut parts = value.split(',').map(|part| part.trim().parse::<u8>().ok());
-        if let (Some(Some(r)), Some(Some(g)), Some(Some(b))) =
-            (parts.next(), parts.next(), parts.next())
-        {
-            return Some(Color::Rgb(r, g, b));
-        }
-    }
-
-    match normalized.as_str() {
-        "black" => Some(Color::Black),
-        "red" => Some(Color::Red),
-        "green" => Some(Color::Green),
-        "yellow" => Some(Color::Yellow),
-        "blue" => Some(Color::Blue),
-        "magenta" | "purple" => Some(Color::Purple),
-        "cyan" => Some(Color::Cyan),
-        "white" => Some(Color::White),
-        "darkgray" | "dark_gray" | "gray" | "grey" => Some(Color::DarkGray),
-        "lightgray" | "light_gray" | "lightgrey" | "light_grey" => Some(Color::LightGray),
-        "lightred" | "light_red" => Some(Color::LightRed),
-        "lightgreen" | "light_green" => Some(Color::LightGreen),
-        "lightyellow" | "light_yellow" => Some(Color::LightYellow),
-        "lightblue" | "light_blue" => Some(Color::LightBlue),
-        "lightmagenta" | "light_magenta" | "lightpurple" | "light_purple" => {
-            Some(Color::LightPurple)
-        }
-        "lightcyan" | "light_cyan" => Some(Color::LightCyan),
-        _ => None,
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]

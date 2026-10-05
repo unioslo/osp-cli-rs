@@ -1,10 +1,7 @@
 # UI and Rendering
 
-This document is about product behavior, not internal Rust API shape.
-
-If you want to understand the UI pipeline as code, start with
-`src/ui/mod.rs`. If you want to understand what users see, how `osp`
-chooses formats, and which config knobs matter, start here.
+This guide explains how `osp` chooses output formats and how to configure
+its presentation. For the implementation, start with `src/ui/mod.rs`.
 
 ## What the UI layer does
 
@@ -15,10 +12,6 @@ At a high level, rendering happens in this order:
 3. `osp` chooses an output format
 4. `osp` chooses a plain or rich backend
 5. the final text is rendered to stdout
-
-The important thing to keep in mind is that `osp` does not render directly
-from raw command data. It first decides what kind of output the result should
-be, then renders that shape consistently.
 
 ## Format Selection
 
@@ -57,7 +50,7 @@ Render mode controls the backend:
 - `rich`: rich terminal rendering, color and Unicode when allowed
 - `auto`: choose based on runtime conditions
 
-The current auto rule is intentionally boring:
+In `auto` mode:
 
 - non-TTY output falls back to `plain`
 - a `dumb` terminal falls back to `plain`
@@ -72,7 +65,7 @@ even if the terminal could support them.
 Useful one-shot flags:
 
 - `--format`
-- `--mode`
+- `--render-mode`
 - `--color {auto,always,never}`
 - `--no-color`
 - `--unicode {auto,always,never}`
@@ -101,10 +94,15 @@ Table-oriented tuning lives here:
 
 - `ui.table.border`
   - `none | square | round`
+- `ui.table.nested_border`
+  - `inherit | none | square | round`; defaults to `none`
+  - applies only to tables nested inside an MREG record, such as
+    `addresses (2):`; `inherit` follows `ui.table.border`
 - `ui.table.overflow`
   - `clip | ellipsis | wrap | none`
-  - defaults to `wrap`, preserving complete values when a table is wider than
-    the configured or detected terminal width
+  - defaults to `ellipsis`, keeping list rows compact when a table is wider
+    than the configured or detected terminal width
+  - explicit `wrap` preserves complete values across as many lines as needed
 
 `table` is the dense grid view for many rows.
 
@@ -225,5 +223,5 @@ osp --format md plugins commands
 Force plain JSON for scripting:
 
 ```bash
-osp --format json --mode plain plugins list
+osp --format json --render-mode plain plugins list
 ```

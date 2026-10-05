@@ -133,6 +133,10 @@ impl<'a> NativeCommandContext<'a> {
     }
 
     /// Gives the host an opportunity to display coalesced terminal progress.
+    ///
+    /// Call before a blocking interaction that must follow pending progress.
+    /// May wait for rendering and return a deferred render error. Without a
+    /// progress sink, this is a no-op.
     pub fn flush_progress(&self) -> Result<()> {
         if let Some(progress) = self.progress {
             progress.flush()?;
@@ -140,8 +144,19 @@ impl<'a> NativeCommandContext<'a> {
         Ok(())
     }
 
-    /// Emits one structured transient progress document immediately.
+    /// Display a notice or confirmation through the host renderer, outside stream filters.
     ///
+    /// Without a progress sink, this is a no-op.
+    pub fn present(&self, document: NativeProgressEvent) -> Result<()> {
+        match self.progress {
+            Some(progress) => progress.present(document),
+            None => Ok(()),
+        }
+    }
+
+    /// Submits one structured transient progress document to the host.
+    ///
+    /// The host may coalesce terminal replacement updates before displaying them.
     /// A context created outside the host has no sink, in which case emission
     /// is a no-op. Native commands should still return the stable final
     /// document through [`NativeCommandOutcome`].
@@ -156,7 +171,7 @@ impl<'a> NativeCommandContext<'a> {
 /// One transient structured document emitted while a native command runs.
 #[derive(Debug, Clone)]
 pub struct NativeProgressEvent {
-    /// Canonical progress data to render immediately.
+    /// Canonical progress data submitted to the host for rendering.
     pub data: serde_json::Value,
     /// Structured messages attached to this progress document.
     pub messages: Vec<ResponseMessageV1>,
@@ -194,6 +209,11 @@ impl NativeProgressEvent {
 pub trait NativeProgressSink {
     /// Renders or records one progress document before command execution resumes.
     fn emit(&self, event: NativeProgressEvent) -> Result<()>;
+
+    /// Render a notice or confirmation without applying result-stream filters.
+    fn present(&self, document: NativeProgressEvent) -> Result<()> {
+        self.emit(document)
+    }
 
     /// Flushes coalesced terminal progress when the command is waiting for input.
     fn flush(&self) -> Result<()> {
@@ -369,7 +389,8 @@ pub trait NativeCommand: Send + Sync {
     /// or execution reads this command's state. Called again on REPL rebuild.
     ///
     /// Keep this local: select the service/session context and invalidate stale
-    /// snapshots here; remote refresh belongs in execution or refresh_completion.
+    /// snapshots here; remote refresh belongs in execution, invocation metadata
+    /// preparation, or refresh_completion.
     /// The registered command name must remain stable across configurations.
     fn configure(&self, _config: &ResolvedConfig) {}
 
@@ -378,8 +399,10 @@ pub trait NativeCommand: Send + Sync {
 
     /// Converts supplied arguments to the canonical command grammar.
     ///
-    /// The host calls this once before native clap parsing and command-path
-    /// authorization, then passes the same arguments to [`Self::execute`].
+    /// The host calls this before native clap parsing and command-path
+    /// authorization, then passes the canonical arguments to [`Self::execute`].
+    /// If [`Self::prepare_invocation_metadata`] changes the grammar, the host
+    /// normalizes the original arguments again before retrying strict parsing.
     /// Arguments exclude the registered command name and any DSL pipeline.
     /// The default leaves them unchanged.
     ///
@@ -390,6 +413,27 @@ pub trait NativeCommand: Send + Sync {
     /// or execution side effects. Return an error for ambiguous normalization.
     fn normalize_args(&self, args: &[String]) -> Result<Vec<String>> {
         Ok(args.to_vec())
+    }
+
+    /// Prepares metadata when an invocation fails strict parsing or requests help.
+    ///
+    /// For ordinary execution, the host authorizes the command root as runnable
+    /// before calling this. For help, it first authorizes the cached command
+    /// path as visible and treats preparation errors as a cache miss so help
+    /// remains available offline and without acquiring credentials. Arguments
+    /// are the original supplied arguments, without the registered command name
+    /// or DSL pipeline. Remote discovery is permitted, but this must not execute
+    /// the requested action.
+    /// Return `true` only when the grammar changed: the host then normalizes,
+    /// describes, and strictly parses the invocation once more, and authorizes
+    /// its full path against both host policy and refreshed native declarations
+    /// before execution. Installed host restrictions remain in force.
+    fn prepare_invocation_metadata(
+        &self,
+        _args: &[String],
+        _config: &ResolvedConfig,
+    ) -> Result<bool> {
+        Ok(false)
     }
 
     /// Returns optional auth/visibility metadata for the command.

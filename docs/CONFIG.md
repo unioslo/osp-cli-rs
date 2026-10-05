@@ -44,14 +44,8 @@ Useful switches:
   - show pre-interpolation values
 - `--session`
   - force an in-memory change
-- `--save`
+- `--permanent`
   - persist the change when running inside the REPL
-
-Rule of thumb:
-
-- if you only need the current winner, use `get`
-- if you are confused, use `explain`
-- if you want the broad picture, use `show`
 
 ## Profile Selection On The Command Line
 
@@ -109,7 +103,7 @@ Notes:
 - REPL `config set --session ...` writes into the in-memory session layer.
 - Launch-time bootstrap flags like `--theme` and `-u` may still affect startup
   state or session defaults.
-- Invocation flags like `--json`, `--format`, `--mode`, `--color`, `--ascii`,
+- Invocation flags like `--json`, `--format`, `--render-mode`, `--color`, `--ascii`,
   `-v/-q`, `-d`, and `--plugin-provider` do not write into config state.
 - `config get --sources` therefore reflects stored defaults, not one-shot
   invocation overrides.
@@ -122,8 +116,8 @@ For UI keys, there is one more rule inside the resolved config:
 
 ## Loader Abstraction
 
-`osp-config` exposes a generic loader interface so each source can be wired
-without custom code in `osp-cli`:
+`osp_cli::config` exposes a generic loader interface so each source can be wired
+without custom host loading code:
 
 - `ConfigLoader` trait (`load() -> ConfigLayer`)
 - `StaticLayerLoader` for in-memory defaults/session layers
@@ -136,7 +130,7 @@ without custom code in `osp-cli`:
 
 ## Typed Schema and Validation
 
-`osp-config` validates resolved keys against a typed schema (`ConfigSchema`):
+`osp_cli::config` validates resolved keys against a typed schema (`ConfigSchema`):
 
 - Unknown keys are rejected by default.
 - `extensions.*` is the only open namespace for unknown keys.
@@ -196,7 +190,7 @@ profile.default = "uio"
 ui.format = "table"
 
 [profile.uio]
-osp.url = "https://osp-orchestrator.uio.no"
+extensions.plugins.env.api.url = "https://api.example.org"
 
 [profile.tsd]
 ui.format = "json"
@@ -221,7 +215,7 @@ Notes:
 
 ## Environment Variable Mapping
 
-Keep the mapping explicit and predictable:
+Environment names map to configuration keys as follows:
 
 - `OSP__UI__FORMAT` -> `ui.format`
 - `OSP__PROFILE__TSD__UI__FORMAT` -> `ui.format` scoped to profile `tsd`
@@ -258,6 +252,21 @@ Secrets are stored in a separate backend:
 - Without `--secrets`, `config set` warns and still writes the value to the
   main config store.
 - Secrets are wrapped in a redacted type for diagnostics.
+
+Import a value without putting it in shell history or process arguments:
+
+```bash
+osp config set extensions.example.token --secrets --from-file ~/token
+pass show example | osp config set extensions.example.token --secrets --from-file -
+```
+
+`--from-file PATH` reads a UTF-8 file once; `-` reads stdin until EOF. It is
+mutually exclusive with a positional value. Only trailing CR/LF characters
+are removed; other whitespace is preserved. The normal schema validation,
+scoping and store selection still apply. With `--secrets`, the selected file
+or keyring backend owns the value. Without it, the sensitive-key warning
+still applies. The source file is never consulted again; repeat the import
+to rotate the value.
 
 No secret defaults are allowed in code. Missing secrets must surface as
 clear config errors.
@@ -332,7 +341,11 @@ These keys currently drive user-visible rendering and REPL presentation:
   - `per-section | shared`
 - `ui.table.border`
   - `none | square | round`
+- `ui.table.nested_border`
+  - `inherit | none | square | round`; defaults to `none`. Applies to tables
+    nested inside a record (`addresses (2):`); `inherit` follows `ui.table.border`
 - `ui.table.overflow`
+  - `clip | ellipsis | wrap | none`; defaults to `ellipsis`
 - `ui.help.level`
   - `inherit | none | tiny | normal | verbose`
 - `theme.name`
@@ -347,8 +360,8 @@ These keys currently drive user-visible rendering and REPL presentation:
 - `repl.intro`
   - `none | minimal | compact | full`
 - `ui.messages.layout`
-  - `grouped | plain | minimal`
-  - `grouped | minimal`
+  - `full | compact | austere | plain | none`
+  - `grouped` and `minimal` are aliases for `full` and `austere`
 
 ## UI Examples
 
@@ -377,9 +390,27 @@ Compatibility note:
 
 ## REPL Config Writes
 
-Store choice depends on where you run the command:
+Without a configured `config.default-target` or explicit scope/store flags,
+store choice depends on where you run the command:
 
 - in one-shot CLI, `config set` defaults to the persistent config store
 - in the REPL, `config set` defaults to the session store
-- use `--save`, `--config`, or `--secrets` for persistence
+- use `--permanent`, `--config`, or `--secrets` for persistence
 - use `--session` to force in-memory session behavior
+
+`config.default-target` chooses the default destination for future writes:
+`session` is temporary, `global` is saved for all profiles, and any other value
+names a saved profile. Explicit `--session`, `--profile`, `--global`, or
+`--permanent` flags override the corresponding default. `--terminal repl` or
+`--terminal cli` further narrows applicability. Without a configured default,
+REPL writes are temporary and one-shot writes persist for the active profile.
+
+```text
+config set config.default-target uio --permanent --global
+config set ui.margin 2
+config set ui.margin 4 --session
+```
+
+The first command saves the default destination for all profiles. Subsequent
+plain writes go to profile `uio`; the last command remains temporary. Successful
+temporary writes show a concrete `--permanent` command with the resolved scope.

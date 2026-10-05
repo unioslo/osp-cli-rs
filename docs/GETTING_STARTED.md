@@ -1,30 +1,27 @@
 # Getting Started
 
-This is the shortest useful path through `osp`.
-
-The goal is simple:
+This guide walks through a first session with `osp`:
 
 1. run one command
 2. start the REPL and inspect something interactively
 3. know the first troubleshooting commands before you need them
 
-If you are looking for site-specific command surfaces, read the downstream
-product docs for your distribution. This file is about the generic upstream
-experience.
+For site-specific commands, use the product documentation for your
+distribution. These examples use commands included in the upstream install.
 
 ## 1. Confirm The Binary Works
 
 Install and inspect the top-level help:
 
 ```bash
-cargo install osp-cli
+cargo install osp-cli --locked
 osp --help
 ```
 
 If you are building from source instead:
 
 ```bash
-cargo install --path .
+cargo install --path . --locked
 osp --help
 ```
 
@@ -44,7 +41,7 @@ That gives you three different answers:
 - which command roots are currently visible
 - what the command catalog looks like in machine-readable form
 
-If you are unsure what `osp` thinks right now, also run:
+To inspect the active configuration, run:
 
 ```bash
 osp config show
@@ -67,10 +64,7 @@ plugins commands --format md
 help config
 ```
 
-That covers the core upstream promise:
-
-- the REPL reuses the same command grammar as the CLI
-- help and formatting behave the same way interactively
+The REPL uses the same commands, help, and formatting options as the CLI.
 
 Use full commands first. REPL shell scope exists only for a small set of
 shellable domain roots. When those roots are available, typing the bare root
@@ -78,7 +72,7 @@ enters that shell. It is not part of the generic upstream quick start.
 
 ## 4. Learn The First Three Troubleshooting Commands
 
-These are the highest-value first checks:
+Start with these commands when something goes wrong:
 
 ```bash
 osp plugins doctor
@@ -89,7 +83,7 @@ osp -d plugins list
 Use them for:
 
 - missing or unhealthy plugin commands
-- confusing config winners
+- unexpected configuration values
 - a quick stderr-side diagnostic pass without changing stored defaults
 
 ## 5. Where To Go Next

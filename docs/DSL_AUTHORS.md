@@ -22,7 +22,11 @@ parallel implementations of verbs.
   hints. `unix_timestamp_columns` identifies Unix seconds without knowing
   product field names. `display_rules` supports literal string suffixes gated
   by a true boolean (`SuffixWhenTrue`) and blanking gated by another field's
-  non-null presence (`BlankWhenPresent`). Conditions always read the original
+  non-null presence (`BlankWhenPresent`), binary byte units for numeric fields
+  (`Bytes`), and compact relative RFC3339 or Unix-second timestamps
+  (`RelativeTimestamp`). Product-authored detail lines can use the matching
+  `ui::format_binary_bytes`, `ui::format_local_timestamp`, and
+  `ui::format_relative_timestamp` helpers. Conditions always read the original
   row; missing target fields are not synthesized. JSON rendering preserves raw
   values, and filters use canonical values before these display changes.
 

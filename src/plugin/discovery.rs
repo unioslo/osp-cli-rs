@@ -103,11 +103,25 @@ enum DiscoveryPolicy {
     Dispatch,
 }
 
+/// Snapshot publication and describe-cache updates share one scan lock.
+#[derive(Default)]
+pub(super) struct DiscoveryCache {
+    passive: Option<Arc<[DiscoveredPlugin]>>,
+    dispatch: Option<Arc<[DiscoveredPlugin]>>,
+}
+
 impl DiscoveryPolicy {
-    fn cache(self, manager: &PluginManager) -> &std::sync::RwLock<Option<Arc<[DiscoveredPlugin]>>> {
+    fn snapshot(self, cache: &DiscoveryCache) -> &Option<Arc<[DiscoveredPlugin]>> {
         match self {
-            Self::Passive => &manager.discovered_cache,
-            Self::Dispatch => &manager.dispatch_discovered_cache,
+            Self::Passive => &cache.passive,
+            Self::Dispatch => &cache.dispatch,
+        }
+    }
+
+    fn publish(self, cache: &mut DiscoveryCache, snapshot: Arc<[DiscoveredPlugin]>) {
+        match self {
+            Self::Passive => cache.passive = Some(snapshot),
+            Self::Dispatch => cache.dispatch = Some(snapshot),
         }
     }
 
@@ -196,15 +210,10 @@ impl PluginManager {
     /// ```
     pub fn refresh(&self) {
         let mut guard = self
-            .discovered_cache
+            .discovery_cache
             .write()
             .unwrap_or_else(|err| err.into_inner());
-        *guard = None;
-        let mut dispatch_guard = self
-            .dispatch_discovered_cache
-            .write()
-            .unwrap_or_else(|err| err.into_inner());
-        *dispatch_guard = None;
+        *guard = DiscoveryCache::default();
     }
 
     pub(super) fn discover(&self) -> Arc<[DiscoveredPlugin]> {
@@ -216,24 +225,23 @@ impl PluginManager {
     }
 
     fn discover_with_policy(&self, policy: DiscoveryPolicy) -> Arc<[DiscoveredPlugin]> {
-        let cache = policy.cache(self);
-        if let Some(cached) = cache.read().unwrap_or_else(|err| err.into_inner()).clone() {
+        let cache = &self.discovery_cache;
+        if let Some(cached) = policy
+            .snapshot(&cache.read().unwrap_or_else(|err| err.into_inner()))
+            .clone()
+        {
             return cached;
         }
 
         let mut guard = cache.write().unwrap_or_else(|err| err.into_inner());
-        if let Some(cached) = guard.clone() {
+        if let Some(cached) = policy.snapshot(&guard).clone() {
             return cached;
         }
         let (discovered, cache_changed) = self.discover_uncached(policy);
         let shared = Arc::<[DiscoveredPlugin]>::from(discovered);
-        *guard = Some(shared.clone());
+        policy.publish(&mut guard, shared.clone());
         if policy == DiscoveryPolicy::Dispatch && cache_changed {
-            let mut passive = self
-                .discovered_cache
-                .write()
-                .unwrap_or_else(|err| err.into_inner());
-            *passive = None;
+            guard.passive = None;
         }
         shared
     }

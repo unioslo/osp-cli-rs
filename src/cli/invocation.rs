@@ -17,8 +17,8 @@ pub(crate) const INVOCATION_HELP_SECTION: &str = r#"Common Invocation Options:
                                             Format this invocation only
   --guide | --json | --table | --mreg | --value | --md
                                             Convenience aliases for --format
-  --mode <auto|plain|rich>                  Render mode for this invocation
-  --plain | --rich                          Convenience aliases for --mode
+  --render-mode <auto|plain|rich>           Render mode for this invocation
+  --plain | --rich                          Convenience aliases for --render-mode
   --color <auto|always|never>               Color policy for this invocation
   --unicode <auto|always|never>             Unicode policy for this invocation
   --ascii                                   Alias for --unicode never
@@ -38,7 +38,7 @@ const INVOCATION_COMPLETION_FLAGS: &[&str] = &[
     "--mreg",
     "--value",
     "--md",
-    "--mode",
+    "--render-mode",
     "--plain",
     "--rich",
     "--color",
@@ -53,7 +53,7 @@ const INVOCATION_COMPLETION_FLAGS: &[&str] = &[
 const FORMAT_COMPLETION_FLAGS: &[&str] = &[
     "--format", "--guide", "--json", "--table", "--mreg", "--value", "--md",
 ];
-const MODE_COMPLETION_FLAGS: &[&str] = &["--mode", "--plain", "--rich"];
+const MODE_COMPLETION_FLAGS: &[&str] = &["--render-mode", "--plain", "--rich"];
 const UNICODE_COMPLETION_FLAGS: &[&str] = &["--unicode", "--ascii"];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -213,21 +213,21 @@ pub(crate) fn scan_command_tokens_with_trace(
             continue;
         }
 
-        if let Some(value) = token.strip_prefix("--mode=") {
+        if let Some(value) = token.strip_prefix("--render-mode=") {
             let mode =
                 RenderMode::parse(value).ok_or_else(|| miette!("unknown render mode: {value}"))?;
-            set_mode(&mut invocation, mode, "--mode")?;
+            set_mode(&mut invocation, mode, "--render-mode")?;
             index += 1;
             continue;
         }
 
-        if token == "--mode" {
+        if token == "--render-mode" {
             let value = tokens
                 .get(index + 1)
-                .ok_or_else(|| miette!("`--mode` expects a value"))?;
+                .ok_or_else(|| miette!("`--render-mode` expects a value"))?;
             let mode =
                 RenderMode::parse(value).ok_or_else(|| miette!("unknown render mode: {value}"))?;
-            set_mode(&mut invocation, mode, "--mode")?;
+            set_mode(&mut invocation, mode, "--render-mode")?;
             index += 2;
             continue;
         }
@@ -563,7 +563,7 @@ mod tests {
         let inline = scan(&[
             "ldap",
             "--format=value",
-            "--mode=rich",
+            "--render-mode=rich",
             "--color=always",
             "--unicode=always",
         ]);
@@ -597,7 +597,7 @@ mod tests {
                 vec!["ldap", "--plugin-provider", "one", "--plugin-provider=two"],
                 "specified more than once",
             ),
-            (vec!["ldap", "--mode", "wat"], "unknown render mode"),
+            (vec!["ldap", "--render-mode", "wat"], "unknown render mode"),
             (
                 vec!["ldap", "--plugin-provider", "   "],
                 "expects a non-empty value",
@@ -605,7 +605,7 @@ mod tests {
             (vec!["ldap", "--format"], "`--format` expects a value"),
             (vec!["ldap", "--color"], "`--color` expects a value"),
             (
-                vec!["ldap", "--plain", "--mode", "rich"],
+                vec!["ldap", "--plain", "--render-mode", "rich"],
                 "conflicting render mode flags",
             ),
             (

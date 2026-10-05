@@ -130,7 +130,7 @@ fn ldap_plugin_completes_subcommands_and_flags_contract() {
     assert!(
         long_flag_matches
             .iter()
-            .any(|item| item["label"] == "--attributes")
+            .any(|item| item["id"] == "--attributes")
     );
 
     let mut short_flags = fixture.osp();
@@ -140,7 +140,11 @@ fn ldap_plugin_completes_subcommands_and_flags_contract() {
     let short_flag_matches = short_flags_payload["matches"]
         .as_array()
         .expect("short-flag matches should render as an array");
-    assert!(short_flag_matches.iter().any(|item| item["label"] == "-a"));
+    assert!(
+        short_flag_matches
+            .iter()
+            .any(|item| item["id"] == "--attributes" && item["label"] == "--attributes, -a")
+    );
 }
 
 #[cfg(unix)]
@@ -188,7 +192,7 @@ set -euo pipefail
 
 if [ "${1:-}" = "--describe" ]; then
   cat <<'JSON'
-{"protocol_version":1,"plugin_id":"ldap","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"ldap","about":"LDAP plugin","args":[],"flags":{},"subcommands":[{"name":"user","about":"Lookup LDAP users","args":[{"name":"uid","about":"User id","multi":false,"value_type":null,"suggestions":[]}],"flags":{"--filter":{"about":"LDAP filter","flag_only":false,"multi":false,"value_type":null,"suggestions":[]},"--attributes":{"about":"Comma-separated attributes","flag_only":false,"multi":false,"value_type":null,"suggestions":[{"value":"uid","meta":"User id","display":null,"sort":null},{"value":"cn","meta":"Common name","display":null,"sort":null}]},"-a":{"about":"Comma-separated attributes","flag_only":false,"multi":false,"value_type":null,"suggestions":[{"value":"uid","meta":"User id","display":null,"sort":null},{"value":"cn","meta":"Common name","display":null,"sort":null}]}},"subcommands":[]},{"name":"netgroup","about":"Lookup LDAP netgroups","args":[{"name":"name","about":"Netgroup name","multi":false,"value_type":null,"suggestions":[]}],"flags":{},"subcommands":[]}]}]}
+{"protocol_version":1,"plugin_id":"ldap","plugin_version":"0.1.0","min_osp_version":"0.1.0","commands":[{"name":"ldap","about":"LDAP plugin","args":[],"flags":{},"subcommands":[{"name":"user","about":"Lookup LDAP users","args":[{"name":"uid","about":"User id","multi":false,"value_type":null,"suggestions":[]}],"flags":{"--filter":{"about":"LDAP filter","flag_only":false,"multi":false,"value_type":null,"suggestions":[]},"--attributes":{"about":"Comma-separated attributes","flag_only":false,"multi":false,"value_type":null,"suggestions":[{"value":"uid","meta":"User id","display":null,"sort":null},{"value":"cn","meta":"Common name","display":null,"sort":null}]},"-a":{"alias_of":"--attributes","about":"Comma-separated attributes","flag_only":false,"multi":false,"value_type":null,"suggestions":[{"value":"uid","meta":"User id","display":null,"sort":null},{"value":"cn","meta":"Common name","display":null,"sort":null}]}},"subcommands":[]},{"name":"netgroup","about":"Lookup LDAP netgroups","args":[{"name":"name","about":"Netgroup name","multi":false,"value_type":null,"suggestions":[]}],"flags":{},"subcommands":[]}]}]}
 JSON
   exit 0
 fi

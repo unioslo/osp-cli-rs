@@ -61,9 +61,22 @@ fn intro_command_emits_semantic_json_with_explicit_format_contract() {
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("intro JSON should parse");
     let rows = json.as_array().expect("guide output should be row array");
     assert_eq!(rows.len(), 1);
+    let sections = rows[0]["sections"]
+        .as_array()
+        .expect("intro should carry semantic sections");
+    let commands = sections
+        .iter()
+        .find(|section| section["kind"] == "commands")
+        .expect("intro should carry command entries");
     assert!(
-        rows[0].get("sections").is_some() || rows[0].get("preamble").is_some(),
-        "expected semantic intro payload, got: {stdout}"
+        commands["entries"]
+            .as_array()
+            .expect("commands should be an entry array")
+            .iter()
+            .any(|entry| entry["name"] == "help"
+                && entry["short_help"]
+                    .as_str()
+                    .is_some_and(|help| !help.is_empty()))
     );
 }
 
@@ -76,7 +89,15 @@ fn top_level_help_supports_all_explicit_output_formats_contract() {
         .as_array()
         .expect("help json should be row array");
     assert_eq!(json_rows.len(), 1);
-    assert!(json_rows[0].get("usage").is_some());
+    let usage = json_rows[0]["usage"]
+        .as_array()
+        .expect("usage should be an array");
+    assert!(!usage.is_empty());
+    assert!(
+        usage
+            .iter()
+            .all(|line| line.as_str().is_some_and(|text| !text.is_empty()))
+    );
 
     let guide = run_cli_stdout(&["--no-env", "--no-config-file", "--guide", "--help"]);
     assert!(guide.contains("Usage"));
@@ -290,7 +311,7 @@ repl.intro = "none"
         ),
         &["--user", "anonymous", "--no-env", "--value", "intro"],
     );
-    assert!(none.trim().is_empty(), "{none:?}");
+    assert_eq!(none.trim(), "No results.", "{none:?}");
 
     let minimal = run_cli_stdout_with_config(
         Some(
@@ -313,7 +334,7 @@ repl.intro = "full"
         ),
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",
@@ -331,7 +352,7 @@ repl.intro = "full"
         ),
         &[
             "--no-env",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",
@@ -465,7 +486,7 @@ repl.simple_prompt = true
         &[
             "--no-env",
             "--guide",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",
@@ -479,7 +500,7 @@ repl.simple_prompt = true
         &[
             "--no-env",
             "--guide",
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "always",

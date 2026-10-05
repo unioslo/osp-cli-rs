@@ -31,6 +31,7 @@ use super::catalog::{
     selected_provider_label,
 };
 use super::conversion::to_command_spec;
+use super::discovery::DiscoveryCache;
 use super::selection::{ProviderResolution, ProviderResolutionError, provider_labels};
 use super::state::PluginCommandPreferences;
 #[cfg(test)]
@@ -675,8 +676,7 @@ impl StdError for PluginDispatchError {
 #[must_use]
 pub struct PluginManager {
     pub(crate) explicit_dirs: Vec<PathBuf>,
-    pub(crate) discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
-    pub(crate) dispatch_discovered_cache: RwLock<Option<Arc<[DiscoveredPlugin]>>>,
+    pub(super) discovery_cache: RwLock<DiscoveryCache>,
     pub(crate) command_preferences: RwLock<PluginCommandPreferences>,
     pub(crate) config_root: Option<PathBuf>,
     pub(crate) cache_root: Option<PathBuf>,
@@ -775,8 +775,7 @@ impl PluginManager {
     pub fn new(explicit_dirs: Vec<PathBuf>) -> Self {
         Self {
             explicit_dirs,
-            discovered_cache: RwLock::new(None),
-            dispatch_discovered_cache: RwLock::new(None),
+            discovery_cache: RwLock::new(DiscoveryCache::default()),
             command_preferences: RwLock::new(PluginCommandPreferences::default()),
             config_root: None,
             cache_root: None,
@@ -842,11 +841,6 @@ impl PluginManager {
         self
     }
 
-    /// Returns whether platform config/cache root fallback is enabled.
-    pub fn default_roots_enabled(&self) -> bool {
-        self.allow_default_roots
-    }
-
     /// Enables or disables discovery through the CLI's bundled plugin roots.
     ///
     /// The default is `true`. Disable this when the caller wants discovery to
@@ -855,11 +849,6 @@ impl PluginManager {
     pub fn with_bundled_roots(mut self, allow_bundled_roots: bool) -> Self {
         self.allow_bundled_roots = allow_bundled_roots;
         self
-    }
-
-    /// Returns whether bundled plugin-root discovery is enabled.
-    pub fn bundled_roots_enabled(&self) -> bool {
-        self.allow_bundled_roots
     }
 
     /// Sets the subprocess timeout used for plugin describe and dispatch calls.
@@ -904,18 +893,11 @@ impl PluginManager {
     /// ```
     /// use osp_cli::plugin::PluginManager;
     ///
-    /// let manager = PluginManager::new(Vec::new()).with_path_discovery(true);
-    ///
-    /// assert!(manager.path_discovery_enabled());
+    /// let _manager = PluginManager::new(Vec::new()).with_path_discovery(true);
     /// ```
     pub fn with_path_discovery(mut self, allow_path_discovery: bool) -> Self {
         self.allow_path_discovery = allow_path_discovery;
         self
-    }
-
-    /// Returns whether fallback discovery through the process `PATH` is enabled.
-    pub fn path_discovery_enabled(&self) -> bool {
-        self.allow_path_discovery
     }
 
     pub(crate) fn with_command_preferences(

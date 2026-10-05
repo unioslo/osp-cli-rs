@@ -9,7 +9,7 @@ use serde_json::json;
 use unicode_width::UnicodeWidthStr;
 
 use super::doc::{Block, SectionTitleChrome};
-use super::settings::HelpTableChrome;
+use super::settings::TableBorderOverride;
 use super::{
     GuideDefaultFormat, HelpChromeSettings, HelpLayout, RenderProfile, RenderSettings,
     StructuredGuideRenderOptions, plan_output, render_guide_with_layout, render_output,
@@ -386,6 +386,7 @@ fn ui2_terminal_table_honors_column_alignment_metadata_unit() {
             unix_timestamp_columns: Vec::new(),
             display_rules: Vec::new(),
             display_columns: None,
+            display_column_labels: None,
             column_align: vec![
                 ColumnAlignment::Left,
                 ColumnAlignment::Right,
@@ -422,6 +423,7 @@ fn ui2_markdown_table_honors_column_alignment_metadata_unit() {
             unix_timestamp_columns: Vec::new(),
             display_rules: Vec::new(),
             display_columns: None,
+            display_column_labels: None,
             column_align: vec![
                 ColumnAlignment::Left,
                 ColumnAlignment::Right,
@@ -710,7 +712,7 @@ fn ui2_help_chrome_settings_override_indent_gap_and_spacing_unit() {
     };
     let mut settings = RenderSettings::test_plain(OutputFormat::Guide);
     settings.help_chrome = HelpChromeSettings {
-        table_chrome: HelpTableChrome::None,
+        table_chrome: TableBorderOverride::None,
         entry_indent: Some(4),
         entry_gap: Some(3),
         section_spacing: Some(0),
@@ -745,6 +747,7 @@ fn ui_grouped_outputs_lower_and_render_with_one_group_owner_unit() {
             unix_timestamp_columns: Vec::new(),
             display_rules: Vec::new(),
             display_columns: None,
+            display_column_labels: None,
             column_align: Vec::new(),
             wants_copy: false,
             grouped: true,

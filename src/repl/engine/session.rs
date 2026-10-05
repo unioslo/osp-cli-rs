@@ -1,13 +1,19 @@
-use super::adapter::{ReplCompleter, build_repl_highlighter};
-use super::config::{LineProjector, ReplAppearance, ReplLineResult, ReplReloadKind, ReplRunResult};
+use super::adapter::{ReplCompleter, build_repl_highlighter, color_from_style_spec};
+use super::config::{
+    LineProjector, ReplAppearance, ReplLineResult, ReplReloadKind, ReplRunResult, ReplTabMode,
+};
 use super::editor::{
-    AutoCompleteEmacs, BasicInputReason, OspPrompt, is_cursor_position_error,
+    AutoCompleteEmacs, BasicInputReason, OspPrompt, PaintedLine, is_cursor_position_error,
     mark_cursor_position_unsupported,
 };
+use super::hint::ReplHinter;
 use super::overlay::{build_completion_menu, launch_history_picker};
 use super::{COMPLETION_MENU_NAME, HOST_COMMAND_HISTORY_PICKER, SharedHistory};
 use crate::completion::CompletionTree;
+use crate::repl::highlight::ReplHighlighter;
+use crate::repl::menu::SharedCompletionMenu;
 use anyhow::Result;
+use nu_ansi_term::{Color, Style};
 use reedline::{
     EditCommand, Emacs, KeyCode, KeyModifiers, Reedline, ReedlineEvent, ReedlineMenu, Signal,
     default_emacs_keybindings,
@@ -18,6 +24,7 @@ pub(crate) struct InteractiveLoopConfig<'a> {
     pub(crate) prompt: &'a OspPrompt,
     pub(crate) completion_tree: CompletionTree,
     pub(crate) appearance: ReplAppearance,
+    pub(crate) tab_mode: ReplTabMode,
     pub(crate) line_projector: Option<LineProjector>,
 }
 
@@ -75,12 +82,14 @@ where
         prompt,
         completion_tree,
         appearance,
+        tab_mode,
         line_projector,
     } = config;
 
     let mut editor = build_interactive_editor(
         completion_tree,
         &appearance,
+        tab_mode,
         line_projector,
         history_store.clone(),
     );
@@ -98,21 +107,33 @@ where
 pub(super) fn build_interactive_editor(
     completion_tree: CompletionTree,
     appearance: &ReplAppearance,
+    tab_mode: ReplTabMode,
     line_projector: Option<LineProjector>,
     history_store: SharedHistory,
 ) -> Reedline {
     let tree = completion_tree;
-    let completer = Box::new(ReplCompleter::new(tree.clone(), line_projector.clone()));
-    let completion_menu = Box::new(build_completion_menu(appearance));
+    let completer = Box::new(
+        ReplCompleter::new(tree.clone(), line_projector.clone())
+            .with_history(history_store.clone()),
+    );
+    let completion_menu = SharedCompletionMenu::new(build_completion_menu(appearance));
+    let painted = PaintedLine::default();
+    let hinter = build_repl_hinter(&tree, appearance, line_projector.clone(), painted.clone());
     let highlighter = build_repl_highlighter(&tree, appearance, line_projector);
     let edit_mode = Box::new(AutoCompleteEmacs::new(
         Emacs::new(build_repl_keybindings()),
-        COMPLETION_MENU_NAME,
+        completion_menu.clone(),
+        tab_mode,
+        painted,
     ));
 
+    // Partial completions route Tab on a closed menu through
+    // `OspCompletionMenu::complete_like_shell`.
     let mut editor = Reedline::create()
         .with_completer(completer)
-        .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
+        .with_menu(ReedlineMenu::EngineCompleter(Box::new(completion_menu)))
+        .with_partial_completions(true)
+        .with_hinter(Box::new(hinter))
         .with_edit_mode(edit_mode);
     if let Some(highlighter) = highlighter {
         editor = editor.with_highlighter(Box::new(highlighter));
@@ -162,13 +183,12 @@ pub(crate) fn run_repl_basic<F>(
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
-    let stdin = io::stdin();
     loop {
         print!("{}{}", prompt.left(), prompt.indicator());
         io::stdout().flush()?;
 
         let mut line = String::new();
-        let read = stdin.read_line(&mut line)?;
+        let read = crate::ui::prompt::read_line(&mut line)?;
         if read == 0 {
             return Ok(ReplRunResult::Exit(0));
         }
@@ -180,12 +200,31 @@ where
     }
 }
 
+fn build_repl_hinter(
+    tree: &CompletionTree,
+    appearance: &ReplAppearance,
+    line_projector: Option<LineProjector>,
+    painted: PaintedLine,
+) -> ReplHinter {
+    let color = |spec: &Option<String>| spec.as_deref().and_then(color_from_style_spec);
+    let error_color = color(&appearance.error_highlight_style).unwrap_or(Color::Red);
+    ReplHinter::new(
+        ReplCompleter::new(tree.clone(), line_projector.clone()),
+        ReplHighlighter::new(tree.clone(), Color::Default, error_color, line_projector),
+        painted,
+        color(&appearance.hint_style).map(|hint| Style::new().fg(hint)),
+        Style::new().fg(error_color),
+    )
+}
+
 fn build_repl_keybindings() -> reedline::Keybindings {
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
         KeyModifiers::NONE,
         KeyCode::Enter,
-        ReedlineEvent::Multiple(vec![ReedlineEvent::Esc, ReedlineEvent::Submit]),
+        // With a menu open reedline accepts the selection and closes the menu
+        // instead of submitting; otherwise this submits the line.
+        ReedlineEvent::Submit,
     );
     keybindings.add_binding(
         KeyModifiers::NONE,
@@ -334,7 +373,7 @@ mod tests {
 
         assert!(matches!(
             keybindings.find_binding(KeyModifiers::NONE, KeyCode::Enter),
-            Some(ReedlineEvent::Multiple(_))
+            Some(ReedlineEvent::Submit)
         ));
         assert!(matches!(
             keybindings.find_binding(KeyModifiers::NONE, KeyCode::Tab),

@@ -438,15 +438,15 @@ def validate_release_notes(path: Path) -> None:
 
 
 def extract_changelog_section(body: str, version: str) -> str | None:
-    """Return one version section from the changelog body, if present."""
+    """Return a version heading and its complete body, if present."""
 
     pattern = re.compile(
-        rf"(?ms)^## \[(?:v)?{re.escape(version)}\](?: - .+)?\n(.*?)(?=^## \[|\Z)"
+        rf"(?ms)^## \[(?:v)?{re.escape(version)}\](?: - [^\n]+)?(?:\n|\Z).*?(?=^## |\Z)"
     )
     match = pattern.search(body)
     if not match:
         return None
-    return match.group(1).strip()
+    return match.group(0).strip()
 
 
 def validate_changelog(path: Path, version: str) -> None:
@@ -466,6 +466,8 @@ def validate_changelog(path: Path, version: str) -> None:
     section = extract_changelog_section(body, version)
     if section is None:
         fail(f"missing changelog section for v{version}: {path}")
+    if not section.partition("\n")[2].strip():
+        fail(f"changelog section for v{version} is empty: {path}")
     if "TODO" in section or "YYYY-MM-DD" in section:
         fail(f"changelog section for v{version} still has placeholders: {path}")
 

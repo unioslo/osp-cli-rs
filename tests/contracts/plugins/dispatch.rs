@@ -1,5 +1,225 @@
 #[cfg(unix)]
 #[test]
+fn plugin_sdk_metadata_flows_through_host_catalog_policy_and_dispatch_contract() {
+    use clap::{Arg, ArgAction, builder::PossibleValue};
+    use osp_cli::app::BufferedUiSink;
+    use osp_cli::completion::SuggestionEntry;
+    use osp_cli::core::command_def::{CommandDef, CommandPolicyDef};
+    use osp_cli::core::command_policy::{
+        AuthStrength, CommandAccess, CommandPath, CommandPolicyContext, CredentialRequirement,
+        CredentialState, SessionRequirements, VisibilityMode,
+    };
+    use osp_cli::core::plugin::{DescribeCommandV1, DescribeV1, PLUGIN_PROTOCOL_V1};
+    use osp_cli::plugin::{PluginDispatchContext, PluginManager, PluginSource};
+
+    let policy = CommandPolicyDef {
+        visibility: VisibilityMode::Authenticated,
+        required_capabilities: vec!["directory.read".to_string()],
+        feature_flags: vec!["directory".to_string()],
+        visible_session_requirements: SessionRequirements {
+            auth_strength: Some(AuthStrength::Basic),
+            credentials: vec![CredentialRequirement::present("audit")],
+        },
+        run_session_requirements: SessionRequirements {
+            auth_strength: Some(AuthStrength::Basic),
+            credentials: vec![
+                CredentialRequirement::valid("directory"),
+                CredentialRequirement::fresh("osp", 300),
+            ],
+        },
+    };
+    let command = CommandDef::from_clap(
+        clap::Command::new("sdk-directory")
+            .about("Inspect directory records")
+            .subcommand(
+                clap::Command::new("inspect")
+                    .about("Read selected record collections")
+                    .arg(
+                        Arg::new("collection")
+                            .value_name("COLLECTION")
+                            .help("Collections to inspect")
+                            .required(true)
+                            .num_args(1..)
+                            .value_parser([
+                                PossibleValue::new("people").help("Person records"),
+                                PossibleValue::new("groups").help("Group records"),
+                            ]),
+                    )
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .short('f')
+                            .visible_alias("fmt")
+                            .visible_short_alias('o')
+                            .help("Export formats")
+                            .required(true)
+                            .action(ArgAction::Append)
+                            .value_parser([
+                                PossibleValue::new("json").help("Typed JSON"),
+                                PossibleValue::new("table").help("Readable table"),
+                            ]),
+                    ),
+            ),
+    )
+    .policy(policy.clone());
+    let describe = DescribeV1 {
+        protocol_version: PLUGIN_PROTOCOL_V1,
+        plugin_id: "sdk".to_string(),
+        plugin_version: "0.1.0".to_string(),
+        min_osp_version: Some("0.1.0".to_string()),
+        commands: vec![DescribeCommandV1::from(&command)],
+    };
+    describe.validate_v1().expect("SDK metadata should be valid");
+    let wire = serde_json::to_value(&describe).expect("metadata should serialize");
+    assert_eq!(
+        wire["commands"][0]["auth"],
+        serde_json::json!({
+            "visibility": "authenticated",
+            "required_capabilities": ["directory.read"],
+            "feature_flags": ["directory"],
+            "visible_session": {
+                "auth_strength": "basic",
+                "credentials": [{"state": "present", "service": "audit"}]
+            },
+            "run_session": {
+                "auth_strength": "basic",
+                "credentials": [
+                    {"state": "valid", "service": "directory"},
+                    {"state": "fresh", "service": "osp", "min_ttl_seconds": 300}
+                ]
+            }
+        })
+    );
+
+    let dir = make_temp_dir("osp-cli-plugin-sdk-consumer");
+    let plugin_path = write_provider_plugin(&dir, "sdk", "sdk-directory", "sdk");
+    let fixture = std::fs::read_to_string(&plugin_path).expect("fixture should be readable");
+    let (prefix, describe_and_execution) = fixture
+        .split_once("cat <<'JSON'\n")
+        .expect("fixture should publish describe JSON");
+    let (_, execution) = describe_and_execution
+        .split_once("\nJSON")
+        .expect("fixture should terminate describe JSON");
+    std::fs::write(
+        &plugin_path,
+        format!("{prefix}cat <<'JSON'\n{wire}\nJSON{execution}"),
+    )
+    .expect("SDK metadata should be installed in the executable fixture");
+
+    let manager = PluginManager::new(vec![dir.path().to_path_buf()])
+        .with_default_roots(false)
+        .with_bundled_roots(false)
+        .with_path_discovery(false);
+    let catalog = manager.command_catalog();
+    assert_eq!(
+        catalog.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(),
+        vec!["sdk-directory"]
+    );
+    let entry = &catalog[0];
+    assert_eq!(entry.about, "Inspect directory records");
+    assert_eq!(entry.provider.as_deref(), Some("sdk"));
+    assert_eq!(entry.providers, vec!["sdk (explicit)".to_string()]);
+    assert_eq!(entry.source, Some(PluginSource::Explicit));
+    assert_eq!(entry.subcommands, vec!["inspect".to_string()]);
+    assert_eq!(serde_json::to_value(&entry.auth).unwrap(), wire["commands"][0]["auth"]);
+    let inspect = &entry.completion.subcommands[0];
+    assert_eq!(inspect.name, "inspect");
+    assert_eq!(inspect.tooltip.as_deref(), Some("Read selected record collections"));
+    assert_eq!(inspect.args[0].name.as_deref(), Some("COLLECTION"));
+    assert_eq!(inspect.args[0].tooltip.as_deref(), Some("Collections to inspect"));
+    assert!(inspect.args[0].required && inspect.args[0].multi);
+    assert_eq!(
+        inspect.args[0].suggestions,
+        vec![
+            SuggestionEntry::value("people").meta("Person records"),
+            SuggestionEntry::value("groups").meta("Group records"),
+        ]
+    );
+    assert_eq!(
+        inspect.flags.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["--fmt", "--format", "-f", "-o"]
+    );
+    let format = &inspect.flags["--format"];
+    assert_eq!(format.tooltip.as_deref(), Some("Export formats"));
+    assert!(format.multi);
+    assert_eq!(
+        format.suggestions,
+        vec![
+            SuggestionEntry::value("json").meta("Typed JSON"),
+            SuggestionEntry::value("table").meta("Readable table"),
+        ]
+    );
+    // The plugin describes its canonical spelling and points aliases back to it.
+    assert_eq!(inspect.flags["--format"].alias_of, None);
+    for spelling in ["--fmt", "--format", "-f", "-o"] {
+        let node = &inspect.flags[spelling];
+        assert_eq!(
+            &osp_cli::completion::FlagNode {
+                alias_of: format.alias_of.clone(),
+                ..node.clone()
+            },
+            format
+        );
+    }
+    for spelling in ["--fmt", "-f", "-o"] {
+        assert_eq!(inspect.flags[spelling].alias_of.as_deref(), Some("--format"));
+    }
+
+    let context = CommandPolicyContext::default()
+        .with_auth_strength(AuthStrength::Basic)
+        .with_capabilities(["directory.read"])
+        .with_features(["directory"])
+        .with_credential("audit", CredentialState::present())
+        .with_credential("directory", CredentialState::valid())
+        .with_credential("osp", CredentialState::valid_for(900));
+    let registry = manager.command_policy_registry();
+    for path in [
+        CommandPath::new(["sdk-directory"]),
+        CommandPath::new(["sdk-directory", "inspect"]),
+    ] {
+        let resolved = registry.resolved_policy(&path).expect("policy should be registered");
+        assert_eq!(resolved.visibility, policy.visibility);
+        assert_eq!(
+            resolved.required_capabilities.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["directory.read"]
+        );
+        assert_eq!(
+            resolved.feature_flags.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["directory"]
+        );
+        assert_eq!(resolved.visible_session_requirements, policy.visible_session_requirements);
+        assert_eq!(resolved.run_session_requirements, policy.run_session_requirements);
+        assert_eq!(registry.evaluate(&path, &context), Some(CommandAccess::visible_runnable()));
+    }
+    let response = manager
+        .dispatch(
+            "sdk-directory",
+            &["inspect".to_string(), "people".to_string(), "--fmt".to_string(), "json".to_string()],
+            &PluginDispatchContext::default(),
+        )
+        .expect("described provider should execute");
+    assert_eq!(response.protocol_version, PLUGIN_PROTOCOL_V1);
+    assert!(response.ok);
+    assert_eq!(response.data, serde_json::json!({"message": "sdk-from-plugin"}));
+    assert_eq!(response.meta.format_hint.as_deref(), Some("table"));
+    assert_eq!(response.meta.columns, Some(vec!["message".to_string()]));
+
+    let mut sink = BufferedUiSink::default();
+    let exit = osp_cli::App::new()
+        .with_policy_context(context)
+        .run_with_sink(
+            ["osp", "--defaults-only", "--plugin-dir", dir.to_str().unwrap(), "--json",
+                "sdk-directory", "inspect", "people", "--fmt", "json"],
+            &mut sink,
+        )
+        .expect("authenticated embedding host should execute the inherited command policy");
+    assert_eq!(exit, 0);
+    assert_eq!(parse_json_stdout(sink.stdout.as_bytes()), serde_json::json!([{"message": "sdk-from-plugin"}]));
+    assert!(sink.stderr.is_empty(), "unexpected host diagnostics: {}", sink.stderr);
+}
+
+#[cfg(unix)]
+#[test]
 fn external_plugin_dispatch_contract() {
     let dir = make_temp_dir("osp-cli-plugin-exec");
     let _plugin_path = write_hello_plugin(&dir);
@@ -282,6 +502,33 @@ fn multi_command_plugin_receives_selected_command_contract() {
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let mut batch = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let batch_output = batch
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args([
+            "--json", "beta", "run", "alice", "bob", "carol", "--label", "batch",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let batch_payload = parse_json_stdout(&batch_output.stdout);
+    assert_eq!(
+        first_json_row(&batch_payload, "nested variadic plugin dispatch"),
+        &serde_json::json!({
+            "selected_command": "beta",
+            "arg0": "beta",
+            "arg1": "run",
+            "arg2": "alice",
+            "arg3": "bob",
+            "arg4": "carol",
+            "arg5": "--label",
+            "arg6": "batch",
+        })
+    );
+    assert!(batch_output.stderr.is_empty());
+
 }
 
 #[cfg(unix)]
@@ -375,7 +622,9 @@ fn describe_cache_is_reused_and_invalidated_contract() {
 
     let mut script =
         std::fs::read_to_string(&plugin_path).expect("plugin script should be readable");
-    script.push_str("\n# cache invalidation\n");
+    script = script
+        .replace("describe counter plugin", "upgraded describe counter plugin")
+        .replace("\"message\":\"ok\"", "\"message\":\"upgraded\"");
     std::fs::write(&plugin_path, script).expect("plugin script should be updated");
 
     let mut third = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
@@ -404,4 +653,105 @@ fn describe_cache_is_reused_and_invalidated_contract() {
         "2"
     );
 
+    let mut catalog = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let catalog_output = catalog
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "plugins", "commands"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let catalog_payload = parse_json_stdout(&catalog_output.stdout);
+    let command = first_json_row(&catalog_payload, "upgraded plugin catalog");
+    assert_eq!(command["name"], "describe-counter");
+    assert_eq!(command["provider"], "describe-counter");
+    assert_eq!(command["about"], "upgraded describe counter plugin");
+    assert_eq!(command["source"], "env");
+
+    let mut execute = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    let execution_output = execute
+        .envs(crate::test_env::isolated_env(&home))
+        .env("OSP_PLUGIN_PATH", &dir)
+        .args(["--json", "describe-counter"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        first_json_row(
+            &parse_json_stdout(&execution_output.stdout),
+            "upgraded plugin execution",
+        ),
+        &serde_json::json!({ "message": "upgraded" })
+    );
+    assert!(execution_output.stderr.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&describe_count_path)
+            .expect("upgraded metadata should stay cached across catalog and execution")
+            .trim(),
+        "2"
+    );
+    // A cache is an optimization: an interrupted write or unavailable cache
+    // location still permits fresh metadata and useful command execution.
+    let cache_path = home.join(".cache/osp/describe-v1.json");
+    let run = |args: &[&str]| {
+        Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+            .envs(crate::test_env::isolated_env(&home))
+            .env("OSP_PLUGIN_PATH", &dir)
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    let describe_count = || {
+        std::fs::read_to_string(&describe_count_path)
+            .unwrap()
+            .trim()
+            .parse::<usize>()
+            .unwrap()
+    };
+    std::fs::write(&cache_path, "{interrupted cache write").unwrap();
+    let repaired = run(&["-dd", "--json", "plugins", "list"]);
+    let repaired_plugins = parse_json_stdout(&repaired.stdout);
+    let repaired_plugin = first_json_row(&repaired_plugins, "repaired describe cache");
+    assert_eq!(repaired_plugin["plugin_id"], "describe-counter");
+    assert_eq!(repaired_plugin["plugin_version"], "0.1.3");
+    assert_eq!(describe_count(), 3);
+    let diagnostics = String::from_utf8(repaired.stderr).unwrap();
+    assert!(diagnostics.contains("WARN"));
+    assert!(diagnostics.contains(cache_path.to_str().unwrap()));
+    let reused = run(&["--json", "describe-counter"]);
+    assert_eq!(
+        first_json_row(
+            &parse_json_stdout(&reused.stdout),
+            "repaired cache execution"
+        ),
+        &serde_json::json!({"message": "upgraded"})
+    );
+    assert_eq!(describe_count(), 3);
+
+    std::fs::remove_file(&cache_path).unwrap();
+    std::fs::create_dir(&cache_path).unwrap();
+    let uncached = run(&["-dd", "--json", "describe-counter"]);
+    assert_eq!(
+        first_json_row(&parse_json_stdout(&uncached.stdout), "uncached execution"),
+        &serde_json::json!({"message": "upgraded"})
+    );
+    assert!(describe_count() > 3);
+    let diagnostics = String::from_utf8(uncached.stderr).unwrap();
+    assert!(diagnostics.contains("WARN"));
+    assert!(diagnostics.contains(cache_path.to_str().unwrap()));
+
+    std::fs::remove_dir(&cache_path).unwrap();
+    let restored = run(&["--json", "plugins", "commands"]);
+    let restored_commands = parse_json_stdout(&restored.stdout);
+    assert_eq!(
+        first_json_row(&restored_commands, "restored cache catalogue")["about"],
+        "upgraded describe counter plugin"
+    );
+    let restored_count = describe_count();
+    run(&["--json", "describe-counter"]);
+    assert_eq!(describe_count(), restored_count);
 }

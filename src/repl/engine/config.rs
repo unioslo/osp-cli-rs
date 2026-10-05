@@ -77,6 +77,49 @@ pub enum ReplInputMode {
     Basic,
 }
 
+/// Selects when typing, rather than Tab, opens the completion menu.
+///
+/// Tab and a leading `-` open the menu in every mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplTabMode {
+    /// Only Tab, Ctrl-Space, or starting a flag opens the menu.
+    Tab,
+    /// Every typed character, including a space, opens the menu.
+    Always,
+    /// The menu opens once the word being typed has this many characters.
+    AfterLetters(usize),
+}
+
+impl ReplTabMode {
+    /// Parses `tab`, `always`, or `after_<n>_letter[s]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use osp_cli::repl::ReplTabMode;
+    ///
+    /// assert_eq!(ReplTabMode::parse("always"), Some(ReplTabMode::Always));
+    /// assert_eq!(ReplTabMode::parse("after_1_letter"), Some(ReplTabMode::AfterLetters(1)));
+    /// assert_eq!(ReplTabMode::parse("after_3_letters"), Some(ReplTabMode::AfterLetters(3)));
+    /// assert_eq!(ReplTabMode::parse("after_0_letters"), None);
+    /// ```
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "tab" => Some(Self::Tab),
+            "always" => Some(Self::Always),
+            other => other
+                .strip_prefix("after_")
+                .and_then(|rest| {
+                    rest.strip_suffix("_letters")
+                        .or_else(|| rest.strip_suffix("_letter"))
+                })
+                .and_then(|count| count.parse::<usize>().ok())
+                .filter(|count| *count > 0)
+                .map(Self::AfterLetters),
+        }
+    }
+}
+
 /// Controls how a command-triggered REPL restart should be presented.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplReloadKind {
@@ -136,6 +179,8 @@ pub struct ReplRunConfig {
     pub history_config: HistoryConfig,
     /// Chooses between interactive and basic input handling.
     pub input_mode: ReplInputMode,
+    /// Chooses when typing opens the completion menu.
+    pub tab_mode: ReplTabMode,
     /// Optional renderer for the right-hand prompt.
     pub prompt_right: Option<PromptRightRenderer>,
     /// Optional projector used before completion/highlighting analysis.
@@ -155,6 +200,7 @@ impl ReplRunConfig {
             appearance: ReplAppearance::default(),
             history_config,
             input_mode: ReplInputMode::Auto,
+            tab_mode: ReplTabMode::Tab,
             prompt_right: None,
             line_projector: None,
         }
@@ -212,20 +258,19 @@ impl ReplRunConfigBuilder {
         self
     }
 
-    /// Replaces the history configuration.
-    ///
-    /// If omitted, the builder keeps the history configuration passed to
-    /// [`ReplRunConfigBuilder::new`].
-    pub fn with_history_config(mut self, history_config: HistoryConfig) -> Self {
-        self.config.history_config = history_config;
-        self
-    }
-
     /// Replaces the input-mode policy.
     ///
     /// If omitted, the config keeps [`ReplInputMode::Auto`].
     pub fn with_input_mode(mut self, input_mode: ReplInputMode) -> Self {
         self.config.input_mode = input_mode;
+        self
+    }
+
+    /// Replaces when typing opens the completion menu.
+    ///
+    /// If omitted, the config keeps [`ReplTabMode::Tab`].
+    pub fn with_tab_mode(mut self, tab_mode: ReplTabMode) -> Self {
+        self.config.tab_mode = tab_mode;
         self
     }
 
@@ -285,6 +330,13 @@ pub struct ReplAppearance {
     pub completion_highlight_style: Option<String>,
     /// Style applied to recognized command segments in the input line.
     pub command_highlight_style: Option<String>,
+    /// Style applied to the first input word that cannot be valid.
+    pub error_highlight_style: Option<String>,
+    /// Style for the inline suggestion and the status line under the input.
+    ///
+    /// Without it the REPL shows no inline suggestion, which would be
+    /// indistinguishable from typed text.
+    pub hint_style: Option<String>,
     /// Maximum number of visible rows in the history search menu.
     pub history_menu_rows: u16,
 }
@@ -317,6 +369,8 @@ impl Default for ReplAppearance {
             completion_background_style: None,
             completion_highlight_style: None,
             command_highlight_style: None,
+            error_highlight_style: None,
+            hint_style: None,
             history_menu_rows: DEFAULT_HISTORY_MENU_ROWS,
         }
     }
@@ -374,6 +428,22 @@ impl ReplAppearanceBuilder {
     /// If omitted, the REPL keeps the theme/default command-highlight style.
     pub fn with_command_highlight_style(mut self, command_highlight_style: Option<String>) -> Self {
         self.appearance.command_highlight_style = command_highlight_style;
+        self
+    }
+
+    /// Replaces the style applied to the first invalid input word.
+    ///
+    /// If omitted, invalid words are shown in red.
+    pub fn with_error_highlight_style(mut self, error_highlight_style: Option<String>) -> Self {
+        self.appearance.error_highlight_style = error_highlight_style;
+        self
+    }
+
+    /// Replaces the style of the inline suggestion and status line.
+    ///
+    /// If omitted, the REPL shows no inline suggestion.
+    pub fn with_hint_style(mut self, hint_style: Option<String>) -> Self {
+        self.appearance.hint_style = hint_style;
         self
     }
 

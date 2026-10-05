@@ -106,14 +106,6 @@ impl CommandSpec {
         self
     }
 
-    /// Extends the command with positional argument definitions.
-    ///
-    /// If omitted, the command contributes no positional completion metadata.
-    pub fn args(mut self, args: impl IntoIterator<Item = ArgNode>) -> Self {
-        self.args.extend(args);
-        self
-    }
-
     /// Adds one flag definition keyed by its spelling.
     ///
     /// If omitted, the command contributes no flag completion metadata.
@@ -127,18 +119,6 @@ impl CommandSpec {
     /// If omitted, the command contributes no flag completion metadata.
     pub fn flags(mut self, flags: impl IntoIterator<Item = (String, FlagNode)>) -> Self {
         self.flags.extend(flags);
-        self
-    }
-
-    /// Attaches provider-aware flag visibility and requiredness hints.
-    pub fn flag_hints(mut self, hints: FlagHints) -> Self {
-        self.flag_hints = Some(hints);
-        self
-    }
-
-    /// Attaches optional advisory relational facts to this command.
-    pub fn planning(mut self, planning: PlanningHints) -> Self {
-        self.planning = Some(planning);
         self
     }
 
@@ -356,6 +336,7 @@ fn arg_node_from_def(arg: &ArgDef) -> ArgNode {
         multi: arg.multi,
         value_type: to_completion_value_type(arg.value_kind),
         suggestions: arg.choices.iter().map(suggestion_from_choice).collect(),
+        prefix_values: None,
     }
 }
 
@@ -369,9 +350,18 @@ fn flag_entries_from_def(flag: &FlagDef) -> Vec<(String, FlagNode)> {
         ..FlagNode::default()
     };
 
-    flag_spellings(flag)
+    let spellings = flag_spellings(flag);
+    let preferred = spellings.first().cloned();
+    spellings
         .into_iter()
-        .map(|name| (name, node.clone()))
+        .enumerate()
+        .map(|(index, name)| {
+            let mut node = node.clone();
+            if index > 0 {
+                node.alias_of = preferred.clone();
+            }
+            (name, node)
+        })
         .collect()
 }
 
@@ -393,6 +383,7 @@ fn suggestion_from_choice(choice: &ValueChoice) -> SuggestionEntry {
         meta: choice.help.clone(),
         display: choice.display.clone(),
         sort: choice.sort_key.clone(),
+        aliases: Vec::new(),
     }
 }
 

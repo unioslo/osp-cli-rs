@@ -42,6 +42,16 @@ pub enum DisplayRule {
         /// Canonical field path whose non-null presence blanks the field.
         when: String,
     },
+    /// Format a non-negative integer byte count using binary units.
+    Bytes {
+        /// Canonical numeric field path to format.
+        field: String,
+    },
+    /// Format an RFC3339 or Unix-seconds timestamp relative to the current time.
+    RelativeTimestamp {
+        /// Canonical timestamp field path to format.
+        field: String,
+    },
 }
 
 /// Alignment hint for a rendered output column.
@@ -76,6 +86,8 @@ pub struct OutputMeta {
     pub key_index: Vec<String>,
     /// Optional curated field paths for human display, in priority order.
     pub display_columns: Option<Vec<String>>,
+    /// Optional human labels aligned positionally with `display_columns`.
+    pub display_column_labels: Option<Vec<String>>,
     /// Producer-declared numeric timestamp paths, measured in Unix seconds.
     pub unix_timestamp_columns: Vec<String>,
     /// Human-only conditional field formatting, evaluated against raw rows.
@@ -143,35 +155,6 @@ impl OutputDocument {
     pub fn new(kind: OutputDocumentKind, value: Value) -> Self {
         Self { kind, value }
     }
-
-    /// Reprojects the payload over generic output items while keeping identity.
-    ///
-    /// The canonical DSL uses this to preserve payload identity without branching on
-    /// concrete semantic types inside the executor. Whether the projected JSON
-    /// still restores into the original payload kind is decided later by the
-    /// payload codec, not by the pipeline engine itself.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use osp_cli::core::output_model::{OutputDocument, OutputDocumentKind, OutputItems};
-    /// use osp_cli::row;
-    /// use serde_json::json;
-    ///
-    /// let document = OutputDocument::new(OutputDocumentKind::Guide, json!({"usage": ["osp"]}));
-    /// let projected = document.project_over_items(&OutputItems::Rows(vec![
-    ///     row! { "uid" => "alice" },
-    /// ]));
-    ///
-    /// assert_eq!(projected.kind, OutputDocumentKind::Guide);
-    /// assert_eq!(projected.value["uid"], "alice");
-    /// ```
-    pub fn project_over_items(&self, items: &OutputItems) -> Self {
-        Self {
-            kind: self.kind,
-            value: output_items_to_value(items),
-        }
-    }
 }
 
 /// Result payload as either flat rows or grouped rows.
@@ -220,6 +203,7 @@ impl OutputResult {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 display_columns: None,
+                display_column_labels: None,
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: false,
@@ -232,6 +216,9 @@ impl OutputResult {
     }
 
     /// Attaches a semantic document to the result and returns the updated value.
+    ///
+    /// Replaces existing payload rows with rows derived from the document and
+    /// rebuilds the key index. This is a payload replacement, not an annotation.
     ///
     /// # Examples
     ///

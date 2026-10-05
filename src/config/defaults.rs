@@ -59,7 +59,7 @@ pub const DEFAULT_REPL_INTRO: &str = "full";
 /// Default threshold for rendering medium lists before expanding further.
 pub const DEFAULT_UI_MEDIUM_LIST_MAX: i64 = 5;
 /// Default table overflow strategy.
-pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "wrap";
+pub const DEFAULT_UI_TABLE_OVERFLOW: &str = "ellipsis";
 
 const DEFAULT_EXTENSIONS_PLUGINS_TIMEOUT_MS: i64 =
     crate::plugin::DEFAULT_PLUGIN_PROCESS_TIMEOUT_MS as i64;
@@ -68,6 +68,7 @@ const LITERAL_DEFAULTS: &[LiteralDefault] = &[
     LiteralDefault::string("secrets.backend", "toml"),
     LiteralDefault::string("profile.default", DEFAULT_PROFILE_NAME),
     LiteralDefault::string("repl.input_mode", "auto"),
+    LiteralDefault::string("repl.tab_mode", "tab"),
     LiteralDefault::string("repl.exit_message", ""),
     LiteralDefault::bool("repl.simple_prompt", false),
     LiteralDefault::string("repl.shell_indicator", "[{shell}]"),
@@ -101,6 +102,7 @@ const LITERAL_DEFAULTS: &[LiteralDefault] = &[
     LiteralDefault::string("ui.chrome.rule_policy", DEFAULT_UI_CHROME_RULE_POLICY),
     LiteralDefault::string("ui.table.overflow", DEFAULT_UI_TABLE_OVERFLOW),
     LiteralDefault::string("ui.table.border", DEFAULT_UI_TABLE_BORDER),
+    LiteralDefault::string("ui.table.nested_border", "none"),
     LiteralDefault::string("ui.help.table_chrome", "none"),
     LiteralDefault::string("ui.help.entry_indent", "inherit"),
     LiteralDefault::string("ui.help.entry_gap", "inherit"),

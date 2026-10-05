@@ -27,7 +27,10 @@
 //! - callers should prefer [`LoaderPipeline`] over assembling bespoke load
 //!   order by hand
 
-use std::path::PathBuf;
+use std::{
+    ffi::{OsStr, OsString},
+    path::PathBuf,
+};
 
 use crate::config::{
     ConfigError, ConfigLayer, ConfigResolver, ConfigSchema, ConfigValue, ResolveOptions,
@@ -44,15 +47,34 @@ pub trait ConfigLoader: Send + Sync {
     fn load(&self) -> Result<ConfigLayer, ConfigError>;
 }
 
-fn collect_string_pairs<I, K, V>(vars: I) -> Vec<(String, String)>
+fn collect_string_pairs<I, K, V>(vars: I) -> Vec<(String, OsString)>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str>,
     V: AsRef<str>,
 {
     vars.into_iter()
-        .map(|(key, value)| (key.as_ref().to_string(), value.as_ref().to_string()))
+        .map(|(key, value)| (key.as_ref().to_string(), OsString::from(value.as_ref())))
         .collect()
+}
+
+fn capture_env_vars(prefix: &str) -> Vec<(String, OsString)> {
+    std::env::vars_os()
+        .filter_map(|(name, value)| {
+            let name = name.into_string().ok()?;
+            name.starts_with(prefix).then_some((name, value))
+        })
+        .collect()
+}
+
+// Never include the undecodable value or its conversion error in diagnostics.
+fn env_value<'a>(name: &str, value: &'a OsStr) -> Result<&'a str, ConfigError> {
+    value
+        .to_str()
+        .ok_or_else(|| ConfigError::InvalidEnvOverride {
+            key: name.to_string(),
+            reason: "value is not valid Unicode".to_string(),
+        })
 }
 
 /// Loader that returns a prebuilt config layer.
@@ -174,14 +196,14 @@ impl ConfigLoader for TomlFileLoader {
 /// caller's job when wiring a [`LoaderPipeline`].
 #[derive(Clone, Default)]
 pub struct EnvVarLoader {
-    vars: Vec<(String, String)>,
+    vars: Vec<(String, OsString)>,
 }
 
 impl EnvVarLoader {
-    /// Captures the current process environment.
+    /// Captures `OSP__...` variables, deferring value decoding to loading.
     pub fn from_process_env() -> Self {
         Self {
-            vars: std::env::vars().collect(),
+            vars: capture_env_vars("OSP__"),
         }
     }
 
@@ -223,8 +245,13 @@ where
 
 impl ConfigLoader for EnvVarLoader {
     fn load(&self) -> Result<ConfigLayer, ConfigError> {
-        let layer =
-            ConfigLayer::from_env_iter(self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())))?;
+        let vars = self
+            .vars
+            .iter()
+            .filter(|(name, _)| name.starts_with("OSP__"))
+            .map(|(name, value)| Ok((name.as_str(), env_value(name, value)?)))
+            .collect::<Result<Vec<_>, ConfigError>>()?;
+        let layer = ConfigLayer::from_env_iter(vars)?;
         tracing::debug!(
             input_vars = self.vars.len(),
             entries = layer.entries().len(),
@@ -301,7 +328,7 @@ impl ConfigLoader for SecretsTomlLoader {
             reason: err.to_string(),
         })?;
 
-        let mut layer = ConfigLayer::from_toml_str(&raw)
+        let mut layer = ConfigLayer::from_secret_toml_str(&raw)
             .map_err(|err| with_path_context(self.path.display().to_string(), err))?;
         let origin = self.path.display().to_string();
         for entry in &mut layer.entries {
@@ -324,14 +351,14 @@ impl ConfigLoader for SecretsTomlLoader {
 /// redact them appropriately.
 #[derive(Clone, Default)]
 pub struct EnvSecretsLoader {
-    vars: Vec<(String, String)>,
+    vars: Vec<(String, OsString)>,
 }
 
 impl EnvSecretsLoader {
-    /// Captures secret variables from the current process environment.
+    /// Captures `OSP_SECRET__...` variables, deferring value decoding to loading.
     pub fn from_process_env() -> Self {
         Self {
-            vars: std::env::vars().collect(),
+            vars: capture_env_vars("OSP_SECRET__"),
         }
     }
 
@@ -374,7 +401,7 @@ impl ConfigLoader for EnvSecretsLoader {
             ConfigSchema::default().validate_writable_key(&spec.key)?;
             layer.insert_with_origin(
                 spec.key,
-                ConfigValue::String(value.clone()).into_secret(),
+                ConfigValue::String(env_value(name, value)?.to_string()).into_secret(),
                 spec.scope,
                 Some(name.clone()),
             );

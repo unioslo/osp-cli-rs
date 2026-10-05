@@ -475,7 +475,7 @@ pub struct ConfigStoreArgs {
     pub secrets: bool,
 
     /// Persist the change immediately after validation.
-    #[arg(long = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
+    #[arg(long = "permanent", alias = "save", conflicts_with_all = ["session", "config_store", "secrets"])]
     pub save: bool,
 }
 
@@ -730,8 +730,13 @@ pub struct ConfigExplainArgs {
 pub struct ConfigSetArgs {
     /// Config key to write.
     pub key: String,
-    /// Config value to write.
-    pub value: String,
+    /// Config value to write; conflicts with --from-file.
+    #[arg(required_unless_present = "from_file", conflicts_with = "from_file")]
+    pub value: Option<String>,
+
+    /// Read the value once from a UTF-8 file, or - for stdin. Strip trailing newlines only.
+    #[arg(long, value_name = "PATH", conflicts_with = "value")]
+    pub from_file: Option<std::path::PathBuf>,
 
     /// Shared global/profile/terminal targeting flags.
     #[command(flatten)]

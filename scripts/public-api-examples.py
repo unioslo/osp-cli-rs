@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pathlib
 import re
-import subprocess
 import sys
 
 
@@ -42,14 +41,7 @@ NON_RUST_FENCE_TOKENS = {
 
 
 def repo_root() -> pathlib.Path:
-    return pathlib.Path(
-        subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    )
+    return pathlib.Path(__file__).resolve().parent.parent
 
 
 def load_baseline(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
@@ -148,18 +140,25 @@ def project_doc_line(raw: str) -> str:
 
 
 def has_runnable_doctest(doc_lines: list[str]) -> bool:
-    in_fence = False
+    fence = ""
+    runnable = False
+    has_code = False
     for raw in doc_lines:
         stripped = raw.strip()
-        if not stripped.startswith("```"):
+        match = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
+        if not match:
+            if fence and stripped.removeprefix("# ").strip() not in {"", "#"}:
+                has_code = True
             continue
-        if not in_fence:
-            info = stripped[3:].strip().lower()
-            if fence_is_runnable(info):
+        marker, info = match.groups()
+        if not fence:
+            fence = marker
+            runnable = fence_is_runnable(info.strip().lower())
+            has_code = False
+        elif marker[0] == fence[0] and len(marker) >= len(fence) and not info.strip():
+            if runnable and has_code:
                 return True
-            in_fence = True
-            continue
-        in_fence = False
+            fence = ""
     return False
 
 
@@ -204,7 +203,11 @@ def main() -> int:
 
     for relative_path, symbol in load_baseline(root):
         path = root / relative_path
-        lines = path.read_text().splitlines()
+        try:
+            lines = path.read_text().splitlines()
+        except OSError as err:
+            failures.append(f"{relative_path}: cannot read source for `{symbol}`: {err.strerror}")
+            continue
         matches = symbol_line_numbers(lines, symbol)
         if not matches:
             failures.append(f"{relative_path}: symbol `{symbol}` not found")

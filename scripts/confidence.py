@@ -33,6 +33,9 @@ Warnings for future edits:
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -55,6 +58,11 @@ CLIPPY_DENIES = (
     "clippy::redundant_closure",
     "clippy::unnecessary_lazy_evaluations",
 )
+
+MIRI_TOOLCHAIN = "nightly-2026-03-24"
+TOOL_VERSIONS = {"cargo-audit": "0.22.2", "cargo-llvm-cov": "0.8.4"}
+GENERIC_CHECKS = {"fmt", "fmt-fix", "clippy", "test", "build", "audit", "metadata", "coverage-crate"}
+LINUX_KEYRING_TOOLS = {"dbus-run-session", "dbus-daemon", "gnome-keyring-daemon", "gdbus"}
 
 
 @dataclass(frozen=True)
@@ -116,7 +124,7 @@ def cargo_miri_test_command(*target_args: str) -> list[str]:
     normal confidence lanes.
     """
 
-    return ["cargo", "+nightly", "miri", "test", *target_args, "--locked"]
+    return ["cargo", f"+{MIRI_TOOLCHAIN}", "miri", "test", *target_args, "--locked"]
 
 
 def clippy_command() -> list[str]:
@@ -126,7 +134,7 @@ def clippy_command() -> list[str]:
     codifies the team's current "high-signal, low-noise" lint policy.
     """
 
-    command = ["cargo", "clippy", "--all-features", "--all-targets", "--"]
+    command = ["cargo", "clippy", "--locked", "--all-features", "--all-targets", "--"]
     for lint in CLIPPY_DENIES:
         command.extend(["-D", lint])
     return command
@@ -150,7 +158,7 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
     rustdoc_warnings = ConfidenceCheck(
         name="rustdoc-warnings",
         description="Fail on rustdoc warnings such as broken intra-doc links.",
-        command=["cargo", "doc", "--no-deps"],
+        command=["cargo", "doc", "--locked", "--no-deps"],
         env={"RUSTDOCFLAGS": "-D warnings"},
     )
     public_api_examples = ConfidenceCheck(
@@ -166,7 +174,7 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
     miri_setup = ConfidenceCheck(
         name="miri-setup",
         description="Prepare the nightly sysroot used by cargo-miri.",
-        command=["cargo", "+nightly", "miri", "setup"],
+        command=["cargo", f"+{MIRI_TOOLCHAIN}", "miri", "setup"],
     )
     miri_smoke = ConfidenceCheck(
         name="miri-smoke",
@@ -201,10 +209,19 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
         description="Architecture guardrail tests.",
         command=cargo_test_command("--test", "architecture"),
     )
-    unit = ConfidenceCheck(
-        name="unit",
-        description="Internal lib/bin unit tests plus the root unit target.",
-        command=cargo_test_command("--lib", "--bins", "--test", "unit"),
+    dependency_audit = ConfidenceCheck(
+        name="audit",
+        description="Fresh dependency advisory check against the committed lockfile.",
+        command=["cargo", "audit", "--file", "Cargo.lock"],
+    )
+    wrapper = ConfidenceCheck(
+        name="product-wrapper",
+        description="Compile the copyable downstream wrapper as an external consumer.",
+        command=[
+            "cargo", "check", "--locked", "--manifest-path",
+            str(root / "examples" / "product-wrapper" / "Cargo.toml"),
+            "--target-dir", str(root / "target"),
+        ],
     )
     doctests = ConfidenceCheck(
         name="doctests",
@@ -221,20 +238,22 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
         description="In-process cross-subsystem behavior flows.",
         command=[*hermetic_runner, *cargo_test_command("--test", "integration")],
     )
-    e2e = ConfidenceCheck(
-        name="e2e",
-        description="Real process and PTY behavior checks.",
-        command=cargo_test_command("--test", "e2e"),
-    )
-    coverage_fast = ConfidenceCheck(
-        name="coverage-fast",
-        description="Approximate local coverage guardrail.",
-        command=[python, str(root / "scripts" / "coverage.py"), "gate", "--fast"],
-    )
     coverage_full = ConfidenceCheck(
         name="coverage",
         description="Full coverage gate.",
         command=[python, str(root / "scripts" / "coverage.py"), "gate"],
+        # Parallel instrumented PTY starts timed out; ordinary lanes stay parallel.
+        env={"RUST_TEST_THREADS": "1"},
+    )
+    build = ConfidenceCheck(
+        name="build",
+        description="Build the release operator binary using the committed lockfile.",
+        command=["cargo", "build", "--release", "--locked", "--bin", "osp"],
+    )
+    startup_budget = ConfidenceCheck(
+        name="startup-budget",
+        description="Check release startup latency and binary size budgets.",
+        command=[python, str(root / "scripts" / "release-budget.py")],
     )
 
     static_checks = [contract_env, fmt, clippy, architecture]
@@ -319,7 +338,7 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
         "full": ConfidenceLane(
             name="full",
             description=(
-                "Full local confidence: docs, static checks, unit coverage, behavior lanes, e2e, and full coverage."
+                "Full confidence: docs, static checks, consumer build, advisories, doctests, and one instrumented test pass."
             ),
             covers=(
                 "public docs contract",
@@ -329,48 +348,226 @@ def lane_catalog(root: Path) -> dict[str, ConfidenceLane]:
                 "in-process subsystem flows",
                 "PTY behavior",
                 "full coverage gate",
+                "external product-wrapper build",
+                "dependency advisory check",
+                "release startup and binary size budgets",
             ),
             omits=(
                 "crate publish dry-run",
                 "release packaging",
+                "UiO product tests (run in the paired product checkout)",
+                "nightly Miri (separate lane)",
             ),
             checks=[
                 public_docs,
                 rustdoc_warnings,
                 *static_checks,
-                unit,
                 public_api_examples,
                 doctests,
-                *behavior_checks,
-                e2e,
+                wrapper,
+                dependency_audit,
                 coverage_full,
+                build,
+                startup_budget,
             ],
         ),
         "pre-push": ConfidenceLane(
             name="pre-push",
             description=(
-                "Merge-guard approximation: local lane plus fast changed-file coverage."
+                "Pre-push convenience: local docs, static checks and behavior boundaries."
             ),
             covers=(
                 "public docs contract",
                 "static policy",
                 "visible CLI behavior",
                 "in-process subsystem flows",
-                "fast coverage approximation",
             ),
             omits=(
                 "PTY behavior",
-                "full release-path coverage",
+                "coverage (run the full lane for authoritative evidence)",
+                "release build and quality budgets",
             ),
             checks=[
                 public_docs,
                 rustdoc_warnings,
                 *static_checks,
                 *behavior_checks,
-                coverage_fast,
             ],
         ),
     }
+
+
+def check_catalog(root: Path, cwd: Path | None = None) -> dict[str, ConfidenceCheck]:
+    """Expose lane checks and small standalone operations through one CLI."""
+
+    python = sys.executable or "python3"
+    checks = {
+        check.name: check
+        for lane in lane_catalog(root).values()
+        for check in lane.checks
+    }
+    for name, description, command in (
+        ("coverage-fast", "Validate a fast changed-file coverage report for review.", [
+            python, str(root / "scripts" / "coverage.py"), "gate", "--fast",
+        ]),
+        ("e2e", "Run existing process and PTY contracts under isolated settings.", [
+            python, str(root / "scripts" / "run-hermetic-cargo.py"), "--",
+            *cargo_test_command("--test", "e2e"),
+        ]),
+        ("fmt-fix", "Format Rust source.", ["cargo", "fmt", "--all"]),
+        ("metadata", "Describe the locked package and configured target directory.", [
+            "cargo", "metadata", "--locked", "--no-deps", "--format-version", "1",
+        ]),
+        ("test", "Run existing tests under isolated runtime settings.", [
+            python, str(root / "scripts" / "run-hermetic-cargo.py"),
+            "--cwd", str(cwd or root), "--", *cargo_test_command("--all-features"),
+        ]),
+        ("coverage-crate", "Instrument this crate's tests and enforce the shared line floor.", [
+            python, str(root / "scripts" / "run-hermetic-cargo.py"),
+            "--cwd", str(cwd or root), "--", "cargo", "llvm-cov",
+            "--locked", "--all-features", "--all-targets", "--no-fail-fast", "--json",
+            "--output-path", "target/coverage.json", "--fail-under-lines",
+            str(json.loads((root / ".coverage-baseline.json").read_text())["overall_line_percent"]),
+        ]),
+        ("coverage-summary", "Show the full instrumented coverage summary.", [
+            python, str(root / "scripts" / "coverage.py"), "run",
+            "--all-features", "--locked", "--summary-only",
+        ]),
+        ("coverage-baseline", "Capture an intentional coverage policy baseline.", [
+            python, str(root / "scripts" / "coverage.py"), "baseline",
+        ]),
+        ("startup-baseline", "Capture an intentional release quality baseline.", [
+            python, str(root / "scripts" / "release-budget.py"), "--baseline",
+        ]),
+        ("publish-dry-run", "Verify the packaged crate without publication.", [
+            "cargo", "publish", "--dry-run", "--locked",
+            "--target-dir", str(root / "target" / "publish-dry-run"),
+        ]),
+    ):
+        checks[name] = ConfidenceCheck(
+            name, description, command,
+            # Product checks need the same bounded instrumented starts as full.
+            env=checks["coverage"].env if name.startswith("coverage") else None,
+        )
+    return checks
+
+
+def required_tools(checks: list[ConfidenceCheck], root: Path) -> set[str]:
+    """Collect prerequisites before a lane spends time building anything."""
+
+    special = {
+        "contract-env": {"bash", "rg"},
+        "public-api-examples": set(),
+        "startup-budget": set(),
+        "startup-baseline": set(),
+        "fmt": {"cargo", "rustfmt"},
+        "fmt-fix": {"cargo", "rustfmt"},
+        "clippy": {"cargo", "clippy"},
+        "audit": {"cargo", "cargo-audit"},
+        "metadata": {"cargo"},
+    }
+    tools: set[str] = set()
+    for check in checks:
+        tools.update(special.get(check.name, {"cargo"}))
+        if (
+            sys.platform.startswith("linux")
+            and root.resolve() == repo_root()
+            and check.name in {
+                "contracts", "test", "coverage", "coverage-fast", "coverage-crate", "coverage-summary"
+            }
+        ):
+            tools.update(LINUX_KEYRING_TOOLS)
+        if check.name.startswith("coverage"):
+            tools.update({"cargo-llvm-cov", "llvm-tools-preview"})
+        if check.name.startswith("miri"):
+            tools.add("miri")
+    # The committed native GNU/Linux target configuration requires this linker.
+    config = root / ".cargo" / "config.toml"
+    if any(check.name not in special or check.name == "clippy" for check in checks):
+        if sys.platform.startswith("linux") and os.uname().machine == "x86_64":
+            if config.exists() and "-fuse-ld=lld" in config.read_text():
+                tools.add("ld.lld")
+    return tools
+
+
+def tool_available(tool: str, root: Path | None = None) -> bool:
+    """Check tools without invoking a dependency build or changing files."""
+
+    if tool == "llvm-tools-preview":
+        if shutil.which("rustc") is None:
+            return False
+        result = subprocess.run(
+            ["rustc", "--print", "target-libdir"], cwd=root,
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode or not result.stdout.strip():
+            return False
+        tool_dir = Path(result.stdout.strip()).parent / "bin"
+        suffix = ".exe" if os.name == "nt" else ""
+        return all(
+            os.access(tool_dir / f"{name}{suffix}", os.X_OK)
+            for name in ("llvm-cov", "llvm-profdata")
+        )
+
+    commands = {
+        "rustfmt": ["cargo", "fmt", "--version"],
+        "clippy": ["cargo", "clippy", "--version"],
+        "miri": ["cargo", f"+{MIRI_TOOLCHAIN}", "miri", "--version"],
+        "cargo-audit": ["cargo-audit", "--version"],
+        "cargo-llvm-cov": ["cargo-llvm-cov", "llvm-cov", "--version"],
+    }
+    command = commands.get(tool)
+    if command is None:
+        return shutil.which(tool) is not None
+    if shutil.which(command[0]) is None:
+        return False
+    if tool in TOOL_VERSIONS and shutil.which("cargo") is None:
+        return False
+    result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+    if result.returncode:
+        return False
+    version = TOOL_VERSIONS.get(tool)
+    return version is None or f"{tool} {version}" in result.stdout.splitlines()
+
+
+def preflight(checks: list[ConfidenceCheck], root: Path) -> None:
+    """Fail with all missing prerequisites before the first expensive check."""
+
+    missing = [tool for tool in sorted(required_tools(checks, root)) if not tool_available(tool, root)]
+    if missing:
+        fail(
+            "Missing or unsupported confidence tools: " + ", ".join(missing)
+            + ". Install pinned helpers with: python3 scripts/confidence.py --install-tools full. "
+            + "Install toolchain components with rustup; GNU/Linux builds require ld.lld (package lld)."
+            + (
+                " Linux contracts require an isolated Secret Service: install dbus-daemon, "
+                "gnome-keyring and libglib2.0-bin on Debian/Ubuntu; see docs/TESTING.md."
+                if set(missing) & LINUX_KEYRING_TOOLS else ""
+            )
+        )
+
+
+def install_tools(checks: list[ConfidenceCheck], root: Path) -> None:
+    """Ensure active LLVM components and pinned helpers for the selected lane."""
+
+    if shutil.which("cargo") is None:
+        fail("cargo is required to install confidence tools.")
+    tools = required_tools(checks, root)
+    if "llvm-tools-preview" in tools and not tool_available("llvm-tools-preview", root):
+        if shutil.which("rustup") is None:
+            fail("rustup is required to install llvm-tools-preview for the active toolchain.")
+        run_check(root, ConfidenceCheck(
+            "install-llvm-tools", "Install the active toolchain's LLVM coverage tools.",
+            ["rustup", "component", "add", "llvm-tools-preview"],
+        ))
+        if not tool_available("llvm-tools-preview", root):
+            fail("llvm-tools-preview did not provide active llvm-cov and llvm-profdata binaries.")
+    for tool in sorted(tools & TOOL_VERSIONS.keys()):
+        if not tool_available(tool, root):
+            run_check(root, ConfidenceCheck(
+                f"install-{tool}", f"Install {tool} {TOOL_VERSIONS[tool]}.",
+                ["cargo", "install", "--locked", "--version", TOOL_VERSIONS[tool], tool],
+            ))
 
 
 def print_lane_summary(lane: ConfidenceLane) -> None:
@@ -393,18 +590,22 @@ def print_lane_summary(lane: ConfidenceLane) -> None:
         print(f"  {index}. {check.name}: {check.description}")
 
 
-def run_check(root: Path, check: ConfidenceCheck) -> CheckResult:
+def run_check(root: Path, check: ConfidenceCheck, *, to_stderr: bool = False) -> CheckResult:
     """Run one check and fail fast with a labeled error.
 
     Confidence lanes are operational guardrails. Once one check fails, more
     output is usually noise rather than signal.
     """
 
-    print(f"\n==> [{check.name}] {check.description}", flush=True)
+    stream = sys.stderr if to_stderr else sys.stdout
+    print(f"\n==> [{check.name}] {check.description}", file=stream, flush=True)
+    if check.name == "coverage-crate":
+        # The report stays here even when Cargo builds in an external target dir.
+        (root / "target").mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     env = None
     if check.env:
-        env = dict(**subprocess.os.environ, **check.env)
+        env = dict(**os.environ, **check.env)
     result = subprocess.run(check.command, cwd=root, env=env)
     elapsed = time.perf_counter() - started
     if result.returncode != 0:
@@ -413,7 +614,7 @@ def run_check(root: Path, check: ConfidenceCheck) -> CheckResult:
             file=sys.stderr,
         )
         raise SystemExit(result.returncode)
-    print(f"    completed in {elapsed:.1f}s", flush=True)
+    print(f"    completed in {elapsed:.1f}s", file=stream, flush=True)
     return CheckResult(check=check, elapsed_seconds=elapsed)
 
 
@@ -434,13 +635,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "lane",
         nargs="?",
-        default="local",
-        help="Lane to run. Use --list to see available lanes.",
+        help="Lane to run (default: local). Use --list to see lanes and checks.",
     )
     parser.add_argument(
         "--list",
         action="store_true",
-        help="List available confidence lanes and exit.",
+        help="List available confidence lanes and named checks, then exit.",
+    )
+    parser.add_argument("--check", help="Run one named check instead of a lane.")
+    parser.add_argument(
+        "--cwd", type=Path,
+        help="Repository for a single generic check; lanes stay anchored to the framework.",
+    )
+    parser.add_argument(
+        "--install-tools", nargs="?", const="full", metavar="LANE",
+        help="Install pinned Cargo helpers for a lane (default: full), then exit.",
     )
     return parser
 
@@ -457,16 +666,45 @@ def main() -> None:
         print("Available confidence lanes:")
         for lane in lanes.values():
             print(f"  - {lane.name}: {lane.description}")
+        print("Available named checks:")
+        for check in check_catalog(root).values():
+            print(f"  - {check.name}: {check.description}")
         return
 
-    lane = lanes.get(args.lane)
+    if args.check:
+        if args.lane or args.install_tools:
+            parser.error("--check cannot be combined with a lane or --install-tools")
+        if args.cwd and args.check not in GENERIC_CHECKS:
+            parser.error("--cwd is only supported with " + ", ".join(sorted(GENERIC_CHECKS)))
+        cwd = (args.cwd or root).resolve()
+        if not cwd.is_dir():
+            parser.error(f"check directory does not exist: {cwd}")
+        checks = check_catalog(root, cwd)
+        check = checks.get(args.check)
+        if check is None:
+            parser.error(f"unknown check: {args.check}; choose one of: {', '.join(sorted(checks))}")
+        preflight([check], cwd)
+        run_check(cwd, check, to_stderr=True)
+        return
+
+    if args.cwd:
+        parser.error("--cwd requires --check")
+    if args.install_tools and args.lane:
+        parser.error("choose a lane with --install-tools LANE")
+
+    lane_name = args.install_tools or args.lane or "local"
+    lane = lanes.get(lane_name)
     if lane is None:
         fail(
-            f"unknown confidence lane: {args.lane}. "
+            f"unknown confidence lane: {lane_name}. "
             f"Choose one of: {', '.join(sorted(lanes))}"
         )
+    if args.install_tools:
+        install_tools(lane.checks, root)
+        return
 
     print_lane_summary(lane)
+    preflight(lane.checks, root)
     results: list[CheckResult] = []
     started = time.perf_counter()
     for check in lane.checks:

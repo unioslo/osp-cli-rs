@@ -47,7 +47,6 @@ ui.mode = "plain"
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
 }
 
 #[cfg(unix)]
@@ -82,7 +81,6 @@ ui.mode = "plain"
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
 }
 
 #[cfg(unix)]
@@ -125,7 +123,6 @@ profile.default = "uio"
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
 }
 
 #[cfg(unix)]
@@ -144,7 +141,13 @@ profile.default = "uio"
     let output = cmd
         .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--presentation", "austere", "config", "explain", "ui.chrome.frame"])
+        .args([
+            "--presentation",
+            "austere",
+            "config",
+            "explain",
+            "ui.chrome.frame",
+        ])
         .assert()
         .success()
         .get_output()
@@ -161,7 +164,6 @@ profile.default = "uio"
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
 }
 
 #[cfg(unix)]
@@ -202,7 +204,6 @@ profile.default = "uio"
         "expected success message on stderr, got: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
 }
 
 #[cfg(unix)]
@@ -244,7 +245,6 @@ profile.default = "tsd"
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
 }
 
 #[cfg(unix)]
@@ -269,7 +269,13 @@ ui.mode = "rich"
     let output = cmd
         .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
-        .args(["--json", "--profile=tsd", "config", "explain", "profile.default"])
+        .args([
+            "--json",
+            "--profile=tsd",
+            "config",
+            "explain",
+            "profile.default",
+        ])
         .assert()
         .success()
         .get_output()
@@ -285,7 +291,6 @@ ui.mode = "rich"
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
 }
 
 #[cfg(unix)]
@@ -315,7 +320,10 @@ ui.mode = "plain"
 
     let payload = parse_json_stdout(&output.stdout);
     assert_eq!(payload["key"], "profile.active");
-    assert_eq!(payload["description"], "Active profile derived during resolution");
+    assert_eq!(
+        payload["description"],
+        "Active profile derived during resolution"
+    );
     assert_eq!(payload["phase"], "runtime");
     assert_eq!(payload["value"], "uio");
     assert!(
@@ -323,7 +331,6 @@ ui.mode = "plain"
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
 }
 
 #[cfg(unix)]
@@ -337,9 +344,20 @@ fn config_explain_reports_interpolation_trace_contract() {
 profile.default = "uio"
 base.dir = "/etc/osp"
 ui.prompt = "${profile.active}:${extensions.uio.ldap.url}:${base.dir}"
+extensions.site.retry_ratio = 1.5
+extensions.site.enabled = true
+extensions.site.request_url = "https://api.example/${profile.active}?ratio=${extensions.site.retry_ratio}&enabled=${extensions.site.enabled}&credential=${extensions.site.token}"
 
 [profile.uio]
 extensions.uio.ldap.url = "ldaps://ldap.uio.no"
+"#,
+    );
+    write_secrets(
+        &home,
+        r#"
+[profile.uio]
+extensions.site.token = "operator-credential"
+extensions.site.connection = "https://operator:credential@api.example/${profile.active}"
 "#,
     );
 
@@ -372,6 +390,83 @@ extensions.uio.ldap.url = "ldaps://ldap.uio.no"
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let explain = |key: &str, show_secrets: bool, json: bool| {
+        let mut args = vec![
+            if json { "--json" } else { "--plain" },
+            "config",
+            "explain",
+            key,
+        ];
+        if show_secrets {
+            args.push("--show-secrets");
+        }
+        Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+            .envs(crate::test_env::isolated_env(&home))
+            .env("PATH", "/usr/bin:/bin")
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    for (key, value, kind) in [
+        (
+            "extensions.site.retry_ratio",
+            serde_json::json!(1.5),
+            "float",
+        ),
+        ("extensions.site.enabled", serde_json::json!(true), "bool"),
+    ] {
+        let payload = parse_json_stdout(&explain(key, false, true).stdout);
+        assert_eq!(payload["value"], value);
+        assert_eq!(payload["value_type"], kind);
+        assert_eq!(payload["source"], "file");
+    }
+    let redacted = parse_json_stdout(&explain("extensions.site.request_url", false, true).stdout);
+    assert_eq!(redacted["value"], "[REDACTED]");
+    let exposed = parse_json_stdout(&explain("extensions.site.request_url", true, true).stdout);
+    assert_eq!(
+        exposed["value"],
+        "https://api.example/uio?ratio=1.5&enabled=true&credential=operator-credential"
+    );
+    let steps = exposed["interpolation"]["steps"].as_array().unwrap();
+    let credential = steps
+        .iter()
+        .find(|step| step["placeholder"] == "extensions.site.token")
+        .unwrap();
+    assert_eq!(credential["value"], "operator-credential");
+    assert_eq!(credential["source"], "secrets");
+    assert_eq!(credential["scope"], "profile:uio");
+    for show_secrets in [false, true] {
+        let connection =
+            parse_json_stdout(&explain("extensions.site.connection", show_secrets, true).stdout);
+        assert_eq!(
+            connection["value"],
+            if show_secrets {
+                "https://operator:credential@api.example/uio"
+            } else {
+                "[REDACTED]"
+            }
+        );
+        assert_eq!(
+            connection["interpolation"]["template"],
+            if show_secrets {
+                "https://operator:credential@api.example/${profile.active}"
+            } else {
+                "[REDACTED]"
+            }
+        );
+        let human = explain("extensions.site.connection", show_secrets, false);
+        assert!(
+            String::from_utf8(human.stdout)
+                .unwrap()
+                .contains(if show_secrets {
+                    "https://operator:credential@api.example/uio"
+                } else {
+                    "[REDACTED]"
+                })
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -423,6 +518,55 @@ extensions.uio.ldap.bind_password = "file-secret"
     let clear_payload = parse_json_stdout(&clear_output.stdout);
     assert_eq!(clear_payload["value"], "file-secret");
 
+    let mut write = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    write
+        .envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "config",
+            "set",
+            "extensions.uio.ldap.bind_password",
+            "saved-secret",
+            "--secrets",
+            "--global",
+        ])
+        .assert()
+        .success();
+    let path = home.join(".config/osp/secrets.toml");
+    let stored: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        stored["default"]["extensions"]["uio"]["ldap"]["bind_password"].as_str(),
+        Some("saved-secret")
+    );
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let persisted = clear.assert().success().get_output().clone();
+    assert_eq!(
+        parse_json_stdout(&persisted.stdout)["value"],
+        "saved-secret"
+    );
+    let redacted = redacted.assert().success().get_output().clone();
+    assert_eq!(parse_json_stdout(&redacted.stdout)["value"], "[REDACTED]");
+
+    let mut unset = Command::new(assert_cmd::cargo::cargo_bin!("osp"));
+    unset
+        .envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "config",
+            "unset",
+            "extensions.uio.ldap.bind_password",
+            "--secrets",
+            "--global",
+        ])
+        .assert()
+        .success();
+    let restored = clear.assert().success().get_output().clone();
+    assert_eq!(parse_json_stdout(&restored.stdout)["value"], "file-secret");
 }
 
 #[cfg(unix)]
@@ -441,6 +585,10 @@ profile.default = "uio"
         r#"
 [default]
 extensions.demo.potato = "sekrit"
+repl.history.exclude = ["private:*"]
+
+[terminal.cli.profile.uio]
+repl.history.exclude = ["confidential:*", "login *"]
 "#,
     );
 
@@ -488,6 +636,126 @@ extensions.demo.potato = "sekrit"
     assert_eq!(row["key"], "extensions.demo.potato");
     assert_eq!(row["value"], "[REDACTED]");
 
+    let run = |args: &[&str]| {
+        Command::new(assert_cmd::cargo::cargo_bin!("osp"))
+            .envs(crate::test_env::isolated_env(&home))
+            .env("PATH", "/usr/bin:/bin")
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    let rotated = serde_json::json!(["confidential:*", "sudo *"]);
+    let output = run(&[
+        "--json",
+        "config",
+        "set",
+        "repl.history.exclude",
+        "['confidential:*', 'sudo *']",
+        "--secrets",
+        "--profile",
+        "uio",
+        "--terminal",
+        "cli",
+    ]);
+    let payload = parse_json_stdout(&output.stdout);
+    let row = first_json_row(&payload, "rotate scoped secret list");
+    assert_eq!(row["scope"], "profile:uio terminal:cli");
+    assert_eq!(row["backend"], "toml");
+    assert_eq!(row["value"], "[REDACTED]");
+    assert_eq!(row["previous"], "[REDACTED]");
+    assert_eq!(row["changed"], true);
+    let path = home.join(".config/osp/secrets.toml");
+    let persisted: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        persisted["terminal"]["cli"]["profile"]["uio"]["repl"]["history"]["exclude"]
+            .as_array()
+            .unwrap(),
+        &vec![
+            toml::Value::String("confidential:*".into()),
+            toml::Value::String("sudo *".into())
+        ],
+    );
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    for expose in [false, true] {
+        let mut args = vec!["--json", "config", "explain", "repl.history.exclude"];
+        if expose {
+            args.push("--show-secrets");
+        }
+        let output = run(&args);
+        let explain = parse_json_stdout(&output.stdout);
+        assert_eq!(
+            explain["value"],
+            if expose {
+                rotated.clone()
+            } else {
+                serde_json::json!("[REDACTED]")
+            }
+        );
+        assert_eq!(explain["value_type"], "list");
+        assert_eq!(explain["source"], "secrets");
+        assert_eq!(explain["scope"], "profile:uio terminal:cli");
+        let mut args = vec!["--plain", "config", "explain", "repl.history.exclude"];
+        if expose {
+            args.push("--show-secrets");
+        }
+        let output = run(&args);
+        assert!(String::from_utf8_lossy(&output.stdout).contains(if expose {
+            "value: [\"confidential:*\",\"sudo *\"] (list)"
+        } else {
+            "value: [REDACTED] (list)"
+        }));
+    }
+    for preview in [true, false] {
+        let mut args = vec![
+            "--json",
+            "config",
+            "unset",
+            "repl.history.exclude",
+            "--secrets",
+            "--profile",
+            "uio",
+            "--terminal",
+            "cli",
+        ];
+        if preview {
+            args.push("--dry-run");
+        }
+        let output = run(&args);
+        let payload = parse_json_stdout(&output.stdout);
+        let row = first_json_row(&payload, "remove scoped secret list");
+        assert_eq!(row["previous"], "[REDACTED]");
+        assert_eq!(row["changed"], true);
+        assert_eq!(row["dry_run"], preview);
+        let output = run(&[
+            "--json",
+            "config",
+            "explain",
+            "repl.history.exclude",
+            "--show-secrets",
+        ]);
+        let explain = parse_json_stdout(&output.stdout);
+        assert_eq!(
+            explain["value"],
+            if preview {
+                rotated.clone()
+            } else {
+                serde_json::json!(["private:*"])
+            }
+        );
+        assert_eq!(
+            explain["scope"],
+            if preview {
+                "profile:uio terminal:cli"
+            } else {
+                "global"
+            }
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -507,7 +775,7 @@ ui.mode = "plain"
     cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "never",
@@ -527,7 +795,6 @@ ui.mode = "plain"
         "config_explain_missing_key_grouped_stderr",
         String::from_utf8(output.stderr).expect("stderr should be utf-8"),
     );
-
 }
 
 #[cfg(unix)]
@@ -551,7 +818,7 @@ ui.mode = "plain"
         .envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "never",
@@ -576,7 +843,6 @@ ui.mode = "plain"
         String::from_utf8(output.stdout).expect("stdout should be utf-8"),
         &[(&home_text, "<HOME>")],
     );
-
 }
 
 #[cfg(unix)]
@@ -596,7 +862,7 @@ ui.format = "json"
     cmd.envs(crate::test_env::isolated_env(&home))
         .env("PATH", "/usr/bin:/bin")
         .args([
-            "--mode",
+            "--render-mode",
             "rich",
             "--color",
             "never",
@@ -611,5 +877,4 @@ ui.format = "json"
     assert_eq!(payload["error"]["code"], "config key not found");
     assert_eq!(payload["error"]["message"], "ui.formt");
     assert!(output.stderr.is_empty());
-
 }

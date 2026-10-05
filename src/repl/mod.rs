@@ -121,7 +121,7 @@ pub use engine::{
     HistoryConfig, HistoryConfigBuilder, HistoryEntry, HistoryShellContext, LineProjection,
     LineProjector, PromptRightRenderer, ReplAppearance, ReplAppearanceBuilder, ReplInputMode,
     ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunConfig, ReplRunConfigBuilder, ReplRunResult,
-    SharedHistory, color_from_style_spec, default_pipe_verbs, run_repl,
+    ReplTabMode, SharedHistory, color_from_style_spec, default_pipe_verbs, run_repl,
 };
 // Debug surfaces for REPL completion, highlight, and history inspection.
 pub use engine::{

@@ -9,9 +9,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -22,17 +27,36 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.94.0
 
+      - name: Install native Linux linker and contract services
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lld dbus-daemon gnome-keyring libglib2.0-bin
+          ld.lld --version
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Install coverage tooling
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install pinned confidence tools
+        run: python3 ./scripts/confidence.py --install-tools full
+
+      - name: Select committed coverage comparison
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]]; then
+            echo "COVERAGE_BASE=empty" >> "${GITHUB_ENV}"
+          else
+            git rev-parse --verify "${BASE_SHA}^{commit}"
+            echo "COVERAGE_BASE=${BASE_SHA}" >> "${GITHUB_ENV}"
+          fi
 
       - name: Run full confidence lane
         run: python3 ./scripts/confidence.py full
 
   miri:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -41,9 +65,15 @@ jobs:
           fetch-depth: 0
 
       - name: Install nightly Rust with Miri
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@nightly-2026-03-24
         with:
           components: miri
+
+      - name: Install native Linux linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lld
+          ld.lld --version
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2

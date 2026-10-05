@@ -37,8 +37,7 @@ Plugins are separate binaries discovered at runtime (Option B).
 
 ## Help Delegation
 
-Delegated help has one deliberately narrow shape. The host may pass a request
-through directly only when the described command grammar proves that the
+The host delegates help only when the described command grammar shows that the
 invocation is a path of described command/subcommand names followed by one
 terminal `help`, `--help`, or `-h` token. No option or positional operand may
 appear before the marker. For example, `osp inventory --help`,
@@ -153,7 +152,7 @@ Message levels:
 - `trace`
 
 Backbone behavior:
-- plugin `messages` are rendered by `osp-ui` on stderr using the same
+- plugin `messages` are rendered by the host's UI on stderr using the same
   grouping/theme/verbosity rules as built-in commands.
 - plugin data remains on stdout.
 - `ok=false` is still a protocol-level response and must use exit code 0.
@@ -171,6 +170,11 @@ Backbone behavior:
   "details": {}
 }
 ```
+
+For external plugin and native response failures, `osp --json` preserves the
+producer's complete `error` object, including structured `details`, alongside
+the output data and messages. Human diagnostics keep backend details behind
+the normal verbosity gate.
 
 ## Exit Code Guidance
 
@@ -194,7 +198,7 @@ Backbone behavior:
 ## Runtime Hints Environment
 
 Backbone injects runtime hints into each plugin subprocess. Plugins can use
-`osp_core::runtime::RuntimeHints::from_env()` to parse them.
+`osp_cli::core::runtime::RuntimeHints::from_env()` to parse them.
 
 Required hints:
 - `OSP_UI_VERBOSITY=error|warning|success|info|trace`
@@ -211,9 +215,9 @@ Optional hints:
 Additional process env:
 - `OSP_COMMAND=<selected-top-level-command>`
 
-The host starts plugins with a deliberately small inherited environment:
+Plugins inherit only these environment variables:
 `PATH`, `HOME`, terminal/locale variables, `TMPDIR`, and the XDG config/data/
-cache roots. It then adds the normalized `OSP_*` runtime hints and the
+cache roots. The host then adds the normalized `OSP_*` runtime hints and the
 explicit `OSP_PLUGIN_CFG_*` values described below. Arbitrary variables from
 the host process are not forwarded implicitly; secrets must be configured in a
 documented plugin environment entry.

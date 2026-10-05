@@ -19,7 +19,7 @@ use super::history;
 use super::input;
 use super::presentation::{
     ReplInputMode, build_repl_appearance, build_repl_prompt, build_repl_prompt_right_renderer,
-    render_repl_intro, repl_input_mode,
+    render_repl_intro, repl_input_mode, repl_tab_mode,
 };
 use super::surface;
 
@@ -148,6 +148,7 @@ fn build_repl_cycle_run_config(
     .with_input_mode(map_repl_input_mode(repl_input_mode(
         runtime.config.resolved(),
     )))
+    .with_tab_mode(repl_tab_mode(runtime.config.resolved()))
     .with_prompt_right(Some(build_repl_prompt_right_renderer(
         view,
         session.prompt_timing.clone(),

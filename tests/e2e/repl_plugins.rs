@@ -148,7 +148,8 @@ fn repl_provider_override_keeps_each_selected_plugin_policy_invocation_local() {
     );
 
     let public_start = session.output_len();
-    session.write_bytes(b"shared --plugin-provider public-provider\r");
+    session.type_text("shared --plugin-provider public-provider");
+    session.write_bytes(b"\r");
     assert!(
         session.wait_for_output_since(public_start, "public-from-plugin", Duration::from_secs(3)),
         "public provider should run; output:\n{}",
@@ -156,7 +157,8 @@ fn repl_provider_override_keeps_each_selected_plugin_policy_invocation_local() {
     );
 
     let guarded_start = session.output_len();
-    session.write_bytes(b"shared --plugin-provider guarded-provider\r");
+    session.type_text("shared --plugin-provider guarded-provider");
+    session.write_bytes(b"\r");
     assert!(
         session.wait_for_output_since(
             guarded_start,

@@ -108,7 +108,7 @@ fn help_render_overrides_parse_supported_and_edge_flags_unit() {
         OsString::from("--theme=dracula"),
         OsString::from("--presentation"),
         OsString::from("compact"),
-        OsString::from("--mode"),
+        OsString::from("--render-mode"),
         OsString::from("plain"),
         OsString::from("--color=always"),
         OsString::from("--unicode"),
@@ -150,7 +150,7 @@ fn help_render_overrides_parse_supported_and_edge_flags_unit() {
 
     let edge_args = vec![
         OsString::from("osp"),
-        OsString::from("--mode"),
+        OsString::from("--render-mode"),
         OsString::from("--profile"),
         OsString::from("tsd"),
     ];

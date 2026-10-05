@@ -40,8 +40,8 @@ Usage: osp history [OPTIONS] <COMMAND>
                                             Format this invocation only
   --guide | --json | --table | --mreg | --value | --md
                                             Convenience aliases for --format
-  --mode <auto|plain|rich>                  Render mode for this invocation
-  --plain | --rich                          Convenience aliases for --mode
+  --render-mode <auto|plain|rich>           Render mode for this invocation
+  --plain | --rich                          Convenience aliases for --render-mode
   --color <auto|always|never>               Color policy for this invocation
   --unicode <auto|always|never>             Unicode policy for this invocation
   --ascii                                   Alias for --unicode never

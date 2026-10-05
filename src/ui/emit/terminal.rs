@@ -5,8 +5,8 @@ use crate::ui::chrome::{
     FULL_HELP_LAYOUT_CHROME, GUIDE_SECTION_CHROME, PLAIN_SECTION_CHROME, RenderedTitle,
 };
 use crate::ui::doc::{
-    Block, Doc, GuideEntriesBlock, KeyValueBlock, KeyValueRow, KeyValueStyle, KeyValueValue,
-    ListBlock, ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
+    Block, Doc, GuideEntriesBlock, KeyValueBlock, KeyValueRow, KeyValueValue, ListBlock,
+    ParagraphBlock, SectionBlock, SectionTitleChrome, TableBlock,
 };
 use crate::ui::settings::{RenderBackend, ResolvedRenderSettings, TableBorderStyle, TableOverflow};
 use crate::ui::style::{StyleToken, ThemeStyler};
@@ -114,10 +114,7 @@ fn section_chrome(title_chrome: SectionTitleChrome) -> crate::ui::chrome::Sectio
 
 fn emit_key_value(block: &KeyValueBlock, settings: &ResolvedRenderSettings) -> String {
     let styler = ThemeStyler::new(settings.color, &settings.theme, &settings.style_overrides);
-    let rendered = match block.style {
-        KeyValueStyle::Plain => emit_plain_rows(&block.rows, "", settings, &styler),
-        KeyValueStyle::Bulleted => emit_bulleted_rows(&block.rows, "", settings, &styler),
-    };
+    let rendered = emit_plain_rows(&block.rows, "", settings, &styler);
     indent_lines(&rendered, settings.margin)
 }
 
@@ -219,6 +216,7 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
     let widths = fitted_table_widths(
         &table.widths,
         &table.headers,
+        &table.rows,
         settings
             .width
             .map(|width| width.saturating_sub(settings.margin)),
@@ -234,20 +232,35 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
 
     let unicode =
         settings.unicode && matches!(settings.backend, RenderBackend::Rich | RenderBackend::Plain);
-    let border = table_border_chars(unicode, settings.table_border);
-    lines.push(indent_lines(
-        &styler.paint(
-            &table_rule(
-                &widths,
-                border.top_left,
-                border.join_top,
-                border.top_right,
-                border.horizontal,
+    let style = if block.nested {
+        settings.nested_table_border
+    } else {
+        settings.table_border
+    };
+    let border = table_border_chars(unicode, style);
+    // Borderless tables keep only header and rows; whitespace rules would print blank lines.
+    let ruled = !matches!(style, TableBorderStyle::None);
+    let rule = |lines: &mut Vec<String>, line: String| {
+        if ruled {
+            lines.push(line);
+        }
+    };
+    rule(
+        &mut lines,
+        indent_lines(
+            &styler.paint(
+                &table_rule(
+                    &widths,
+                    border.top_left,
+                    border.join_top,
+                    border.top_right,
+                    border.horizontal,
+                ),
+                StyleToken::Border,
             ),
-            StyleToken::Border,
+            settings.margin,
         ),
-        settings.margin,
-    ));
+    );
     lines.extend(
         table_row_lines(
             &table.headers,
@@ -261,19 +274,22 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
         .into_iter()
         .map(|line| indent_lines(&line, settings.margin)),
     );
-    lines.push(indent_lines(
-        &styler.paint(
-            &table_rule(
-                &widths,
-                border.join_left,
-                border.join_mid,
-                border.join_right,
-                border.horizontal,
+    rule(
+        &mut lines,
+        indent_lines(
+            &styler.paint(
+                &table_rule(
+                    &widths,
+                    border.join_left,
+                    border.join_mid,
+                    border.join_right,
+                    border.horizontal,
+                ),
+                StyleToken::Border,
             ),
-            StyleToken::Border,
+            settings.margin,
         ),
-        settings.margin,
-    ));
+    );
     for row in &table.rows {
         lines.extend(
             table_row_lines(
@@ -289,25 +305,34 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
             .map(|line| indent_lines(&line, settings.margin)),
         );
     }
-    lines.push(indent_lines(
-        &styler.paint(
-            &table_rule(
-                &widths,
-                border.bottom_left,
-                border.join_bottom,
-                border.bottom_right,
-                border.horizontal,
+    rule(
+        &mut lines,
+        indent_lines(
+            &styler.paint(
+                &table_rule(
+                    &widths,
+                    border.bottom_left,
+                    border.join_bottom,
+                    border.bottom_right,
+                    border.horizontal,
+                ),
+                StyleToken::Border,
             ),
-            StyleToken::Border,
+            settings.margin,
         ),
-        settings.margin,
-    ));
+    );
+    if !ruled {
+        for line in &mut lines {
+            line.truncate(line.trim_end().len());
+        }
+    }
     lines.join("\n")
 }
 
 fn fitted_table_widths(
     natural: &[usize],
     headers: &[PreparedCell],
+    rows: &[Vec<PreparedCell>],
     available_width: Option<usize>,
     overflow: TableOverflow,
 ) -> Vec<usize> {
@@ -319,12 +344,37 @@ fn fitted_table_widths(
     }
 
     let mut widths = natural.to_vec();
-    let minimum = headers
+    let mut minimum = headers
         .iter()
         .map(|cell| cell.width.max(1))
         .collect::<Vec<_>>();
-    // Column order expresses product priority. Drop secondary columns only
-    // when their headers cannot fit; long values can use the wrapping emitter.
+    if matches!(overflow, TableOverflow::Ellipsis | TableOverflow::Wrap) {
+        // Protect identifier cells and comma-separated identifier lists without
+        // treating an isolated URL or long word inside prose as a column floor.
+        let token_width_limit = (available_width / 3).max(1);
+        for (column, minimum_width) in minimum.iter_mut().enumerate() {
+            for cell in rows.iter().filter_map(|row| row.get(column)) {
+                let tokens = cell.raw.split(", ").collect::<Vec<_>>();
+                if tokens
+                    .iter()
+                    .all(|token| !token.is_empty() && !token.chars().any(char::is_whitespace))
+                {
+                    let token_width = tokens
+                        .iter()
+                        .enumerate()
+                        .map(|(index, token)| {
+                            UnicodeWidthStr::width(*token) + usize::from(index + 1 < tokens.len())
+                        })
+                        .max()
+                        .unwrap_or(1)
+                        .min(token_width_limit);
+                    *minimum_width = (*minimum_width).max(token_width);
+                }
+            }
+        }
+    }
+    // Column order expresses product priority. Drop secondary columns when
+    // headings or useful tokens cannot fit; prose can use the remaining room.
     while widths.len() > 1
         && minimum[..widths.len()].iter().sum::<usize>() + widths.len() * 3 + 1 > available_width
     {
@@ -606,61 +656,6 @@ fn emit_plain_array_item_lines(
     }
 }
 
-fn emit_bulleted_rows(
-    rows: &[KeyValueRow],
-    base_indent: &str,
-    settings: &ResolvedRenderSettings,
-    styler: &ThemeStyler<'_>,
-) -> String {
-    rows.iter()
-        .flat_map(|row| emit_bulleted_row_lines(row, base_indent, settings, styler))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn emit_bulleted_row_lines(
-    row: &KeyValueRow,
-    base_indent: &str,
-    settings: &ResolvedRenderSettings,
-    styler: &ThemeStyler<'_>,
-) -> Vec<String> {
-    let effective_indent = format!("{base_indent}{}", row.indent.as_deref().unwrap_or_default());
-    let bullet = styler.paint("-", StyleToken::Punctuation);
-    let key = styler.paint(&display_key(row), StyleToken::Key);
-    let child_indent = format!("{effective_indent}{}", " ".repeat(settings.indent_size));
-
-    match &row.value {
-        KeyValueValue::Empty => vec![format!("{effective_indent}{bullet} {key}")],
-        KeyValueValue::Scalar(text) if text.is_empty() => {
-            vec![format!("{effective_indent}{bullet} {key}")]
-        }
-        KeyValueValue::Scalar(text) => vec![format!(
-            "{effective_indent}{bullet} {key}  {}",
-            styler.paint_value(text)
-        )],
-        KeyValueValue::Object(rows) => {
-            let mut lines = vec![format!(
-                "{effective_indent}{bullet} {key}{}",
-                styler.paint(":", StyleToken::Punctuation)
-            )];
-            if !rows.is_empty() {
-                lines.push(emit_plain_rows(rows, &child_indent, settings, styler));
-            }
-            lines
-        }
-        KeyValueValue::Array(items) => {
-            let mut lines = vec![format!(
-                "{effective_indent}{bullet} {key}{}",
-                styler.paint(":", StyleToken::Punctuation)
-            )];
-            lines.extend(items.iter().enumerate().flat_map(|(index, item)| {
-                emit_plain_array_item_lines(item, index, &child_indent, settings, styler)
-            }));
-            lines
-        }
-    }
-}
-
 fn render_terminal_scalar_grid(
     values: &[&str],
     indent: &str,
@@ -741,7 +736,12 @@ fn table_row(
     header: bool,
 ) -> String {
     let mut out = String::new();
-    let vertical = styler.paint(&vertical.to_string(), StyleToken::Border);
+    let vertical = vertical.to_string();
+    let vertical = if vertical == " " {
+        vertical
+    } else {
+        styler.paint(&vertical, StyleToken::Border)
+    };
     out.push_str(&vertical);
     for (index, width) in widths.iter().enumerate() {
         out.push(' ');

@@ -64,6 +64,7 @@ pub(super) fn to_suggestion_entry(entry: &DescribeSuggestionV1) -> SuggestionEnt
         meta: entry.meta.clone(),
         display: entry.display.clone(),
         sort: entry.sort.clone(),
+        aliases: Vec::new(),
     }
 }
 

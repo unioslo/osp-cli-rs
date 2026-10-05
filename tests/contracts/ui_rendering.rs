@@ -318,3 +318,73 @@ fn quick_filtered_single_row_key_value_block_rich_snapshot_contract() {
 
     assert_snapshot_text!("quick_filtered_single_row_key_value_block_rich", rendered);
 }
+
+#[cfg(unix)]
+#[test]
+fn projected_cli_results_export_to_the_terminal_clipboard_contract() {
+    let home = crate::temp_support::make_temp_dir("osp-cli-terminal-copy");
+    let bin = assert_cmd::cargo::cargo_bin!("osp");
+    let args = [
+        bin.to_str().expect("CLI executable path should be UTF-8"),
+        "--defaults-only",
+        "--json",
+        "theme",
+        "list",
+        "|",
+        "F name=dracula",
+        "|",
+        "P name",
+        "|",
+        "Y",
+    ];
+    let command = args
+        .iter()
+        .map(|arg| shell_words::quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let output = assert_cmd::Command::new("script")
+        .env_clear()
+        .envs(crate::test_env::isolated_env(home.path()))
+        .env("PATH", "/usr/bin:/bin")
+        .env("TERM", "xterm-256color")
+        .env("OSC52", "yes")
+        .args(["-qfec", &command, "/dev/null"])
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let captured = String::from_utf8(output).expect("terminal output should be UTF-8");
+    let prefix = "\x1b]52;c;";
+    let start = captured
+        .find(prefix)
+        .expect("terminal should receive an OSC52 clipboard write");
+    let payload_start = start + prefix.len();
+    let end = payload_start
+        + captured[payload_start..]
+            .find('\x07')
+            .expect("clipboard write should terminate");
+    let decoded = assert_cmd::Command::new("python3")
+        .env_clear()
+        .envs(crate::test_env::isolated_env(home.path()))
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "-c",
+            "import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.argv[1], validate=True))",
+            &captured[payload_start..end],
+        ])
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let copied: serde_json::Value =
+        serde_json::from_slice(&decoded).expect("copied result should remain typed JSON");
+    let visible = format!("{}{}", &captured[..start], &captured[end + 1..]);
+    let visible: serde_json::Value =
+        serde_json::from_str(&visible).expect("visible result should remain typed JSON");
+    assert_eq!(copied, json!([{"name": "Dracula"}]));
+    assert_eq!(visible, copied);
+}

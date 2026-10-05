@@ -1,9 +1,10 @@
 # DSL guide
 
 The pipe DSL transforms command output before rendering. Every stage operates
-on canonical rows. Human headings use the same field paths as filters; JSON
-shows all available fields. The command vocabulary remains owned by each
-product; DSL stages do not rename commands or infer service facts.
+on canonical rows. Producers may supply human headings for ordinary output,
+while filters, projections and JSON keep the canonical field paths. The command
+vocabulary remains owned by each product; DSL stages do not rename commands or
+infer service facts.
 
 ## One-shot commands
 
@@ -116,7 +117,9 @@ same interpretation; predicate `F field != value` also permits attached forms.
 `F field text` means a contains comparison; `F field=value` means equality.
 Array-valued fields match if an element satisfies the predicate.
 
-A bare field selector can match descendant keys. Dotted paths navigate nested
+A bare literal field selector prefers the root field and its leaves, falling
+back to descendant keys only when that root field is absent. Opt-in fuzzy key
+search retains broader descendant matching. Dotted paths navigate nested
 objects; when a named segment reaches an array it visits each member. Thus
 `members.uid` and `members[].uid` select the same leaves. Use `[0]`, `[-1]`,
 `[1:3]` or `[]` for indexed, tail, sliced or full traversal. Missing branches
@@ -192,7 +195,8 @@ produces no groups.
 
 Null and empty arrays render blank; lists render as readable comma-separated
 values. Producer column order expresses priority. Narrow terminal tables omit
-trailing low-priority columns before clipping the first remaining column.
-Declared columns remain stable for zero, one or many rows. Use `--json` for
-complete machine data, or `P` to choose the fields needed for your task.
-The explicit `table_overflow=none` setting disables width fitting.
+trailing low-priority columns before ellipsizing remaining values. Declared
+columns remain stable for zero, one or many rows. Use `--json` for complete
+machine data, or `P` to choose the fields needed for your task. Set
+`ui.table.overflow=wrap` to preserve complete cell values across lines; the
+explicit `none` setting disables width fitting.

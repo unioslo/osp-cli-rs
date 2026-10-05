@@ -24,7 +24,7 @@ osp plugins commands --json
 ## Force Plain JSON For Scripts
 
 ```bash
-osp --format json --mode plain plugins commands
+osp --format json --render-mode plain plugins commands
 ```
 
 ## Explain Why A Config Value Won
@@ -88,9 +88,9 @@ osp plugins select-provider inventory inventory-a
 ## Set Sane Daily Defaults
 
 ```bash
-osp config set ui.presentation compact --save
-osp config set ui.format table --save
-osp config set repl.simple_prompt true --save
+osp config set ui.presentation compact --permanent
+osp config set ui.format table --permanent
+osp config set repl.simple_prompt true --permanent
 ```
 
 ## Do A First-Pass Plugin Health Check

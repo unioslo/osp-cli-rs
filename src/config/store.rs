@@ -1,8 +1,10 @@
 //! Helpers for editing TOML-backed config stores on disk.
 //!
 //! This module exists to keep config-file mutation logic separate from config
-//! resolution. Callers provide a validated key, typed value, and scope; this
-//! layer applies the edit atomically to the right TOML table structure.
+//! resolution. Callers provide a key, typed value, and scope; this layer validates
+//! them against the built-in schema and applies the edit atomically to the right
+//! TOML table structure. Custom resolver schemas are not consulted, and writes
+//! do not refresh an existing resolved config or runtime.
 //!
 //! Contract:
 //!
@@ -11,6 +13,7 @@
 //! - callers should treat these helpers as persistence primitives, not config
 //!   resolution APIs
 
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -100,8 +103,10 @@ pub enum TomlSecretPermissions {
 
 /// Writes one scoped key into a TOML-backed config store.
 ///
-/// The edit runs through normal schema and scope validation first and returns
+/// The edit runs through built-in schema and scope validation first and returns
 /// the previously stored typed value when the key already existed.
+/// Custom resolver schemas are not consulted, and the caller must reload any
+/// resolved config that should reflect the persisted edit.
 ///
 /// `options` controls whether the edit is a dry run and whether the atomic
 /// write path should request owner-only temp-file permissions for secrets
@@ -201,7 +206,16 @@ fn edit_scoped_value_in_toml(
         }
         TomlEditOperation::Unset => ValidatedTomlEditOperation::Unset,
     };
-    let mut root = load_or_create_toml_root(path)?;
+    let _transaction_lock = options
+        .should_write()
+        .then(|| lock_file_transaction(path))
+        .transpose()
+        .map_err(|err| ConfigError::FileWrite {
+            path: path.display().to_string(),
+            reason: err.to_string(),
+        })?;
+    let mut root =
+        load_or_create_toml_root_with_source(path, !options.strict_secret_permissions())?;
     let root_table = root
         .as_table_mut()
         .ok_or(ConfigError::TomlRootMustBeTable)?;
@@ -233,7 +247,15 @@ fn validate_dotted_key(key: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+#[cfg(test)]
 fn load_or_create_toml_root(path: &Path) -> Result<toml::Value, ConfigError> {
+    load_or_create_toml_root_with_source(path, true)
+}
+
+fn load_or_create_toml_root_with_source(
+    path: &Path,
+    include_source: bool,
+) -> Result<toml::Value, ConfigError> {
     if !path.exists() {
         return Ok(toml::Value::Table(toml::value::Table::new()));
     }
@@ -244,15 +266,47 @@ fn load_or_create_toml_root(path: &Path) -> Result<toml::Value, ConfigError> {
     })?;
 
     raw.parse::<toml::Value>().map_err(|err| {
+        let diagnostic = TomlParseDiagnostic::new(err.message());
         with_path_context(
             path.display().to_string(),
-            ConfigError::TomlParse(TomlParseDiagnostic::new(err.message()).with_source(
-                path.display().to_string(),
-                raw.clone(),
-                err.span(),
-            )),
+            ConfigError::TomlParse(if include_source {
+                diagnostic.with_source(path.display().to_string(), raw.clone(), err.span())
+            } else {
+                diagnostic.with_location_from_source(&raw, err.span())
+            }),
         )
     })
+}
+
+pub(crate) fn lock_file_transaction(path: &Path) -> std::io::Result<File> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("path has no file name: {}", path.display()),
+        )
+    })?;
+    let lock_path = parent.join(format!(".{}.lock", file_name.to_string_lossy()));
+    let lock = open_lock_file(&lock_path)?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+fn open_lock_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 fn write_toml_root(

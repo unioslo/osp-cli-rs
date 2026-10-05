@@ -115,24 +115,6 @@ impl<'a> ThemeStyler<'a> {
     }
 }
 
-#[cfg(test)]
-pub fn apply_style(text: &str, token: StyleToken, color: bool, theme_name: &str) -> String {
-    let theme = crate::ui::theme::resolve_theme(theme_name);
-    apply_style_with_theme(text, token, color, &theme)
-}
-
-#[cfg(test)]
-pub fn apply_style_with_overrides(
-    text: &str,
-    token: StyleToken,
-    color: bool,
-    theme_name: &str,
-    overrides: &StyleOverrides,
-) -> String {
-    let theme = crate::ui::theme::resolve_theme(theme_name);
-    apply_style_with_theme_overrides(text, token, color, &theme, overrides)
-}
-
 pub fn apply_style_with_theme(
     text: &str,
     token: StyleToken,
@@ -335,7 +317,25 @@ fn apply_style_token(style: Style, token: &str) -> Option<Style> {
     }
 }
 
-fn parse_color_token(token: &str) -> Option<Color> {
+pub(crate) fn parse_color_token(token: &str) -> Option<Color> {
+    if let Some(value) = token.strip_prefix("ansi")
+        && let Ok(index) = value.parse::<u8>()
+    {
+        return Some(Color::Fixed(index));
+    }
+
+    if let Some(value) = token
+        .strip_prefix("rgb(")
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        let mut parts = value.split(',').map(|part| part.trim().parse::<u8>().ok());
+        if let (Some(Some(r)), Some(Some(g)), Some(Some(b))) =
+            (parts.next(), parts.next(), parts.next())
+        {
+            return Some(Color::Rgb(r, g, b));
+        }
+    }
+
     match token {
         "black" => Some(Color::Black),
         "red" => Some(Color::Red),
@@ -345,14 +345,17 @@ fn parse_color_token(token: &str) -> Option<Color> {
         "purple" | "magenta" => Some(Color::Purple),
         "cyan" => Some(Color::Cyan),
         "white" => Some(Color::White),
-        "bright-black" => Some(Color::DarkGray),
-        "bright-red" => Some(Color::LightRed),
-        "bright-green" => Some(Color::LightGreen),
-        "bright-yellow" => Some(Color::LightYellow),
-        "bright-blue" => Some(Color::LightBlue),
-        "bright-purple" | "bright-magenta" => Some(Color::LightPurple),
-        "bright-cyan" => Some(Color::LightCyan),
-        "bright-white" => Some(Color::LightGray),
+        "bright-black" | "darkgray" | "dark_gray" | "gray" | "grey" => Some(Color::DarkGray),
+        "bright-red" | "lightred" | "light_red" => Some(Color::LightRed),
+        "bright-green" | "lightgreen" | "light_green" => Some(Color::LightGreen),
+        "bright-yellow" | "lightyellow" | "light_yellow" => Some(Color::LightYellow),
+        "bright-blue" | "lightblue" | "light_blue" => Some(Color::LightBlue),
+        "bright-purple" | "bright-magenta" | "lightmagenta" | "light_magenta" | "lightpurple"
+        | "light_purple" => Some(Color::LightPurple),
+        "bright-cyan" | "lightcyan" | "light_cyan" => Some(Color::LightCyan),
+        "bright-white" | "lightgray" | "light_gray" | "lightgrey" | "light_grey" => {
+            Some(Color::LightGray)
+        }
         _ => parse_hex_rgb(token).map(|(r, g, b)| Color::Rgb(r, g, b)),
     }
 }

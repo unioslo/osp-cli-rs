@@ -10,3 +10,4 @@ include!("config_commands/read.rs");
 include!("config_commands/explain.rs");
 include!("config_commands/sources_and_profiles.rs");
 include!("config_commands/mutate.rs");
+include!("config_commands/native_keyring.rs");

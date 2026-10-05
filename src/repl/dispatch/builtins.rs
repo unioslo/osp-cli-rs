@@ -14,7 +14,7 @@ use super::shell::{handle_repl_exit_request, render_repl_help_for_scope};
 pub(super) enum ReplBuiltin {
     Help,
     Exit,
-    Last { raw: bool },
+    Last,
     Pagination(PaginationDirection),
     Source(SourceCommand),
     Bang(BangCommand),
@@ -62,7 +62,7 @@ pub(super) fn execute_repl_builtin(
             sink,
         )?)),
         ReplBuiltin::Exit => Ok(handle_repl_exit_request(session)),
-        ReplBuiltin::Last { raw } => execute_last_result_builtin(runtime, session, raw),
+        ReplBuiltin::Last => execute_last_result_builtin(runtime, session, raw),
         ReplBuiltin::Pagination(direction) => {
             execute_pagination_builtin(runtime, session, clients, history, direction, sink)
         }
@@ -90,8 +90,8 @@ pub(super) fn parse_repl_builtin(raw: &str) -> Result<Option<ReplBuiltin>> {
     if raw == "prev" {
         return Ok(Some(ReplBuiltin::Pagination(PaginationDirection::Previous)));
     }
-    if let Some(raw) = parse_last_builtin(raw)? {
-        return Ok(Some(ReplBuiltin::Last { raw }));
+    if raw.split_whitespace().next() == Some("last") {
+        return Ok(Some(ReplBuiltin::Last));
     }
     if let Some(command) = parse_source_builtin(raw)? {
         return Ok(Some(ReplBuiltin::Source(command)));
@@ -165,78 +165,65 @@ fn execute_source_command(
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            if shell_words::split(line)
-                .ok()
-                .and_then(|words| words.into_iter().next())
-                .as_deref()
-                == Some("source")
-            {
-                let err = miette!("nested `source` commands are not supported");
-                if command.ignore_errors {
-                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
-                    continue;
-                }
-                return Err(err).wrap_err_with(|| {
-                    format!("command failed at {}:{}", path.display(), index + 1)
-                });
-            }
-            let executed = match super::execute_repl_plugin_line_with_sink(
-                runtime, session, clients, history, line, sink,
-            ) {
-                Ok(executed) => executed,
+            let location = format!("{}:{}", path.display(), index + 1);
+            match execute_source_line(runtime, session, clients, history, line, &location, sink) {
+                Ok(None) => {}
+                Ok(Some(stop)) => return Ok(stop),
                 Err(err) if command.ignore_errors => {
-                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
-                    continue;
+                    sink.write_stderr(&format!("{location}: {err}\n"));
                 }
                 Err(err) => {
-                    return Err(err).wrap_err_with(|| {
-                        format!("command failed at {}:{}", path.display(), index + 1)
-                    });
-                }
-            };
-            let failed = !matches!(executed.exit_code, 0 | EXIT_CODE_WAITING_APPROVAL);
-            match executed.result {
-                ReplLineResult::Continue(rendered) => sink.write_stdout(&rendered),
-                ReplLineResult::Restart {
-                    output: restart_output,
-                    reload,
-                } => {
-                    sink.write_stdout(&restart_output);
-                    sink.write_stderr(&format!(
-                        "{}:{}: command requires a REPL restart; remaining source lines were not run\n",
-                        path.display(),
-                        index + 1
-                    ));
-                    return Ok(ReplLineResult::Restart {
-                        output: String::new(),
-                        reload,
-                    });
-                }
-                ReplLineResult::Exit(code) => return Ok(ReplLineResult::Exit(code)),
-                ReplLineResult::ReplaceInput(_) => {
-                    let err = miette!("history expansion is not supported in sourced files");
-                    if command.ignore_errors {
-                        sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
-                    } else {
-                        return Err(err).wrap_err_with(|| {
-                            format!("command failed at {}:{}", path.display(), index + 1)
-                        });
-                    }
-                }
-            }
-            if failed {
-                let err = miette!("command exited with status {}", executed.exit_code);
-                if command.ignore_errors {
-                    sink.write_stderr(&format!("{}:{}: {err}\n", path.display(), index + 1));
-                } else {
-                    return Err(err).wrap_err_with(|| {
-                        format!("command failed at {}:{}", path.display(), index + 1)
-                    });
+                    return Err(err).wrap_err_with(|| format!("command failed at {location}"));
                 }
             }
         }
     }
     Ok(ReplLineResult::Continue(String::new()))
+}
+
+/// Runs one sourced line, returning the result that stops the batch, if any.
+fn execute_source_line(
+    runtime: &mut AppRuntime,
+    session: &mut AppSession,
+    clients: &AppClients,
+    history: &SharedHistory,
+    line: &str,
+    location: &str,
+    sink: &mut dyn UiSink,
+) -> Result<Option<ReplLineResult>> {
+    if shell_words::split(line)
+        .ok()
+        .and_then(|words| words.into_iter().next())
+        .as_deref()
+        == Some("source")
+    {
+        return Err(miette!("nested `source` commands are not supported"));
+    }
+    let executed =
+        super::execute_repl_plugin_line_with_sink(runtime, session, clients, history, line, sink)?;
+    match executed.result {
+        ReplLineResult::Continue(rendered) => sink.write_stdout(&rendered),
+        ReplLineResult::Restart { output, reload } => {
+            sink.write_stdout(&output);
+            sink.write_stderr(&format!(
+                "{location}: command requires a REPL restart; remaining source lines were not run\n"
+            ));
+            return Ok(Some(ReplLineResult::Restart {
+                output: String::new(),
+                reload,
+            }));
+        }
+        ReplLineResult::Exit(code) => return Ok(Some(ReplLineResult::Exit(code))),
+        ReplLineResult::ReplaceInput(_) => {
+            return Err(miette!(
+                "history expansion is not supported in sourced files"
+            ));
+        }
+    }
+    if !matches!(executed.exit_code, 0 | EXIT_CODE_WAITING_APPROVAL) {
+        return Err(miette!("command exited with status {}", executed.exit_code));
+    }
+    Ok(None)
 }
 
 fn execute_pagination_builtin(
@@ -284,24 +271,10 @@ fn source_help() -> String {
         .to_string()
 }
 
-fn parse_last_builtin(raw: &str) -> Result<Option<bool>> {
-    let mut parts = raw.split_whitespace();
-    if parts.next() != Some("last") {
-        return Ok(None);
-    }
-
-    match (parts.next(), parts.next()) {
-        (None, None) => Ok(Some(false)),
-        (Some("--raw"), None) => Ok(Some(true)),
-        _ => Err(miette!("`last` only supports the optional `--raw` flag")),
-    }
-}
-
 pub(super) fn parse_bang_command(raw: &str) -> Result<Option<BangCommand>> {
-    let raw = raw.trim();
-    if !raw.starts_with('!') {
+    let Some((_, raw)) = split_bang_request(raw) else {
         return Ok(None);
-    }
+    };
     if raw == "!" {
         return Ok(Some(BangCommand::Prefix(String::new())));
     }
@@ -352,11 +325,11 @@ pub(super) fn execute_bang_command(
     raw: &str,
     command: BangCommand,
 ) -> Result<ReplLineResult> {
+    let elevated = split_bang_request(raw).is_some_and(|(elevated, _)| elevated);
     let scope = current_history_scope(session);
     let recent = history.recent_commands_for(scope.as_deref());
-
     let expanded = match command {
-        BangCommand::Last => expand_history("!!", &recent, scope.as_deref(), true),
+        BangCommand::Last => history.expand_last_command(raw),
         BangCommand::Relative(offset) => {
             expand_history(&format!("!-{offset}"), &recent, scope.as_deref(), true)
         }
@@ -393,7 +366,15 @@ pub(super) fn execute_bang_command(
         )));
     };
 
-    Ok(ReplLineResult::ReplaceInput(expanded))
+    Ok(ReplLineResult::ReplaceInput(if elevated {
+        if expanded.split_whitespace().next() == Some("sudo") {
+            expanded
+        } else {
+            format!("sudo {expanded}")
+        }
+    } else {
+        expanded
+    }))
 }
 
 pub(super) fn current_history_scope(session: &AppSession) -> Option<String> {
@@ -417,7 +398,7 @@ fn render_bang_help() -> String {
     out.push_str("  last     replay the last successful result\n");
     out.push_str("  last --raw  show the pre-pipeline result\n\n");
     out.push_str("Bang history shortcuts:\n");
-    out.push_str("  !!       last visible command\n");
+    out.push_str("  !!       repeat the last command\n");
     out.push_str("  !-N      Nth previous visible command\n");
     out.push_str("  !N [args]  visible history entry by id, with optional appended arguments\n");
     out.push_str("  !prefix  latest visible command starting with prefix\n");
@@ -428,24 +409,68 @@ fn render_bang_help() -> String {
 fn execute_last_result_builtin(
     runtime: &mut AppRuntime,
     session: &mut AppSession,
-    raw: bool,
+    line: &str,
 ) -> Result<ReplLineResult> {
+    let parsed = crate::repl::input::ReplParsedLine::parse(line, runtime.config.resolved())?;
+    let scanned = crate::cli::invocation::scan_command_tokens(&parsed.dispatch_tokens)?;
+    let command = clap::Command::new("last")
+        .about("Render the last successful result without running its command again")
+        .arg(
+            clap::Arg::new("raw")
+                .long("raw")
+                .action(clap::ArgAction::SetTrue)
+                .help("Start from the saved result before its original pipeline"),
+        )
+        .after_help(crate::cli::invocation::INVOCATION_HELP_SECTION);
+    let matches = match command.try_get_matches_from(scanned.tokens) {
+        Ok(matches) => matches,
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+            return Ok(ReplLineResult::Continue(error.to_string()));
+        }
+        Err(error) => return Err(miette!(error.to_string())),
+    };
     let Some(last) = session.last_success() else {
         return Ok(ReplLineResult::Continue(
             "No recorded successful REPL result in this session.\n".to_string(),
         ));
     };
-    let runtime = crate::app::CommandRenderRuntime::new(runtime.config.resolved(), &runtime.ui);
-    let rendered = if raw {
-        crate::app::render_repl_output_with_runtime(&runtime, &last.output)
+    let invocation = crate::app::resolve_invocation_ui(
+        runtime.config.resolved(),
+        &runtime.ui,
+        &scanned.invocation,
+    );
+    // Replay only saved data. New stages follow the original pipeline unless
+    // --raw explicitly selects its pre-pipeline input; neither replaces the cache.
+    let mut stages = if matches.get_flag("raw") {
+        Vec::new()
     } else {
-        crate::app::render_saved_repl_output_with_runtime(&runtime, &last.output, &last.stages)?
+        last.stages.clone()
     };
+    stages.extend(parsed.stages);
+    let rendered = crate::app::render_saved_repl_output_with_runtime(
+        &crate::app::CommandRenderRuntime::new(runtime.config.resolved(), &invocation.ui),
+        &last.output,
+        &stages,
+    )?;
     Ok(ReplLineResult::Continue(rendered))
 }
 
 pub(super) fn is_repl_bang_request(raw: &str) -> bool {
-    raw.trim_start().starts_with('!')
+    split_bang_request(raw).is_some()
+}
+
+fn split_bang_request(raw: &str) -> Option<(bool, &str)> {
+    let raw = raw.trim();
+    if raw.starts_with('!') {
+        return Some((false, raw));
+    }
+
+    let rest = raw.strip_prefix("sudo")?;
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    let bang = rest.trim_start();
+    bang.starts_with('!').then_some((true, bang))
 }
 
 #[cfg(test)]
@@ -539,11 +564,11 @@ mod tests {
         ));
         assert!(matches!(
             parse_repl_builtin("last").expect("last"),
-            Some(super::ReplBuiltin::Last { raw: false })
+            Some(super::ReplBuiltin::Last)
         ));
         assert!(matches!(
             parse_repl_builtin("last --raw").expect("last raw"),
-            Some(super::ReplBuiltin::Last { raw: true })
+            Some(super::ReplBuiltin::Last)
         ));
         assert!(matches!(
             parse_repl_builtin("next").expect("next"),

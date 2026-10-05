@@ -6,78 +6,204 @@
 
 use std::borrow::Cow;
 use std::io::{self, IsTerminal, Write};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use reedline::{
-    EditCommand, EditMode, Emacs, Prompt, PromptEditMode, PromptHistorySearch,
+    EditCommand, EditMode, Emacs, Menu, MenuEvent, Prompt, PromptEditMode, PromptHistorySearch,
     PromptHistorySearchStatus, ReedlineEvent, ReedlineRawEvent,
 };
 
-use super::{PromptRightRenderer, ReplInputMode};
+use super::{PromptRightRenderer, ReplInputMode, ReplTabMode};
+use crate::repl::menu::SharedCompletionMenu;
+
+/// The input line and cursor as reedline last painted them.
+///
+/// An edit mode only sees key events, never the buffer. The hinter runs on
+/// every paint and records the line here, so key handling can measure the
+/// word being typed.
+#[derive(Clone, Default)]
+pub(crate) struct PaintedLine(Arc<Mutex<(String, usize, u64)>>);
+
+impl PaintedLine {
+    pub(crate) fn set(&self, line: &str, cursor: usize) {
+        let mut painted = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        painted.0.clear();
+        painted.0.push_str(line);
+        painted.1 = cursor;
+        painted.2 = painted.2.wrapping_add(1);
+    }
+
+    /// Characters between the start of the current word and the cursor.
+    fn word_len_before_cursor(&self) -> (usize, u64) {
+        let painted = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = painted.0.get(..painted.1).unwrap_or(&painted.0);
+        (
+            before
+                .chars()
+                .rev()
+                .take_while(|ch| !ch.is_whitespace())
+                .count(),
+            painted.2,
+        )
+    }
+}
 
 pub(crate) struct AutoCompleteEmacs {
     inner: Emacs,
-    menu_name: String,
+    menu: SharedCompletionMenu,
+    tab_mode: ReplTabMode,
+    painted: PaintedLine,
+    painted_revision: u64,
+    pending_word_len: Option<usize>,
 }
 
 impl AutoCompleteEmacs {
-    pub(crate) fn new(inner: Emacs, menu_name: impl Into<String>) -> Self {
+    pub(crate) fn new(
+        inner: Emacs,
+        menu: SharedCompletionMenu,
+        tab_mode: ReplTabMode,
+        painted: PaintedLine,
+    ) -> Self {
+        let (pending_word_len, painted_revision) = painted.word_len_before_cursor();
         Self {
             inner,
-            menu_name: menu_name.into(),
+            menu,
+            tab_mode,
+            painted,
+            painted_revision,
+            pending_word_len: Some(pending_word_len),
         }
     }
 
-    pub(crate) fn should_reopen_menu(commands: &[EditCommand]) -> bool {
-        // reedline closes menus on ordinary edits. Reopen after text-changing
-        // edits so completion keeps behaving like an interactive shell menu
-        // instead of forcing the user to press Tab again after every keystroke.
-        commands.iter().any(|cmd| {
-            matches!(
-                cmd,
-                EditCommand::InsertChar(_)
-                    | EditCommand::InsertString(_)
-                    | EditCommand::ReplaceChar(_)
-                    | EditCommand::ReplaceChars(_, _)
-                    | EditCommand::Backspace
-                    | EditCommand::Delete
-                    | EditCommand::CutChar
-                    | EditCommand::BackspaceWord
-                    | EditCommand::DeleteWord
-                    | EditCommand::Clear
-                    | EditCommand::ClearToLineEnd
-                    | EditCommand::CutCurrentLine
-                    | EditCommand::CutFromStart
-                    | EditCommand::CutFromLineStart
-                    | EditCommand::CutToEnd
-                    | EditCommand::CutToLineEnd
-                    | EditCommand::CutWordLeft
-                    | EditCommand::CutBigWordLeft
-                    | EditCommand::CutWordRight
-                    | EditCommand::CutBigWordRight
-                    | EditCommand::CutWordRightToNext
-                    | EditCommand::CutBigWordRightToNext
-                    | EditCommand::PasteCutBufferBefore
-                    | EditCommand::PasteCutBufferAfter
-                    | EditCommand::Undo
-                    | EditCommand::Redo
-            )
-        })
+    /// Whether typing these commands should open a closed menu.
+    ///
+    /// Starting a flag always does; a `-` inside a word such as a hostname
+    /// does not. Otherwise `tab_mode` decides. A space only opens in `Always`
+    /// mode and is handled with the token commit below.
+    pub(crate) fn opens_menu(&self, commands: &[EditCommand]) -> bool {
+        self.opens_menu_at(commands, Some(self.painted.word_len_before_cursor().0))
+    }
+
+    fn opens_menu_at(&self, commands: &[EditCommand], word_len: Option<usize>) -> bool {
+        let [EditCommand::InsertChar(ch)] = commands else {
+            return false;
+        };
+        if *ch == '-' && word_len == Some(0) {
+            return true;
+        }
+        match self.tab_mode {
+            ReplTabMode::Tab => false,
+            ReplTabMode::Always => true,
+            ReplTabMode::AfterLetters(count) => {
+                !ch.is_whitespace() && word_len.is_some_and(|len| len + 1 >= count)
+            }
+        }
+    }
+
+    fn sync_painted_word_len(&mut self) -> Option<usize> {
+        let (word_len, revision) = self.painted.word_len_before_cursor();
+        if revision != self.painted_revision {
+            self.painted_revision = revision;
+            self.pending_word_len = Some(word_len);
+        }
+        self.pending_word_len
+    }
+
+    fn track_edit(&mut self, commands: &[EditCommand], word_len: Option<usize>) {
+        self.pending_word_len = match commands {
+            [EditCommand::InsertChar(ch)] if ch.is_whitespace() => Some(0),
+            [EditCommand::InsertChar(_)] => word_len.map(|len| len + 1),
+            [EditCommand::InsertString(text)] if text.chars().any(char::is_whitespace) => Some(
+                text.chars()
+                    .rev()
+                    .take_while(|ch| !ch.is_whitespace())
+                    .count(),
+            ),
+            [EditCommand::InsertString(text)] => word_len.map(|len| len + text.chars().count()),
+            [EditCommand::InsertNewline] => Some(0),
+            _ => None,
+        };
+    }
+
+    fn auto_open(&self) -> ReedlineEvent {
+        ReedlineEvent::Menu(self.menu.name().to_string())
+    }
+
+    /// Whether `event` is Tab opening a closed menu.
+    fn is_tab_open(&self, event: &ReedlineEvent) -> bool {
+        matches!(
+            event,
+            ReedlineEvent::UntilFound(events)
+                if matches!(
+                    events.as_slice(),
+                    [ReedlineEvent::Menu(name), ReedlineEvent::MenuNext] if name == self.menu.name()
+                )
+        )
+    }
+}
+
+/// The menu move a key binding asks for once the completion menu is open.
+///
+/// With the menu open, reedline resolves `UntilFound` to its first menu move:
+/// `Menu(name)` only applies to a closed menu. Menu navigation takes precedence
+/// over accepting an inline history hint.
+pub(crate) fn menu_navigation(event: &ReedlineEvent) -> Option<MenuEvent> {
+    match event {
+        ReedlineEvent::MenuNext => Some(MenuEvent::NextElement),
+        ReedlineEvent::MenuPrevious => Some(MenuEvent::PreviousElement),
+        ReedlineEvent::MenuUp => Some(MenuEvent::MoveUp),
+        ReedlineEvent::MenuDown => Some(MenuEvent::MoveDown),
+        ReedlineEvent::MenuLeft => Some(MenuEvent::MoveLeft),
+        ReedlineEvent::MenuRight => Some(MenuEvent::MoveRight),
+        ReedlineEvent::MenuPageNext => Some(MenuEvent::NextPage),
+        ReedlineEvent::MenuPagePrevious => Some(MenuEvent::PreviousPage),
+        ReedlineEvent::UntilFound(events) => events.iter().find_map(menu_navigation),
+        _ => None,
     }
 }
 
 impl EditMode for AutoCompleteEmacs {
     fn parse_event(&mut self, event: ReedlineRawEvent) -> ReedlineEvent {
+        let word_len = self.sync_painted_word_len();
         let parsed = self.inner.parse_event(event);
+        // Selection moves become buffer edits here, before reedline paints;
+        // see `OspCompletionMenu::navigate`.
+        if let Some(commands) =
+            menu_navigation(&parsed).and_then(|nav| self.menu.navigate_painted_line(nav))
+        {
+            self.pending_word_len = None;
+            return ReedlineEvent::Edit(commands);
+        }
+        // Only Tab completes like a shell; menus opened by typing just list.
+        if self.is_tab_open(&parsed) {
+            self.menu.mark_tab_open();
+        }
         match parsed {
-            ReedlineEvent::Edit(commands) if Self::should_reopen_menu(&commands) => {
-                ReedlineEvent::Multiple(vec![
-                    ReedlineEvent::Edit(commands),
-                    ReedlineEvent::Menu(self.menu_name.clone()),
-                ])
+            ReedlineEvent::Edit(commands) if commands == [EditCommand::InsertChar(' ')] => {
+                self.track_edit(&commands, word_len);
+                // Space commits the token: close the menu, keeping any cycled
+                // selection already in the buffer, instead of letting reedline
+                // refresh it with the next token's candidates. `Always` then
+                // opens a fresh menu for the next token.
+                let mut events = vec![ReedlineEvent::Esc, ReedlineEvent::Edit(commands)];
+                if self.tab_mode == ReplTabMode::Always {
+                    events.push(self.auto_open());
+                }
+                ReedlineEvent::Multiple(events)
+            }
+            // An open menu already refilters on every edit.
+            ReedlineEvent::Edit(commands)
+                if !self.menu.is_active() && self.opens_menu_at(&commands, word_len) =>
+            {
+                self.track_edit(&commands, word_len);
+                ReedlineEvent::Multiple(vec![ReedlineEvent::Edit(commands), self.auto_open()])
+            }
+            ReedlineEvent::Edit(commands) => {
+                self.track_edit(&commands, word_len);
+                ReedlineEvent::Edit(commands)
             }
             other => other,
         }
@@ -225,27 +351,7 @@ pub(crate) fn contains_cursor_position_report(bytes: &[u8]) -> bool {
     })
 }
 
-pub(crate) fn parse_cursor_position_report(bytes: &[u8]) -> Option<(u16, u16)> {
-    let rest = bytes.strip_prefix(b"\x1b[")?;
-    let row_end = rest.iter().position(|byte| !byte.is_ascii_digit())?;
-    if row_end == 0 || *rest.get(row_end)? != b';' {
-        return None;
-    }
-    let row = std::str::from_utf8(&rest[..row_end])
-        .ok()?
-        .parse::<u16>()
-        .ok()?;
-    let col_rest = &rest[row_end + 1..];
-    let col_end = col_rest.iter().position(|byte| !byte.is_ascii_digit())?;
-    if col_end == 0 || *col_rest.get(col_end)? != b'R' {
-        return None;
-    }
-    let col = std::str::from_utf8(&col_rest[..col_end])
-        .ok()?
-        .parse::<u16>()
-        .ok()?;
-    Some((col, row))
-}
+pub(crate) use crate::ui::prompt::parse_cursor_position_report;
 
 pub(crate) struct OspPrompt {
     left: String,

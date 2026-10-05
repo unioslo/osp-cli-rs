@@ -18,8 +18,9 @@ use crate::completion::model::{
     CommandLine, CompletionAnalysis, CompletionNode, CompletionRequest, CompletionTree,
     PlanningValue, Suggestion, SuggestionEntry, SuggestionOutput, ValueType,
 };
+use crate::completion::model::{FlagNode, PrefixValues};
 use crate::core::fuzzy::{completion_fuzzy_matcher, fold_case};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MATCH_SCORE_EXACT: u32 = 0;
 const MATCH_SCORE_EMPTY_STUB: u32 = 1_000;
@@ -163,13 +164,8 @@ impl SuggestionEngine {
         let mut out = Vec::new();
 
         if request.show_subcommands {
-            let subcommand_stub = if request.context_node.children.contains_key(request.stub) {
-                ""
-            } else {
-                request.stub
-            };
             out.extend(
-                self.subcommand_suggestions(request.context_node, subcommand_stub)
+                self.subcommand_suggestions(request.context_node, request.stub)
                     .into_iter()
                     .map(SuggestionOutput::Item),
             );
@@ -234,20 +230,34 @@ impl SuggestionEngine {
     ) -> Vec<Suggestion> {
         let allowlist = self.resolved_flag_allowlist(node, provider);
         let required = self.required_flags(node, provider);
-        let flag_stub = if node.flags.contains_key(stub) {
-            ""
-        } else {
-            stub
-        };
         let provider_flags = provider
             .name()
             .and_then(|name| node.flag_hints.as_ref()?.by_provider.get(name));
 
+        // Other spellings of one flag collapse into its preferred entry, e.g.
+        // `--interactive, -i`, unless typed exactly.
+        let mut other_spellings = BTreeMap::<&str, Vec<&str>>::new();
+        for (flag, meta) in &node.flags {
+            if let Some(preferred) = meta.alias_of.as_deref()
+                && node.flags.contains_key(preferred)
+            {
+                other_spellings
+                    .entry(preferred)
+                    .or_default()
+                    .push(flag.as_str());
+            }
+        }
+        let is_hidden_alias = |flag: &str, meta: &FlagNode| {
+            meta.alias_of
+                .as_deref()
+                .is_some_and(|preferred| node.flags.contains_key(preferred) && stub != flag)
+        };
         node.flags
             .iter()
+            .filter(|(flag, meta)| !is_hidden_alias(flag, meta))
             .filter_map(|(flag, meta)| {
-                let score = self.match_score(flag_stub, flag)?;
-                let score = if flag_stub == "--" {
+                let score = self.match_score(stub, flag)?;
+                let score = if matches!(stub, "-" | "--") {
                     MATCH_SCORE_EMPTY_STUB
                 } else {
                     score
@@ -259,11 +269,29 @@ impl SuggestionEngine {
                     .as_ref()
                     .is_none_or(|allowed| allowed.contains(flag.as_str()))
             })
-            .filter(|(flag, meta, _)| meta.multi || !cmd.has_flag(flag) || stub == *flag)
+            .filter(|(flag, meta, _)| {
+                meta.multi
+                    || stub == *flag
+                    || !(cmd.has_flag(flag)
+                        || other_spellings
+                            .get(flag.as_str())
+                            .is_some_and(|spellings| spellings.iter().any(|s| cmd.has_flag(s))))
+            })
             .map(|(flag, meta, score)| Suggestion {
                 text: flag.clone(),
-                meta: meta.tooltip.clone(),
-                display: required.contains(flag.as_str()).then(|| format!("{flag}*")),
+                meta: if required.contains(flag.as_str()) {
+                    Some(match meta.tooltip.as_deref() {
+                        Some(tooltip) => format!("required; {tooltip}"),
+                        None => "required".to_string(),
+                    })
+                } else {
+                    meta.tooltip.clone()
+                },
+                display: flag_display(
+                    flag,
+                    other_spellings.get(flag.as_str()),
+                    required.contains(flag.as_str()),
+                ),
                 is_exact: score == 0,
                 sort: Some(
                     if required.contains(flag.as_str()) {
@@ -306,6 +334,10 @@ impl SuggestionEngine {
             return vec![SuggestionOutput::PathSentinel];
         }
 
+        if let Some(values) = &flag_node.prefix_values {
+            return self.prefix_value_suggestions(values, stub);
+        }
+
         let static_entries = self
             .provider_specific_flag_value_entries(flag_node, provider)
             .unwrap_or_else(|| flag_node.suggestions.clone());
@@ -346,8 +378,24 @@ impl SuggestionEngine {
         if arg.value_type == Some(ValueType::Path) {
             return vec![SuggestionOutput::PathSentinel];
         }
+        if let Some(values) = &arg.prefix_values {
+            return self.prefix_value_suggestions(values, stub);
+        }
 
         self.entry_suggestions(&arg.suggestions, stub)
+    }
+
+    // Large catalogues answer only once the stub narrows them usefully.
+    fn prefix_value_suggestions(&self, values: &PrefixValues, stub: &str) -> Vec<SuggestionOutput> {
+        if stub.chars().count() < 3 {
+            return Vec::new();
+        }
+        let entries = values
+            .matching(stub, 25)
+            .into_iter()
+            .map(SuggestionEntry::value)
+            .collect::<Vec<_>>();
+        self.entry_suggestions(&entries, stub)
     }
 
     fn subcommand_suggestions(&self, node: &CompletionNode, stub: &str) -> Vec<Suggestion> {
@@ -440,21 +488,30 @@ impl SuggestionEngine {
     }
 
     fn entry_suggestions(&self, entries: &[SuggestionEntry], stub: &str) -> Vec<SuggestionOutput> {
-        let stub = if entries
-            .iter()
-            .any(|entry| fold_case(&entry.value) == fold_case(stub))
-        {
-            ""
-        } else {
-            stub
-        };
         entries
             .iter()
             .filter_map(|entry| {
-                let score = self.match_score(stub, &entry.value)?;
+                let score = self.entry_match_score(stub, entry)?;
                 Some(SuggestionOutput::Item(entry_to_suggestion(entry, score)))
             })
             .collect()
+    }
+
+    /// Scores a value by its own spelling, falling back to its aliases.
+    ///
+    /// An empty stub lists only the canonical values; aliases surface their
+    /// value once typed input matches one of them.
+    fn entry_match_score(&self, stub: &str, entry: &SuggestionEntry) -> Option<u32> {
+        let own = self.match_score(stub, &entry.value);
+        if stub.is_empty() {
+            return own;
+        }
+        entry
+            .aliases
+            .iter()
+            .filter_map(|alias| self.match_score(stub, alias))
+            .chain(own)
+            .min()
     }
 
     fn match_score(&self, stub: &str, candidate: &str) -> Option<u32> {
@@ -520,7 +577,7 @@ impl SuggestionEngine {
         Some(allowed)
     }
 
-    fn required_flags(
+    pub(crate) fn required_flags(
         &self,
         node: &CompletionNode,
         provider: &ProviderSelection<'_>,
@@ -552,6 +609,21 @@ fn command_without_current_value(cmd: &CommandLine, flag: &str) -> CommandLine {
         None => {}
     }
     planning
+}
+
+/// Menu label for a flag: its other spellings and a `*` when required.
+///
+/// Returns `None` when the label would equal the flag itself.
+fn flag_display(flag: &str, other_spellings: Option<&Vec<&str>>, required: bool) -> Option<String> {
+    let mut label = flag.to_string();
+    for spelling in other_spellings.into_iter().flatten() {
+        label.push_str(", ");
+        label.push_str(spelling);
+    }
+    if required {
+        label.push('*');
+    }
+    (label != flag).then_some(label)
 }
 
 fn child_completion_meta(child: &CompletionNode) -> Option<String> {

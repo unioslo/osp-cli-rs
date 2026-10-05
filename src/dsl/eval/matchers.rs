@@ -35,7 +35,8 @@ pub fn match_row_keys<'a>(row: &'a Row, token: &str, exact: ExactMode) -> Vec<&'
         .collect()
 }
 
-/// Returns exact and partial key matches for `token` without applying preference rules.
+/// Returns exact and partial key matches for `token`, retaining top-level
+/// precedence for simple selectors.
 pub fn match_row_keys_detailed(row: &Row, token: &str, exact: ExactMode) -> KeyMatches {
     compute_key_matches(row, token, exact, false)
 }
@@ -271,6 +272,25 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode, allow_fuzzy: bo
                 .unwrap_or(0)
                 == 1);
 
+    // A simple selector names a top-level field before it names descendants.
+    // The matcher sees flattened keys, so include all leaves rooted at that
+    // field; otherwise `=name` would also select `provider.name` when `name`
+    // exists. Fuzzy search intentionally keeps its broader descendant
+    // semantics.
+    if !allow_fuzzy && let Some(label) = simple_label(expr.as_ref(), trimmed) {
+        let top_level = row
+            .keys()
+            .filter(|key| key_starts_with_label(key, label, case_sensitive))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !top_level.is_empty() {
+            return KeyMatches {
+                partial: top_level.clone(),
+                exact: top_level,
+            };
+        }
+    }
+
     let token_cmp = if case_sensitive {
         trimmed.to_string()
     } else {
@@ -350,6 +370,30 @@ fn compute_key_matches(row: &Row, token: &str, exact: ExactMode, allow_fuzzy: bo
     KeyMatches {
         exact: exact_keys,
         partial: partial_keys,
+    }
+}
+
+fn simple_label<'a>(expr: Option<&'a PathExpression>, token: &'a str) -> Option<&'a str> {
+    let Some(expr) = expr else {
+        return Some(token);
+    };
+
+    if expr.absolute || expr.segments.len() != 1 || !expr.segments[0].selectors.is_empty() {
+        return None;
+    }
+
+    expr.segments[0].name.as_deref()
+}
+
+fn key_starts_with_label(key: &str, label: &str, case_sensitive: bool) -> bool {
+    let segments = key_segments(key, case_sensitive);
+    let Some(first) = segments.first() else {
+        return false;
+    };
+    if case_sensitive {
+        first == label
+    } else {
+        first == &fold_case(label)
     }
 }
 

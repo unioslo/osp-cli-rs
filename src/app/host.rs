@@ -596,7 +596,9 @@ pub(crate) fn resolve_invocation_ui(
     invocation: &InvocationOptions,
 ) -> ResolvedInvocation {
     let mut render_settings = ui.render_settings.clone();
-    render_settings.format_explicit = invocation.format.is_some();
+    // A process-level format flag remains explicit until this command overrides it.
+    render_settings.format_explicit =
+        ui.render_settings.format_explicit || invocation.format.is_some();
     if let Some(format) = invocation.format {
         render_settings.format = format;
     }
@@ -897,11 +899,14 @@ fn terse_clap_error(error: &clap::Error) -> String {
         .unwrap_or(first)
         .trim()
         .to_string();
-    if error.kind() == clap::error::ErrorKind::MissingRequiredArgument
-        && let Some(argument) = lines.find(|line| line.starts_with(['<', '-']))
-    {
-        terse.push(' ');
-        terse.push_str(argument);
+    if error.kind() == clap::error::ErrorKind::MissingRequiredArgument {
+        for argument in lines
+            .take_while(|line| !line.starts_with("Usage:"))
+            .filter(|line| line.starts_with(['<', '-']))
+        {
+            terse.push(' ');
+            terse.push_str(argument);
+        }
     }
     terse
 }
@@ -1024,7 +1029,7 @@ pub(crate) fn report_report_with_context(
     })
 }
 
-fn find_error_in_chain<E>(err: &miette::Report) -> Option<&E>
+pub(super) fn find_error_in_chain<E>(err: &miette::Report) -> Option<&E>
 where
     E: std::error::Error + 'static,
 {

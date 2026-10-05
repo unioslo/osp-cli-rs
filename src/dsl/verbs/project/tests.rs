@@ -60,17 +60,7 @@ fn project_nested_path_variants_cover_exact_relative_and_absolute_matching_unit(
     let projected = apply(rows, "id").expect("project should work");
     assert_eq!(
         projected,
-        vec![
-            json!({
-                "id": 55753,
-                "txts": {"id": 27994},
-                "ipaddresses": [{"id": 57171}, {"id": 57172}],
-                "metadata": {"asset": {"id": 42}}
-            })
-            .as_object()
-            .cloned()
-            .expect("object")
-        ]
+        vec![json!({"id": 55753}).as_object().cloned().expect("object")]
     );
 
     let rows = vec![

@@ -488,6 +488,9 @@ pub struct DescribeArgV1 {
 /// Flag description emitted by a plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeFlagV1 {
+    /// Canonical spelling for this entry when it is an alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias_of: Option<String>,
     /// Short help text for the flag.
     #[serde(default)]
     pub about: Option<String>,
@@ -566,8 +569,8 @@ pub struct ResponseMetaV1 {
     /// Human-only field decorations; canonical JSON and DSL values stay unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display_rules: Vec<crate::core::output_model::DisplayRule>,
-    /// Producer labels retained in the response metadata. Human headings use the
-    /// canonical `columns` paths so display and filter keys stay discoverable.
+    /// Optional human headings aligned with `columns`. JSON and DSL keys remain
+    /// the canonical column paths.
     #[serde(default)]
     pub column_labels: Vec<String>,
     /// Top-level `data` field whose array supplies canonical rows for display and DSL.
@@ -1259,6 +1262,7 @@ impl From<&ArgDef> for DescribeArgV1 {
 impl From<&FlagDef> for DescribeFlagV1 {
     fn from(flag: &FlagDef) -> Self {
         Self {
+            alias_of: None,
             about: flag.help.clone(),
             required: flag.required,
             flag_only: !flag.takes_value,
@@ -1414,7 +1418,6 @@ fn validate_session_requirements(
 }
 
 fn describe_flag_entries(flag: &FlagDef) -> Vec<(String, DescribeFlagV1)> {
-    let value = DescribeFlagV1::from(flag);
     let mut names = Vec::new();
     if let Some(long) = flag.long.as_deref() {
         names.push(format!("--{long}"));
@@ -1423,9 +1426,17 @@ fn describe_flag_entries(flag: &FlagDef) -> Vec<(String, DescribeFlagV1)> {
         names.push(format!("-{short}"));
     }
     names.extend(flag.aliases.iter().cloned());
+    let preferred = names.first().cloned();
     names
         .into_iter()
-        .map(|name| (name, value.clone()))
+        .enumerate()
+        .map(|(index, name)| {
+            let mut value = DescribeFlagV1::from(flag);
+            if index > 0 {
+                value.alias_of = preferred.clone();
+            }
+            (name, value)
+        })
         .collect()
 }
 
@@ -1446,43 +1457,29 @@ fn group_describe_flag((name, flag): (&String, &DescribeFlagV1)) -> Option<FlagD
 }
 
 fn collect_describe_flags(flags: &BTreeMap<String, DescribeFlagV1>) -> Vec<FlagDef> {
-    let mut grouped: BTreeMap<String, Vec<(&String, &DescribeFlagV1)>> = BTreeMap::new();
-    for entry in flags.iter() {
-        let signature = serde_json::to_string(entry.1).unwrap_or_default();
-        grouped.entry(signature).or_default().push(entry);
+    let mut definitions = BTreeMap::<String, FlagDef>::new();
+    for (name, flag) in flags {
+        if flag.alias_of.is_none()
+            && let Some(definition) = group_describe_flag((name, flag))
+        {
+            definitions.insert(name.clone(), definition);
+        }
     }
 
-    grouped
-        .into_values()
-        .filter_map(|group| {
-            let mut iter = group.into_iter();
-            let first = iter.next()?;
-            let mut def = group_describe_flag(first)?;
-            for (name, _) in iter {
-                if let Some(long) = name.strip_prefix("--") {
-                    if def.long.is_none() {
-                        def.long = Some(long.to_string());
-                        if def.id == "flag" {
-                            def.id = long.to_string();
-                        }
-                    } else if Some(long) != def.long.as_deref() {
-                        def.aliases.push(format!("--{long}"));
-                    }
-                } else if let Some(short) = name.strip_prefix('-') {
-                    let short_char = short.chars().next();
-                    if def.short.is_none() {
-                        def.short = short_char;
-                        if def.id == "flag" {
-                            def.id = short.to_string();
-                        }
-                    } else if short_char != def.short {
-                        def.aliases.push(format!("-{short}"));
-                    }
-                }
+    for (name, flag) in flags {
+        let Some(preferred) = flag.alias_of.as_deref() else {
+            continue;
+        };
+        let Some(definition) = definitions.get_mut(preferred) else {
+            if let Some(definition) = group_describe_flag((name, flag)) {
+                definitions.insert(name.clone(), definition);
             }
-            Some(def)
-        })
-        .collect()
+            continue;
+        };
+        definition.aliases.push(name.clone());
+    }
+
+    definitions.into_values().collect()
 }
 
 fn command_policy_from_describe(auth: &DescribeCommandAuthV1) -> CommandPolicyDef {
@@ -1531,6 +1528,89 @@ mod tests {
     };
     use crate::core::command_policy::{AuthStrength, CommandPath, VisibilityMode};
     use serde_json::json;
+
+    #[test]
+    fn protocol_validation_names_the_invalid_field_unit() {
+        let describe = json!({
+            "protocol_version": PLUGIN_PROTOCOL_V1,
+            "plugin_id": "vm",
+            "plugin_version": "1.0.0",
+            "commands": [{
+                "name": "vm",
+                "auth": {"feature_flags": ["beta"], "visible_session": {"credentials": [{"state": "present", "service": "orch"}]}},
+                "flags": {"--size": {"suggestions": [{"value": "small"}]}},
+                "args": [{"suggestions": [{"value": "db01"}]}],
+                "subcommands": [{"name": "list"}]
+            }]
+        });
+        let validate_describe = |value: serde_json::Value| {
+            serde_json::from_value::<DescribeV1>(value)
+                .expect("describe fixture should deserialize")
+                .validate_v1()
+        };
+        assert_eq!(validate_describe(describe.clone()), Ok(()));
+        for (pointer, value, field) in [
+            ("/protocol_version", json!(2), "protocol version"),
+            ("/plugin_id", json!("env"), "reserved"),
+            ("/plugin_id", json!("VM"), "plugin_id"),
+            ("/commands/0/subcommands/0/name", json!(" "), "command name"),
+            ("/commands/0/flags", json!({"size": {}}), "flag `size`"),
+            (
+                "/commands/0/flags/--size/suggestions/0/value",
+                json!(" "),
+                "flag `--size` suggestions",
+            ),
+            (
+                "/commands/0/args/0/suggestions/0/value",
+                json!(""),
+                "argument",
+            ),
+            (
+                "/commands/0/auth/feature_flags",
+                json!([" "]),
+                "feature_flags",
+            ),
+            (
+                "/commands/0/auth/visible_session/credentials/0/service",
+                json!(" "),
+                "visible_session credentials",
+            ),
+        ] {
+            let mut invalid = describe.clone();
+            *invalid.pointer_mut(pointer).expect("fixture path") = value;
+            let error = validate_describe(invalid).expect_err(pointer);
+            assert!(error.contains(field), "{pointer}: {error}");
+        }
+
+        let response = json!({
+            "protocol_version": PLUGIN_PROTOCOL_V1,
+            "ok": true,
+            "data": {"items": []},
+            "error": null,
+            "messages": [{"level": "info", "text": "listed"}],
+            "meta": {"row_path": "items", "columns": ["name"], "column_labels": ["NAME"]}
+        });
+        let validate_response = |value: serde_json::Value| {
+            serde_json::from_value::<ResponseV1>(value)
+                .expect("response fixture should deserialize")
+                .validate_v1()
+        };
+        assert_eq!(validate_response(response.clone()), Ok(()));
+        for (pointer, value, field) in [
+            ("/protocol_version", json!(0), "protocol version"),
+            ("/error", json!({"code": "x", "message": "y"}), "error=null"),
+            ("/ok", json!(false), "error payload"),
+            ("/messages/0/text", json!(" "), "messages"),
+            ("/meta/row_path", json!(" "), "meta.row_path"),
+            ("/meta/columns", json!(null), "requires meta.columns"),
+            ("/meta/column_labels/0", json!(" "), "empty labels"),
+        ] {
+            let mut invalid = response.clone();
+            *invalid.pointer_mut(pointer).expect("fixture path") = value;
+            let error = validate_response(invalid).expect_err(pointer);
+            assert!(error.contains(field), "{pointer}: {error}");
+        }
+    }
 
     #[test]
     fn response_row_path_requires_a_top_level_array_unit() {

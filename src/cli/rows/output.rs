@@ -41,6 +41,9 @@ pub(crate) fn plugin_data_to_output_result(
         meta: OutputMeta {
             key_index,
             display_columns: meta.and_then(|meta| meta.columns.clone()),
+            display_column_labels: meta.and_then(|meta| {
+                (!meta.column_labels.is_empty()).then(|| meta.column_labels.clone())
+            }),
             display_rules: meta
                 .map(|meta| meta.display_rules.clone())
                 .unwrap_or_default(),
@@ -160,6 +163,7 @@ mod tests {
 
         let scalar = plugin_data_to_output_result(json!("hello"), None);
         let object = plugin_data_to_output_result(json!({ "uid": "alice", "count": 2 }), None);
+        let empty_object = plugin_data_to_output_result(json!({}), None);
         let scalar_array = plugin_data_to_output_result(json!(["alice", "bob"]), None);
         let empty_array = plugin_data_to_output_result(json!([]), None);
 
@@ -174,6 +178,13 @@ mod tests {
             vec![crate::row! { "uid" => "alice", "count" => 2 }]
         );
         assert_eq!(
+            render_output(
+                &empty_object,
+                &RenderSettings::test_plain(OutputFormat::Mreg)
+            ),
+            "No results.\n"
+        );
+        assert_eq!(
             scalar_array_rows,
             vec![
                 crate::row! { "value" => "alice" },
@@ -181,6 +192,13 @@ mod tests {
             ]
         );
         assert!(empty_array_rows.is_empty());
+        assert_eq!(
+            render_output(
+                &empty_array,
+                &RenderSettings::test_plain(OutputFormat::Table)
+            ),
+            "No results.\n"
+        );
     }
 
     #[test]
@@ -241,13 +259,14 @@ mod tests {
     }
 
     #[test]
-    fn plugin_row_path_keeps_raw_fields_and_separate_display_columns_unit() {
+    fn plugin_row_path_keeps_raw_fields_and_renders_display_labels_unit() {
         let output = plugin_data_to_output_result(
             json!({
                 "items": [{
                     "name": "db01.uio.no",
                     "provider": {"name": "vmware"},
-                    "compute": {"display": "4 CPU / 8 GiB"}
+                    "compute": {"display": "4 CPU / 8 GiB"},
+                    "error_code": null
                 }]
             }),
             Some(&ResponseMetaV1 {
@@ -255,11 +274,13 @@ mod tests {
                     "name".to_string(),
                     "provider.name".to_string(),
                     "compute.display".to_string(),
+                    "error_code".to_string(),
                 ]),
                 column_labels: vec![
                     "NAME".to_string(),
                     "PROVIDER".to_string(),
                     "COMPUTE".to_string(),
+                    "ERROR".to_string(),
                 ],
                 row_path: Some("items".to_string()),
                 ..ResponseMetaV1::default()
@@ -271,9 +292,16 @@ mod tests {
             vec![crate::row! {
                 "name" => "db01.uio.no",
                 "provider" => json!({"name": "vmware"}),
-                "compute" => json!({"display": "4 CPU / 8 GiB"})
+                "compute" => json!({"display": "4 CPU / 8 GiB"}),
+                "error_code" => Value::Null
             }]
         );
+        let rendered = render_output(&output, &RenderSettings::test_plain(OutputFormat::Table));
+        assert!(rendered.contains("NAME"));
+        assert!(rendered.contains("PROVIDER"));
+        assert!(rendered.contains("COMPUTE"));
+        assert!(!rendered.contains("ERROR"));
+        assert!(!rendered.contains("provider.name"));
     }
 
     #[test]
@@ -318,11 +346,12 @@ mod tests {
             Some(&data)
         );
         let rendered = render_output(&output, &RenderSettings::test_plain(OutputFormat::Mreg));
-        assert!(rendered.contains("task_id:"));
+        assert!(rendered.contains("Task:"));
         assert!(rendered.contains("1855"));
-        assert!(rendered.contains("target.display:"));
+        assert!(rendered.contains("Target:"));
         assert!(rendered.contains("db02.uio.no"));
-        assert!(rendered.contains("approval.progress:"));
+        assert!(rendered.contains("Approval:"));
+        assert!(!rendered.contains("task_id:"));
         assert!(!rendered.contains("force"));
     }
 
@@ -392,6 +421,7 @@ mod tests {
                 unix_timestamp_columns: Vec::new(),
                 display_rules: Vec::new(),
                 display_columns: None,
+                display_column_labels: None,
                 column_align: Vec::new(),
                 wants_copy: false,
                 grouped: true,

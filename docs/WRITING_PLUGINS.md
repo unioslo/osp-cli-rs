@@ -18,7 +18,8 @@ stderr.
 
 ## Minimal example
 
-A plugin that provides an `echo` command:
+A plugin that provides an `echo` command, using Python's standard library to
+encode arbitrary input as JSON:
 
 ```bash
 #!/usr/bin/env bash
@@ -46,13 +47,13 @@ fi
 
 # Skip the command name (first arg is "echo"), echo the rest
 shift
-TEXT="${*:-hello}"
+TEXT_JSON="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "${*:-hello}")"
 
 cat <<EOF
 {
   "protocol_version": 1,
   "ok": true,
-  "data": [{ "message": "$TEXT" }],
+  "data": [{ "message": $TEXT_JSON }],
   "error": null,
   "messages": [],
   "meta": {
@@ -90,10 +91,9 @@ The repository includes two convenience scripts under `scripts/`:
 They can inspect a Python `argparse` parser or a Click/Typer command tree
 and emit a `DescribeV1`-shaped JSON skeleton.
 
-These scripts are a nice gesture, not a compatibility promise. They are
-best-effort helpers for bootstrapping plugin metadata, not something the
-project guarantees will stay current with every upstream Python framework
-change. If one of them falls behind, feel free to fix it and submit a PR.
+These helpers may lag behind changes in Python frameworks. Review the
+generated metadata before using it; fixes are welcome if a framework update
+breaks generation.
 
 ## Protocol reference
 
@@ -303,8 +303,6 @@ verbosity rules as built-in commands. Keep table/JSON/value data in
 
 ### Exit codes
 
-Keep the rule boring:
-
 - use exit code `0` for protocol responses, including `ok=false`
 - use non-zero exits only for process-level failures such as crashes, missing
   prerequisites, or setup/transport failures
@@ -483,10 +481,10 @@ dispatch.
 ## Writing a plugin in Rust
 
 For Rust plugins, you can use clap for argument parsing and serde for
-JSON serialization. The `osp-core` crate exports the protocol types:
+JSON serialization. The `osp-cli` crate exports the protocol types:
 
 ```rust
-use osp_core::plugin::{DescribeV1, ResponseV1, ResponseMetaV1};
+use osp_cli::core::plugin::{DescribeV1, ResponseV1, ResponseMetaV1};
 ```
 
 A Rust plugin can use `DescribeV1::from_clap_command()` to generate
