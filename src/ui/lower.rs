@@ -1146,8 +1146,9 @@ impl MregRecordBuilder {
         });
     }
 
-    fn push_table(&mut self, key: &str, item_count: usize, table: TableBlock, depth: usize) {
+    fn push_table(&mut self, key: &str, item_count: usize, mut table: TableBlock, depth: usize) {
         self.flush();
+        table.nested = true;
         self.blocks.push(Block::Paragraph(ParagraphBlock {
             text: format!("{key} ({item_count}):"),
             indent: depth * 2,
@@ -1301,6 +1302,7 @@ fn table_from_rows(
             .iter()
             .map(|index| all_align[*index])
             .collect(),
+        nested: false,
     }
 }
 

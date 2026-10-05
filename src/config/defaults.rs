@@ -102,6 +102,7 @@ const LITERAL_DEFAULTS: &[LiteralDefault] = &[
     LiteralDefault::string("ui.chrome.rule_policy", DEFAULT_UI_CHROME_RULE_POLICY),
     LiteralDefault::string("ui.table.overflow", DEFAULT_UI_TABLE_OVERFLOW),
     LiteralDefault::string("ui.table.border", DEFAULT_UI_TABLE_BORDER),
+    LiteralDefault::string("ui.table.nested_border", "none"),
     LiteralDefault::string("ui.help.table_chrome", "none"),
     LiteralDefault::string("ui.help.entry_indent", "inherit"),
     LiteralDefault::string("ui.help.entry_gap", "inherit"),

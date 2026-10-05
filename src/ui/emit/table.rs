@@ -88,6 +88,7 @@ mod tests {
             headers: vec!["na|me".to_string(), "id".to_string()],
             rows: vec![vec!["ali|ce".to_string(), "42".to_string()]],
             column_align: vec![ColumnAlignment::Left, ColumnAlignment::Right],
+            nested: false,
         };
 
         let prepared = PreparedTable::for_markdown(&table);

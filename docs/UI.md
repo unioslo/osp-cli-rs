@@ -94,6 +94,10 @@ Table-oriented tuning lives here:
 
 - `ui.table.border`
   - `none | square | round`
+- `ui.table.nested_border`
+  - `inherit | none | square | round`; defaults to `none`
+  - applies only to tables nested inside an MREG record, such as
+    `addresses (2):`; `inherit` follows `ui.table.border`
 - `ui.table.overflow`
   - `clip | ellipsis | wrap | none`
   - defaults to `ellipsis`, keeping list rows compact when a table is wider

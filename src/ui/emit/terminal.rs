@@ -232,20 +232,35 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
 
     let unicode =
         settings.unicode && matches!(settings.backend, RenderBackend::Rich | RenderBackend::Plain);
-    let border = table_border_chars(unicode, settings.table_border);
-    lines.push(indent_lines(
-        &styler.paint(
-            &table_rule(
-                &widths,
-                border.top_left,
-                border.join_top,
-                border.top_right,
-                border.horizontal,
+    let style = if block.nested {
+        settings.nested_table_border
+    } else {
+        settings.table_border
+    };
+    let border = table_border_chars(unicode, style);
+    // Borderless tables keep only header and rows; whitespace rules would print blank lines.
+    let ruled = !matches!(style, TableBorderStyle::None);
+    let rule = |lines: &mut Vec<String>, line: String| {
+        if ruled {
+            lines.push(line);
+        }
+    };
+    rule(
+        &mut lines,
+        indent_lines(
+            &styler.paint(
+                &table_rule(
+                    &widths,
+                    border.top_left,
+                    border.join_top,
+                    border.top_right,
+                    border.horizontal,
+                ),
+                StyleToken::Border,
             ),
-            StyleToken::Border,
+            settings.margin,
         ),
-        settings.margin,
-    ));
+    );
     lines.extend(
         table_row_lines(
             &table.headers,
@@ -259,19 +274,22 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
         .into_iter()
         .map(|line| indent_lines(&line, settings.margin)),
     );
-    lines.push(indent_lines(
-        &styler.paint(
-            &table_rule(
-                &widths,
-                border.join_left,
-                border.join_mid,
-                border.join_right,
-                border.horizontal,
+    rule(
+        &mut lines,
+        indent_lines(
+            &styler.paint(
+                &table_rule(
+                    &widths,
+                    border.join_left,
+                    border.join_mid,
+                    border.join_right,
+                    border.horizontal,
+                ),
+                StyleToken::Border,
             ),
-            StyleToken::Border,
+            settings.margin,
         ),
-        settings.margin,
-    ));
+    );
     for row in &table.rows {
         lines.extend(
             table_row_lines(
@@ -287,19 +305,27 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
             .map(|line| indent_lines(&line, settings.margin)),
         );
     }
-    lines.push(indent_lines(
-        &styler.paint(
-            &table_rule(
-                &widths,
-                border.bottom_left,
-                border.join_bottom,
-                border.bottom_right,
-                border.horizontal,
+    rule(
+        &mut lines,
+        indent_lines(
+            &styler.paint(
+                &table_rule(
+                    &widths,
+                    border.bottom_left,
+                    border.join_bottom,
+                    border.bottom_right,
+                    border.horizontal,
+                ),
+                StyleToken::Border,
             ),
-            StyleToken::Border,
+            settings.margin,
         ),
-        settings.margin,
-    ));
+    );
+    if !ruled {
+        for line in &mut lines {
+            line.truncate(line.trim_end().len());
+        }
+    }
     lines.join("\n")
 }
 
@@ -710,7 +736,12 @@ fn table_row(
     header: bool,
 ) -> String {
     let mut out = String::new();
-    let vertical = styler.paint(&vertical.to_string(), StyleToken::Border);
+    let vertical = vertical.to_string();
+    let vertical = if vertical == " " {
+        vertical
+    } else {
+        styler.paint(&vertical, StyleToken::Border)
+    };
     out.push_str(&vertical);
     for (index, width) in widths.iter().enumerate() {
         out.push(' ');

@@ -341,6 +341,9 @@ These keys currently drive user-visible rendering and REPL presentation:
   - `per-section | shared`
 - `ui.table.border`
   - `none | square | round`
+- `ui.table.nested_border`
+  - `inherit | none | square | round`; defaults to `none`. Applies to tables
+    nested inside a record (`addresses (2):`); `inherit` follows `ui.table.border`
 - `ui.table.overflow`
   - `clip | ellipsis | wrap | none`; defaults to `ellipsis`
 - `ui.help.level`
