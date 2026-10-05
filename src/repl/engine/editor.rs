@@ -25,7 +25,7 @@ use crate::repl::menu::SharedCompletionMenu;
 /// every paint and records the line here, so key handling can measure the
 /// word being typed.
 #[derive(Clone, Default)]
-pub(crate) struct PaintedLine(Arc<Mutex<(String, usize)>>);
+pub(crate) struct PaintedLine(Arc<Mutex<(String, usize, u64)>>);
 
 impl PaintedLine {
     pub(crate) fn set(&self, line: &str, cursor: usize) {
@@ -33,17 +33,21 @@ impl PaintedLine {
         painted.0.clear();
         painted.0.push_str(line);
         painted.1 = cursor;
+        painted.2 = painted.2.wrapping_add(1);
     }
 
     /// Characters between the start of the current word and the cursor.
-    fn word_len_before_cursor(&self) -> usize {
+    fn word_len_before_cursor(&self) -> (usize, u64) {
         let painted = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let before = painted.0.get(..painted.1).unwrap_or(&painted.0);
-        before
-            .chars()
-            .rev()
-            .take_while(|ch| !ch.is_whitespace())
-            .count()
+        (
+            before
+                .chars()
+                .rev()
+                .take_while(|ch| !ch.is_whitespace())
+                .count(),
+            painted.2,
+        )
     }
 }
 
@@ -52,6 +56,8 @@ pub(crate) struct AutoCompleteEmacs {
     menu: SharedCompletionMenu,
     tab_mode: ReplTabMode,
     painted: PaintedLine,
+    painted_revision: u64,
+    pending_word_len: Option<usize>,
 }
 
 impl AutoCompleteEmacs {
@@ -61,11 +67,14 @@ impl AutoCompleteEmacs {
         tab_mode: ReplTabMode,
         painted: PaintedLine,
     ) -> Self {
+        let (pending_word_len, painted_revision) = painted.word_len_before_cursor();
         Self {
             inner,
             menu,
             tab_mode,
             painted,
+            painted_revision,
+            pending_word_len: Some(pending_word_len),
         }
     }
 
@@ -75,19 +84,48 @@ impl AutoCompleteEmacs {
     /// does not. Otherwise `tab_mode` decides. A space only opens in `Always`
     /// mode and is handled with the token commit below.
     pub(crate) fn opens_menu(&self, commands: &[EditCommand]) -> bool {
+        self.opens_menu_at(commands, Some(self.painted.word_len_before_cursor().0))
+    }
+
+    fn opens_menu_at(&self, commands: &[EditCommand], word_len: Option<usize>) -> bool {
         let [EditCommand::InsertChar(ch)] = commands else {
             return false;
         };
-        if *ch == '-' && self.painted.word_len_before_cursor() == 0 {
+        if *ch == '-' && word_len == Some(0) {
             return true;
         }
         match self.tab_mode {
             ReplTabMode::Tab => false,
             ReplTabMode::Always => true,
             ReplTabMode::AfterLetters(count) => {
-                !ch.is_whitespace() && self.painted.word_len_before_cursor() + 1 >= count
+                !ch.is_whitespace() && word_len.is_some_and(|len| len + 1 >= count)
             }
         }
+    }
+
+    fn sync_painted_word_len(&mut self) -> Option<usize> {
+        let (word_len, revision) = self.painted.word_len_before_cursor();
+        if revision != self.painted_revision {
+            self.painted_revision = revision;
+            self.pending_word_len = Some(word_len);
+        }
+        self.pending_word_len
+    }
+
+    fn track_edit(&mut self, commands: &[EditCommand], word_len: Option<usize>) {
+        self.pending_word_len = match commands {
+            [EditCommand::InsertChar(ch)] if ch.is_whitespace() => Some(0),
+            [EditCommand::InsertChar(_)] => word_len.map(|len| len + 1),
+            [EditCommand::InsertString(text)] if text.chars().any(char::is_whitespace) => Some(
+                text.chars()
+                    .rev()
+                    .take_while(|ch| !ch.is_whitespace())
+                    .count(),
+            ),
+            [EditCommand::InsertString(text)] => word_len.map(|len| len + text.chars().count()),
+            [EditCommand::InsertNewline] => Some(0),
+            _ => None,
+        };
     }
 
     fn auto_open(&self) -> ReedlineEvent {
@@ -129,12 +167,14 @@ pub(crate) fn menu_navigation(event: &ReedlineEvent) -> Option<MenuEvent> {
 
 impl EditMode for AutoCompleteEmacs {
     fn parse_event(&mut self, event: ReedlineRawEvent) -> ReedlineEvent {
+        let word_len = self.sync_painted_word_len();
         let parsed = self.inner.parse_event(event);
         // Selection moves become buffer edits here, before reedline paints;
         // see `OspCompletionMenu::navigate`.
         if let Some(commands) =
             menu_navigation(&parsed).and_then(|nav| self.menu.navigate_painted_line(nav))
         {
+            self.pending_word_len = None;
             return ReedlineEvent::Edit(commands);
         }
         // Only Tab completes like a shell; menus opened by typing just list.
@@ -143,6 +183,7 @@ impl EditMode for AutoCompleteEmacs {
         }
         match parsed {
             ReedlineEvent::Edit(commands) if commands == [EditCommand::InsertChar(' ')] => {
+                self.track_edit(&commands, word_len);
                 // Space commits the token: close the menu, keeping any cycled
                 // selection already in the buffer, instead of letting reedline
                 // refresh it with the next token's candidates. `Always` then
@@ -155,9 +196,14 @@ impl EditMode for AutoCompleteEmacs {
             }
             // An open menu already refilters on every edit.
             ReedlineEvent::Edit(commands)
-                if !self.menu.is_active() && self.opens_menu(&commands) =>
+                if !self.menu.is_active() && self.opens_menu_at(&commands, word_len) =>
             {
+                self.track_edit(&commands, word_len);
                 ReedlineEvent::Multiple(vec![ReedlineEvent::Edit(commands), self.auto_open()])
+            }
+            ReedlineEvent::Edit(commands) => {
+                self.track_edit(&commands, word_len);
+                ReedlineEvent::Edit(commands)
             }
             other => other,
         }
