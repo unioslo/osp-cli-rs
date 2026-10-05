@@ -21,6 +21,7 @@ fn describe_command_helpers_preserve_nested_completion_metadata_unit() {
         flags: std::collections::BTreeMap::from([(
             "--format".to_string(),
             DescribeFlagV1 {
+                alias_of: None,
                 about: Some("output format".to_string()),
                 required: true,
                 flag_only: false,

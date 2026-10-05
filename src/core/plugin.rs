@@ -488,6 +488,9 @@ pub struct DescribeArgV1 {
 /// Flag description emitted by a plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DescribeFlagV1 {
+    /// Canonical spelling for this entry when it is an alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias_of: Option<String>,
     /// Short help text for the flag.
     #[serde(default)]
     pub about: Option<String>,
@@ -1259,6 +1262,7 @@ impl From<&ArgDef> for DescribeArgV1 {
 impl From<&FlagDef> for DescribeFlagV1 {
     fn from(flag: &FlagDef) -> Self {
         Self {
+            alias_of: None,
             about: flag.help.clone(),
             required: flag.required,
             flag_only: !flag.takes_value,
@@ -1414,7 +1418,6 @@ fn validate_session_requirements(
 }
 
 fn describe_flag_entries(flag: &FlagDef) -> Vec<(String, DescribeFlagV1)> {
-    let value = DescribeFlagV1::from(flag);
     let mut names = Vec::new();
     if let Some(long) = flag.long.as_deref() {
         names.push(format!("--{long}"));
@@ -1423,9 +1426,17 @@ fn describe_flag_entries(flag: &FlagDef) -> Vec<(String, DescribeFlagV1)> {
         names.push(format!("-{short}"));
     }
     names.extend(flag.aliases.iter().cloned());
+    let preferred = names.first().cloned();
     names
         .into_iter()
-        .map(|name| (name, value.clone()))
+        .enumerate()
+        .map(|(index, name)| {
+            let mut value = DescribeFlagV1::from(flag);
+            if index > 0 {
+                value.alias_of = preferred.clone();
+            }
+            (name, value)
+        })
         .collect()
 }
 
@@ -1446,43 +1457,29 @@ fn group_describe_flag((name, flag): (&String, &DescribeFlagV1)) -> Option<FlagD
 }
 
 fn collect_describe_flags(flags: &BTreeMap<String, DescribeFlagV1>) -> Vec<FlagDef> {
-    let mut grouped: BTreeMap<String, Vec<(&String, &DescribeFlagV1)>> = BTreeMap::new();
-    for entry in flags.iter() {
-        let signature = serde_json::to_string(entry.1).unwrap_or_default();
-        grouped.entry(signature).or_default().push(entry);
+    let mut definitions = BTreeMap::<String, FlagDef>::new();
+    for (name, flag) in flags {
+        if flag.alias_of.is_none()
+            && let Some(definition) = group_describe_flag((name, flag))
+        {
+            definitions.insert(name.clone(), definition);
+        }
     }
 
-    grouped
-        .into_values()
-        .filter_map(|group| {
-            let mut iter = group.into_iter();
-            let first = iter.next()?;
-            let mut def = group_describe_flag(first)?;
-            for (name, _) in iter {
-                if let Some(long) = name.strip_prefix("--") {
-                    if def.long.is_none() {
-                        def.long = Some(long.to_string());
-                        if def.id == "flag" {
-                            def.id = long.to_string();
-                        }
-                    } else if Some(long) != def.long.as_deref() {
-                        def.aliases.push(format!("--{long}"));
-                    }
-                } else if let Some(short) = name.strip_prefix('-') {
-                    let short_char = short.chars().next();
-                    if def.short.is_none() {
-                        def.short = short_char;
-                        if def.id == "flag" {
-                            def.id = short.to_string();
-                        }
-                    } else if short_char != def.short {
-                        def.aliases.push(format!("-{short}"));
-                    }
-                }
+    for (name, flag) in flags {
+        let Some(preferred) = flag.alias_of.as_deref() else {
+            continue;
+        };
+        let Some(definition) = definitions.get_mut(preferred) else {
+            if let Some(definition) = group_describe_flag((name, flag)) {
+                definitions.insert(name.clone(), definition);
             }
-            Some(def)
-        })
-        .collect()
+            continue;
+        };
+        definition.aliases.push(name.clone());
+    }
+
+    definitions.into_values().collect()
 }
 
 fn command_policy_from_describe(auth: &DescribeCommandAuthV1) -> CommandPolicyDef {
