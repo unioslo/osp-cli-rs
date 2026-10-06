@@ -332,6 +332,7 @@ mod tests {
             headers: Vec::new(),
             rows: Vec::new(),
             column_align: Vec::new(),
+            nested: false,
         };
         assert_eq!(emit_table(&empty), "");
 
@@ -348,6 +349,7 @@ mod tests {
                 vec!["bob".to_string(), "".to_string()],
             ],
             column_align: vec![ColumnAlignment::Left, ColumnAlignment::Right],
+            nested: false,
         };
 
         let rendered = emit_table(&table);

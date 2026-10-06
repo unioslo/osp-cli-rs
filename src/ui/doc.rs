@@ -60,6 +60,8 @@ pub struct TableBlock {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub column_align: Vec<ColumnAlignment>,
+    /// Drawn inside a record (`key (n):`); uses `ui.table.nested_border`.
+    pub nested: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

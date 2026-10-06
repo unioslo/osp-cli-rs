@@ -769,6 +769,12 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     );
     insert_builtin_schema_key(
         schema,
+        "ui.table.nested_border",
+        SchemaEntry::string().with_allowed_values(["inherit", "none", "square", "round"]),
+        "Border style for tables nested inside a record, or inherit",
+    );
+    insert_builtin_schema_key(
+        schema,
         "ui.help.table_chrome",
         SchemaEntry::string().with_allowed_values(["inherit", "none", "square", "round"]),
         "Help table chrome style or inherit",
