@@ -385,11 +385,8 @@ impl SuggestionEngine {
         self.entry_suggestions(&arg.suggestions, stub)
     }
 
-    // Large catalogues answer only once the stub narrows them usefully.
+    // Bound the result before cloning, including an empty prefix on the first TAB.
     fn prefix_value_suggestions(&self, values: &PrefixValues, stub: &str) -> Vec<SuggestionOutput> {
-        if stub.chars().count() < 3 {
-            return Vec::new();
-        }
         let entries = values
             .matching(stub, 25)
             .into_iter()

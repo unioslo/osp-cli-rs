@@ -409,7 +409,7 @@ pub struct ArgNode {
     pub value_type: Option<ValueType>,
     /// Suggested values for the argument.
     pub suggestions: Vec<SuggestionEntry>,
-    /// Optional shared catalogue: three-character minimum, at most 25 prefix matches.
+    /// Optional shared catalogue: at most 25 prefix matches, including an empty prefix.
     pub prefix_values: Option<PrefixValues>,
 }
 
@@ -533,7 +533,7 @@ impl PrefixValues {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
 pub struct FlagNode {
-    /// Optional shared catalogue: three-character minimum, at most 25 prefix matches.
+    /// Optional shared catalogue: at most 25 prefix matches, including an empty prefix.
     pub prefix_values: Option<PrefixValues>,
     /// Optional description shown alongside the flag.
     pub tooltip: Option<String>,
