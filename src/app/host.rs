@@ -309,9 +309,12 @@ fn handle_clap_parse_error(
                 app.native_commands.configure(config);
             }
             let raw_help = err.to_string();
-            let root_help = raw_help
-                .lines()
-                .any(|line| line.trim() == "Usage: osp [OPTIONS] [COMMAND]");
+            // Only the root command's usage is `<bin> [OPTIONS] [COMMAND]`; the
+            // binary name depends on how osp was installed, so it is not matched.
+            let root_help = raw_help.lines().any(|line| {
+                let words = line.split_whitespace().collect::<Vec<_>>();
+                matches!(words.as_slice(), ["Usage:", _, "[OPTIONS]", "[COMMAND]"])
+            });
             let mut body = GuideView::from_text(&raw_help);
             extend_with_invocation_help(&mut body, help_context.help_level);
             if root_help {

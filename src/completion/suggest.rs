@@ -827,6 +827,35 @@ fn entry_to_suggestion(entry: &SuggestionEntry, match_score: u32) -> Suggestion 
     }
 }
 
+/// Close values for a "did you mean" hint, ranked exactly like completion:
+/// the same tiers, catalogue order and typo rescue, at most `limit`. These are
+/// suggestions only, never a resolved identity.
+///
+/// # Examples
+///
+/// ```
+/// use osp_cli::completion::closest_values;
+/// use osp_cli::completion::model::ValueCatalog;
+///
+/// let yours = ValueCatalog::default();
+/// yours.replace(vec!["oistes-test07.uio.no".into(), "oistes-test01.uio.no".into()]);
+/// assert_eq!(closest_values(&[yours], "oistse-tst07", 1), ["oistes-test07.uio.no"]);
+/// ```
+pub fn closest_values(catalogs: &[ValueCatalog], text: &str, limit: usize) -> Vec<String> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    SuggestionEngine::new(CompletionTree::default())
+        .catalog_suggestions(catalogs, text)
+        .into_iter()
+        .filter_map(|output| match output {
+            SuggestionOutput::Item(item) => Some(item.text),
+            SuggestionOutput::PathSentinel => None,
+        })
+        .take(limit)
+        .collect()
+}
+
 /// The best-scoring catalogue hits, lowest score first, then alphabetical.
 fn best<'a>(hits: impl Iterator<Item = (u32, &'a str)>) -> Vec<(u32, String)> {
     let mut hits = hits.collect::<Vec<_>>();

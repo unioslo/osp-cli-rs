@@ -87,7 +87,7 @@ impl From<PresentationArg> for UiPresentation {
     name = "osp",
     version = env!("CARGO_PKG_VERSION"),
     about = "OSP CLI",
-    after_help = "Use `osp plugins commands` to list plugin-provided commands. Pipe output through the OSP DSL with `|`; use `| H` for in-band DSL help."
+    after_help = "Run `osp COMMAND --help` for a command family, or `osp` alone for the interactive shell. Pipe output through the OSP DSL with `|`; use `| H` for in-band DSL help."
 )]
 pub struct Cli {
     /// Override the effective user name for this invocation.

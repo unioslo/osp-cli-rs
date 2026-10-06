@@ -151,6 +151,8 @@ The REPL provides:
   editor without running; Enter expands and runs them. Unknown commands and
   invalid syntax are excluded from saved history.
 - saved-history expansion such as `!123`, `!-2`, and `!prefix`
+- paged results: `next` and `prev`, or Shift+→ / Shift+← (also PageDown /
+  PageUp) on an empty line; with text on the line, Shift+arrows move the cursor
 
 Completion does not call remote services while you are typing. It works from
 the known command catalog, config vocabulary, and already-available runtime

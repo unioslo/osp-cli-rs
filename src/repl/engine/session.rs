@@ -8,7 +8,10 @@ use super::editor::{
 };
 use super::hint::ReplHinter;
 use super::overlay::{build_completion_menu, launch_history_picker};
-use super::{COMPLETION_MENU_NAME, HOST_COMMAND_HISTORY_PICKER, SharedHistory};
+use super::{
+    COMPLETION_MENU_NAME, HOST_COMMAND_HISTORY_PICKER, HOST_COMMAND_PAGE_NEXT,
+    HOST_COMMAND_PAGE_PREVIOUS, SharedHistory,
+};
 use crate::completion::CompletionTree;
 use crate::repl::highlight::ReplHighlighter;
 use crate::repl::menu::SharedCompletionMenu;
@@ -252,6 +255,23 @@ fn build_repl_keybindings() -> reedline::Keybindings {
         KeyCode::Char('r'),
         ReedlineEvent::ExecuteHostCommand(HOST_COMMAND_HISTORY_PICKER.to_string()),
     );
+    // Step through paginated results in both directions without retyping
+    // `prev` / `next`, which any other command would otherwise reset.
+    for (modifiers, previous, next) in [
+        (KeyModifiers::SHIFT, KeyCode::Left, KeyCode::Right),
+        (KeyModifiers::NONE, KeyCode::PageUp, KeyCode::PageDown),
+    ] {
+        keybindings.add_binding(
+            modifiers,
+            previous,
+            ReedlineEvent::ExecuteHostCommand(HOST_COMMAND_PAGE_PREVIOUS.to_string()),
+        );
+        keybindings.add_binding(
+            modifiers,
+            next,
+            ReedlineEvent::ExecuteHostCommand(HOST_COMMAND_PAGE_NEXT.to_string()),
+        );
+    }
     keybindings
 }
 
@@ -282,6 +302,22 @@ where
                 editor.run_edit_commands(&[EditCommand::Clear, EditCommand::InsertString(command)]);
             }
             Ok(None)
+        }
+        Signal::Success(line)
+            if line == HOST_COMMAND_PAGE_PREVIOUS || line == HOST_COMMAND_PAGE_NEXT =>
+        {
+            let previous = line == HOST_COMMAND_PAGE_PREVIOUS;
+            if !editor.current_buffer_contents().is_empty() {
+                // While typing, the keys keep their ordinary editing meaning.
+                editor.run_edit_commands(&[if previous {
+                    EditCommand::MoveLeft { select: false }
+                } else {
+                    EditCommand::MoveRight { select: false }
+                }]);
+                return Ok(None);
+            }
+            let command = if previous { "prev" } else { "next" };
+            apply_interactive_submission(evaluate_repl_submission(command, submission)?, editor)
         }
         Signal::Success(line) => {
             apply_interactive_submission(evaluate_repl_submission(&line, submission)?, editor)

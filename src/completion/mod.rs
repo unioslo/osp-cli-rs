@@ -51,5 +51,5 @@ pub use model::{
     SuggestionOutput, TailItem, ValueType,
 };
 pub use parse::{CommandLineParser, ParsedCursorLine, TokenSpan};
-pub use suggest::SuggestionEngine;
+pub use suggest::{SuggestionEngine, closest_values};
 pub use tree::{CommandSpec, CompletionTreeBuildError, CompletionTreeBuilder, ConfigKeySpec};

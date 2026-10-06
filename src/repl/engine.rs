@@ -80,6 +80,10 @@ use session::{SubmissionResult, evaluate_repl_submission};
 const COMPLETION_MENU_NAME: &str = "completion_menu";
 const HISTORY_MENU_NAME: &str = "history_menu";
 const HOST_COMMAND_HISTORY_PICKER: &str = "\u{0}osp-repl-history-picker";
+/// Page keys leave reedline through private host commands so they can step
+/// paginated results with an empty line and edit normally otherwise.
+const HOST_COMMAND_PAGE_PREVIOUS: &str = "\u{0}osp-repl-page-previous";
+const HOST_COMMAND_PAGE_NEXT: &str = "\u{0}osp-repl-page-next";
 
 struct ReplRunContext {
     prompt: OspPrompt,
