@@ -153,21 +153,16 @@ pub fn style_spec<'a>(
         StyleToken::Trace
         | StyleToken::Border
         | StyleToken::PanelBorder
-        | StyleToken::Ipv4
-        | StyleToken::Ipv6
         | StyleToken::MessageTrace => theme.palette.border.as_str(),
         StyleToken::Muted | StyleToken::TextMuted | StyleToken::Null | StyleToken::Punctuation => {
             theme.palette.muted.as_str()
         }
         StyleToken::Info | StyleToken::MessageInfo => theme.palette.info.as_str(),
         StyleToken::Warning | StyleToken::MessageWarning => theme.palette.warning.as_str(),
-        StyleToken::Error | StyleToken::MessageError | StyleToken::BoolFalse => {
-            theme.palette.error.as_str()
+        StyleToken::Error | StyleToken::MessageError => theme.palette.error.as_str(),
+        StyleToken::Success | StyleToken::PromptCommand | StyleToken::MessageSuccess => {
+            theme.palette.success.as_str()
         }
-        StyleToken::Success
-        | StyleToken::BoolTrue
-        | StyleToken::PromptCommand
-        | StyleToken::MessageSuccess => theme.palette.success.as_str(),
         StyleToken::PanelTitle => theme.palette.title.as_str(),
         StyleToken::Code => theme.palette.accent.as_str(),
         StyleToken::Key | StyleToken::TableHeader | StyleToken::MregKey | StyleToken::JsonKey => {
@@ -176,7 +171,13 @@ pub fn style_spec<'a>(
         StyleToken::Text | StyleToken::PromptText | StyleToken::Value => {
             theme.palette.text.as_str()
         }
-        StyleToken::Number | StyleToken::ValueNumber => theme.value_number_spec(),
+        // Literal data shares one colour; red and green stay for status.
+        StyleToken::Number
+        | StyleToken::ValueNumber
+        | StyleToken::BoolTrue
+        | StyleToken::BoolFalse
+        | StyleToken::Ipv4
+        | StyleToken::Ipv6 => theme.value_number_spec(),
     }
 }
 
@@ -215,23 +216,17 @@ fn override_spec(overrides: &StyleOverrides, token: StyleToken) -> Option<&str> 
         StyleToken::BoolTrue => overrides
             .bool_true
             .as_deref()
-            .or(overrides.message_success.as_deref()),
+            .or(overrides.number.as_deref()),
         StyleToken::BoolFalse => overrides
             .bool_false
             .as_deref()
-            .or(overrides.message_error.as_deref()),
+            .or(overrides.number.as_deref()),
         StyleToken::Null => overrides
             .null_value
             .as_deref()
             .or(overrides.muted.as_deref()),
-        StyleToken::Ipv4 => overrides
-            .ipv4
-            .as_deref()
-            .or(overrides.panel_border.as_deref()),
-        StyleToken::Ipv6 => overrides
-            .ipv6
-            .as_deref()
-            .or(overrides.panel_border.as_deref()),
+        StyleToken::Ipv4 => overrides.ipv4.as_deref().or(overrides.number.as_deref()),
+        StyleToken::Ipv6 => overrides.ipv6.as_deref().or(overrides.number.as_deref()),
     }
 }
 
@@ -239,6 +234,11 @@ pub fn value_style_token(value: &str) -> StyleToken {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return StyleToken::Value;
+    }
+
+    // Copyable command lines look like the command typed at the prompt.
+    if trimmed.starts_with("osp ") {
+        return StyleToken::PromptCommand;
     }
 
     if let Ok(address) = trimmed.parse::<std::net::IpAddr>() {
@@ -438,6 +438,10 @@ mod tests {
         assert_eq!(value_style_token("null"), StyleToken::Null);
         assert_eq!(value_style_token("19.2"), StyleToken::ValueNumber);
         assert_eq!(value_style_token("hello"), StyleToken::Value);
+        assert_eq!(
+            value_style_token("osp orch task info 7"),
+            StyleToken::PromptCommand
+        );
     }
 
     #[test]

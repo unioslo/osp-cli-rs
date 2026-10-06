@@ -302,7 +302,7 @@ fn ui2_mreg_renders_nested_object_arrays_as_tables_unit() {
 
     assert!(rendered.contains("name:       it-usit-gsd-drift"));
     assert!(rendered.contains("siteadmins:"));
-    assert!(rendered.contains("current (1):"));
+    assert!(rendered.contains("current:"));
     assert!(rendered.contains("expired (2):"));
     assert!(rendered.contains("iti-ssd@usit.uio.no"));
     assert!(rendered.contains("it-drift-gd-gsd@usit.uio.no"));

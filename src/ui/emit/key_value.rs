@@ -18,12 +18,9 @@ pub(super) fn aligned_display_key_width(rows: &[KeyValueRow]) -> usize {
         .unwrap_or(0)
 }
 
+/// A count is shown only when it says something: never for a single row.
 fn should_include_count(items: &[KeyValueValue]) -> bool {
-    if items.is_empty() || items.len() > 1 {
-        return true;
-    }
-
-    !matches!(items[0], KeyValueValue::Empty | KeyValueValue::Scalar(_))
+    items.len() != 1
 }
 
 #[cfg(test)]

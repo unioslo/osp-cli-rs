@@ -342,6 +342,15 @@ fn sanitize_blocks(blocks: &mut [Block]) {
     }
 }
 
+/// `key (N):` for several rows; a single row needs no count.
+fn section_title(key: &str, count: usize) -> String {
+    if count == 1 {
+        format!("{key}:")
+    } else {
+        format!("{key} ({count}):")
+    }
+}
+
 fn sanitize_key_value_row(row: &mut KeyValueRow) {
     row.key = sanitize_human_text(&row.key);
     if let Some(indent) = &mut row.indent {
@@ -717,7 +726,7 @@ fn lower_mreg_guide_named_value(key: &str, value: &Value, indent: usize) -> Vec<
             }
         }
         Value::Array(items) => {
-            let mut blocks = vec![mreg_line_block(format!("{key} ({}):", items.len()), indent)];
+            let mut blocks = vec![mreg_line_block(section_title(key, items.len()), indent)];
             for (index, item) in items.iter().enumerate() {
                 if index > 0 {
                     blocks.push(mreg_line_block("---".to_string(), indent + 2));
@@ -1150,7 +1159,7 @@ impl MregRecordBuilder {
         self.flush();
         table.nested = true;
         self.blocks.push(Block::Paragraph(ParagraphBlock {
-            text: format!("{key} ({item_count}):"),
+            text: section_title(key, item_count),
             indent: depth * 2,
             inline_markup: false,
         }));
