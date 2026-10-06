@@ -2129,6 +2129,7 @@ dependencies = [
  "sha2",
  "shell-words",
  "skim",
+ "strsim",
  "tempfile",
  "terminal_size",
  "thiserror 2.0.20",
