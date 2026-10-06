@@ -2,8 +2,7 @@
 //!
 //! This module turns a raw REPL line into the command tokens, dispatch tokens,
 //! and DSL stages the REPL runtime needs. It also owns the shell-first entry
-//! rules and the narrow hidden `cd` escape hatch for rare same-name nesting
-//! cases.
+//! rules: a bare shell root enters that shell, switching from any current one.
 
 use crate::completion::CommandLineParser;
 use crate::config::ResolvedConfig;
@@ -17,6 +16,12 @@ use crate::app::CMD_HELP;
 use crate::app::ReplScopeStack;
 use crate::cli::invocation::{hidden_invocation_completion_flags, scan_command_tokens_with_trace};
 use crate::cli::pipeline::{ParsedCommandLine, parse_command_text_with_aliases};
+
+// These commands keep their root meaning inside every integration shell.
+// Dispatch and the editor's command tree must agree on this set.
+pub(crate) const REPL_GLOBAL_COMMANDS: &[&str] = &[
+    "plugins", "doctor", "theme", "config", "alias", "history", "intro", "last", "source",
+];
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ReplParsedLine {
@@ -45,8 +50,7 @@ impl ReplParsedLine {
         scope: &ReplScopeStack,
         config: &ResolvedConfig,
     ) -> Option<&'a str> {
-        self.explicit_shell_entry_command(config)
-            .or_else(|| self.implicit_shell_entry_command(scope, config))
+        self.implicit_shell_entry_command(scope, config)
     }
 
     pub(crate) fn current_shell_help_command<'a>(
@@ -58,8 +62,7 @@ impl ReplParsedLine {
         // Shell-first UX: once the operator is already inside `ldap`, typing
         // `ldap` again should explain the current subcommand shell, not try to
         // descend into a synthetic `ldap ldap` path by default. That keeps the
-        // common "what can I do here?" flow cheap and leaves hidden `cd ldap`
-        // as the explicit escape hatch for the rare same-name nesting case.
+        // common "what can I do here?" flow cheap.
         match self.dispatch_tokens.as_slice() {
             [command] if command.eq_ignore_ascii_case(current) => Some(CurrentShellHelp {
                 command,
@@ -101,26 +104,6 @@ impl ReplParsedLine {
             dispatch_tokens,
             stages: parsed.stages,
         }
-    }
-
-    fn explicit_shell_entry_command(&self, config: &ResolvedConfig) -> Option<&str> {
-        if !self.stages.is_empty() || self.dispatch_tokens.len() != 2 {
-            return None;
-        }
-
-        let action = self.dispatch_tokens[0].trim();
-        let command = self.dispatch_tokens[1].trim();
-        if !action.eq_ignore_ascii_case("cd") || command.is_empty() {
-            return None;
-        }
-
-        // `cd` is a hidden escape hatch, not the primary UX. It stays around
-        // so operators can force shell entry in rare same-name nesting cases
-        // after the user-facing model switched back to "bare root enters the
-        // shell" and "repeating the current root means help". Keeping it
-        // hidden is intentional: visible `cd` teaches a filesystem metaphor,
-        // while the public model here is "subcommand enters subcommand shell".
-        is_repl_shellable_command(config, command).then_some(command)
     }
 
     fn implicit_shell_entry_command<'a>(
@@ -336,8 +319,6 @@ mod tests {
         }
 
         let mut scope = ReplScopeStack::default();
-        let hidden = ReplParsedLine::parse("cd ldap", &config).expect("hidden shell should parse");
-        assert_eq!(hidden.shell_entry_command(&scope, &config), Some("ldap"));
 
         let bare = ReplParsedLine::parse("ldap", &config).expect("command should parse");
         assert_eq!(bare.shell_entry_command(&scope, &config), Some("ldap"));
@@ -348,7 +329,6 @@ mod tests {
         );
 
         scope.enter("ldap");
-        assert_eq!(hidden.shell_entry_command(&scope, &config), Some("ldap"));
         assert_eq!(bare.shell_entry_command(&scope, &config), None);
         assert_eq!(
             bare.current_shell_help_command(&scope),

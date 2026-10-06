@@ -104,42 +104,44 @@ impl ReplScopeFrame {
     }
 }
 
-/// Nested REPL command-scope stack used for shell-style scoped interaction.
+/// The REPL's current command shell, used for shell-style scoped interaction.
 ///
 /// This is what lets the REPL stay "inside" a command family while still
 /// rendering scope labels, help targets, and history prefixes consistently.
+/// Shells are root commands, so there is at most one: entering another shell
+/// switches to it rather than nesting.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplScopeStack {
-    frames: Vec<ReplScopeFrame>,
+    frame: Option<ReplScopeFrame>,
 }
 
 impl ReplScopeStack {
     /// Returns `true` when the REPL is at the top-level scope.
     pub fn is_root(&self) -> bool {
-        self.frames.is_empty()
+        self.frame.is_none()
     }
 
-    /// Pushes a new command scope onto the stack.
+    /// Enters a command shell, leaving any current one.
     pub fn enter(&mut self, command: impl Into<String>) {
-        self.frames.push(ReplScopeFrame::new(command));
+        self.frame = Some(ReplScopeFrame::new(command));
     }
 
-    /// Pops the current command scope from the stack.
+    /// Leaves the current command shell.
     pub fn leave(&mut self) -> Option<ReplScopeFrame> {
-        self.frames.pop()
+        self.frame.take()
     }
 
     /// Returns the command path represented by the current stack.
     pub fn commands(&self) -> Vec<String> {
-        self.frames
+        self.frame
             .iter()
             .map(|frame| frame.command.clone())
             .collect()
     }
 
-    /// Returns whether the stack already contains the given command.
+    /// Returns whether the given command is the current shell.
     pub fn contains_command(&self, command: &str) -> bool {
-        self.frames
+        self.frame
             .iter()
             .any(|frame| frame.command.eq_ignore_ascii_case(command))
     }
@@ -154,22 +156,12 @@ impl ReplScopeStack {
     /// let mut scope = ReplScopeStack::default();
     /// assert_eq!(scope.display_label(), None);
     ///
-    /// scope.enter("theme");
-    /// scope.enter("show");
-    /// assert_eq!(scope.display_label(), Some("theme / show".to_string()));
+    /// scope.enter("orch");
+    /// scope.enter("nh");
+    /// assert_eq!(scope.display_label(), Some("nh".to_string()));
     /// ```
     pub fn display_label(&self) -> Option<String> {
-        if self.is_root() {
-            None
-        } else {
-            Some(
-                self.frames
-                    .iter()
-                    .map(|frame| frame.command.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" / "),
-            )
-        }
+        self.frame.as_ref().map(|frame| frame.command.clone())
     }
 
     /// Returns the history prefix used for shell-backed history entries.
@@ -181,23 +173,15 @@ impl ReplScopeStack {
     ///
     /// let mut scope = ReplScopeStack::default();
     /// scope.enter("theme");
-    /// scope.enter("show");
+    /// scope.enter("orch");
     ///
-    /// assert_eq!(scope.history_prefix(), "theme show ");
+    /// assert_eq!(scope.history_prefix(), "orch ");
     /// ```
     pub fn history_prefix(&self) -> String {
-        if self.is_root() {
-            String::new()
-        } else {
-            format!(
-                "{} ",
-                self.frames
-                    .iter()
-                    .map(|frame| frame.command.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            )
-        }
+        self.frame
+            .as_ref()
+            .map(|frame| format!("{} ", frame.command))
+            .unwrap_or_default()
     }
 
     /// Returns the active history scope prefix, if the REPL is inside a shell.
@@ -233,8 +217,8 @@ impl ReplScopeStack {
     /// assert_eq!(scope.history_scope_label(), "root history");
     ///
     /// scope.enter("theme");
-    /// scope.enter("show");
-    /// assert_eq!(scope.history_scope_label(), "theme / show shell history");
+    /// scope.enter("orch");
+    /// assert_eq!(scope.history_scope_label(), "orch shell history");
     /// ```
     pub fn history_scope_label(&self) -> String {
         self.display_label()
@@ -304,7 +288,7 @@ pub struct AppSession {
     /// Session-scoped context exposed by native commands to the REPL host.
     pub native_context: NativeSessionContext,
     pub(crate) startup_prompt_timing_pending: bool,
-    /// Current nested command scope within the REPL.
+    /// Current command shell within the REPL.
     pub scope: ReplScopeStack,
     /// Rows returned by the most recent successful REPL command.
     pub last_rows: Vec<Row>,
@@ -355,10 +339,7 @@ pub(crate) struct LastSuccess {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ReplExitTransition {
     ExitRoot,
-    LeftShell {
-        frame: ReplScopeFrame,
-        now_root: bool,
-    },
+    LeftShell { frame: ReplScopeFrame },
 }
 
 #[derive(Clone)]
@@ -464,7 +445,7 @@ impl AppSession {
         self
     }
 
-    /// Enters a nested REPL shell scope and synchronizes history context.
+    /// Enters a REPL shell, leaving any current one, and synchronizes history context.
     pub fn enter_repl_scope(&mut self, command: impl Into<String>) {
         self.scope.enter(command);
         self.sync_history_shell_context();
@@ -484,10 +465,7 @@ impl AppSession {
             ReplExitTransition::ExitRoot
         } else {
             match self.leave_repl_scope() {
-                Some(frame) => ReplExitTransition::LeftShell {
-                    now_root: self.scope.is_root(),
-                    frame,
-                },
+                Some(frame) => ReplExitTransition::LeftShell { frame },
                 None => ReplExitTransition::ExitRoot,
             }
         }
@@ -1067,35 +1045,23 @@ mod tests {
     use crate::config::ConfigLayer;
 
     #[test]
-    fn request_repl_exit_tracks_root_and_nested_scope_transitions_unit() {
+    fn request_repl_exit_tracks_root_and_shell_transitions_unit() {
         let mut root = AppSession::with_cache_limit(4);
         assert!(matches!(
             root.request_repl_exit(),
             ReplExitTransition::ExitRoot
         ));
 
-        let mut nested = AppSession::with_cache_limit(4);
-        nested.enter_repl_scope("ldap");
+        // Entering another shell switches; exit then returns to root.
+        let mut shell = AppSession::with_cache_limit(4);
+        shell.enter_repl_scope("ldap");
+        shell.enter_repl_scope("orch");
+        assert_eq!(shell.scope.commands(), vec!["orch".to_string()]);
         assert!(matches!(
-            nested.request_repl_exit(),
-            ReplExitTransition::LeftShell {
-                now_root: true,
-                frame,
-            } if frame.command() == "ldap"
+            shell.request_repl_exit(),
+            ReplExitTransition::LeftShell { frame } if frame.command() == "orch"
         ));
-        assert!(nested.scope.is_root());
-
-        let mut deep = AppSession::with_cache_limit(4);
-        deep.enter_repl_scope("ldap");
-        deep.enter_repl_scope("user");
-        assert!(matches!(
-            deep.request_repl_exit(),
-            ReplExitTransition::LeftShell {
-                now_root: false,
-                frame,
-            } if frame.command() == "user"
-        ));
-        assert_eq!(deep.scope.commands(), vec!["ldap".to_string()]);
+        assert!(shell.scope.is_root());
     }
 
     #[test]
@@ -1108,7 +1074,6 @@ mod tests {
         session = session.with_config_overrides(overrides);
         session.max_cached_results = 7;
         session.enter_repl_scope("ldap");
-        session.enter_repl_scope("user");
         session.record_prompt_timing(2, Duration::from_secs(3), None, None, None);
         session.startup_prompt_timing_pending = false;
 
@@ -1128,14 +1093,8 @@ mod tests {
         assert_eq!(restored.prompt_prefix, "osp-dev");
         assert!(!restored.history_enabled);
         assert_eq!(restored.max_cached_results, 7);
-        assert_eq!(
-            restored.scope.commands(),
-            vec!["ldap".to_string(), "user".to_string()]
-        );
-        assert_eq!(
-            restored.history_shell.prefix(),
-            Some("ldap user ".to_string())
-        );
+        assert_eq!(restored.scope.commands(), vec!["ldap".to_string()]);
+        assert_eq!(restored.history_shell.prefix(), Some("ldap ".to_string()));
         assert_eq!(restored.cached_rows("list users"), Some(&[row][..]));
         assert!(restored.last_success().is_some());
         assert_eq!(

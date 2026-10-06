@@ -37,7 +37,7 @@ pub(super) fn classify_repl_shortcut(
     // This ordering is deliberate. In an active shell, repeating the current
     // root name is a help affordance and must win before bare-root shell entry
     // is considered, otherwise `ldap` inside `(ldap)` would fall back toward
-    // nested shell entry instead of answering "what does this subcommand do?".
+    // re-entering the same shell instead of answering "what does this subcommand do?".
     if let Some(current_help) = parsed.current_shell_help_command(&session.scope) {
         return Ok(Some(ReplShortcutPlan::CurrentShellHelp {
             command: current_help.command.to_string(),
@@ -159,7 +159,6 @@ fn repeated_shell_root_help_warning(command: &str) -> String {
     format!(
         "`{command}` inside the `{command}` shell was interpreted as `{command} --help`.\n\
 This shell treats repeating the current root as a help shortcut.\n\
-If you meant a same-named nested shell, use hidden `cd {command}`.\n\
 If you meant help explicitly, use `help {command}` or `{command} --help`.\n\n"
     )
 }
@@ -187,12 +186,10 @@ fn repl_help_result(
 pub(super) fn handle_repl_exit_request(session: &mut AppSession) -> ReplLineResult {
     match session.request_repl_exit() {
         crate::app::session::ReplExitTransition::ExitRoot => ReplLineResult::Exit(0),
-        crate::app::session::ReplExitTransition::LeftShell { frame, now_root } => {
-            ReplLineResult::Restart {
-                output: render_repl_shell_leave_message(&frame, now_root),
-                reload: ReplReloadKind::Default,
-            }
-        }
+        crate::app::session::ReplExitTransition::LeftShell { frame } => ReplLineResult::Restart {
+            output: render_repl_shell_leave_message(&frame),
+            reload: ReplReloadKind::Default,
+        },
     }
 }
 
@@ -208,18 +205,14 @@ pub(crate) fn apply_repl_shell_prefix(
 pub(crate) fn leave_repl_shell(session: &mut AppSession) -> Option<String> {
     match session.request_repl_exit() {
         crate::app::session::ReplExitTransition::ExitRoot => None,
-        crate::app::session::ReplExitTransition::LeftShell { frame, now_root } => {
-            Some(render_repl_shell_leave_message(&frame, now_root))
+        crate::app::session::ReplExitTransition::LeftShell { frame } => {
+            Some(render_repl_shell_leave_message(&frame))
         }
     }
 }
 
-fn render_repl_shell_leave_message(frame: &crate::app::ReplScopeFrame, now_root: bool) -> String {
-    if now_root {
-        format!("Leaving {} shell. Back at root.\n", frame.command())
-    } else {
-        format!("Leaving {} shell.\n", frame.command())
-    }
+fn render_repl_shell_leave_message(frame: &crate::app::ReplScopeFrame) -> String {
+    format!("Leaving {} shell. Back at root.\n", frame.command())
 }
 
 pub(super) fn enter_repl_shell(
@@ -240,8 +233,17 @@ pub(super) fn enter_repl_shell(
     )?;
     ensure_shell_entry_dispatchable(&catalog, command)?;
 
+    // Shells are root commands: entering one switches from the current shell.
+    let mut out = session
+        .scope
+        .commands()
+        .last()
+        .map(|current| format!("Leaving {current} shell. "))
+        .unwrap_or_default();
     session.enter_repl_scope(command.to_string());
-    let mut out = format!("Entering {command} shell. Type `exit` to leave.\n");
+    out.push_str(&format!(
+        "Entering {command} shell. Type `exit` to leave.\n"
+    ));
     if let Ok(help) =
         render_repl_help_for_scope(runtime, session, clients, invocation, "", &[], sink)
     {
@@ -715,7 +717,6 @@ JSON
         match rendered {
             ReplLineResult::Continue(text) => {
                 assert!(text.contains("was interpreted as `ldap --help`"));
-                assert!(text.contains("hidden `cd ldap`"));
                 assert!(text.contains("Directory lookup"));
             }
             other => panic!("unexpected repl result: {other:?}"),
@@ -724,16 +725,16 @@ JSON
     }
 
     #[test]
-    fn hidden_cd_still_forces_same_named_nested_shell_entry_unit() {
+    fn entering_another_shell_replaces_the_current_scope_unit() {
         let native = NativeCommandRegistry::new().with_command(NativeLdapHelpCommand);
         let mut state = app_state_with_native(native);
-        state.session.scope.enter("ldap");
+        state.session.scope.enter("orch");
         let invocation = base_repl_invocation(&state.runtime);
-        let parsed = ReplParsedLine::parse("cd ldap", state.runtime.config.resolved())
-            .expect("hidden cd should parse");
+        let parsed = ReplParsedLine::parse("ldap", state.runtime.config.resolved())
+            .expect("shell root should parse");
         let shortcut = classify_repl_shortcut(&state.runtime, &state.session, &parsed, &invocation)
-            .expect("hidden cd should classify")
-            .expect("hidden cd should remain available");
+            .expect("shell root should classify")
+            .expect("shell root should remain available");
         let mut sink = BufferedUiSink::default();
         let rendered = execute_repl_shortcut(
             &mut state.runtime,
@@ -741,10 +742,10 @@ JSON
             &state.clients,
             &parsed,
             shortcut,
-            "cd ldap",
+            "ldap",
             &mut sink,
         )
-        .expect("hidden cd should enter a nested shell");
+        .expect("shell root should switch shells");
 
         match rendered {
             ReplLineResult::Restart {
@@ -753,10 +754,7 @@ JSON
             } => assert!(text.contains("Entering ldap shell")),
             other => panic!("unexpected repl result: {other:?}"),
         }
-        assert_eq!(
-            state.session.scope.commands(),
-            &["ldap".to_string(), "ldap".to_string()]
-        );
+        assert_eq!(state.session.scope.commands(), &["ldap".to_string()]);
     }
 
     #[cfg(unix)]

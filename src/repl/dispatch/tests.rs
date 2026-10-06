@@ -115,7 +115,7 @@ For more information, try '--help'.\n",
 }
 
 #[test]
-fn repl_exit_behaves_differently_for_root_and_nested_shells_unit() {
+fn repl_exit_behaves_differently_for_root_and_shells_unit() {
     let mut root = AppSession::with_cache_limit(4);
     assert!(matches!(
         handle_repl_exit_request(&mut root),
@@ -132,13 +132,6 @@ fn repl_exit_behaves_differently_for_root_and_nested_shells_unit() {
         } if message == "Leaving ldap shell. Back at root.\n"
     ));
     assert!(nested.scope.is_root());
-
-    let mut deep = AppSession::with_cache_limit(4);
-    deep.scope.enter("ldap");
-    deep.scope.enter("user");
-    let message = leave_repl_shell(&mut deep).expect("nested shell should leave");
-    assert_eq!(message, "Leaving user shell.\n");
-    assert_eq!(deep.scope.commands(), vec!["ldap".to_string()]);
 }
 
 #[test]

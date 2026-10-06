@@ -99,12 +99,10 @@ pub(super) fn parse_repl_invocation(
     let command_tokens = &scanned.tokens[prefix_len..];
     let scope = session.scope.commands();
     let absolute_command = command_tokens.first().is_some_and(|command| {
-        matches!(
-            command.as_str(),
-            "plugins" | "doctor" | "theme" | "config" | "alias" | "history" | "intro"
-        ) || (elevated
-            && (scope.first() == Some(command)
-                || crate::repl::is_repl_shellable_command(runtime.config.resolved(), command)))
+        input::REPL_GLOBAL_COMMANDS.contains(&command.as_str())
+            || (elevated
+                && (scope.first() == Some(command)
+                    || crate::repl::is_repl_shellable_command(runtime.config.resolved(), command)))
     });
     // Elevation wraps the resolved command; it must not discard shell scope.
     // Keep bare sudo untouched so the ordinary missing-command error applies.

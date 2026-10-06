@@ -388,10 +388,9 @@ mod tests {
         );
 
         session.scope.enter("orch");
-        session.scope.enter("vm");
         let scope = HistoryScopeView::from_session(&session);
-        assert_eq!(scope.prefix.as_deref(), Some("orch vm "));
-        assert_eq!(scope.label, "orch / vm shell history");
+        assert_eq!(scope.prefix.as_deref(), Some("orch "));
+        assert_eq!(scope.label, "orch shell history");
     }
 
     #[test]

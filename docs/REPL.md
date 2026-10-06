@@ -126,11 +126,17 @@ ldap
 
 The second `ldap` is interpreted as `ldap --help`.
 
-The hidden `cd <root>` command handles the rare case where a nested shell has
-the same name as its parent.
+Shells do not nest. Typing another shell's root switches to it: inside `orch`,
+`nh` leaves the `orch` shell and enters the `nh` shell, and `exit` returns to
+root.
 
 Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned. They
 manage the shell rather than dispatching a normal command.
+
+Host commands such as `doctor last -v`, `config`, and `history` keep their root
+meaning inside integration shells. Scoped completion includes the same global
+commands that dispatch accepts; you do not need to leave `[orch]` to inspect a
+failure.
 
 ## History And Completion
 
@@ -181,7 +187,7 @@ config set repl.exit_message 'So long, and thanks for all the fish!' --permanent
 ```
 
 The message is printed for root `exit`, `quit`, or end-of-input. Leaving a
-nested command shell keeps its existing `Leaving … shell` message instead.
+command shell keeps its existing `Leaving … shell` message instead.
 
 ## Config Writes Inside The REPL
 

@@ -209,7 +209,7 @@ impl HistoryConfigBuilder {
     }
 }
 
-/// Shared shell-prefix state used to scope history to nested shell integrations.
+/// Shared shell-prefix state used to scope history to the current integration shell.
 #[derive(Clone, Default, Debug)]
 pub struct HistoryShellContext {
     inner: Arc<RwLock<Option<String>>>,
