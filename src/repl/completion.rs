@@ -242,7 +242,13 @@ fn scoped_completion_root(root: &CompletionNode, path: &[String]) -> CompletionN
         };
         node = child;
     }
-    node.clone()
+    let mut scoped = node.clone();
+    for &command in super::input::REPL_GLOBAL_COMMANDS {
+        if let Some(global) = root.children.get(command) {
+            scoped.children.insert(command.to_string(), global.clone());
+        }
+    }
+    scoped
 }
 
 fn invocation_prefilled_flags(

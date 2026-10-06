@@ -132,6 +132,11 @@ the same name as its parent.
 Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned. They
 manage the shell rather than dispatching a normal command.
 
+Host commands such as `doctor last -v`, `config`, and `history` keep their root
+meaning inside integration shells. Scoped completion includes the same global
+commands that dispatch accepts; you do not need to leave `[orch]` to inspect a
+failure.
+
 ## History And Completion
 
 The REPL provides:
