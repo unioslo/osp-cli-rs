@@ -409,8 +409,9 @@ pub struct ArgNode {
     pub value_type: Option<ValueType>,
     /// Suggested values for the argument.
     pub suggestions: Vec<SuggestionEntry>,
-    /// Optional shared catalogue: at most 25 prefix matches, including an empty prefix.
-    pub prefix_values: Option<PrefixValues>,
+    /// Large shared catalogues searched in order; a later one is used only
+    /// when earlier ones have no match (e.g. your VMs, then every VM).
+    pub catalogs: Vec<ValueCatalog>,
 }
 
 impl ArgNode {
@@ -481,21 +482,21 @@ impl ArgNode {
 }
 
 /// A large, locally refreshed value catalogue shared by completion tree clones.
-/// Values are sorted once on replacement; each lookup copies at most `limit`
-/// prefix matches. Refresh outside the editing path, without network I/O here.
-/// Clones observe the same replacements. Equality compares shared catalogue
-/// identity, not the current entries.
+/// Values are sorted once on replacement; refresh outside the editing path,
+/// without network I/O here. Clones observe the same replacements. Equality
+/// compares shared catalogue identity, not the current entries. Ranking lives
+/// in completion suggestion code, which reads the values through [`Self::scan`].
 #[derive(Debug, Clone, Default)]
-pub struct PrefixValues(std::sync::Arc<std::sync::RwLock<Vec<String>>>);
+pub struct ValueCatalog(std::sync::Arc<std::sync::RwLock<Vec<String>>>);
 
-impl PartialEq for PrefixValues {
+impl PartialEq for ValueCatalog {
     fn eq(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.0, &other.0)
     }
 }
-impl Eq for PrefixValues {}
+impl Eq for ValueCatalog {}
 
-impl PrefixValues {
+impl ValueCatalog {
     /// Atomically replaces the catalogue, sorting and removing duplicate values.
     pub fn replace(&self, mut values: Vec<String>) {
         values.sort_unstable();
@@ -523,6 +524,11 @@ impl PrefixValues {
             .binary_search_by(|candidate| candidate.as_str().cmp(value))
             .is_ok()
     }
+
+    /// Reads the sorted values in place; callers copy only what they keep.
+    pub fn scan<R>(&self, read: impl FnOnce(&[String]) -> R) -> R {
+        read(&self.0.read().unwrap_or_else(|err| err.into_inner()))
+    }
 }
 
 /// Completion metadata for a flag spelling.
@@ -533,8 +539,9 @@ impl PrefixValues {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
 pub struct FlagNode {
-    /// Optional shared catalogue: at most 25 prefix matches, including an empty prefix.
-    pub prefix_values: Option<PrefixValues>,
+    /// Large shared catalogues searched in order; a later one is used only
+    /// when earlier ones have no match (e.g. your VMs, then every VM).
+    pub catalogs: Vec<ValueCatalog>,
     /// Optional description shown alongside the flag.
     pub tooltip: Option<String>,
     /// Whether the flag does not accept a value.

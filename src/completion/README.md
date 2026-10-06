@@ -26,8 +26,11 @@ arrives already baked into the tree; this module never fetches it.
   preferred spelling once, as `--interactive, -i`.
 - Required flags come from `FlagHints` declared by the command or provider.
   Completion reports them; it never invents requiredness.
-- Large catalogues use `PrefixValues`: nothing below three characters, at most
-  25 prefix matches.
+- Large catalogues use `ValueCatalog`s, searched in order: a later catalogue
+  (every VM) is consulted only when earlier ones (your VMs) have no match.
+  They rank like other values: exact, prefix, word boundary, then fuzzy. When
+  nothing matches, a Jaro-Winkler typo rescue (4+ characters, ≥ 0.85 on the
+  part before the first `.`) runs in the same order. At most 25 results.
 
 ## Common changes
 
