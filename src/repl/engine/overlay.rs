@@ -249,13 +249,17 @@ fn skim_color_value(color: Color) -> Option<String> {
     }
 }
 
+const COMPLETION_MENU_MAX_COLUMNS: u16 = 5;
+
 pub(crate) fn build_completion_menu(appearance: &ReplAppearance) -> OspCompletionMenu {
     // No quick-complete: a single match is selected by Tab like any other,
     // then committed with Enter or space.
     build_candidate_menu(appearance, COMPLETION_MENU_NAME)
         .with_only_buffer_difference(false)
         .with_quick_complete(false)
-        .with_columns(u16::MAX)
+        // A narrow grid keeps long values like hostnames scannable instead of
+        // spreading them across a wide terminal; rows stay unbounded.
+        .with_columns(COMPLETION_MENU_MAX_COLUMNS)
         .with_max_rows(u16::MAX)
 }
 

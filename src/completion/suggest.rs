@@ -18,7 +18,7 @@ use crate::completion::model::{
     CommandLine, CompletionAnalysis, CompletionNode, CompletionRequest, CompletionTree,
     PlanningValue, Suggestion, SuggestionEntry, SuggestionOutput, ValueType,
 };
-use crate::completion::model::{FlagNode, PrefixValues};
+use crate::completion::model::{FlagNode, ValueCatalog};
 use crate::core::fuzzy::{completion_fuzzy_matcher, fold_case};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,8 +28,17 @@ const MATCH_SCORE_PREFIX_BASE: u32 = 100;
 const MATCH_SCORE_BOUNDARY_PREFIX_BASE: u32 = 200;
 const MATCH_SCORE_FUZZY_BASE: u32 = 10_000;
 const MATCH_SCORE_FUZZY_NORMALIZED_MAX: u32 = 100_000;
+const MATCH_SCORE_TYPO_BASE: u32 = 200_000;
 // Lower scores win:
-// exact < prefix < boundary-prefix < fuzzy fallback.
+// exact < prefix < boundary-prefix < fuzzy fallback < catalogue typo rescue.
+
+/// Catalogue matches shown at once; the menu lays them out as a compact grid.
+const CATALOG_MATCH_LIMIT: usize = 25;
+/// Typo rescue needs enough typed text for similarity to mean something.
+const TYPO_RESCUE_MIN_CHARS: usize = 4;
+/// Jaro-Winkler floor; measured on the 53k-name MREG index, 0.85 keeps
+/// `mial-mx01` -> `mail-mx01` while dropping unrelated short names.
+const TYPO_RESCUE_MIN_SIMILARITY: f64 = 0.85;
 
 struct PositionalRequest<'a> {
     context_node: &'a CompletionNode,
@@ -334,8 +343,8 @@ impl SuggestionEngine {
             return vec![SuggestionOutput::PathSentinel];
         }
 
-        if let Some(values) = &flag_node.prefix_values {
-            return self.prefix_value_suggestions(values, stub);
+        if !flag_node.catalogs.is_empty() {
+            return self.catalog_suggestions(&flag_node.catalogs, stub);
         }
 
         let static_entries = self
@@ -378,21 +387,79 @@ impl SuggestionEngine {
         if arg.value_type == Some(ValueType::Path) {
             return vec![SuggestionOutput::PathSentinel];
         }
-        if let Some(values) = &arg.prefix_values {
-            return self.prefix_value_suggestions(values, stub);
+        if !arg.catalogs.is_empty() {
+            return self.catalog_suggestions(&arg.catalogs, stub);
         }
 
         self.entry_suggestions(&arg.suggestions, stub)
     }
 
-    // Bound the result before cloning, including an empty prefix on the first TAB.
-    fn prefix_value_suggestions(&self, values: &PrefixValues, stub: &str) -> Vec<SuggestionOutput> {
-        let entries = values
-            .matching(stub, 25)
-            .into_iter()
-            .map(SuggestionEntry::value)
-            .collect::<Vec<_>>();
-        self.entry_suggestions(&entries, stub)
+    /// Ranks large catalogues like other values, searching them in order.
+    ///
+    /// A later catalogue is searched only when earlier ones have no ordinary
+    /// match, so "your VMs" hide everyone else's until the typed text leaves
+    /// them. Typo rescue runs only when no catalogue has an ordinary match;
+    /// an exact match in a later catalogue wins over typo rescue. Results are bounded before
+    /// cloning; an empty stub lists the first names of the first non-empty
+    /// catalogue rather than scoring every value.
+    fn catalog_suggestions(&self, catalogs: &[ValueCatalog], stub: &str) -> Vec<SuggestionOutput> {
+        let ranked = |hits: Vec<(u32, String)>| {
+            hits.into_iter()
+                .map(|(score, value)| {
+                    SuggestionOutput::Item(entry_to_suggestion(
+                        &SuggestionEntry::value(value),
+                        score,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        };
+        if stub.is_empty() {
+            let first = catalogs
+                .iter()
+                .map(|catalog| catalog.matching("", CATALOG_MATCH_LIMIT))
+                .find(|values| !values.is_empty())
+                .unwrap_or_default();
+            return ranked(
+                first
+                    .into_iter()
+                    .map(|value| (MATCH_SCORE_EMPTY_STUB, value))
+                    .collect(),
+            );
+        }
+        for catalog in catalogs {
+            let hits = catalog.scan(|values| {
+                best(
+                    values
+                        .iter()
+                        .filter_map(|value| Some((self.match_score(stub, value)?, value.as_str()))),
+                )
+            });
+            if !hits.is_empty() {
+                return ranked(hits);
+            }
+        }
+        if stub.chars().count() < TYPO_RESCUE_MIN_CHARS {
+            return Vec::new();
+        }
+        let stub_lc = fold_case(stub);
+        for catalog in catalogs {
+            let hits = catalog.scan(|values| {
+                best(values.iter().filter_map(|value| {
+                    // Compare the leading label so a shared domain suffix
+                    // cannot make every hostname look alike.
+                    let label = value.split('.').next().unwrap_or(value);
+                    let similarity = strsim::jaro_winkler(&stub_lc, &fold_case(label));
+                    (similarity >= TYPO_RESCUE_MIN_SIMILARITY).then(|| {
+                        let distance = ((1.0 - similarity) * 10_000.0) as u32;
+                        (MATCH_SCORE_TYPO_BASE + distance, value.as_str())
+                    })
+                }))
+            });
+            if !hits.is_empty() {
+                return ranked(hits);
+            }
+        }
+        Vec::new()
     }
 
     fn subcommand_suggestions(&self, node: &CompletionNode, stub: &str) -> Vec<Suggestion> {
@@ -758,6 +825,16 @@ fn entry_to_suggestion(entry: &SuggestionEntry, match_score: u32) -> Suggestion 
         sort: entry.sort.clone(),
         match_score,
     }
+}
+
+/// The best-scoring catalogue hits, lowest score first, then alphabetical.
+fn best<'a>(hits: impl Iterator<Item = (u32, &'a str)>) -> Vec<(u32, String)> {
+    let mut hits = hits.collect::<Vec<_>>();
+    hits.sort_unstable_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)));
+    hits.into_iter()
+        .take(CATALOG_MATCH_LIMIT)
+        .map(|(score, value)| (score, value.to_owned()))
+        .collect()
 }
 
 fn boundary_prefix_index(candidate: &str, stub: &str) -> Option<usize> {

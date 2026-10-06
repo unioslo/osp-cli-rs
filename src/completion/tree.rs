@@ -336,7 +336,7 @@ fn arg_node_from_def(arg: &ArgDef) -> ArgNode {
         multi: arg.multi,
         value_type: to_completion_value_type(arg.value_kind),
         suggestions: arg.choices.iter().map(suggestion_from_choice).collect(),
-        prefix_values: None,
+        catalogs: Vec::new(),
     }
 }
 
